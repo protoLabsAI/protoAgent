@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { BarChart3, BookOpen, Bug, Github, ScrollText, Settings2, X } from "lucide-react";
+import { BookOpen, Bug, Github, ScrollText, Settings2, X } from "lucide-react";
 
 import { Button } from "@protolabsai/ui/primitives";
 
@@ -9,10 +9,9 @@ import "./app-drawer.css";
 type SurfaceItem = { id: string; label: string; icon: ReactNode };
 
 /**
- * The app menu drawer — a right-side sheet opened by the header hamburger (2026-06-18
- * IA pass). One drawer for both modes: on desktop it holds the box-level/global actions
- * (Global settings, Telemetry) + the Docs/Changelog/GitHub links; on mobile it ALSO lists the
- * surfaces (it's the mobile "more"). Workspace settings stay in the rail surface, not here.
+ * The app menu drawer — a right-side sheet opened by the header hamburger. One drawer for
+ * both modes: on desktop it holds the single Settings door + the Docs/Changelog/GitHub links;
+ * on mobile it ALSO lists the surfaces (it's the mobile "more").
  */
 export function AppDrawer({
   open,
@@ -79,13 +78,11 @@ export function AppDrawer({
 
           <section className="app-drawer-group">
             <p className="app-drawer-label">Settings</p>
+            {/* One Settings door (ADR 0048 §2.4) — Telemetry is a section inside it (Box group),
+                reachable via the sidenav or a ⌘K deep-link, not a second drawer shortcut. */}
             <button type="button" className="app-drawer-item" onClick={act(() => onOpenGlobal())}>
               <span className="app-drawer-ico"><Settings2 size={16} /></span>
               Settings
-            </button>
-            <button type="button" className="app-drawer-item" onClick={act(() => onOpenGlobal("telemetry"))}>
-              <span className="app-drawer-ico"><BarChart3 size={16} /></span>
-              Telemetry
             </button>
           </section>
 

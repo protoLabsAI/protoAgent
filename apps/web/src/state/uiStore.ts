@@ -47,16 +47,15 @@ export type RightPanel = "tasks" | "goals" | (string & {}); // + plugin:<id>:<vi
 // "market" = Discover. (Keys kept for persisted-state compat; the old "download"
 // tab is gone — a stale persisted value falls back to Installed.)
 export type PluginsTab = "local" | "market";
-// Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
-// section sub-nav. `settingsScope` picks the home; `settingsSection` the active
-// section within it (a free string so each home owns its own section ids).
-export type SettingsScope = "host" | "workspace";
+// Settings IA (ADR 0048, ratified 2026-06-28): ONE surface organized by DOMAIN; scope is a
+// per-field badge, NOT a nav axis. `settingsSection` is the active sidenav section (a free
+// string — the section ids live in SettingsSurface). The old `settingsScope` "two homes"
+// axis is gone (it was never read by any view — see the v14 migration).
 
 type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
   pluginsTab: PluginsTab;
-  settingsScope: SettingsScope;
   settingsSection: string;
   // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
   // and asks the fleet panel to open the new-agent picker on mount, then clears it.
@@ -116,7 +115,6 @@ type UIState = {
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setPluginsTab: (t: PluginsTab) => void;
-  setSettingsScope: (s: SettingsScope) => void;
   setSettingsSection: (s: string) => void;
   setFleetStartNew: (b: boolean) => void;
   setRightCollapsed: (b: boolean) => void;
@@ -261,6 +259,21 @@ export function migrateUiState(persisted: unknown): unknown {
         (x) => x !== "activity" && x !== "plugins" && x !== "settings" && !FOLDED.has(x),
       );
     }
+    // v14 (ADR 0048 ratified — domain-first IA): drop the dead `settingsScope` "two homes"
+    // axis (no view ever read it), and remap the old section ids to the new domain ids so a
+    // persisted `settingsSection` still resolves (else it falls back to the first section).
+    // "overview" was the old default and is a host-only Box section → "identity".
+    delete (rest as Record<string, unknown>).settingsScope;
+    const SECTION_REMAP: Record<string, string> = {
+      overview: "identity", // old default (host-only Box) → first Agent domain
+      settings: "model", // old "Model & Routing" id
+      memory: "knowledge",
+      system: "behavior",
+      middleware: "behavior",
+    };
+    if (typeof rest.settingsSection === "string" && rest.settingsSection in SECTION_REMAP) {
+      rest.settingsSection = SECTION_REMAP[rest.settingsSection];
+    }
     // v13 (hidden surfaces): railOrder gains a `hidden` bucket (enabled-but-not-shown
     // surfaces). Complete the shape with [] for a layout that predates it. Runs LAST — the
     // v2/v8/v10/v11/v12 steps rebuild railOrder as {left,right,bottom} and would drop a
@@ -282,8 +295,9 @@ export const useUI = create<UIState>()(
       surface: "chat",
       rightPanel: "work",
       pluginsTab: "local",
-      settingsScope: "host" as SettingsScope,
-      settingsSection: "overview",
+      // ADR 0048 (ratified): default to the first Agent domain. "overview" is a host-only
+      // Box section, so it can't be the universal default (a fleet member has no Box group).
+      settingsSection: "identity",
       fleetStartNew: false,
       globalSettingsOpen: false,
       globalSettingsSection: undefined,
@@ -407,9 +421,6 @@ export const useUI = create<UIState>()(
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setPluginsTab: (pluginsTab) => set({ pluginsTab }),
-      // Switching home resets to that home's first section (its own default lives in
-      // SettingsSurface); callers that want a specific section call setSettingsSection too.
-      setSettingsScope: (settingsScope) => set({ settingsScope }),
       setSettingsSection: (settingsSection) => set({ settingsSection }),
       setFleetStartNew: (fleetStartNew) => set({ fleetStartNew }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
@@ -440,7 +451,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 13, // …v11 Tasks+Goals+Schedule→Work hub · v12 Settings→utility pill · v13 railOrder.hidden bucket
+      version: 14, // …v12 Settings→utility pill · v13 railOrder.hidden bucket · v14 drop dead settingsScope (domain-first IA, ADR 0048)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // Ephemeral overlay state — dropped from persistence so a refresh never reopens it
       // (the Global settings overlay + the per-plugin Configure dialog).

@@ -77,7 +77,7 @@ test("settings dialog: Identity, then Tools and MCP sections", async ({ page }) 
 test("plugins section: Installed / Discover (config + advanced install folded in)", async ({ page }) => {
   // Plugins is a Settings dialog section now (2026-06), opened from the utility-bar pill.
   await page.getByTestId("settings-widget").click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Integrations", exact: true }).click();
 
   // Two sections only now (ADR 0059 D4) — no separate "Install URL" tab.
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Install URL", exact: true })).toHaveCount(0);

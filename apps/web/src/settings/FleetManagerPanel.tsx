@@ -1,7 +1,7 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
+import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -10,6 +10,7 @@ import { EditableText, Switch } from "@protolabsai/ui/forms";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
+import { QuickSetting } from "./QuickSetting";
 import { api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys } from "../lib/queries";
@@ -147,9 +148,27 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         title="Agents"
         kicker={`${agents.length} agent${agents.length === 1 ? "" : "s"} on this host · the fleet`}
         actions={
-          <Button variant="primary" onClick={onNew}>
-            <Plus size={15} /> New agent
-          </Button>
+          <>
+            {/* Box-runtime knobs (bind interface · ports · discovery · keep-warm) — host-scoped
+                box defaults, set right where you manage the fleet (ADR 0047 D8 / 0048). */}
+            <QuickSetting
+              keys={[
+                "network.bind",
+                "fleet.port_base",
+                "fleet.discovery.port_min",
+                "fleet.discovery.port_max",
+                "fleet.discovery.mdns",
+                "fleet.warm.max",
+                "fleet.warm.grace_seconds",
+              ]}
+              title="Box runtime"
+              label="Box runtime settings"
+              icon={<Server size={15} />}
+            />
+            <Button variant="primary" onClick={onNew}>
+              <Plus size={15} /> New agent
+            </Button>
+          </>
         }
       />
       <div className="stage-body">

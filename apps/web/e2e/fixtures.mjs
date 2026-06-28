@@ -199,7 +199,7 @@ export const NOTES_WORKSPACE = {
 export const SETTINGS_SCHEMA = [
   {
     section: "Model",
-    category: "Agent",
+    category: "Model",
     fields: [
       // model.name is host-scoped + inherited from the host layer (inheritance badge). Its
       // options are gateway-probed (options_source "models") — the "Get models" action (#1386)
@@ -213,7 +213,7 @@ export const SETTINGS_SCHEMA = [
   },
   {
     section: "Routing",
-    category: "Agent",
+    category: "Model",
     fields: [
       // App default (inherited-from-default badge).
       { key: "routing.aux_model", label: "Auxiliary (fast) model", type: "string", section: "Routing", restart: false, description: "Cheap alias for aux calls.", options: [], value: "protolabs/fast", default: "", scope: "host", source: "default" },
@@ -223,14 +223,14 @@ export const SETTINGS_SCHEMA = [
   },
   {
     section: "Compaction",
-    category: "System",
+    category: "Behavior",
     fields: [
       { key: "compaction.enabled", label: "Enable compaction", type: "bool", section: "Compaction", restart: false, description: "", options: [], value: true, default: true, scope: "host", source: "host" },
     ],
   },
   {
     section: "Runtime",
-    category: "System",
+    category: "Behavior",
     fields: [
       { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false, scope: "agent", source: "agent" },
     ],

@@ -9,7 +9,7 @@ async function openModelSettings(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
   await expect(page.locator(".settings-overlay")).toBeVisible();
-  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Model", exact: true }).click();
   // Field groups start collapsed — open them so the model field + actions are visible.
   const triggers = page.locator(".pl-accordion__trigger");
   await expect(triggers.first()).toBeVisible();

@@ -14,7 +14,8 @@ test("the header hamburger opens the app drawer → Settings dialog", async ({ p
   const drawer = page.getByTestId("app-drawer");
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
-  await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toBeVisible();
+  // The drawer is a single Settings door now (ADR 0048) — no separate Telemetry shortcut.
+  await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toHaveCount(0);
   await expect(drawer.getByRole("link", { name: "Docs" })).toBeVisible();
   const changelog = drawer.getByRole("link", { name: "Changelog" });
   await expect(changelog).toBeVisible();

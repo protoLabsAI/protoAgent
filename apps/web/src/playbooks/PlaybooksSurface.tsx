@@ -340,9 +340,9 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
         kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned${layered ? ` · ${fromCommons} from commons` : ""}`}
         actions={
           <>
-            {/* Quick-set the skill-sharing mode (scoped/shared/layered) right where you
-                manage skills — same field as Workspace ▸ Skills, ADR 0048. */}
-            <QuickSetting keys={["skills.scope"]} title="Skill sharing" label="Skill sharing mode" icon={<Share2 size={16} />} />
+            {/* Skill sharing tier + the box commons location — set right where you manage
+                skills (ADR 0048: the canonical editor for the Capabilities sharing knobs). */}
+            <QuickSetting keys={["skills.scope", "commons.path"]} title="Skill sharing" label="Skill sharing & commons" icon={<Share2 size={16} />} />
             {enabled ? (
               <Button
                 icon

@@ -16,8 +16,8 @@ from graph.settings_schema import (
 def test_schema_groups_and_values():
     cfg = LangGraphConfig()
     groups = build_schema(cfg, model_options=["a", "b"])
-    # Grouped + ordered by category: the Agent category leads, runtime first.
-    assert [g["section"] for g in groups][:3] == ["Agent runtime", "Model", "Routing"]
+    # Grouped + ordered by domain (ADR 0048): Identity leads, then Model (Model/Routing/Caching).
+    assert [g["section"] for g in groups][:3] == ["Identity", "Model", "Routing"]
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present — EXCEPT ui_hidden ones, which stay in FIELDS for
     # config round-trip but aren't rendered in the settings UI (e.g. identity.name,
@@ -56,24 +56,26 @@ def test_schema_groups_and_values():
 
 
 def test_groups_carry_category_in_taxonomy_order():
-    """ADR 0020: every group is tagged with a category, and categories appear
+    """ADR 0048: every group is tagged with a domain category, and categories appear
     contiguously in _CATEGORY_ORDER (so the console sub-nav is stable)."""
     from graph.settings_schema import _CATEGORY_ORDER
 
     groups = build_schema(LangGraphConfig())
     cats = [g["category"] for g in groups]
     assert all(cats), "every group must carry a category"
-    assert cats[0] == "Agent"
+    assert cats[0] == "Identity"
     # First-appearance order of categories matches _CATEGORY_ORDER (contiguous).
     seen: list[str] = []
     for c in cats:
         if c not in seen:
             seen.append(c)
     assert seen == [c for c in _CATEGORY_ORDER if c in seen]
-    # Known mappings hold.
+    # Known domain mappings hold (ADR 0048).
     by_section = {g["section"]: g["category"] for g in groups}
-    assert by_section["Knowledge"] == "Memory"
-    assert by_section["Middleware"] == "System"
+    assert by_section["Knowledge"] == "Knowledge"
+    assert by_section["Middleware"] == "Behavior"
+    assert by_section["Model"] == "Model"
+    assert by_section["Telemetry"] == "Box"
 
 
 def test_secrets_are_redacted_with_is_set():

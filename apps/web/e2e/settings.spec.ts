@@ -42,35 +42,38 @@ async function expandAllGroups(page) {
   }
 }
 
-test("the settings dialog lists the grouped Agent + Box sections (host, no scope toggle)", async ({ page }) => {
+test("the settings dialog lists the domain groups (host, no scope toggle)", async ({ page }) => {
   await openSettings(page);
-  // One consolidated surface — no Global/Workspace segmented toggle.
+  // One consolidated surface — no Global/Workspace segmented toggle (ADR 0048: scope is a
+  // per-field badge, not a nav axis).
   await expect(page.locator(".pl-tabs--segmented")).toHaveCount(0);
-  // The e2e default (/app/, no /agent/<slug>/) is the host console, so both the Agent group
-  // and the host-only Box group render.
+  // The e2e default (/app/, no /agent/<slug>/) is the host console, so the Agent + Capabilities
+  // + host-only Box + This-console groups all render, by domain.
   const sidenav = page.locator(".settings-overlay .pl-sidenav");
   expect(await sidenav.locator("button").allTextContents()).toEqual([
     // Agent group
     "Identity",
-    "Model & Routing",
-    "Plugins",
+    "Operator & access",
+    "Model",
+    "Behavior",
+    "Knowledge",
+    "Integrations",
+    // Capabilities group (sharing knobs live on each manager's chip, not a separate panel)
     "Tools",
     "MCP",
+    "Skills",
     "Subagents",
     "Delegates",
-    "Skills",
-    "Middleware",
-    "Memory",
-    "System",
-    "Theme",
-    "Chat",
-    "Keyboard",
-    // Box group (host console only). (Shared Skills folded into Agent ▸ Skills.)
+    // Box group (host console only)
     "Overview",
     "Fleet",
     "Telemetry",
+    // This console group
+    "Theme",
+    "Chat",
+    "Keyboard",
   ]);
-  await section(page, "System");
+  await section(page, "Behavior");
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
@@ -93,14 +96,19 @@ test("opening from the header drawer's Settings item shows the same dialog + the
   await expect(page.getByTestId("telemetry-surface")).toBeVisible();
 });
 
-test("the drawer's Telemetry item deep-links the Telemetry section", async ({ page }) => {
-  await openFromDrawer(page, "Telemetry");
-  await expect(page.getByTestId("telemetry-surface")).toBeVisible();
+// The drawer no longer has a Telemetry shortcut (ADR 0048 §2.4 — one Settings door); Telemetry
+// is reachable via the Box group in the dialog or a ⌘K deep-link.
+test("the drawer has a single Settings door, no Telemetry shortcut", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  const drawer = page.getByTestId("app-drawer");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toHaveCount(0);
 });
 
-test("Model & Routing shows the agent's Model + Routing fields", async ({ page }) => {
+test("Model shows the agent's Model + Routing fields", async ({ page }) => {
   await openSettings(page);
-  await section(page, "Model & Routing");
+  await section(page, "Model");
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Routing"]);
   await expandAllGroups(page);
@@ -110,7 +118,7 @@ test("Model & Routing shows the agent's Model + Routing fields", async ({ page }
 
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {
   await openSettings(page);
-  await section(page, "Model & Routing");
+  await section(page, "Model");
   await expandAllGroups(page);
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
@@ -120,9 +128,9 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
   await expect(page.locator(".pl-toast", { hasText: "config saved" })).toBeVisible();
 });
 
-test("a restart-flagged System field shows the restart banner", async ({ page }) => {
+test("a restart-flagged Behavior field shows the restart banner", async ({ page }) => {
   await openSettings(page);
-  await section(page, "System");
+  await section(page, "Behavior");
   await expect(page.locator(".settings-banner")).toHaveCount(0);
   await expandAllGroups(page);
   await page.locator('.setting-row[data-key="runtime.autostart_on_boot"] .pl-switch').click();
@@ -130,11 +138,11 @@ test("a restart-flagged System field shows the restart banner", async ({ page })
 });
 
 // On the HOST console the host-scoped fields ARE the box defaults — they carry a "box
-// default" badge inline in Model & Routing (the former Global ▸ Configuration section is
-// gone; editing these writes the host layer). model.name / routing.aux_model are host-scoped.
-test("host-scoped fields show the 'box default' badge inline in Model & Routing", async ({ page }) => {
+// default" badge inline in the Model domain (editing these writes the host layer).
+// model.name / routing.aux_model are host-scoped.
+test("host-scoped fields show the 'box default' badge inline in Model", async ({ page }) => {
   await openSettings(page);
-  await section(page, "Model & Routing");
+  await section(page, "Model");
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText("box default");
   await expect(page.locator('.setting-row[data-key="routing.aux_model"] .setting-inheritance')).toContainText(
@@ -145,11 +153,11 @@ test("host-scoped fields show the 'box default' badge inline in Model & Routing"
 });
 
 // On the host these same host-scoped edits save to the host layer (ADR 0047): the mock echoes
-// "config saved (host)". This is the new home of the former "Configuration (Global)" behavior —
-// the host-scoped subset now edits inline in Model & Routing, writing the box-shared host layer.
+// "config saved (host)". The host-scoped subset edits inline in the Model domain, writing the
+// box-shared host layer.
 test("a host-scoped edit on the host console saves to the host layer", async ({ page }) => {
   await openSettings(page);
-  await section(page, "Model & Routing");
+  await section(page, "Model");
   await expandAllGroups(page);
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/host-fast");
   await page.getByRole("button", { name: /Save & apply/ }).click();
@@ -163,7 +171,7 @@ test("per-agent (fleet member) settings show ADR 0047 inheritance badges + reset
   await openSettings(page, "/app/agent/ava/");
   // No Box group on a fleet member.
   await expect(page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true })).toHaveCount(0);
-  await section(page, "Model & Routing");
+  await section(page, "Model");
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText(
     "inherited from host",
