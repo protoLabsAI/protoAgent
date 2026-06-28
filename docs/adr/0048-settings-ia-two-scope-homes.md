@@ -178,16 +178,39 @@ Separate planes by **what you're doing**, and collapse redundant doors:
 
 | # | Item | Action |
 |---|------|--------|
-| C1 | `HostDefaultsPanel`, `HostConfigLocked` (`SettingsCategory.tsx`) | **Delete** — orphaned ADR-0047 UI, never imported. |
-| C2 | `settingsScope` / `setSettingsScope` / `SettingsScope` (`uiStore.ts`) | **Delete** + bump the persisted store version; drop from `uiStore.test.ts`. |
-| C3 | `SettingsSurface.tsx` sidenav | Rebuild into the §2.1 three groups (6 Agent domains). |
-| C4 | "Model & Routing" panel rendering `category="Agent"` | Split: Model panel = `category="Model"`; the other domains get their own category panels. |
-| C5 | `identity.name` dual path (schema vs `/api/config`) | One editor in **Identity**; retire the duplicate write path. |
-| C6 | `skills.top_k` in the `Knowledge` section | Move to `Skills` (Capabilities). |
-| C7 | `Network/Discovery/Keep-warm` under System | Re-home to **Box** (Fleet group) via §2.3. |
-| C8 | AppDrawer "Telemetry" shortcut | Remove (single Settings door). |
-| C9 | QuickSetting chips (`mcp.scope`, `skills.scope`, `knowledge.*`, `telemetry.*`) | Keep as shortcuts, but assert single `/api/settings` write path; document the §2.2 rule. |
-| C10 | `uiStore` default `settingsSection: "overview"` | Default to first Agent domain (`identity`); `overview` is host-only Box. |
+| C1 | `HostDefaultsPanel`, `HostConfigLocked` (`SettingsCategory.tsx`) | ✅ **Done** — deleted (orphaned ADR-0047 UI, never imported). |
+| C2 | `settingsScope` / `setSettingsScope` / `SettingsScope` (`uiStore.ts`) | ✅ **Done** — deleted; store bumped to v14 (drops it); `uiStore.test.ts` covers the v14 migration. |
+| C3 | `SettingsSurface.tsx` sidenav | ✅ **Done** — rebuilt into domain groups (see *As-built* below). |
+| C4 | "Model & Routing" panel rendering `category="Agent"` | ✅ **Done** — split into per-domain panels; the Model item now renders `category="Model"`. |
+| C5 | `identity.name` dual path (schema vs `/api/config`) | ✅ **Already fixed** — `identity.name` is `ui_hidden` in the schema (#1076); the Identity panel owns it via `/api/config`. No dual path remained. |
+| C6 | `skills.top_k` in the `Knowledge` section | ⚠️ **Deviation — left in Knowledge.** Moving it to a `Capabilities`-only home would orphan it (no rendered Capabilities panel covers it cleanly), and it's recall-adjacent. Kept under Knowledge. |
+| C7 | `Network/Discovery/Keep-warm` under System | ✅ **Done** — re-homed to the **Box** domain (rendered in the host-only "Box config" item). |
+| C8 | AppDrawer "Telemetry" shortcut | ✅ **Done** — removed; Settings is the single door (Telemetry = a Box section / ⌘K deep-link). |
+| C9 | QuickSetting chips (`mcp.scope`, `skills.scope`, `knowledge.*`, `telemetry.*`) | ✅ **Kept as shortcuts** — all write the same `/api/settings` key as their canonical domain panel (no second save path), so they satisfy §2.2. The canonical full editors are the "Sharing & tiers" (Capabilities) and "Box config" (Box) panels. |
+| C10 | `uiStore` default `settingsSection: "overview"` | ✅ **Done** — default is `identity`; the v14 migration remaps old ids (`overview/settings/memory/system/middleware`). |
+
+### 3.1 As-built sidenav (2026-06-28)
+
+The §2.1 sketch put everything under one "Agent" group; the implementation splits the
+makeup into its own **Capabilities** group (so the rich Tools/MCP/Skills/Subagents/Delegates
+managers keep first-class items) and adds two schema-home items for fields that had no
+bespoke editor:
+
+```
+Agent         Identity · Model · Behavior · Knowledge · Integrations
+Capabilities  Tools · MCP · Skills · Subagents · Delegates · Sharing & tiers
+Box (host)    Overview · Fleet · Telemetry · Box config
+This console  Theme · Chat · Keyboard
+```
+
+- **Integrations** is the renamed Plugins item (id stays `plugins` for the ⌘K/deep-link
+  contract). GitHub is a plugin, so it lands here by default.
+- **Sharing & tiers** (`category="Capabilities"`) is the canonical editor for the
+  skill/MCP sharing scope + `commons.path`.
+- **Box config** (`category="Box"`) is the canonical editor for telemetry + the host
+  box-runtime knobs (network/discovery/keep-warm).
+- The read-only **Middleware** roster panel was removed; its editable toggles live in
+  the **Behavior** domain.
 
 ## 4. Slice plan (smallest blast radius first; each build + e2e green)
 

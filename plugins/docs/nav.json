@@ -526,7 +526,7 @@
         },
         {
           "path": "adr/0048-settings-ia-two-scope-homes.md",
-          "title": "ADR 0048 — Settings IA: two scope-based homes (Host/App + Workspace)"
+          "title": "ADR 0048 — Settings & console-configuration IA (domain-first, scope-as-badge)"
         },
         {
           "path": "adr/0049-bundle-pin-lifecycle.md",
