@@ -423,7 +423,10 @@ export type ComponentSpec = { component: string; props: Record<string, unknown> 
 export type ChatPart =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
-  | { kind: "tools"; ids: string[] };
+  | { kind: "tools"; ids: string[] }
+  // An inline component (component-v1) at its emission position, so it renders ABOVE the
+  // answer text that streams in after it — not shoved below (#1323).
+  | { kind: "component"; spec: ComponentSpec };
 
 /** Per-turn token usage + cost, accumulated across the turn's LLM calls — lifted off the
  *  terminal cost-v1 DataPart (A2A ext, ADR 0006). `inputTokens` is the SUM of prompt tokens

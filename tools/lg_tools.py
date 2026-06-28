@@ -107,11 +107,16 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 
 @tool
 def show_component(component: str, props: dict, title: str = "") -> str:
-    """Render a structured UI component inline in the chat (ADR 0051).
+    """Render structured data as a typed widget INLINE in the chat (ADR 0051).
 
-    Use this to present structured data as a real widget instead of a markdown blob —
-    a comparison table, a status/metrics block, a plan/timeline. Data-only and safe;
-    for free-form generated HTML use an artifact instead.
+    Pick this over a markdown blob when the data fits a curated shape — a comparison
+    ``table``, a ``keyvalue`` status/metrics block, or a ``timeline`` of steps. It renders
+    inline in your answer, data-only and safe (no sandbox).
+
+    For free-form or custom-rendered visuals — a chart, a Mermaid diagram, bespoke
+    HTML/React/SVG — use ``show_artifact`` instead (it renders generated CODE in a separate
+    sandboxed panel). Rule of thumb: a data SHAPE (table / metrics / steps) → this tool;
+    a generated VISUAL → an artifact.
 
     Args:
         component: one of ``"table"``, ``"keyvalue"``, ``"timeline"``.
