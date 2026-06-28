@@ -28,29 +28,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[>]` deferred (
 
 Additive guards / one-liners; near-zero regression risk, high security ROI.
 
-- [ ] **Ingestion SSRF guard** — `High` · churn Low · LOE S — `ingestion/engine.py:334-398`.
+- [x] **Ingestion SSRF guard** — `High` · churn Low · LOE S — `ingestion/engine.py:334-398`.
   Route `extract_url`/`_http_fetch` through the existing `security.egress.check_url`
   (as `fetch_url` already does), set `follow_redirects=False` and re-check every hop.
   Closes internal/metadata-fetch-into-KB. *(Two finders flagged this; asymmetric with
   the already-guarded `fetch_url` tool.)*
-- [ ] **`KnowledgeStore` missing `busy_timeout`** — Med · Low · XS — `knowledge/store.py:273`.
+- [x] **`KnowledgeStore` missing `busy_timeout`** — Med · Low · XS — `knowledge/store.py:273`.
   `PRAGMA busy_timeout=5000` in `_connect` (concurrent writes silently lost today;
   error swallowed at `400-402`).
-- [ ] **Scheduler raw `database is locked`** — Low · Low · XS — `scheduler/local.py:245`.
+- [x] **Scheduler raw `database is locked`** — Low · Low · XS — `scheduler/local.py:245`.
   Same PRAGMA in `LocalScheduler._connect`.
-- [ ] **Non-constant-time credential compare** — Low · Low · XS — `a2a_impl/auth.py:218`,
+- [x] **Non-constant-time credential compare** — Low · Low · XS — `a2a_impl/auth.py:218`,
   `operator_api/console_handlers.py:389`. Use `hmac.compare_digest` for X-API-Key and
   the inbox token (bearer already does).
 - [ ] **`requestForm` double-body-read masks 401** — Med · Low · XS–S —
   `apps/web/src/lib/api.ts:345`. Read body once (`text()` then best-effort
   `JSON.parse`); restores the real error + the 401 AuthGate on uploads.
-- [ ] **Boot TTL sweep deletes HITL tasks** — Low · Low · XS–S —
+- [x] **Boot TTL sweep deletes HITL tasks** — Low · Low · XS–S —
   `a2a_impl/stores.py:291`. Exclude `INPUT_REQUIRED`/`AUTH_REQUIRED` from
   `sweep_expired_tasks` (mirror reconcile's preserved states).
-- [ ] **`requires_pip` arg injection** — Med · Low · S — `graph/plugins/installer.py:630`.
+- [x] **`requires_pip` arg injection** — Med · Low · S — `graph/plugins/installer.py:630`.
   Validate each entry as a plain PEP 508 requirement: reject leading `-`
   (`--index-url`/`-e`), reject VCS/URL/`@`/`file:` refs, pass `--` before specs.
-- [ ] **Subagent return-value mis-parse** — Low · Med · S — `graph/agent.py:278`.
+- [x] **Subagent return-value mis-parse** — Low · Med · S — `graph/agent.py:278`.
   Select the last `AIMessage` (not "any message with content"); drop the
   `startswith("Error")` heuristic — use the `SubagentError` path for failures.
 - [ ] **Palette deep-link dead-ends on workspace console** — Low · Low · S —
