@@ -26,6 +26,7 @@ import {
   RUNTIME_STATUS,
   SCHEDULER_JOBS,
   SETTINGS_SCHEMA,
+  GATEWAY_MODELS,
   settingsRestartRequired,
   SLASH_COMMANDS,
   PLAYBOOKS,
@@ -409,6 +410,14 @@ const server = createServer(async (req, res) => {
     // `removed: true` is the happy path the #1103 e2e drives (cancel before drain).
     if (/^\/api\/chat\/sessions\/[^/]+\/steer\/[^/]+$/.test(pathname) && req.method === "DELETE") {
       return sendJson(res, { removed: true, pending: 0 });
+    }
+    if (pathname === "/api/config/models" && req.method === "POST") {
+      // "Get models" (#1386): probe the (form) gateway for its model list. The mock returns a
+      // DIFFERENT set than the saved dropdown, so the test can prove the dropdown refreshes.
+      return sendJson(res, { models: GATEWAY_MODELS, error: "" });
+    }
+    if (pathname === "/api/config/test-model" && req.method === "POST") {
+      return sendJson(res, { ok: true, error: "" });
     }
     if (pathname === "/api/knowledge/attach" && req.method === "POST") {
       // Chat attachment upload (#1002) — multipart, so DON'T JSON-parse the body.

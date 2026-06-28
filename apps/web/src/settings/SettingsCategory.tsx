@@ -4,7 +4,7 @@ import { Alert } from "@protolabsai/ui/data";
 import { Combobox, DropdownSelect, Input, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Loader2, RotateCcw, Save } from "lucide-react";
+import { Boxes, Loader2, RotateCcw, Save } from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -211,6 +211,38 @@ export function SettingsCategory({
     onError: (e) => setStatus(`connection test failed: ${errMsg(e)}`),
   });
 
+  // "Get models" (#1386): probe the gateway named on the FORM — its api_base/key, which may be
+  // a NEW provider you haven't saved yet — for its model list, so you can pick a valid model
+  // BEFORE saving and testing (the saved dropdown would otherwise be stuck on the old gateway's
+  // models → a dead-end). The result is merged into every model-backed dropdown below.
+  const [gatewayModels, setGatewayModels] = useState<string[] | null>(null);
+  const apiBaseField = useMemo(
+    () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.api_base"),
+    [groups],
+  );
+  const getModels = useMutation({
+    // api_base: the form edit, else the saved value. api_key: the form edit, else blank — the
+    // server falls back to the saved (secret) key, which never leaves localStorage as plaintext.
+    mutationFn: () => api.models(asStr(dirty["model.api_base"]) || asStr(apiBaseField?.value), asStr(dirty["model.api_key"])),
+    onMutate: () => setStatus("fetching models from the gateway…"),
+    onSuccess: (r) => {
+      if (r.error) { setStatus(`couldn't fetch models — ${r.error}`); return; }
+      setGatewayModels(r.models);
+      setStatus(
+        r.models.length
+          ? `found ${r.models.length} model${r.models.length === 1 ? "" : "s"} — pick one in Primary model, then Test connection.`
+          : "the gateway returned no models.",
+      );
+    },
+    onError: (e) => setStatus(`couldn't fetch models — ${errMsg(e)}`),
+  });
+  // Merge the freshly-probed models into a model-backed field's options (new gateway's models
+  // first, then whatever was saved), so the dropdown isn't stuck on the old provider's list.
+  const withGatewayModels = (field: SettingsField): SettingsField =>
+    gatewayModels && (field.options_source === "models" || field.options_source === "models+acp")
+      ? { ...field, options: [...new Set([...gatewayModels, ...field.options])] }
+      : field;
+
   // Generic per-group "Test connection" (ADR 0029).
   const [testingSection, setTestingSection] = useState<string | null>(null);
   const groupFields = (group: SettingsGroup): Record<string, unknown> => {
@@ -239,7 +271,7 @@ export function SettingsCategory({
       {group.fields.filter(isVisible).map((field) => (
         <SettingRow
           key={field.key}
-          field={field}
+          field={withGatewayModels(field)}
           dirty={field.key in dirty}
           value={field.key in dirty ? dirty[field.key] : field.value}
           showInheritance={!hostLayer}
@@ -283,7 +315,14 @@ export function SettingsCategory({
         actions={
           <>
             {hasModel ? (
-              <TestConnectionButton onClick={() => testConn.mutate()} pending={testConn.isPending} disabled={save.isPending} />
+              <>
+                {/* #1386 — pull the form gateway's model list into the Primary model dropdown, so
+                    switching provider/key isn't a dead-end (the saved list is stale). */}
+                <Button type="button" onClick={() => getModels.mutate()} disabled={getModels.isPending || save.isPending}>
+                  {getModels.isPending ? <Loader2 className="spin" size={15} /> : <Boxes size={15} />} Get models
+                </Button>
+                <TestConnectionButton onClick={() => testConn.mutate()} pending={testConn.isPending} disabled={save.isPending} />
+              </>
             ) : null}
             {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
             <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
