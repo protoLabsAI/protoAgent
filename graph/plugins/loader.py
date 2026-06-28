@@ -27,6 +27,9 @@ log = logging.getLogger("protoagent.plugins")
 @dataclass
 class PluginLoadResult:
     tools: list = field(default_factory=list)
+    # tool name -> the owning plugin's display name, so the console Tools tab can group
+    # plugin tools by the plugin that contributed them instead of one flat "Plugin" bucket.
+    tool_plugins: dict = field(default_factory=dict)
     skill_dirs: list = field(default_factory=list)
     workflow_dirs: list = field(default_factory=list)  # *.yaml recipe dirs (ADR 0027)
     goal_verifiers: dict = field(default_factory=dict)  # name -> verifier fn (ADR 0028)
@@ -340,6 +343,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             kept.append(tool)
 
         result.tools.extend(kept)
+        # Attribute each kept tool to this plugin (display name, id fallback) for the Tools tab.
+        for tool in kept:
+            result.tool_plugins[tool.name] = manifest.name or manifest.id
         result.skill_dirs.extend(registry.skill_dirs)
         result.workflow_dirs.extend(registry.workflow_dirs)
         # Full-bundle auto-discovery (ADR 0027): a plugin repo can ship SKILL.md

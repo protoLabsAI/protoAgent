@@ -192,6 +192,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         _plugins.skill_dirs,
         _plugins.meta,
     )
+    STATE.plugin_tool_owner = _plugins.tool_plugins
     STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
     STATE.plugin_chat_commands = _plugins.chat_commands  # user-only /<name> control commands
@@ -1288,6 +1289,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     new_skills = None
     new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
     new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
+    new_plugin_tool_owner: dict = {}  # tool name -> owning plugin display name (Tools tab)
     new_plugin_chat_commands: dict = {}  # user-only /<name> control commands
     if is_setup_complete():
         try:
@@ -1307,6 +1309,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
                 new_config, plugin_servers=[s["factory"] for s in new_plugins.mcp_servers]
             )
             new_plugin_tools = new_plugins.tools
+            new_plugin_tool_owner = new_plugins.tool_plugins
             new_plugin_skill_dirs = new_plugins.skill_dirs
             new_plugin_meta = new_plugins.meta
             new_plugin_chat_commands = new_plugins.chat_commands  # user-only /<name> control commands
@@ -1358,6 +1361,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         new_plugin_skill_dirs,
         new_plugin_meta,
     )
+    STATE.plugin_tool_owner = new_plugin_tool_owner
     try:
         from security import egress
         from security import policy
