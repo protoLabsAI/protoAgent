@@ -80,6 +80,7 @@ type A2AFrame = {
     };
     artifactUpdate?: {
       taskId?: string;
+      contextId?: string;
       artifact?: { parts?: A2APart[] };
       append?: boolean;
       lastChunk?: boolean;
@@ -100,6 +101,25 @@ type A2AFrame = {
     message?: string;
   };
 };
+
+/**
+ * Defense-in-depth for streaming (follow-up to the subagent-stream-isolation fix #1394).
+ *
+ * The a2a SDK stamps EVERY frame it emits — `task`, `statusUpdate`, `artifactUpdate` — with
+ * the originating `contextId`, and a single console turn streams exactly ONE context (the
+ * `sessionId` it sent as the message `contextId`; the server echoes it back unchanged). So a
+ * frame carrying a DIFFERENT contextId is cross-talk from a concurrent turn or a detached
+ * background job and must never be rendered into this turn's message. Returns true for such a
+ * foreign frame. A frame with no contextId (an older server / the A2A 0.3 flat shape that
+ * omits it) is never treated as foreign — the guard degrades to a no-op rather than dropping
+ * legitimate output.
+ */
+export function frameIsForeign(frame: A2AFrame, expectedContextId: string): boolean {
+  const r = frame.result;
+  if (!r) return false;
+  const cid = r.task?.contextId ?? r.statusUpdate?.contextId ?? r.artifactUpdate?.contextId ?? r.contextId;
+  return !!cid && cid !== expectedContextId;
+}
 
 function defaultApiBase() {
   if (typeof window === "undefined") return "";
@@ -1168,6 +1188,9 @@ export const api = {
       if (frame.error?.message) throw new Error(frame.error.message);
       const result = frame.result;
       if (!result) return;
+      // Drop any frame stamped with a different contextId than this turn's — cross-talk from
+      // a concurrent turn or background job can't leak into this message (see frameIsForeign).
+      if (frameIsForeign(frame, sessionId)) return;
       const task = result.task ?? (result.kind === "task" ? result : undefined);
       const statusUpdate = result.statusUpdate ?? (result.kind === "status-update" ? result : undefined);
       const artifactUpdate = result.artifactUpdate ?? (result.kind === "artifact-update" ? result : undefined);

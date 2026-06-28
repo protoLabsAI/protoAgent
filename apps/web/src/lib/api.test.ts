@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ApiError, apiUrl, drainSseBuffer, isColdStart, textFromParts, hitlFromParts } from "./api";
+import { ApiError, apiUrl, drainSseBuffer, frameIsForeign, isColdStart, textFromParts, hitlFromParts } from "./api";
 
 describe("cold-start detection (ApiError / isColdStart)", () => {
   it("ApiError carries the HTTP status", () => {
@@ -148,5 +148,44 @@ describe("apiUrl — fleet slug routing (ADR 0042)", () => {
     focus("m");
     expect(apiUrl("/api/fleet")).not.toContain("/agents/");
     expect(apiUrl("/api/archetypes")).not.toContain("/agents/");
+  });
+});
+
+describe("frameIsForeign — cross-context stream guard (subagent-stream-isolation #1394 follow-up)", () => {
+  // A console turn streams exactly one A2A context (its sessionId); the SDK stamps every frame
+  // with its originating contextId, so a frame from a DIFFERENT context is cross-talk to drop.
+  // A frame with no contextId is never foreign (back-compat / A2A 0.3 flat shape).
+  const SESSION = "sess-1";
+
+  it("drops an artifactUpdate stamped with a different contextId (e.g. a background job)", () => {
+    const frame = { result: { artifactUpdate: { taskId: "t9", contextId: "background:bg-7", artifact: { parts: [] } } } };
+    expect(frameIsForeign(frame, SESSION)).toBe(true);
+  });
+
+  it("keeps an artifactUpdate stamped with this turn's contextId", () => {
+    const frame = { result: { artifactUpdate: { taskId: "t1", contextId: SESSION, artifact: { parts: [] } } } };
+    expect(frameIsForeign(frame, SESSION)).toBe(false);
+  });
+
+  it("keeps an artifactUpdate with NO contextId (older server → guard is a no-op)", () => {
+    const frame = { result: { artifactUpdate: { taskId: "t1", artifact: { parts: [] } } } };
+    expect(frameIsForeign(frame, SESSION)).toBe(false);
+  });
+
+  it("drops foreign statusUpdate and task frames; keeps matching ones", () => {
+    expect(frameIsForeign({ result: { statusUpdate: { taskId: "t9", contextId: "other" } } }, SESSION)).toBe(true);
+    expect(frameIsForeign({ result: { task: { id: "t9", contextId: "other" } } }, SESSION)).toBe(true);
+    expect(frameIsForeign({ result: { statusUpdate: { taskId: "t1", contextId: SESSION } } }, SESSION)).toBe(false);
+    expect(frameIsForeign({ result: { task: { id: "t1", contextId: SESSION } } }, SESSION)).toBe(false);
+  });
+
+  it("handles the A2A 0.3 flat shape via result.contextId", () => {
+    expect(frameIsForeign({ result: { kind: "artifact-update", contextId: "other" } }, SESSION)).toBe(true);
+    expect(frameIsForeign({ result: { kind: "artifact-update", contextId: SESSION } }, SESSION)).toBe(false);
+  });
+
+  it("never treats an empty / resultless frame as foreign", () => {
+    expect(frameIsForeign({}, SESSION)).toBe(false);
+    expect(frameIsForeign({ result: {} }, SESSION)).toBe(false);
   });
 });
