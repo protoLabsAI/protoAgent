@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.72.0",
+    "date": "2026-06-28",
+    "changes": [
+      "Context-window meter + per-turn cost/time",
+      "Vision-describe pass for text-only models",
+      "\"Get models\"",
+      "Inline components re-enabled",
+      "Per-stimulus Activity attribution",
+      "Inline action feedback → toasts",
+      "Deduped inbox/Activity now-item notifications + deliver-before-fire",
+      "Clear error for images on a text-only model",
+      "Chat-tab trash only on the hovered ✕"
+    ]
+  },
+  {
     "version": "v0.71.0",
     "date": "2026-06-27",
     "changes": [
