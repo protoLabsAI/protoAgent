@@ -9,7 +9,6 @@ The real stdio round-trip is covered by the end-to-end check in the PR.
 from __future__ import annotations
 
 import asyncio
-import os
 from types import SimpleNamespace
 
 from graph.config import LangGraphConfig
@@ -19,16 +18,20 @@ from tools.mcp_tools import _run_blocking, _server_connection, build_mcp_tools
 # ── connection mapping ───────────────────────────────────────────────────────
 
 
-def test_stdio_connection_mapping() -> None:
+def test_stdio_connection_mapping(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_TEST_PLAINVAR", "keep")
+    monkeypatch.setenv("MCP_TEST_API_KEY", "secret")
     conn = _server_connection(
         {"name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "x"], "env": {"A": "1"}}
     )
-    # stdio servers inherit the parent env by default, with the per-server
-    # override layered on top.
+    # stdio servers inherit the parent env by default, but credential-looking vars
+    # are stripped and the per-server override is layered on top.
     assert conn["transport"] == "stdio"
     assert conn["command"] == "npx"
     assert conn["args"] == ["-y", "x"]
-    assert conn["env"] == {**os.environ, "A": "1"}
+    assert conn["env"]["A"] == "1"                     # per-server override wins
+    assert conn["env"]["MCP_TEST_PLAINVAR"] == "keep"  # ordinary var inherited
+    assert "MCP_TEST_API_KEY" not in conn["env"]       # secret-named var stripped
 
 
 def test_stdio_connection_inherit_env_false() -> None:
@@ -37,6 +40,32 @@ def test_stdio_connection_inherit_env_false() -> None:
         {"name": "fs", "transport": "stdio", "command": "npx", "inherit_env": False, "env": {"A": "1"}}
     )
     assert conn["env"] == {"A": "1"}
+
+
+def test_stdio_inherit_env_true_passes_full(monkeypatch) -> None:
+    # inherit_env: true → the FULL parent env, secrets included (escape hatch).
+    monkeypatch.setenv("MCP_TEST_API_KEY", "secret")
+    conn = _server_connection(
+        {"name": "fs", "transport": "stdio", "command": "npx", "inherit_env": True}
+    )
+    assert conn["env"]["MCP_TEST_API_KEY"] == "secret"
+
+
+def test_stdio_default_strips_secret_named_vars(monkeypatch) -> None:
+    monkeypatch.setenv("FOO_TOKEN", "t")
+    monkeypatch.setenv("FOO_SECRET", "s")
+    monkeypatch.setenv("FOO_PASSWORD", "p")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/ssh-agent.sock")  # capability handle → stripped
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:pw@h/db")  # DSN w/ creds → stripped
+    monkeypatch.setenv("SENTRY_DSN", "https://k@sentry/1")      # DSN → stripped
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gw/v1")      # base URL, not a secret → kept
+    monkeypatch.setenv("MCP_TEST_PLAIN", "ok")                  # ordinary var → kept
+    conn = _server_connection({"name": "fs", "transport": "stdio", "command": "npx"})
+    env = conn["env"]
+    for stripped in ("FOO_TOKEN", "FOO_SECRET", "FOO_PASSWORD", "SSH_AUTH_SOCK", "DATABASE_URL", "SENTRY_DSN"):
+        assert stripped not in env, f"{stripped} should be stripped"
+    assert env.get("OPENAI_BASE_URL") == "https://gw/v1"  # base URLs are deliberately kept
+    assert env.get("MCP_TEST_PLAIN") == "ok"
 
 
 def test_http_connection_mapping_and_alias() -> None:
