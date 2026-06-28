@@ -295,6 +295,26 @@
   overscroll-behavior: contain;
 }
 
+/* Expanded row body: a live tool-by-tool feed (DS ToolCard) and/or the result. The wrapper
+   owns the single top separator; the nested result drops its own to avoid a double rule. */
+.bg-jobs-detail {
+  border-top: 1px solid var(--border, #2a2a31);
+}
+.bg-jobs-detail .bg-jobs-result {
+  border-top: none;
+}
+.bg-jobs-feed {
+  padding: 8px 12px 8px 33px;
+  /* A chatty job (many tools) scrolls within the row rather than growing the dialog. */
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Divider when a result is shown beneath the tool feed. */
+.bg-jobs-feed + .bg-jobs-result {
+  border-top: 1px solid var(--border, #2a2a31);
+}
+
 .topbar {
   display: flex;
   align-items: center;
