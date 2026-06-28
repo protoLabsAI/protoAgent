@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 log = logging.getLogger("protoagent.mcp")
@@ -74,6 +75,39 @@ def _mcp_tool_error_handler(exc: Exception) -> str:
     )
 
 
+# Env-var NAMES that look like a credential — stripped from a stdio MCP server's
+# inherited environment by default. A third-party server (npx/uvx) gets the
+# operational env it needs (PATH/HOME/LANG/proxy/...) but NOT the agent's secrets
+# (LLM gateway key, GITHUB_TOKEN, A2A_AUTH_TOKEN, *_API_KEY, ...).
+_SECRET_ENV_RE = re.compile(
+    r"(SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|_KEY$)",
+    re.IGNORECASE,
+)
+
+
+def _inherited_env(server_env: dict[str, str], *, inherit) -> dict[str, str] | None:
+    """Build the env for a stdio MCP subprocess.
+
+    ``inherit`` is the server's ``inherit_env`` value (``None`` = unset):
+
+      - unset (default) → parent env with credential-looking NAMES stripped, then
+        the per-server ``env:`` overlaid — a server still gets PATH/HOME/etc. but
+        not the agent's secrets;
+      - ``True`` → the FULL parent env (explicit opt-in escape hatch, e.g. a
+        trusted server that needs a secret injected via the environment);
+      - ``False`` → only the explicit per-server ``env:`` (minimal), or ``None``
+        so the SDK applies its own minimal default.
+
+    A per-server ``env:`` value always wins over an inherited one.
+    """
+    if inherit is False:
+        return dict(server_env) if server_env else None
+    if inherit is True:
+        return {**os.environ, **server_env}
+    base = {k: v for k, v in os.environ.items() if not _SECRET_ENV_RE.search(k)}
+    return {**base, **server_env}
+
+
 def _server_connection(server: dict) -> dict | None:
     """Map a config ``mcp.servers[]`` entry to a langchain-mcp-adapters
     connection dict. Returns ``None`` for an entry missing its essential fields
@@ -105,17 +139,16 @@ def _server_connection(server: dict) -> dict | None:
     if not command:
         return None
     conn = {"transport": "stdio", "command": str(command), "args": list(server.get("args") or [])}
-    # Pass the parent environment through to the stdio subprocess by default.
-    # The MCP SDK's stdio client uses a MINIMAL default env, so custom vars set
-    # on the agent process (API keys, base URLs) are stripped from the server —
-    # a common failure in containerized deploys where those are injected into
-    # the agent's env, not the config YAML. Set ``inherit_env: false`` on the
-    # server to opt out; a per-server ``env:`` block always overrides on top.
+    # Build the subprocess env (secret-filtered parent env by default). The MCP
+    # SDK's stdio client otherwise uses a MINIMAL env, dropping vars a server may
+    # need; we inherit the operational env but strip credential-looking NAMES so a
+    # third-party server can't read the agent's secrets. ``inherit_env: true``
+    # passes the FULL env (escape hatch); ``false`` passes only the per-server
+    # ``env:``. See ``_inherited_env``.
     server_env = {str(k): str(v) for k, v in (server.get("env") or {}).items()}
-    if server.get("inherit_env", True):
-        conn["env"] = {**os.environ, **server_env}
-    elif server_env:
-        conn["env"] = server_env
+    env = _inherited_env(server_env, inherit=server.get("inherit_env"))
+    if env is not None:
+        conn["env"] = env
     if server.get("cwd"):
         conn["cwd"] = str(server["cwd"])
     return conn
