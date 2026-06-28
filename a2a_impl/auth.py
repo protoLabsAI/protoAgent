@@ -50,7 +50,6 @@ _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 # ---------------------------------------------------------------------------
 _PUBLIC_PREFIXES = (
     "/healthz",
-    "/metrics",
     "/.well-known/",
     "/app",
     "/manifest.json",
@@ -60,6 +59,12 @@ _PUBLIC_PREFIXES = (
     "/static/",
     "/_ds/",
 )
+
+# /metrics is CONDITIONALLY public — see ``_metrics_public``. It carries
+# operational data (model/tool inventory, cost, traffic) so it is exposed without
+# auth only in open mode (no token configured). Once a bearer / X-API-Key gates
+# the surface, the Prometheus scraper must authenticate too — set
+# ``PROTOAGENT_PUBLIC_METRICS=1`` to keep it anonymous behind a network boundary.
 
 # Plugin-declared auth-exempt prefixes. Set once at startup (and on reload) from
 # enabled plugins' manifest ``public_paths`` — each already validated to the
@@ -94,10 +99,28 @@ def set_public_prefixes(prefixes) -> None:
         logger.info("[a2a] %d plugin-declared auth-exempt path(s): %s", len(cleaned), ", ".join(cleaned))
 
 
+def _metrics_public() -> bool:
+    """Whether ``/metrics`` is reachable without auth.
+
+    Default: only in open mode (no bearer AND no X-API-Key configured), where the
+    whole surface is already unauthenticated. When any token gates the surface,
+    ``/metrics`` is gated too — unless ``PROTOAGENT_PUBLIC_METRICS=1`` keeps it
+    open for an anonymous Prometheus scraper fenced by a network boundary.
+    """
+    if os.environ.get("PROTOAGENT_PUBLIC_METRICS", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    return _BEARER[0] is None and not _API_KEY[0]
+
+
 def _is_public(path: str) -> bool:
     """Return True when ``path`` is on the public allowlist (no auth needed)."""
-    return (any(path.startswith(p) for p in _PUBLIC_PREFIXES)
-            or any(path.startswith(p) for p in _PLUGIN_PUBLIC))
+    if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+        return True
+    if any(path.startswith(p) for p in _PLUGIN_PUBLIC):
+        return True
+    if path.startswith("/metrics") and _metrics_public():
+        return True
+    return False
 
 
 def set_bearer_token(token: str | None) -> None:

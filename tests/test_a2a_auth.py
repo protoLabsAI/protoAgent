@@ -155,11 +155,38 @@ def test_ac2_healthz_public(monkeypatch):
     assert _client_multi().get("/healthz").status_code == 200
 
 
-# AC3: /metrics is public
-def test_ac3_metrics_public(monkeypatch):
+# AC3: /metrics is gated when a token is configured, public only in open mode,
+# and can be re-opened for an anonymous scraper via PROTOAGENT_PUBLIC_METRICS=1.
+def test_ac3_metrics_gated_when_token_set(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("PROTOAGENT_PUBLIC_METRICS", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/metrics").status_code == 401
+    assert c.get("/metrics", headers={"Authorization": "Bearer secret"}).status_code == 200
+
+
+def test_metrics_public_in_open_mode(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("PROTOAGENT_PUBLIC_METRICS", raising=False)
+    auth.configure(bearer_token=None, api_key="", allowed_origins_raw="")
+    assert _client_multi().get("/metrics").status_code == 200
+
+
+def test_metrics_public_optin_env(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("PROTOAGENT_PUBLIC_METRICS", "1")
     auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
     assert _client_multi().get("/metrics").status_code == 200
+
+
+def test_metrics_gated_when_only_api_key_set(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("PROTOAGENT_PUBLIC_METRICS", raising=False)
+    auth.configure(bearer_token=None, api_key="k", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/metrics").status_code == 401
+    assert c.get("/metrics", headers={"x-api-key": "k"}).status_code == 200
 
 
 # AC4: /.well-known/agent-card.json is public
@@ -395,9 +422,9 @@ def test_public_paths_stay_public_when_token_set(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
     auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
     c = _client_multi()
-    # Public allowlist paths are always accessible.
+    # Public allowlist paths are always accessible (/metrics is conditional now —
+    # covered by the metrics-policy tests above — so it is intentionally omitted).
     assert c.get("/healthz").status_code == 200
-    assert c.get("/metrics").status_code == 200
     assert c.get("/.well-known/agent-card.json").status_code == 200
     assert c.get("/app").status_code == 200
     assert c.get("/manifest.json").status_code == 200
@@ -448,7 +475,6 @@ def test_open_bind_optin_allowed_with_warning():
     "path,expected",
     [
         ("/healthz", True),
-        ("/metrics", True),
         ("/.well-known/agent-card.json", True),
         ("/.well-known/other", True),
         ("/app", True),
