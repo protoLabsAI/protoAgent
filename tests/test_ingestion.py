@@ -204,6 +204,22 @@ def test_extract_url_empty_raises():
         extract_url("   ")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud-metadata (link-local)
+        "http://127.0.0.1:7870/api/config",  # loopback
+        "http://[::1]/x",  # loopback (v6)
+        "file:///etc/passwd",  # no host / non-http scheme
+    ],
+)
+def test_http_fetch_blocks_internal_ssrf(url):
+    """The real URL fetcher applies the egress SSRF guard before any network I/O —
+    internal / metadata / loopback targets are refused (literal IPs need no DNS)."""
+    with pytest.raises(UnsupportedSource):
+        engine._http_fetch(url)
+
+
 # ── audio / video (gateway STT, injected transcribe + ffmpeg) ─────────────────
 
 
