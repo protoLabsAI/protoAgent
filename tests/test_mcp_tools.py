@@ -56,13 +56,15 @@ def test_stdio_default_strips_secret_named_vars(monkeypatch) -> None:
     monkeypatch.setenv("FOO_SECRET", "s")
     monkeypatch.setenv("FOO_PASSWORD", "p")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/run/ssh-agent.sock")  # capability handle → stripped
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:pw@h/db")  # DSN w/ creds → stripped
+    monkeypatch.setenv("SENTRY_DSN", "https://k@sentry/1")      # DSN → stripped
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gw/v1")      # base URL, not a secret → kept
     monkeypatch.setenv("MCP_TEST_PLAIN", "ok")                  # ordinary var → kept
     conn = _server_connection({"name": "fs", "transport": "stdio", "command": "npx"})
     env = conn["env"]
-    assert "FOO_TOKEN" not in env
-    assert "FOO_SECRET" not in env
-    assert "FOO_PASSWORD" not in env
-    assert "SSH_AUTH_SOCK" not in env
+    for stripped in ("FOO_TOKEN", "FOO_SECRET", "FOO_PASSWORD", "SSH_AUTH_SOCK", "DATABASE_URL", "SENTRY_DSN"):
+        assert stripped not in env, f"{stripped} should be stripped"
+    assert env.get("OPENAI_BASE_URL") == "https://gw/v1"  # base URLs are deliberately kept
     assert env.get("MCP_TEST_PLAIN") == "ok"
 
 

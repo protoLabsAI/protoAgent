@@ -95,8 +95,8 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
   this branch.)*
 - [x] **Strip secrets from stdio MCP subprocess env** — `High` · High · M —
   `tools/mcp_tools.py:108-118`. Default (`inherit_env` unset) → secret-filtered
-  passthrough (strip `*_TOKEN`/`*_SECRET`/`*API_KEY`/`*PASSWORD`/`*_KEY` + SSH/Kerberos/GPG
-  agent sockets); `inherit_env:
+  passthrough (strip `*_TOKEN`/`*_SECRET`/`*API_KEY`/`*PASSWORD`/`*_KEY` + DSN/DB
+  connection-strings + SSH/Kerberos/GPG agent sockets; base-URLs kept); `inherit_env:
   true` = explicit full passthrough escape hatch; `inherit_env: false` = minimal.
   **Breaks servers that relied on an implicitly-inherited secret env var** — they set
   `inherit_env: true` or a per-server `env:`. *(Authorized for launch; shipped on this
