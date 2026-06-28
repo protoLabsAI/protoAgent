@@ -603,6 +603,29 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     return {"id": plugin_id, "removed": removed, "deps_left": deps_left, "purged": purge}
 
 
+def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
+    """Reject ``requires_pip`` entries that aren't plain package requirements — a
+    pip option (``--index-url``/``-e``), a VCS/URL/direct reference, or junk — so a
+    plugin manifest can't inject pip flags (index hijack) or arbitrary build code
+    beyond the named packages an operator reviewed. ``--`` before the specs in the
+    pip argv is the belt to this suspenders."""
+    for d in deps:
+        s = str(d).strip()
+        low = s.lower()
+        if not s or s.startswith("-"):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} looks like a pip option, not a package."
+            )
+        if "://" in s or "@" in s or low.startswith(("git+", "hg+", "svn+", "bzr+", "file:")):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} is a VCS/URL/direct reference, which is not allowed."
+            )
+        if not _PKG_NAME_RE.match(s):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} is not a valid PEP 508 package requirement."
+            )
+
+
 def install_deps(plugin_id: str) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Returns the deps."""
@@ -616,6 +639,7 @@ def install_deps(plugin_id: str) -> list[str]:
     deps = list(manifest.requires_pip)
     if not deps:
         return []
+    _validate_pip_specs(plugin_id, deps)
     # Frozen runtime (desktop): no pip. The deps must already be bundled — confirm
     # (nothing to install) or refuse with a clear message (ADR 0058 D2).
     if _frozen_like():
@@ -628,7 +652,7 @@ def install_deps(plugin_id: str) -> list[str]:
         log.info("[plugins] %s deps already in the runtime — nothing to install", plugin_id)
         return deps
     proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", *deps],
+        [sys.executable, "-m", "pip", "install", "--", *deps],
         capture_output=True,
         text=True,
     )
