@@ -3,13 +3,14 @@ import { expect, test } from "@playwright/test";
 // The Telemetry section renders the per-turn rollups from
 // /api/telemetry/* (ADR 0006 Slice 3): summary cards + a recent-turns table.
 
-test("Global ▸ Telemetry shows the summary cards and recent turns", async ({ page }) => {
+test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Telemetry lives under the Global settings overlay now, deep-linked from the
-  // header hamburger → app drawer → Telemetry (folded in from the old Box rail).
-  await page.getByTestId("header-menu").click();
-  await page.getByTestId("app-drawer").getByRole("button", { name: "Telemetry", exact: true }).click();
+  // Telemetry is a section in the Settings dialog (Box group), opened from the utility-bar
+  // Settings pill — the single Settings door (ADR 0048; the drawer shortcut was removed).
+  await page.getByTestId("settings-widget").click();
+  await expect(page.locator(".settings-overlay")).toBeVisible();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Telemetry", exact: true }).click();
 
   const surface = page.getByTestId("telemetry-surface");
   await expect(surface).toBeVisible();
