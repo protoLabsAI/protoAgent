@@ -62,7 +62,7 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
 
 ## Batch 2 — Med churn × Low–Med LOE → contained, needs regression tests (one PR each)
 
-- [ ] **Plugin `public_paths` prefix-match auth bypass** — `High` · churn Med · LOE S–M —
+- [x] **Plugin `public_paths` prefix-match auth bypass** — `High` · churn Med · LOE S–M —
   `graph/plugins/manifest.py:141-146` + `a2a_impl/auth.py:88-100`. Boundary-less
   `startswith` lets a plugin with `id: install` + `public_paths:["/api/plugins/install"]`
   strip the bearer gate off the core install (RCE) route. Fix: require a trailing-slash
@@ -76,11 +76,11 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
   fallback cache (`139-153`) → make discovery signal failure distinctly; (c) MCP inline
   env/header secrets returned + stored unredacted (`386-391`) → route to `secrets.yaml`
   / mask.
-- [ ] **Plugin install/update/sync block the event loop** — `High` · Med · S–M —
+- [x] **Plugin install/update/sync block the event loop** — `High` · Med · S–M —
   `operator_api/plugin_routes.py:192,324,337,382` → `graph/plugins/installer.py`.
   `await asyncio.to_thread(installer.…)` in the handlers + bounded subprocess timeouts
   on clone/ls-remote. Self-DoS: one install freezes all chat/A2A/scheduler.
-- [ ] **`data` goal-verifier `eval()` escapable sandbox** — Low (adj) · Low–Med · S —
+- [x] **`data` goal-verifier `eval()` escapable sandbox** — Low (adj) · Low–Med · S —
   `graph/goals/verifiers.py:178-184`. Replace `eval()` with the AST-whitelist approach
   from `tools/lg_tools.py:_safe_eval` (reject `Attribute`/`Call`/comprehensions); fix the
   misleading "blocks exec/eval" comment. *(Low on its own — the sibling `command`
