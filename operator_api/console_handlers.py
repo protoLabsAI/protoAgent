@@ -16,6 +16,7 @@ imported under the same alias names the bodies use, and the one captured local
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 
@@ -386,7 +387,7 @@ def _inbox_authorized(token: str | None) -> bool:
     ).strip()
     if not active:
         return True
-    return (token or "") == active
+    return hmac.compare_digest(token or "", active)
 
 
 async def _fire_activity_from_inbox(item: dict) -> bool:
