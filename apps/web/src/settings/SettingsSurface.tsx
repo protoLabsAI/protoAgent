@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, Keyboard, Layers, MessageSquare, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Gauge, Keyboard, MessageSquare, Network, Palette, Plug, Puzzle, Server, Share2, SlidersHorizontal, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -6,7 +6,6 @@ import { SideNav, Tabs } from "@protolabsai/ui/navigation";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
 import { McpPanel } from "../app/McpPanel";
-import { MiddlewarePanel } from "../app/MiddlewarePanel";
 import { SubagentsPanel } from "../app/SubagentsPanel";
 import { ToolsPanel } from "../app/ToolsPanel";
 import { isHostConsole } from "../lib/api";
@@ -22,54 +21,21 @@ import { OverviewPanel } from "./OverviewPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
 
-// Settings IA (ADR 0047/0048 — consolidated 2026-06). There is ONE settings surface: the
-// focused agent's settings. "Global" is no longer a separate home — it's simply this surface
-// when your focused agent is the host (host-scoped fields are the box defaults every agent
-// inherits). The sidenav splits into two labeled groups:
+// Settings IA (ADR 0048, ratified 2026-06-28). ONE surface, organized by DOMAIN — what a
+// setting *does* — not by scope. Scope (host vs agent) is a per-field inheritance badge
+// (ADR 0047), never a nav axis. The sidenav splits into labeled groups:
 //
-//   Agent — everything that defines the focused agent. Host-scoped fields here carry an
-//           inheritance badge (ADR 0047): on a fleet member, "inherited from host" + override;
-//           on the host console, "box default" (you're setting what others inherit).
-//   Box   — box-wide ops (Fleet · Telemetry). Host-console only. (Shared skills live in
-//           Agent ▸ Skills — the commons is browsed + shared from there, not a separate panel.)
+//   Agent        — what defines the focused agent: Identity · Model · Behavior · Knowledge ·
+//                  Integrations (Plugins). Schema-driven domains carry the ADR 0047 badge.
+//   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates,
+//                  plus the Sharing & tiers knobs.
+//   Box          — box-wide ops (HOST CONSOLE ONLY): Overview · Fleet · Telemetry · Box config.
+//   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard.
 
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
 
-// The focused agent's makeup + field settings. Host-scoped fields (model gateway · routing ·
-// caching · org · telemetry/fleet runtime) appear inline in Model & Routing / Memory / System
-// with their ADR 0047 inheritance badge.
-const AGENT_SECTIONS: Section[] = [
-  { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
-  // id stays "settings" for persisted-section compat; the label is the un-nested name.
-  { id: "settings", label: "Model & Routing", icon: Settings2, render: () => <SettingsCategoryPanel category="Agent" title="Model & Routing" /> },
-  { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
-  { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
-  { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
-  { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
-  { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
-  { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
-  { id: "middleware", label: "Middleware", icon: Layers, render: () => <MiddlewarePanel /> },
-  { id: "memory", label: "Memory", icon: Database, render: () => <SettingsCategoryPanel category="Memory" title="Memory" /> },
-  { id: "system", label: "System", icon: Settings2, render: () => <SettingsCategoryPanel category="System" title="System" /> },
-  { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
-  { id: "chat", label: "Chat", icon: MessageSquare, render: () => <ChatSettingsPanel /> },
-  { id: "keybindings", label: "Keyboard", icon: Keyboard, render: () => <KeybindingsPanel /> },
-];
-
-// Box-wide operations (host console only) — the former Global ▸ Fleet/Telemetry.
-// The old Global ▸ Configuration section is GONE: host-scoped FIELDS are edited inline in the
-// Agent group (on the host they write the host layer; elsewhere they override per-agent).
-// Shared Skills folded into Agent ▸ Skills (PlaybooksSurface) — it already browses the
-// commons (tier badges) and shares/unshares from there, so a separate panel was redundant.
-const BOX_SECTIONS: Section[] = [
-  { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
-  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-];
-
-// The Plugins manager (install · enable · configure, plus the Discover directory) lives
-// in Settings ▸ Plugins. Per-plugin config is inline per row (ADR 0059); the delegate
-// registry is built-in core infrastructure with its own Delegates section.
+// The Plugins manager (install · enable · configure, plus the Discover directory) — the
+// Integrations domain. Per-plugin config is inline per row (ADR 0059).
 function PluginSettingsHome() {
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
@@ -89,9 +55,58 @@ function PluginSettingsHome() {
   );
 }
 
-// One consolidated settings surface. `only` is accepted but ignored (legacy callers) — there
-// is a single home now; the Box group is gated to the host console. `initialSection`
-// deep-links a section (the overlay / a ⌘K command).
+// Identity domain: the bespoke Identity panel (name + persona/SOUL via /api/config) followed
+// by the schema-driven identity/operator/access fields (operator · org · project dir · A2A token).
+function IdentityHome() {
+  return (
+    <>
+      <IdentityPanel />
+      <SettingsCategoryPanel category="Identity" title="Operator & access" />
+    </>
+  );
+}
+
+// AGENT — what defines the focused agent (schema domains + the bespoke Identity panel).
+const AGENT_SECTIONS: Section[] = [
+  { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityHome /> },
+  // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
+  // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
+  { id: "model", label: "Model", icon: Cpu, render: () => <SettingsCategoryPanel category="Model" title="Model & routing" /> },
+  { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
+  { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
+  { id: "plugins", label: "Integrations", icon: Puzzle, render: () => <PluginSettingsHome /> },
+];
+
+// CAPABILITIES — what the agent is wired to (rich bespoke managers) + the sharing/tier knobs.
+const CAPABILITY_SECTIONS: Section[] = [
+  { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
+  { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
+  { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
+  { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
+  { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
+  { id: "sharing", label: "Sharing & tiers", icon: Share2, render: () => <SettingsCategoryPanel category="Capabilities" title="Sharing & tiers" emptyHint="No sharing tiers to configure." /> },
+];
+
+// BOX — box-wide operations (host console only). Overview/Fleet/Telemetry are bespoke surfaces;
+// "Box config" is the schema home for the host box-runtime + telemetry knobs (ADR 0047 D8).
+const BOX_SECTIONS: Section[] = [
+  { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
+  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
+  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
+  { id: "boxconfig", label: "Box config", icon: SlidersHorizontal, render: () => <SettingsCategoryPanel category="Box" title="Box config" emptyHint="No box-wide config on this box yet." /> },
+];
+
+// THIS CONSOLE — device-local preferences. These don't cascade and use their own backends
+// (Theme → /api/theme; Chat/Keyboard → the persisted UI store). Kept visibly separate from
+// agent config so the "this device vs this agent" line is obvious (ADR 0048 §2.4).
+const CONSOLE_SECTIONS: Section[] = [
+  { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
+  { id: "chat", label: "Chat", icon: MessageSquare, render: () => <ChatSettingsPanel /> },
+  { id: "keybindings", label: "Keyboard", icon: Keyboard, render: () => <KeybindingsPanel /> },
+];
+
+// One consolidated settings surface. `initialSection` deep-links a section (the overlay / a ⌘K
+// command). The Box group is gated to the host console.
 export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
   const onHost = isHostConsole();
   const persistedSection = useUI((s) => s.settingsSection);
@@ -102,12 +117,19 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     if (initialSection) setSection(initialSection);
   }, [initialSection, setSection]);
 
-  const sections = onHost ? [...AGENT_SECTIONS, ...BOX_SECTIONS] : AGENT_SECTIONS;
+  const sections = [
+    ...AGENT_SECTIONS,
+    ...CAPABILITY_SECTIONS,
+    ...(onHost ? BOX_SECTIONS : []),
+    ...CONSOLE_SECTIONS,
+  ];
   const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
   const toItem = (s: Section) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> });
   const groups = [
     { label: "Agent", items: AGENT_SECTIONS.map(toItem) },
+    { label: "Capabilities", items: CAPABILITY_SECTIONS.map(toItem) },
     ...(onHost ? [{ label: "Box", items: BOX_SECTIONS.map(toItem) }] : []),
+    { label: "This console", items: CONSOLE_SECTIONS.map(toItem) },
   ];
 
   return (

@@ -260,12 +260,19 @@ export function migrateUiState(persisted: unknown): unknown {
       );
     }
     // v14 (ADR 0048 ratified — domain-first IA): drop the dead `settingsScope` "two homes"
-    // axis (no view ever read it). The persisted `settingsSection: "overview"` was the old
-    // default and is a host-only Box section — retarget it to the new universal default
-    // ("identity", the first Agent domain) so a fleet member doesn't land on a missing section.
+    // axis (no view ever read it), and remap the old section ids to the new domain ids so a
+    // persisted `settingsSection` still resolves (else it falls back to the first section).
+    // "overview" was the old default and is a host-only Box section → "identity".
     delete (rest as Record<string, unknown>).settingsScope;
-    if (rest.settingsSection === "overview" || rest.settingsSection === "settings") {
-      rest.settingsSection = "identity";
+    const SECTION_REMAP: Record<string, string> = {
+      overview: "identity", // old default (host-only Box) → first Agent domain
+      settings: "model", // old "Model & Routing" id
+      memory: "knowledge",
+      system: "behavior",
+      middleware: "behavior",
+    };
+    if (typeof rest.settingsSection === "string" && rest.settingsSection in SECTION_REMAP) {
+      rest.settingsSection = SECTION_REMAP[rest.settingsSection];
     }
     // v13 (hidden surfaces): railOrder gains a `hidden` bucket (enabled-but-not-shown
     // surfaces). Complete the shape with [] for a layout that predates it. Runs LAST — the
