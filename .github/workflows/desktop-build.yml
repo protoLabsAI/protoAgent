@@ -82,17 +82,17 @@ jobs:
             target: x86_64-pc-windows-msvc
             bundles: nsis
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -337,7 +337,7 @@ jobs:
 
       - name: Upload dispatch artifact
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: protoAgent-${{ steps.version.outputs.version }}-${{ matrix.target }}
           path: dist-desktop/*
@@ -371,12 +371,12 @@ jobs:
       # in-app updater notes (below). By tag-push time CHANGELOG.md already holds the
       # dated `## [VERSION]` section — the bump PR (prepare-release.yml) merged before
       # the tag. Without this the job has no working tree (it only `gh release`s).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 

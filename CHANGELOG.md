@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CI off the deprecated Node 20 action runtime** (#1391) — bumped every GitHub Actions pin across
+  the nine workflow files to the lowest major that runs natively on Node 24, so runs no longer log
+  GitHub's "Node.js 20 is deprecated" annotation. Notable non-`+1` jumps where the next major was
+  still Node 20: `upload-artifact` v4 → **v6**, `build-push-action` v5 → **v7**, and
+  `attest-build-provenance` v1 → **v3** (its v2 leaf `actions/attest` was still Node 20). All are
+  pure-runtime bumps for our usage — no input/behavior changes; the new majors need Actions Runner
+  ≥ 2.327.1, which GitHub-hosted runners (all we use) already satisfy.
+
 ## [0.72.0] - 2026-06-28
 
 ### Added
