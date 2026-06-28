@@ -27,7 +27,7 @@ test("Get models refreshes the Primary model dropdown with the gateway's models 
 
   // Pull the gateway's models (POST /api/config/models → the mock's GATEWAY_MODELS).
   await page.getByRole("button", { name: "Get models" }).click();
-  await expect(page.locator(".settings-status")).toContainText(/found 3 models/i);
+  await expect(page.locator(".pl-toast", { hasText: /found 3 models/i })).toBeVisible();
 
   // The freshly-probed models are now selectable — picking protolabs/smart (which was NOT in the
   // saved options) proves the dropdown refreshed, so switching gateway is no longer a dead-end.

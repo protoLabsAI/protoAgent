@@ -3,7 +3,7 @@ import "./delegates.css";
 
 import { DropdownSelect, Input, RadioCard, RadioCardGroup, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { Dialog } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 
 import { StatusDot } from "@protolabsai/ui/data";
 
@@ -65,8 +65,9 @@ export function DelegatesSection() {
   const types = useQuery(delegateTypesQuery());
   const [editing, setEditing] = useState<DelegateView | null>(null);
   const [adding, setAdding] = useState(false);
-  const [status, setStatus] = useState("");
+  // Per-row probe chips (test results) stay inline; transient add/remove/save feedback toasts.
   const [probes, setProbes] = useState<Record<string, DelegateProbe>>({});
+  const toast = useToast();
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.delegates });
   const closeForm = () => { setAdding(false); setEditing(null); };
@@ -74,10 +75,10 @@ export function DelegatesSection() {
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteDelegate(name),
     onSuccess: (r) => {
-      setStatus(r.message || "deleted");
+      toast({ tone: "success", title: "Delegate removed", message: r.message || "Removed." });
       void invalidate();
     },
-    onError: (e) => setStatus(`delete failed: ${errMsg(e)}`),
+    onError: (e) => toast({ tone: "error", title: "Remove failed", message: errMsg(e) }),
   });
 
   const testRow = useMutation({
@@ -151,8 +152,6 @@ export function DelegatesSection() {
         {!delegates.length ? <p className="setting-desc">No delegates yet — add one below.</p> : null}
       </div>
 
-      {status ? <p className="settings-inline-status">{status}</p> : null}
-
       <div className="settings-group-actions">
         <Button type="button" onClick={() => { setEditing(null); setAdding(true); }} disabled={!typeSpecs.length}>
           <Plus size={15} /> Add delegate
@@ -174,7 +173,7 @@ export function DelegatesSection() {
           spec={typeSpecs}
           initial={editing}
           onClose={closeForm}
-          onSaved={(msg) => { closeForm(); setStatus(msg); void invalidate(); }}
+          onSaved={(msg) => { closeForm(); toast({ tone: "success", title: "Delegate saved", message: msg }); void invalidate(); }}
         />
       </Dialog>
     </section>

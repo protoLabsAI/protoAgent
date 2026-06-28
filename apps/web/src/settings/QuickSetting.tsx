@@ -1,7 +1,7 @@
 import "./settings.css";
 
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { Dialog } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Loader2, Save, Settings2 } from "lucide-react";
@@ -85,7 +85,9 @@ function QuickSettingDialog({
   const queryClient = useQueryClient();
   const schema = useQuery(settingsSchemaQuery());
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
-  const [status, setStatus] = useState("");
+  // Action feedback is a TOAST, not an inline line — the in-progress state is on the Save
+  // button's pending spinner; transient success/error belongs in the global toaster.
+  const toast = useToast();
 
   const fields = useMemo<SettingsField[]>(() => {
     const byKey = new globalThis.Map<string, SettingsField>();
@@ -99,16 +101,16 @@ function QuickSettingDialog({
 
   const save = useMutation({
     mutationFn: () => api.saveSettings(dirty, layer),
-    onMutate: () => setStatus("saving…"),
     onSuccess: (r) => {
       if (!r.ok) {
-        setStatus(`save failed: ${r.messages.join(" · ")}`);
+        toast({ tone: "error", title: "Save failed", message: r.messages.join(" · ") });
         return;
       }
+      toast({ tone: "success", title: "Saved", message: "Settings applied." });
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
       onClose();
     },
-    onError: (e) => setStatus(`save failed: ${errMsg(e)}`),
+    onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),
   });
 
   const dirtyKeys = Object.keys(dirty);
@@ -161,7 +163,6 @@ function QuickSettingDialog({
           ))}
         </div>
       )}
-      {status ? <p className="settings-status">{status}</p> : null}
     </Dialog>
   );
 }

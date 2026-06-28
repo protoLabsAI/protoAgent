@@ -7,6 +7,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
+import { useToast } from "@protolabsai/ui/overlays";
 
 // Author a workflow recipe from the console (Sprint C): name + inputs + steps
 // (id, subagent, prompt, depends_on) + output → POST /api/workflows, which
@@ -26,6 +27,7 @@ export function WorkflowBuilder({
   onSaved: (name: string) => void;
   onCancel: () => void;
 }) {
+  const toast = useToast();
   const fallback = subagents[0] || "researcher";
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -35,7 +37,6 @@ export function WorkflowBuilder({
   ]);
   const [output, setOutput] = useState("");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
 
   const setStep = (i: number, patch: Partial<Step>) =>
     setSteps((s) => s.map((st, j) => (j === i ? { ...st, ...patch } : st)));
@@ -57,7 +58,6 @@ export function WorkflowBuilder({
 
   async function save() {
     setSaving(true);
-    setError("");
     const last = steps[steps.length - 1].id.trim();
     const recipe: Record<string, unknown> = {
       name: name.trim(),
@@ -76,9 +76,11 @@ export function WorkflowBuilder({
     if (description.trim()) recipe.description = description.trim();
     try {
       const r = await api.saveWorkflow(recipe);
-      onSaved(r.name || name.trim());
+      const saved = r.name || name.trim();
+      toast({ tone: "success", title: "Workflow saved", message: `${saved} is ready to run.` });
+      onSaved(saved);
     } catch (e) {
-      setError(errMsg(e));
+      toast({ tone: "error", title: "Couldn't save workflow", message: errMsg(e) });
     } finally {
       setSaving(false);
     }
@@ -193,8 +195,6 @@ export function WorkflowBuilder({
           placeholder={`default: {{steps.${steps[steps.length - 1].id.trim() || "lastStep"}.output}}`}
         />
       </label>
-
-      {error && <p className="workflow-failed">{error}</p>}
 
       <div className="panel-actions">
         <Button variant="ghost" type="button" onClick={onCancel} disabled={saving}>

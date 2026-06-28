@@ -117,7 +117,7 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/turbo");
   await expect(save).toBeEnabled();
   await save.click();
-  await expect(page.locator(".settings-status")).toContainText("config saved");
+  await expect(page.locator(".pl-toast", { hasText: "config saved" })).toBeVisible();
 });
 
 test("a restart-flagged System field shows the restart banner", async ({ page }) => {
@@ -153,7 +153,7 @@ test("a host-scoped edit on the host console saves to the host layer", async ({ 
   await expandAllGroups(page);
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/host-fast");
   await page.getByRole("button", { name: /Save & apply/ }).click();
-  await expect(page.locator(".settings-status")).toContainText("(host)");
+  await expect(page.locator(".pl-toast", { hasText: "(host)" })).toBeVisible();
 });
 
 // On a FLEET MEMBER console (/agent/<slug>/) the same fields show the ADR 0047 inheritance
@@ -174,6 +174,6 @@ test("per-agent (fleet member) settings show ADR 0047 inheritance badges + reset
   const temp = page.locator('.setting-row[data-key="model.temperature"]');
   await expect(temp.locator(".setting-inheritance")).toContainText("overridden here");
   await temp.getByRole("button", { name: /Reset to inherited/ }).click();
-  await expect(page.locator(".settings-status")).toContainText("inherited");
+  await expect(page.locator(".pl-toast", { hasText: /inherited/i })).toBeVisible();
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
 });

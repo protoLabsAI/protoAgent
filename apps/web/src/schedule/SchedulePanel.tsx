@@ -2,7 +2,7 @@ import "./schedule.css";
 
 import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
-import { ConfirmDialog, Dialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import {
   useMutation,
   useQueryClient,
@@ -189,14 +189,12 @@ function ScheduleDetailDialog({
   onSave,
   onDelete,
   busy,
-  error,
 }: {
   job: ScheduledJob | null;
   onClose: () => void;
   onSave: (id: string, body: { prompt: string; schedule: string; timezone?: string }) => void;
   onDelete: (id: string) => void;
   busy: boolean;
-  error?: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -250,7 +248,6 @@ function ScheduleDetailDialog({
       }
     >
       <div className="schedule-form" data-testid="schedule-detail">
-        {error ? <p className="settings-status">Couldn't save: {error}</p> : null}
         {editing ? (
           <>
             <label className="field">
@@ -303,10 +300,17 @@ function ScheduleBody() {
   const confirmJob = jobs.find((j) => j.id === confirmDeleteId) ?? null;
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.schedules });
+  // Transient action feedback is a TOAST, not an inline line — the in-progress state
+  // already shows on each button's disabled/pending affordance.
+  const toast = useToast();
 
   const add = useMutation({
     mutationFn: (body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) => api.addSchedule(body),
-    onSuccess: () => setModalOpen(false),
+    onSuccess: () => {
+      setModalOpen(false);
+      toast({ tone: "success", title: "Scheduled", message: "The job was added." });
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't schedule", message: errMsg(e) }),
     onSettled: invalidate,
   });
   const cancel = useMutation({ mutationFn: (id: string) => api.cancelSchedule(id), onSettled: invalidate });
@@ -315,7 +319,11 @@ function ScheduleBody() {
   const edit = useMutation({
     mutationFn: ({ id, body }: { id: string; body: { prompt: string; schedule: string; timezone?: string } }) =>
       api.updateSchedule(id, body),
-    onSuccess: () => setDetailId(null),
+    onSuccess: () => {
+      setDetailId(null);
+      toast({ tone: "success", title: "Schedule updated", message: "Your changes were saved." });
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't save the job", message: errMsg(e) }),
     onSettled: invalidate,
   });
   const busy = add.isPending || cancel.isPending || edit.isPending;
@@ -337,7 +345,6 @@ function ScheduleBody() {
       />
 
       <div className="stage-body">
-        {add.isError ? <p className="settings-status">Couldn't schedule: {errMsg(add.error)}</p> : null}
         <div className="subagent-list">
           {jobs.length ? (
             jobs.map((job) => (
@@ -376,7 +383,6 @@ function ScheduleBody() {
         onSave={(id, body) => edit.mutate({ id, body })}
         onDelete={(id) => setConfirmDeleteId(id)}
         busy={busy}
-        error={edit.isError ? errMsg(edit.error) : null}
       />
       <ConfirmDialog
         open={confirmDeleteId !== null}

@@ -7,10 +7,11 @@ import { useState } from "react";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
 import { EditableText, Switch } from "@protolabsai/ui/forms";
-import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
 import { api, currentSlug } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import type { DiscoveredAgent, FleetAgent } from "../lib/types";
 
@@ -21,16 +22,19 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const qc = useQueryClient();
   const fleet = useQuery(fleetQuery());
   const [busy, setBusy] = useState<string | null>(null); // name currently being acted on
-  const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<FleetAgent | null>(null);
   const [purge, setPurge] = useState(false);
+  // Transient action feedback (rename / start / stop / add / discover failures) is a TOAST —
+  // the global toaster, not an inline line. The in-progress state already rides each button's
+  // disabled spinner, so there's no "…ing" toast. (The one exception is the actionable
+  // enable-delegates banner below, which carries a retry button a toast can't.)
+  const toast = useToast();
 
   // Display rename (the id — and so the URL slug + data scope — never changes).
   const [renaming, setRenaming] = useState<string | null>(null); // the id being renamed
   const rename = useMutation({
     mutationFn: ({ id, name }: { id: string; name: string }) => api.renameAgent(id, name),
-    onMutate: () => setError(null),
-    onError: (e: Error) => setError(e.message),
+    onError: (e) => toast({ tone: "error", title: "Rename failed", message: errMsg(e) }),
     onSettled: () => {
       setRenaming(null);
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
@@ -45,8 +49,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
 
   const run = useMutation({
     mutationFn: async (fn: () => Promise<unknown>) => fn(),
-    onMutate: () => setError(null),
-    onError: (e: Error) => setError(e.message),
+    onError: (e) => toast({ tone: "error", title: "Action failed", message: errMsg(e) }),
     onSettled: () => {
       setBusy(null);
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
@@ -71,16 +74,15 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const addDelegate = useMutation({
     mutationFn: (entry: { name: string; url: string }) =>
       api.createDelegate({ name: entry.name, type: "a2a", url: entry.url }),
-    onMutate: () => {
-      setError(null);
-      setNeedsEnable(null);
-    },
+    onMutate: () => setNeedsEnable(null),
     onError: (e: Error, entry) => {
+      // A 404 means the focused agent doesn't serve /api/delegates yet — surface the
+      // actionable enable-and-retry banner (needsEnable) instead of a transient toast,
+      // since it carries a retry button. Any other failure is a plain error toast.
       if (/404|not found/i.test(e.message)) {
         setNeedsEnable(entry);
-        setError("This agent can't hold delegates yet — the delegates plugin isn't enabled on it.");
       } else {
-        setError(e.message);
+        toast({ tone: "error", title: "Couldn't add delegate", message: errMsg(e) });
       }
     },
     onSettled: () => {
@@ -97,12 +99,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       }
       return entry;
     },
-    onMutate: () => setError(null),
     onSuccess: (entry) => {
       setNeedsEnable(null);
       addDelegate.mutate(entry); // routes are hot-mounted on the reload — retry the add now
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e) => toast({ tone: "error", title: "Couldn't enable delegates", message: errMsg(e) }),
   });
 
   // Network discovery (ADR 0042 §I) — scan the box + LAN for OTHER protoAgents (not in this
@@ -111,11 +112,10 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const [discovered, setDiscovered] = useState<DiscoveredAgent[] | null>(null);
   const scan = async () => {
     setScanning(true);
-    setError(null);
     try {
       setDiscovered((await api.discoverAgents()).discovered);
     } catch (e) {
-      setError((e as Error).message);
+      toast({ tone: "error", title: "Discovery failed", message: errMsg(e) });
     } finally {
       setScanning(false);
     }
@@ -129,8 +129,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // collide with existing agents (every template fork is "protoagent") — suffix on 400.
   const addMember = useMutation({
     mutationFn: (d: DiscoveredAgent) => api.addRemoteAgent({ name: d.name, url: d.url }),
-    onMutate: () => setError(null),
-    onError: (e: Error) => setError(e.message),
+    onError: (e) => toast({ tone: "error", title: "Couldn't add to fleet", message: errMsg(e) }),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
       void scan(); // the new member drops out of the discover list
@@ -138,8 +137,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   });
   const removeMember = useMutation({
     mutationFn: (a: FleetAgent) => api.removeRemoteAgent(a.id),
-    onMutate: () => setError(null),
-    onError: (e: Error) => setError(e.message),
+    onError: (e) => toast({ tone: "error", title: "Couldn't remove member", message: errMsg(e) }),
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
 
@@ -155,10 +153,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         }
       />
       <div className="stage-body">
-        {error ? (
+        {/* The one error that stays inline: a 404 add-delegate carries an actionable
+            enable-and-retry banner (the focused agent's delegates plugin isn't enabled).
+            Plain action failures are transient toasts; this one needs its retry button. */}
+        {needsEnable ? (
           <Alert
             status="error"
-            action={needsEnable ? (
+            action={
               <Button
                 variant="default"
                 disabled={enableDelegates.isPending || addDelegate.isPending}
@@ -166,9 +167,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                 data-testid="enable-delegates">
                 {enableDelegates.isPending ? "Enabling…" : "Enable delegates on this agent"}
               </Button>
-            ) : undefined}
+            }
           >
-            {error}
+            This agent can't hold delegates yet — the delegates plugin isn't enabled on it.
           </Alert>
         ) : null}
         {fleet.isLoading ? (

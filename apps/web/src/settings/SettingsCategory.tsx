@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
+import { useToast } from "@protolabsai/ui/overlays";
 import { StagePanel } from "../app/ErrorBoundary";
 import { HelpLink, TestConnectionButton } from "../app/ui-kit";
 import { agentHref, api, isHostConsole } from "../lib/api";
@@ -123,8 +124,10 @@ export function SettingsCategory({
       .filter((g) => g.fields.length);
   }, [data.groups, category, categories, hostLayer, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
-  const [status, setStatus] = useState("");
   const dirtyKeys = Object.keys(dirty);
+  // Action feedback is a TOAST, not an inline line — transient success/error belongs in the
+  // global toaster (the in-progress state is already on each button's pending spinner).
+  const toast = useToast();
 
   // #963 — conditional field visibility. The live value of every in-scope field
   // (the dirty edit if any, else the saved value), so a `depends_on` predicate is
@@ -176,15 +179,14 @@ export function SettingsCategory({
         restart_required: rs.flatMap((r) => r.restart_required),
       };
     },
-    onMutate: () => setStatus("saving…"),
     onSuccess: (r) => {
-      if (!r.ok) { setStatus(`save failed: ${r.messages.join(" · ")}`); return; }
-      const restartNote = r.restart_required.length ? ` — restart required for: ${r.restart_required.join(", ")}` : "";
-      setStatus(`${r.messages.join(" · ")}${restartNote}`);
+      if (!r.ok) { toast({ tone: "error", title: "Save failed", message: r.messages.join(" · ") }); return; }
+      const restartNote = r.restart_required.length ? `Restart required for: ${r.restart_required.join(", ")}` : "";
+      toast({ tone: "success", title: "Settings saved", message: restartNote || r.messages.join(" · ") || "Applied." });
       setDirty({});
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
-    onError: (e) => setStatus(`save failed: ${errMsg(e)}`),
+    onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),
   });
 
   // ADR 0047 reset-to-inherited — pop one (or more) overridden keys from the agent
@@ -192,23 +194,24 @@ export function SettingsCategory({
   // so the badges + values re-resolve to the inherited source (consistent with save).
   const reset = useMutation({
     mutationFn: (keys: string[]) => api.resetSettings(keys),
-    onMutate: () => setStatus("resetting to inherited…"),
     onSuccess: (r, keys) => {
-      if (!r.ok) { setStatus(`reset failed: ${r.messages.join(" · ")}`); return; }
-      setStatus(r.messages.join(" · "));
+      if (!r.ok) { toast({ tone: "error", title: "Reset failed", message: r.messages.join(" · ") }); return; }
+      toast({ tone: "success", title: "Reset to inherited", message: r.messages.join(" · ") || "Back to the inherited value." });
       // Drop any pending edit on the reset keys — the inherited value is now authoritative.
       setDirty((d) => { const next = { ...d }; for (const k of keys) delete next[k]; return next; });
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
-    onError: (e) => setStatus(`reset failed: ${errMsg(e)}`),
+    onError: (e) => toast({ tone: "error", title: "Reset failed", message: errMsg(e) }),
   });
 
   const asStr = (v: unknown) => (typeof v === "string" ? v : "");
   const testConn = useMutation({
     mutationFn: () => api.testModel(asStr(dirty["model.api_base"]), asStr(dirty["model.api_key"]), asStr(dirty["model.name"])),
-    onMutate: () => setStatus("testing connection…"),
-    onSuccess: (r) => setStatus(r.ok ? "connection OK — the model responded." : `connection failed — ${r.error || "no response"}`),
-    onError: (e) => setStatus(`connection test failed: ${errMsg(e)}`),
+    onSuccess: (r) =>
+      r.ok
+        ? toast({ tone: "success", title: "Connection OK", message: "The model responded." })
+        : toast({ tone: "error", title: "Connection failed", message: r.error || "no response" }),
+    onError: (e) => toast({ tone: "error", title: "Connection test failed", message: errMsg(e) }),
   });
 
   // "Get models" (#1386): probe the gateway named on the FORM — its api_base/key, which may be
@@ -224,17 +227,16 @@ export function SettingsCategory({
     // api_base: the form edit, else the saved value. api_key: the form edit, else blank — the
     // server falls back to the saved (secret) key, which never leaves localStorage as plaintext.
     mutationFn: () => api.models(asStr(dirty["model.api_base"]) || asStr(apiBaseField?.value), asStr(dirty["model.api_key"])),
-    onMutate: () => setStatus("fetching models from the gateway…"),
     onSuccess: (r) => {
-      if (r.error) { setStatus(`couldn't fetch models — ${r.error}`); return; }
+      if (r.error) { toast({ tone: "error", title: "Couldn't fetch models", message: r.error }); return; }
       setGatewayModels(r.models);
-      setStatus(
+      toast(
         r.models.length
-          ? `found ${r.models.length} model${r.models.length === 1 ? "" : "s"} — pick one in Primary model, then Test connection.`
-          : "the gateway returned no models.",
+          ? { tone: "success", title: `Found ${r.models.length} model${r.models.length === 1 ? "" : "s"}`, message: "Pick one in Primary model, then Test connection." }
+          : { tone: "info", title: "No models", message: "The gateway returned no models." },
       );
     },
-    onError: (e) => setStatus(`couldn't fetch models — ${errMsg(e)}`),
+    onError: (e) => toast({ tone: "error", title: "Couldn't fetch models", message: errMsg(e) }),
   });
   // Merge the freshly-probed models into a model-backed field's options (new gateway's models
   // first, then whatever was saved), so the dropdown isn't stuck on the old provider's list.
@@ -256,13 +258,15 @@ export function SettingsCategory({
   };
   const testGroup = useMutation({
     mutationFn: (vars: { endpoint: string; fields: Record<string, unknown> }) => api.testConfig(vars.endpoint, vars.fields),
-    onMutate: () => setStatus("testing connection…"),
-    onSuccess: (r) => setStatus(r.ok ? `connection OK${r.identity ? ` — ${r.identity}` : ""}` : `connection failed — ${r.error || "no response"}`),
-    onError: (e) => setStatus(`connection test failed: ${errMsg(e)}`),
+    onSuccess: (r) =>
+      r.ok
+        ? toast({ tone: "success", title: "Connection OK", message: r.identity || "Connected." })
+        : toast({ tone: "error", title: "Connection failed", message: r.error || "no response" }),
+    onError: (e) => toast({ tone: "error", title: "Connection test failed", message: errMsg(e) }),
     onSettled: () => setTestingSection(null),
   });
 
-  const discard = () => { setDirty({}); setStatus(""); };
+  const discard = () => setDirty({});
 
   // The fields + Test/Connect for one group — rendered inside an AccordionItem in the
   // full Settings view, or flat (no accordion) when folded into a plugin's row (ADR 0059).
@@ -355,7 +359,6 @@ export function SettingsCategory({
             Needs a restart to take effect: {pendingRestart.join(", ")}
           </Alert>
         ) : null}
-        {status ? <p className="settings-status">{status}</p> : null}
         {!groups.length && !footer ? <p className="muted">{emptyHint || "Nothing to configure here."}</p> : null}
 
         {/* Each field group is a collapsible accordion (DS 0.29) so a dense category

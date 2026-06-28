@@ -4,8 +4,8 @@ import { useState } from "react";
 
 import { Input, RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
-import { Alert } from "@protolabsai/ui/data";
 import { PanelHeader } from "@protolabsai/ui/navigation";
+import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
 import { archetypesQuery, queryKeys } from "../lib/queries";
@@ -19,10 +19,10 @@ const NAME_RE = /^[A-Za-z0-9-_]+$/;
 // POST returns once the agent is up, so the button shows a spinner until then.
 export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) => void; onCancel?: () => void }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const archetypes = useQuery(archetypesQuery());
   const [picked, setPicked] = useState<string>("basic");
   const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
   // agent from a bundle and has no SOUL editor, so Custom would just duplicate Basic.
@@ -32,11 +32,12 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
 
   const create = useMutation({
     mutationFn: () => api.createAgent({ name: name.trim(), bundle: archetype?.bundle ?? null }),
-    onMutate: () => setError(null),
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => toast({ tone: "error", title: "Couldn't create agent", message: e.message }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
-      onDone?.(res.agent?.name ?? name.trim());
+      const created = res.agent?.name ?? name.trim();
+      toast({ tone: "success", title: "Agent created", message: `${created} is ready.` });
+      onDone?.(created);
     },
   });
 
@@ -54,8 +55,6 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         }
       />
       <div className="stage-body">
-        {error ? <Alert status="error">{error}</Alert> : null}
-
         <p className="fleet-section-label">Archetype</p>
         <RadioCardGroup name="archetype" min="160px" value={picked} onValueChange={setPicked}>
           {list.map((a: Archetype) => (

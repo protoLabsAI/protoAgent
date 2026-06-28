@@ -1,6 +1,6 @@
 import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button, Empty } from "@protolabsai/ui/primitives";
-import { Dialog } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -21,6 +21,7 @@ import {
 import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { tasksQuery, queryKeys } from "../lib/queries";
@@ -64,13 +65,11 @@ function TaskCreateDialog({
   onClose,
   onCreate,
   busy,
-  error,
 }: {
   open: boolean;
   onClose: () => void;
   onCreate: (draft: IssueDraft) => void;
   busy: boolean;
-  error?: string | null;
 }) {
   const [draft, setDraft] = useState<IssueDraft>(emptyIssueDraft);
   // Reset to a blank draft each time the dialog opens.
@@ -102,7 +101,6 @@ function TaskCreateDialog({
       }
     >
       <div className="task-create-form" data-testid="task-create-dialog">
-        {error ? <p className="settings-status">Couldn't create: {error}</p> : null}
         <label className="field">
           <span>Title</span>
           <Input
@@ -165,6 +163,9 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   const issues = data.issues;
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.tasks });
+  // Transient action feedback is a TOAST, not an inline line — the in-progress state
+  // already shows on the Create button's pending spinner.
+  const toast = useToast();
 
   // Live: the agent created/closed/updated an issue mid-turn — refresh off the
   // `task.changed` bus push instead of polling every 5s (#1310), like the inbox panel.
@@ -181,7 +182,11 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
         priority: d.priority,
         description: d.description.trim() || undefined,
       }),
-    onSuccess: () => setDialogOpen(false),
+    onSuccess: () => {
+      setDialogOpen(false);
+      toast({ tone: "success", title: "Task created", message: "Added to the board." });
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't create task", message: errMsg(e) }),
     onSettled: invalidate,
   });
   const update = useMutation({
@@ -324,7 +329,6 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
         onClose={() => { setDialogOpen(false); create.reset(); }}
         onCreate={(d) => create.mutate(d)}
         busy={create.isPending}
-        error={create.isError ? (create.error as Error).message : null}
       />
     </>
   );
