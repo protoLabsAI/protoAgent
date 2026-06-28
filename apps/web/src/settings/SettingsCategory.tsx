@@ -13,7 +13,7 @@ import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigatio
 import { useToast } from "@protolabsai/ui/overlays";
 import { StagePanel } from "../app/ErrorBoundary";
 import { HelpLink, TestConnectionButton } from "../app/ui-kit";
-import { agentHref, api, isHostConsole } from "../lib/api";
+import { api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
@@ -26,54 +26,6 @@ export function SettingsCategoryPanel(props: { category: string; title?: string;
     <StagePanel label="settings" className="settings-panel">
       <SettingsCategory {...props} />
     </StagePanel>
-  );
-}
-
-// Global / box-shared defaults view (ADR 0047) — the host-scoped fields across ALL
-// categories, editable, saving to the host layer. Gated to the host console at the
-// call site (SettingsSurface): a workspace console renders <HostConfigLocked/> instead.
-export function HostDefaultsPanel({
-  categories = ["Agent", "System"],
-  title = "Configuration",
-}: {
-  categories?: string[];
-  title?: string;
-}) {
-  // ONE panel — the host-scoped fields across all the given categories render
-  // together under a single header + Save bar + explainer (grouped by their
-  // section). Previously this mapped one full SettingsCategory PER category, which
-  // stacked duplicate panels each with its own scroll/Save/explainer.
-  return (
-    <StagePanel label="configuration" className="settings-panel">
-      <SettingsCategory
-        category={categories[0]}
-        categories={categories}
-        title={title}
-        emptyHint="No box-shared defaults on this box yet."
-        hostLayer
-      />
-    </StagePanel>
-  );
-}
-
-// Workspace-console view of Global ▸ Configuration (ADR 0047 §7.7): the box-shared
-// defaults are editable only on the host console, so a workspace console gets a
-// read-only pointer. Per-agent overrides still happen under Workspace ▸ Settings.
-export function HostConfigLocked() {
-  return (
-    <section className="panel stage-panel settings-panel">
-      <PanelHeader title="Configuration" kicker="box-shared Global defaults" />
-      <div className="stage-body">
-        <Alert status="info" className="settings-banner">
-          These are the box-shared <strong>Global</strong> defaults — edited on the
-          <strong> host console</strong>. This workspace inherits them; to change a value
-          just for this agent, override it under <strong>Workspace ▸ Settings</strong>.
-        </Alert>
-        <Button variant="primary" type="button" onClick={() => { window.location.href = agentHref("host"); }}>
-          Open host console
-        </Button>
-      </div>
-    </section>
   );
 }
 

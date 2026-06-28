@@ -285,6 +285,27 @@ describe("hideSurface / showSurface", () => {
   });
 });
 
+// v14 (ADR 0048 ratified — domain-first IA): the dead `settingsScope` "two homes" axis is
+// dropped (no view read it), and a persisted default `settingsSection: "overview"` (host-only
+// Box section) is retargeted to the new universal default "identity" (the first Agent domain).
+describe("migrateUiState — v14 domain-first settings IA", () => {
+  it("drops the dead settingsScope axis", () => {
+    const out = migrateUiState({ settingsScope: "host", rightWidth: 320 }) as Record<string, unknown>;
+    expect(out).not.toHaveProperty("settingsScope");
+    expect(out).toEqual({ rightWidth: 320 });
+  });
+
+  it("retargets the old 'overview' default section to 'identity'", () => {
+    const out = migrateUiState({ settingsSection: "overview" }) as { settingsSection: string };
+    expect(out.settingsSection).toBe("identity");
+  });
+
+  it("leaves a user-chosen section untouched", () => {
+    const out = migrateUiState({ settingsSection: "model" }) as { settingsSection: string };
+    expect(out.settingsSection).toBe("model");
+  });
+});
+
 // The v13 migration adds the `hidden` bucket to a persisted railOrder that predates it, so the
 // shape is complete (actions also fall back to [] defensively).
 describe("migrateUiState — v13 hidden bucket", () => {
