@@ -44,6 +44,23 @@ class TestCodec:
         assert COMPONENT_MIME.endswith("component-v1+json")
         assert set(COMPONENT_TYPES) == {"table", "keyvalue", "timeline"}
 
+    def test_large_payload_extracts_but_truncated_preview_does_not(self):
+        """Regression (#1323): a rich component (a 9-step timeline) exceeds the tool-card
+        preview cap. extract_component MUST run on the FULL tool content — extracting from the
+        truncated card preview (what server/chat.py used to do) cuts the JSON tail and fails."""
+        from server.chat import _TOOL_PREVIEW_CHARS
+
+        steps = [
+            {"label": f"Phase {i}: build the thing", "state": "todo", "detail": "x" * 80} for i in range(9)
+        ]
+        full = "Rendered a timeline component for the user. " + encode_component("timeline", {"steps": steps})
+        assert len(full) > _TOOL_PREVIEW_CHARS  # the payload is bigger than the card preview
+        # Full content extracts the complete payload …
+        got = extract_component(full)
+        assert got is not None and len(got["props"]["steps"]) == 9
+        # … but the truncated preview (the old bug) loses the JSON tail and fails.
+        assert extract_component(full[:_TOOL_PREVIEW_CHARS]) is None
+
 
 class TestShowComponentTool:
     def _tool(self):

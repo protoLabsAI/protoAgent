@@ -341,16 +341,20 @@ async def _run_turn_stream(
             # run_command, an execution error, an enforcement block) closes the card
             # as a failure (X) instead of a green "done".
             coerced = _coerce_tool_output(output)
-            # A show_component result (ADR 0051) carries a sentinel-wrapped payload — lift
-            # it into a `component` frame (→ a component-v1 DataPart) and strip it from the
-            # card so the user sees the rendered widget, not raw wire JSON.
-            if isinstance(coerced, str):
+            # A show_component result (ADR 0051) carries a sentinel-wrapped payload — lift it
+            # into a `component` frame (→ a component-v1 DataPart) and strip it from the card so
+            # the user sees the rendered widget, not raw wire JSON. Extract from the FULL tool
+            # content, NOT the truncated card preview `coerced`: _coerce_tool_output caps at
+            # _TOOL_PREVIEW_CHARS for the SSE frame, which cuts a large component's JSON tail and
+            # breaks extraction (#1323 — a rich timeline rendered nothing).
+            full = getattr(output, "content", output)
+            if isinstance(full, str):
                 from graph.components import extract_component, strip_component
 
-                comp = extract_component(coerced)
+                comp = extract_component(full)
                 if comp is not None:
                     yield ("component", comp)
-                    coerced = strip_component(coerced)
+                    coerced = str(strip_component(full))[:_TOOL_PREVIEW_CHARS]  # card = human prefix
             yield (
                 "tool_end",
                 {
