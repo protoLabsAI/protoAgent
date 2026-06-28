@@ -7,7 +7,7 @@ Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import InjectedState
 
@@ -275,13 +275,16 @@ async def _run_subagent(
 
         messages = result.get("messages", [])
 
+        # The delegation's answer is the subagent's last AIMessage with content —
+        # not "any message with content" (which could surface a raw tool dump) and
+        # not gated on a fragile startswith("Error") text sniff (which discarded a
+        # legitimate answer that opened with "Error"). Hard failures already raise
+        # SubagentError below, so they never reach here.
         body = None
         for msg in reversed(messages):
-            if hasattr(msg, "content") and msg.content:
-                content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                if content and not content.startswith("Error"):
-                    body = content
-                    break
+            if isinstance(msg, AIMessage) and msg.content:
+                body = msg.content if isinstance(msg.content, str) else str(msg.content)
+                break
 
         if body is None:
             return f"[{subagent_type} completed: {description}] -- no output produced."
