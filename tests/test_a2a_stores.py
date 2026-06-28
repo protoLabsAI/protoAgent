@@ -132,6 +132,49 @@ async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_task_ttl_sweep_preserves_hitl_pauses(tmp_path):
+    """A resumable input_required/auth_required pause must NOT be TTL-swept even
+    when stale — its LangGraph checkpoint can still resume (a non-HITL stale task
+    on the same sweep is still evicted)."""
+    from datetime import UTC, datetime, timedelta
+
+    from a2a.server.models import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import select, update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    ctx = _ctx()
+    engine = make_sqlite_engine(str(tmp_path / "a2a-tasks.db"))
+    store = DatabaseTaskStore(engine)
+    await store.initialize()
+    await store.save(a2a_pb2.Task(id="paused", context_id="c"), ctx)
+    await store.save(a2a_pb2.Task(id="dead", context_id="c"), ctx)
+
+    old = datetime.now(UTC) - timedelta(hours=48)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as session:
+        await session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == "paused")
+            .values(last_updated=old, status={"state": "TASK_STATE_INPUT_REQUIRED"})
+        )
+        await session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == "dead")
+            .values(last_updated=old, status={"state": "TASK_STATE_WORKING"})
+        )
+        await session.commit()
+
+    deleted = await sweep_expired_tasks(engine)
+    assert deleted == 1  # only the non-HITL stale row
+    async with sm() as session:
+        remaining = {r[0] for r in (await session.execute(select(TaskModel.id))).all()}
+    assert "paused" in remaining  # resumable HITL pause survives the TTL
+    assert "dead" not in remaining
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_orphaned_push_config_sweep(tmp_path):
     """sweep_orphaned_push_configs drops push configs whose task is gone (ADR 0051),
     keeps configs for live tasks."""

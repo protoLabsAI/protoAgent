@@ -245,6 +245,7 @@ class LocalScheduler:
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.path))
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         try:
             db.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError as exc:

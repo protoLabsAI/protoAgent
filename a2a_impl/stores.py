@@ -35,7 +35,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import bindparam, delete, select, text, update
+from sqlalchemy import bindparam, delete, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from a2a.server.context import ServerCallContext
@@ -298,7 +298,15 @@ async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     async with session_maker() as session:
-        result = await session.execute(delete(TaskModel).where(TaskModel.last_updated < cutoff))
+        # Preserve resumable HITL/auth pauses (their checkpoint outlives the TTL).
+        # A NULL/absent state is not a preserved pause, so still sweep it (the
+        # JSON-path is NULL for a stateless row, and ``NOT IN`` wouldn't match it).
+        state = TaskModel.status["state"].as_string()
+        result = await session.execute(
+            delete(TaskModel)
+            .where(TaskModel.last_updated < cutoff)
+            .where(or_(state.is_(None), state.notin_(_PRESERVED_STATES)))
+        )
         await session.commit()
         return result.rowcount or 0
 
@@ -342,6 +350,11 @@ async def sweep_orphaned_push_configs(task_engine: AsyncEngine, push_engine: Asy
 # those are HITL / auth *pauses* whose LangGraph checkpoint survives the restart
 # and can resume on the next message, so failing them would be wrong.
 _INTERRUPTED_STATES = ("TASK_STATE_SUBMITTED", "TASK_STATE_WORKING")
+
+# HITL / auth *pauses* whose LangGraph checkpoint survives a restart and resumes on
+# the next message — the TTL sweep must NOT delete them (initialize_a2a_stores'
+# docstring promises this; sweep_expired_tasks now actually enforces it).
+_PRESERVED_STATES = ("TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED")
 
 
 def _interrupted_status_blob(now: datetime) -> dict:
