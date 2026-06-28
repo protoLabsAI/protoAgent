@@ -48,6 +48,10 @@ _ALLOWED_SCHEMES = ("https://", "http://", "git://", "ssh://", "git@", "file://"
 # (source_url, ref) so repeated polls don't ls-remote the same source every call.
 _LSREMOTE_TIMEOUT_S = 5.0
 _LSREMOTE_TTL_S = 300.0  # ~5 min
+# A git clone of a slow/large remote is bounded so it can't hang an install thread
+# indefinitely (the operator install/update routes offload to a thread, so this
+# caps the worst case rather than wedging a pool worker forever).
+_CLONE_TIMEOUT_S = 600.0
 _lsremote_cache: dict[tuple[str, str], tuple[float, str]] = {}
 
 
@@ -174,13 +178,13 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     if ref and _SHA_RE.match(ref):
         # A specific commit: full clone (shallow can't reliably check out an
         # arbitrary SHA), then check it out.
-        _git("clone", "--no-recurse-submodules", url, str(dest))
+        _git("clone", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
         _git("checkout", ref, cwd=dest)
     elif ref:
         # A tag or branch: shallow clone of just that ref.
-        _git("clone", "--depth", "1", "--no-recurse-submodules", "--branch", ref, url, str(dest))
+        _git("clone", "--depth", "1", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S)
     else:
-        _git("clone", "--depth", "1", "--no-recurse-submodules", url, str(dest))
+        _git("clone", "--depth", "1", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
