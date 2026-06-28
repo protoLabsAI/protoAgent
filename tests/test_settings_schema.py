@@ -45,6 +45,11 @@ def test_schema_groups_and_values():
     # The fallback list carries the gateway options too (rendered as combobox rows).
     fallback = next(f for f in fields if f["key"] == "routing.fallback_models")
     assert fallback["type"] == "string_list" and fallback["options"] == ["a", "b"]
+    # #1386 — every CORE entry carries options_source so the console knows which dropdowns to
+    # refresh from a freshly-probed gateway ("Get models"). Model-backed → "models"/"models+acp".
+    assert all("options_source" in f for f in fields if f["key"] in core_keys)
+    assert model["options_source"] == "models"
+    assert next(f for f in fields if f["key"] == "routing.aux_model")["options_source"] == "models+acp"
     # The main-brain runtime select offers native + every ACP agent (incl. gemini).
     runtime = next(f for f in fields if f["key"] == "agent_runtime")
     assert runtime["type"] == "select" and runtime["options"] == ["native", *ACP_MODEL_OPTIONS]

@@ -826,6 +826,10 @@ def build_schema(
             "default": _jsonable(getattr(defaults, f.attr, None)),
             "scope": f.scope,  # ADR 0047: "agent" | "host"
             "source": _source_for(f.key, agent_doc, host_doc),  # which layer set the live value
+            # Lets the console refresh a model-backed dropdown from a DIFFERENT gateway than the
+            # saved one (#1386): a "Get models" action probes the form's api_base/key and merges
+            # the result into every field whose options come from "models".
+            "options_source": f.options_source,
         }
         if f.type == "secret":
             entry["value"] = ""

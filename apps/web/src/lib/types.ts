@@ -248,6 +248,9 @@ export type SettingsField = {
   description?: string;
   restart: boolean;
   options: string[];
+  // Where `options` come from: "models" / "models+acp" → the gateway's model list. The Model
+  // settings "Get models" action (#1386) merges a freshly-probed list into these fields.
+  options_source?: string;
   default?: unknown;
   value?: unknown; // absent for secrets
   is_set?: boolean; // secrets only

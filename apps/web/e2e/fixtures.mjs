@@ -201,8 +201,11 @@ export const SETTINGS_SCHEMA = [
     section: "Model",
     category: "Agent",
     fields: [
-      // model.name is host-scoped + inherited from the host layer (inheritance badge).
-      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/reasoning", scope: "host", source: "host" },
+      // model.name is host-scoped + inherited from the host layer (inheritance badge). Its
+      // options are gateway-probed (options_source "models") — the "Get models" action (#1386)
+      // refreshes them from the form's api_base/key.
+      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], options_source: "models", value: "protolabs/reasoning", default: "protolabs/reasoning", scope: "host", source: "host" },
+      { key: "model.api_base", label: "Gateway base URL", type: "string", section: "Model", restart: false, description: "", options: [], value: "https://gw.example/v1", default: "", scope: "host", source: "host" },
       // host-scoped but overridden in this agent (overridden-here badge + reset link).
       { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2, scope: "host", source: "agent" },
       { key: "model.api_key", label: "API key", type: "secret", section: "Model", restart: false, description: "Stored in secrets.yaml.", options: [], value: "", is_set: true, scope: "agent", source: "agent" },
@@ -243,6 +246,11 @@ export const SETTINGS_SCHEMA = [
     ],
   },
 ];
+
+/** The model list a freshly-probed gateway returns from POST /api/config/models (#1386) — a
+ *  DIFFERENT set than model.name's saved options, so the e2e can prove "Get models" refreshes
+ *  the dropdown with the new provider's models. */
+export const GATEWAY_MODELS = ["protolabs/smart", "protolabs/micro", "protolabs/nano"];
 
 /** restart_required for a flat updates payload, per the schema. */
 export function settingsRestartRequired(updates) {
