@@ -55,13 +55,15 @@ def test_stdio_default_strips_secret_named_vars(monkeypatch) -> None:
     monkeypatch.setenv("FOO_TOKEN", "t")
     monkeypatch.setenv("FOO_SECRET", "s")
     monkeypatch.setenv("FOO_PASSWORD", "p")
-    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/sock")  # not a credential name → kept
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/ssh-agent.sock")  # capability handle → stripped
+    monkeypatch.setenv("MCP_TEST_PLAIN", "ok")                  # ordinary var → kept
     conn = _server_connection({"name": "fs", "transport": "stdio", "command": "npx"})
     env = conn["env"]
     assert "FOO_TOKEN" not in env
     assert "FOO_SECRET" not in env
     assert "FOO_PASSWORD" not in env
-    assert env.get("SSH_AUTH_SOCK") == "/tmp/sock"
+    assert "SSH_AUTH_SOCK" not in env
+    assert env.get("MCP_TEST_PLAIN") == "ok"
 
 
 def test_http_connection_mapping_and_alias() -> None:

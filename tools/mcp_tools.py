@@ -78,9 +78,13 @@ def _mcp_tool_error_handler(exc: Exception) -> str:
 # Env-var NAMES that look like a credential — stripped from a stdio MCP server's
 # inherited environment by default. A third-party server (npx/uvx) gets the
 # operational env it needs (PATH/HOME/LANG/proxy/...) but NOT the agent's secrets
-# (LLM gateway key, GITHUB_TOKEN, A2A_AUTH_TOKEN, *_API_KEY, ...).
+# (LLM gateway key, GITHUB_TOKEN, A2A_AUTH_TOKEN, *_API_KEY, ...) nor
+# capability-bearing agent handles (SSH_AUTH_SOCK / KRB5CCNAME / GPG_AGENT_INFO),
+# which would let an untrusted server impersonate the user via the SSH / Kerberos
+# / GPG agent. A server that genuinely needs one opts in with ``inherit_env: true``.
 _SECRET_ENV_RE = re.compile(
-    r"(SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|_KEY$)",
+    r"(SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|"
+    r"CREDENTIAL|_KEY$|^SSH_AUTH_SOCK$|^KRB5CCNAME$|^GPG_AGENT_INFO$)",
     re.IGNORECASE,
 )
 
