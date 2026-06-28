@@ -57,18 +57,16 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     "Behavior",
     "Knowledge",
     "Integrations",
-    // Capabilities group
+    // Capabilities group (sharing knobs live on each manager's chip, not a separate panel)
     "Tools",
     "MCP",
     "Skills",
     "Subagents",
     "Delegates",
-    "Sharing & tiers",
     // Box group (host console only)
     "Overview",
     "Fleet",
     "Telemetry",
-    "Box config",
     // This console group
     "Theme",
     "Chat",

@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Gauge, Keyboard, MessageSquare, Network, Palette, Plug, Puzzle, Server, Share2, SlidersHorizontal, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Gauge, Keyboard, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -27,9 +27,10 @@ import { ThemeSurface } from "./ThemeSurface";
 //
 //   Agent        — what defines the focused agent: Identity · Model · Behavior · Knowledge ·
 //                  Integrations (Plugins). Schema-driven domains carry the ADR 0047 badge.
-//   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates,
-//                  plus the Sharing & tiers knobs.
-//   Box          — box-wide ops (HOST CONSOLE ONLY): Overview · Fleet · Telemetry · Box config.
+//   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates.
+//                  Each manager owns its sharing/tier knob via a contextual chip (no extra panel).
+//   Box          — box-wide ops (HOST CONSOLE ONLY): Overview · Fleet · Telemetry. Box-runtime +
+//                  telemetry knobs are chips on Fleet / Telemetry, not a separate empty panel.
 //   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard.
 
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
@@ -55,20 +56,11 @@ function PluginSettingsHome() {
   );
 }
 
-// Identity domain: the bespoke Identity panel (name + persona/SOUL via /api/config) followed
-// by the schema-driven identity/operator/access fields (operator · org · project dir · A2A token).
-function IdentityHome() {
-  return (
-    <>
-      <IdentityPanel />
-      <SettingsCategoryPanel category="Identity" title="Operator & access" />
-    </>
-  );
-}
-
 // AGENT — what defines the focused agent (schema domains + the bespoke Identity panel).
 const AGENT_SECTIONS: Section[] = [
-  { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityHome /> },
+  // Identity is the bespoke panel ONLY (name + persona/SOUL via /api/config) so the SOUL editor
+  // fills the panel; the operator/org/access schema fields hang off its "Operator & access" chip.
+  { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
   // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
   // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
   { id: "model", label: "Model", icon: Cpu, render: () => <SettingsCategoryPanel category="Model" title="Model & routing" /> },
@@ -77,23 +69,23 @@ const AGENT_SECTIONS: Section[] = [
   { id: "plugins", label: "Integrations", icon: Puzzle, render: () => <PluginSettingsHome /> },
 ];
 
-// CAPABILITIES — what the agent is wired to (rich bespoke managers) + the sharing/tier knobs.
+// CAPABILITIES — what the agent is wired to (rich bespoke managers). Each manager owns its own
+// sharing/tier knob via a contextual "…sharing" chip in its header (Skills/MCP) — not a separate
+// schema-only panel (ADR 0048 §2.2: a chip is a shortcut to the canonical field, same save path).
 const CAPABILITY_SECTIONS: Section[] = [
   { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
   { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
   { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
   { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
   { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
-  { id: "sharing", label: "Sharing & tiers", icon: Share2, render: () => <SettingsCategoryPanel category="Capabilities" title="Sharing & tiers" emptyHint="No sharing tiers to configure." /> },
 ];
 
-// BOX — box-wide operations (host console only). Overview/Fleet/Telemetry are bespoke surfaces;
-// "Box config" is the schema home for the host box-runtime + telemetry knobs (ADR 0047 D8).
+// BOX — box-wide operations (host console only). The host box-runtime + telemetry knobs are
+// reached via chips on Fleet ("Box runtime") and Telemetry, not a separate empty schema panel.
 const BOX_SECTIONS: Section[] = [
   { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
   { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
   { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-  { id: "boxconfig", label: "Box config", icon: SlidersHorizontal, render: () => <SettingsCategoryPanel category="Box" title="Box config" emptyHint="No box-wide config on this box yet." /> },
 ];
 
 // THIS CONSOLE — device-local preferences. These don't cascade and use their own backends

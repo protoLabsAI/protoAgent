@@ -198,17 +198,23 @@ bespoke editor:
 
 ```
 Agent         Identity · Model · Behavior · Knowledge · Integrations
-Capabilities  Tools · MCP · Skills · Subagents · Delegates · Sharing & tiers
-Box (host)    Overview · Fleet · Telemetry · Box config
+Capabilities  Tools · MCP · Skills · Subagents · Delegates
+Box (host)    Overview · Fleet · Telemetry
 This console  Theme · Chat · Keyboard
 ```
 
+- **Identity** is the bespoke panel ALONE (name + SOUL), so the SOUL editor fills the
+  panel. The operator/org/access schema fields (operator · org · project dir · allowed
+  dirs · A2A token) hang off an "Operator & access" **chip** in its header.
+  *(An earlier build composed Identity + a schema panel; two `flex:1` `.stage-panel`s
+  split the height 50/50 — the SOUL editor only filled half and it read as two confusing
+  panels. The chip avoids both.)*
 - **Integrations** is the renamed Plugins item (id stays `plugins` for the ⌘K/deep-link
   contract). GitHub is a plugin, so it lands here by default.
-- **Sharing & tiers** (`category="Capabilities"`) is the canonical editor for the
-  skill/MCP sharing scope + `commons.path`.
-- **Box config** (`category="Box"`) is the canonical editor for telemetry + the host
-  box-runtime knobs (network/discovery/keep-warm).
+- **No standalone schema-only items.** The sharing/tier + box-runtime knobs are reached
+  via contextual **chips** on the relevant manager (Skills chip = `skills.scope` +
+  `commons.path`; MCP chip = `mcp.scope`; Fleet chip = box-runtime; Telemetry chip =
+  telemetry store) — same `/api/settings` save path (§2.2), no empty panels.
 - The read-only **Middleware** roster panel was removed; its editable toggles live in
   the **Behavior** domain.
 
