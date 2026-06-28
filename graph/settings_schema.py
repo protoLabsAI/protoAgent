@@ -716,48 +716,42 @@ def _plugin_group(sch, spec) -> str:
     return spec.get("group") or sch.section.replace("_", " ").title()
 
 
-# Settings categories (ADR 0020) — fold the flat sections into a small,
-# navigable taxonomy so the surface isn't one long scroll. Order here is the
-# category the console routes each section to. Settings are decentralized: Agent +
-# Memory render in their home views (Agent → Settings, Knowledge → Settings), while
-# Plugins + System stay in the central Settings surface. Unknown sections (notably
-# plugin-contributed ones, ADR 0019) default to "Plugins".
-_CATEGORY_ORDER = ["Agent", "Memory", "Plugins", "System"]
+# Settings categories — the DOMAIN each flat section routes to (ADR 0048, ratified
+# 2026-06-28). The category IS the domain, so the data model and the console sidenav
+# speak the same axis (the earlier scope-vs-category disagreement is gone). Scope
+# (host vs agent) is a per-field badge (ADR 0047), NOT a category. Order here is the
+# domain order the console renders. Unknown sections (notably plugin-contributed ones,
+# ADR 0019) default to "Plugins" (the Integrations surface).
+_CATEGORY_ORDER = ["Identity", "Model", "Behavior", "Capabilities", "Knowledge", "Plugins", "Box"]
 _SECTION_CATEGORY = {
-    # Agent — who it is + how it behaves (rendered in the Agent view's Settings tab).
-    "Identity": "Agent",
-    "Model": "Agent",
-    "Routing": "Agent",
-    "Agent runtime": "Agent",
-    "Goal mode": "Agent",
-    "Tools": "Agent",
-    # Memory — knowledge/recall config (rendered in the Knowledge view's Settings tab).
-    "Knowledge": "Memory",
-    # Skills — the agent's skill-sharing tier + the box commons (ADR 0041). Agent
-    # category today (Agent ▸ Settings); folds into Workspace ▸ Skills, with
-    # commons.path (host-scoped) surfacing in Host/App (ADR 0048).
-    "Skills": "Agent",
-    # MCP — the agent's MCP-server sharing tier (ADR 0041), alongside Skills in the
-    # Agent category; the dedicated MCP panel (Settings ▸ MCP) is the primary home.
-    "MCP": "Agent",
-    # System — runtime + performance knobs (central Settings → System).
-    "Compaction": "System",
-    "Caching": "System",
-    "Middleware": "System",
-    "Runtime": "System",
-    "Telemetry": "System",
-    # GitHub — the /issue command's repo list + default (Settings → System). Not a
-    # plugin section, so it must map to a category SettingsCategoryPanel renders
-    # (else it'd default to "Plugins", which only shows installed-plugin config).
-    "GitHub": "System",
-    # Host box-runtime knobs (ADR 0047 D8), regrouped (bd-2zb) from one "Fleet" lump
-    # into Network / Discovery / Keep-warm. All System category so the host-scoped
-    # fields surface in Settings ▸ Host / App ▸ Host config (which renders the host
-    # fields of the Agent+System categories).
-    "Network": "System",
-    "Discovery": "System",
-    "Keep-warm": "System",
-    # Discord / Google / other plugin sections → "Plugins" (the default).
+    # Identity — who the agent is (name + persona live in the dedicated Identity panel;
+    # these are the operator/org/access fields rendered beneath it).
+    "Identity": "Identity",
+    # Model — the LLM connection, sampling, and cache (the real "Model & Routing").
+    "Model": "Model",
+    "Routing": "Model",
+    "Caching": "Model",
+    # Behavior — how the agent thinks, loops, and decides.
+    "Agent runtime": "Behavior",
+    "Goal mode": "Behavior",
+    "Compaction": "Behavior",
+    "Middleware": "Behavior",
+    "Runtime": "Behavior",
+    # Capabilities — the sharing/tier knobs for what the agent is wired to (the rich
+    # Tools/MCP/Skills/Subagents/Delegates managers are bespoke console panels).
+    "Skills": "Capabilities",
+    "MCP": "Capabilities",
+    # Knowledge — recall / RAG config.
+    "Knowledge": "Knowledge",
+    # Box — box-wide operational config (host console only): the telemetry store + the
+    # host box-runtime knobs (network / discovery / keep-warm, ADR 0047 D8). Host-scoped;
+    # a workspace-leaf override of these is a silent no-op (consumed by the host process).
+    "Telemetry": "Box",
+    "Network": "Box",
+    "Discovery": "Box",
+    "Keep-warm": "Box",
+    # Discord / Google / GitHub / other plugin sections → "Plugins" (the default), the
+    # Integrations surface.
 }
 
 
