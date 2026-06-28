@@ -215,6 +215,22 @@ def test_plugin_public_prefix_exempts_only_namespaced(monkeypatch):
         assert _client_multi().get("/plugins/example/status").status_code == 401
 
 
+def test_set_public_prefixes_rejects_core_route_prefix(monkeypatch):
+    """A plugin can't strip the gate off a core /api/plugins/<verb> route by
+    declaring it a public_path — the namespace boundary needs a trailing slash
+    after the <id> segment (defence-in-depth vs the id=='install' bypass)."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    try:
+        auth.set_public_prefixes(["/api/plugins/install", "/api/plugins/", "/plugins/install"])
+        c = _client_multi()
+        assert c.post("/api/plugins/install").status_code == 401  # core route stays gated
+        auth.set_public_prefixes(["/api/plugins/myplugin/webhook"])
+        assert c.get("/api/plugins/myplugin/webhook").status_code != 401  # real subtree exempt
+    finally:
+        auth.set_public_prefixes([])
+
+
 # AC5: /app is public (SPA served without auth)
 def test_ac5_app_public(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)

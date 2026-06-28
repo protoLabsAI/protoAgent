@@ -130,15 +130,25 @@ def _parse_views(views, plugin_id: str) -> list[dict]:
     return kept
 
 
+# A plugin id namespaces its routes (``/plugins/<id>/``, ``/api/plugins/<id>/``)
+# and its config section, so it must be a safe slug AND must not shadow a core
+# ``/api/plugins/<verb>`` management route — otherwise its ``public_paths`` could
+# prefix-match and exempt that core route (e.g. install = RCE) from the auth gate.
+_VALID_PLUGIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_RESERVED_PLUGIN_IDS = frozenset({"install", "installed", "sync", "updates", "catalog", "enabled"})
+
+
 def _parse_public_paths(paths, plugin_id: str) -> list[str]:
-    """Keep auth-exempt paths that live under THIS plugin's namespace
+    """Keep auth-exempt paths that live under THIS plugin's namespace SUBTREE
     (``/plugins/<id>/…`` or ``/api/plugins/<id>/…``); drop + warn on anything else.
 
     Namespace-scoping is the security boundary: a plugin can exempt only its own
-    routes from the auth gate, never a core path like ``/api/config``."""
+    routes from the auth gate, never a core path like ``/api/config`` or the core
+    ``/api/plugins/<verb>`` routes. The trailing slash is load-bearing — without
+    it, id ``install`` would prefix-match the core ``/api/plugins/install`` route."""
     if not isinstance(paths, (list, tuple)):
         return []
-    roots = (f"/plugins/{plugin_id}", f"/api/plugins/{plugin_id}")
+    roots = (f"/plugins/{plugin_id}/", f"/api/plugins/{plugin_id}/")
     kept: list[str] = []
     for p in paths:
         s = str(p).strip()
@@ -205,6 +215,13 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     name = str(data.get("name", "")).strip()
     if not pid or not name:
         log.warning("[plugins] %s: manifest missing required id/name — skipping", plugin_dir.name)
+        return None
+    if not _VALID_PLUGIN_ID.match(pid) or pid.lower() in _RESERVED_PLUGIN_IDS:
+        log.warning(
+            "[plugins] %s: invalid or reserved plugin id %r — must match %s and must not shadow a "
+            "core /api/plugins/ route; skipping",
+            plugin_dir.name, pid, _VALID_PLUGIN_ID.pattern,
+        )
         return None
 
     req = data.get("requires_env")
