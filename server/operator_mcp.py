@@ -66,7 +66,7 @@ def _boot_stores_only(config):
         ),
     )
     STATE.plugin_tools = plugins.tools
-    STATE.plugin_tool_owner = plugins.tool_plugins
+    STATE.plugin_tool_owner = getattr(plugins, "tool_plugins", {}) or {}
     STATE.plugin_skill_dirs = plugins.skill_dirs
     STATE.plugin_meta = plugins.meta
     STATE.knowledge_store = ai._apply_plugin_knowledge_backend(config, STATE.knowledge_store, plugins)
