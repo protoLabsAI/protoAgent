@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Gauge, Keyboard, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Gauge, Keyboard, KeyRound, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -59,8 +59,10 @@ function PluginSettingsHome() {
 // AGENT — what defines the focused agent (schema domains + the bespoke Identity panel).
 const AGENT_SECTIONS: Section[] = [
   // Identity is the bespoke panel ONLY (name + persona/SOUL via /api/config) so the SOUL editor
-  // fills the panel; the operator/org/access schema fields hang off its "Operator & access" chip.
+  // fills the panel. The operator/org/access schema fields are their own one-click section (a
+  // chip-in-a-dialog was unnecessary extra clicking).
   { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
+  { id: "access", label: "Operator & access", icon: KeyRound, render: () => <SettingsCategoryPanel category="Identity" title="Operator & access" /> },
   // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
   // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
   { id: "model", label: "Model", icon: Cpu, render: () => <SettingsCategoryPanel category="Model" title="Model & routing" /> },

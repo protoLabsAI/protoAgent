@@ -5,13 +5,12 @@ import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useEffect, useState } from "react";
-import { Eye, Pencil, Save, SlidersHorizontal } from "lucide-react";
+import { Eye, Pencil, Save } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
-import { QuickSetting } from "../settings/QuickSetting";
 
 // Agent → Identity: who this agent is. The SOUL.md (persona) renders as Markdown by default and
 // fills the panel; "Edit" flips it to a raw textarea. Saving merges the name into config, writes
@@ -56,25 +55,15 @@ export function IdentityPanel() {
         title="Identity"
         kicker="who this agent is — its name and persona (SOUL.md)"
         actions={
-          <>
-            {/* Operator/org/access fields (operator · org · project dir · allowed dirs · A2A
-                token) — a contextual chip so the SOUL editor below keeps the whole panel. */}
-            <QuickSetting
-              keys={["identity.operator", "identity.org", "operator.project_dir", "operator.allowed_dirs", "auth.token"]}
-              title="Operator & access"
-              label="Operator & access settings"
-              icon={<SlidersHorizontal size={15} />}
-            />
-            <Button
-              variant="primary"
-              type="button"
-              disabled={!dirty || save.isPending}
-              onClick={() => save.mutate()}
-              data-testid="identity-save"
-            >
-              <Save size={15} /> {save.isPending ? "Saving…" : "Save & reload"}
-            </Button>
-          </>
+          <Button
+            variant="primary"
+            type="button"
+            disabled={!dirty || save.isPending}
+            onClick={() => save.mutate()}
+            data-testid="identity-save"
+          >
+            <Save size={15} /> {save.isPending ? "Saving…" : "Save & reload"}
+          </Button>
         }
       />
       <div className="stage-body identity-body">

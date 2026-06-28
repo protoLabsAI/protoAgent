@@ -53,6 +53,7 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
   expect(await sidenav.locator("button").allTextContents()).toEqual([
     // Agent group
     "Identity",
+    "Operator & access",
     "Model",
     "Behavior",
     "Knowledge",
