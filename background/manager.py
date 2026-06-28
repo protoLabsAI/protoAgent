@@ -26,6 +26,7 @@ from background.store import BackgroundStore
 log = logging.getLogger(__name__)
 
 _DEFAULT_FIRE_TIMEOUT_S = 1800.0  # background turns can run long (research + tools); generous
+_DEFAULT_MAX_CONCURRENCY = 3  # cap on concurrent background turns so a fan-out can't swamp the gateway
 
 
 class BackgroundManager:
@@ -40,6 +41,7 @@ class BackgroundManager:
         api_key: str | None = None,
         bearer_token: str | None = None,
         fire_timeout_s: float | None = None,
+        max_concurrency: int | None = None,
         event_publish=None,
     ) -> None:
         self.agent_name = agent_name
@@ -58,6 +60,21 @@ class BackgroundManager:
                 self._fire_timeout_s = float(os.environ.get("BACKGROUND_FIRE_TIMEOUT_S", _DEFAULT_FIRE_TIMEOUT_S))
             except ValueError:
                 self._fire_timeout_s = _DEFAULT_FIRE_TIMEOUT_S
+        # Bound how many background turns run at once. A wide fan-out — ``task_batch`` with
+        # run_in_background, or several ``task(run_in_background=True)`` calls — would
+        # otherwise open one full lead-graph turn per job against the gateway at the same
+        # time. The cap gates the actual self-POST in ``_fire`` (which holds its slot for the
+        # whole turn); jobs past the cap queue at the semaphore. A queued job's store row
+        # still reads ``running`` (it IS accepted) — cancel/reconcile both handle a row whose
+        # turn hasn't fired yet. Override with ``BACKGROUND_MAX_CONCURRENCY``.
+        if max_concurrency is not None:
+            self._max_concurrency = max(1, int(max_concurrency))
+        else:
+            try:
+                self._max_concurrency = max(1, int(os.environ.get("BACKGROUND_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY)))
+            except ValueError:
+                self._max_concurrency = _DEFAULT_MAX_CONCURRENCY
+        self._sem = asyncio.Semaphore(self._max_concurrency)
         # Hold the detached fire tasks so they aren't GC'd mid-flight (the cause of
         # "Task was destroyed but it is pending"); discard on completion.
         self._fire_tasks: set[asyncio.Task] = set()
@@ -191,20 +208,25 @@ class BackgroundManager:
                 },
             },
         }
-        try:
-            async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
-                r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
-            if r.status_code >= 400:
-                log.error(
-                    "[background] fire failed for %s: HTTP %d %s",
-                    job_id,
-                    r.status_code,
-                    r.text[:200],
-                )
-                self.store.mark_complete(job_id, "failed", f"Background turn failed to start: HTTP {r.status_code}.")
-        except Exception as exc:  # noqa: BLE001
-            log.exception("[background] fire exception for %s", job_id)
-            self.store.mark_complete(job_id, "failed", f"Background turn delivery error: {exc}")
+        # Gate the actual self-POST on the concurrency semaphore so a fan-out can't open more
+        # than ``_max_concurrency`` full turns at once. The slot is held for the WHOLE turn —
+        # the A2A handler runs the turn synchronously before the POST returns — which is
+        # exactly the bound we want (concurrent running turns, not just in-flight requests).
+        async with self._sem:
+            try:
+                async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
+                    r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
+                if r.status_code >= 400:
+                    log.error(
+                        "[background] fire failed for %s: HTTP %d %s",
+                        job_id,
+                        r.status_code,
+                        r.text[:200],
+                    )
+                    self.store.mark_complete(job_id, "failed", f"Background turn failed to start: HTTP {r.status_code}.")
+            except Exception as exc:  # noqa: BLE001
+                log.exception("[background] fire exception for %s", job_id)
+                self.store.mark_complete(job_id, "failed", f"Background turn delivery error: {exc}")
 
 
 def _build_fired_prompt(subagent_type: str, description: str, prompt: str) -> str:
