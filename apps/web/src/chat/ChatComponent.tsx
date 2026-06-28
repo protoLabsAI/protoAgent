@@ -2,12 +2,16 @@ import "./chat-component.css";
 
 import type { JSX } from "react";
 
+import { registeredChatComponents } from "../ext/componentRegistry";
 import type { ComponentSpec } from "../lib/types";
 
 // Curated, data-only chat component registry (ADR 0051 Slice 2). Renders typed
 // component-v1 DataParts inline in the transcript. No code execution — props are pure
 // data, so this is safe without a sandbox (free-form generated UI uses the ADR 0038
 // iframe/artifact path instead). Unknown component types degrade to a labeled note.
+// The built-ins below are EXTENSIBLE: forks/plugins add (or override) renderers via the
+// `registerChatComponent` ext seam (#1323), so the agent's component vocabulary grows
+// without editing this file.
 
 type Row = unknown[];
 
@@ -103,14 +107,16 @@ function TimelineComponent({ props }: { props: Record<string, unknown> }) {
   );
 }
 
-const REGISTRY: Record<string, (p: { props: Record<string, unknown> }) => JSX.Element> = {
+const BUILTINS: Record<string, (p: { props: Record<string, unknown> }) => JSX.Element> = {
   table: TableComponent,
   keyvalue: KeyValueComponent,
   timeline: TimelineComponent,
 };
 
 export function ChatComponent({ spec }: { spec: ComponentSpec }) {
-  const Renderer = REGISTRY[spec.component];
+  // Registered (fork/plugin) renderers win over the built-ins of the same name, so a fork can
+  // both add new kinds and re-skin a built-in (#1323).
+  const Renderer = registeredChatComponents()[spec.component] ?? BUILTINS[spec.component];
   if (!Renderer) {
     return <div className="chat-comp chat-comp-unknown">[unsupported component: {spec.component}]</div>;
   }

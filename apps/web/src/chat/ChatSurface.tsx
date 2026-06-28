@@ -28,7 +28,7 @@ import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
-import { addToolRef, appendReasoning, appendText } from "./parts";
+import { addComponent, addToolRef, appendReasoning, appendText } from "./parts";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -902,6 +902,10 @@ function ChatSessionSlot({
           );
         },
         onToolCall: (evt) => {
+          // `show_component` is a render directive, not a real action — its output IS the
+          // inline component (delivered via onComponent / message.components). Suppress its
+          // tool card so it doesn't add noise to the collapsed work timeline (#1323).
+          if (evt.name === "show_component") return;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
@@ -954,15 +958,20 @@ function ChatSessionSlot({
           );
         },
         onComponent: (spec) => {
-          // A renderable component (ADR 0051) — append to the assistant message; the
-          // registry renders it inline after the text.
+          // A renderable component (ADR 0051) — add it as an ORDERED part at its emission
+          // point so it renders ABOVE the answer text that streams in after (#1323). `components`
+          // is kept as the history/persistence fallback for messages without ordered parts.
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
             session.id,
             latest.messages.map((message) =>
               message.id === assistantId
-                ? { ...message, components: [...(message.components || []), spec] }
+                ? {
+                    ...message,
+                    parts: addComponent(message.parts, spec),
+                    components: [...(message.components || []), spec],
+                  }
                 : message,
             ),
           );

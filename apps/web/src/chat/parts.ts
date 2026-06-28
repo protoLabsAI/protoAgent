@@ -1,4 +1,4 @@
-import type { ChatPart, ToolCall } from "../lib/types";
+import type { ChatPart, ComponentSpec, ToolCall } from "../lib/types";
 
 // Ordered-parts accumulation for a streaming assistant turn. These keep the
 // emission order of reasoning, answer text and tool calls so a pre-tool preamble
@@ -60,6 +60,12 @@ export function addToolRef(parts: ChatPart[] | undefined, id: string): ChatPart[
   }
   next.push({ kind: "tools", ids: [id] });
   return next;
+}
+
+/** Append an inline component as an ordered part — at its emission point, so it renders
+ *  ABOVE the answer text that streams in after it (#1323). */
+export function addComponent(parts: ChatPart[] | undefined, spec: ComponentSpec): ChatPart[] {
+  return [...(parts ?? []), { kind: "component", spec }];
 }
 
 /** The tool calls to render for a `tools` part: its top-level calls (by id) plus any

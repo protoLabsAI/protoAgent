@@ -57,8 +57,11 @@ export function ChatMessageView({
           // just the answer. The "answer" is the trailing run of text parts; everything before
           // it is the work. User messages carry only text.
           const parts = message.parts!;
+          // The "answer" is the trailing run of text AND component parts — a component is
+          // emitted before its summary text, so it belongs with the answer (above the text),
+          // not folded into the work timeline (#1323). Everything before is the work.
           let split = parts.length;
-          while (split > 0 && parts[split - 1].kind === "text") split--;
+          while (split > 0 && (parts[split - 1].kind === "text" || parts[split - 1].kind === "component")) split--;
           const workParts = parts.slice(0, split);
           const answerParts = parts.slice(split);
           const hasTools = workParts.some((p) => p.kind === "tools");
@@ -76,9 +79,14 @@ export function ChatMessageView({
               part.text.trim() ? (
                 <ReasoningCard key={i} text={part.text} streaming={streaming && i === workParts.length - 1} />
               ) : null
+            ) : part.kind === "component" ? (
+              <ChatComponent key={i} spec={part.spec} />
             ) : (
               renderText(part, `w${i}`)
             );
+          // An answer part is either streamed text or an inline component (rendered in order).
+          const renderAnswerPart = (part: ChatPart, i: number) =>
+            part.kind === "component" ? <ChatComponent key={`ac${i}`} spec={part.spec} /> : renderText(part, `a${i}`);
           return (
             <>
               {hasTools && hasReasoning ? (
@@ -86,7 +94,7 @@ export function ChatMessageView({
               ) : (
                 workParts.map(renderInline)
               )}
-              {answerParts.map((part, i) => renderText(part, `a${i}`))}
+              {answerParts.map(renderAnswerPart)}
             </>
           );
         })()
@@ -114,7 +122,10 @@ export function ChatMessageView({
       !message.reasoning ? (
         <Loader2 className="spin" size={15} />
       ) : null}
-      {message.components && message.components.length > 0
+      {/* History fallback: a message persisted before component-parts existed renders its
+          components here (after the answer). Live turns render them inline via ordered parts
+          above — so skip this when any component part is present, to avoid double-rendering. */}
+      {message.components && message.components.length > 0 && !message.parts?.some((p) => p.kind === "component")
         ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
         : null}
       {/* Background-agent report (ADR 0050/0062): the bubble shows the server's preview; this

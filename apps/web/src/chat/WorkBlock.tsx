@@ -4,6 +4,7 @@ import { ToolCard } from "@protolabsai/ui/tool-card";
 import { Tooltip } from "@protolabsai/ui/overlays";
 
 import type { ChatPart, ToolCall } from "../lib/types";
+import { ChatComponent } from "./ChatComponent";
 import { toolsForGroup } from "./parts";
 import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
@@ -125,6 +126,8 @@ export function WorkBlock({
               part.text.trim() ? <ReasoningCard key={i} text={part.text} /> : null
             ) : part.kind === "tools" ? (
               <ToolCalls key={i} calls={toolsForGroup(part.ids, toolCalls)} flat />
+            ) : part.kind === "component" ? (
+              <ChatComponent key={i} spec={part.spec} />
             ) : part.text.trim() ? (
               <div key={i} className="work-text">{part.text}</div>
             ) : null,

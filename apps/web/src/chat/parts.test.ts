@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
+import { addComponent, addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
+
+describe("addComponent", () => {
+  it("appends a component part at its emission point (before the answer text streams in)", () => {
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "let me build a table");
+    p = addComponent(p, { component: "table", props: { rows: [] } });
+    p = appendText(p, "here it is", false); // answer streams AFTER the component
+    expect(p).toEqual([
+      { kind: "reasoning", text: "let me build a table" },
+      { kind: "component", spec: { component: "table", props: { rows: [] } } },
+      { kind: "text", text: "here it is" },
+    ]);
+  });
+});
 
 describe("appendText", () => {
   it("starts a run, then appends deltas to it", () => {
