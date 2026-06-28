@@ -105,55 +105,68 @@ def _operator_subagent_list():
     return _operator_list_subagents(STATE.graph_config)
 
 
-# Group the flat tool inventory by subsystem (matches get_all_tools' sections) so the
-# console can section the list instead of showing a wall of 30. Name → category;
-# unknown core names fall back to "General", plugin/mcp tools to their source.
+# Group the CORE tool inventory by subsystem so the console sections the list instead
+# of a wall of 30 (the old single "General" bucket held filesystem + skills + the long
+# tail). Name → subsystem. Plugin tools group by their OWNING PLUGIN (not a flat
+# "Plugin"); MCP tools by "MCP". Unmapped core names fall back to "General".
 _TOOL_CATEGORY = {
-    "current_time": "General",
-    "calculator": "General",
-    "web_search": "General",
-    "fetch_url": "General",
-    "ask_human": "General",
-    "request_user_input": "General",
-    "github_get_pr": "GitHub",
-    "github_get_issue": "GitHub",
-    "github_list_issues": "GitHub",
-    "github_get_commit_diff": "GitHub",
-    "read_note": "Notes",
-    "write_note": "Notes",
-    "append_note": "Notes",
+    # Filesystem / operator workspace
+    "list_dir": "Filesystem",
+    "read_file": "Filesystem",
+    "find_files": "Filesystem",
+    "search_files": "Filesystem",
+    "write_file": "Filesystem",
+    "edit_file": "Filesystem",
+    "run_command": "Filesystem",
+    "list_projects": "Filesystem",
+    # Skills
+    "load_skill": "Skills",
+    "list_skills": "Skills",
+    "save_skill": "Skills",
+    # Web & research
+    "web_search": "Web & research",
+    "fetch_url": "Web & research",
+    # Memory
     "memory_ingest": "Memory",
     "memory_recall": "Memory",
     "memory_list": "Memory",
     "memory_stats": "Memory",
+    "forget_memory": "Memory",
+    # Scheduler
     "schedule_task": "Scheduler",
     "list_schedules": "Scheduler",
     "cancel_schedule": "Scheduler",
+    # Inbox
     "check_inbox": "Inbox",
+    # Tasks
     "task_create": "Tasks",
     "task_list": "Tasks",
     "task_update": "Tasks",
     "task_close": "Tasks",
+    # Goals
     "set_goal": "Goals",
+    # Delegation (subagents)
     "task": "Delegation",
     "task_batch": "Delegation",
+    "task_output": "Delegation",
+    "stop_task": "Delegation",
+    # Workflows
     "run_workflow": "Workflows",
     "save_workflow": "Workflows",
+    # Discovery
     "search_tools": "Discovery",
 }
 
 
-def _tool_category(name: str, source: str) -> str:
-    # Known tools group by subsystem regardless of source — so first-party plugin
-    # tools (e.g. GitHub) keep their subsystem group instead of a generic "Plugin".
-    known = _TOOL_CATEGORY.get(name)
-    if known:
-        return known
+def _tool_category(name: str, source: str, plugin_owner: str | None = None) -> str:
+    # Plugin tools group by the plugin that contributed them (its display name), so the
+    # console organizes by plugin instead of one flat "Plugin" dump.
     if source == "plugin":
-        return "Plugin"
+        return plugin_owner or "Plugin"
     if source == "mcp":
         return "MCP"
-    return "General"
+    # Core tools group by subsystem; the long tail falls back to "General".
+    return _TOOL_CATEGORY.get(name, "General")
 
 
 def _operator_tools_list():
@@ -172,6 +185,8 @@ def _operator_tools_list():
     # everything else bound to the graph is core.
     plugin_names = {getattr(t, "name", None) for t in (getattr(STATE, "plugin_tools", None) or [])}
     mcp_names = {getattr(t, "name", None) for t in (getattr(STATE, "mcp_tools", None) or [])}
+    # tool name -> owning plugin display name (Tools tab grouping), stamped by the loader.
+    plugin_owner = getattr(STATE, "plugin_tool_owner", None) or {}
 
     def add(tool, source=None):
         name = getattr(tool, "name", None)
@@ -185,7 +200,7 @@ def _operator_tools_list():
                 "name": name,
                 "description": desc,
                 "source": src,
-                "category": _tool_category(name, src),
+                "category": _tool_category(name, src, plugin_owner.get(name)),
             }
         )
 

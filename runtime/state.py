@@ -43,6 +43,8 @@ class AppState:
     mcp_tools: list = field(default_factory=list)
     mcp_meta: list = field(default_factory=list)
     plugin_tools: list = field(default_factory=list)
+    # tool name -> owning plugin display name (Tools tab grouping); mirrors plugin_tools.
+    plugin_tool_owner: dict = field(default_factory=dict)
     plugin_skill_dirs: list = field(default_factory=list)
     plugin_middleware: list = field(default_factory=list)  # resolved AgentMiddleware instances (ADR 0032)
     plugin_late_tool_factories: list = field(default_factory=list)  # (all_tools, config) -> tool|list (late seam)
