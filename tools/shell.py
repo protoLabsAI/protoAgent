@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 from dataclasses import dataclass
 
 
@@ -62,6 +63,9 @@ async def run_command(
             stderr=asyncio.subprocess.PIPE,
             env=merged_env,
             cwd=cwd,
+            # Own process group so a timeout can kill the whole tree — a shell command
+            # (run_command goes through /bin/sh -c) may spawn children via |, &, $(…).
+            start_new_session=True,
         )
     except FileNotFoundError:
         binary = argv[0] if argv else "?"
@@ -75,7 +79,12 @@ async def run_command(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        proc.kill()
+        # Kill the whole process group, not just the immediate child: a shell command can
+        # spawn children (pipes, &, $(…)) that would otherwise be orphaned on timeout.
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
         try:
             await proc.communicate()
         except Exception:  # noqa: BLE001 — process already killed; draining is best-effort

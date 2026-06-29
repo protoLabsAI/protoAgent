@@ -146,7 +146,9 @@ def test_run_command_runs_via_shell(workspace):
         )
     )
     out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "echo one && echo two"}))
-    assert "one" in out and "two" in out
+    # Exact lines (not substrings): the old argv path would print the literal "one && echo two",
+    # so this assertion specifically fails unless the && actually chained two commands.
+    assert out.splitlines() == ["one", "two"]
 
 
 def test_run_command_declined_raises(workspace, monkeypatch):
