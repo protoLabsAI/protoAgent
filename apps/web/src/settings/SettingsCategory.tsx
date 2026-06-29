@@ -329,11 +329,14 @@ export function SettingsCategory({
           </div>
         ) : (
           <Accordion className="settings-groups">
-            {groups.map((group) => {
+            {groups.map((group, i) => {
               const groupDirty = group.fields.filter(isVisible).reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
               return (
                 <AccordionItem
                   key={group.section}
+                  // Open the first group by default so a panel never lands fully collapsed
+                  // (the operator sees content immediately; the rest expand on demand).
+                  defaultOpen={i === 0}
                   title={
                     <span className="settings-group-head">
                       {group.section}

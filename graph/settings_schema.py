@@ -667,6 +667,42 @@ FIELDS: list[Field] = [
     ),
 ]
 
+# Knowledge domain sub-sections (console grouping). The Knowledge fields are declared with
+# section "Knowledge" above for locality; here we split that one 22-field wall into three
+# scannable accordion groups — Recall (retrieval), Ingestion (import/chunking), History
+# (checkpoints) — all still under the Knowledge domain (see _SECTION_CATEGORY). One map, so
+# the split is reviewable in one place instead of scattered across 22 field definitions.
+_KNOWLEDGE_SUBSECTION = {
+    # Recall — what the agent retrieves into context, and how.
+    "knowledge.top_k": "Recall",
+    "knowledge.scope": "Recall",
+    "knowledge.embeddings": "Recall",
+    "knowledge.embed_model": "Recall",
+    "knowledge.recall_preview_chars": "Recall",
+    "knowledge.vector_k": "Recall",
+    "knowledge.rrf_k": "Recall",
+    "knowledge.min_score": "Recall",
+    "skills.top_k": "Recall",  # skills surfaced into context — a recall-count sibling
+    # Ingestion — bringing documents in (extraction, chunking, enrichment).
+    "knowledge.transcribe_model": "Ingestion",
+    "knowledge.image_describe_model": "Ingestion",
+    "knowledge.chunk_max_chars": "Ingestion",
+    "knowledge.chunk_overlap_chars": "Ingestion",
+    "knowledge.contextual_enrichment": "Ingestion",
+    "knowledge.attach_inline_budget": "Ingestion",
+    "knowledge.facts": "Ingestion",
+    # History — conversation checkpoints + retention/harvest.
+    "checkpoint.db_path": "History",
+    "checkpoint.keep_per_thread": "History",
+    "checkpoint.max_age_days": "History",
+    "checkpoint.prune_interval_hours": "History",
+    "checkpoint.harvest_enabled": "History",
+    "checkpoint.vacuum": "History",
+}
+for _f in FIELDS:
+    if _f.key in _KNOWLEDGE_SUBSECTION:
+        _f.section = _KNOWLEDGE_SUBSECTION[_f.key]
+
 _BY_KEY = {f.key: f for f in FIELDS}
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
 _HOST_KEYS = {f.key for f in FIELDS if getattr(f, "scope", "agent") == "host"}
@@ -741,8 +777,10 @@ _SECTION_CATEGORY = {
     # Tools/MCP/Skills/Subagents/Delegates managers are bespoke console panels).
     "Skills": "Capabilities",
     "MCP": "Capabilities",
-    # Knowledge — recall / RAG config.
-    "Knowledge": "Knowledge",
+    # Knowledge — recall / RAG config, split into sub-sections (see _KNOWLEDGE_SUBSECTION).
+    "Recall": "Knowledge",
+    "Ingestion": "Knowledge",
+    "History": "Knowledge",
     # Box — box-wide operational config (host console only): the telemetry store + the
     # host box-runtime knobs (network / discovery / keep-warm, ADR 0047 D8). Host-scoped;
     # a workspace-leaf override of these is a silent no-op (consumed by the host process).
