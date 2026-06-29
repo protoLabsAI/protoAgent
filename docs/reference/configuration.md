@@ -254,7 +254,7 @@ filesystem:
 
 ## `egress`
 
-Deny-by-default outbound-host allowlist ([ADR 0008](../adr/0008-sandboxing-and-openshell.md)) enforced in `fetch_url` — the tool where the model picks an arbitrary host (the in-process exfiltration / SSRF vector). Also the single source of truth the OpenShell network policy is generated from (`scripts/gen_openshell_policy.py`).
+Deny-by-default outbound-host allowlist ([ADR 0008](../adr/0008-sandboxing-and-openshell.md)) enforced in `fetch_url` — the tool where the model picks an arbitrary host (the in-process exfiltration / SSRF vector). Also the single source of truth the OpenShell network policy is generated from (`scripts/gen_openshell_policy.py`). Editable in the console at **Settings ▸ Box ▸ Network** (host-scoped, hot-reloads).
 
 ```yaml
 egress:
@@ -265,9 +265,9 @@ egress:
 
 | Key | Default | What |
 |---|---|---|
-| `allowed_hosts` | `[]` | Hosts `fetch_url` may reach. **Empty = permissive** (off). When set, any other host is denied. `*.host` matches subdomains + apex; case-insensitive, port-agnostic. Hot-reloads. |
+| `allowed_hosts` | `[]` | Hosts `fetch_url` may reach. **Empty = permissive** (off, with a built-in SSRF guard still blocking private / loopback / cloud-metadata addresses). When set, any other host is denied. `*.host` matches subdomains + apex; case-insensitive, port-agnostic. Hot-reloads. |
 
-Covers `fetch_url` only; `execute_code`/`run_command` process-level egress is fenced by running under OpenShell (see [Sandboxing & egress](../guides/sandboxing.md)).
+When the allowlist **is** set, your configured model gateway (`model.api_base`) host is permitted **automatically** — you don't have to list it, and the connection-test / "Get models" probes for a custom base URL won't be blocked. (With an empty allowlist this auto-add is a no-op; adding one host there would flip the guard into deny-by-default for every other host.) Covers `fetch_url` only; `execute_code`/`run_command` process-level egress is fenced by running under OpenShell (see [Sandboxing & egress](../guides/sandboxing.md)).
 
 ## `security`
 

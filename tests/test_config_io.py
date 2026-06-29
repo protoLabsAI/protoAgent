@@ -153,6 +153,8 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
         # Box runtime (Host layer, ADR 0047 D8).
         "network",
         "fleet",
+        # Egress allowlist (ADR 0008) — surfaced in Settings ▸ Box ▸ Network.
+        "egress",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
@@ -494,6 +496,47 @@ def test_list_gateway_models_blocks_internal_api_base(monkeypatch):
     models, err = config_io.list_gateway_models("http://169.254.169.254/latest/v1")
     assert models == [] and "blocked" in err
     assert called["n"] == 0  # never hit the network
+
+
+def test_list_gateway_models_allows_localhost_api_base(monkeypatch):
+    """A custom api_base is an operator-configured gateway — most commonly localhost
+    (Ollama / LM Studio / local vLLM / LiteLLM). allow_private (mirroring the fleet-remote
+    probe) lets it through the SSRF guard while link-local/metadata stays blocked. Regression
+    for "connection failed — api_base host is blocked by the egress guard" on a local gateway."""
+    from graph import config_io
+
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"data": [{"id": "llama3"}]}
+
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.get.return_value = fake_response
+    monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
+
+    models, err = config_io.list_gateway_models("http://127.0.0.1:11434/v1")
+    assert err == ""  # not blocked — the probe reached the (mocked) gateway
+    assert models == ["llama3"]
+    assert fake_client.get.call_args[0][0] == "http://127.0.0.1:11434/v1/models"
+
+
+def test_validate_model_connection_allows_localhost_api_base(monkeypatch):
+    """Same fix on the completion probe: a localhost gateway is not blocked by egress."""
+    from graph import config_io
+
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.post.return_value = fake_response
+    monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
+
+    ok, err = config_io.validate_model_connection("http://127.0.0.1:11434/v1", model="llama3")
+    assert ok is True and err == ""
+    assert fake_client.post.call_args[0][0] == "http://127.0.0.1:11434/v1/chat/completions"
 
 
 # ── list_available_tools ─────────────────────────────────────────────────────

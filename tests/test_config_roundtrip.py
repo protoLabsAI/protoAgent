@@ -211,6 +211,9 @@ CONFIG_TO_DICT_GOLDEN = {
         "model": "",
         "trigger": "fraction:0.8",
     },
+    "egress": {
+        "allowed_hosts": [],
+    },
     "fleet": {
         "port_base": 7870,
         "discovery": {

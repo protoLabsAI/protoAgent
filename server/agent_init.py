@@ -110,7 +110,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     from security import egress
 
-    egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts)
+    egress.set_allowed_hosts(
+        STATE.graph_config.egress_allowed_hosts, also_allow_url=STATE.graph_config.api_base
+    )
     # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
     from security import policy
 
@@ -1366,7 +1368,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         from security import egress
         from security import policy
 
-        egress.set_allowed_hosts(new_config.egress_allowed_hosts)  # live-reload (ADR 0008)
+        egress.set_allowed_hosts(
+            new_config.egress_allowed_hosts, also_allow_url=new_config.api_base
+        )  # live-reload (ADR 0008)
         policy.set_callback_allowlist(new_config.security_callback_allowlist)  # live-reload (#572)
     except Exception:  # noqa: BLE001 — never block a reload on the egress update
         pass
