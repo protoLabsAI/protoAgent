@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.73.0] - 2026-06-29
+
 ### Added
 - **Background batch delegation** (#1396) — `task_batch(run_in_background=True)` fans a whole batch
   of subagents out detached, returning job ids immediately while you keep working, with each

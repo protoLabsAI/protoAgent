@@ -1,5 +1,32 @@
 [
   {
+    "version": "v0.73.0",
+    "date": "2026-06-29",
+    "changes": [
+      "Background batch delegation",
+      "Live tool-card feed for background agents",
+      "Settings ▸ Knowledge split into sub-sections",
+      "Tools view — MCP tools grouped by server",
+      "Settings IA — domain-first",
+      "Tools view — grouped by plugin + subsystem",
+      "Built-in subagents answer natively",
+      "CI off the deprecated Node 20 action runtime",
+      "Structured-output parser retired",
+      "Concurrent same-conversation turns no longer corrupt chat history",
+      "Chat answers no longer truncated; A2A tasks return the real final answer",
+      "Subagent token streams isolated from the live chat",
+      "Cross-tab chat no longer clobbers itself",
+      "ACP coding-agent eviction race closed",
+      "Cross-context streaming guard",
+      "File uploads restore the token prompt on auth failure",
+      "Secure defaults for metrics and MCP secrets",
+      "Backend launch-hardening — ingestion SSRF guard + credential hardening",
+      "Plugin auth-bypass and event-loop hardening",
+      "Fail-safe plugin secret redaction",
+      "Operator-token storage guidance"
+    ]
+  },
+  {
     "version": "v0.72.0",
     "date": "2026-06-28",
     "changes": [
