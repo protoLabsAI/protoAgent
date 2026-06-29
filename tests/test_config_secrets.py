@@ -152,12 +152,12 @@ def test_secret_paths_falls_back_to_cache_on_discovery_failure(monkeypatch, capl
 
     # 1) a good discovery populates the cache (the plugin secret is recognized).
     monkeypatch.setattr(config_io, "_PLUGIN_SECRET_PATHS_CACHE", ())
-    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()])
+    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda **kw: [_Schema()])
     assert pair in config_io.secret_paths()
 
     # 2) discovery now FAILS — the plugin secret must still be recognized (cached),
     #    and the failure is logged (no silent downgrade).
-    def _boom():
+    def _boom(**kw):
         raise RuntimeError("manifest parse blew up")
 
     monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", _boom)
@@ -177,14 +177,42 @@ def test_a_plugin_secret_is_stripped_from_the_doc_even_if_rediscovery_fails(monk
         secrets = ["api_key"]
 
     monkeypatch.setattr(config_io, "_PLUGIN_SECRET_PATHS_CACHE", ())
-    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()])
+    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda **kw: [_Schema()])
     config_io.secret_paths()  # prime the cache
 
     monkeypatch.setattr(
         "graph.plugins.pconfig.installed_plugin_config_schemas",
-        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     doc = {"myplugin": {"api_key": "sk-should-be-stripped", "host": "ok-to-keep"}}
     config_io.strip_secrets_from_doc(doc)
     assert "api_key" not in doc["myplugin"]  # the secret never reaches the main YAML
     assert doc["myplugin"]["host"] == "ok-to-keep"  # non-secret kept
+
+
+def test_config_to_dict_blanks_plugin_section_on_discovery_failure(monkeypatch):
+    """GET /api/config must fail SAFE: if plugin-schema discovery raises, config_to_dict
+    can't tell a secret from a non-secret value, so it blanks the WHOLE plugin section
+    rather than echoing a plugin secret in the clear."""
+    from graph import config_io
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig(plugin_config={"discord": {"bot_token": "sek-ret", "guild": "123"}})
+
+    class _S:
+        section = "discord"
+        secrets = ["bot_token"]
+
+    # discovery OK → only the declared secret is blanked, non-secret config preserved.
+    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda **kw: [_S()])
+    d = config_io.config_to_dict(cfg)
+    assert d["discord"]["bot_token"] == ""
+    assert d["discord"]["guild"] == "123"
+
+    # discovery FAILS → blank the whole section (no plugin secret echoed in the clear).
+    monkeypatch.setattr(
+        "graph.plugins.pconfig.installed_plugin_config_schemas",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("discovery boom")),
+    )
+    d2 = config_io.config_to_dict(cfg)
+    assert d2["discord"] == {"bot_token": "", "guild": ""}

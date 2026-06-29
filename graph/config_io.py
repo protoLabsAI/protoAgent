@@ -140,7 +140,7 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
     try:
         from graph.plugins.pconfig import installed_plugin_config_schemas
 
-        extra = tuple((sch.section, key) for sch in installed_plugin_config_schemas() for key in sch.secrets)
+        extra = tuple((sch.section, key) for sch in installed_plugin_config_schemas(strict=True) for key in sch.secrets)
         _PLUGIN_SECRET_PATHS_CACHE = extra  # remember the good set for next time
     except Exception as e:  # noqa: BLE001 — discovery is best-effort; fail SAFE, not empty
         extra = _PLUGIN_SECRET_PATHS_CACHE
@@ -422,15 +422,23 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     # (blank-means-unchanged, like api_key). A default config has none.
     plugin_cfg = getattr(config, "plugin_config", {}) or {}
     if plugin_cfg:
+        discovery_ok = True
         try:
             # ALL installed plugins (not just enabled) — so a disabled plugin's stored
             # secret is redacted from the API response too, never echoed back in the clear.
             from graph.plugins.pconfig import installed_plugin_config_schemas
 
-            secrets_by_section = {s.section: set(s.secrets) for s in installed_plugin_config_schemas()}
-        except Exception:  # noqa: BLE001
+            secrets_by_section = {s.section: set(s.secrets) for s in installed_plugin_config_schemas(strict=True)}
+        except Exception:  # noqa: BLE001 — discovery FAILED (vs genuinely-empty): we no longer know which keys are secret
+            discovery_ok = False
             secrets_by_section = {}
         for section, vals in plugin_cfg.items():
+            if not discovery_ok:
+                # Fail SAFE: with no schema we can't tell a secret from a non-secret
+                # value, so blank the WHOLE section rather than risk echoing a plugin
+                # secret in the clear (blank-means-unchanged on save, like api_key).
+                d[section] = {k: "" for k in vals}
+                continue
             redacted = dict(vals)
             for skey in secrets_by_section.get(section, set()):
                 if skey in redacted:
