@@ -94,11 +94,15 @@ export function HitlForm({
   busy,
   onSubmit,
   onCancel,
+  onApproveAlways,
 }: {
   payload: HitlPayload;
   busy?: boolean;
   onSubmit: (response: Record<string, unknown> | string) => void;
   onCancel: () => void;
+  // Approval gates only: "Approve & don't ask again" — approve this action AND turn on
+  // bypass-permissions for the tab (skip future approvals). Omitted ⇒ the button is hidden.
+  onApproveAlways?: () => void;
 }) {
   const isForm = payload.kind === "form" && (payload.steps?.length ?? 0) > 0;
   const isApproval = payload.kind === "approval";
@@ -116,6 +120,18 @@ export function HitlForm({
           <Button type="button" variant="ghost" onClick={() => onSubmit("denied")} disabled={busy}>
             Deny
           </Button>
+          {onApproveAlways && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="hitl-approve-always"
+              title="Approve this — and skip approval for the rest of this tab's commands (bypass mode). Turn off with /bypass off."
+              onClick={onApproveAlways}
+              disabled={busy}
+            >
+              Approve &amp; don&apos;t ask again
+            </Button>
+          )}
           <Button type="button" variant="primary" onClick={() => onSubmit("approved")} disabled={busy}>
             Approve
           </Button>

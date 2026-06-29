@@ -1032,7 +1032,9 @@ function ChatSessionSlot({
         images: opts.images,
         model: session.model,
         reasoningEffort: effectiveReasoningEffort(session),
-        bypassPermissions: session.bypassPermissions,
+        // Read live (not the render-closure session) so an "Approve & don't ask again" that
+        // flips bypass on right before this resume turn is carried by it.
+        bypassPermissions: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.bypassPermissions,
       });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
@@ -1125,6 +1127,14 @@ function ChatSessionSlot({
           busy={status === "streaming"}
           onSubmit={resumeHitl}
           onCancel={() => setHitl(null)}
+          onApproveAlways={
+            hitl.kind === "approval" && session
+              ? () => {
+                  chatStore.setSessionBypassPermissions(session.id, true); // turn bypass on for this tab
+                  void resumeHitl("approved"); // …and approve the pending command
+                }
+              : undefined
+          }
         />
       )}
 
