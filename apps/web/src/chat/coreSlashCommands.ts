@@ -54,3 +54,24 @@ registerSlashCommand({
     return true;
   },
 });
+
+registerSlashCommand({
+  name: "bypass",
+  description: "DANGER: auto-approve tool permissions (run_command) for this tab",
+  usage: "/bypass on|off",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false;
+    const arg = ctx.rest.trim().toLowerCase();
+    const session = chatStore.getSnapshot().sessions.find((s) => s.id === ctx.sessionId);
+    const cur = !!session?.bypassPermissions;
+    const next = arg === "on" ? true : arg === "off" ? false : !cur; // bare /bypass toggles
+    chatStore.setSessionBypassPermissions(ctx.sessionId, next);
+    ctx.noteToThread(
+      next
+        ? "⚠️ **Bypass permissions ON** for this tab — `run_command` runs **without approval** until you turn it off with `/bypass off`. (A host can forbid this entirely via `filesystem.bypass_allowed: false`.)"
+        : "Bypass permissions **off** — tool approvals will prompt again.",
+    );
+    ctx.focusComposer();
+    return true;
+  },
+});

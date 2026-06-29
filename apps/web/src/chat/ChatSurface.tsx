@@ -1028,7 +1028,12 @@ function ChatSessionSlot({
             }),
           );
         },
-      }, { images: opts.images, model: session.model, reasoningEffort: effectiveReasoningEffort(session) });
+      }, {
+        images: opts.images,
+        model: session.model,
+        reasoningEffort: effectiveReasoningEffort(session),
+        bypassPermissions: session.bypassPermissions,
+      });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
       void reconcileSteer();
@@ -1210,6 +1215,16 @@ function ChatSessionSlot({
                 </Button>
               ))}
               <ComposerModelSelect />
+              {session?.bypassPermissions ? (
+                <button
+                  type="button"
+                  className="composer-bypass-chip"
+                  title="Bypass permissions is ON for this tab — run_command runs WITHOUT approval. Click to turn it off."
+                  onClick={() => chatStore.setSessionBypassPermissions(session.id, false)}
+                >
+                  ⚠ bypass on
+                </button>
+              ) : null}
             </>
           }
           attachments={attachments.map((a) => ({

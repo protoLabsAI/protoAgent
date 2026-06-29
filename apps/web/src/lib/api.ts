@@ -1156,7 +1156,12 @@ export const api = {
       onFailed?: (message: string) => void;
       onDone?: () => void;
     } = {},
-    opts: { images?: { b64: string; mime: string; name: string }[]; model?: string; reasoningEffort?: string } = {},
+    opts: {
+      images?: { b64: string; mime: string; name: string }[];
+      model?: string;
+      reasoningEffort?: string;
+      bypassPermissions?: boolean;
+    } = {},
   ) {
     // One A2A SendStreamingMessage body + one frame dispatcher, shared by the desktop
     // (Tauri-relayed) and browser (fetch SSE) paths so both decode turns identically.
@@ -1176,11 +1181,12 @@ export const api = {
           contextId: sessionId,
           // Per-turn overrides ride the A2A message metadata (server/chat.py reads them):
           // the tab's chosen model + the /effort reasoning level.
-          ...((opts.model || opts.reasoningEffort)
+          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions)
             ? {
                 metadata: {
                   ...(opts.model ? { model: opts.model } : {}),
                   ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
+                  ...(opts.bypassPermissions ? { bypass_permissions: true } : {}),
                 },
               }
             : {}),

@@ -152,6 +152,27 @@
 .chat-tabbar-wrap--del .pl-tabbar__close:hover {
   color: var(--pl-color-danger, #e5484d);
 }
+
+/* Bypass-permissions warning chip in the composer toolbar — loud, so the dangerous mode is
+   never silently on. Clicking it turns bypass off (same as `/bypass off`). */
+.composer-bypass-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--pl-color-danger, #e5484d);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.composer-bypass-chip:hover {
+  filter: brightness(1.08);
+}
 .chat-tabbar-wrap--del .pl-tabbar__close:hover svg {
   display: none;
 }

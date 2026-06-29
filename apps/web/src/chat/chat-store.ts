@@ -18,6 +18,10 @@ export type ChatSession = {
   // (DEFAULT_REASONING_EFFORT, auto-enabled); "off" → no reasoning this tab;
   // else low|medium|high|max. Sent each turn so the tab reasons at its own level.
   reasoningEffort?: string;
+  // Per-tab "bypass permissions" mode (the /bypass command): when true, each turn carries
+  // metadata.bypass_permissions so the server auto-approves run_command (no HITL gate). A
+  // deliberately dangerous escape hatch — default OFF; the composer shows a loud chip while on.
+  bypassPermissions?: boolean;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -474,6 +478,17 @@ export const chatStore = {
       ...current,
       sessions: current.sessions.map((session) =>
         session.id === sessionId ? { ...session, reasoningEffort: effort || undefined } : session,
+      ),
+    }));
+  },
+
+  // Per-tab bypass-permissions toggle (the /bypass command). Dangerous — auto-approves
+  // run_command for this tab's turns until turned off.
+  setSessionBypassPermissions(sessionId: string, on: boolean) {
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId ? { ...session, bypassPermissions: on || undefined } : session,
       ),
     }));
   },
