@@ -12,6 +12,8 @@
 // Core itself registers `/new`, `/clear`, `/effort` through this seam (see
 // `chat/coreSlashCommands.ts`) — the seam is the only path, not a special case.
 
+import type { SystemNoteTone } from "../lib/types";
+
 /** What a client slash command's handler receives. The host (ChatSurface) builds this
  *  from its local state + the chat store when the command fires. */
 export type SlashContext = {
@@ -19,8 +21,9 @@ export type SlashContext = {
   rest: string;
   /** The active chat session id, or null if none. */
   sessionId: string | null;
-  /** Drop a LOCAL system note into the thread (shown to the operator, never sent). */
-  noteToThread: (markdown: string) => void;
+  /** Drop a LOCAL system note into the thread (shown to the operator, never sent). `tone`
+   *  colours it (info/warning/danger/success); omit for a neutral note. */
+  noteToThread: (markdown: string, opts?: { tone?: SystemNoteTone }) => void;
   /** Replace the composer draft text. */
   setDraft: (text: string) => void;
   /** Return focus to the composer textarea. */

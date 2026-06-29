@@ -43,7 +43,17 @@ export function ChatMessageView({
   // Per-turn token/cost footer is an opt-out display pref (Settings ▸ Chat, #1372).
   const showChatUsage = useUI((s) => s.showChatUsage);
   return (
-    <Message role={message.role} streaming={streaming} className={message.report ? "chat-report" : undefined}>
+    <Message
+      role={message.role}
+      streaming={streaming}
+      className={
+        message.report
+          ? "chat-report"
+          : message.noteTone
+            ? `chat-note chat-note--${message.noteTone}`
+            : undefined
+      }
+    >
       {message.reasoning && !(message.parts && message.parts.length) ? (
         // History-loaded turns have no ordered parts — fall back to the flat collapsed
         // reasoning card. Live turns render reasoning inline via parts.

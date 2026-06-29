@@ -14,7 +14,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
-import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
+import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
@@ -409,14 +409,17 @@ function ChatSessionSlot({
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
 
-  // A local-only system note in the thread (e.g. /effort confirmation) — never sent
-  // to the agent, just shown so the operator sees the command took effect.
-  function noteToThread(text: string) {
+  // Post a local SYSTEM NOTE to the thread (e.g. a /effort confirmation, a status line, a
+  // warning) — never sent to the agent, just shown so the operator sees a local action took
+  // effect. role "system" so it renders distinctly and never gets the answer action row
+  // (copy/fork/regenerate). `tone` colours it (info/warning/danger/success). This is the reusable
+  // seam for any non-agent in-thread notice — exposed to forks via the slash/composer registries.
+  function noteToThread(text: string, opts?: { tone?: SystemNoteTone }) {
     if (!session) return;
     const base = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? [];
     chatStore.updateMessages(session.id, [
       ...base,
-      { id: messageId(), role: "assistant", content: text, createdAt: Date.now(), status: "done" },
+      { id: messageId(), role: "system", content: text, noteTone: opts?.tone, createdAt: Date.now(), status: "done" },
     ]);
   }
 

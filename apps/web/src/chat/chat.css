@@ -206,6 +206,21 @@
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :first-child { margin-top: 0; }
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :last-child { margin-bottom: 0; }
 
+/* Local SYSTEM NOTE (noteToThread) — a slash-command confirmation / status / warning. Same
+   inset system card as a report, but compact and with a tone-coloured left accent driven by
+   the message's `noteTone` (info/warning/danger/success). System notes never carry the answer
+   action row (that's role-"assistant"-only). Add a tone: one rule here + the SystemNoteTone
+   union in lib/types.ts. The `.chat-note--*` class sits ON `.pl-message--system`, so these
+   (4 classes) outrank the base system rule above (3 classes). */
+.chat-session-slot .pl-message--system.chat-note .pl-message__content {
+  font-size: 0.85rem;
+  padding: 8px 12px;
+}
+.chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-info, #3b82f6); }
+.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-success, #30a46c); }
+.chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-warning, #d98324); }
+.chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-danger, #e5484d); }
+
 /* No "loading side-bar" on streaming answer text. The DS pulses a 2px accent left-border +
    10px inset on a streaming message body (ai.css) — but the streaming text itself is the cue,
    and it should read FULL WIDTH, not inset behind an animated rail. Drop it (higher specificity

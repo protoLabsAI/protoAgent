@@ -462,6 +462,13 @@ export type ContextWindow = {
   enabled?: boolean;
 };
 
+/** Emphasis tone for a local SYSTEM NOTE (a role-"system" message without a `report`) —
+ *  e.g. a slash-command confirmation, a status line, or a warning. The reusable seam for
+ *  posting non-agent, in-thread notices is `ChatSurface.noteToThread(text, { tone })`,
+ *  exposed to forks via the slash + composer registries. Add a tone here + a matching
+ *  `.chat-note--<tone>` rule in chat.css; nothing else needs to change. */
+export type SystemNoteTone = "info" | "warning" | "danger" | "success";
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
@@ -490,6 +497,11 @@ export type ChatMessage = {
   /** This turn's context-window fill + compaction threshold (terminal context-v1 DataPart).
    *  Drives the meter in the same footer; absent on user turns / pre-ship history. */
   contextWindow?: ContextWindow;
+  /** Set on a local SYSTEM NOTE (role "system", no `report`) to tone its rendering — a
+   *  reusable, non-agent in-thread notice (slash-command confirmation, status, warning).
+   *  Posted via `noteToThread(text, { tone })`; system notes never carry the answer
+   *  action row (copy/fork/regenerate) — those are answer-only. */
+  noteTone?: SystemNoteTone;
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required

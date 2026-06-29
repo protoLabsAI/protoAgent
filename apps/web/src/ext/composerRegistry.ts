@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import type { SystemNoteTone } from "../lib/types";
+
 // Build-time fork seam for COMPOSER ACTIONS (ADR 0061, extends ADR 0038 D3). A fork drops
 // a `src/ext/<name>.tsx` that calls `registerComposerAction()` to add a control to the chat
 // composer's actions slot (beside the model picker) — WITHOUT editing `ChatSurface.tsx`, so
@@ -17,8 +19,9 @@ export type ComposerActionContext = {
   setDraft: (text: string) => void;
   /** Return focus to the composer textarea. */
   focusComposer: () => void;
-  /** Drop a LOCAL system note into the thread (shown to the operator, never sent). */
-  noteToThread: (markdown: string) => void;
+  /** Drop a LOCAL system note into the thread (shown to the operator, never sent). `tone`
+   *  colours it (info/warning/danger/success); omit for a neutral note. */
+  noteToThread: (markdown: string, opts?: { tone?: SystemNoteTone }) => void;
 };
 
 export type ComposerAction = {
