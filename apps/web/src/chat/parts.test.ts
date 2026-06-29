@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { addComponent, addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
+import { addComponent, addToolRef, appendReasoning, appendText, foldPlan, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -130,6 +130,54 @@ describe("addToolRef", () => {
       { kind: "text", text: "mid" },
       { kind: "tools", ids: ["b"] },
     ]);
+  });
+});
+
+describe("foldPlan", () => {
+  const reasoning = (text: string): ChatPart => ({ kind: "reasoning", text });
+  const text = (t: string): ChatPart => ({ kind: "text", text: t });
+  const tools = (...ids: string[]): ChatPart => ({ kind: "tools", ids });
+  const component = (): ChatPart => ({ kind: "component", spec: { component: "x", props: {} } });
+
+  it("folds a reason+tool turn and splits the trailing answer once settled", () => {
+    const parts = [reasoning("think"), tools("a"), text("the answer")];
+    expect(foldPlan(parts, false)).toEqual({
+      fold: true,
+      workParts: [reasoning("think"), tools("a")],
+      answerParts: [text("the answer")],
+    });
+  });
+
+  it("keeps an ambiguous trailing text run as WORK while streaming a folded turn (the flash guard)", () => {
+    // Interstitial narration after a tool, mid-turn — must NOT become the answer yet, or it
+    // flashes into the main chat then jumps back into the WorkBlock when the next tool arrives.
+    const parts = [reasoning("think"), tools("a"), text("let me try another tool")];
+    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+  });
+
+  it("keeps a trailing component as work while streaming a folded turn", () => {
+    const parts = [reasoning("think"), tools("a"), component()];
+    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+  });
+
+  it("does NOT fold a tool-only turn (no reasoning) — split stays stable even while streaming", () => {
+    const parts = [tools("a"), text("answer")];
+    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: [tools("a")], answerParts: [text("answer")] });
+  });
+
+  it("does NOT fold a reasoning-only turn (no tools)", () => {
+    const parts = [reasoning("think"), text("answer")];
+    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: [reasoning("think")], answerParts: [text("answer")] });
+  });
+
+  it("a plain text turn is all answer, never folded", () => {
+    expect(foldPlan([text("hi")], true)).toEqual({ fold: false, workParts: [], answerParts: [text("hi")] });
+  });
+
+  it("a folded turn with no answer yet keeps everything as work, settled or streaming", () => {
+    const parts = [reasoning("think"), tools("a")];
+    expect(foldPlan(parts, false)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
   });
 });
 

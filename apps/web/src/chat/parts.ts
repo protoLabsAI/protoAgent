@@ -68,6 +68,31 @@ export function addComponent(parts: ChatPart[] | undefined, spec: ComponentSpec)
   return [...(parts ?? []), { kind: "component", spec }];
 }
 
+/** Split a turn's parts into the folded "work" (the reason→tool→interstitial timeline behind the
+ *  WorkBlock) and the trailing "answer" (the final text/component run rendered below it).
+ *
+ *  `fold` is true only when the work interleaves reasoning WITH tools (the forever-stack case the
+ *  WorkBlock exists to tame); tool-only / reasoning-only / plain turns render their parts inline.
+ *
+ *  Flash guard: WHILE STREAMING a folded turn, a trailing text/component run is ambiguous — it
+ *  might be the final answer, or just interstitial narration (or a status component) before the
+ *  next tool. Promoting it eagerly made it flash into the main chat, then get yanked back into the
+ *  work timeline the moment the next tool arrived (the "Worked" block collapsing/re-expanding). So
+ *  while streaming a folded turn we keep everything as work (the WorkBlock surfaces the live tail);
+ *  only once the turn settles (`!streaming`) do we split the final run out as the answer. Non-folded
+ *  turns are unaffected — their split is stable, so their answer streams below as before. */
+export function foldPlan(
+  parts: ChatPart[],
+  streaming: boolean,
+): { fold: boolean; workParts: ChatPart[]; answerParts: ChatPart[] } {
+  let split = parts.length;
+  while (split > 0 && (parts[split - 1].kind === "text" || parts[split - 1].kind === "component")) split--;
+  const baseWork = parts.slice(0, split);
+  const fold = baseWork.some((p) => p.kind === "tools") && baseWork.some((p) => p.kind === "reasoning");
+  if (fold && streaming) return { fold, workParts: parts, answerParts: [] };
+  return { fold, workParts: baseWork, answerParts: parts.slice(split) };
+}
+
 /** The tool calls to render for a `tools` part: its top-level calls (by id) plus any
  *  subagent children nested under them — so ToolCalls can rebuild the nesting. */
 export function toolsForGroup(ids: string[], calls: ToolCall[] | undefined): ToolCall[] {
