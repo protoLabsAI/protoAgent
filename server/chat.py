@@ -101,36 +101,47 @@ def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
 # history, so we reuse it across turns; ADR 0033 slice 4).
 _ACP_RUNTIMES: dict[str, Any] = {}
 _ACP_RUNTIME_ACCESS: dict[str, float] = {}  # thread_id → time.monotonic() last access
+_ACP_BUSY: dict[str, int] = {}  # thread_id → in-flight turn count; never evict while > 0
+_ACP_LOCK = asyncio.Lock()  # serializes registry mutation across concurrent turns
 _ACP_IDLE_TTL_S = 1800  # 30 min idle before eviction
 _ACP_MAX_RUNTIMES = 100  # hard cap — evict LRU when exceeded
 
 
 async def _evict_acp_runtimes(now: float) -> None:
-    """Sweep idle ACP runtimes and enforce the hard cap."""
-    # Phase 1 — evict entries older than the idle TTL.
+    """Sweep idle ACP runtimes and enforce the hard cap. The CALLER holds ``_ACP_LOCK``
+    (kept lock-free here so it composes under the get/acquire helpers). A runtime with an
+    in-flight turn (``_ACP_BUSY > 0``) is NEVER evicted — closing it would kill a live turn
+    (a long ACP coding turn can outlast the idle TTL)."""
+    # Phase 1 — evict entries older than the idle TTL (never an in-flight one).
     for tid in list(_ACP_RUNTIMES):
+        if _ACP_BUSY.get(tid, 0) > 0:
+            continue
         last = _ACP_RUNTIME_ACCESS.get(tid, 0)
         if now - last >= _ACP_IDLE_TTL_S:
-            rt = _ACP_RUNTIMES.pop(tid)
+            rt = _ACP_RUNTIMES.pop(tid, None)
             _ACP_RUNTIME_ACCESS.pop(tid, None)
-            await rt.close()
-            agent = getattr(rt, "agent", "?")
-            log.info("[acp-runtime] evicted idle runtime for thread=%s agent=%s", tid, agent)
+            if rt is not None:
+                await rt.close()
+                log.info("[acp-runtime] evicted idle runtime for thread=%s agent=%s", tid, getattr(rt, "agent", "?"))
 
-    # Phase 2 — if still over cap, evict LRU entries until at or below _ACP_MAX_RUNTIMES.
+    # Phase 2 — over cap: evict the LRU NON-BUSY runtime until at/below the cap.
     while len(_ACP_RUNTIMES) > _ACP_MAX_RUNTIMES:
-        lru_tid = min(_ACP_RUNTIME_ACCESS, key=lambda k: _ACP_RUNTIME_ACCESS[k])
-        rt = _ACP_RUNTIMES.pop(lru_tid)
+        evictable = [t for t in _ACP_RUNTIME_ACCESS if _ACP_BUSY.get(t, 0) == 0]
+        if not evictable:
+            break  # everything is in-flight — ride over cap rather than kill a live turn
+        lru_tid = min(evictable, key=lambda k: _ACP_RUNTIME_ACCESS[k])
+        rt = _ACP_RUNTIMES.pop(lru_tid, None)
         _ACP_RUNTIME_ACCESS.pop(lru_tid, None)
-        await rt.close()
-        agent = getattr(rt, "agent", "?")
-        log.info("[acp-runtime] evicted LRU runtime for thread=%s agent=%s", lru_tid, agent)
+        if rt is not None:
+            await rt.close()
+            log.info("[acp-runtime] evicted LRU runtime for thread=%s agent=%s", lru_tid, getattr(rt, "agent", "?"))
 
 
-async def _get_acp_runtime(thread_id: str):
+async def _get_acp_runtime_locked(thread_id: str):
+    """Get-or-create the runtime for ``thread_id`` (evicting idle/over-cap first). The
+    CALLER holds ``_ACP_LOCK``."""
     now = time.monotonic()
     await _evict_acp_runtimes(now)
-
     rt = _ACP_RUNTIMES.get(thread_id)
     _ACP_RUNTIME_ACCESS[thread_id] = now  # bump on every call (hit or miss)
     if rt is None:
@@ -139,6 +150,93 @@ async def _get_acp_runtime(thread_id: str):
         rt = AcpRuntime(STATE.graph_config)
         _ACP_RUNTIMES[thread_id] = rt
     return rt
+
+
+async def _get_acp_runtime(thread_id: str):
+    """Get-or-create the ACP runtime for ``thread_id`` (lock-guarded)."""
+    async with _ACP_LOCK:
+        return await _get_acp_runtime_locked(thread_id)
+
+
+async def _acp_acquire(thread_id: str):
+    """Get-or-create the runtime AND mark it in-flight (refcount++), atomically under
+    ``_ACP_LOCK``, so a concurrent turn's eviction can't close it mid-turn. Pair with
+    ``_acp_release`` in a ``finally``."""
+    async with _ACP_LOCK:
+        rt = await _get_acp_runtime_locked(thread_id)
+        _ACP_BUSY[thread_id] = _ACP_BUSY.get(thread_id, 0) + 1
+        return rt
+
+
+async def _acp_release(thread_id: str) -> None:
+    """Mark a thread's ACP runtime no longer in-flight (refcount--)."""
+    async with _ACP_LOCK:
+        n = _ACP_BUSY.get(thread_id, 0) - 1
+        if n > 0:
+            _ACP_BUSY[thread_id] = n
+        else:
+            _ACP_BUSY.pop(thread_id, None)
+        _ACP_RUNTIME_ACCESS[thread_id] = time.monotonic()  # fresh access on release
+
+
+async def _acp_drive_turn(rt, message: str):
+    """Drive one ACP turn over ``rt``, yielding the normalized frames (text /
+    tool_start / tool_end, then usage + done, or an error) in arrival order. Extracted
+    so the A2A handler can wrap the turn in _acp_acquire/_acp_release without a deep
+    in-line reindent."""
+    # Bridge the agent's reader-loop callbacks (answer-text deltas + tool events) into the
+    # same text / tool_start / tool_end frames the native runtime yields, in arrival order.
+    _ACP_DONE = object()
+    frame_q: asyncio.Queue = asyncio.Queue()
+
+    async def _on_text(delta: str) -> None:
+        await frame_q.put(("text", delta))
+
+    async def _on_tool(ev: dict) -> None:
+        if ev.get("phase") == "start":
+            await frame_q.put(
+                ("tool_start", {"id": ev.get("id", ""), "name": ev.get("name", "tool"), "input": ev.get("input", "")})
+            )
+        elif ev.get("phase") == "end":
+            await frame_q.put(
+                ("tool_end", {"id": ev.get("id", ""), "name": ev.get("name", "tool"), "output": ev.get("output", "")})
+            )
+
+    async def _drive():
+        try:
+            return await rt.run_turn(message, text_callback=_on_text, tool_callback=_on_tool)
+        finally:
+            await frame_q.put(_ACP_DONE)
+
+    driver = asyncio.create_task(_drive())
+    while True:
+        frame = await frame_q.get()
+        if frame is _ACP_DONE:
+            break
+        yield frame  # (kind, payload) — already normalized
+    try:
+        answer = await driver
+    except Exception as exc:  # noqa: BLE001 — surface as a turn error, don't 500
+        log.exception("[acp-runtime] turn failed")
+        yield ("error", f"ACP runtime ({rt.agent}) failed: {exc}")
+        return
+    # Attribute the turn to the ACP agent in telemetry — gateway tokens/cost are 0 (the
+    # external agent's own subscription meters its usage). The acp:<agent> model label is
+    # the honest signal that this turn wasn't gateway-metered.
+    yield (
+        "usage",
+        {
+            "model": f"acp:{rt.agent}",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cost_usd": 0.0,
+        },
+    )
+    # The answer already streamed as text deltas; `done` finalizes (executor appends only
+    # meta when text was streamed, so no duplication).
+    yield ("done", answer)
 
 
 def _setup_required_message() -> list[dict[str, Any]]:
@@ -786,72 +884,16 @@ async def _chat_langgraph_stream(
             from runtime.acp_runtime import is_acp_runtime
 
             if is_acp_runtime(STATE.graph_config):
-                rt = await _get_acp_runtime(_resolve_thread_id(request_metadata, session_id))
-                # Bridge the agent's reader-loop callbacks (answer-text deltas + tool events)
-                # into the same text / tool_start / tool_end frames the native runtime yields,
-                # in arrival order → live streaming + tool cards.
-                _ACP_DONE = object()
-                frame_q: asyncio.Queue = asyncio.Queue()
-
-                async def _on_text(delta: str) -> None:
-                    await frame_q.put(("text", delta))
-
-                async def _on_tool(ev: dict) -> None:
-                    if ev.get("phase") == "start":
-                        await frame_q.put(
-                            (
-                                "tool_start",
-                                {"id": ev.get("id", ""), "name": ev.get("name", "tool"), "input": ev.get("input", "")},
-                            )
-                        )
-                    elif ev.get("phase") == "end":
-                        await frame_q.put(
-                            (
-                                "tool_end",
-                                {
-                                    "id": ev.get("id", ""),
-                                    "name": ev.get("name", "tool"),
-                                    "output": ev.get("output", ""),
-                                },
-                            )
-                        )
-
-                async def _drive():
-                    try:
-                        return await rt.run_turn(message, text_callback=_on_text, tool_callback=_on_tool)
-                    finally:
-                        await frame_q.put(_ACP_DONE)
-
-                driver = asyncio.create_task(_drive())
-                while True:
-                    frame = await frame_q.get()
-                    if frame is _ACP_DONE:
-                        break
-                    yield frame  # (kind, payload) — already normalized
+                _acp_tid = _resolve_thread_id(request_metadata, session_id)
+                # Hold the runtime "in-flight" for the whole turn so a concurrent turn's
+                # eviction can't close it mid-stream (a long ACP coding turn can outlast the
+                # idle TTL); registry mutation is serialized by _ACP_LOCK. See _acp_acquire.
+                rt = await _acp_acquire(_acp_tid)
                 try:
-                    answer = await driver
-                except Exception as exc:  # noqa: BLE001 — surface as a turn error, don't 500
-                    log.exception("[acp-runtime] turn failed")
-                    yield ("error", f"ACP runtime ({rt.agent}) failed: {exc}")
-                    return
-                # Attribute the turn to the ACP agent in telemetry — else it defaults to the
-                # gateway model (`protolabs/reasoning`), which never ran. Gateway tokens/cost are
-                # 0: the external agent's own subscription meters its usage, not us. (The model
-                # label `acp:<agent>` is the honest signal that this turn wasn't gateway-metered.)
-                yield (
-                    "usage",
-                    {
-                        "model": f"acp:{rt.agent}",
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                        "cache_creation_input_tokens": 0,
-                        "cost_usd": 0.0,
-                    },
-                )
-                # The answer already streamed as text deltas; `done` finalizes (executor appends
-                # only meta when text was streamed, so no duplication).
-                yield ("done", answer)
+                    async for frame in _acp_drive_turn(rt, message):
+                        yield frame
+                finally:
+                    await _acp_release(_acp_tid)
                 return
 
             # thread_id keys this session's history in the checkpointer (bound

@@ -400,6 +400,73 @@ async def test_evict_lru_when_over_cap(monkeypatch):
     monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", original_cap)
 
 
+async def test_busy_runtime_not_idle_evicted():
+    """A runtime with an in-flight turn (_ACP_BUSY > 0) is NEVER idle-evicted — a long
+    ACP coding turn can outlast the idle TTL, and closing it would kill the live turn."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+    chat._ACP_BUSY.clear()
+
+    rt = _MockRuntime("busy-agent")
+    now = 100_000.0
+    chat._ACP_RUNTIMES["busy"] = rt
+    chat._ACP_RUNTIME_ACCESS["busy"] = now - chat._ACP_IDLE_TTL_S - 1  # stale past the TTL
+    chat._ACP_BUSY["busy"] = 1  # in-flight
+
+    await chat._evict_acp_runtimes(now)
+    assert "busy" in chat._ACP_RUNTIMES and rt.closed is False  # protected while in-flight
+
+    chat._ACP_BUSY.pop("busy")  # turn finished
+    await chat._evict_acp_runtimes(now)
+    assert "busy" not in chat._ACP_RUNTIMES and rt.closed is True  # now evictable
+    chat._ACP_BUSY.clear()
+
+
+async def test_busy_runtime_not_lru_evicted(monkeypatch):
+    """Over-cap LRU eviction skips an in-flight runtime even when it IS the LRU, and
+    evicts the next non-busy victim instead."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+    chat._ACP_BUSY.clear()
+    monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", 2)
+
+    now = 100_000.0
+    rts = {}
+    for i, name in enumerate(["a", "b", "c"]):
+        rt = _MockRuntime(name)
+        chat._ACP_RUNTIMES[name] = rt
+        chat._ACP_RUNTIME_ACCESS[name] = now - (10 - i)  # a oldest (LRU), c newest
+        rts[name] = rt
+    chat._ACP_BUSY["a"] = 1  # the LRU is in-flight
+
+    await chat._evict_acp_runtimes(now)
+    assert "a" in chat._ACP_RUNTIMES and rts["a"].closed is False  # LRU but busy → skipped
+    assert "b" not in chat._ACP_RUNTIMES and rts["b"].closed is True  # next non-busy victim
+    assert "c" in chat._ACP_RUNTIMES
+    chat._ACP_BUSY.clear()
+
+
+async def test_acp_acquire_release_refcount():
+    """_acp_acquire marks the runtime in-flight (refcount++); _acp_release clears it."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+    chat._ACP_BUSY.clear()
+
+    rt = _MockRuntime("x")
+    chat._ACP_RUNTIMES["t"] = rt
+    chat._ACP_RUNTIME_ACCESS["t"] = time.monotonic()  # warm so eviction leaves it
+
+    got = await chat._acp_acquire("t")
+    assert got is rt
+    assert chat._ACP_BUSY.get("t") == 1
+    await chat._acp_release("t")
+    assert "t" not in chat._ACP_BUSY
+    chat._ACP_BUSY.clear()
+
+
 async def test_get_acp_runtime_bumps_access(monkeypatch):
     """Calling _get_acp_runtime on an existing thread bumps its access timestamp."""
     chat = _chat_module()
