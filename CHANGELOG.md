@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Tools view — MCP tools grouped by server** (#1404) — MCP tools (namespaced
+- **Tools view — MCP tools grouped by server** (#1405) — MCP tools (namespaced
   `<server>__<tool>`) now group under the server that serves them, mirroring the plugin
   grouping, instead of one flat "MCP" bucket; the group sorts after core + plugin groups
   with an `mcp` source chip on its header.
