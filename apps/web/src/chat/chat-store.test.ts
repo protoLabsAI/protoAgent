@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   ensureActiveSessions,
+  mergeSessions,
   sanitizePersisted,
   MAX_ACTIVE_SESSIONS,
+  MAX_SESSIONS,
   type ChatSession,
   type ChatState,
 } from "./chat-store";
@@ -291,5 +293,101 @@ describe("sanitizePersisted", () => {
       messages: [{ role: "assistant", content: "", taskId: "t1", status: "done" }],
     });
     expect(sanitizePersisted({ sessions: [s], currentSessionId: "a" })?.sessions).toEqual([s]);
+  });
+});
+
+// Cross-tab merge: two tabs of the same agent share ONE localStorage key, and each
+// persists the whole store. Without a merge the last writer clobbers the other tab's
+// chats (data loss). mergeSessions unions by id (newest updatedAt wins); persist
+// read-merge-writes so a write never drops a concurrent tab's sessions; a `storage`
+// event folds a sibling tab's chats into this tab live.
+
+describe("mergeSessions", () => {
+  it("unions disjoint sessions from two tabs (neither is clobbered)", () => {
+    expect(mergeSessions([mkSession("a")], [mkSession("b")]).map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  it("keeps the newer updatedAt for a session present in both tabs", () => {
+    const mine = mkSession("x", { updatedAt: 10, title: "mine" });
+    expect(mergeSessions([mine], [mkSession("x", { updatedAt: 20, title: "theirs" })])[0].title).toBe("theirs");
+    expect(mergeSessions([mine], [mkSession("x", { updatedAt: 5, title: "older" })])[0].title).toBe("mine");
+  });
+
+  it("never overwrites a locally-streaming session with a cross-tab snapshot", () => {
+    const live = mkSession("x", { updatedAt: 10, title: "live" });
+    const stale = mkSession("x", { updatedAt: 99, title: "stale-but-newer-clock" });
+    expect(mergeSessions([live], [stale], { streamingIds: new Set(["x"]) })[0].title).toBe("live");
+  });
+
+  it("does not resurrect a session this tab deleted", () => {
+    expect(mergeSessions([], [mkSession("gone")], { deletedIds: new Set(["gone"]) })).toEqual([]);
+  });
+
+  it("orders this tab's sessions first, then incoming-only by createdAt", () => {
+    const a = mkSession("a", { createdAt: 1 });
+    const ids = mergeSessions([a], [mkSession("c", { createdAt: 30 }), mkSession("b", { createdAt: 20 })]).map(
+      (s) => s.id,
+    );
+    expect(ids).toEqual(["a", "b", "c"]);
+  });
+
+  it("caps the union at MAX_SESSIONS", () => {
+    const local = Array.from({ length: MAX_SESSIONS }, (_, i) => mkSession(`l${i}`, { createdAt: i }));
+    const incoming = [mkSession("extra", { createdAt: 9999 })];
+    expect(mergeSessions(local, incoming)).toHaveLength(MAX_SESSIONS);
+  });
+});
+
+describe("cross-tab persistence", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.resetModules();
+  });
+
+  it("persist folds in a sibling tab's sessions instead of clobbering them", async () => {
+    const { chatStore } = await import("./chat-store");
+    const mine = chatStore.getSnapshot().currentSessionId!;
+    // A sibling tab wrote its own session to the shared key after we loaded.
+    window.localStorage.setItem(
+      "protoagent.chat.sessions",
+      JSON.stringify({ version: 1, sessions: [mkSession("sibling", { updatedAt: 5 })], currentSessionId: "sibling" }),
+    );
+    chatStore.createSession(); // structural change → immediate read-merge-write
+
+    const ids = JSON.parse(window.localStorage.getItem("protoagent.chat.sessions")!).sessions.map(
+      (s: { id: string }) => s.id,
+    );
+    expect(ids).toContain("sibling"); // the other tab's chat survived our write
+    expect(ids).toContain(mine);
+  });
+
+  it("a sibling tab's storage event merges its new chat in live, preserving our view", async () => {
+    const { chatStore } = await import("./chat-store");
+    const mine = chatStore.getSnapshot().currentSessionId!;
+    const before = chatStore.getSnapshot().sessions.length;
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "protoagent.chat.sessions",
+        newValue: JSON.stringify({
+          version: 1,
+          sessions: [mkSession("sib", { updatedAt: 9 })],
+          currentSessionId: "sib",
+        }),
+      }),
+    );
+
+    const snap = chatStore.getSnapshot();
+    expect(snap.sessions.map((s) => s.id)).toContain("sib"); // sibling's chat appeared
+    expect(snap.sessions.length).toBe(before + 1);
+    expect(snap.currentSessionId).toBe(mine); // our active session is untouched
+  });
+
+  it("ignores storage events for other keys and tenant-clear (null newValue)", async () => {
+    const { chatStore } = await import("./chat-store");
+    const before = chatStore.getSnapshot().sessions.map((s) => s.id);
+    window.dispatchEvent(new StorageEvent("storage", { key: "some.other.key", newValue: "{}" }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "protoagent.chat.sessions", newValue: null }));
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(before);
   });
 });
