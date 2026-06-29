@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.74.0",
+    "date": "2026-06-29",
+    "changes": [
+      "Bypass-permissions mode",
+      "run_command runs shell operators",
+      "Slash-command notices render as system notes"
+    ]
+  },
+  {
     "version": "v0.73.0",
     "date": "2026-06-29",
     "changes": [

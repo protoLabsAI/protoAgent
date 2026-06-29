@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-06-29
+
 ### Added
 - **Bypass-permissions mode** (#1418) — a per-tab toggle that auto-approves `run_command` so the
   agent runs shell commands without the HITL approval prompt: `/bypass on|off`, a DS warning badge
