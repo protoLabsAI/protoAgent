@@ -160,9 +160,18 @@ describe("foldPlan", () => {
     expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
   });
 
-  it("does NOT fold a tool-only turn (no reasoning) — split stays stable even while streaming", () => {
+  it("folds a tool-only turn too (any tool → clean batch), deferring the answer while streaming", () => {
     const parts = [tools("a"), text("answer")];
-    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: [tools("a")], answerParts: [text("answer")] });
+    // streaming: keep the answer folded (nothing below the WorkBlock yet)
+    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+    // settled: the answer splits out below the "Worked" summary
+    expect(foldPlan(parts, false)).toEqual({ fold: true, workParts: [tools("a")], answerParts: [text("answer")] });
+  });
+
+  it("folds a tool+narration turn (no reasoning) — the shell-command case that used to split", () => {
+    // tools, interim narration, more tools — must fold (not render inline + split into batches)
+    const parts = [tools("a"), text("running the next one"), tools("b")];
+    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
   });
 
   it("does NOT fold a reasoning-only turn (no tools)", () => {

@@ -81,13 +81,6 @@
   line-height: 1.5;
   color: var(--pl-color-fg-muted);
 }
-/* The streaming live tail (narration / in-progress answer) shown in the WorkBlock spotlight is
-   rendered as markdown, so it lays out its own blocks — drop the plain-text pre-wrap. It stays
-   muted/compact (inherited from .work-text) to read as "still working" until the turn settles and
-   the final answer moves out below the summary in full prominence. */
-.work-text-live {
-  white-space: normal;
-}
 
 /* WorkBlock header: the turn's work tallied as icon + count chips (reasoning / tools /
    skill loads), in the DS ToolCard name slot. Hover surfaces the breakdown tooltip. */

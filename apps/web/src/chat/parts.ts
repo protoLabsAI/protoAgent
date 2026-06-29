@@ -71,16 +71,18 @@ export function addComponent(parts: ChatPart[] | undefined, spec: ComponentSpec)
 /** Split a turn's parts into the folded "work" (the reason→tool→interstitial timeline behind the
  *  WorkBlock) and the trailing "answer" (the final text/component run rendered below it).
  *
- *  `fold` is true only when the work interleaves reasoning WITH tools (the forever-stack case the
- *  WorkBlock exists to tame); tool-only / reasoning-only / plain turns render their parts inline.
+ *  `fold` is true for ANY turn that called a tool: the WorkBlock keeps the streaming view clean —
+ *  just "Working… [tally]" + the running-tool spotlight — and folds the reasoning, interstitial
+ *  narration, and multi-batch tool timeline behind one (collapsed, expandable) disclosure. That's
+ *  what stops a chatty/tool-heavy turn from rendering interim text and splitting into separate
+ *  batches of tool cards as the agent thinks/narrates between calls. Reasoning-only and plain
+ *  text turns don't fold — they stream their parts inline.
  *
- *  Flash guard: WHILE STREAMING a folded turn, a trailing text/component run is ambiguous — it
- *  might be the final answer, or just interstitial narration (or a status component) before the
- *  next tool. Promoting it eagerly made it flash into the main chat, then get yanked back into the
- *  work timeline the moment the next tool arrived (the "Worked" block collapsing/re-expanding). So
- *  while streaming a folded turn we keep everything as work (the WorkBlock surfaces the live tail);
- *  only once the turn settles (`!streaming`) do we split the final run out as the answer. Non-folded
- *  turns are unaffected — their split is stable, so their answer streams below as before. */
+ *  Settle guard: WHILE STREAMING a folded turn, keep EVERYTHING as work (nothing renders below the
+ *  WorkBlock); only once the turn settles (`!streaming`) do we split the final text/component run
+ *  out as the answer beneath the collapsed "Worked" summary. Promoting a trailing run eagerly made
+ *  interstitial narration flash into the main chat, then jump back into the timeline when the next
+ *  tool arrived. */
 export function foldPlan(
   parts: ChatPart[],
   streaming: boolean,
@@ -88,7 +90,7 @@ export function foldPlan(
   let split = parts.length;
   while (split > 0 && (parts[split - 1].kind === "text" || parts[split - 1].kind === "component")) split--;
   const baseWork = parts.slice(0, split);
-  const fold = baseWork.some((p) => p.kind === "tools") && baseWork.some((p) => p.kind === "reasoning");
+  const fold = baseWork.some((p) => p.kind === "tools");
   if (fold && streaming) return { fold, workParts: parts, answerParts: [] };
   return { fold, workParts: baseWork, answerParts: parts.slice(split) };
 }

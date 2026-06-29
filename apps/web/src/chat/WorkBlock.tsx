@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { BookOpen, Brain, Wrench } from "lucide-react";
 
 import { ToolCard } from "@protolabsai/ui/tool-card";
@@ -6,10 +5,11 @@ import { Tooltip } from "@protolabsai/ui/overlays";
 
 import type { ChatPart, ToolCall } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
-import { Markdown } from "./LazyMarkdown";
 import { toolsForGroup } from "./parts";
 import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
+
+type ToolsPart = Extract<ChatPart, { kind: "tools" }>;
 
 /** A skill load is a `load_skill` tool call; the skill name rides its JSON input. */
 function skillName(input?: string): string {
@@ -109,27 +109,15 @@ export function WorkBlock({
     </Tooltip>
   );
 
-  // While streaming, keep the LIVE TAIL visible below the collapsed summary — the agent's
-  // most-recent step, whatever its kind: a running tool, or the reasoning / narration / answer
-  // text streaming in. (Before, only a tool tail showed, so streamed text was invisible here and
-  // the splitter flashed it into the main chat instead.) The full timeline stays inside the
-  // disclosure; once the turn settles the trailing answer moves out below the "Worked" summary.
-  const tail = parts[parts.length - 1];
-  let spotlight: ReactNode = null;
-  if (streaming && tail) {
-    if (tail.kind === "tools" && tail.ids.length) {
-      spotlight = <ToolCalls calls={toolsForGroup([tail.ids[tail.ids.length - 1]], toolCalls)} spotlight />;
-    } else if (tail.kind === "reasoning" && tail.text.trim()) {
-      spotlight = <ReasoningCard text={tail.text} streaming />;
-    } else if (tail.kind === "component") {
-      spotlight = <ChatComponent spec={tail.spec} />;
-    } else if (tail.kind === "text" && tail.text.trim()) {
-      spotlight = (
-        <div className="work-text work-text-live">
-          <Markdown>{tail.text}</Markdown>
-        </div>
-      );
-    }
+  // While streaming, spotlight ONLY the most-recent tool below the collapsed summary — the
+  // reasoning, interstitial narration, and the streaming answer stay folded in the disclosure
+  // (and the answer lands below the "Worked" summary once the turn settles). This is what keeps
+  // a chatty/tool-heavy turn reading as one clean batch instead of interim text + split groups.
+  let spotlightIds: string[] = [];
+  if (streaming) {
+    const toolsParts = parts.filter((p): p is ToolsPart => p.kind === "tools");
+    const last = toolsParts[toolsParts.length - 1];
+    if (last && last.ids.length) spotlightIds = [last.ids[last.ids.length - 1]];
   }
 
   return (
@@ -149,7 +137,11 @@ export function WorkBlock({
           )}
         </div>
       </ToolCard>
-      {spotlight ? <div className="work-spotlight">{spotlight}</div> : null}
+      {spotlightIds.length > 0 ? (
+        <div className="work-spotlight">
+          <ToolCalls calls={toolsForGroup(spotlightIds, toolCalls)} spotlight />
+        </div>
+      ) : null}
     </div>
   );
 }
