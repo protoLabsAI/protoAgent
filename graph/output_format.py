@@ -102,9 +102,14 @@ Optionally, after `</output>`, you may self-report confidence:
 # (truncating the answer). The real tags are never backtick-wrapped.
 _OUTPUT_RE = re.compile(r"(?<!`)<output>([\s\S]*?)(?<!`)</output>", re.IGNORECASE)
 _SCRATCH_RE = re.compile(r"<scratch_pad>[\s\S]*?</scratch_pad>", re.IGNORECASE)
-_ORPHAN_SCRATCH_OPEN_RE = re.compile(r"<scratch_pad>[\s\S]*$", re.IGNORECASE)
+# Orphan eat-to-end (truncation recovery). Backtick-guarded like _OUTPUT_RE: a
+# plain answer that *mentions* the protocol in inline code (e.g. ``I reason in
+# `<scratch_pad>` then write `<output>` ``) must not be eaten to end-of-text on
+# the no-<output>-wrapper fallback tiers. A real (un-backticked) orphan tag — a
+# genuinely truncated/leaked reasoning block — still gets stripped.
+_ORPHAN_SCRATCH_OPEN_RE = re.compile(r"(?<!`)<scratch_pad>[\s\S]*$", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
-_ORPHAN_THINK_OPEN_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
+_ORPHAN_THINK_OPEN_RE = re.compile(r"(?<!`)<think>[\s\S]*$", re.IGNORECASE)
 _ORPHAN_THINK_CLOSE_RE = re.compile(r"</think>\s*", re.IGNORECASE)
 _CONFIDENCE_BLOCK_RE = re.compile(r"<confidence>[\s\S]*?</confidence>", re.IGNORECASE)
 _CONFIDENCE_EXPL_BLOCK_RE = re.compile(

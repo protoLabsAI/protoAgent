@@ -170,6 +170,20 @@ def test_extract_output_keeps_literal_scratch_pad_mention():
     assert "<scratch_pad>" in out  # the literal mention survives
 
 
+def test_extract_output_keeps_backticked_tag_mention_without_output_wrapper():
+    """Regression (Batch-4): the same literal-protocol-mention answer but with NO
+    <output> wrapper falls to the orphan-strip fallback tiers. The eat-to-EOT orphan
+    openers are backtick-guarded too, so a backticked `<scratch_pad>` / `<think>`
+    mention no longer truncates the stored/A2A/Discord copy at that token — while a
+    genuine (un-backticked) orphan is still recovered (eat-to-EOT)."""
+    text = (
+        "Here's how I work: I reason in `<scratch_pad>` and `<think>` blocks, then "
+        "write the final answer. No protocol wrapper on this reply."
+    )
+    assert extract_output(text) == text  # whole answer survives the fallback tier
+    assert extract_output("real answer <scratch_pad>leaked unfinished") == "real answer"
+
+
 def test_extract_output_ignores_backticked_open_tag_in_scratch():
     """Regression: the model commonly explains the protocol *in its scratch_pad*
     ("answer in `<output>` format"). The matcher must open on the real
