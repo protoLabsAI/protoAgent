@@ -115,13 +115,12 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
   federation vector (the main one) can't be gated without a **separate operator-vs-federation
   token** model. (`data`'s eval escape is already closed in Batch 2, so `data` is no longer
   an RCE sink — only `command`/`test`/`ci` remain.)
-- [>] **ACP runtime eviction race** — Med · Med–High · M — `server/chat.py:102-141`,
-  `runtime/acp_runtime.py:216`. LRU/idle eviction closes an in-flight runtime mid-turn;
-  registry dicts mutated lock-free. Add a per-thread busy flag/refcount (never evict
-  busy) + `asyncio.Lock`; `pop(tid, None)` to tolerate concurrent eviction. ACP opt-in
-  bounds blast radius. *(Deferred this pass: the never-evict-busy half needs a ~65-line
-  reindent of the ACP turn body in the streaming generator — high-churn, near the Batch 4
-  area; narrow/opt-in so low priority.)*
+- [x] **ACP runtime eviction race** — Med · Med–High · M — `server/chat.py:102-141`.
+  Fixed: `asyncio.Lock` around all registry mutation, an `_ACP_BUSY` refcount so eviction
+  never closes an in-flight runtime (idle TTL + LRU cap both skip busy), `pop(tid, None)`
+  safety, and `_acp_acquire`/`_acp_release` helpers. The ACP turn body was extracted to
+  `_acp_drive_turn` so the A2A handler wraps it in acquire/try-finally/release without a
+  deep reindent.
 
 ## Batch 4 — High churn × Med–High LOE → design-first, isolate (own initiative)
 
