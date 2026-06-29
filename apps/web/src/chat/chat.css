@@ -153,25 +153,15 @@
   color: var(--pl-color-danger, #e5484d);
 }
 
-/* Bypass-permissions warning chip in the composer toolbar — loud, so the dangerous mode is
-   never silently on. Clicking it turns bypass off (same as `/bypass off`). */
-.composer-bypass-chip {
+/* Bypass-permissions indicator in the composer toolbar — a DS warning Badge (outline tone) in a
+   bare button so clicking it turns bypass off (same as `/bypass off`). The Badge owns the styling. */
+.composer-bypass-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: #fff;
-  background: var(--pl-color-danger, #e5484d);
+  padding: 0;
   border: none;
-  border-radius: 999px;
+  background: none;
   cursor: pointer;
-}
-.composer-bypass-chip:hover {
-  filter: brightness(1.08);
 }
 .chat-tabbar-wrap--del .pl-tabbar__close:hover svg {
   display: none;

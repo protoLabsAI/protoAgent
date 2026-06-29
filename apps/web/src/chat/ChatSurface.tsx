@@ -1,5 +1,5 @@
 import "./chat.css";
-import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Switch } from "@protolabsai/ui/forms";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
@@ -1228,11 +1228,11 @@ function ChatSessionSlot({
               {session?.bypassPermissions ? (
                 <button
                   type="button"
-                  className="composer-bypass-chip"
+                  className="composer-bypass-toggle"
                   title="Bypass permissions is ON for this tab — run_command runs WITHOUT approval. Click to turn it off."
                   onClick={() => chatStore.setSessionBypassPermissions(session.id, false)}
                 >
-                  ⚠ bypass on
+                  <Badge status="warning">bypass on</Badge>
                 </button>
               ) : null}
             </>
