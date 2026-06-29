@@ -58,6 +58,10 @@ const STORAGE_KEY = (() => {
   }
 })();
 
+// Sessions this tab deleted — a lightweight per-tab tombstone so the cross-tab merge
+// never resurrects a chat we just removed from another tab's stale on-disk copy.
+const locallyDeletedIds = new Set<string>();
+
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -122,6 +126,50 @@ export function sanitizePersisted(parsed: unknown): PersistedChatState | null {
   };
 }
 
+/** Merge two session lists from different tabs that share one localStorage key (same
+ *  agent slug). Union by id; for an id in BOTH, the newer `updatedAt` wins — EXCEPT a
+ *  session this tab is actively streaming (its in-memory copy is the freshest; never
+ *  overwrite a live stream with a cross-tab snapshot) and a session this tab deleted
+ *  (`deletedIds` — never resurrect it from another tab's copy). Order: this tab's order
+ *  first, then sessions only the other tab has (oldest-created first).
+ *
+ *  This is the fix for the last-writer-wins clobber, where one tab's full-store write
+ *  dropped another tab's chats. Cross-tab DELETE is best-effort: a chat deleted in one
+ *  tab can linger in another until that tab removes it too (no shared tombstones). */
+export function mergeSessions(
+  local: ChatSession[],
+  incoming: ChatSession[],
+  opts: { streamingIds?: Set<string>; deletedIds?: Set<string> } = {},
+): ChatSession[] {
+  const streaming = opts.streamingIds ?? new Set<string>();
+  const deleted = opts.deletedIds ?? new Set<string>();
+  const byId = new Map<string, ChatSession>();
+  for (const s of local) byId.set(s.id, s);
+  for (const s of incoming) {
+    if (deleted.has(s.id)) continue;
+    const mine = byId.get(s.id);
+    if (!mine) byId.set(s.id, s);
+    else if (!streaming.has(s.id) && s.updatedAt > mine.updatedAt) byId.set(s.id, s);
+  }
+  const out: ChatSession[] = [];
+  const seen = new Set<string>();
+  for (const s of local) {
+    if (deleted.has(s.id) || seen.has(s.id)) continue;
+    out.push(byId.get(s.id)!);
+    seen.add(s.id);
+  }
+  for (const s of [...incoming].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (deleted.has(s.id) || seen.has(s.id)) continue;
+    out.push(byId.get(s.id)!);
+    seen.add(s.id);
+  }
+  return out.slice(0, MAX_SESSIONS);
+}
+
+function streamingIds(state: ChatState): Set<string> {
+  return new Set(Object.keys(state.sessionStatusMap).filter((id) => state.sessionStatusMap[id] === "streaming"));
+}
+
 function loadPersisted(): PersistedChatState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -140,9 +188,26 @@ function loadPersisted(): PersistedChatState {
 
 function persist(state: ChatState) {
   try {
+    // Read-merge-write: a concurrent tab sharing this key may have written sessions we
+    // don't have (or newer copies) since our last read. Fold them in so our write never
+    // clobbers another tab's chats (the last-writer-wins data-loss bug). Our own
+    // streaming sessions stay authoritative; locally-deleted ones are not resurrected.
+    let sessions = state.sessions;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const onDisk = raw ? sanitizePersisted(JSON.parse(raw)) : null;
+      if (onDisk) {
+        sessions = mergeSessions(state.sessions, onDisk.sessions, {
+          streamingIds: streamingIds(state),
+          deletedIds: locallyDeletedIds,
+        });
+      }
+    } catch {
+      // Corrupt on-disk blob — write our own state rather than lose this turn.
+    }
     const payload: PersistedChatState = {
       version: state.version,
-      sessions: state.sessions.slice(0, MAX_SESSIONS),
+      sessions: sessions.slice(0, MAX_SESSIONS),
       currentSessionId: state.currentSessionId,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -239,6 +304,39 @@ function setState(
   listeners.forEach((listener) => listener());
 }
 
+/** A sibling tab sharing our localStorage key wrote new chat state. Merge its sessions
+ *  into ours (so its new/updated chats show up here live) WITHOUT disturbing this tab's
+ *  own view — our currentSessionId, active tabs, and live stream statuses stay put. We
+ *  don't persist here: the next real write carries the union via persist()'s
+ *  read-merge-write, so two tabs can't ping-pong writes. */
+function mergeFromStorage(incoming: PersistedChatState) {
+  const sessions = mergeSessions(state.sessions, incoming.sessions, {
+    streamingIds: streamingIds(state),
+    deletedIds: locallyDeletedIds,
+  });
+  const currentSessionId =
+    state.currentSessionId && sessions.some((s) => s.id === state.currentSessionId)
+      ? state.currentSessionId
+      : (sessions[0]?.id ?? null);
+  const activeSessions = state.activeSessions.filter((id) => sessions.some((s) => s.id === id));
+  state = { ...state, sessions, currentSessionId, activeSessions };
+  listeners.forEach((listener) => listener());
+}
+
+try {
+  window.addEventListener("storage", (e: StorageEvent) => {
+    if (e.key !== STORAGE_KEY || e.newValue == null) return; // other key, or a tenant-clear
+    try {
+      const incoming = sanitizePersisted(JSON.parse(e.newValue));
+      if (incoming) mergeFromStorage(incoming);
+    } catch {
+      // Ignore a malformed cross-tab write — our own state is unaffected.
+    }
+  });
+} catch {
+  // non-browser context (tests without a full window)
+}
+
 export const chatStore = {
   subscribe(listener: () => void) {
     listeners.add(listener);
@@ -268,6 +366,7 @@ export const chatStore = {
   },
 
   deleteSession(sessionId: string) {
+    locallyDeletedIds.add(sessionId); // tombstone: the cross-tab merge won't resurrect it
     setState((current) => {
       const sessions = current.sessions.filter((session) => session.id !== sessionId);
       const currentSessionId =
