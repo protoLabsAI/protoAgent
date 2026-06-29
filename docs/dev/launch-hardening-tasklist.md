@@ -69,13 +69,14 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
   boundary (`/api/plugins/{id}/`), validate `plugin_id` against `^[a-z0-9][a-z0-9_-]*$`,
   reserved-name denylist (`install`,`installed`,`sync`,`updates`,`catalog`,`enabled`).
   Test that legit plugin public pages still pass.
-- [ ] **Secret-redaction fail-open trio** — Med×2/Low · Med · S–M — `graph/config_io.py`.
-  Root cause: discovery-empty is indistinguishable from discovery-failure. Fix all three:
-  (a) `GET /api/config` echoes plugin secrets when schema discovery returns empty
-  (`423-438`) → redact the whole section when no schema; (b) dead `secret_paths()` `#877`
-  fallback cache (`139-153`) → make discovery signal failure distinctly; (c) MCP inline
-  env/header secrets returned + stored unredacted (`386-391`) → route to `secrets.yaml`
-  / mask.
+- [x] **Secret-redaction fail-open (a)+(b)** — Med×2 · Med · S–M — `graph/config_io.py` +
+  `graph/plugins/pconfig.py`. Root cause: discovery-empty was indistinguishable from
+  discovery-failure. Added `strict=True` discovery that PROPAGATES errors: (a) `GET
+  /api/config` now blanks the whole plugin section on discovery failure (fail-safe);
+  (b) `secret_paths()` `#877` cache fallback actually triggers now (was dead).
+  - [>] **(c) MCP inline env/header secrets** unredacted in `config_to_dict` (`386-391`) —
+    deferred (Low; live YAML is gitignored, and masking needs save-roundtrip / blank-means-
+    unchanged handling so a re-save doesn't clobber the stored value).
 - [x] **Plugin install/update/sync block the event loop** — `High` · Med · S–M —
   `operator_api/plugin_routes.py:192,324,337,382` → `graph/plugins/installer.py`.
   `await asyncio.to_thread(installer.…)` in the handlers + bounded subprocess timeouts
