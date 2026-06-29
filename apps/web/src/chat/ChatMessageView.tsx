@@ -49,8 +49,10 @@ export function ChatMessageView({
       className={
         message.report
           ? "chat-report"
-          : message.noteTone
-            ? `chat-note chat-note--${message.noteTone}`
+          : // Any non-report system message is a local note → compact .chat-note card; the
+            // tone modifier is appended only when set, so neutral notes still get the styling.
+            message.role === "system"
+            ? `chat-note${message.noteTone ? ` chat-note--${message.noteTone}` : ""}`
             : undefined
       }
     >
