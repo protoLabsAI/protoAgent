@@ -182,7 +182,7 @@ Separate planes by **what you're doing**, and collapse redundant doors:
 | C2 | `settingsScope` / `setSettingsScope` / `SettingsScope` (`uiStore.ts`) | ✅ **Done** — deleted; store bumped to v14 (drops it); `uiStore.test.ts` covers the v14 migration. |
 | C3 | `SettingsSurface.tsx` sidenav | ✅ **Done** — rebuilt into domain groups (see *As-built* below). |
 | C4 | "Model & Routing" panel rendering `category="Agent"` | ✅ **Done** — split into per-domain panels; the Model item now renders `category="Model"`. |
-| C5 | `identity.name` dual path (schema vs `/api/config`) | ✅ **Already fixed** — `identity.name` is `ui_hidden` in the schema (#1076); the Identity panel owns it via `/api/config`. No dual path remained. |
+| C5 | `identity.name` dual path (schema vs `/api/config`) | ✅ **Already fixed** (2026-06-28) — `identity.name` is `ui_hidden` in the schema (#1076); the Identity panel owned it via `/api/config`. *(Superseded by **T2** (#1428): the name now saves via the canonical `/api/settings` cascade; see §6.)* |
 | C6 | `skills.top_k` in the `Knowledge` section | ⚠️ **Deviation — left in Knowledge.** Moving it to a `Capabilities`-only home would orphan it (no rendered Capabilities panel covers it cleanly), and it's recall-adjacent. Kept under Knowledge. |
 | C7 | `Network/Discovery/Keep-warm` under System | ✅ **Done** — re-homed to the **Box** domain (rendered in the host-only "Box config" item). |
 | C8 | AppDrawer "Telemetry" shortcut | ✅ **Done** — removed; Settings is the single door (Telemetry = a Box section / ⌘K deep-link). |
@@ -248,7 +248,64 @@ UX — the UI local-test gate).
   rail destination (it's the agent's "makeup") — deferred; it stays a Settings
   group for now.
 
-## 6. History — superseded 2026-06-10 proposal ("two scope-based homes")
+## 6. True-up & DS extraction (2026-06-29 — finishing "one system" + moving primitives upstream)
+
+The domain-first IA (§§2–4) shipped (#1393). A follow-up four-dimension audit — canonical-system
+map · panel inventory · config dual-paths · DS contribute-back — asked the harder question: does
+**every** settings/view/panel actually use the one system, and what UI logic should leave the app
+for the design system? Finding: the schema-cascade `/api/settings` pipeline is canonical and
+broadly adopted (QuickSetting chips, `PluginSettingsDialog`, and all host/box-runtime knobs share
+it; the legacy `hostLayer` `SettingsCategory` path is dead code). The residual drift is narrow and
+named — this is *finish-and-extract*, not a rebuild.
+
+### 6.1 Canonical system (the contract every config surface must meet)
+
+A setting is one backend `Field` (`graph/settings_schema.py`) → `build_schema()` JSON → the generic
+`SettingInput` renderer → `POST /api/settings` (cascade-aware, ADR 0047). Add a `Field`, restart,
+and it renders + validates + saves with zero frontend code. Reuse, not reimplementation:
+`QuickSetting` (contextual chip/dialog) and `PluginSettingsDialog` (a Dialog wrapping
+`SettingsCategory`) both render through the SAME path. Bespoke managers (Identity; the
+Tools/MCP/Skills/Subagents/Delegates makeup; Box; This-console prefs) are legitimate where they're
+rich CRUD or device-local — but they must (a) save through the canonical path for any field the
+schema owns, (b) report via DS `useToast`, and (c) use DS form primitives, not hand-rolled inputs.
+
+### 6.2 True-up ledger (T-series)
+
+| # | Item | Decision / status |
+|---|------|-------------------|
+| T1 | `IdentityPanel` echoed a **cached** `identity.operator` on every save → could clobber a fresh Operator & access edit | ✅ **Fixed (#1428)** — operator is owned solely by Operator & access; IdentityPanel never writes it. |
+| T2 | `identity.name` lived in two systems (ui_hidden `Field` + bespoke `/api/config`) — supersedes C5 | ✅ **Fixed (#1428)** — name saves via the canonical `/api/settings` cascade; `ui_hidden` stays so IdentityPanel remains its **single editor**. SOUL (not a schema field) saves via `/api/config` with a null config. |
+| T3 | `FleetManagerPanel` hand-patched `plugins.enabled` via `/api/config` | ✅ **Fixed (#1428)** — uses the dedicated `/api/plugins/{id}/enabled` endpoint (enabled/disabled reconcile + builtin guard). |
+| T4 | Playbooks/Knowledge route errors through an `onError` prop that's a **no-op when embedded** → silent failures | ⬜ **Phase 1** — replace with DS `useToast`. |
+| T5 | Toast convention half-adopted — inline status in McpPanel / PluginsSurface / InstallPluginDialog / McpCatalogDialog | ⬜ **Phase 2** — sweep to `useToast`. |
+| T6 | Playbooks + Knowledge still on the retired manual-fetch pattern (not TanStack Query) | ⬜ **Phase 2.** |
+| T7 | DS-adoption misses: raw `<checkbox>`→`Switch`, `window.confirm`→`ConfirmDialog`, `HelpLink`→`TextLink`, raw `<kbd>`→`Kbd` | ⬜ **Phase 2.** |
+| T8 | SetupWizard `/api/config/setup` + SOUL writes | ✅ **Intentional** — first-run bootstrap, gated; left as-is. |
+
+### 6.3 DS extraction (contribute upstream to `@protolabsai/ui`)
+
+The settings renderer's **business logic stays app-owned** (save cascade, ADR-0047 inheritance,
+`depends_on` visibility — domain, not UI). What moves upstream are the **primitives** it leans on,
+each a genuine DS gap with app-agnostic reuse:
+
+| Priority | Add to DS | Removes from the app |
+|---|---|---|
+| **P0** | `Button loading` prop (spinner + disabled + `aria-busy`) | a per-call ternary in ~16 files, the app `.spin` keyframe, the `RefreshButton`/`TestConnectionButton` wrappers |
+| **P1** | `ToastProvider position` prop | the top-right `.pl-toast-stack` CSS override (closes protoContent#347) |
+| **P1** | headless context-menu registry + host that renders DS `Menu` | ~120 LOC (`contextMenu/{registry,store,ContextMenuRenderer,types}`); app keeps only domain `registrations.tsx` |
+| **P2** | `FieldControl` (type→control resolver), `PropertyRow`, `SecretInput(isSet)`, `TabBar onTabContextMenu`, `KeyRecorder` | the `SettingInput` switch + property-row chrome + masked-input duplication |
+
+Delivered as the full contribute-back loop (build in `protoContent` → PR → DS release → bump
+`@protolabsai/ui` → adopt in-app), leading with P0 (smallest DS change, largest app reduction).
+
+### 6.4 Slice plan (true-up)
+
+- **Phase 0** — this section (record + ledger).
+- **Phase 1 (correctness, auto-merge on green):** T1–T3 (#1428, done) · T4. Identity (T1/T2) folded in.
+- **Phase 2 (conventions, DRAFT under the UI local-test gate):** T5–T7 + delete the dead `hostLayer` path.
+- **Phase 4:** the §6.3 DS extraction wave.
+
+## 7. History — superseded 2026-06-10 proposal ("two scope-based homes")
 
 > Retained for context. The original decision made **scope the primary axis** —
 > exactly two homes, **Host/App** (box-shared) and **Workspace** (focused agent) —
