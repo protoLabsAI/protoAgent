@@ -73,6 +73,31 @@ def test_set_filters_blanks():
     assert egress.allowed_hosts() == ["good.com"]
 
 
+def test_also_allow_url_includes_gateway_host_when_allowlist_set():
+    # When an allowlist IS configured, the operator-configured gateway (api_base) host is
+    # always reachable — so the deny-by-default allowlist never blocks the user's own gateway
+    # they explicitly pointed the agent at (the "custom baseURL → blocked by egress" report).
+    egress.set_allowed_hosts(["api.proto-labs.ai"], also_allow_url="https://my-gateway.internal:4000/v1")
+    assert "my-gateway.internal" in egress.allowed_hosts()
+    assert egress.check_url("https://my-gateway.internal:4000/v1/models") is None
+    # The explicitly-listed host still works; an unrelated host is still denied.
+    assert egress.check_url("https://api.proto-labs.ai/v1") is None
+    assert egress.check_url("https://evil.example/") is not None
+
+
+def test_also_allow_url_ignored_when_no_allowlist():
+    # Empty allowlist = permissive mode (default SSRF denylist only). Auto-adding the api_base
+    # host here would flip the guard into deny-by-default for EVERY other host — so it must not.
+    egress.set_allowed_hosts([], also_allow_url="https://my-gateway.internal/v1")
+    assert egress.is_enabled() is False
+    assert egress.allowed_hosts() == []
+
+
+def test_also_allow_url_not_duplicated():
+    egress.set_allowed_hosts(["gw.example"], also_allow_url="https://gw.example/v1")
+    assert egress.allowed_hosts() == ["gw.example"]
+
+
 # ── config round-trip ──────────────────────────────────────────────────────────
 
 

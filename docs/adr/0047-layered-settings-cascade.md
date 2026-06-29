@@ -139,6 +139,7 @@ the corresponding items in §7.
    | `prompt_cache.enabled/ttl/warm.enabled/warm.interval_seconds` | cache tier is gateway/deployment-dependent |
    | `telemetry.enabled`, `telemetry.retention_days` | observability is machine-wide |
    | `identity.org` | white-label org branding is deployment-wide (`identity.name`/`operator` stay per-agent) |
+   | `egress.allowed_hosts` | box-wide outbound network policy (ADR 0008); sits at the Host layer beside the inbound `network.bind` (D8) |
 
    Everything else is `agent`: `identity.name/operator`, `model.temperature/max_tokens/max_iterations`,
    `agent_runtime` (each agent picks **native or `acp:*`** independently), `operator_mcp.tools`,

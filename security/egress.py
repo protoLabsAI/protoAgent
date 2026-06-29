@@ -27,10 +27,26 @@ from urllib.parse import urlparse
 _allowed: list[str] = []  # lowercased host patterns; empty = permissive (off)
 
 
-def set_allowed_hosts(hosts) -> None:
-    """Set the allowlist (called once at startup from config). Empty = off."""
+def set_allowed_hosts(hosts, *, also_allow_url: str = "") -> None:
+    """Set the allowlist (called at startup / live-reload from config). Empty = off.
+
+    ``also_allow_url`` — when an allowlist IS configured, the host of this URL (the
+    operator-configured model gateway / ``api_base``) is always included, so a deny-by-default
+    allowlist never blocks the operator's own deliberately-set gateway. Mirrors
+    ``scripts/gen_openshell_policy.py``, which already auto-adds the api_base host to the
+    process-level network policy. Ignored when ``hosts`` is empty — permissive mode must stay
+    permissive (adding one host would flip the guard into deny-by-default for everything else).
+    """
     global _allowed
-    _allowed = [str(h).strip().lower() for h in (hosts or []) if h and str(h).strip()]
+    cleaned = [str(h).strip().lower() for h in (hosts or []) if h and str(h).strip()]
+    if cleaned and also_allow_url:
+        try:
+            host = (urlparse(also_allow_url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host and host not in cleaned:
+            cleaned.append(host)
+    _allowed = cleaned
 
 
 def allowed_hosts() -> list[str]:

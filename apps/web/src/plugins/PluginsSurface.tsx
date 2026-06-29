@@ -167,12 +167,19 @@ function LocalTab() {
     qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
     qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
     qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
+    // The active plugin set changed, so the settings schema (which carries each enabled
+    // plugin's declared config fields, ADR 0019) is stale — refetch it (#1423).
+    qc.invalidateQueries({ queryKey: queryKeys.settings });
   };
 
   const toggle = useMutation({
     mutationFn: (p: Plugin) => api.setPluginEnabled(p.id, !p.enabled),
     onSuccess: (res, p) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      // Enable/disable changes which plugins contribute Settings fields (ADR 0019), so
+      // refetch the schema — else a just-enabled plugin's config section won't appear
+      // until a restart clears the 5-min-stale cache (#1423).
+      qc.invalidateQueries({ queryKey: queryKeys.settings });
       // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
       // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
       setHint(
@@ -191,6 +198,8 @@ function LocalTab() {
     onSuccess: (res, p) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
       qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
+      // A new version may declare new/changed config fields — refetch the schema (#1423).
+      qc.invalidateQueries({ queryKey: queryKeys.settings });
       setHint(
         res.restart_recommended
           ? `${p.name} updated${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.`

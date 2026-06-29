@@ -711,12 +711,18 @@ def list_gateway_models(
 
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
     url = api_base.rstrip("/") + "/models"
-    # SSRF guard (#871): an operator-supplied api_base must not steer this probe at an
-    # internal service or cloud-metadata (169.254.169.254). Blocked unless explicitly
-    # allowlisted via egress.allowed_hosts.
+    # SSRF guard (#871): an operator-supplied api_base must not steer this probe at
+    # cloud-metadata (169.254.169.254) or another link-local/reserved address. But a
+    # custom api_base is an OPERATOR-configured gateway — overwhelmingly localhost
+    # (Ollama / LM Studio / local vLLM / LiteLLM) or a LAN/tailnet host — so allow_private
+    # (same as the fleet-remote probe in graph/fleet/supervisor.py) while STILL blocking
+    # link-local/metadata/multicast/reserved. An unresolvable host isn't itself an SSRF
+    # target — let the real httpx connection error surface instead of a misleading block.
+    # If an egress allowlist IS set, it still enforces (the host must be allowlisted, which
+    # it also needs for actual gateway egress / the OpenShell policy anyway).
     from security import egress
 
-    if egress.check_url(url):
+    if egress.check_url(url, allow_private=True, block_unresolvable=False):
         return [], "api_base host is blocked by the egress guard (set egress.allowed_hosts to permit it)"
     headers = {}
     if key:
@@ -783,10 +789,12 @@ def validate_model_connection(
 
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
     url = api_base.rstrip("/") + "/chat/completions"
-    # SSRF guard (#871) — same as list_gateway_models.
+    # SSRF guard (#871) — same as list_gateway_models: allow_private so a localhost /
+    # LAN / tailnet operator gateway works, link-local/metadata stays blocked, and an
+    # allowlist (when set) still enforces.
     from security import egress
 
-    if egress.check_url(url):
+    if egress.check_url(url, allow_private=True, block_unresolvable=False):
         return False, "api_base host is blocked by the egress guard (set egress.allowed_hosts to permit it)"
     headers = {"Content-Type": "application/json"}
     if key:

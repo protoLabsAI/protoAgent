@@ -598,6 +598,23 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # Outbound counterpart to the inbound bind interface (ADR 0008). Host-scoped +
+    # hot-reloaded (egress.set_allowed_hosts runs on save). string_list → the generic
+    # one-per-line editor; no bespoke console code.
+    Field(
+        "egress.allowed_hosts",
+        "egress_allowed_hosts",
+        "Outbound host allowlist",
+        "string_list",
+        "Network",
+        "Hosts the agent's fetch_url tool may reach — one per line; a leading `*.` matches "
+        "subdomains (e.g. `*.github.com`). Empty = off: any public host is reachable, with a "
+        "built-in SSRF guard still blocking private / loopback / cloud-metadata addresses. When "
+        "set it's deny-by-default (only these hosts) — your configured model gateway (Model ▸ API "
+        "base URL) is always permitted automatically, so you needn't list it. Also the source of "
+        "truth for the OpenShell sandbox network policy.",
+        scope="host",
+    ),
     Field(
         "fleet.port_base",
         "fleet_port_base",

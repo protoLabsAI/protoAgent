@@ -82,6 +82,22 @@ def test_groups_carry_category_in_taxonomy_order():
     assert "Knowledge" not in by_section  # the single 22-field wall is gone
 
 
+def test_egress_allowlist_surfaced_in_box_network():
+    """The egress allowlist (ADR 0008) is editable in Settings ▸ Box ▸ Network —
+    a host-scoped, hot-reloaded string_list (so it renders in the generic list editor)."""
+    groups = build_schema(LangGraphConfig())
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+    e = by_key.get("egress.allowed_hosts")
+    assert e is not None, "egress.allowed_hosts must be rendered in the settings UI"
+    assert e["type"] == "string_list"
+    assert e["section"] == "Network"
+    assert e["scope"] == "host"  # box-wide default (ADR 0047)
+    assert e["restart"] is False  # set_allowed_hosts runs on live-reload
+    assert e["default"] == []
+    section_cat = {g["section"]: g["category"] for g in groups}
+    assert section_cat["Network"] == "Box"
+
+
 def test_knowledge_split_into_subsections():
     """The Knowledge domain renders as Recall → Ingestion → History (not one wall)."""
     groups = build_schema(LangGraphConfig())
