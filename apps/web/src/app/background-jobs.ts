@@ -22,14 +22,16 @@ export function fmtElapsed(startIso?: string, endIso?: string): string {
 }
 
 // A background turn's tool, as surfaced by the `background.progress` channel (ADR 0051).
-export type ProgressTool = { id: string; tool: string; done: boolean; error: boolean };
+// `output` is the (server-truncated) tool result that rides the tool_end frame — shown in
+// the expandable per-tool card; absent while the tool is still running.
+export type ProgressTool = { id: string; tool: string; done: boolean; error: boolean; output?: string };
 
 /** Merge a `background.progress` frame into a job's tool list, keyed by tool_call_id
- *  (tool_start → running, tool_end → done/error). Capped so a chatty job can't grow
- *  unbounded. Pure → unit-testable. */
+ *  (tool_start → running, tool_end → done/error, carrying the truncated output). Capped so a
+ *  chatty job can't grow unbounded. Pure → unit-testable. */
 export function applyProgress(
   prev: ProgressTool[],
-  frame: { phase?: string; tool?: string; tool_call_id?: string; error?: boolean },
+  frame: { phase?: string; tool?: string; tool_call_id?: string; error?: boolean; output?: string },
 ): ProgressTool[] {
   const id = String(frame.tool_call_id || frame.tool || "");
   if (!id) return prev;
@@ -40,6 +42,8 @@ export function applyProgress(
     tool: String(frame.tool || (i >= 0 ? next[i].tool : "tool")),
     done: frame.phase === "tool_end",
     error: !!frame.error,
+    // tool_end carries the output; keep any earlier value if a later frame omits it.
+    output: frame.output != null ? String(frame.output) : i >= 0 ? next[i].output : undefined,
   };
   if (i >= 0) next[i] = entry;
   else next.push(entry);

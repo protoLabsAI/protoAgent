@@ -1,4 +1,5 @@
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
+import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Bot, CheckCircle2, Loader2, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -98,6 +99,7 @@ export function BackgroundJobs() {
           tool: d.tool ? String(d.tool) : undefined,
           tool_call_id: d.tool_call_id ? String(d.tool_call_id) : undefined,
           error: !!d.error,
+          output: d.output ? String(d.output) : undefined,
         }),
       }));
     });
@@ -249,6 +251,11 @@ function BgJobRow({
   );
   const elapsed = fmtElapsed(job.created_at, running ? undefined : job.completed_at);
   const hasResult = !running && !!job.result;
+  const hasTools = tools.length > 0;
+  // Expandable when there's a result to read OR a live/historical tool feed to watch —
+  // so a RUNNING job can now be opened to follow its tool-by-tool activity (ADR 0050
+  // Phase 3's deferred "rich live subagent card"), not just finished jobs.
+  const canExpand = hasResult || hasTools;
   const recentTools = tools.slice(-3);
   return (
     <li className="bg-jobs-row">
@@ -256,9 +263,9 @@ function BgJobRow({
         <button
           type="button"
           className="bg-jobs-rowmain"
-          onClick={() => hasResult && setExpanded((v) => !v)}
-          aria-expanded={hasResult ? expanded : undefined}
-          disabled={!hasResult}
+          onClick={() => canExpand && setExpanded((v) => !v)}
+          aria-expanded={canExpand ? expanded : undefined}
+          disabled={!canExpand}
         >
           <span className="bg-jobs-icon">{icon}</span>
           <span className="bg-jobs-meta">
@@ -268,7 +275,7 @@ function BgJobRow({
             <span className="bg-jobs-sub">
               {job.status}
               {elapsed ? ` · ${elapsed}` : ""}
-              {hasResult ? (expanded ? " · hide result" : " · show result") : ""}
+              {canExpand ? (expanded ? " · hide details" : hasResult ? " · show result" : " · show activity") : ""}
             </span>
             {running && recentTools.length > 0 ? (
               <span className="bg-jobs-tools">
@@ -303,9 +310,26 @@ function BgJobRow({
           </button>
         )}
       </div>
-      {hasResult && expanded ? (
-        <div className="bg-jobs-result">
-          <Markdown>{job.result || ""}</Markdown>
+      {expanded && canExpand ? (
+        <div className="bg-jobs-detail">
+          {hasTools ? (
+            <ToolCardList className="bg-jobs-feed">
+              {tools.map((t) => (
+                <ToolCard
+                  key={t.id}
+                  name={t.tool}
+                  status={t.error ? "error" : t.done ? "done" : "running"}
+                >
+                  {t.output ? <ToolSection label="output">{t.output}</ToolSection> : null}
+                </ToolCard>
+              ))}
+            </ToolCardList>
+          ) : null}
+          {hasResult ? (
+            <div className="bg-jobs-result">
+              <Markdown>{job.result || ""}</Markdown>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </li>
