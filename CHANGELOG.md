@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Egress allowlist in Settings** (#1422) — the outbound-host allowlist (`egress.allowed_hosts`,
+  ADR 0008) is now editable in **Settings ▸ Box ▸ Network**, the outbound counterpart to the
+  inbound *Bind interface*. Host-scoped and hot-reloading; previously YAML-only.
+
+### Fixed
+- **Custom model gateway no longer blocked on the connection test** (#1422) — pointing the *API
+  base URL* at a local gateway (Ollama / LM Studio / local vLLM / LiteLLM on `localhost`, or a
+  LAN/tailnet host) failed with "api_base host is blocked by the egress guard". The connection-test
+  probes now allow private/loopback hosts for the operator-configured gateway (still blocking
+  link-local / cloud-metadata / multicast / reserved), and when an egress allowlist *is* set the
+  configured gateway host is permitted automatically.
+- **Plugin config appears without a restart** (#1423) — a newly installed or enabled plugin's
+  configuration section now shows up in Settings immediately. The console refetches the settings
+  schema whenever the active plugin set changes (install / enable / disable / uninstall / sync /
+  update) instead of serving a stale cache until the next app restart.
+
 ## [0.74.0] - 2026-06-29
 
 ### Added
