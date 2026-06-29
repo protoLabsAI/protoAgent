@@ -270,7 +270,11 @@ async function handleA2AStream(req, res, body) {
     .join("");
   const frames = buildFrames({
     rpcId: body.id ?? "1",
-    contextId: params.contextId || "e2e-ctx",
+    // Echo the contextId the console sent (it rides on the MESSAGE, like the real server,
+    // which mirrors message.context_id back onto every frame). The console now drops frames
+    // whose contextId != its sessionId (frameIsForeign, #1399); a mock that didn't echo the
+    // real contextId would have all its frames rejected and render nothing.
+    contextId: params.message?.contextId || params.contextId || "e2e-ctx",
     taskId: "task-e2e-1",
     prompt,
   });
