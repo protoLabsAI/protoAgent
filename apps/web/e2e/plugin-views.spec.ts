@@ -197,6 +197,17 @@ test("right-click a plugin view → Configure opens that plugin's settings dialo
   await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
 });
 
+test("right-click a rail icon → 'Manage plugins…' opens Settings ▸ Integrations", async ({ page }) => {
+  // The per-icon rail menu also carries the rail-wide "Manage plugins…" action (the all-plugins
+  // counterpart to the per-plugin "Configure…"), opening Settings ▸ Integrations.
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Manage plugins", { exact: false }).click();
+  const overlay = page.locator(".settings-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Integrations/);
+});
+
 test("right-click a plugin's util-bar widget → Configure opens its settings dialog", async ({ page }) => {
   // ADR 0036/0059 — the util-bar widget context menu mirrors the rail-icon Configure.
   await page.goto("/app/", { waitUntil: "load" });

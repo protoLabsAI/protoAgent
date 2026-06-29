@@ -37,10 +37,10 @@ registerContextMenu({
       { side: "right", label: "Move to right rail" },
       { side: "bottom", label: "Move to bottom dock" },
     ];
-    // Management actions, gathered so the divider only shows when at least one applies:
-    // Configure (plugin views only) opens the owning plugin's settings dialog; Hide moves the
-    // surface to railOrder.hidden (restore from ⌘K or "Move to …"). Chat is never hidden — it
-    // mounts unconditionally on its dock, so a hidden chat would render with no rail icon.
+    // Management actions. "Manage plugins…" (open the all-plugins manager, Settings ▸ Integrations)
+    // is always present; Configure (plugin views only) opens the owning plugin's settings dialog;
+    // Hide moves the surface to railOrder.hidden (restore from ⌘K or "Move to …"). Chat is never
+    // hidden — it mounts unconditionally on its dock, so a hidden chat would render with no rail icon.
     const manage: MenuEntry[] = [];
     if (ctx.pluginId) {
       const pid = ctx.pluginId;
@@ -52,6 +52,14 @@ registerContextMenu({
         run: () => useUI.getState().openPluginConfig(pid, pname),
       });
     }
+    // A rail-wide escape hatch on every icon: the all-plugins counterpart to the per-plugin
+    // "Configure…" above — opens Settings ▸ Integrations.
+    manage.push({
+      id: "manage-plugins",
+      label: "Manage plugins…",
+      icon: <Puzzle size={14} />,
+      run: () => useUI.getState().openGlobalSettings("plugins"),
+    });
     if (ctx.id !== "chat") {
       manage.push({
         id: "hide",
