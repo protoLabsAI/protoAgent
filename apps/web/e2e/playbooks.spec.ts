@@ -118,3 +118,17 @@ test("deleting a playbook confirms first, then removes it", async ({ page }) => 
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(surface.getByText("pr-triage-flow")).toBeHidden();
 });
+
+test("a failed skills load surfaces a toast (errors are no longer swallowed)", async ({ page }) => {
+  // PlaybooksSurface is embedded in Settings ▸ Skills with no error host; it used to delegate
+  // failures to a no-op onError prop and swallow them. It now self-reports via toast.
+  await page.route("**/api/playbooks", (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({ status: 500, json: { detail: "boom" } })
+      : route.fallback(),
+  );
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
+  await expect(page.locator(".pl-toast", { hasText: /Skills/i })).toBeVisible();
+});

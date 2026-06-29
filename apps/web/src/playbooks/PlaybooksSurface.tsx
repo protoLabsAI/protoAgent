@@ -4,7 +4,7 @@ import { ArrowDownFromLine, ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, S
 
 import { useEffect, useMemo, useState } from "react";
 
-import { ConfirmDialog, Dialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
@@ -165,7 +165,14 @@ function SourceBadge({ p }: { p: Playbook }) {
   );
 }
 
-export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: string) => void }) {
+export function PlaybooksSurface() {
+  // Self-reports failures via toast. This surface only ever renders inside Settings ▸ Skills, where
+  // the old `onError` callback prop defaulted to a no-op and silently swallowed every failure. A
+  // blank message is a clear-no-op (toasts auto-dismiss on their own).
+  const toast = useToast();
+  const onError = (message: string) => {
+    if (message) toast({ tone: "error", title: "Skills", message });
+  };
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
