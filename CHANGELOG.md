@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.75.0] - 2026-06-29
+
 ### Added
 - **Egress allowlist in Settings** (#1422) — the outbound-host allowlist (`egress.allowed_hosts`,
   ADR 0008) is now editable in **Settings ▸ Box ▸ Network**, the outbound counterpart to the
