@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, Puzzle, SlidersHorizontal, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -91,34 +91,44 @@ registerContextMenu({
   },
 });
 
-// Right-click the EMPTY rail background (not an icon) → the "Hidden views" menu: one entry per
-// hidden surface (railOrder.hidden), each restored onto the dock whose background was clicked
-// (`ctx.side`) and then opened. The App-side trigger resolves each hidden id's label (core/plugin/
-// ext metadata lives there) + the clicked side into `ctx`. When nothing is hidden, a disabled hint
-// shows so the menu still confirms the feature. The discoverable counterpart to ⌘K (ADR 0035/0036).
+// Right-click the EMPTY rail background (not an icon) → the rail menu: one "Show hidden view" entry
+// per hidden surface (railOrder.hidden), each restored onto the dock whose background was clicked
+// (`ctx.side`) and then opened, plus a rail-wide "Manage plugins…" action that opens Settings ▸
+// Integrations. The App-side trigger resolves each hidden id's label (core/plugin/ext metadata lives
+// there) + the clicked side into `ctx`. When nothing is hidden, a disabled hint shows so that part
+// still confirms the feature. The discoverable counterpart to ⌘K (ADR 0035/0036).
 registerContextMenu({
   type: "rail-background",
   items: (ctx: { side?: "left" | "right" | "bottom"; hidden?: { id: string; label: string }[] }): MenuEntry[] => {
     const hidden = ctx?.hidden ?? [];
-    if (!hidden.length) {
-      return [{ id: "none", label: "No hidden views", disabled: true, run: () => {} }];
-    }
-    return [
-      { id: "hidden-header", label: "Show hidden view", disabled: true, run: () => {} },
-      { id: "hidden-div", divider: true },
-      ...hidden.map(
-        (h): MenuEntry => ({
-          id: `show-${h.id}`,
-          label: h.label,
-          icon: <Eye size={14} />,
-          // Restore to the dock the menu was opened on, then open it there.
-          run: () => {
-            useUI.getState().showSurface(h.id, ctx?.side);
-            openView(h.id);
-          },
-        }),
-      ),
-    ];
+    const out: MenuEntry[] = hidden.length
+      ? [
+          { id: "hidden-header", label: "Show hidden view", disabled: true, run: () => {} },
+          { id: "hidden-div", divider: true },
+          ...hidden.map(
+            (h): MenuEntry => ({
+              id: `show-${h.id}`,
+              label: h.label,
+              icon: <Eye size={14} />,
+              // Restore to the dock the menu was opened on, then open it there.
+              run: () => {
+                useUI.getState().showSurface(h.id, ctx?.side);
+                openView(h.id);
+              },
+            }),
+          ),
+        ]
+      : [{ id: "none", label: "No hidden views", disabled: true, run: () => {} }];
+    // A rail-wide action (not tied to one surface): open the plugin manager — Settings ▸
+    // Integrations — to install, enable/disable, configure, or update plugins.
+    out.push({ id: "manage-div", divider: true });
+    out.push({
+      id: "manage-plugins",
+      label: "Manage plugins…",
+      icon: <Puzzle size={14} />,
+      run: () => useUI.getState().openGlobalSettings("plugins"),
+    });
+    return out;
   },
 });
 

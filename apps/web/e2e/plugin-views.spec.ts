@@ -169,6 +169,25 @@ test("the Hidden views menu restores onto the rail it was opened on", async ({ p
   await expect(leftRail.getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
 });
 
+test("right-click the empty rail → 'Manage plugins…' opens Settings ▸ Integrations", async ({ page }) => {
+  // The rail-background menu also carries a rail-wide action (not tied to one surface) that opens
+  // the plugin manager — Settings ▸ Integrations — via openGlobalSettings("plugins").
+  await page.goto("/app/", { waitUntil: "load" });
+  const rail = page.getByRole("complementary", { name: "Left surfaces" });
+  await expect(rail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+
+  // Right-click empty rail space (below the icons) → the menu offers "Manage plugins…".
+  const box = await rail.boundingBox();
+  if (!box) throw new Error("left rail has no bounding box");
+  await rail.click({ button: "right", position: { x: box.width / 2, y: box.height - 8 } });
+  await page.locator(".pl-menu").getByText("Manage plugins", { exact: false }).click();
+
+  // The one settings dialog opens, deep-linked to the Integrations (plugins) section.
+  const overlay = page.locator(".settings-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Integrations/);
+});
+
 test("right-click a plugin view → Configure opens that plugin's settings dialog", async ({ page }) => {
   // ADR 0036/0059 — a plugin view's rail menu offers "Configure…", which opens the owning
   // plugin's per-plugin settings dialog (titled with the plugin's display name, "Boardy").
