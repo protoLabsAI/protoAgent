@@ -152,6 +152,17 @@
 .chat-tabbar-wrap--del .pl-tabbar__close:hover {
   color: var(--pl-color-danger, #e5484d);
 }
+
+/* Bypass-permissions indicator in the composer toolbar — a DS warning Badge (outline tone) in a
+   bare button so clicking it turns bypass off (same as `/bypass off`). The Badge owns the styling. */
+.composer-bypass-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
 .chat-tabbar-wrap--del .pl-tabbar__close:hover svg {
   display: none;
 }

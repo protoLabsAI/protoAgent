@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Bypass-permissions mode** (#1418) — a per-tab toggle that auto-approves `run_command` so the
+  agent runs shell commands without the HITL approval prompt: `/bypass on|off`, a DS warning badge
+  in the composer while it's on, and an **"Approve & don't ask again"** button in the approval
+  dialog. Every bypassed command is audit-logged, and a host can forbid bypass entirely via
+  `filesystem.bypass_allowed: false`.
+
+### Changed
+- **`run_command` runs shell operators** (#1419) — the fenced `run_command` tool executes via
+  `/bin/sh -c`, so `&&`, `|`, `>`, and `$(…)` work instead of being literalized by argv-splitting.
+  No new capability (the agent could already nest `bash -c "…"`); still cwd-fenced and
+  approval/bypass-gated, and a timed-out command now kills its whole process group.
+
+### Fixed
+- **Slash-command notices render as system notes** (#1420) — local in-thread notices (e.g. the
+  `/effort` and `/bypass` confirmations) are now tone-aware `role:"system"` notes instead of fake
+  assistant messages, so they no longer carry the answer action row (copy/fork/regenerate).
+
 ## [0.73.0] - 2026-06-29
 
 ### Added

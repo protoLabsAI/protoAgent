@@ -109,6 +109,16 @@ def _registry_from_config(config) -> ProjectRegistry:
     return ProjectRegistry(projects)
 
 
+def _bypass_requested() -> bool:
+    """True when the in-flight turn carries the per-turn ``bypass_permissions`` flag — the
+    operator's explicit /bypass toggle, sent in the A2A request metadata (read live, so it's
+    per-turn, not captured at tool-build time). Gated additionally by ``filesystem_bypass_allowed``
+    at the call site, so a host can forbid bypass regardless of caller-supplied metadata."""
+    from graph.middleware.request_context import current_request_metadata
+
+    return bool(current_request_metadata().get("bypass_permissions"))
+
+
 def build_fs_tools(config) -> list:
     """Build the fenced filesystem tools from config. Empty list when no valid
     projects are registered (so the primitive is inert by default)."""
@@ -122,6 +132,9 @@ def build_fs_tools(config) -> list:
     # the command + approves/denies). Forks can disable the gate (e.g. inside a
     # hardened container, or for a trusted autonomous deploy).
     run_requires_approval = bool(getattr(config, "filesystem_run_requires_approval", True))
+    # Whether this HOST permits bypass-permissions mode at all (default True). When False, the
+    # approval gate is enforced regardless of any caller-supplied bypass metadata.
+    bypass_allowed = bool(getattr(config, "filesystem_bypass_allowed", True))
 
     @tool
     def list_projects() -> str:
@@ -263,7 +276,7 @@ def build_fs_tools(config) -> list:
             # the command before it runs. interrupt() re-runs this fn from the
             # top on resume (the validation above is idempotent) and returns the
             # operator's decision. Denied → don't run.
-            if run_requires_approval:
+            if run_requires_approval and not (bypass_allowed and _bypass_requested()):
                 from langgraph.types import interrupt
 
                 decision = interrupt(
@@ -279,6 +292,10 @@ def build_fs_tools(config) -> list:
                     # status="error": the chat card then renders the declined action
                     # as a failure (red X) instead of a green "done" with decline text.
                     raise ToolException(f"Command declined by the operator — not run: {command!r}")
+            elif run_requires_approval:
+                # Bypass-permissions mode (the operator's explicit per-turn /bypass toggle): the
+                # approval gate is skipped. AUDIT every command that runs without confirmation.
+                log.warning("[fs] run_command ran under bypass-permissions (no approval): %s", command)
             res = await _shell_run(["/bin/sh", "-c", command], cwd=str(root), timeout=timeout)
             if res.error:
                 raise ToolException(res.error)

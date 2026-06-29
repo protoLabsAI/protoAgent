@@ -6,7 +6,7 @@ import { SLASH_COMMANDS } from "./fixtures.mjs";
 // (GET /api/chat/commands) and autocompletes them as you type "/name".
 
 // Deterministic client-side commands (ADR 0057) surface FIRST, then the server skills.
-const CLIENT_SLASH = ["/new", "/clear", "/effort"];
+const CLIENT_SLASH = ["/new", "/clear", "/effort", "/bypass"];
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });

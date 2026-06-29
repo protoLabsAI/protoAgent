@@ -666,6 +666,12 @@ class LangGraphConfig:
     filesystem_enabled: bool = True
     filesystem_allow_run: bool = True
     filesystem_run_requires_approval: bool = True
+    # Escape hatch (off by default per-turn): when True (default), an operator may toggle
+    # bypass-permissions mode per-turn via A2A ``message.metadata.bypass_permissions`` to
+    # auto-approve ``run_command`` — for trusted-autonomous / container runs. Set False to
+    # FORBID bypass entirely regardless of caller metadata (locked-down hosts); the approval
+    # gate is then always enforced.
+    filesystem_bypass_allowed: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
 
     # Egress allowlist (ADR 0008) — deny-by-default outbound-host allowlist
@@ -931,6 +937,9 @@ class LangGraphConfig:
             filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),
             filesystem_run_requires_approval=data.get("filesystem", {}).get(
                 "run_requires_approval", cls.filesystem_run_requires_approval
+            ),
+            filesystem_bypass_allowed=data.get("filesystem", {}).get(
+                "bypass_allowed", cls.filesystem_bypass_allowed
             ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
