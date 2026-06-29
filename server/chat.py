@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import time
+import weakref
 from typing import Any
 
 from graph.output_format import (
@@ -744,6 +745,162 @@ def _skill_directive(skill: dict, args: str) -> str:
     return directive
 
 
+# Per-thread_id locks (WeakValueDictionary so a lock is GC'd once no turn holds it,
+# bounding memory). See _thread_lock.
+_THREAD_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+
+
+def _thread_lock(thread_id: str) -> asyncio.Lock:
+    """Per-thread_id async lock — serializes turns on the SAME checkpointer thread so
+    two concurrent A2A message/send on one context_id can't lost-update each other's
+    history. Auto-evicted once no turn references the lock."""
+    lock = _THREAD_LOCKS.get(thread_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _THREAD_LOCKS[thread_id] = lock
+    return lock
+
+
+async def _run_native_turn(message, session_id, config, *, request_metadata=None, resume=False, images=None):
+    """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
+    kicker retry, and goal-mode continuations, then yield the terminal confidence + done
+    frames. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
+    lock around the whole turn without a deep in-line reindent."""
+    from graph.goals.goal_turn import goal_turn
+
+    # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
+    # the /effort level in the A2A request metadata). Threaded into every turn this stream
+    # runs — initial, kicker, goal continuation. Unset → the configured default.
+    _model = ((request_metadata or {}).get("model") or "").strip() or None
+    _effort = ((request_metadata or {}).get("reasoning_effort") or "").strip() or None
+    # When a goal is already active, the whole turn is goal-driven (suppress cross-session
+    # prior_sessions on the initial turn + kicker, matching the continuation turns).
+    goal_active = STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
+
+    # One graph turn (model tokens accumulated silently; A2A consumers get progress from
+    # tool_start/tool_end). Final text is extracted once via extract_output().
+    accumulated_raw = ""
+    paused = False
+    last_tool_out = ""  # streaming equivalent of _last_tool_text — the empty-turn fallback answer
+    with goal_turn(goal_active):
+        async for kind, payload in _run_turn_stream(
+            message,
+            session_id,
+            config,
+            resume_value=(message if resume else None),
+            images=images,
+            model=_model,
+            reasoning_effort=_effort,
+        ):
+            if kind == "__raw__":
+                accumulated_raw = payload
+            elif kind == "input_required":
+                # Agent paused for human input — surface it and park the turn; the A2A
+                # runner sets the task input-required and the caller resumes via
+                # message/send on the same taskId.
+                yield (kind, payload)
+                paused = True
+            else:
+                if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
+                    last_tool_out = str(payload["output"])
+                yield (kind, payload)
+
+    # A paused turn produced no final answer — don't run the dropped-scratch kicker or
+    # goal verification; the task is parked.
+    if paused:
+        return
+
+    final_text = extract_output(accumulated_raw)
+    final_raw = accumulated_raw
+
+    # Dropped-turn recovery: the model emitted only <scratch_pad>/<think> — no <output>,
+    # no tool call — so extract_output is empty and the turn would silently drop. Re-prompt
+    # once on the same thread with a kicker (history is preserved). Capped at 1 retry.
+    if not final_text and is_dropped_scratch_turn(accumulated_raw):
+        log.warning(
+            "[chat-stream] dropped scratch-only turn (session=%s) — kicker retry",
+            session_id,
+        )
+        yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
+        retry_raw = ""
+        with goal_turn(goal_active):
+            async for kind, payload in _run_turn_stream(
+                DROPPED_SCRATCH_KICKER, session_id, config, model=_model, reasoning_effort=_effort
+            ):
+                if kind == "__raw__":
+                    retry_raw = payload
+                else:
+                    yield (kind, payload)
+        recovered = extract_output(retry_raw)
+        if recovered:
+            final_text, final_raw = recovered, retry_raw
+            log.info("[chat-stream] kicker recovered the turn (session=%s)", session_id)
+        else:
+            log.warning(
+                "[chat-stream] kicker retry also empty (session=%s) — falling back",
+                session_id,
+            )
+
+    # Goal mode: when an active goal exists for this session, verify the outcome after the
+    # agent stops; if not met, re-invoke on the same thread with a continuation prompt until
+    # the verifier passes, the iteration budget is spent, or it's flagged unachievable.
+    if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
+        guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
+        note = ""
+        while guard < hard_cap:
+            guard += 1
+            decision = await STATE.goal_controller.evaluate(session_id, last_text=final_text)
+            if decision is None:
+                break
+            note = decision.note
+            yield ("tool_start", f"🎯 {decision.note}")
+            if decision.action == "done":
+                break
+            # For fresh-context goals, create a scoped thread so the checkpointer starts
+            # clean — no accumulated transcript from prior iterations.
+            goal_state = decision.state
+            if goal_state and goal_state.fresh_context:
+                base_tid = _resolve_thread_id(request_metadata, session_id)
+                cont_config = {
+                    "configurable": {"thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"},
+                    "recursion_limit": 200,
+                }
+            else:
+                cont_config = config  # same-session (existing behavior)
+
+            cont_raw = ""
+            with goal_turn():
+                async for kind, payload in _run_turn_stream(
+                    decision.message, session_id, cont_config, model=_model, reasoning_effort=_effort
+                ):
+                    if kind == "__raw__":
+                        cont_raw = payload
+                    else:
+                        yield (kind, payload)
+            cont_text = extract_output(cont_raw)
+            if cont_text:
+                final_text, final_raw = cont_text, cont_raw
+        # Append the terminal goal outcome to the answer so the A2A terminal artifact
+        # carries it, matching the non-streaming path (the 🎯 status frames above are
+        # transient and can coalesce).
+        if note:
+            final_text = f"{final_text}\n\n---\n{note}"
+
+    # Never end the stream on a silent empty answer (a native-reasoning model that emitted
+    # only reasoning, or an otherwise empty turn): surface the last tool result or a
+    # placeholder, matching the non-streaming path's _last_tool_text-or-placeholder.
+    if not final_text:
+        final_text = last_tool_out or "_(The agent ended the turn without a textual reply.)_"
+
+    # Self-reported confidence (from whichever pass produced the answer), yielded before
+    # "done" so the A2A handler records it on the terminal artifact's confidence-v1 DataPart.
+    confidence, explanation = extract_confidence(final_raw)
+    if confidence is not None:
+        yield ("confidence", {"confidence": confidence, "explanation": explanation})
+
+    yield ("done", final_text)
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -775,7 +932,6 @@ async def _chat_langgraph_stream(
     """
     from observability import tracing
 
-    from graph.goals.goal_turn import goal_turn
     from graph.middleware.request_context import request_metadata_scope
 
     trace_meta: dict = {"message_preview": message[:100]}
@@ -915,142 +1071,23 @@ async def _chat_langgraph_stream(
             # sessions from the non-streaming chat in the shared MemorySaver. Derivation is
             # a pluggable seam (#571): a fork registers a resolver to scope memory
             # off request metadata (e.g. per-project) without editing this file.
+            _tid = _resolve_thread_id(request_metadata, session_id)
             config = {
-                "configurable": {"thread_id": _resolve_thread_id(request_metadata, session_id)},
+                "configurable": {"thread_id": _tid},
                 "recursion_limit": 200,
             }
 
-            # Per-tab model + reasoning-effort override (the console puts the tab's chosen
-            # model + the /effort level in the A2A request metadata). Threaded into every
-            # turn this stream runs — initial, kicker, goal continuation — so the whole
-            # conversation stays on the tab's model/effort. Unset → the configured default.
-            _model = ((request_metadata or {}).get("model") or "").strip() or None
-            _effort = ((request_metadata or {}).get("reasoning_effort") or "").strip() or None
-
-            # When a goal is already active, the whole turn is goal-driven —
-            # suppress cross-session prior_sessions on the initial turn (and the
-            # kicker retry below), matching the continuation turns.
-            goal_active = (
-                STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
-            )
-
-            # One graph turn (model tokens accumulated silently; A2A consumers
-            # get progress from tool_start/tool_end). Final text is extracted
-            # once via extract_output().
-            accumulated_raw = ""
-            paused = False
-            with goal_turn(goal_active):
-                async for kind, payload in _run_turn_stream(
-                    message,
-                    session_id,
-                    config,
-                    resume_value=(message if resume else None),
-                    images=images,
-                    model=_model,
-                    reasoning_effort=_effort,
+            # Serialize turns on the SAME thread_id: two near-simultaneous A2A
+            # message/send on one context_id would otherwise run concurrent graph turns
+            # against the shared checkpointer thread → lost-update history corruption. A
+            # per-thread async lock runs them one-at-a-time (mirrors the console steering
+            # queue; different contexts never block each other). The turn body lives in
+            # _run_native_turn so the lock wraps it without a deep in-line reindent.
+            async with _thread_lock(_tid):
+                async for frame in _run_native_turn(
+                    message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
                 ):
-                    if kind == "__raw__":
-                        accumulated_raw = payload
-                    elif kind == "input_required":
-                        # Agent paused for human input — surface it and park the
-                        # turn; the A2A runner sets the task input-required and the
-                        # caller resumes via message/send on the same taskId.
-                        yield (kind, payload)
-                        paused = True
-                    else:
-                        yield (kind, payload)
-
-            # A paused turn produced no final answer — don't run the
-            # dropped-scratch kicker or goal verification; the task is parked.
-            if paused:
-                return
-
-            final_text = extract_output(accumulated_raw)
-            final_raw = accumulated_raw
-
-            # Dropped-turn recovery: the model emitted only <scratch_pad>/<think>
-            # — no <output>, no tool call — so extract_output is empty and the
-            # turn would silently drop. Re-prompt once on the same thread with a
-            # kicker (history is preserved by the checkpointer). Capped at 1 retry.
-            if not final_text and is_dropped_scratch_turn(accumulated_raw):
-                log.warning(
-                    "[chat-stream] dropped scratch-only turn (session=%s) — kicker retry",
-                    session_id,
-                )
-                yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
-                retry_raw = ""
-                with goal_turn(goal_active):
-                    async for kind, payload in _run_turn_stream(
-                        DROPPED_SCRATCH_KICKER, session_id, config, model=_model, reasoning_effort=_effort
-                    ):
-                        if kind == "__raw__":
-                            retry_raw = payload
-                        else:
-                            yield (kind, payload)
-                recovered = extract_output(retry_raw)
-                if recovered:
-                    final_text, final_raw = recovered, retry_raw
-                    log.info("[chat-stream] kicker recovered the turn (session=%s)", session_id)
-                else:
-                    log.warning(
-                        "[chat-stream] kicker retry also empty (session=%s) — falling back",
-                        session_id,
-                    )
-
-            # Goal mode: when an active goal exists for this session, verify the
-            # outcome after the agent stops; if not met, re-invoke on the same
-            # thread with a continuation prompt until the verifier passes, the
-            # iteration budget is spent, or it's flagged unachievable.
-            if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
-                guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
-                note = ""
-                while guard < hard_cap:
-                    guard += 1
-                    decision = await STATE.goal_controller.evaluate(session_id, last_text=final_text)
-                    if decision is None:
-                        break
-                    note = decision.note
-                    yield ("tool_start", f"🎯 {decision.note}")
-                    if decision.action == "done":
-                        break
-                    # For fresh-context goals, create a scoped thread so the checkpointer
-                    # starts clean — no accumulated transcript from prior iterations.
-                    goal_state = decision.state
-                    if goal_state and goal_state.fresh_context:
-                        base_tid = _resolve_thread_id(request_metadata, session_id)
-                        cont_config = {
-                            "configurable": {"thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"},
-                            "recursion_limit": 200,
-                        }
-                    else:
-                        cont_config = config  # same-session (existing behavior)
-
-                    cont_raw = ""
-                    with goal_turn():
-                        async for kind, payload in _run_turn_stream(
-                            decision.message, session_id, cont_config, model=_model, reasoning_effort=_effort
-                        ):
-                            if kind == "__raw__":
-                                cont_raw = payload
-                            else:
-                                yield (kind, payload)
-                    cont_text = extract_output(cont_raw)
-                    if cont_text:
-                        final_text, final_raw = cont_text, cont_raw
-                # Append the terminal goal outcome to the answer so the A2A
-                # terminal artifact carries it, matching the non-streaming path
-                # (the 🎯 status frames above are transient and can coalesce).
-                if note:
-                    final_text = f"{final_text}\n\n---\n{note}"
-
-            # Self-reported confidence (from whichever pass produced the answer),
-            # yielded before "done" so the A2A handler records it on the
-            # terminal artifact's confidence-v1 DataPart.
-            confidence, explanation = extract_confidence(final_raw)
-            if confidence is not None:
-                yield ("confidence", {"confidence": confidence, "explanation": explanation})
-
-            yield ("done", final_text)
+                    yield frame
 
         except GeneratorExit:
             # Expected: A2A consumers break out of the SSE loop after
