@@ -72,10 +72,25 @@ def test_groups_carry_category_in_taxonomy_order():
     assert seen == [c for c in _CATEGORY_ORDER if c in seen]
     # Known domain mappings hold (ADR 0048).
     by_section = {g["section"]: g["category"] for g in groups}
-    assert by_section["Knowledge"] == "Knowledge"
     assert by_section["Middleware"] == "Behavior"
     assert by_section["Model"] == "Model"
     assert by_section["Telemetry"] == "Box"
+    # Knowledge is split into Recall/Ingestion/History, all under the Knowledge domain.
+    assert by_section["Recall"] == "Knowledge"
+    assert by_section["Ingestion"] == "Knowledge"
+    assert by_section["History"] == "Knowledge"
+    assert "Knowledge" not in by_section  # the single 22-field wall is gone
+
+
+def test_knowledge_split_into_subsections():
+    """The Knowledge domain renders as Recall → Ingestion → History (not one wall)."""
+    groups = build_schema(LangGraphConfig())
+    kn = [g["section"] for g in groups if g["category"] == "Knowledge"]
+    assert kn == ["Recall", "Ingestion", "History"]
+    keys = {g["section"]: [f["key"] for f in g["fields"]] for g in groups if g["category"] == "Knowledge"}
+    assert "knowledge.top_k" in keys["Recall"]
+    assert "knowledge.transcribe_model" in keys["Ingestion"]
+    assert "checkpoint.db_path" in keys["History"]
 
 
 def test_secrets_are_redacted_with_is_set():

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Settings ▸ Knowledge split into sub-sections** (#1408) — the 22-field Knowledge panel is
+  organized into **Recall · Ingestion · History** accordion groups instead of one wall, and
+  every settings panel now opens its first group by default (no more landing on a fully
+  collapsed panel).
 - **Tools view — MCP tools grouped by server** (#1405) — MCP tools (namespaced
   `<server>__<tool>`) now group under the server that serves them, mirroring the plugin
   grouping, instead of one flat "MCP" bucket; the group sorts after core + plugin groups
