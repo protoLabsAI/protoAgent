@@ -15,8 +15,9 @@ brand, window/tab title, agent card, and system prompt:
 
 - `identity.name` in `config/langgraph-config.yaml` (or the setup wizard), and
 - `config/SOUL.md` for persona — it's loaded into the system prompt, so you don't
-  edit `graph/prompts.py`. (Keep the `<scratch_pad>`/`<output>` protocol block if
-  you ever do touch prompts — the A2A handler's output extraction depends on it.)
+  edit `graph/prompts.py`. (The model answers natively — there is no
+  `<scratch_pad>`/`<output>` protocol to preserve; reasoning streams on the gateway's
+  `reasoning_content` channel.)
 
 **Do NOT `sed` the internal `protoagent` identifier.** It's the stable template
 name for logger namespaces, the `~/.protoagent` data dir, `PROTOAGENT_*` env

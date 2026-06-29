@@ -38,7 +38,7 @@ def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
         task_id="t1",
         context_id=server.ACTIVITY_CONTEXT,
         state="completed",
-        text="<scratch_pad>thinking</scratch_pad><output>Overnight: 3 PRs merged.</output>",
+        text="<scratch_pad>thinking</scratch_pad>Overnight: 3 PRs merged.",
         origin="scheduler",
         trigger="daily-brief",
         priority="",
@@ -75,7 +75,7 @@ def test_terminal_hook_surfaces_scheduler_resume_into_chat(tmp_path, monkeypatch
             task_id="t9",
             context_id="chat-xyz",
             state="completed",
-            text="<output>Ship arrived; sold the ore.</output>",
+            text="Ship arrived; sold the ore.",
             origin="scheduler",
             trigger="wait-resume",
         )

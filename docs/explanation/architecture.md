@@ -131,7 +131,7 @@ This extra layer of indirection exists because:
 
 - A2A consumers want a stable frame vocabulary (`kind: "status-update"` with `taskId`, not LangGraph event names)
 - The template needs to capture `on_chat_model_end` for cost-v1 emission — that event doesn't appear in A2A
-- The agent might use the streaming output differently internally (e.g. buffering for `<scratch_pad>` / `<output>` extraction) than what consumers see
+- The agent might use the streaming output differently internally (e.g. accumulating the answer for a terminal leaked-reasoning strip) than what consumers see
 
 If you strip the indirection, you'd need to push A2A concerns up into LangGraph and LangGraph concerns down into the A2A handler. Both bad.
 
@@ -144,5 +144,5 @@ If you declare a skill on the card but don't teach the LLM about it, A2A callers
 ## Related
 
 - [A2A protocol](/explanation/a2a-protocol) — why the handler looks this way
-- [Output protocol](/explanation/output-protocol) — why the streaming layer does that specific dance
+- [Model output](/explanation/output-protocol) — native reasoning + the leaked-reasoning guard
 - [Cost & trace](/explanation/cost-and-trace) — why `on_chat_model_end` matters

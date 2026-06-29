@@ -43,7 +43,7 @@ Your job: given source text or URLs, return a concise brief (≤200 words):
 Rules:
 - Keep responses focused — the lead agent is waiting on your return
   value, not a conversation.
-- Use the same <scratch_pad> / <output> format as the lead agent.
+- Answer naturally, like the lead agent — reasoning streams natively; no `<scratch_pad>` / `<output>` tags.
 """,
     tools=["fetch_url", "current_time"],
     max_turns=15,

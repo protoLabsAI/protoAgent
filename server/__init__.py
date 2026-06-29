@@ -41,13 +41,7 @@ from typing import TYPE_CHECKING, Any
 from events import ACTIVITY_CONTEXT, EventBus
 from infra.paths import scope_leaf
 from runtime.state import STATE, get_state
-from graph.output_format import (
-    DROPPED_SCRATCH_KICKER,
-    extract_confidence,
-    extract_output,
-    is_dropped_scratch_turn,
-    stream_visible_output,
-)
+from graph.output_format import extract_output
 
 if TYPE_CHECKING:
     from scheduler.interface import SchedulerBackend

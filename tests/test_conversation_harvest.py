@@ -15,12 +15,12 @@ from graph.conversation_harvest import harvest_thread, render_transcript
 def test_render_transcript_cleans_and_skips_noise():
     msgs = [
         HumanMessage(content="what is 2+2?"),
-        AIMessage(content="<scratch_pad>add them</scratch_pad><output>It's 4.</output>"),
+        AIMessage(content="<scratch_pad>add them</scratch_pad>It's 4."),
         AIMessage(content="   "),  # empty → skipped
     ]
     t = render_transcript(msgs)
     assert "User: what is 2+2?" in t
-    assert "Assistant: It's 4." in t  # extracted from <output>, scratch dropped
+    assert "Assistant: It's 4." in t  # leaked scratch_pad dropped, native answer kept
     assert "scratch_pad" not in t
 
 

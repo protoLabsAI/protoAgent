@@ -20,12 +20,7 @@ import time
 import weakref
 from typing import Any
 
-from graph.output_format import (
-    DROPPED_SCRATCH_KICKER,
-    extract_confidence,
-    extract_output,
-    is_dropped_scratch_turn,
-)
+from graph.output_format import extract_output
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
@@ -811,35 +806,6 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
         return
 
     final_text = extract_output(accumulated_raw)
-    final_raw = accumulated_raw
-
-    # Dropped-turn recovery: the model emitted only <scratch_pad>/<think> — no <output>,
-    # no tool call — so extract_output is empty and the turn would silently drop. Re-prompt
-    # once on the same thread with a kicker (history is preserved). Capped at 1 retry.
-    if not final_text and is_dropped_scratch_turn(accumulated_raw):
-        log.warning(
-            "[chat-stream] dropped scratch-only turn (session=%s) — kicker retry",
-            session_id,
-        )
-        yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
-        retry_raw = ""
-        with goal_turn(goal_active):
-            async for kind, payload in _run_turn_stream(
-                DROPPED_SCRATCH_KICKER, session_id, config, model=_model, reasoning_effort=_effort
-            ):
-                if kind == "__raw__":
-                    retry_raw = payload
-                else:
-                    yield (kind, payload)
-        recovered = extract_output(retry_raw)
-        if recovered:
-            final_text, final_raw = recovered, retry_raw
-            log.info("[chat-stream] kicker recovered the turn (session=%s)", session_id)
-        else:
-            log.warning(
-                "[chat-stream] kicker retry also empty (session=%s) — falling back",
-                session_id,
-            )
 
     # Goal mode: when an active goal exists for this session, verify the outcome after the
     # agent stops; if not met, re-invoke on the same thread with a continuation prompt until
@@ -879,7 +845,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                         yield (kind, payload)
             cont_text = extract_output(cont_raw)
             if cont_text:
-                final_text, final_raw = cont_text, cont_raw
+                final_text = cont_text
         # Append the terminal goal outcome to the answer so the A2A terminal artifact
         # carries it, matching the non-streaming path (the 🎯 status frames above are
         # transient and can coalesce).
@@ -891,12 +857,6 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # placeholder, matching the non-streaming path's _last_tool_text-or-placeholder.
     if not final_text:
         final_text = last_tool_out or "_(The agent ended the turn without a textual reply.)_"
-
-    # Self-reported confidence (from whichever pass produced the answer), yielded before
-    # "done" so the A2A handler records it on the terminal artifact's confidence-v1 DataPart.
-    confidence, explanation = extract_confidence(final_raw)
-    if confidence is not None:
-        yield ("confidence", {"confidence": confidence, "explanation": explanation})
 
     yield ("done", final_text)
 
@@ -1190,21 +1150,6 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     payload = _interrupt_payload(interrupt_val)
                     question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
                     return [{"role": "assistant", "content": f"🙋 **Input needed:** {question}"}]
-
-                # Dropped scratch-only turn (no <output>, no tool call): re-prompt
-                # once with the kicker, matching _chat_langgraph_stream.
-                if is_dropped_scratch_turn(raw):
-                    log.warning("[chat] dropped scratch-only turn (session=%s) — kicker retry", session_id)
-                    with goal_turn(goal_active):
-                        result = await STATE.graph.ainvoke(
-                            {
-                                "messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)],
-                                "session_id": session_id,
-                                **_model_extra,
-                            },
-                            config=config,
-                        )
-                    response = extract_output(_last_ai(result))
 
             # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
             # to the last tool result so the caller gets a signal, not a blank.

@@ -7,7 +7,7 @@ Understanding-oriented. Read these when you want to know *why* the template is s
 | Page | Question it answers |
 |---|---|
 | [Architecture](/explanation/architecture) | How do the A2A handler, LangGraph runtime, and LiteLLM gateway fit together? |
-| [Output protocol](/explanation/output-protocol) | Why `<scratch_pad>` / `<output>` instead of whatever the model emits? |
+| [Model output](/explanation/output-protocol) | Native reasoning, and the thin guard that strips provider-leaked `<think>` from answers |
 | [Mid-turn steering](/explanation/steering) | How can I redirect the agent mid-turn without stopping and losing its work? |
 | [LiteLLM gateway](/explanation/litellm-gateway) | Why route every call through a gateway instead of the provider SDK? |
 

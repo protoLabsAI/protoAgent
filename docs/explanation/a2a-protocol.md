@@ -32,7 +32,7 @@ Every SSE frame must carry one of:
 - `"kind": "status-update"` (state transitions, tool progress)
 - `"kind": "artifact-update"` (streaming artifacts)
 
-The assistant's answer streams incrementally: `artifact-update` frames with `append: true` carry each new suffix as the model generates it, and a final `append: false` frame replaces the artifact with the authoritative full text. Only the user-facing `<output>` region streams — the server's `stream_visible_output` holds back the `<scratch_pad>` and any partial trailing tag, and the terminal `extract_output` reconciles the result. Consumers that only want the final answer can ignore the deltas and read the last `append: false` frame.
+The assistant's answer streams incrementally: `artifact-update` frames with `append: true` carry each new suffix as the model generates it, and a final `append: false` frame replaces the artifact with the authoritative full text. The model answers natively — its reasoning streams separately as `reasoning` frames, not in the answer text — and the terminal `extract_output` strips any provider-leaked reasoning before the final replace. Consumers that only want the final answer can ignore the deltas and read the last `append: false` frame.
 
 `@a2a-js/sdk`'s `for await` loop routes frames by `kind`. Without the field, the loop silently skips every frame and consumers never attach. The template's regression test `test_message_stream_events_have_kind_discriminator` locks this in — inline dict construction is the path of least resistance and also the easiest way to forget this field.
 

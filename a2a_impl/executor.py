@@ -15,14 +15,13 @@ The producer-event contract (unchanged from the hand-rolled handler) is::
     tool_end        a tool finished   (dict {id,name,output} | str)
     delta           a worldstate-delta {domain,path,op,value}
     usage           per-LLM-call token usage {input_tokens,output_tokens,...}
-    confidence      self-reported {confidence, explanation?}
     input_required  HITL pause {question}
     done            terminal; payload is the final text
     error           terminal; payload is the error string
 
-On terminal completion the accumulated text + the cost / confidence /
-worldstate-delta extension DataParts are published as a single artifact. Tool
-events are surfaced as tool-call-v1 DataParts on the working status frames.
+On terminal completion the accumulated text + the cost / worldstate-delta /
+context extension DataParts are published as a single artifact. Tool events are
+surfaced as tool-call-v1 DataParts on the working status frames.
 """
 
 from __future__ import annotations
@@ -273,8 +272,6 @@ class ProtoAgentExecutor(AgentExecutor):
         # model's own count of all prompt tokens, incl. cache reads). Unlike the summed
         # usage above, this is the live context-window FILL, not per-turn spend (#1372).
         context_tokens = 0
-        confidence: float | None = None
-        confidence_expl: str | None = None
         llm_calls = 0
         tool_calls = 0
         models: list[str] = []
@@ -284,9 +281,9 @@ class ProtoAgentExecutor(AgentExecutor):
         # model writes, instead of the whole answer landing at turn end. Batched
         # by a small char threshold to avoid a frame per token. The terminal
         # emission then REPLACES this artifact (append=False) with the canonical
-        # final text + the cost/confidence DataParts — so the durable task and any
-        # re-fetch carry the answer exactly once (and a kicker/goal retry that
-        # changed the text still finalizes correctly).
+        # final text + the cost/context DataParts — so the durable task and any
+        # re-fetch carry the answer exactly once (and a goal retry that changed the
+        # text still finalizes correctly).
         answer_aid = f"{context.task_id or 'turn'}-answer"
         _text_buf = ""
         _answer_started = False  # first chunk creates the artifact (append=False); rest append
@@ -306,7 +303,7 @@ class ProtoAgentExecutor(AgentExecutor):
             _text_buf = ""
 
         async def _finalize(final_text: str) -> None:
-            """Close the answer artifact + emit the cost/confidence DataParts. If
+            """Close the answer artifact + emit the cost/context DataParts. If
             the text was streamed (delta frames), append ONLY the meta parts so
             concat-based consumers don't double the answer; otherwise emit the full
             text once (the non-streaming path: workflow/subagent short-circuits)."""
@@ -337,8 +334,6 @@ class ProtoAgentExecutor(AgentExecutor):
                 deltas,
                 usage if had_usage else None,
                 cost_usd,
-                confidence,
-                confidence_expl,
                 context_meta,
                 success=True,
                 duration_ms=int((time.monotonic() - started) * 1000),
@@ -441,12 +436,6 @@ class ProtoAgentExecutor(AgentExecutor):
                         model = payload.get("model", "")
                         if model and model not in models:
                             models.append(model)
-
-                elif event_type == "confidence":
-                    if isinstance(payload, dict) and payload.get("confidence") is not None:
-                        confidence = max(0.0, min(1.0, float(payload["confidence"])))
-                        expl = payload.get("explanation")
-                        confidence_expl = expl.strip() if isinstance(expl, str) and expl.strip() else None
 
                 elif event_type == "input_required":
                     await _flush_text()  # persist any answer text streamed before the pause
@@ -614,19 +603,16 @@ def _terminal_parts(
     deltas: list[dict],
     usage: dict | None,
     cost_usd: float,
-    confidence: float | None,
-    confidence_expl: str | None,
     context: dict | None = None,
     *,
     success: bool,
     duration_ms: int | None = None,
 ) -> list[Part]:
-    """Assemble the terminal artifact's parts: text first, then the cost /
-    confidence / worldstate-delta / context extension DataParts that have content.
+    """Assemble the terminal artifact's parts: text first, then the worldstate-delta /
+    cost / context extension DataParts that have content.
 
-    Mirrors the hand-rolled handler's ``_terminal_artifact_parts`` ordering
-    (text → worldstate → cost → confidence) so consumers reading parts in
-    order are unchanged; the context-v1 part trails as a pure append.
+    Ordering (text → worldstate → cost → context) is stable so consumers reading parts
+    in order are unchanged; the context-v1 part trails as a pure append.
     """
     parts: list[Part] = []
     if text:
@@ -640,16 +626,6 @@ def _terminal_parts(
                     usage,
                     duration_ms=duration_ms,
                     cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
-                    success=success,
-                )
-            )
-        )
-    if confidence is not None:
-        parts.append(
-            _ext_data_part(
-                pa.emit_confidence(
-                    confidence,
-                    explanation=confidence_expl,
                     success=success,
                 )
             )

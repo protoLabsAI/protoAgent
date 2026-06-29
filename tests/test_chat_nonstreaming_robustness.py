@@ -89,21 +89,6 @@ async def test_ask_human_interrupt_surfaces_the_question(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_scratch_only_turn_kicks_and_recovers(monkeypatch):
-    from server.chat import chat
-
-    _install_graph(
-        monkeypatch,
-        [
-            AIMessage(content="<scratch_pad>thinking, never committed</scratch_pad>"),
-            AIMessage(content="<output>recovered answer</output>"),
-        ],
-    )
-    out = await chat("do something", "sessB")
-    assert out[0]["content"] == "recovered answer"
-
-
-@pytest.mark.asyncio
 async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     from server.chat import chat
 

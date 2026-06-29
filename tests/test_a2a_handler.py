@@ -271,16 +271,15 @@ async def test_send_message_runs_to_completed_with_text_artifact():
 
 @pytest.mark.asyncio
 async def test_terminal_artifact_carries_all_extensions_in_order():
-    """text → worldstate-delta → cost-v1 → confidence-v1 → context-v1, matching
-    the order the hand-rolled handler emitted (consumers read parts in order); the
-    context-v1 readout (#1372) trails as a pure append."""
+    """text → worldstate-delta → cost-v1 → context-v1, matching the order the
+    hand-rolled handler emitted (consumers read parts in order); the context-v1
+    readout (#1372) trails as a pure append."""
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "done text")
         yield ("usage", {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001})
         yield ("usage", {"input_tokens": 140, "output_tokens": 20, "cost_usd": 0.001})
         yield ("delta", {"domain": "board", "path": "data.backlog", "op": "inc", "value": 1})
-        yield ("confidence", {"confidence": 0.9, "explanation": "sure"})
         yield ("done", "done text")
 
     app = _build_app(stream)
@@ -291,7 +290,7 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
     parts = final["artifacts"][0]["parts"]
     assert parts[0]["text"] == "done text"
     mimes = [p.get("metadata", {}).get("mimeType") for p in parts[1:]]
-    assert mimes == [pa.WORLDSTATE_DELTA_MIME, pa.COST_MIME, pa.CONFIDENCE_MIME, _CONTEXT_MIME]
+    assert mimes == [pa.WORLDSTATE_DELTA_MIME, pa.COST_MIME, _CONTEXT_MIME]
     # cost-v1 payload carries the SUMMED token usage (100+140 input) + the turn duration.
     cost = pa.parse_cost(parts[2])
     assert cost["usage"]["input_tokens"] == 240
@@ -300,7 +299,7 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
     assert isinstance(cost["durationMs"], (int, float)) and cost["durationMs"] >= 0
     # context-v1 carries the PEAK prompt size (max single call's input_tokens), the live
     # context-window fill — distinct from the summed spend above.
-    _ctx_mime, ctx = pa.read_data(parts[4])
+    _ctx_mime, ctx = pa.read_data(parts[3])
     assert _ctx_mime == _CONTEXT_MIME
     assert ctx["contextTokens"] == 140
 

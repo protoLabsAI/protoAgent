@@ -51,11 +51,12 @@ Everything that writes to the store funnels through `KnowledgeStore.add_chunk`:
 
 ### The reasoning guardrail
 
-The agent thinks inside `<scratch_pad>` and answers inside `<output>` (the
-[output protocol](output-protocol.md)). `add_chunk` **strips
-`<scratch_pad>`/`<think>` from every write** — so the model's internal reasoning
-can never reach the store (and never gets recycled into a later prompt via
-retrieval). A chunk that is *only* reasoning is dropped, not stored empty.
+The agent reasons natively — on the gateway's `reasoning_content` channel, not in
+the answer text (see [model output](output-protocol.md)). As a defense-in-depth
+guardrail, `add_chunk` **strips any leaked `<scratch_pad>`/`<think>` from every
+write** — so reasoning a provider leaks into content can never reach the store (and
+never gets recycled into a later prompt via retrieval). A chunk that is *only*
+reasoning is dropped, not stored empty.
 
 ## Retrieval
 
@@ -118,6 +119,6 @@ hybrid via `evals.sweep`. See [Eval your fork](../guides/evals.md).
 ## See also
 
 - [ADR 0021 — Agent memory: extract, don't dump](../adr/0021-agent-memory-architecture.md)
-- [Output protocol](output-protocol.md) — the `<scratch_pad>`/`<output>` contract the guardrail enforces
+- [Model output](output-protocol.md) — native reasoning + the leaked-reasoning guard this enforces
 - [Skills](../guides/skills.md) — procedural memory (Playbooks)
 - [Starter tools](../reference/starter-tools.md) — the `memory_*` tools
