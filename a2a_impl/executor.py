@@ -310,8 +310,16 @@ class ProtoAgentExecutor(AgentExecutor):
             the text was streamed (delta frames), append ONLY the meta parts so
             concat-based consumers don't double the answer; otherwise emit the full
             text once (the non-streaming path: workflow/subagent short-circuits)."""
-            # text="" yields a dataparts-only list (the text part is conditional).
-            body = "" if _answer_started else final_text
+            # If text streamed but the canonical final_text DIVERGES from what
+            # streamed (a goal-outcome note appended, a kicker / multi-iteration retry,
+            # or extract_output reshaping it), REPLACE the artifact (append=False) with
+            # the full final_text so the durable task + any tasks/get re-fetch carry the
+            # real answer, not the raw streamed deltas. When it matches (the common case)
+            # append meta-only so concat-based consumers don't double the answer.
+            diverged = _answer_started and (final_text or "").strip() != accumulated.strip()
+            replace = (not _answer_started) or diverged
+            # body="" yields a dataparts-only list (the text part is conditional).
+            body = final_text if replace else ""
             # Compaction context (#1372): the live prompt size + the configured trigger /
             # token threshold, merged into one context-v1 DataPart. Provider failures
             # degrade to "size only" — never break the turn's finalization.
@@ -340,7 +348,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 await updater.add_artifact(
                     parts,
                     artifact_id=answer_aid,
-                    append=_answer_started,
+                    append=not replace,
                     last_chunk=True,
                 )
 
