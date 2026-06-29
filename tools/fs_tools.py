@@ -21,7 +21,6 @@ Security (ADR 0007 §4):
 from __future__ import annotations
 
 import logging
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -251,17 +250,14 @@ def build_fs_tools(config) -> list:
 
             Powerful + dual-use (like execute_code) — use it for read-only
             inspection (`git status`, `gh pr list`, `br list`) and only mutate in
-            read-write projects. argv is shell-split; no shell metacharacters.
+            read-write projects. Runs via ``/bin/sh -c``, so shell operators
+            (``&&``, ``|``, ``>``, ``$(…)``) work.
             """
             try:
                 root = registry.resolve(project, ".")
             except ValueError as exc:
                 return f"Error: {exc}"
-            try:
-                argv = shlex.split(command)
-            except ValueError as exc:
-                return f"Error: cannot parse command: {exc}"
-            if not argv:
+            if not command.strip():
                 return "Error: empty command."
             # HITL approval gate (Sprint A): pause for the operator to approve
             # the command before it runs. interrupt() re-runs this fn from the
@@ -283,7 +279,7 @@ def build_fs_tools(config) -> list:
                     # status="error": the chat card then renders the declined action
                     # as a failure (red X) instead of a green "done" with decline text.
                     raise ToolException(f"Command declined by the operator — not run: {command!r}")
-            res = await _shell_run(argv, cwd=str(root), timeout=timeout)
+            res = await _shell_run(["/bin/sh", "-c", command], cwd=str(root), timeout=timeout)
             if res.error:
                 raise ToolException(res.error)
             body = res.stdout or "(no output)"
