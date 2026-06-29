@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Background batch delegation** (#1396) — `task_batch(run_in_background=True)` fans a whole batch
+  of subagents out detached, returning job ids immediately while you keep working, with each
+  completion notified back independently. A new background concurrency cap (default 3, override
+  `BACKGROUND_MAX_CONCURRENCY`) bounds how many background turns run at once so a wide fan-out can't
+  overload the gateway.
+- **Live tool-card feed for background agents** (#1402) — expanding a running background job in the
+  Background-agents dialog now follows its tool-by-tool activity live, each step shown as a tool card
+  with name, status, and output preview, instead of only the last-three collapsed pills.
+
 ### Changed
 - **Settings ▸ Knowledge split into sub-sections** (#1408) — the 22-field Knowledge panel is
   organized into **Recall · Ingestion · History** accordion groups instead of one wall, and
@@ -32,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that contributed them (Artifact, GitHub, …) instead of one flat "Plugin" bucket, and the core
   "General" bucket is split into Filesystem / Skills / Web & research subsystems. Groups order
   core → plugin → MCP, with the source shown once on each group header instead of on every row.
+- **Built-in subagents answer natively** (#1411) — the built-in subagents (researcher, antagonist,
+  verifier, synthesizer, dream, distill) no longer carry the retired `<scratch_pad>`/`<output>`
+  protocol directives; they deliberate with native reasoning and return plain answers, matching what
+  the lead agent already does. Prompt-text only — no behavior-contract change for fork callers.
 - **CI off the deprecated Node 20 action runtime** (#1391) — bumped every GitHub Actions pin across
   the nine workflow files to the lowest major that runs natively on Node 24, so runs no longer log
   GitHub's "Node.js 20 is deprecated" annotation. Notable non-`+1` jumps where the next major was
@@ -39,6 +53,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `attest-build-provenance` v1 → **v3** (its v2 leaf `actions/attest` was still Node 20). All are
   pure-runtime bumps for our usage — no input/behavior changes; the new majors need Actions Runner
   ≥ 2.327.1, which GitHub-hosted runners (all we use) already satisfy.
+
+### Removed
+- **Structured-output parser retired** (#1412) — the dead `<scratch_pad>`/`<output>` XML parser is
+  deleted (`graph/output_format.py` shrinks 473→67 lines), completing the move to native model
+  reasoning. The lead agent and subagents already stopped emitting the protocol; this drops the
+  no-longer-used `<output>` extraction, the dropped-turn retry, the `<confidence>` self-report (and
+  its A2A DataPart / chat-stream event), and the streaming-view machinery. Forkers keep only a thin
+  leaked-reasoning strip plus the `<think>`/`<scratch_pad>` guards that stop reasoning from being
+  persisted (ADR-0021) or leaking into answers.
+
+### Fixed
+- **Concurrent same-conversation turns no longer corrupt chat history** (#1410) — two
+  near-simultaneous A2A messages on the same context now run one-at-a-time via a per-conversation
+  lock instead of racing and losing history, and a reasoning-only model that emits no answer now
+  surfaces its last tool output or a placeholder instead of a silently blank reply.
+- **Chat answers no longer truncated; A2A tasks return the real final answer** (#1409) — an answer
+  that mentions a protocol tag like `<scratch_pad>` in inline code is no longer cut off in the
+  stored / A2A / Discord copy; and when the canonical final answer diverges from the streamed text
+  (goal-outcome notes, retries, reshaping), the durable A2A task artifact is replaced with the true
+  answer instead of keeping stale streamed deltas, so `tasks/get` and delegating agents see the
+  correct result.
+- **Subagent token streams isolated from the live chat** (#1394) — running concurrent subagents
+  (`task` / `task_batch`) no longer garbles the chat stream or pollutes the lead's final answer;
+  subagent reasoning and draft output stay off the main turn and return only via the delegation tool
+  card, while tool-card nesting and cost accounting stay intact.
+- **Cross-tab chat no longer clobbers itself** (#1413) — two browser tabs of the same agent share one
+  chat-store key, and the last tab to write used to overwrite the other's chats, silently losing
+  conversations. Tabs now union-merge their sessions (newest edit wins; live-streaming and
+  just-deleted chats stay authoritative) and sync each other's chats live.
+- **ACP coding-agent eviction race closed** (#1406) — concurrent chat turns no longer corrupt the
+  per-thread ACP runtime cache, and idle/LRU eviction never tears down a runtime whose turn is still
+  streaming, so a long coding turn can outlive the 30-minute idle TTL without being killed by an
+  unrelated turn.
+- **Cross-context streaming guard** (#1399) — the console drops any streaming frame whose `contextId`
+  doesn't match the active chat turn, so a stray frame from a concurrent turn or a detached
+  background job can't render into the wrong message. Frames without a `contextId` pass through, so
+  older servers and the A2A 0.3 shape are unaffected.
+- **File uploads restore the token prompt on auth failure** (#1404) — `requestForm` read the response
+  body twice in its error path, throwing "body stream already read" — which masked the real HTTP
+  error (e.g. "file too large") and, on token-gated deployments, skipped the 401 AuthGate so uploads
+  never prompted for a token. The body is read once now, surfacing the true error and re-enabling the
+  sign-in prompt.
+
+### Security
+- **Secure defaults for metrics and MCP secrets** (#1395) — `/metrics` is no longer unconditionally
+  public: on a token-gated deploy it requires `Authorization: Bearer <token>` (or
+  `PROTOAGENT_PUBLIC_METRICS=1` to keep anonymous scraping), and stdio MCP subprocesses no longer
+  inherit credential-looking env vars by default. **Breaking (token-gated deploys only):** Prometheus
+  scrapers must authenticate, and an MCP server relying on an implicitly-inherited secret must set
+  `inherit_env: true` or pass it via a per-server `env:` block. Local tokenless deploys are
+  unaffected.
+- **Backend launch-hardening — ingestion SSRF guard + credential hardening** (#1398) — web/file
+  ingestion now runs the same egress allowlist as `fetch_url` (redirects disabled and re-checked per
+  hop), closing server-side fetches of cloud-metadata and internal hosts into the knowledge base;
+  plus constant-time API-key/inbox-token comparison, PEP 508 validation of plugin pip deps to block
+  flag/VCS injection, HITL pauses preserved through the TTL sweep, and SQLite `busy_timeout` on the
+  knowledge / scheduler stores.
+- **Plugin auth-bypass and event-loop hardening** (#1401) — a plugin can no longer strip the bearer
+  gate off core routes (including the install/RCE route): `public_paths` match on namespace subtrees
+  and plugin IDs are validated against a reserved-name denylist. The `data` goal-verifier's `eval()`
+  is AST-guarded against attribute-traversal sandbox escapes, and plugin install/update/sync run off
+  the asyncio loop so one operator install no longer freezes all chat / A2A / scheduler traffic.
+- **Fail-safe plugin secret redaction** (#1403) — when plugin config discovery hits a transient
+  failure, the server fails safe instead of fail-open: `GET /api/config` blanks the entire affected
+  plugin section rather than echoing its secrets, and cached secret paths are preserved so a plugin
+  secret can't be written into the exportable main YAML in plaintext.
+- **Operator-token storage guidance** (#1414) — documents where the console's operator bearer lives:
+  the server env (`A2A_AUTH_TOKEN`) is the recommended home. The browser console caches a copy in
+  `localStorage`, an accepted residual bounded by the localhost-default bind, default-deny bearer
+  gate, and sanitized-markdown-only rendering — rotate the token on compromise and don't expose the
+  console beyond localhost without a fronting proxy.
 
 ## [0.72.0] - 2026-06-28
 
