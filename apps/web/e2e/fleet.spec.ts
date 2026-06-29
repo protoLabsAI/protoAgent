@@ -91,11 +91,11 @@ test("topbar switcher navigates to an agent by slug", async ({ page }) => {
 
 test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }) => {
   // The focused agent (host) doesn't serve /api/delegates until the plugin is enabled;
-  // enabling appends plugins.enabled via /api/config and the reload hot-mounts the routes,
-  // so the retry lands without a restart.
+  // enabling goes through the dedicated /api/plugins/{id}/enabled endpoint and the reload
+  // hot-mounts the routes, so the retry lands without a restart.
   let enabled = false;
   let delegatePosts = 0;
-  let configPosts = 0;
+  let enablePosts = 0;
   await page.route("**/api/fleet", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
@@ -108,11 +108,11 @@ test("host without delegates: add → 404 → Enable delegates → retried add s
     if (!enabled) return route.fulfill({ status: 404, json: { detail: "Not Found" } });
     return route.fulfill({ json: { ok: true } });
   });
-  await page.route("**/api/config", async (route) => {
+  await page.route("**/api/plugins/*/enabled", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
-    configPosts += 1;
+    enablePosts += 1;
     enabled = true;
-    return route.fulfill({ json: { ok: true, messages: ["config saved", "reloaded"] } });
+    return route.fulfill({ json: { ok: true, enabled: true, reloaded: true, restart_recommended: false } });
   });
 
   await openAgents(page);
@@ -125,7 +125,7 @@ test("host without delegates: add → 404 → Enable delegates → retried add s
   await expect(error).toContainText("can't hold delegates");
   await page.getByTestId("enable-delegates").click();
 
-  await expect.poll(() => configPosts).toBe(1); // plugins.enabled += delegates applied
+  await expect.poll(() => enablePosts).toBe(1); // delegates enabled via the dedicated endpoint
   await expect.poll(() => delegatePosts).toBe(2); // the 404'd attempt + the post-enable retry
   await expect(error).toHaveCount(0); // retry succeeded -> error cleared
 });
