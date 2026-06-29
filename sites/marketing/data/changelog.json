@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.75.0",
+    "date": "2026-06-29",
+    "changes": [
+      "Egress allowlist in Settings",
+      "Custom model gateway no longer blocked on the connection test",
+      "Plugin config appears without a restart"
+    ]
+  },
+  {
     "version": "v0.74.0",
     "date": "2026-06-29",
     "changes": [
