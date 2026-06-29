@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Tools view — MCP tools grouped by server** (#1404) — MCP tools (namespaced
+  `<server>__<tool>`) now group under the server that serves them, mirroring the plugin
+  grouping, instead of one flat "MCP" bucket; the group sorts after core + plugin groups
+  with an `mcp` source chip on its header.
 - **Settings IA — domain-first (ADR 0048)** (#1393) — the settings dialog is reorganized by what a
   setting *does*: an **Agent** group (Identity · Operator & access · Model · Behavior · Knowledge ·
   Integrations), a **Capabilities** group (Tools · MCP · Skills · Subagents · Delegates), a host-only

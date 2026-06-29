@@ -159,13 +159,21 @@ _TOOL_CATEGORY = {
 }
 
 
-def _tool_category(name: str, source: str, plugin_owner: str | None = None) -> str:
+def _tool_category(
+    name: str, source: str, plugin_owner: str | None = None, mcp_servers: list[str] | None = None
+) -> str:
     # Plugin tools group by the plugin that contributed them (its display name), so the
     # console organizes by plugin instead of one flat "Plugin" dump.
     if source == "plugin":
         return plugin_owner or "Plugin"
     if source == "mcp":
-        return "MCP"
+        # MCP tools are namespaced "<server>__<tool>" (tool_name_prefix=True), so group by
+        # the originating server — match the known server names first (handles a name that
+        # itself contains "__"), else fall back to the prefix before the first "__".
+        for s in mcp_servers or []:
+            if name.startswith(f"{s}__"):
+                return s
+        return name.split("__", 1)[0] if "__" in name else "MCP"
     # Core tools group by subsystem; the long tail falls back to "General".
     return _TOOL_CATEGORY.get(name, "General")
 
@@ -188,6 +196,9 @@ def _operator_tools_list():
     mcp_names = {getattr(t, "name", None) for t in (getattr(STATE, "mcp_tools", None) or [])}
     # tool name -> owning plugin display name (Tools tab grouping), stamped by the loader.
     plugin_owner = getattr(STATE, "plugin_tool_owner", None) or {}
+    # Configured MCP server names (mcp_meta = [{name, transport, tool_count}]) → group MCP
+    # tools by the server that serves them, mirroring the plugin grouping.
+    mcp_servers = [m.get("name") for m in (getattr(STATE, "mcp_meta", None) or []) if m.get("name")]
 
     def add(tool, source=None):
         name = getattr(tool, "name", None)
@@ -201,7 +212,7 @@ def _operator_tools_list():
                 "name": name,
                 "description": desc,
                 "source": src,
-                "category": _tool_category(name, src, plugin_owner.get(name)),
+                "category": _tool_category(name, src, plugin_owner.get(name), mcp_servers),
             }
         )
 

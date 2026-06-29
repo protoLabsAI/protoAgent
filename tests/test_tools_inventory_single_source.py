@@ -83,7 +83,19 @@ def test_plugin_tools_group_by_owning_plugin():
     assert _tool_category("github_create_pr", "plugin", "GitHub") == "GitHub"
     # No owner recorded → the generic fallback.
     assert _tool_category("mystery", "plugin", None) == "Plugin"
-    assert _tool_category("echo__ping", "mcp") == "MCP"
+
+
+def test_mcp_tools_group_by_server():
+    """MCP tools (namespaced <server>__<tool>) group by the originating server."""
+    from operator_api.console_handlers import _tool_category
+
+    # Matched against the known server list (handles a server name containing "__").
+    assert _tool_category("echo__ping", "mcp", None, ["echo"]) == "echo"
+    assert _tool_category("we__ird__t", "mcp", None, ["we__ird"]) == "we__ird"
+    # No server list → fall back to the prefix before the first "__".
+    assert _tool_category("echo__ping", "mcp", None, []) == "echo"
+    # A bare (un-namespaced) name with no match → the generic MCP bucket.
+    assert _tool_category("loner", "mcp", None, []) == "MCP"
 
 
 def test_inventory_uses_plugin_owner_map(monkeypatch):
