@@ -68,8 +68,9 @@ registerSlashCommand({
     chatStore.setSessionBypassPermissions(ctx.sessionId, next);
     ctx.noteToThread(
       next
-        ? "⚠️ **Bypass permissions ON** for this tab — `run_command` runs **without approval** until you turn it off with `/bypass off`. (A host can forbid this entirely via `filesystem.bypass_allowed: false`.)"
+        ? "**Bypass permissions ON** for this tab — `run_command` runs **without approval** until you turn it off with `/bypass off`. (A host can forbid this entirely via `filesystem.bypass_allowed: false`.)"
         : "Bypass permissions **off** — tool approvals will prompt again.",
+      { tone: next ? "warning" : "info" },
     );
     ctx.focusComposer();
     return true;
