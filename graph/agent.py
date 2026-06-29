@@ -7,7 +7,7 @@ Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import InjectedState
 
@@ -275,13 +275,16 @@ async def _run_subagent(
 
         messages = result.get("messages", [])
 
+        # The delegation's answer is the subagent's last AIMessage with content —
+        # not "any message with content" (which could surface a raw tool dump) and
+        # not gated on a fragile startswith("Error") text sniff (which discarded a
+        # legitimate answer that opened with "Error"). Hard failures already raise
+        # SubagentError below, so they never reach here.
         body = None
         for msg in reversed(messages):
-            if hasattr(msg, "content") and msg.content:
-                content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                if content and not content.startswith("Error"):
-                    body = content
-                    break
+            if isinstance(msg, AIMessage) and msg.content:
+                body = msg.content if isinstance(msg.content, str) else str(msg.content)
+                break
 
         if body is None:
             return f"[{subagent_type} completed: {description}] -- no output produced."
@@ -572,7 +575,12 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             delegations.unregister(session_id, tool_call_id)
 
     @tool
-    async def task_batch(tasks: list[dict], tool_call_id: Annotated[str, InjectedToolCallId] = "") -> str:
+    async def task_batch(
+        tasks: list[dict],
+        run_in_background: bool = False,
+        state: Annotated[Any, InjectedState] = None,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
+    ) -> str:
         """Delegate several independent tasks to subagents concurrently.
 
         Prefer this over multiple sequential ``task`` calls whenever the
@@ -587,15 +595,62 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 - ``description`` (str, required): short summary of the task
                 - ``prompt`` (str, required): detailed instructions
                 - ``subagent_type`` (str, optional): defaults to "researcher"
+            run_in_background: Set True to fan the whole batch out DETACHED — every
+                task spawns as its own background agent and this returns IMMEDIATELY
+                with their job ids, instead of blocking until they finish. Use it for a
+                wide fan-out of long / independent / quota-heavy work (research several
+                topics at once) you don't need to wait on; you'll be notified as each
+                finishes. When you set this, do NOT poll, re-check, or re-spawn — just
+                continue. Leave False (the default) when you need the results in this
+                turn. Concurrency is capped either way.
 
         Returns the results concatenated in the same order as ``tasks``, each
         prefixed with its 1-based index. Individual failures are reported
-        inline and do not abort the batch.
+        inline and do not abort the batch. With ``run_in_background`` the return is
+        instead the list of started job ids (results arrive later as notifications).
         """
         if not tasks:
             return "Error: task_batch called with an empty task list."
         if not isinstance(tasks, list):
             return "Error: 'tasks' must be a list of task objects."
+
+        # Background fan-out (ADR 0050): spawn every spec detached and return immediately
+        # with the job ids — the multi-task analog of task(run_in_background=True), through
+        # the same BackgroundManager.spawn. Each completion drains back into this session
+        # independently (one task-notification per job); the manager's concurrency cap bounds
+        # how many run at once. Degrades to the foreground batch below when no manager exists.
+        if run_in_background and background_mgr is not None:
+            session_id = _session_id_from(state)
+            lines: list[str] = []
+            started = 0
+            for i, spec in enumerate(tasks, start=1):
+                if not isinstance(spec, dict):
+                    lines.append(f"Task {i}: skipped — each task must be an object.")
+                    continue
+                desc = spec.get("description") or "(no description)"
+                prm = spec.get("prompt")
+                st = spec.get("subagent_type", "researcher")
+                if not prm:
+                    lines.append(f"Task {i} ({desc}): skipped — missing 'prompt'.")
+                    continue
+                if st not in SUBAGENT_REGISTRY:
+                    lines.append(f"Task {i} ({desc}): skipped — unknown subagent '{st}'.")
+                    continue
+                job_id = await background_mgr.spawn(
+                    origin_session=session_id,
+                    subagent_type=st,
+                    description=desc,
+                    prompt=prm,
+                )
+                started += 1
+                lines.append(f"Task {i}: {job_id} ({st}: {desc})")
+            if not started:
+                return "No background tasks started:\n" + "\n".join(lines)
+            return (
+                f"Started {started} background agent(s), running detached. You will be "
+                "notified automatically as each finishes — do NOT poll, re-check, or "
+                "re-spawn; continue with other work.\n" + "\n".join(lines)
+            )
 
         sem = asyncio.Semaphore(max_concurrency)
 

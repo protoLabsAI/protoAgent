@@ -59,4 +59,14 @@ describe("applyProgress", () => {
     for (let i = 0; i < 20; i++) p = applyProgress(p, { phase: "tool_start", tool_call_id: `t${i}` });
     expect(p.length).toBe(8);
   });
+
+  it("captures the tool output on tool_end (for the expandable feed) and preserves it", () => {
+    let p = applyProgress([], { phase: "tool_start", tool: "web_search", tool_call_id: "tc1" });
+    expect(p[0].output).toBeUndefined(); // no output while running
+    p = applyProgress(p, { phase: "tool_end", tool: "web_search", tool_call_id: "tc1", output: "found 3 results" });
+    expect(p[0]).toMatchObject({ id: "tc1", done: true, output: "found 3 results" });
+    // a later frame without output for the same tool keeps the captured value
+    p = applyProgress(p, { phase: "tool_end", tool: "web_search", tool_call_id: "tc1" });
+    expect(p[0].output).toBe("found 3 results");
+  });
 });

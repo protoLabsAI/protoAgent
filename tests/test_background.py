@@ -283,6 +283,49 @@ class TestManager:
         await _drain_fire_tasks(mgr)
         assert mgr.store.get(jid).status == "failed"
 
+    async def test_fire_respects_concurrency_cap(self, tmp_path, monkeypatch):
+        """A fan-out of background jobs runs at most ``max_concurrency`` turns at once —
+        the semaphore gates the self-POST, which holds its slot for the whole turn. Without
+        the cap all N would POST concurrently and hammer the gateway."""
+        import httpx
+
+        live = {"n": 0, "peak": 0}
+
+        class _SlowClient:
+            def __init__(self, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                live["n"] += 1
+                live["peak"] = max(live["peak"], live["n"])
+                await asyncio.sleep(0.03)  # stand in for a whole turn running server-side
+                live["n"] -= 1
+                return _FakeResponse(200)
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _SlowClient(**kw))
+        mgr = _manager(tmp_path, max_concurrency=2)
+        for i in range(6):
+            await mgr.spawn(origin_session="s", subagent_type="researcher", description=f"d{i}", prompt="p")
+        # Drain all six fires (longer budget than the default helper — 6 jobs / cap 2).
+        for _ in range(400):
+            if not mgr._fire_tasks:
+                break
+            await asyncio.sleep(0.01)
+        assert not mgr._fire_tasks, "fires did not all complete"
+        assert 1 <= live["peak"] <= 2, f"peak concurrency {live['peak']} should be capped at 2"
+
+    async def test_default_concurrency_from_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BACKGROUND_MAX_CONCURRENCY", "7")
+        assert _manager(tmp_path)._max_concurrency == 7
+        monkeypatch.setenv("BACKGROUND_MAX_CONCURRENCY", "bogus")
+        assert _manager(tmp_path)._max_concurrency == 3  # default on a bad value
+
 
 # ── Phase 2: autonomous idle-wake (server/a2a.py) ────────────────────────────
 
@@ -597,3 +640,64 @@ async def test_background_task_stamps_the_turn_session_as_origin(monkeypatch):
         config={"configurable": {"thread_id": "t1"}},
     )
     assert bg.seen_origin == "sess-BG"
+
+
+# ── task_batch(run_in_background=True) stamps the session + spawns every spec ──
+# The batch background path reads origin_session from injected graph state (same
+# contextvar-empty-in-tool-body class as the single task). Drive a REAL graph so a
+# monkeypatch can't mask it.
+
+
+class _RecordingBatchBG:
+    def __init__(self):
+        self.spawns: list[dict] = []
+
+    async def spawn(self, *, origin_session, subagent_type, description, prompt):
+        self.spawns.append({"origin": origin_session, "subagent_type": subagent_type, "description": description})
+        return f"bg-{len(self.spawns)}"
+
+
+@pytest.mark.asyncio
+async def test_background_batch_stamps_session_and_spawns_all(monkeypatch):
+    from unittest.mock import patch
+
+    from langchain_core.messages import HumanMessage
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from graph.config import LangGraphConfig
+
+    batch_call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "task_batch",
+                "args": {
+                    "tasks": [
+                        {"description": "topic a", "prompt": "research a"},
+                        {"description": "topic b", "prompt": "research b", "subagent_type": "researcher"},
+                    ],
+                    "run_in_background": True,
+                },
+                "id": "c1",
+                "type": "tool_call",
+            }
+        ],
+    )
+    fake = _ToolFake(messages=iter([batch_call, AIMessage(content="all three kicked off, moving on")]))
+    bg = _RecordingBatchBG()
+    with patch("graph.agent.create_llm", lambda *a, **k: fake):
+        from graph.agent import create_agent_graph
+
+        graph = create_agent_graph(
+            LangGraphConfig(),
+            include_subagents=True,
+            background_mgr=bg,
+            checkpointer=MemorySaver(),
+        )
+    await graph.ainvoke(
+        {"messages": [HumanMessage("research these in the background")], "session_id": "sess-BB"},
+        config={"configurable": {"thread_id": "t1"}},
+    )
+    assert len(bg.spawns) == 2
+    assert {s["origin"] for s in bg.spawns} == {"sess-BB"}
+    assert {s["description"] for s in bg.spawns} == {"topic a", "topic b"}

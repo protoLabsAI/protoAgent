@@ -28,59 +28,61 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[>]` deferred (
 
 Additive guards / one-liners; near-zero regression risk, high security ROI.
 
-- [ ] **Ingestion SSRF guard** — `High` · churn Low · LOE S — `ingestion/engine.py:334-398`.
+- [x] **Ingestion SSRF guard** — `High` · churn Low · LOE S — `ingestion/engine.py:334-398`.
   Route `extract_url`/`_http_fetch` through the existing `security.egress.check_url`
   (as `fetch_url` already does), set `follow_redirects=False` and re-check every hop.
   Closes internal/metadata-fetch-into-KB. *(Two finders flagged this; asymmetric with
   the already-guarded `fetch_url` tool.)*
-- [ ] **`KnowledgeStore` missing `busy_timeout`** — Med · Low · XS — `knowledge/store.py:273`.
+- [x] **`KnowledgeStore` missing `busy_timeout`** — Med · Low · XS — `knowledge/store.py:273`.
   `PRAGMA busy_timeout=5000` in `_connect` (concurrent writes silently lost today;
   error swallowed at `400-402`).
-- [ ] **Scheduler raw `database is locked`** — Low · Low · XS — `scheduler/local.py:245`.
+- [x] **Scheduler raw `database is locked`** — Low · Low · XS — `scheduler/local.py:245`.
   Same PRAGMA in `LocalScheduler._connect`.
-- [ ] **Non-constant-time credential compare** — Low · Low · XS — `a2a_impl/auth.py:218`,
+- [x] **Non-constant-time credential compare** — Low · Low · XS — `a2a_impl/auth.py:218`,
   `operator_api/console_handlers.py:389`. Use `hmac.compare_digest` for X-API-Key and
   the inbox token (bearer already does).
-- [ ] **`requestForm` double-body-read masks 401** — Med · Low · XS–S —
+- [x] **`requestForm` double-body-read masks 401** — Med · Low · XS–S —
   `apps/web/src/lib/api.ts:345`. Read body once (`text()` then best-effort
   `JSON.parse`); restores the real error + the 401 AuthGate on uploads.
-- [ ] **Boot TTL sweep deletes HITL tasks** — Low · Low · XS–S —
+- [x] **Boot TTL sweep deletes HITL tasks** — Low · Low · XS–S —
   `a2a_impl/stores.py:291`. Exclude `INPUT_REQUIRED`/`AUTH_REQUIRED` from
   `sweep_expired_tasks` (mirror reconcile's preserved states).
-- [ ] **`requires_pip` arg injection** — Med · Low · S — `graph/plugins/installer.py:630`.
+- [x] **`requires_pip` arg injection** — Med · Low · S — `graph/plugins/installer.py:630`.
   Validate each entry as a plain PEP 508 requirement: reject leading `-`
   (`--index-url`/`-e`), reject VCS/URL/`@`/`file:` refs, pass `--` before specs.
-- [ ] **Subagent return-value mis-parse** — Low · Med · S — `graph/agent.py:278`.
+- [x] **Subagent return-value mis-parse** — Low · Med · S — `graph/agent.py:278`.
   Select the last `AIMessage` (not "any message with content"); drop the
   `startswith("Error")` heuristic — use the `SubagentError` path for failures.
-- [ ] **Palette deep-link dead-ends on workspace console** — Low · Low · S —
-  `apps/web/src/app/usePaletteRegistry.ts:142`. Gate `box:fleet`/`box:telemetry`
-  registrations behind `isHostConsole()`. *(Surfaced on the settings-IA branch.)*
+- [>] **Palette deep-link dead-ends on workspace console** — Low · Low · S —
+  `apps/web/src/app/usePaletteRegistry.ts`. *(Deferred: `_link` registers at module-import,
+  so an `isHostConsole()` gate there is timing-fragile; the clean fix is a run-time guard in
+  `SettingsSurface`. Cosmetic — low priority.)*
 - [ ] **SSE token in URL** — Low · Low · XS — `apps/web/src/lib/events.ts:70`. Scrub
   `token` from server access logs (cookie-bound SSE token is a bigger change; defer).
   Already mitigated by 30s HMAC TTL + `/api/events`-only scope.
 
 ## Batch 2 — Med churn × Low–Med LOE → contained, needs regression tests (one PR each)
 
-- [ ] **Plugin `public_paths` prefix-match auth bypass** — `High` · churn Med · LOE S–M —
+- [x] **Plugin `public_paths` prefix-match auth bypass** — `High` · churn Med · LOE S–M —
   `graph/plugins/manifest.py:141-146` + `a2a_impl/auth.py:88-100`. Boundary-less
   `startswith` lets a plugin with `id: install` + `public_paths:["/api/plugins/install"]`
   strip the bearer gate off the core install (RCE) route. Fix: require a trailing-slash
   boundary (`/api/plugins/{id}/`), validate `plugin_id` against `^[a-z0-9][a-z0-9_-]*$`,
   reserved-name denylist (`install`,`installed`,`sync`,`updates`,`catalog`,`enabled`).
   Test that legit plugin public pages still pass.
-- [ ] **Secret-redaction fail-open trio** — Med×2/Low · Med · S–M — `graph/config_io.py`.
-  Root cause: discovery-empty is indistinguishable from discovery-failure. Fix all three:
-  (a) `GET /api/config` echoes plugin secrets when schema discovery returns empty
-  (`423-438`) → redact the whole section when no schema; (b) dead `secret_paths()` `#877`
-  fallback cache (`139-153`) → make discovery signal failure distinctly; (c) MCP inline
-  env/header secrets returned + stored unredacted (`386-391`) → route to `secrets.yaml`
-  / mask.
-- [ ] **Plugin install/update/sync block the event loop** — `High` · Med · S–M —
+- [x] **Secret-redaction fail-open (a)+(b)** — Med×2 · Med · S–M — `graph/config_io.py` +
+  `graph/plugins/pconfig.py`. Root cause: discovery-empty was indistinguishable from
+  discovery-failure. Added `strict=True` discovery that PROPAGATES errors: (a) `GET
+  /api/config` now blanks the whole plugin section on discovery failure (fail-safe);
+  (b) `secret_paths()` `#877` cache fallback actually triggers now (was dead).
+  - [>] **(c) MCP inline env/header secrets** unredacted in `config_to_dict` (`386-391`) —
+    deferred (Low; live YAML is gitignored, and masking needs save-roundtrip / blank-means-
+    unchanged handling so a re-save doesn't clobber the stored value).
+- [x] **Plugin install/update/sync block the event loop** — `High` · Med · S–M —
   `operator_api/plugin_routes.py:192,324,337,382` → `graph/plugins/installer.py`.
   `await asyncio.to_thread(installer.…)` in the handlers + bounded subprocess timeouts
   on clone/ls-remote. Self-DoS: one install freezes all chat/A2A/scheduler.
-- [ ] **`data` goal-verifier `eval()` escapable sandbox** — Low (adj) · Low–Med · S —
+- [x] **`data` goal-verifier `eval()` escapable sandbox** — Low (adj) · Low–Med · S —
   `graph/goals/verifiers.py:178-184`. Replace `eval()` with the AST-whitelist approach
   from `tools/lg_tools.py:_safe_eval` (reject `Attribute`/`Call`/comprehensions); fix the
   misleading "blocks exec/eval" comment. *(Low on its own — the sibling `command`
@@ -101,16 +103,25 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
   **Breaks servers that relied on an implicitly-inherited secret env var** — they set
   `inherit_env: true` or a per-server `env:`. *(Authorized for launch; shipped on this
   branch.)*
-- [ ] **"Operator-only" goal trust gate** — `High` · High · M — `server/chat.py:692,1036`
+- [>] **"Operator-only" goal trust gate** — `High` · High · M — `server/chat.py:692,1036`
   → `graph/goals/controller.py:98`. Thread `trusted: bool` from the calling surface into
   `parse_control`; refuse `command`/`test`/`ci`/`data` verifiers on the A2A and `/v1`
   paths (route through `set_goal_safe`'s allowlist). Today a shared-token A2A peer gets
   `bash -c` on the host. Pairs with the Batch 2 `eval` fix.
-- [ ] **ACP runtime eviction race** — Med · Med–High · M — `server/chat.py:102-141`,
+  **DEFERRED — needs a decision (surfaced to the user):** the console's *streaming* chat
+  goes through `/a2a` with the operator bearer (ADR 0045), i.e. the SAME path + SAME token
+  a federated peer uses — so console-vs-peer is indistinguishable by code-path or token. A
+  clean gate would break the operator's own console `/goal command`, and the `/a2a`
+  federation vector (the main one) can't be gated without a **separate operator-vs-federation
+  token** model. (`data`'s eval escape is already closed in Batch 2, so `data` is no longer
+  an RCE sink — only `command`/`test`/`ci` remain.)
+- [>] **ACP runtime eviction race** — Med · Med–High · M — `server/chat.py:102-141`,
   `runtime/acp_runtime.py:216`. LRU/idle eviction closes an in-flight runtime mid-turn;
   registry dicts mutated lock-free. Add a per-thread busy flag/refcount (never evict
   busy) + `asyncio.Lock`; `pop(tid, None)` to tolerate concurrent eviction. ACP opt-in
-  bounds blast radius.
+  bounds blast radius. *(Deferred this pass: the never-evict-busy half needs a ~65-line
+  reindent of the ACP turn body in the streaming generator — high-churn, near the Batch 4
+  area; narrow/opt-in so low priority.)*
 
 ## Batch 4 — High churn × Med–High LOE → design-first, isolate (own initiative)
 

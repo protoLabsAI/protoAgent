@@ -29,6 +29,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -78,6 +79,13 @@ _PLUGIN_PUBLIC: list[str] = []
 # SSE token lifetime (seconds).
 _SSE_TOKEN_LIFETIME = 30
 
+# A plugin public-prefix must be a real SUBTREE of its own namespace —
+# ``/plugins/<id>/…`` or ``/api/plugins/<id>/…`` with a trailing slash after the
+# id segment — so a bare core route like ``/api/plugins/install`` can never be
+# prefix-matched into the exempt set (defence-in-depth behind the manifest
+# parser, which applies the same boundary).
+_PLUGIN_NS_RE = re.compile(r"^/(?:api/)?plugins/[^/]+/")
+
 
 def set_public_prefixes(prefixes) -> None:
     """Replace the plugin-declared public-prefix set (idempotent + reload-safe).
@@ -90,10 +98,12 @@ def set_public_prefixes(prefixes) -> None:
         s = str(p).strip()
         if not s:
             continue
-        if s.startswith("/plugins/") or s.startswith("/api/plugins/"):
+        if _PLUGIN_NS_RE.match(s):
             cleaned.append(s)
         else:
-            logger.warning("[a2a] ignoring plugin public prefix %r — must live under /plugins/<id>/", s)
+            logger.warning(
+                "[a2a] ignoring plugin public prefix %r — must be under /plugins/<id>/ or /api/plugins/<id>/", s
+            )
     _PLUGIN_PUBLIC[:] = cleaned
     if cleaned:
         logger.info("[a2a] %d plugin-declared auth-exempt path(s): %s", len(cleaned), ", ".join(cleaned))
@@ -238,7 +248,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
 
         # X-API-Key (legacy) — enforced only when configured.
         api_key = _API_KEY[0]
-        if api_key and request.headers.get("x-api-key") != api_key:
+        if api_key and not hmac.compare_digest(request.headers.get("x-api-key", "") or "", api_key):
             return _unauthorized("Unauthorized")
 
         # Bearer — enforced only when configured.

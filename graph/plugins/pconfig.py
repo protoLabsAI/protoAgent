@@ -61,14 +61,17 @@ class PluginConfigSchema:
     guide_url: str = ""  # optional setup-guide link rendered next to the group (ADR 0059)
 
 
-def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[PluginConfigSchema]:
+def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: bool = False) -> list[PluginConfigSchema]:
     """Config schemas of **active** plugins that declare config/secrets/settings.
 
     ``roots`` are plugin directories (bundle + live); ``enabled_ids`` the operator's
     ``plugins.enabled`` set (a manifest ``enabled: true`` also counts);
     ``disabled_ids`` (``plugins.disabled``) turns one off regardless. A section
-    colliding with a built-in (or a second plugin) is dropped (logged). Never
-    raises — bad discovery yields no plugin config, not a broken boot.
+    colliding with a built-in (or a second plugin) is dropped (logged). Never raises
+    by default — bad discovery yields no plugin config, not a broken boot. With
+    ``strict=True`` a discovery ERROR propagates instead of returning ``[]``, so a
+    caller (secret routing / config redaction) can tell a real failure from a
+    genuinely-empty result and fail SAFE rather than open.
     """
     try:
         from graph.plugins.loader import discover_plugins
@@ -106,6 +109,8 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[Plugin
         return out
     except Exception:  # noqa: BLE001 — discovery is best-effort
         log.exception("[plugins] config-schema discovery failed")
+        if strict:
+            raise
         return []
 
 
@@ -136,12 +141,16 @@ def live_plugin_config_schemas() -> list[PluginConfigSchema]:
         return []
 
 
-def installed_plugin_config_schemas() -> list[PluginConfigSchema]:
+def installed_plugin_config_schemas(*, strict: bool = False) -> list[PluginConfigSchema]:
     """Like ``live_plugin_config_schemas`` but for EVERY installed plugin — enabled or
     not. The SECRET-ROUTING + config-redaction paths use this so a secret saved for a
     currently-DISABLED plugin is still pulled into ``secrets.yaml`` (never left in
     plaintext in the live config) and never echoed back to the API. The settings UI
-    keeps the enabled-only view (you don't configure a plugin that's off)."""
+    keeps the enabled-only view (you don't configure a plugin that's off).
+
+    ``strict=True`` propagates a discovery error (vs returning ``[]``) so the
+    secret-routing / redaction callers can fail SAFE instead of treating a transient
+    failure as "no secrets"."""
     try:
         from graph.config_io import _live_config_dir, load_yaml_doc
         from graph.plugins.loader import discover_plugins
@@ -149,7 +158,9 @@ def installed_plugin_config_schemas() -> list[PluginConfigSchema]:
         data = load_yaml_doc() or {}
         roots = plugin_roots_from(_live_config_dir(), str((data.get("plugins") or {}).get("dir") or ""))
         all_ids = {m.id for m in discover_plugins(roots)}
-        return discover_plugin_config(roots, all_ids, set())  # every installed plugin, on or off
+        return discover_plugin_config(roots, all_ids, set(), strict=strict)  # every installed plugin, on or off
     except Exception:  # noqa: BLE001
         log.exception("[plugins] installed config-schema discovery failed")
+        if strict:
+            raise
         return []

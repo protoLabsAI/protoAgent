@@ -48,6 +48,10 @@ _ALLOWED_SCHEMES = ("https://", "http://", "git://", "ssh://", "git@", "file://"
 # (source_url, ref) so repeated polls don't ls-remote the same source every call.
 _LSREMOTE_TIMEOUT_S = 5.0
 _LSREMOTE_TTL_S = 300.0  # ~5 min
+# A git clone of a slow/large remote is bounded so it can't hang an install thread
+# indefinitely (the operator install/update routes offload to a thread, so this
+# caps the worst case rather than wedging a pool worker forever).
+_CLONE_TIMEOUT_S = 600.0
 _lsremote_cache: dict[tuple[str, str], tuple[float, str]] = {}
 
 
@@ -174,13 +178,13 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     if ref and _SHA_RE.match(ref):
         # A specific commit: full clone (shallow can't reliably check out an
         # arbitrary SHA), then check it out.
-        _git("clone", "--no-recurse-submodules", url, str(dest))
+        _git("clone", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
         _git("checkout", ref, cwd=dest)
     elif ref:
         # A tag or branch: shallow clone of just that ref.
-        _git("clone", "--depth", "1", "--no-recurse-submodules", "--branch", ref, url, str(dest))
+        _git("clone", "--depth", "1", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S)
     else:
-        _git("clone", "--depth", "1", "--no-recurse-submodules", url, str(dest))
+        _git("clone", "--depth", "1", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
@@ -603,6 +607,29 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     return {"id": plugin_id, "removed": removed, "deps_left": deps_left, "purged": purge}
 
 
+def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
+    """Reject ``requires_pip`` entries that aren't plain package requirements — a
+    pip option (``--index-url``/``-e``), a VCS/URL/direct reference, or junk — so a
+    plugin manifest can't inject pip flags (index hijack) or arbitrary build code
+    beyond the named packages an operator reviewed. ``--`` before the specs in the
+    pip argv is the belt to this suspenders."""
+    for d in deps:
+        s = str(d).strip()
+        low = s.lower()
+        if not s or s.startswith("-"):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} looks like a pip option, not a package."
+            )
+        if "://" in s or "@" in s or low.startswith(("git+", "hg+", "svn+", "bzr+", "file:")):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} is a VCS/URL/direct reference, which is not allowed."
+            )
+        if not _PKG_NAME_RE.match(s):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} is not a valid PEP 508 package requirement."
+            )
+
+
 def install_deps(plugin_id: str) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Returns the deps."""
@@ -616,6 +643,7 @@ def install_deps(plugin_id: str) -> list[str]:
     deps = list(manifest.requires_pip)
     if not deps:
         return []
+    _validate_pip_specs(plugin_id, deps)
     # Frozen runtime (desktop): no pip. The deps must already be bundled — confirm
     # (nothing to install) or refuse with a clear message (ADR 0058 D2).
     if _frozen_like():
@@ -628,7 +656,7 @@ def install_deps(plugin_id: str) -> list[str]:
         log.info("[plugins] %s deps already in the runtime — nothing to install", plugin_id)
         return deps
     proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", *deps],
+        [sys.executable, "-m", "pip", "install", "--", *deps],
         capture_output=True,
         text=True,
     )

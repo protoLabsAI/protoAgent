@@ -23,6 +23,9 @@ _FETCH_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
 # ffmpeg audio-extraction (video → audio) is bounded so a pathological file can't
 # wedge an ingest thread.
 _FFMPEG_TIMEOUT_S = 600.0
+# Cap redirect chains so a fetched URL can't bounce us toward an internal target
+# after the initial egress check — every hop is re-checked. See _http_fetch.
+_MAX_REDIRECTS = 5
 
 
 class IngestionError(Exception):
@@ -389,10 +392,28 @@ def _media_filename(url: str, url_ext: str, default_ext: str) -> str:
 def _http_fetch(url: str) -> tuple[bytes, str]:
     import httpx
 
-    with httpx.Client(follow_redirects=True, timeout=_FETCH_TIMEOUT_S, headers={"User-Agent": _FETCH_UA}) as client:
-        resp = client.get(url)
-        resp.raise_for_status()
-        content = resp.content
-        if len(content) > _MAX_FETCH_BYTES:
-            raise ExtractionError(f"document too large ({len(content)} bytes > {_MAX_FETCH_BYTES})")
-        return content, resp.headers.get("content-type", "")
+    from security import egress
+
+    # SSRF guard: ingestion fetches an operator/user-supplied URL server-side and
+    # persists the response, so it gets the same destination policy as the
+    # ``fetch_url`` tool — reject private/loopback/link-local/cloud-metadata hosts
+    # (unless egress-allowlisted), and re-check every redirect hop manually so a
+    # public URL can't 30x-bounce us onto an internal target.
+    err = egress.check_url(url)
+    if err:
+        raise UnsupportedSource(err)
+    with httpx.Client(follow_redirects=False, timeout=_FETCH_TIMEOUT_S, headers={"User-Agent": _FETCH_UA}) as client:
+        for _ in range(_MAX_REDIRECTS + 1):
+            resp = client.get(url)
+            if resp.is_redirect:
+                url = str(resp.url.join(resp.headers.get("location", "")))
+                err = egress.check_url(url)
+                if err:
+                    raise UnsupportedSource(err)
+                continue
+            resp.raise_for_status()
+            content = resp.content
+            if len(content) > _MAX_FETCH_BYTES:
+                raise ExtractionError(f"document too large ({len(content)} bytes > {_MAX_FETCH_BYTES})")
+            return content, resp.headers.get("content-type", "")
+    raise ExtractionError(f"too many redirects (> {_MAX_REDIRECTS}) fetching {url}")

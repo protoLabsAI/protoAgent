@@ -180,7 +180,26 @@ def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
     deps = installer.install_deps("demo_ext")
     assert deps == ["requests>=2", "rich"]
     assert calls and calls[0][1:4] == ["-m", "pip", "install"]
-    assert calls[0][4:] == ["requests>=2", "rich"]
+    # `--` ends pip option parsing so a manifest dep can't be read as a flag.
+    assert calls[0][4:] == ["--", "requests>=2", "rich"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "--index-url=https://evil.example/simple",
+        "-e .",
+        "git+https://evil.example/pkg.git",
+        "foo @ https://evil.example/foo.whl",
+        "https://evil.example/foo.tar.gz",
+    ],
+)
+def test_install_deps_rejects_non_pep508_requires_pip(env, bad):
+    """A plugin manifest can't smuggle pip options / VCS+URL refs through requires_pip."""
+    repo = _make_plugin_repo(env, manifest_extra=f"requires_pip: ['{bad}']\n")
+    installer.install(str(repo))
+    with pytest.raises(installer.InstallError):
+        installer.install_deps("demo_ext")
 
 
 def test_uninstall_removes_enabled_ref_keeps_config(env):

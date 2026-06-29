@@ -125,7 +125,7 @@ function handleApiGet(pathname, fleet = FLEET) {
         tools: [
           { name: "web_search", description: "Search the web.", source: "core", category: "General" },
           { name: "memory_recall", description: "Search long-term memory.", source: "core", category: "Memory" },
-          { name: "echo__ping", description: "Echo ping.", source: "mcp", category: "MCP" },
+          { name: "echo__ping", description: "Echo ping.", source: "mcp", category: "echo" },
         ],
         count: 3,
       };

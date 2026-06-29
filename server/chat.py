@@ -381,6 +381,20 @@ async def _run_turn_stream(
                         "tool_start",
                         {"id": tcid, "name": tcname, "input": "", **({"parentId": parent_tool_id} if parent_tool_id else {})},
                     )
+            # A subagent's answer + reasoning belong to ITS delegation, not the lead's
+            # turn: `_run_subagent` captures the subagent's final message and hands it back
+            # as the `task`/`task_batch` tool result (which renders as the delegation card's
+            # output). But the subagent's LLM events still surface on THIS stream because
+            # LangChain propagates the parent run's callbacks into the nested `ainvoke`,
+            # tagging them with `parent_task_id` (set in graph.agent._run_subagent).
+            # Forwarding those content/reasoning chunks streams the subagent's internals
+            # into the lead answer — polluting `accumulated_raw` and, under `task_batch`,
+            # interleaving every concurrent subagent's tokens character-by-character (the
+            # garbled-output bug). Suppress them here: the subagent's tool cards above still
+            # nest by id, and the `on_chat_model_end` cost accounting below is untouched
+            # (subagent tokens still bill). Only the lead's own tokens reach the answer.
+            if parent_tool_id:
+                continue
             # Native reasoning: the model's REAL thinking, streamed on its own channel.
             # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into
             # additional_kwargs; reasoning chunks carry NO `content`, so this is checked

@@ -273,6 +273,7 @@ class KnowledgeStore:
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.path))
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         # WAL is best-effort — read-only sqlite files (e.g. immutable
         # mounts) reject the PRAGMA. The connection stays usable for
         # reads; only writes will fail later, and those go through

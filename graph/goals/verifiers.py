@@ -20,6 +20,7 @@ operator action — only set goals from trusted input. See docs/guides/goal-mode
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 from dataclasses import dataclass
@@ -60,6 +61,27 @@ _SAFE_BUILTINS = {
         "filter",
     )
 }
+
+# Attribute access is the eval-sandbox escape (``().__class__.__bases__[0].
+# __subclasses__()`` and the ``"{0.__class__}".format`` / f-string variants), so
+# the `data` verifier's expr is AST-validated to reject it (and dunder names,
+# lambda, await/yield) BEFORE evaluation — subscripts, comparisons, boolean/
+# arithmetic ops, comprehensions and calls to the curated builtins still work.
+_DISALLOWED_EXPR_NODES = (ast.Attribute, ast.Lambda, ast.Await, ast.Yield, ast.YieldFrom)
+
+
+def _eval_data_expr(expr: str, data):
+    """Evaluate a `data` verifier expr with the escape vectors statically rejected
+    and only the curated read-only builtins available. Raises ``ValueError`` on a
+    disallowed construct, otherwise returns the expr's value."""
+    tree = ast.parse(expr, mode="eval")
+    for node in ast.walk(tree):
+        if isinstance(node, _DISALLOWED_EXPR_NODES):
+            raise ValueError(f"{type(node).__name__} is not allowed in a data expr")
+        if isinstance(node, ast.Name) and node.id.startswith("__"):
+            raise ValueError(f"dunder name {node.id!r} is not allowed in a data expr")
+    code = compile(tree, "<data-expr>", "eval")
+    return eval(code, {"__builtins__": _SAFE_BUILTINS}, {"data": data})  # noqa: S307 — AST-validated above
 
 
 @dataclass
@@ -175,9 +197,10 @@ async def _verify_data(spec: dict, ctx: VerifyContext) -> VerifyResult:
         except json.JSONDecodeError as exc:
             return VerifyResult(False, f"{path} is not valid JSON: {exc}", _tail(text))
         try:
-            # Restricted eval: only curated read-only builtins + the parsed
-            # document as `data`. Blocks __import__/open/exec/eval.
-            result = eval(expr, {"__builtins__": _SAFE_BUILTINS}, {"data": data})  # noqa: S307
+            # AST-validated restricted eval: curated read-only builtins + the
+            # parsed document as `data`, with attribute access / dunder names
+            # rejected so the expr can't escape the sandbox. See _eval_data_expr.
+            result = _eval_data_expr(expr, data)
         except Exception as exc:
             return VerifyResult(False, f"expr error: {type(exc).__name__}: {exc}", _tail(text))
         met = bool(result)

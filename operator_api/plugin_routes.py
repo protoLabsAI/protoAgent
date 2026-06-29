@@ -26,6 +26,7 @@ routes don't serve until a process restart, so both routes flag it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -189,12 +190,10 @@ def register_plugin_routes(app) -> None:
         ref = str(body.get("ref", "")).strip() or None
         force = bool(body.get("force"))
         try:
-            summary = installer.install(
-                url,
-                ref,
-                force=force,
-                by="console",
-                allow=_sources_allowlist(),
+            # git clone + dep work is blocking — offload so it can't stall the
+            # event loop (and with it every chat/A2A/scheduler request) (#DoS).
+            summary = await asyncio.to_thread(
+                installer.install, url, ref, force=force, by="console", allow=_sources_allowlist()
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -321,7 +320,7 @@ def register_plugin_routes(app) -> None:
         Pinned-to-SHA plugins skip the network; the rest ls-remote their ref
         (TTL-cached + timeout-bounded so the poll can't hang). Errors are
         non-fatal per entry — surfaced in each row's ``error``."""
-        return {"plugins": installer.check_updates()}
+        return {"plugins": await asyncio.to_thread(installer.check_updates)}
 
     @app.post("/api/plugins/sync")
     async def _sync():
@@ -334,7 +333,7 @@ def register_plugin_routes(app) -> None:
         (e.g. a restored data dir whose config still enables it), hot-reload so
         it comes up live — a previously-missing plugin has no mounted router, so
         the hot-mount path applies and no restart is needed."""
-        results = installer.sync(allow=_sources_allowlist())
+        results = await asyncio.to_thread(installer.sync, allow=_sources_allowlist())
         fetched = {r["id"] for r in results if r.get("status") == "installed"}
 
         reloaded = False
@@ -379,12 +378,8 @@ def register_plugin_routes(app) -> None:
             )
         ref = entry.get("requested_ref", "") or None
         try:
-            summary = installer.install(
-                source_url,
-                ref,
-                force=True,
-                by="console",
-                allow=_sources_allowlist(),
+            summary = await asyncio.to_thread(
+                installer.install, source_url, ref, force=True, by="console", allow=_sources_allowlist()
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

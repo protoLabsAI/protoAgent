@@ -177,6 +177,22 @@ the thing to check first when it lands.)
   long synchronous delegation transparently detaches and becomes killable — the direct cure for
   the audited incident.
 
+### Follow-up — background batch + concurrency cap (shipped)
+- **`task_batch(run_in_background=True)`** fans a whole batch out detached: every spec spawns as
+  its own background job and the call returns immediately with the job ids, instead of blocking
+  until all finish (the foreground `task_batch` path). It's the multi-task analog of
+  `task(run_in_background=True)` and goes through the same `BackgroundManager.spawn`; each
+  completion drains back into the spawning session independently — one task-notification per job —
+  reusing Phase 1's exactly-once drain. Bad specs (missing prompt / unknown subagent) are skipped
+  inline; the good ones still spawn. With no manager configured it degrades to the foreground batch.
+- **Concurrency cap (the missing backpressure).** `BackgroundManager` now bounds concurrent
+  background turns with a semaphore that gates the self-POST in `_fire` (held for the whole turn).
+  A fan-out can no longer open one full lead-graph turn per job against the gateway at once; jobs
+  past the cap queue at the semaphore. Default 3, override `BACKGROUND_MAX_CONCURRENCY`. It applies
+  to *every* spawn — so several ad-hoc `task(run_in_background=True)` calls are bounded too. A
+  queued job's row reads `running` until a slot frees (it is accepted); `cancel` and
+  `reconcile_interrupted` both already handle a row whose turn hasn't fired yet.
+
 ## Consequences
 
 - **The chat stays live.** A delegation marked `run_in_background` returns in milliseconds; the
@@ -196,6 +212,10 @@ the thing to check first when it lands.)
   but `BACKGROUND_WAKE=0` disables it for cost-sensitive or non-reactive deployments.
 - **A background turn could itself spawn background turns.** Bounded in practice by focused
   prompts + the prompt contract; a hard depth fence is a later refinement.
+- **Background fan-out is bounded.** A `task_batch(run_in_background=True)` — or many single
+  `task(run_in_background=True)` calls — can't swamp the gateway: at most `BACKGROUND_MAX_CONCURRENCY`
+  turns run at once, the rest queue. Trade-off: a queued job reports `running` before its turn
+  actually starts (a small cosmetic lie the console's running-count inherits).
 - **Long jobs vs. the self-POST timeout.** `_fire` holds the connection open for the whole turn
   (like the scheduler); a job exceeding the fire timeout is marked `failed` even if still
   running. The timeout default is generous and configurable; a true submit-and-detach (A2A
