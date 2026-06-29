@@ -28,6 +28,10 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
       // gates Uninstall.
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
       qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
+      // Install auto-enables the plugin, so its declared Settings fields (ADR 0019) are
+      // now in the schema — refetch it or the plugin's config section won't appear until
+      // a restart clears the 5-min-stale cache (#1423).
+      qc.invalidateQueries({ queryKey: queryKeys.settings });
       setUrl("");
       setRef("");
       // Clean install (auto-enabled, nothing to flag) → close; the new row shows in the
