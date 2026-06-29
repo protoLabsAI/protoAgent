@@ -4,6 +4,15 @@
 // prompts for the operator bearer. Pure module so it's unit-testable and usable
 // from non-React code (api.ts).
 
+// SECURITY — the bearer is cached here in localStorage, an ACCEPTED residual: a
+// console-origin XSS could read it. The credential's real home is the server env
+// (`A2A_AUTH_TOKEN`); this is just the browser's copy so it can authenticate. We do NOT
+// try to "harden" it in place — an httpOnly cookie can't auth the cross-origin desktop
+// webview, and hashing/encrypting at rest is no defense against same-origin XSS (a script
+// in the page can read the key and reuse this very send path). Bounded by the
+// localhost-default + default-deny bearer-gate posture; the real lever beyond localhost is
+// a CSP connect-src egress limit. See docs/guides/deploy-docker.md → "Where the operator
+// token lives".
 const TOKEN_KEY = "protoagent.authToken";
 
 let needed = false;

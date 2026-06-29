@@ -145,13 +145,26 @@ touches the same chat/subagent streaming surface.
 - [>] **chat-store cross-tab clobber** — Med · Med–High · M —
   `apps/web/src/chat/chat-store.ts:141`. `storage`-event merge (union by id, newest
   `updatedAt` wins) or a `BroadcastChannel` single-writer.
-- [>] **`localStorage` bearer (XSS-exfiltratable)** — Low · High · L —
-  `apps/web/src/lib/auth.ts:42`. Move to an httpOnly SameSite cookie, or accept-risk +
-  guarantee no raw-HTML/JS render sink (none found today — DS markdown only). Interim:
-  document as a known sink.
+- [x] **`localStorage` bearer (XSS-exfiltratable)** — Low · High · L — **ACCEPTED + documented**
+  (2026-06-29). `apps/web/src/lib/auth.ts`. An httpOnly cookie was evaluated and rejected: it
+  can't authenticate the cross-origin **desktop** webview (`SameSite` isn't sent cross-origin;
+  `SameSite=None` needs the HTTPS the localhost sidecar lacks), so it would protect only the
+  browser while adding a dual auth path. Hashing/encrypting at rest is no defense against
+  same-origin XSS (a script in the page reads the key + reuses the send path). Bounded by
+  localhost-default + default-deny bearer-gate + sanitized-markdown-only render (no raw-HTML
+  sink). Recommended credential home = the server env (`A2A_AUTH_TOKEN`); operator note in
+  `docs/guides/deploy-docker.md` → "Where the operator token lives". The real lever if exposed
+  beyond localhost = a CSP `connect-src` egress allowlist (tracked below).
 
 ## Doc-only / optional
 
+- [ ] **CSP `connect-src` egress allowlist** — Low · Med · M — the effective XSS-exfil lever
+  (replaces the rejected httpOnly-cookie move for the `localStorage` bearer above; works for
+  both the browser console AND the cross-origin desktop). Enumerate the console's legitimate
+  egress (same-origin `/api` + `/a2a`, the desktop sidecar origin, the hub proxy, any gateway),
+  then serve a `Content-Security-Policy` with a `connect-src` allowlist so an injected script
+  can't `fetch`/beacon the token off-origin. Test deeply against SSE, plugin iframes, fleet,
+  and the desktop. Only worth it before exposing the console beyond localhost.
 - [ ] **Plugin iframe `allow-scripts`+`allow-same-origin`** — Low · Low · XS —
   `apps/web/src/app/PluginView.tsx:266` (+ `App.tsx:529`, `Launcher.tsx:67`). No
   functional change (plugins are trusted code, given the bearer by design); document the

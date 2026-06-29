@@ -48,6 +48,30 @@ protoAgent refuses to bind `0.0.0.0` with an **open** operator API (`/api/*`, `/
 - bind `127.0.0.1` (single-host);
 - or, only behind a trusted network boundary, `PROTOAGENT_ALLOW_OPEN=1`.
 
+### Where the operator token lives
+
+Configure the token in the **server's environment** — `A2A_AUTH_TOKEN` (or `auth.token` in
+`langgraph-config.yaml`). That's the credential's home: it never lives in a browser, and
+rotating it instantly invalidates every client.
+
+The **browser console** has to authenticate too, so when you paste the token into its
+sign-in prompt it's cached in that browser's `localStorage`. Know the trade-off:
+
+- A script injected into the console's origin (XSS) could read that cached token and
+  exfiltrate it. The exposure is bounded by the default posture — the console binds
+  `127.0.0.1` and the whole API is default-deny bearer-gated — and the console renders
+  agent/model output only through sanitized markdown (no raw-HTML sink). Treat the cached
+  token like any browser-stored credential: don't expose the console beyond localhost
+  without a fronting auth proxy, and rotate `A2A_AUTH_TOKEN` if a workstation is compromised.
+- It stays in `localStorage` deliberately. An httpOnly cookie can't authenticate the
+  **desktop app** — its Tauri webview and the local HTTP sidecar are different origins, so a
+  `SameSite` cookie isn't sent cross-origin and `SameSite=None` needs the HTTPS the localhost
+  sidecar doesn't have — so a cookie would protect only the browser. And hashing/encrypting
+  the value at rest doesn't defend against same-origin XSS: a script in the page can read the
+  key and reuse the same code path the console uses to send the token. The effective lever,
+  if the console is ever exposed beyond localhost, is an egress limit (a CSP `connect-src`
+  allowlist) that blocks exfiltration for both the browser and the desktop.
+
 ## Day-2
 
 | Want to… | Do |
