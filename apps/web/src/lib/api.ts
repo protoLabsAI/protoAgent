@@ -343,12 +343,15 @@ async function requestForm<T>(path: string, form: FormData, opts: { host?: boole
     body: form,
   });
   if (!response.ok) {
+    // Read the body ONCE (a Response stream can't be read twice — calling
+    // .json() then .text() throws "body stream already read", which masked the
+    // real HTTP detail and skipped the 401 AuthGate). Mirror `request`.
+    const raw = await response.text().catch(() => "");
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail || detail;
+      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
     } catch {
-      detail = await response.text();
+      detail = raw || detail;
     }
     if (response.status === 401) notifyAuthRequired();
     throw new ApiError(response.status, detail || "request failed");
