@@ -69,8 +69,8 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // When an add 404s (the focused agent doesn't serve /api/delegates), we keep the attempted
   // entry so "Enable delegates" can retry it after enabling the plugin. Fleet agents ship with
   // delegates enabled at create (ADR 0042); the HOST carries no plugins by default — enabling
-  // appends to plugins.enabled via applyConfig, and the reload hot-mounts the routes (#797),
-  // so the retry succeeds without a restart.
+  // goes through the dedicated /api/plugins/{id}/enabled endpoint, and the reload hot-mounts the
+  // routes (#797), so the retry succeeds without a restart.
   const [needsEnable, setNeedsEnable] = useState<{ name: string; url: string } | null>(null);
   const addDelegate = useMutation({
     mutationFn: (entry: { name: string; url: string }) =>
@@ -96,7 +96,10 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       const { config } = await api.config(); // the FOCUSED agent's live config (slug-scoped)
       const enabled = config.plugins?.enabled ?? [];
       if (!enabled.includes("delegates")) {
-        await api.applyConfig({ plugins: { enabled: [...enabled, "delegates"] } }, null);
+        // Use the dedicated endpoint, not a raw plugins.enabled patch: it reconciles the
+        // enabled/disabled lists, refuses builtins, and runs the install/surface logic a
+        // hand-written `applyConfig({plugins:{enabled:[…]}})` would skip.
+        await api.setPluginEnabled("delegates", true);
       }
       return entry;
     },

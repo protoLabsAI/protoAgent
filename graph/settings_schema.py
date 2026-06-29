@@ -533,10 +533,12 @@ FIELDS: list[Field] = [
         scope="host",
     ),
     # ── Identity / operator ──────────────────────────────────────────────────
-    # `identity.name` stays in FIELDS so it round-trips through the YAML writer, but
-    # it's ui_hidden: the dedicated Identity panel (Workspace ▸ Identity, POST
-    # /api/config) owns the agent name alongside its persona (SOUL.md). Surfacing it
-    # here too made the same field editable from two places with two write paths (#1076).
+    # `identity.name` stays in FIELDS so it round-trips through the YAML writer AND so it
+    # validates/cascades on save, but it's ui_hidden: the dedicated Identity panel (Agent ▸
+    # Identity) is its single editor, alongside the persona (SOUL.md). Surfacing it here too
+    # would make the same field editable from two places (#1076). The panel saves the name
+    # through the canonical /api/settings cascade (a ui_hidden key still saves fine — only
+    # build_schema rendering is gated); only SOUL goes via /api/config.
     Field("identity.name", "identity_name", "Agent name", "string", "Identity", ui_hidden=True),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
     Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),

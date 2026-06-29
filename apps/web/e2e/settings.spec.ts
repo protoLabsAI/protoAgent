@@ -185,3 +185,29 @@ test("per-agent (fleet member) settings show ADR 0047 inheritance badges + reset
   await expect(page.locator(".pl-toast", { hasText: /inherited/i })).toBeVisible();
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
 });
+
+test("Identity: a name change saves via /api/settings, not /api/config (no operator clobber)", async ({ page }) => {
+  // The Identity panel routes the name through the canonical settings cascade; SOUL (unchanged
+  // here) is what goes via /api/config. The old code ALWAYS POSTed /api/config echoing a cached
+  // operator, which could clobber a fresh Operator & access edit — assert that's gone: a name-only
+  // save POSTs /api/settings with identity.name and never touches /api/config.
+  await openSettings(page);
+  await section(page, "Identity");
+  const nameInput = page.getByTestId("identity-name");
+  await expect(nameInput).toBeVisible();
+
+  let configPosted = false;
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname.endsWith("/api/config")) configPosted = true;
+  });
+
+  await nameInput.fill("renamed-agent");
+  const settingsReq = page.waitForRequest(
+    (r) => r.method() === "POST" && new URL(r.url()).pathname.endsWith("/api/settings"),
+  );
+  await page.getByTestId("identity-save").click();
+  const req = await settingsReq;
+  expect(req.postDataJSON()?.updates?.["identity.name"]).toBe("renamed-agent");
+  await expect(page.locator(".pl-toast", { hasText: /Identity saved/i })).toBeVisible();
+  expect(configPosted).toBe(false);
+});
