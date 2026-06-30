@@ -67,6 +67,7 @@ class Delegate:
     url: str = ""
     auth_scheme: str = ""  # "" | bearer | apiKey
     auth_token: str = ""  # secret value (from secrets.yaml overlay)
+    poll_timeout_s: float = 300.0  # a2a: max seconds to await a long-running delegated task
 
     # openai
     model: str = ""
@@ -146,6 +147,19 @@ async def _timed(coro) -> tuple[object, int]:
     return res, int((time.monotonic() - t0) * 1000)
 
 
+def _a2a_error_detail(d: Delegate, err: object) -> str:
+    """Turn a JSON-RPC error payload into an operator-legible cause — especially the
+    version-skew case, which otherwise surfaces as an opaque ``-32009``."""
+    code = err.get("code") if isinstance(err, dict) else None
+    msg = str(err.get("message")) if isinstance(err, dict) else str(err)
+    if code == -32009 or "VERSION_NOT_SUPPORTED" in str(err).upper():
+        return (
+            f"delegate {d.name!r}: peer rejected A2A-Version 1.0 (VERSION_NOT_SUPPORTED) — it speaks "
+            "an older A2A dialect. Upgrade the peer, or point its url at a 1.0 /a2a endpoint."
+        )
+    return f"delegate {d.name!r}: {msg or err}"
+
+
 class A2aAdapter(Adapter):
     type = "a2a"
     label = "A2A agent"
@@ -175,6 +189,15 @@ class A2aAdapter(Adapter):
                 "secret",
                 help="Stored in secrets.yaml (gitignored), never in tracked config.",
             ),
+            FieldSpec(
+                "poll_timeout_s",
+                "Task poll timeout (s)",
+                "number",
+                default=300,
+                help="Max seconds to wait for a long-running delegated task to finish before "
+                "giving up locally — the peer keeps working. Raise it for slow agents (e.g. a "
+                "code build); the old fixed 30s cut long tasks off mid-flight.",
+            ),
         ]
 
     def parse(self, raw: dict) -> Delegate:
@@ -185,9 +208,15 @@ class A2aAdapter(Adapter):
         auth = raw.get("auth") or {}
         d.auth_scheme = str(auth.get("scheme", "")).strip()
         d.auth_token = _secret(auth, "token", "credentialsEnv")
+        try:
+            d.poll_timeout_s = float(raw.get("poll_timeout_s") or 300.0)
+        except (TypeError, ValueError):
+            d.poll_timeout_s = 300.0
         return d
 
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
+        import time
+
         import httpx
 
         from security import policy
@@ -207,17 +236,30 @@ class A2aAdapter(Adapter):
 
         async def _rpc(client, method, params):
             body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
-            r = await client.post(d.url, json=body, headers=headers)
+            # Map transport failures to a legible CAUSE — a delegating agent (and the
+            # operator) needs "unreachable" vs "timed out" vs "version-incompatible",
+            # not an opaque stack trace or a bare connection error.
+            try:
+                r = await client.post(d.url, json=body, headers=headers)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                raise DelegateError(f"delegate {d.name!r} unreachable at {d.url} ({type(exc).__name__})") from exc
+            except httpx.TimeoutException as exc:
+                raise DelegateError(f"delegate {d.name!r} timed out contacting {d.url}") from exc
+            except httpx.HTTPError as exc:
+                raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
             if r.status_code >= 400:
-                raise DelegateError(f"HTTP {r.status_code}: {r.text[:200]}")
+                raise DelegateError(f"delegate {d.name!r} HTTP {r.status_code}: {r.text[:200]}")
             data = r.json()
             if data.get("error"):
-                raise DelegateError(str(data["error"]))
+                raise DelegateError(_a2a_error_detail(d, data["error"]))
             return data.get("result") or {}
 
+        poll_timeout = d.poll_timeout_s if d.poll_timeout_s and d.poll_timeout_s > 0 else 300.0
         # A2A 1.0 (a2a-sdk >=1.0): JSON-RPC `SendMessage` / `GetTask`, the ROLE_USER
         # enum, and a `result.task` envelope. (`message/send` + lowercase `user` is
-        # the v0.3 legacy dialect, which 1.0 servers reject with -32601.)
+        # the v0.3 legacy dialect, which 1.0 servers reject with -32601.) The per-request
+        # client timeout caps a single call; the poll DEADLINE caps the overall wait for a
+        # long-running task — so a 2-minute delegated task no longer fails at the old 30s.
         async with httpx.AsyncClient(timeout=timeout or 60) as client:
             result = await _rpc(
                 client,
@@ -236,17 +278,22 @@ class A2aAdapter(Adapter):
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
-            polls = 0
-            while task_id and not _is_terminal(state) and polls < 30:
+            deadline = time.monotonic() + poll_timeout
+            while task_id and not _is_terminal(state) and time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
-                polls += 1
                 result = await _rpc(client, "GetTask", {"name": task_id})
                 task = result.get("task", result) or {}
                 state = (task.get("status") or {}).get("state")
             text = _extract_text(result)
             if text:
                 return text
-            raise DelegateError(f"no text returned (state={state})")
+            if task_id and not _is_terminal(state):
+                raise DelegateError(
+                    f"delegate {d.name!r} still running after {int(poll_timeout)}s — the peer may "
+                    f"still be working; raise its poll timeout if tasks legitimately take longer "
+                    f"(state={state})"
+                )
+            raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
 
     async def probe(self, d: Delegate) -> dict:
         import httpx
