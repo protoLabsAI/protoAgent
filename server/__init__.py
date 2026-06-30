@@ -293,6 +293,15 @@ def _main():
 
         raise SystemExit(run_fleet_cli(sys.argv[2:]))
 
+    # Config subcommand: `python -m server config explain` — a read-only diagnostic
+    # that prints this instance's identity, both roots, every resolved path, and the
+    # per-field cascade provenance (the "where did my config/key go?" answer). Acts
+    # on disk + the env, then exits; never starts the server.
+    if len(sys.argv) > 1 and sys.argv[1] == "config":
+        from graph.config_explain import run_config_cli
+
+        raise SystemExit(run_config_cli(sys.argv[2:]))
+
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
     # factory re-invokes this binary with `--mcp-plugin <id>` instead of `-m
