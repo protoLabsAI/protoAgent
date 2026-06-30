@@ -1,6 +1,6 @@
 import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { ArrowDownFromLine, ArrowUpToLine, Boxes, Library, Loader2, Plus, Share2, Trash2 } from "lucide-react";
@@ -22,8 +22,9 @@ type McpServer = { name: string; transport: string; tool_count: number; tier?: "
 
 type Transport = "stdio" | "http" | "sse";
 
-function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
+function AddServerForm() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
@@ -40,18 +41,18 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
     qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
     reset();
     setOpen(false);
-    onDone(msg);
+    toast({ tone: "success", title: "MCP server", message: msg });
   };
   const add = useMutation({
     mutationFn: () =>
       api.addMcpServer(transport === "stdio" ? { name, transport, command, args } : { name, transport, url }),
     onSuccess: (res) => onSuccess(`Connected ${res.name} — its tools are live.`),
-    onError: (err: unknown) => onDone(`Couldn't add server: ${errMsg(err)}`),
+    onError: (err: unknown) => toast({ tone: "error", title: "Couldn't add server", message: errMsg(err) }),
   });
   const importJson = useMutation({
     mutationFn: () => api.importMcpServers(json),
     onSuccess: (res) => onSuccess(`Imported ${res.added.length} server${res.added.length === 1 ? "" : "s"}: ${res.added.join(", ")}.`),
-    onError: (err: unknown) => onDone(`Import failed: ${errMsg(err)}`),
+    onError: (err: unknown) => toast({ tone: "error", title: "Import failed", message: errMsg(err) }),
   });
 
   const formValid = name.trim() && (transport === "stdio" ? command.trim() : url.trim());
@@ -133,7 +134,7 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
 function McpBody() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
   const qc = useQueryClient();
-  const [hint, setHint] = useState<string | null>(null);
+  const toast = useToast();
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [forgetPending, setForgetPending] = useState<McpServer | null>(null);
   const servers = (runtime.mcp?.servers ?? []) as McpServer[];
@@ -146,9 +147,9 @@ function McpBody() {
     mutationFn: (n: string) => api.removeMcpServer(n),
     onSuccess: (_res, n) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      setHint(`Removed ${n}.`);
+      toast({ tone: "success", title: "Server removed", message: `${n} is no longer wired in.` });
     },
-    onError: (err: unknown, n) => setHint(`Couldn't remove ${n}: ${errMsg(err)}`),
+    onError: (err: unknown, n) => toast({ tone: "error", title: "Couldn't remove server", message: `${n}: ${errMsg(err)}` }),
   });
   const removingName = remove.isPending ? remove.variables : undefined;
 
@@ -156,17 +157,17 @@ function McpBody() {
     mutationFn: (n: string) => api.promoteMcpServer(n),
     onSuccess: (_res, n) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      setHint(`Shared ${n} to the box commons — every layered agent on this box now runs it.`);
+      toast({ tone: "success", title: "Shared to the box commons", message: `Every layered agent on this box now runs ${n}.` });
     },
-    onError: (err: unknown, n) => setHint(`Couldn't share ${n}: ${errMsg(err)}`),
+    onError: (err: unknown, n) => toast({ tone: "error", title: "Couldn't share server", message: `${n}: ${errMsg(err)}` }),
   });
   const forget = useMutation({
     mutationFn: (n: string) => api.forgetMcpServer(n),
     onSuccess: (_res, n) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      setHint(`Unshared ${n} — it's private to this agent again.`);
+      toast({ tone: "success", title: "Unshared", message: `${n} is private to this agent again.` });
     },
-    onError: (err: unknown, n) => setHint(`Couldn't unshare ${n}: ${errMsg(err)}`),
+    onError: (err: unknown, n) => toast({ tone: "error", title: "Couldn't unshare server", message: `${n}: ${errMsg(err)}` }),
   });
   const busyName = promote.isPending ? promote.variables : forget.isPending ? forget.variables : undefined;
 
@@ -177,15 +178,14 @@ function McpBody() {
         kicker={`${servers.length} server${servers.length === 1 ? "" : "s"} · ${total} tool${total === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
-        {hint ? <p className="plugin-hint">{hint}</p> : null}
         <div className="mcp-browse-row">
           <Button type="button" variant="ghost" onClick={() => setCatalogOpen(true)} title="Add a common MCP server from a curated list">
             <Boxes size={14} /> Browse common servers
           </Button>
           <QuickSetting keys={["mcp.scope"]} title="MCP server sharing" label="MCP server sharing" icon={<Share2 size={16} />} />
         </div>
-        <AddServerForm onDone={setHint} />
-        <McpCatalogDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdded={setHint} />
+        <AddServerForm />
+        <McpCatalogDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} />
         <div className="table-list">
           {servers.length ? (
             servers.map((server) => (
@@ -206,7 +206,7 @@ function McpBody() {
                   <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
                   {layered && server.tier === "private" ? (
                     <Button type="button" variant="ghost" disabled={busyName === server.name}
-                      onClick={() => { setHint(null); promote.mutate(server.name); }}
+                      onClick={() => promote.mutate(server.name)}
                       title={`Share ${server.name} to the box commons`} aria-label={`share ${server.name}`}
                     >
                       <ArrowUpToLine size={14} className={busyName === server.name ? "spin" : ""} />
@@ -214,7 +214,7 @@ function McpBody() {
                   ) : null}
                   {layered && server.tier === "commons" ? (
                     <Button type="button" variant="ghost" disabled={busyName === server.name}
-                      onClick={() => { setHint(null); setForgetPending(server); }}
+                      onClick={() => setForgetPending(server)}
                       title={`Unshare ${server.name} from the box commons`} aria-label={`unshare ${server.name}`}
                     >
                       <ArrowDownFromLine size={14} />
@@ -223,7 +223,7 @@ function McpBody() {
                   <Button type="button"
                     variant="ghost"
                     disabled={removingName === server.name}
-                    onClick={() => { setHint(null); remove.mutate(server.name); }}
+                    onClick={() => remove.mutate(server.name)}
                     title={`Remove ${server.name}`}
                   >
                     {removingName === server.name ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}

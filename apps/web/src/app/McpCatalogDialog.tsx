@@ -1,5 +1,5 @@
 import { Input } from "@protolabsai/ui/forms";
-import { Dialog } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink, Loader2, Plus, Search } from "lucide-react";
@@ -40,13 +40,12 @@ function fillTemplate(
 export function McpCatalogDialog({
   open,
   onClose,
-  onAdded,
 }: {
   open: boolean;
   onClose: () => void;
-  onAdded: (msg: string) => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const catalog = useQuery({
     queryKey: MCP_CATALOG_KEY,
     queryFn: () => api.mcpCatalog(),
@@ -57,7 +56,6 @@ export function McpCatalogDialog({
   const [cat, setCat] = useState("All");
   const [selected, setSelected] = useState<McpCatalogEntry | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
-  const [err, setErr] = useState<string | null>(null);
 
   const servers = catalog.data?.servers ?? [];
   const categories = useMemo(
@@ -78,16 +76,15 @@ export function McpCatalogDialog({
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
       qc.invalidateQueries({ queryKey: MCP_CATALOG_KEY });
-      onAdded(`Connected ${res.name} — its tools are live.`);
+      toast({ tone: "success", title: "MCP server", message: `Connected ${res.name} — its tools are live.` });
       close();
     },
-    onError: (e: unknown) => setErr(errMsg(e)),
+    onError: (e: unknown) => toast({ tone: "error", title: "Couldn't add server", message: errMsg(e) }),
   });
 
   function back() {
     setSelected(null);
     setValues({});
-    setErr(null);
   }
   function close() {
     back();
@@ -96,7 +93,6 @@ export function McpCatalogDialog({
     onClose();
   }
   function pick(entry: McpCatalogEntry) {
-    setErr(null);
     if (entry.inputs?.length) {
       setSelected(entry);
       setValues(Object.fromEntries(entry.inputs.map((i) => [i.key, ""])));
@@ -142,7 +138,6 @@ export function McpCatalogDialog({
               />
             </label>
           ))}
-          {err ? <p className="plugin-hint">{err}</p> : null}
           <div className="mcp-add-actions">
             <Button
               type="button"
@@ -182,7 +177,6 @@ export function McpCatalogDialog({
               ))}
             </div>
           </div>
-          {err ? <p className="plugin-hint">{err}</p> : null}
           {catalog.isError ? (
             <p className="plugin-hint">Couldn't load the server directory.</p>
           ) : !shown.length ? (
