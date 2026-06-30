@@ -2,7 +2,7 @@ import "../settings/plugins.css";
 
 import { Button } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
-import { useToast } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { useState, type JSX } from "react";
@@ -163,6 +163,8 @@ function LocalTab() {
   const qc = useQueryClient();
   const toast = useToast();
   const [installOpen, setInstallOpen] = useState(false);
+  const [uninstallPending, setUninstallPending] = useState<Plugin | null>(null);
+  const [restartPending, setRestartPending] = useState(false);
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
@@ -221,11 +223,7 @@ function LocalTab() {
     onSuccess: (_res, p) => { refreshAll(); toast({ tone: "success", title: "Plugin uninstalled", message: `${p.name} removed.` }); },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't uninstall plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
-  const onRemove = (p: Plugin) => {
-    if (window.confirm(`Uninstall ${p.name}? This deletes its code from disk and removes it from plugins.lock. (To keep it installed, Disable it instead.)`)) {
-      remove.mutate(p);
-    }
-  };
+  const onRemove = (p: Plugin) => setUninstallPending(p);
   const removingId = remove.isPending ? remove.variables?.id : undefined;
 
   // Re-clone locked-but-missing plugins (fresh clone / restored data dir).
@@ -342,11 +340,7 @@ function LocalTab() {
             variant="default"
             size="sm"
             disabled={restart.isPending}
-            onClick={() => {
-              if (window.confirm("Restart the server now? In-flight work finishes, then the console reconnects automatically.")) {
-                restart.mutate();
-              }
-            }}
+            onClick={() => setRestartPending(true)}
             title="Gracefully restart the server process"
           >
             {restart.isPending ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Restart server
@@ -354,6 +348,27 @@ function LocalTab() {
         </div>
       </div>
       <InstallPluginDialog open={installOpen} onClose={() => setInstallOpen(false)} />
+      <ConfirmDialog
+        open={uninstallPending !== null}
+        title="Uninstall plugin?"
+        confirmLabel="Uninstall"
+        destructive
+        onConfirm={() => { if (uninstallPending) remove.mutate(uninstallPending); setUninstallPending(null); }}
+        onClose={() => setUninstallPending(null)}
+      >
+        {uninstallPending
+          ? `"${uninstallPending.name}" — this deletes its code from disk and removes it from plugins.lock. To keep it installed, Disable it instead.`
+          : undefined}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={restartPending}
+        title="Restart the server?"
+        confirmLabel="Restart"
+        onConfirm={() => { restart.mutate(); setRestartPending(false); }}
+        onClose={() => setRestartPending(false)}
+      >
+        In-flight work finishes, then the console reconnects automatically.
+      </ConfirmDialog>
     </>
   );
 }

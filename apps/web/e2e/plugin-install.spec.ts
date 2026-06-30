@@ -26,9 +26,11 @@ test("install a plugin from a git URL, then uninstall it from its row", async ({
   const row = page.locator(".plugin-row-wrap", { hasText: "protoagent-plugin-widgets" });
   await expect(row).toBeVisible();
 
-  // Uninstall from the row — a window.confirm guards it; accept and the row disappears.
-  page.once("dialog", (d) => d.accept());
+  // Uninstall from the row — a DS ConfirmDialog guards it; confirm and the row disappears.
   await row.getByRole("button", { name: /uninstall/i }).click();
+  const confirm = page.getByRole("dialog", { name: "Uninstall plugin?" });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole("button", { name: "Uninstall", exact: true }).click();
   await expect(page.locator(".plugin-row-wrap", { hasText: "protoagent-plugin-widgets" })).toHaveCount(0);
 });
 
