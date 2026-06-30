@@ -130,6 +130,48 @@ def test_fleet_list_carries_versions(client, monkeypatch):
     assert "token" not in remote and "sek" not in str(agents)
 
 
+def test_add_remote_probes_on_register_reachable(client, monkeypatch):
+    """POST /api/fleet/remotes probes the new peer immediately and returns
+    reachable+version, so the console/CLI can confirm at register time."""
+    import httpx
+    from graph.fleet import supervisor
+
+    supervisor._probe_cache.clear()
+
+    class FakeCard:
+        status_code = 200
+
+        def json(self):
+            return {"name": "ava", "version": "0.31.0"}
+
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeCard())
+    body = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://1.2.3.4:7871"}).json()
+    assert body["ok"] is True and body["agent"]["name"] == "ava"
+    assert body["reachable"] is True and body["version"] == "0.31.0"
+    assert "token" not in body["agent"]
+
+
+def test_add_remote_unreachable_is_registered_not_rejected(client, monkeypatch):
+    """An unreachable peer is STILL registered (deferred registration is intentional) —
+    the response just reports reachable:false so the caller can warn."""
+    import httpx
+    from graph.fleet import supervisor
+
+    supervisor._probe_cache.clear()
+
+    def boom(url, timeout):
+        raise httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    r = client.post("/api/fleet/remotes", json={"name": "ghosty", "url": "http://1.2.3.4:7999"})
+    assert r.status_code == 200  # NOT a hard reject
+    body = r.json()
+    assert body["ok"] is True and body["reachable"] is False and body["version"] == ""
+    # it's actually in the fleet, just shown not-running
+    entry = next(a for a in client.get("/api/fleet").json()["agents"] if a.get("remote"))
+    assert entry["name"] == "ghosty" and entry["running"] is False
+
+
 def test_discover_endpoint(client, monkeypatch):
     # /api/fleet/discover returns OTHER protoAgents (mock the scan); the route's host self-exclusion
     # + supervisor scan run, discover() internals are unit-tested elsewhere.
