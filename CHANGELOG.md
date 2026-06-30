@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-06-30
+
 ### Added
 - **"Manage plugins…" in the rail context menus** (#1426) — right-clicking empty rail space or any
   rail icon now offers **Manage plugins…**, which opens the plugin manager (Settings ▸

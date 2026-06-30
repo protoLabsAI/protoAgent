@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.76.0",
+    "date": "2026-06-30",
+    "changes": [
+      "\"Manage plugins…\" in the rail context menus",
+      "Reveal toggle on secret fields",
+      "Settings true-up — one canonical config system",
+      "Settings surfaces no longer swallow load/save errors",
+      "Identity name and fleet delegates save through the canonical settings cascade"
+    ]
+  },
+  {
     "version": "v0.75.0",
     "date": "2026-06-29",
     "changes": [
