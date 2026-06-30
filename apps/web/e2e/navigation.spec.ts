@@ -87,7 +87,7 @@ test("plugins section: Installed / Discover (config + advanced install folded in
   await expect(page.getByText("Zzz Disabled", { exact: false })).toBeVisible();
   await page.locator(".subagent-row", { hasText: "Zzz Disabled" })
     .getByRole("button", { name: "Enable" }).click();
-  await expect(page.locator(".pl-toast")).toContainText("Zzz Disabled");
+  await expect(page.locator(".pl-toast", { hasText: "Zzz Disabled" })).toBeVisible();
 
   // Configure opens a per-plugin settings DIALOG now (2026-06) — not an inline row expander.
   // The (icon-only) Configure button is labelled "Configure <name>"; the dialog is

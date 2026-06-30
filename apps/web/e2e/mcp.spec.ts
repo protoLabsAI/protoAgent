@@ -16,7 +16,7 @@ test("MCP tab lists servers and adds one inline", async ({ page }) => {
   await page.getByPlaceholder("name (e.g. echo)").fill("mathy");
   await page.getByPlaceholder("command (e.g. python)").fill("python");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.locator(".pl-toast")).toContainText("Connected mathy");
+  await expect(page.locator(".pl-toast", { hasText: "Connected mathy" })).toBeVisible();
 });
 
 test("MCP tab imports servers from pasted JSON", async ({ page }) => {
@@ -30,7 +30,7 @@ test("MCP tab imports servers from pasted JSON", async ({ page }) => {
     '{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@mcp/fs"]}, "weather": {"url": "https://x/mcp"}}}',
   );
   await page.getByRole("button", { name: "Import", exact: true }).click();
-  await expect(page.locator(".pl-toast")).toContainText("Imported 2 servers: filesystem, weather");
+  await expect(page.locator(".pl-toast", { hasText: "Imported 2 servers: filesystem, weather" })).toBeVisible();
 });
 
 test("MCP catalog quick-adds a common server that needs an input", async ({ page }) => {
@@ -51,7 +51,7 @@ test("MCP catalog quick-adds a common server that needs an input", async ({ page
 
   // A successful add closes the dialog, hints, and the server joins the list.
   await expect(page.getByLabel("search MCP servers")).toHaveCount(0);
-  await expect(page.locator(".pl-toast")).toContainText("Connected filesystem");
+  await expect(page.locator(".pl-toast", { hasText: "Connected filesystem" })).toBeVisible();
   await expect(page.getByText("filesystem · stdio")).toBeVisible();
 });
 
@@ -67,7 +67,7 @@ test("MCP catalog adds a no-input server in one click", async ({ page }) => {
   // Memory needs no config → one click adds it and closes the dialog.
   await dialog.locator(".mcp-catalog-card", { hasText: "Memory" }).getByRole("button", { name: "Add" }).click();
   await expect(page.getByLabel("search MCP servers")).toHaveCount(0);
-  await expect(page.locator(".pl-toast")).toContainText("Connected memory");
+  await expect(page.locator(".pl-toast", { hasText: "Connected memory" })).toBeVisible();
   await expect(page.getByText("memory · stdio")).toBeVisible();
 });
 
