@@ -186,6 +186,63 @@ def test_probe_captures_remote_version(tmp_path, monkeypatch):
     assert host["version"]
 
 
+def test_probe_ttl_is_three_seconds():
+    """The reachability cache TTL is aligned to the 3s console poll (remote-member
+    health robustness) so a just-downed remote isn't shown 'running' for ~10s."""
+    assert supervisor._PROBE_TTL == 3.0
+
+
+def test_probe_remote_reachable_returns_version(tmp_path, monkeypatch):
+    """probe_remote() probes ONE member immediately (TTL-bypass) and returns
+    (reachable, version) — what the register route surfaces so the console can warn
+    up front. It refreshes the cache and persists the probed version."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    supervisor._probe_cache.clear()
+    rec = supervisor.add_remote("ava", "http://h:9", token="sek")
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"name": "ava", "version": "0.31.0"}
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
+    reachable, version = supervisor.probe_remote(rec["id"])
+    assert reachable is True and version == "0.31.0"
+    assert supervisor._probe_cache[rec["id"]][0] is True
+    # persisted on the record (token left intact for the proxy)
+    stored = supervisor.remote_for_slug(rec["id"])
+    assert stored["version"] == "0.31.0" and stored["token"] == "sek"
+    # by NAME resolves too
+    assert supervisor.probe_remote("ava")[0] is True
+
+
+def test_probe_remote_unreachable_is_false(tmp_path, monkeypatch):
+    """An unreachable peer probes reachable:false (no version) — registration is NOT
+    rejected for it (deferred registration is intentional)."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    supervisor._probe_cache.clear()
+    rec = supervisor.add_remote("ghosty", "http://h:9")
+
+    import httpx
+
+    def boom(url, timeout):
+        raise httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    reachable, version = supervisor.probe_remote(rec["id"])
+    assert reachable is False and version == ""
+    assert supervisor._probe_cache[rec["id"]][0] is False
+
+
+def test_probe_remote_unknown_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    with pytest.raises(supervisor.FleetError):
+        supervisor.probe_remote("nope")
+
+
 def test_probe_card_without_version_keeps_last_known(tmp_path, monkeypatch):
     """A card with no/blank version (or unparseable JSON) must not clobber the
     last-known value — last-good wins until the remote reports something new."""

@@ -395,3 +395,80 @@ async def test_health_probe_records_failure(monkeypatch):
     monkeypatch.setattr(ADAPTERS["acp"], "probe", boom)
     await H._probe_all()
     assert H._HEALTH["p"]["ok"] is False and "nope" in H._HEALTH["p"]["error"]
+
+
+# ── per-delegate backoff (remote-member health robustness) ─────────────────────
+
+
+def test_backoff_delay_grows_then_caps():
+    # healthy → base; each consecutive failure doubles; pinned at the ceiling.
+    assert H._backoff_delay(0) == H._BACKOFF_BASE_S
+    assert H._backoff_delay(1) == H._BACKOFF_BASE_S * 2
+    assert H._backoff_delay(2) == H._BACKOFF_BASE_S * 4
+    seq = [H._backoff_delay(i) for i in range(0, 8)]
+    assert seq == sorted(seq)  # monotonically non-decreasing
+    assert max(seq) == H._BACKOFF_MAX_S  # eventually caps
+    assert H._backoff_delay(100) == H._BACKOFF_MAX_S  # stays capped
+
+
+async def test_health_backoff_skips_until_due_then_resets_on_success(monkeypatch):
+    H._HEALTH.clear()
+    H._FAILURES.clear()
+    H._NEXT_DUE.clear()
+    import plugins.delegates.store as store
+
+    monkeypatch.setattr(
+        store, "merged_delegates", lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}]
+    )
+    calls = {"n": 0}
+    outcome = {"ok": False}
+
+    async def probe(d):
+        calls["n"] += 1
+        return {"ok": outcome["ok"]}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", probe)
+
+    # t=0: first probe FAILS → backed off to base*2 out.
+    await H._probe_all(now=0.0)
+    assert calls["n"] == 1 and H._FAILURES["p"] == 1
+    assert H._NEXT_DUE["p"] == H._backoff_delay(1)  # 0 + base*2
+
+    # not yet due → skipped (a flaky peer isn't hammered every tick).
+    await H._probe_all(now=H._backoff_delay(1) - 1.0)
+    assert calls["n"] == 1
+
+    # exactly due → re-probed, fails again → window widens further.
+    due1 = H._NEXT_DUE["p"]
+    await H._probe_all(now=due1)
+    assert calls["n"] == 2 and H._FAILURES["p"] == 2
+    assert H._NEXT_DUE["p"] == due1 + H._backoff_delay(2)
+
+    # success resets to the base cadence and clears the failure count.
+    outcome["ok"] = True
+    due2 = H._NEXT_DUE["p"]
+    await H._probe_all(now=due2)
+    assert calls["n"] == 3 and "p" not in H._FAILURES
+    assert H._NEXT_DUE["p"] == due2 + H._BACKOFF_BASE_S
+
+
+async def test_health_backoff_state_pruned_with_delegate(monkeypatch):
+    H._HEALTH.clear()
+    H._FAILURES.clear()
+    H._NEXT_DUE.clear()
+    import plugins.delegates.store as store
+
+    monkeypatch.setattr(
+        store, "merged_delegates", lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}]
+    )
+
+    async def boom(d):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", boom)
+    await H._probe_all(now=0.0)
+    assert "p" in H._FAILURES and "p" in H._NEXT_DUE
+
+    monkeypatch.setattr(store, "merged_delegates", lambda: [])
+    await H._probe_all(now=1.0)
+    assert "p" not in H._HEALTH and "p" not in H._FAILURES and "p" not in H._NEXT_DUE

@@ -321,35 +321,62 @@ def remove_remote(ident: str) -> dict:
 # Reachability probes are network calls — keep them OFF the status() path (it runs on
 # every 3s console poll). `refresh_remote_probes()` is sync + TTL-guarded; the fleet
 # route calls it via asyncio.to_thread before status(), so the loop never blocks.
-_PROBE_TTL = 10.0
+# TTL aligns with the 3s console poll so a just-downed remote doesn't keep showing
+# 'running' for a full poll-and-a-bit after it dies.
+_PROBE_TTL = 3.0
 _probe_cache: dict[str, tuple[bool, float]] = {}
 
 
-def refresh_remote_probes(timeout: float = 1.0) -> None:
+def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
+    """Probe ONE remote's A2A card: refresh its reachability cache + persist a changed
+    version. Returns ``(reachable, version-from-card-or-blank)``. Network call — keep it
+    off the event loop."""
     import httpx
 
+    version = ""
+    try:
+        r = httpx.get(f"{rec['url']}/.well-known/agent-card.json", timeout=timeout)
+        alive = r.status_code == 200
+        if alive:
+            try:
+                # The A2A card carries the remote's app version (pyproject
+                # [project].version) — same unauthenticated endpoint the
+                # reachability probe already hits, no extra round-trip.
+                version = str(r.json().get("version", "") or "")
+            except ValueError:
+                version = ""
+    except httpx.HTTPError:
+        alive = False
+    _probe_cache[rec["id"]] = (alive, time.monotonic())
+    if version and version != rec.get("version"):
+        _record_remote_version(rec["id"], version)
+    return alive, version
+
+
+def refresh_remote_probes(timeout: float = 1.0) -> None:
     now = time.monotonic()
     for rec in list_remotes():
         hit = _probe_cache.get(rec["id"])
         if hit and now - hit[1] < _PROBE_TTL:
             continue
-        version = ""
-        try:
-            r = httpx.get(f"{rec['url']}/.well-known/agent-card.json", timeout=timeout)
-            alive = r.status_code == 200
-            if alive:
-                try:
-                    # The A2A card carries the remote's app version (pyproject
-                    # [project].version) — same unauthenticated endpoint the
-                    # reachability probe already hits, no extra round-trip.
-                    version = str(r.json().get("version", "") or "")
-                except ValueError:
-                    version = ""
-        except httpx.HTTPError:
-            alive = False
-        _probe_cache[rec["id"]] = (alive, now)
-        if version and version != rec.get("version"):
-            _record_remote_version(rec["id"], version)
+        _probe_one(rec, timeout)
+
+
+def probe_remote(ident: str, timeout: float = 1.0) -> tuple[bool, str]:
+    """Probe a SINGLE remote member (by id or name) NOW, bypassing the TTL — used at
+    register time so the caller (console/CLI) learns reachability immediately instead of
+    waiting for the next 3s poll. Returns ``(reachable, version)`` where version falls back
+    to the last-known when the card carries none. ``FleetError`` if no such remote.
+
+    Registration is never rejected for an unreachable peer (deferred registration is
+    intentional — a peer can come online later); this just lets the caller warn up front."""
+    remotes = _load_remotes()
+    rid = ident if ident in remotes else next((k for k, r in remotes.items() if r["name"] == ident), None)
+    if rid is None:
+        raise FleetError(f"no remote member {ident!r}")
+    rec = remotes[rid]
+    alive, version = _probe_one(rec, timeout)
+    return alive, version or str(rec.get("version", "") or "")
 
 
 def _record_remote_version(rid: str, version: str) -> None:
