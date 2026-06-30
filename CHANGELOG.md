@@ -70,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance's data) into the new location. Use `config explain` to see the resolved layout.
 
 ### Fixed
+- **Docs reader: in-content cross-reference links route in-app instead of breaking the iframe**
+  (#1456) — clicking a cross-reference link inside a rendered doc page used to navigate *inside*
+  the embed frame, loading a bare page stripped of the docs nav/search in a cramped frame. The
+  reader now intercepts content-link clicks: a link that resolves to a bundled doc — relative
+  (`./adr.md`, `../guides/skills.md`) or VitePress abs-rooted (`/adr/0060-…`, `/guides/`) — opens
+  **in-panel** (carrying any `#anchor`, with client-side heading slugs so anchors land); anything
+  else (external, or a doc not in the bundle) opens at the live docs site in a new tab. In-page
+  `#section` links scroll the reader instead of reloading it.
 - **A crashed co-located fleet member is now detected and restartable** (#1474) — a member the hub
   spawned is its child process, so a SIGKILL crash left it a zombie that `os.kill(pid, 0)` reported
   as *alive*: `/api/fleet` kept showing it running and a restart no-op'd on the dead pid. `_alive()`

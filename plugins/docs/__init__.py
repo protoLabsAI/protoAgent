@@ -171,12 +171,56 @@ if (new URLSearchParams(location.search).get("mode")==="search") document.body.c
 const $list=document.getElementById("list"), $reader=document.getElementById("reader"), $q=document.getElementById("q");
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 async function api(p){ try{ const r=await kit.apiFetch("/api/plugins/docs"+p); return r.ok?await r.json():null; }catch(e){ return null; } }
-async function openDoc(path){
-  const d=await api("/doc?path="+encodeURIComponent(path));
-  $reader.innerHTML = d ? '<article class="md">'+d.html+'</article>' : '<div class="empty">Could not load.</div>';
-  $reader.scrollTop=0;
-  [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
+const LIVE_DOCS="https://agent.protolabs.studio/docs/";  // Cloudflare build folds the docs in here (config.mts)
+const slugify=s=>String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").toLowerCase();
+let currentPath=null;
+// Resolve a doc link — relative (`./x.md`, `../sec/y.md`) or VitePress abs-rooted (`/sec/z`,
+// `/sec/`) — against the current doc's dir into ORDERED corpus rel-path candidates to try.
+// Clean links (no .md) may map to `z.md` OR a section index `z/index.md`; a trailing slash
+// is always a section index. Returns [] for an unresolvable link (→ live-docs fallback).
+function candidatePaths(fromPath, rawPath){
+  let parts;
+  if(rawPath.startsWith("/")) parts=[];
+  else { const dir=fromPath.includes("/")?fromPath.slice(0,fromPath.lastIndexOf("/")):""; parts=dir?dir.split("/"):[]; }
+  const trailingSlash=/\/$/.test(rawPath);
+  for(const seg of rawPath.split("/")){ if(seg===""||seg===".")continue; if(seg==="..")parts.pop(); else parts.push(seg); }
+  const joined=parts.join("/");
+  if(!joined) return [];
+  if(trailingSlash) return [joined+"/index.md"];
+  if(/\.md$/i.test(joined)) return [joined];
+  return [joined+".md", joined+"/index.md"];
 }
+function liveDocsUrl(fromPath, rawPath, anchor){
+  const c=candidatePaths(fromPath, rawPath);
+  const p=(c[0]||rawPath.replace(/^\/+/,"")).replace(/\/index\.md$/i,"/").replace(/\.md$/i,"");
+  return LIVE_DOCS+p+(anchor?("#"+anchor):"");
+}
+function addHeadingIds(){ $reader.querySelectorAll(".md h1,.md h2,.md h3,.md h4,.md h5,.md h6").forEach(h=>{ if(!h.id) h.id=slugify(h.textContent||""); }); }
+function scrollToAnchor(anchor){ if(!anchor){ $reader.scrollTop=0; return; } const a=decodeURIComponent(anchor); const el=document.getElementById(a)||document.getElementById(slugify(a)); if(el)el.scrollIntoView({block:"start"}); else $reader.scrollTop=0; }
+async function fetchDoc(path){ return api("/doc?path="+encodeURIComponent(path)); }
+function renderDoc(path, d, anchor){
+  currentPath=path;
+  $reader.innerHTML='<article class="md">'+d.html+'</article>';
+  addHeadingIds();
+  [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
+  scrollToAnchor(anchor);
+}
+async function openDoc(path){ const d=await fetchDoc(path); if(d) renderDoc(path,d); else $reader.innerHTML='<div class="empty">Could not load.</div>'; }
+// In-content cross-reference links: don't let the click reload the target INSIDE this iframe
+// (cramped, loses the docs chrome). Resolve to a corpus doc → open in-panel (preferred);
+// else open the live docs site in a new tab (fallback). In-page anchors scroll the reader;
+// external/scheme links open a new tab (browser: a tab; desktop: the system browser, #1450).
+$reader.addEventListener("click", async (e)=>{
+  const a=e.target.closest("a[href]"); if(!a||!$reader.contains(a)) return;
+  const href=a.getAttribute("href")||""; if(!href) return;
+  if(href.startsWith("#")){ e.preventDefault(); scrollToAnchor(href.slice(1)); return; }
+  if(/^[a-z][\w+.-]*:/i.test(href)||href.startsWith("//")){ e.preventDefault(); window.open(href,"_blank","noopener,noreferrer"); return; }
+  e.preventDefault();
+  const hi=href.indexOf("#"); const rawPath=hi>=0?href.slice(0,hi):href; const anchor=hi>=0?href.slice(hi+1):"";
+  if(!rawPath){ scrollToAnchor(anchor); return; }
+  for(const c of candidatePaths(currentPath||"", rawPath)){ const d=await fetchDoc(c); if(d){ renderDoc(c,d,anchor); return; } }
+  window.open(liveDocsUrl(currentPath||"", rawPath, anchor), "_blank", "noopener,noreferrer");
+});
 function renderTree(sections){
   const item=it=>'<a class="item" data-path="'+esc(it.path)+'" title="'+esc(it.path)+'">'+esc(it.title)+'</a>';
   $list.innerHTML = sections.map(s=>'<div class="sec">'+esc(s.label)+'</div>'+
