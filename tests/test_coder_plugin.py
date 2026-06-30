@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from plugins.coder.generate import extract_code
 from plugins.coder.solve import Budget, Verdict, solve
-from plugins.coder.verify import run_tests
+from plugins.coder.verify import _parse, run_tests
 
 
 # ── ladder helpers ────────────────────────────────────────────────────────────
@@ -79,6 +79,16 @@ async def test_no_oracle_degrades_to_greedy():
     assert "verif" in res.note.lower()
 
 
+async def test_budget_zero_with_verifier_is_unknown_not_failed():
+    # Budget exhausted before any generation: the oracle never ran ⇒ passed is None
+    # ("unknown"), not False ("ran and failed").
+    gen, calls = _gen_sequence(["x"])
+    res = await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(0))
+    assert res.passed is None
+    assert res.rung == "none"
+    assert calls["n"] == 0
+
+
 async def test_budget_caps_generations():
     # budget of 1 ⇒ only the greedy gen; no best-of-k, no refine, even though all fail.
     gen, calls = _gen_sequence(["bad", "good", "good", "good"])
@@ -115,6 +125,22 @@ async def test_run_tests_reports_failing_case():
     assert v.failed >= 1
     assert any("test_add" in name for name in v.failing)
     assert v.feedback()  # non-empty model-facing summary
+
+
+def test_parse_ignores_candidate_stdout_pollution():
+    # A candidate that prints a pytest-looking count must not pollute the verdict:
+    # only the real summary line (with the "in <t>s" suffix) is parsed.
+    output = "1000 passed\n5 failed\n===== 1 failed, 2 passed in 0.04s =====\n"
+    v = _parse(output, returncode=1)
+    assert v.total == 3 and v.failed == 1
+    assert v.passed is False
+
+
+def test_parse_no_summary_with_error_exit_is_failed():
+    # Collection/import error: no count summary, non-zero exit ⇒ failed, not passed.
+    v = _parse("ImportError: no module named solution\n", returncode=2)
+    assert v.passed is False
+    assert v.failed == 1 and v.total == 1
 
 
 # ── code extraction ──────────────────────────────────────────────────────────

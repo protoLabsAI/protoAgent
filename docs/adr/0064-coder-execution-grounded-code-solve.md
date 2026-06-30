@@ -1,6 +1,6 @@
 # 0064 — `coder`: execution-grounded code-solve (the board's verifier-grounded coder)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-29
 - Builds on: ADR 0002 (reusable subagent workflows), ADR 0020 (subagents via the
   `task` tool), ADR 0024 (spawn CLI coding agents over ACP), ADR 0025 (unified
