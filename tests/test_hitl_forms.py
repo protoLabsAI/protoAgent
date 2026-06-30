@@ -23,6 +23,16 @@ def test_request_user_input_in_deferred_base():
     assert "request_user_input" in DEFERRED_BASE_TOOL_NAMES
 
 
+def test_request_user_input_rejects_empty_steps():
+    # A zero-step form degrades to a bare free-text box (dropping the structured
+    # contract), so the tool guards it and returns guidance instead of interrupting.
+    from tools.lg_tools import request_user_input
+
+    out = request_user_input.invoke({"title": "Pick", "steps": []})
+    assert isinstance(out, str) and out.startswith("Error:")
+    assert "ask_human" in out
+
+
 # ── interrupt → input-required payload shaping ────────────────────────────────
 
 
@@ -42,3 +52,87 @@ def test_plain_value_degrades_to_question():
     # (never silently dropped).
     out = server._interrupt_payload({"foo": 1})
     assert "question" in out and "foo" in out["question"]
+
+
+# ── autonomous-turn HITL guard ────────────────────────────────────────────────
+# A scheduler/inbox/webhook/background turn has no operator watching the chat, so a HITL
+# pause would park the task in input-required forever (and that state is TTL-exempt). The
+# native turn must auto-answer the interrupt and complete instead of parking.
+
+import importlib
+
+import pytest
+
+from runtime.state import STATE
+
+# `server.chat` the attribute is shadowed by the re-exported `chat` function in
+# server/__init__.py, so resolve the actual submodule from sys.modules.
+chat_mod = importlib.import_module("server.chat")
+
+
+class _FakeTurnStream:
+    """Stand-in for ``_run_turn_stream``: records each pass's ``resume_value`` and yields a
+    HITL interrupt on the first (fresh) pass, then a real answer once resumed."""
+
+    def __init__(self):
+        self.resume_values: list = []
+
+    def __call__(self, message, session_id, config, *, resume_value=None, **_kw):
+        self.resume_values.append(resume_value)
+        first = len(self.resume_values) == 1
+
+        async def _gen():
+            if first:
+                yield ("input_required", {"question": "Which environment?"})
+            else:
+                yield ("text", "Proceeding with staging.")
+                yield ("__raw__", "Proceeding with staging.")
+
+        return _gen()
+
+
+async def _collect(agen):
+    return [frame async for frame in agen]
+
+
+@pytest.mark.asyncio
+async def test_autonomous_turn_auto_answers_hitl(monkeypatch):
+    # No goal controller → the goal-verification block is skipped; isolate the turn loop.
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    fake = _FakeTurnStream()
+    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+
+    frames = await _collect(
+        chat_mod._run_native_turn(
+            "run the deploy",
+            "s-auto",
+            {"configurable": {"thread_id": "t-auto"}},
+            request_metadata={"origin": "scheduler"},
+        )
+    )
+    kinds = [k for k, _ in frames]
+    assert "input_required" not in kinds  # never parks an autonomous turn
+    assert ("done", "Proceeding with staging.") in frames  # it ran to completion
+    # The interrupt was resumed with the no-operator sentinel (first pass is the fresh input).
+    assert fake.resume_values[0] is None
+    assert chat_mod._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
+
+
+@pytest.mark.asyncio
+async def test_operator_turn_still_parks_on_hitl(monkeypatch):
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    fake = _FakeTurnStream()
+    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+
+    frames = await _collect(
+        chat_mod._run_native_turn(
+            "merge it",
+            "s-op",
+            {"configurable": {"thread_id": "t-op"}},
+            request_metadata={},  # empty origin = live operator → must still park
+        )
+    )
+    kinds = [k for k, _ in frames]
+    assert "input_required" in kinds  # parked for the human to answer
+    assert "done" not in kinds  # a parked turn yields no terminal answer
+    assert fake.resume_values == [None]  # never auto-resumed

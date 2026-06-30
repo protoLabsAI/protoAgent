@@ -756,6 +756,25 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
     return lock
 
 
+# Origins (ADR 0022) whose turns run with NO operator watching the chat: a HITL pause
+# (ask_human / request_user_input) on one of these would park the task in input-required
+# FOREVER — and that state is deliberately exempt from the TTL sweep, so it never settles.
+# Live operator turns carry an empty origin (they keep parking — a human is watching);
+# inbound `a2a` calls are excluded too, because the remote caller can itself resume the
+# input-required task. For everything here, we auto-answer the interrupt instead of parking.
+_AUTONOMOUS_ORIGINS = frozenset({"scheduler", "inbox", "webhook", "background"})
+
+# What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
+# finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps
+# re-asking can't auto-answer in an infinite loop (past the cap we fall back to parking).
+_AUTONOMOUS_HITL_SENTINEL = (
+    "[no interactive operator available] This turn is running autonomously "
+    "(scheduled / inbox / background), so no human can answer right now. Do not wait for "
+    "input — proceed using your best judgment and explicitly state any assumption you made."
+)
+_MAX_AUTONOMOUS_AUTOANSWERS = 3
+
+
 async def _run_native_turn(message, session_id, config, *, request_metadata=None, resume=False, images=None):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal confidence + done
@@ -777,28 +796,50 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     accumulated_raw = ""
     paused = False
     last_tool_out = ""  # streaming equivalent of _last_tool_text — the empty-turn fallback answer
+    # An autonomous turn (no operator watching) must never deadlock on a HITL pause: when one
+    # of these turns hits input_required we resume the graph with a "no operator" sentinel and
+    # run another pass, up to a cap, instead of parking the task forever (see _AUTONOMOUS_*).
+    _autonomous = ((request_metadata or {}).get("origin") or "").strip().lower() in _AUTONOMOUS_ORIGINS
+    _resume_value = (message if resume else None)
+    _auto_answers = 0
     with goal_turn(goal_active):
-        async for kind, payload in _run_turn_stream(
-            message,
-            session_id,
-            config,
-            resume_value=(message if resume else None),
-            images=images,
-            model=_model,
-            reasoning_effort=_effort,
-        ):
-            if kind == "__raw__":
-                accumulated_raw = payload
-            elif kind == "input_required":
-                # Agent paused for human input — surface it and park the turn; the A2A
-                # runner sets the task input-required and the caller resumes via
-                # message/send on the same taskId.
-                yield (kind, payload)
-                paused = True
-            else:
-                if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
-                    last_tool_out = str(payload["output"])
-                yield (kind, payload)
+        while True:
+            _autoanswer_pending = False
+            async for kind, payload in _run_turn_stream(
+                message,
+                session_id,
+                config,
+                resume_value=_resume_value,
+                images=images,
+                model=_model,
+                reasoning_effort=_effort,
+            ):
+                if kind == "__raw__":
+                    accumulated_raw = payload
+                elif kind == "input_required":
+                    if _autonomous and _auto_answers < _MAX_AUTONOMOUS_AUTOANSWERS:
+                        # No human can answer — auto-answer this interrupt and re-run the turn
+                        # so it completes, rather than parking an (un-sweepable) input-required
+                        # task. The graph is checkpointed at the interrupt; the resume below
+                        # feeds the sentinel as ask_human / request_user_input's return value.
+                        _autoanswer_pending = True
+                    else:
+                        # Operator/a2a turn (or the auto-answer budget is spent): surface it and
+                        # park the turn; the A2A runner sets the task input-required and the
+                        # caller resumes via message/send on the same taskId.
+                        yield (kind, payload)
+                        paused = True
+                else:
+                    if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
+                        last_tool_out = str(payload["output"])
+                    yield (kind, payload)
+            if not _autoanswer_pending:
+                break
+            # Resume past the interrupt with the no-operator sentinel and run another pass;
+            # images belong only to the first (fresh) pass, so drop them on resume.
+            _auto_answers += 1
+            _resume_value = _AUTONOMOUS_HITL_SENTINEL
+            images = None
 
     # A paused turn produced no final answer — don't run the dropped-scratch kicker or
     # goal verification; the task is parked.

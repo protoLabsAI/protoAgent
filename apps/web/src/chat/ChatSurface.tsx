@@ -787,6 +787,22 @@ function ChatSessionSlot({
     );
   }
 
+  // Dismiss a paused (input-required) form/question WITHOUT answering it. Clearing the card
+  // alone would leave the task parked in input-required forever — that state is exempt from
+  // the server TTL sweep, so the LangGraph thread would never settle. Instead RESUME the turn
+  // with an explicit "dismissed" sentinel so the agent continues and the task reaches a
+  // terminal state. A dismissal isn't conversation content, so resume silently and continue
+  // the paused assistant message (matching the approval-resume path) rather than minting a
+  // new bubble.
+  async function dismissHitl() {
+    setHitl(null);
+    void runTurn(
+      "[dismissed] The operator dismissed this request without providing input. Continue " +
+        "without it — proceed using your best judgment, or stop and explain what you need.",
+      { hidden: true, resumeMessageId: lastAssistantId },
+    );
+  }
+
   async function runTurn(
     content: string,
     opts: {
@@ -1147,7 +1163,7 @@ function ChatSessionSlot({
           payload={hitl}
           busy={status === "streaming"}
           onSubmit={resumeHitl}
-          onCancel={() => setHitl(null)}
+          onCancel={dismissHitl}
           onApproveAlways={
             hitl.kind === "approval" && session
               ? () => {

@@ -92,3 +92,99 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Wizard header + step indicator (multi-step request_user_input). */
+.hitl-wizard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hitl-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hitl-step-count {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.hitl-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.hitl-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.hitl-dot[data-state="active"] {
+  background: var(--brand-indigo, #6366f1);
+}
+
+.hitl-dot[data-state="done"] {
+  background: var(--fg-muted);
+}
+
+/* Option cards (AskUserQuestion-style choice fields). */
+.hitl-field-choice > span {
+  color: var(--fg-secondary);
+}
+
+.hitl-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.hitl-card-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+  padding: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+
+.hitl-card-option:hover {
+  border-color: var(--brand-indigo, #6366f1);
+}
+
+.hitl-card-option[data-selected] {
+  border-color: var(--brand-indigo, #6366f1);
+  background: color-mix(in srgb, var(--brand-indigo, #6366f1) 12%, var(--bg));
+}
+
+.hitl-card-mark {
+  line-height: 1.2;
+  color: var(--brand-indigo, #6366f1);
+}
+
+.hitl-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hitl-card-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.hitl-card-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+}

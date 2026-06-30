@@ -65,6 +65,11 @@ def ask_human(question: str) -> str:
     from this call so you can continue. Do NOT use it for narration or status —
     only for an answer you must wait on. Phrase ``question`` as a clear,
     self-contained ask.
+
+    Autonomous turns (scheduled / inbox / background) have no operator watching the
+    chat, so don't block on a human here — prefer proceeding with your best judgment
+    and stating the assumption. (If you do ask on such a turn, the runtime
+    auto-answers it so the turn can't deadlock.)
     """
     # LangGraph HITL: interrupt() checkpoints the graph at this exact point. On
     # resume (Command(resume=answer)) it returns the operator's reply. Requires a
@@ -80,17 +85,47 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
     """Ask the operator for **structured** input via a form dialog, then continue
     with their response. Use when you need specific values, choices, credentials,
     or config — anything better captured as form fields than free text. The task
-    pauses (surfaced as ``input-required``) until they submit; their response (a
-    JSON object keyed by field name) is returned from this call.
+    pauses (surfaced as ``input-required``) until they submit; their response (the
+    submitted fields, as a JSON object) is returned from this call.
 
-    ``steps`` is a list of form steps — multiple steps render as a wizard. Each
-    step is ``{"schema": <JSON Schema draft-07 of the fields>, "uiSchema"?: <layout
-    hints>, "title"?: str, "description"?: str}``. Phrase the ask clearly and only
-    request fields you actually need. For a single free-text or yes/no question,
-    use ``ask_human`` instead.
+    ``steps`` is a list of form steps. Multiple steps render as a sequential
+    **wizard** (one step per screen with Back / Next and a progress indicator); the
+    operator advances through them and the final step submits every step's answers
+    together as one object. Use several steps to pace a longer series of questions;
+    use one step for a simple form. Each step is ``{"schema": <JSON Schema draft-07
+    of the step's fields>, "title"?: str, "description"?: str}`` — supply at least
+    one step that defines fields.
+
+    Field types (per property in a step's ``schema.properties``):
+    - text / number / boolean → ``{"type": "string"|"number"|"integer"|"boolean"}``;
+      add ``"format": "textarea"`` for multi-line text.
+    - **single-choice cards** (preferred for "pick one of these") →
+      ``{"type": "string", "oneOf": [{"const": "pg", "title": "Postgres",
+      "description": "Durable, multi-writer"}, {"const": "sqlite", "title": "SQLite",
+      "description": "Zero-config"}]}``. Each option shows its label + description as
+      a selectable card. (A bare ``"enum": [...]`` renders as a plain dropdown.)
+    - **multi-choice cards** ("pick any") → wrap the same options in an array:
+      ``{"type": "array", "items": {"oneOf": [...]}}`` → the value is a list.
+    Mark a field required via the step schema's ``"required": [...]``; required
+    fields gate Next / Submit.
+
+    Phrase the ask clearly and only request fields you actually need. For a single
+    free-text or yes/no question, use ``ask_human`` instead. As with ``ask_human``,
+    don't block on this in an autonomous turn — there may be no operator to submit
+    the form (the runtime auto-answers it there).
     """
     import json
     from langgraph.types import interrupt
+
+    # A form with no steps renders as a bare free-text box (the console treats zero-step
+    # payloads as an ask_human prompt), silently dropping the structured contract — guide
+    # the model back instead of degrading. The LLM reads this and retries.
+    if not steps:
+        return (
+            "Error: request_user_input needs at least one form step. Pass "
+            'steps=[{"schema": {"type": "object", "properties": {…}, "required": […]}}], '
+            "or use ask_human for a single free-text or yes/no question."
+        )
 
     response = interrupt(
         {
@@ -1089,10 +1124,11 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
     """
-    # ask_human is a lead-agent HITL tool — it pauses the A2A turn via a
-    # LangGraph interrupt that only the lead turn's runner resumes. Subagents
-    # (run outside that runner) must not get it, so it's gated by allowlist:
-    # present in the full set for the lead agent, absent from subagent allowlists.
+    # ask_human AND request_user_input are lead-agent HITL tools — each pauses the A2A
+    # turn via a LangGraph interrupt that only the lead turn's runner resumes. Subagents
+    # (run outside that runner, on a graph with no checkpointer) must not get either, so
+    # they're gated by allowlist: present in the full set for the lead agent, absent from
+    # every subagent allowlist in graph/subagents/config.py. Don't add them to one.
     # show_component (inline component rendering, ADR 0051 / #1323): table/keyvalue/timeline
     # widgets rendered inline in chat by the console's extensible component registry.
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, load_skill, show_component]
