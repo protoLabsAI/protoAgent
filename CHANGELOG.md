@@ -15,6 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"Manage plugins…" in the rail context menus** (#1426) — right-clicking empty rail space or any
   rail icon now offers **Manage plugins…**, which opens the plugin manager (Settings ▸
   Integrations). It's the all-plugins counterpart to a plugin icon's per-plugin *Configure…*.
+- **Reveal toggle on secret fields** (#1442) — every masked secret/token input (settings secrets,
+  delegate auth tokens, the operator-token gate, MCP server secrets, the setup-wizard API key) now
+  carries an eye button to show what you typed or pasted, so you can verify a key before saving.
+
+### Changed
+- **Settings true-up — one canonical config system** (#1428, #1432–#1442; ADR 0048 §6) — the
+  console's settings, plus the Playbooks and Knowledge surfaces, were unified onto the canonical
+  `/api/settings` cascade and TanStack Query (no more bespoke `/api/config` writers or hand-rolled
+  fetches), and a wave of console controls moved to the shared `@protolabsai/ui` design system
+  (button loading states, toast positioning, icon search inputs, segmented category filters, secret
+  inputs). Mostly invisible, but settings and list surfaces now load, error, and behave consistently.
+
+### Fixed
+- **Settings surfaces no longer swallow load/save errors** (#1430, #1431) — the Skills, MCP,
+  Plugins, and Knowledge surfaces now report a failed load or save via a toast instead of failing
+  silently.
+- **Identity name and fleet delegates save through the canonical settings cascade** (#1428) —
+  retired the last two `/api/config` writers, so these fields persist like every other setting
+  (host/agent scoping, hot reload) instead of via a side path.
 
 ## [0.75.0] - 2026-06-29
 
