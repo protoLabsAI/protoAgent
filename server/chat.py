@@ -338,6 +338,19 @@ async def _pending_interrupt_value(config: dict):
     return getattr(pending[0], "value", pending[0])
 
 
+async def _clear_pending_interrupt(config: dict) -> None:
+    """Discard a pending (un-resumed) LangGraph interrupt so the thread is left in a clean,
+    non-interrupted state. Used when an autonomous turn gives up on a HITL pause it can't
+    answer (below): ``aupdate_state(config, None)`` advances the checkpoint past the interrupt
+    WITHOUT running the model — verified to clear ``snapshot.interrupts`` and let the next
+    fresh-input turn run clean. Best-effort: a failure here must never break the turn, and the
+    next fresh turn supersedes a stray interrupt anyway."""
+    try:
+        await STATE.graph.aupdate_state(config, None)
+    except Exception:  # noqa: BLE001 — clearing is defensive; never break the turn
+        log.debug("[hitl] could not clear pending interrupt on autonomous give-up", exc_info=True)
+
+
 def _last_tool_text(result) -> str:
     """The last tool result's text in a turn — the fallback when a turn produced
     no assistant text (e.g. a ``wait`` yield, whose 'Yielding…' confirmation is a
@@ -766,7 +779,8 @@ _AUTONOMOUS_ORIGINS = frozenset({"scheduler", "inbox", "webhook", "background"})
 
 # What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
 # finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps
-# re-asking can't auto-answer in an infinite loop (past the cap we fall back to parking).
+# re-asking can't auto-answer in an infinite loop; past the cap we force the turn to complete
+# (clearing the stray interrupt) rather than parking — an autonomous turn must never park.
 _AUTONOMOUS_HITL_SENTINEL = (
     "[no interactive operator available] This turn is running autonomously "
     "(scheduled / inbox / background), so no human can answer right now. Do not wait for "
@@ -805,6 +819,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     with goal_turn(goal_active):
         while True:
             _autoanswer_pending = False
+            _autonomous_giveup = False
             async for kind, payload in _run_turn_stream(
                 message,
                 session_id,
@@ -817,29 +832,39 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                 if kind == "__raw__":
                     accumulated_raw = payload
                 elif kind == "input_required":
-                    if _autonomous and _auto_answers < _MAX_AUTONOMOUS_AUTOANSWERS:
-                        # No human can answer — auto-answer this interrupt and re-run the turn
-                        # so it completes, rather than parking an (un-sweepable) input-required
-                        # task. The graph is checkpointed at the interrupt; the resume below
-                        # feeds the sentinel as ask_human / request_user_input's return value.
-                        _autoanswer_pending = True
-                    else:
-                        # Operator/a2a turn (or the auto-answer budget is spent): surface it and
-                        # park the turn; the A2A runner sets the task input-required and the
-                        # caller resumes via message/send on the same taskId.
+                    if not _autonomous:
+                        # Operator/a2a turn: surface it and park the turn; the A2A runner sets
+                        # the task input-required and the caller resumes via message/send on the
+                        # same taskId. (A human — local or at the remote a2a caller — can answer.)
                         yield (kind, payload)
                         paused = True
+                    elif _auto_answers < _MAX_AUTONOMOUS_AUTOANSWERS:
+                        # No human can answer — auto-answer this interrupt and re-run the turn so
+                        # it completes, rather than parking an (un-sweepable) input-required task.
+                        # The graph is checkpointed at the interrupt; the resume below feeds the
+                        # sentinel as ask_human / request_user_input's return value.
+                        _autoanswer_pending = True
+                    else:
+                        # Still asking after the auto-answer budget is spent: an autonomous turn
+                        # must NEVER park, so give up on the pause and force the turn to a
+                        # terminal state. The stray interrupt is cleared after the loop.
+                        _autonomous_giveup = True
                 else:
                     if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
                         last_tool_out = str(payload["output"])
                     yield (kind, payload)
-            if not _autoanswer_pending:
-                break
-            # Resume past the interrupt with the no-operator sentinel and run another pass;
-            # images belong only to the first (fresh) pass, so drop them on resume.
-            _auto_answers += 1
-            _resume_value = _AUTONOMOUS_HITL_SENTINEL
-            images = None
+            if _autoanswer_pending:
+                # Resume past the interrupt with the no-operator sentinel and run another pass;
+                # images belong only to the first (fresh) pass, so drop them on resume.
+                _auto_answers += 1
+                _resume_value = _AUTONOMOUS_HITL_SENTINEL
+                images = None
+                continue
+            if _autonomous_giveup:
+                # Discard the un-answered interrupt so the checkpoint isn't left dangling, then
+                # fall through to the normal completion path below (extract_output → done).
+                await _clear_pending_interrupt(config)
+            break
 
     # A paused turn produced no final answer — don't run the dropped-scratch kicker or
     # goal verification; the task is parked.
