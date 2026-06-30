@@ -24,8 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `check_artifact` tool returns the latest render verdict on demand. Closes the code→render→fix
   loop so the agent self-corrects instead of guessing. The wait is gated on a live panel, so
   headless/closed-panel runs never block.
+- **Multi-step wizard + choice-card HITL forms** (#1464) — `request_user_input` now renders
+  multiple `steps` as a real sequential **Back/Next wizard** (step indicator, per-step
+  required-field validation) instead of one scrollable form, and supports AskUserQuestion-style
+  **option cards** — a field with `oneOf: [{const, title, description}]` renders as selectable
+  cards (single-select; `type: "array"` for multi-select), alongside the existing
+  text/number/boolean/enum fields. See [Starter tools](/reference/starter-tools).
 
 ### Fixed
+- **Autonomous turns no longer deadlock on a human-input pause** (#1464, #1466) — a
+  `scheduler` / `inbox` / `webhook` / `background` turn that calls `ask_human` /
+  `request_user_input` has no operator to answer, so the task used to park in `input-required`
+  forever (a state exempt from the TTL sweep). It now auto-answers the pause with a "no
+  operator — proceed" sentinel (bounded), and past that budget **force-completes** the turn —
+  clearing the stray interrupt — rather than parking. Live operator and inbound-`a2a` turns
+  still park as before. Dismissing a HITL card now resolves the parked task instead of only
+  clearing it client-side.
+- **HITL tools are hard-denied to subagents** (#1469) — `ask_human` / `request_user_input`
+  (resumable only by the lead turn's runner) can no longer be bound to a subagent even if a
+  `SubagentConfig.tools` allowlist names one — enforced in `_subagent_tools`, not just
+  convention. `request_user_input` also rejects an empty `steps` list instead of silently
+  degrading to a free-text box.
 - **Settings surfaces when the agent config shadows a host-scoped field** (#1459) — when a
   `scope="host"` field (e.g. `model.api_base`) is set in both `host-config.yaml` and the agent
   leaf (`langgraph-config.yaml`), the agent value wins at runtime (ADR 0047) but the host console

@@ -3,7 +3,7 @@
 The default tool set (from `tools/lg_tools.py::get_all_tools`):
 
 - Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
-- Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a structured multi-step form) — pause the turn (A2A `input-required`) for the operator and resume with their answer (lead-agent only).
+- Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a multi-step Back/Next form **wizard** with text/number/choice fields, incl. AskUserQuestion-style option cards) — pause the turn (A2A `input-required`) for the operator and resume with their answer. Lead-agent only (hard-denied to subagents); on autonomous turns they don't block — the runtime auto-answers so the turn can't deadlock.
 - The **render tool** `show_component(component, props, title?)` — render structured data inline in chat as a `table`, `keyvalue`, or `timeline` widget instead of a markdown blob ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)). Data-only and safe (no code execution); the console renders it via an **extensible component registry** plugins can add to. For free-form generated HTML/React, use an artifact instead.
 - Four **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
@@ -225,10 +225,41 @@ Pause the turn and ask the human operator a question, then continue with their
 answer (human-in-the-loop, ADR 0003). Issues a LangGraph `interrupt()`, which
 checkpoints the graph at the call site; A2A callers see the task transition to
 `input-required` carrying the question, and resume it by sending a follow-up
-message with the same `taskId`. **Lead-agent only** — it's excluded from
-subagent allowlists, since the interrupt is resumed by the lead turn's runner.
-Use it only for a decision/input you genuinely must wait on (an approval, a
-missing fact), never for narration.
+message with the same `taskId`. **Lead-agent only** — it's hard-denied to
+subagents (the interrupt is resumed by the lead turn's runner, and a subagent has
+no checkpointer to resume one). On an **autonomous turn** (scheduler / inbox /
+webhook / background) no operator is watching, so rather than parking the task
+forever the runtime auto-answers the pause with a "no operator — proceed"
+sentinel (bounded; it force-completes past the budget) — prefer proceeding with a
+stated assumption there instead of asking. Use it only for a decision/input you
+genuinely must wait on (an approval, a missing fact), never for narration.
+
+## `request_user_input`
+
+```python
+@tool
+def request_user_input(title: str, steps: list[dict], description: str = "") -> str
+```
+
+Ask the operator for **structured** input via a form dialog, then continue with
+their response (the submitted fields, as a JSON object). Same HITL mechanics as
+`ask_human` — LangGraph `interrupt()` → A2A `input-required` → resume on the same
+`taskId`; **lead-agent only**, hard-denied to subagents; auto-answered on
+autonomous turns.
+
+`steps` is a list of form steps. Multiple steps render as a sequential **Back/Next
+wizard** (step indicator; required fields gate Next/Submit), and the last step
+submits every step's answers together. Each step is `{"schema": <JSON Schema
+draft-07 of the step's fields>, "title"?: str, "description"?: str}` — supply at
+least one step with fields (an empty `steps` is rejected). Field types per property
+in a step's `schema.properties`:
+
+- **text / number / boolean** — `{"type": "string" | "number" | "integer" | "boolean"}`; add `"format": "textarea"` for multi-line text.
+- **single-choice cards** — `{"type": "string", "oneOf": [{"const": "pg", "title": "Postgres", "description": "Durable, multi-writer"}, …]}`. Each option renders as a selectable card with its label + description. (A bare `"enum": [...]` renders as a plain dropdown.)
+- **multi-choice cards** — wrap the options in an array: `{"type": "array", "items": {"oneOf": [...]}}`; the value is a list.
+
+Mark fields required via the step schema's `"required": [...]`. For a single
+free-text or yes/no question, use `ask_human` instead.
 
 ## `check_inbox`
 
