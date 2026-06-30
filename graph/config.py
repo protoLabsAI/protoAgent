@@ -146,18 +146,22 @@ def _env_default(name: str, default, cast=str):
         return default
 
 
+def _host_scoped_fields():
+    """The host-scoped (ADR 0047 ``scope=="host"``) settings fields — the single
+    source for both the host-layer filter and the shadow check, so they can't drift."""
+    from graph.settings_schema import FIELDS
+
+    return [f for f in FIELDS if getattr(f, "scope", "agent") == "host"]
+
+
 def _filter_to_host_keys(raw: dict) -> dict:
     """Keep only the host-scoped FIELDS keys present in a raw host-config doc.
 
     The Host file can set box-shared defaults but **cannot inject agent-only
     settings** (ADR 0047 D1/D4) — anything outside the ``scope=="host"`` set is
     dropped here before the merge."""
-    from graph.settings_schema import FIELDS
-
     out: dict = {}
-    for f in FIELDS:
-        if getattr(f, "scope", "agent") != "host":
-            continue
+    for f in _host_scoped_fields():
         found, val = _get_dotted(raw, f.key)
         if found:
             _set_dotted(out, f.key, val)
@@ -170,11 +174,7 @@ def _warn_shadowed_host_keys(host_layer: dict, agent_data: dict) -> None:
     ``host-config.yaml`` is silently *shadowed* — otherwise invisible until you read
     the merge (issue #1459). Best-effort: a provenance warning must never break boot."""
     try:
-        from graph.settings_schema import FIELDS
-
-        for f in FIELDS:
-            if getattr(f, "scope", "agent") != "host":
-                continue
+        for f in _host_scoped_fields():
             h_found, h_val = _get_dotted(host_layer, f.key)
             a_found, a_val = _get_dotted(agent_data, f.key)
             if h_found and a_found and a_val not in (None, "") and a_val != h_val:
