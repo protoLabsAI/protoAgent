@@ -38,7 +38,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         the providers themselves is caught too. */}
     <ErrorBoundary fallback={({ error }) => <AppCrash error={error} />}>
       <QueryClientProvider client={queryClient}>
-        <ToastProvider>{launcher ? <Launcher /> : <App />}</ToastProvider>
+        {/* Toasts anchor TOP-right (app-level notifications; clear of the bottom utility
+            bar / composer) via the DS prop — no `.pl-toast-stack` CSS override needed
+            since @protolabsai/ui 0.49 (ToastProvider `position`). */}
+        <ToastProvider position="top-right">{launcher ? <Launcher /> : <App />}</ToastProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>,

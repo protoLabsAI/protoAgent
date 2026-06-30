@@ -688,15 +688,8 @@ select:disabled {
   padding: var(--pl-space-6, 24px);
 }
 
-/* Toasts anchor TOP-right, not the DS default bottom-right — they read as app-level
-   notifications and shouldn't collide with the bottom utility bar / composer. `column-reverse`
-   keeps the NEWEST toast nearest the top-right corner (mirrors the DS's newest-nearest-the-anchor
-   behavior). Loads after the DS overlays.css, so equal specificity wins. */
-.pl-toast-stack {
-  top: var(--pl-space-4, 16px);
-  bottom: auto;
-  flex-direction: column-reverse;
-}
+/* Toast top-right anchoring now comes from the DS prop (`<ToastProvider position="top-right">`,
+   @protolabsai/ui ≥ 0.49) — the `.pl-toast-stack` override that used to live here is retired. */
 
 /* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
    self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
