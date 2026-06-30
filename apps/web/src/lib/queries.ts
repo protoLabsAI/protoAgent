@@ -24,6 +24,7 @@ export const queryKeys = {
   fleet: ["fleet"] as const,
   archetypes: ["archetypes"] as const,
   playbooks: ["playbooks"] as const,
+  knowledge: ["knowledge"] as const,
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll
@@ -201,4 +202,14 @@ export const playbooksQuery = () =>
   queryOptions({
     queryKey: queryKeys.playbooks,
     queryFn: () => api.playbooks(),
+  });
+
+// Knowledge-store search (ADR 0020) — server-side FTS keyed on the (debounced)
+// query string, so each term is its own cache entry. The surface reads it
+// non-suspense with `placeholderData: keepPreviousData` so typing doesn't blank
+// the list; invalidated (whole `knowledge` subtree) after curate / share / ingest.
+export const knowledgeQuery = (q: string) =>
+  queryOptions({
+    queryKey: [...queryKeys.knowledge, q] as const,
+    queryFn: () => api.knowledgeSearch(q),
   });

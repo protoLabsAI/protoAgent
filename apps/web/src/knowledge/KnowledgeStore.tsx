@@ -1,6 +1,8 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
+import { Alert } from "@protolabsai/ui/data";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownFromLine, ArrowUpToLine, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
@@ -9,6 +11,7 @@ import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
+import { knowledgeQuery, queryKeys } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
@@ -20,6 +23,11 @@ import type { KnowledgeChunk } from "../lib/types";
 // The operator can also CURATE the store here: add a fact, fix a stale chunk,
 // delete a wrong one. Edit replaces the chunk server-side (new id — the new
 // revision is added before the old row is dropped, and a hybrid store re-embeds).
+//
+// Search is read with `useQuery` (not `useSuspenseQuery`) + keepPreviousData
+// (ADR 0013): it's a search-as-you-type surface, so suspending on each new term
+// would blank the list every keystroke. A read failure is a contained <Alert>;
+// each write is a `useMutation` that toasts on failure and invalidates the list.
 
 type Draft = { heading: string; domain: string; content: string };
 const EMPTY_DRAFT: Draft = { heading: "", domain: "general", content: "" };
@@ -90,44 +98,42 @@ function IngestForm({
   onError,
   onClose,
 }: {
-  onDone: () => void | Promise<void>;
+  onDone: () => void;
   onError: (message: string) => void;
   onClose: () => void;
 }) {
   const [url, setUrl] = useState("");
   const [domain, setDomain] = useState("general");
-  const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
   const [note, setNote] = useState("");
 
-  async function ingest(form: FormData) {
-    setBusy(true);
-    setNote("");
-    onError("");
-    try {
+  const ingest = useMutation({
+    mutationFn: (form: FormData) => {
       form.set("domain", domain.trim() || "general");
-      const r = await api.ingestKnowledge(form);
+      return api.ingestKnowledge(form);
+    },
+    onSuccess: (r) => {
       setNote(`Added ${r.chunks} chunk${r.chunks === 1 ? "" : "s"}${r.title ? ` from “${r.title}”` : ""}.`);
       setUrl("");
-      await onDone();
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+      onDone();
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+  const busy = ingest.isPending;
 
   function ingestFile(file: File) {
     const f = new FormData();
     f.append("file", file);
-    void ingest(f);
+    setNote("");
+    ingest.mutate(f);
   }
 
   function ingestUrl() {
     if (!url.trim()) return;
     const f = new FormData();
     f.append("url", url.trim());
-    void ingest(f);
+    setNote("");
+    ingest.mutate(f);
   }
 
   return (
@@ -197,112 +203,83 @@ function IngestForm({
 }
 
 export function KnowledgeStore() {
-  // Self-reports failures via toast. This surface used to route errors up to App's shared error
-  // strip through an `onError` prop; it now owns its feedback. A blank message is a clear-no-op.
+  // Action failures (curate / share / ingest) self-report via toast; a read/search
+  // failure is the contained <Alert> below. A blank message is a clear-no-op.
+  const qc = useQueryClient();
   const toast = useToast();
   const onError = (message: string) => {
     if (message) toast({ tone: "error", title: "Knowledge", message });
   };
-  const [results, setResults] = useState<KnowledgeChunk[]>([]);
-  const [stats, setStats] = useState<Record<string, number>>({});
-  const [enabled, setEnabled] = useState(true);
-  const [loading, setLoading] = useState(false);
+
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Debounce the search term — TanStack owns the fetch; this only delays the key
+  // change so a fast typist doesn't fire an FTS request per keystroke.
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query), 250);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  const { data, isFetching, error, refetch } = useQuery({
+    ...knowledgeQuery(debouncedQuery),
+    placeholderData: keepPreviousData,
+  });
+  const enabled = data?.enabled ?? true;
+  const results = data?.results ?? [];
+  const stats = data?.stats ?? {};
+  const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.knowledge });
 
   const [adding, setAdding] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<KnowledgeChunk | null>(null);
-  const [promoting, setPromoting] = useState<number | null>(null);
   const [forgetPending, setForgetPending] = useState<KnowledgeChunk | null>(null);
 
-  async function run(q: string) {
-    setLoading(true);
-    try {
-      const r = await api.knowledgeSearch(q);
-      setEnabled(r.enabled);
-      setResults(r.results || []);
-      setStats(r.stats || {});
-      onError("");
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Fires on mount (query="" → recent) and debounced on every keystroke.
-  useEffect(() => {
-    const t = window.setTimeout(() => void run(query), 250);
-    return () => window.clearTimeout(t);
-  }, [query]);
-
-  async function save() {
-    setSaving(true);
-    try {
-      if (editingId !== null) {
-        await api.updateKnowledgeChunk(editingId, draft);
-      } else {
-        await api.addKnowledgeChunk(draft);
-      }
+  const save = useMutation({
+    mutationFn: () => (editingId !== null ? api.updateKnowledgeChunk(editingId, draft) : api.addKnowledgeChunk(draft)),
+    onSuccess: () => {
       setAdding(false);
       setEditingId(null);
       setDraft(EMPTY_DRAFT);
-      await run(query);
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setSaving(false);
-    }
-  }
+      invalidate();
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
 
-  async function remove(id: number) {
-    try {
-      await api.deleteKnowledgeChunk(id);
-      await run(query);
-    } catch (e) {
-      onError(errMsg(e));
-    }
-  }
+  const del = useMutation({
+    mutationFn: (id: number) => api.deleteKnowledgeChunk(id),
+    onSuccess: () => invalidate(),
+    onError: (e) => onError(errMsg(e)),
+  });
 
   // Share a private chunk into the shared commons (ADR 0041 / bd-2wu).
-  async function promote(c: KnowledgeChunk) {
-    setPromoting(c.id);
-    try {
-      const r = await api.promoteKnowledgeChunk(c.id);
+  const promote = useMutation({
+    mutationFn: (c: KnowledgeChunk) => api.promoteKnowledgeChunk(c.id),
+    onSuccess: (r) => {
       if (!r.promoted) {
         onError(r.error || "promote failed");
         return;
       }
-      onError("");
-      await run(query); // the chunk now also reads from the commons tier
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setPromoting(null);
-    }
-  }
+      invalidate(); // the chunk now also reads from the commons tier
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+  const promotingId = promote.isPending ? promote.variables?.id : undefined;
 
   // Unshare = forget from the commons (the inverse of promote). Confirmed — it affects
   // every agent on the box. The private copy (if any) is untouched.
-  async function confirmUnshare() {
-    if (!forgetPending) return;
-    const c = forgetPending;
-    setForgetPending(null);
-    try {
-      const r = await api.forgetKnowledgeChunk(c.id);
+  const unshare = useMutation({
+    mutationFn: (c: KnowledgeChunk) => api.forgetKnowledgeChunk(c.id),
+    onSuccess: (r) => {
       if (!r.forgotten) {
         onError(r.error || "unshare failed");
         return;
       }
-      onError("");
-      await run(query);
-    } catch (e) {
-      onError(errMsg(e));
-    }
-  }
+      invalidate();
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
 
   function startEdit(c: KnowledgeChunk) {
     setAdding(false);
@@ -343,7 +320,7 @@ export function KnowledgeStore() {
                 </Button>
               </>
             ) : null}
-            <RefreshButton onClick={() => void run(query)} busy={loading} />
+            <RefreshButton onClick={() => void refetch()} busy={isFetching} />
           </>
         }
       />
@@ -357,9 +334,13 @@ export function KnowledgeStore() {
           onChange={(e) => setQuery(e.target.value)}
         />
 
+        {error ? (
+          <Alert status="error">Couldn't search the knowledge base — {errMsg(error)}</Alert>
+        ) : null}
+
         {ingesting ? (
           <IngestForm
-            onDone={() => run(query)}
+            onDone={invalidate}
             onError={onError}
             onClose={() => setIngesting(false)}
           />
@@ -369,9 +350,9 @@ export function KnowledgeStore() {
           <ChunkForm
             draft={draft}
             setDraft={setDraft}
-            onSave={() => void save()}
+            onSave={() => save.mutate()}
             onCancel={() => { setAdding(false); setDraft(EMPTY_DRAFT); }}
-            saving={saving}
+            saving={save.isPending}
             saveLabel="Add entry"
           />
         ) : null}
@@ -397,9 +378,9 @@ export function KnowledgeStore() {
                   <ChunkForm
                     draft={draft}
                     setDraft={setDraft}
-                    onSave={() => void save()}
+                    onSave={() => save.mutate()}
                     onCancel={() => { setEditingId(null); setDraft(EMPTY_DRAFT); }}
-                    saving={saving}
+                    saving={save.isPending}
                     saveLabel="Save changes"
                   />
                 ) : (
@@ -445,11 +426,11 @@ export function KnowledgeStore() {
                             variant="ghost"
                             type="button"
                             title="Share to the commons (every agent on this box can then recall it)"
-                            onClick={() => void promote(c)}
-                            disabled={promoting === c.id}
+                            onClick={() => promote.mutate(c)}
+                            disabled={promotingId === c.id}
                             aria-label={`share entry ${c.id}`}
                           >
-                            <ArrowUpToLine size={14} className={promoting === c.id ? "spin" : ""} />
+                            <ArrowUpToLine size={14} className={promotingId === c.id ? "spin" : ""} />
                           </Button>
                         ) : null}
                         {c.tier === "commons" ? (
@@ -491,7 +472,7 @@ export function KnowledgeStore() {
         confirmLabel="Delete entry"
         destructive
         onConfirm={() => {
-          if (pendingDelete) void remove(pendingDelete.id);
+          if (pendingDelete) del.mutate(pendingDelete.id);
           setPendingDelete(null);
         }}
         onClose={() => setPendingDelete(null)}
@@ -506,7 +487,10 @@ export function KnowledgeStore() {
         title="Unshare from the commons?"
         confirmLabel="Unshare"
         destructive
-        onConfirm={() => void confirmUnshare()}
+        onConfirm={() => {
+          if (forgetPending) unshare.mutate(forgetPending);
+          setForgetPending(null);
+        }}
         onClose={() => setForgetPending(null)}
       >
         {forgetPending
