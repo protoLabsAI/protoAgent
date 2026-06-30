@@ -1,5 +1,5 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
-import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { ArrowDownFromLine, ArrowUpToLine, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
@@ -196,7 +196,13 @@ function IngestForm({
   );
 }
 
-export function KnowledgeStore({ onError }: { onError: (message: string) => void }) {
+export function KnowledgeStore() {
+  // Self-reports failures via toast. This surface used to route errors up to App's shared error
+  // strip through an `onError` prop; it now owns its feedback. A blank message is a clear-no-op.
+  const toast = useToast();
+  const onError = (message: string) => {
+    if (message) toast({ tone: "error", title: "Knowledge", message });
+  };
   const [results, setResults] = useState<KnowledgeChunk[]>([]);
   const [stats, setStats] = useState<Record<string, number>>({});
   const [enabled, setEnabled] = useState(true);

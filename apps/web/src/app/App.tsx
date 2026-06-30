@@ -573,7 +573,7 @@ export function App() {
       // Knowledge is the searchable Store; its Memory settings folded into
       // Settings ▸ Workspace ▸ Memory (ADR 0048 S-C).
       case "knowledge":
-        return <KnowledgeStore onError={setError} />;
+        return <KnowledgeStore />;
       // Settings is no longer a rail surface (2026-06 consolidation) — it's a utility-bar
       // pill opening the settings dialog (SettingsOverlay). Notes is the first-party `notes`
       // plugin (ADR 0034 S4) — rendered via the default

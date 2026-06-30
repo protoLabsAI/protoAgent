@@ -2,6 +2,7 @@ import "../settings/plugins.css";
 
 import { Button } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
+import { useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { useState, type JSX } from "react";
@@ -160,7 +161,7 @@ function LocalTab() {
   // in-tree built-ins are not) + which are locked-but-missing on disk.
   const installed = useQuery(installedPluginsQuery());
   const qc = useQueryClient();
-  const [hint, setHint] = useState<string | null>(null);
+  const toast = useToast();
   const [installOpen, setInstallOpen] = useState(false);
 
   const refreshAll = () => {
@@ -182,15 +183,15 @@ function LocalTab() {
       qc.invalidateQueries({ queryKey: queryKeys.settings });
       // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
       // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
-      setHint(
+      toast(
         res.restart_recommended
-          ? `${p.name} disabled — restart to fully remove its console view or background surface.`
-          : `${p.name} ${res.enabled ? "enabled" : "disabled"}.`,
+          ? { tone: "info", title: "Plugin disabled", message: `${p.name} — restart to fully remove its console view or background surface.` }
+          : { tone: "success", title: `Plugin ${res.enabled ? "enabled" : "disabled"}`, message: `${p.name} is ${res.enabled ? "live" : "off"}.` },
       );
     },
-    onError: (err: unknown, p) => setHint(`Couldn't toggle ${p.name}: ${errMsg(err)}`),
+    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't toggle plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
-  const onToggle = (p: Plugin) => { setHint(null); toggle.mutate(p); };
+  const onToggle = (p: Plugin) => toggle.mutate(p);
   const pendingId = toggle.isPending ? toggle.variables?.id : undefined;
 
   const update = useMutation({
@@ -200,15 +201,15 @@ function LocalTab() {
       qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
       // A new version may declare new/changed config fields — refetch the schema (#1423).
       qc.invalidateQueries({ queryKey: queryKeys.settings });
-      setHint(
+      toast(
         res.restart_recommended
-          ? `${p.name} updated${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.`
-          : `${p.name} updated${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.`,
+          ? { tone: "info", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.` }
+          : { tone: "success", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.` },
       );
     },
-    onError: (err: unknown, p) => setHint(`Couldn't update ${p.name}: ${errMsg(err)}`),
+    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't update plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
-  const onUpdate = (p: Plugin) => { setHint(null); update.mutate(p); };
+  const onUpdate = (p: Plugin) => update.mutate(p);
   const updatingId = update.isPending ? update.variables?.id : undefined;
   const updateById = new Map((updates.data?.plugins ?? []).map((u) => [u.id, u]));
 
@@ -217,12 +218,11 @@ function LocalTab() {
   // lock-backed inventory.
   const remove = useMutation({
     mutationFn: (p: Plugin) => api.uninstallPlugin(p.id),
-    onSuccess: (_res, p) => { refreshAll(); setHint(`${p.name} uninstalled.`); },
-    onError: (err: unknown, p) => setHint(`Couldn't uninstall ${p.name}: ${errMsg(err)}`),
+    onSuccess: (_res, p) => { refreshAll(); toast({ tone: "success", title: "Plugin uninstalled", message: `${p.name} removed.` }); },
+    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't uninstall plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
   const onRemove = (p: Plugin) => {
     if (window.confirm(`Uninstall ${p.name}? This deletes its code from disk and removes it from plugins.lock. (To keep it installed, Disable it instead.)`)) {
-      setHint(null);
       remove.mutate(p);
     }
   };
@@ -234,22 +234,20 @@ function LocalTab() {
     onSuccess: (res) => {
       const fetched = res.plugins.filter((r) => r.status === "installed").map((r) => r.id);
       const failed = res.plugins.filter((r) => r.status === "failed");
-      setHint(
+      toast(
         failed.length
-          ? `Sync: ${failed.map((f) => `${f.id} (${f.error ?? "failed"})`).join(", ")}${fetched.length ? ` — fetched ${fetched.join(", ")}` : ""}`
-          : fetched.length
-            ? `Fetched ${fetched.join(", ")}${res.reloaded ? " — enabled plugins are live" : ""}.`
-            : "Nothing to sync — all locked plugins present.",
+          ? { tone: "error", title: "Sync had problems", message: `${failed.map((f) => `${f.id} (${f.error ?? "failed"})`).join(", ")}${fetched.length ? ` — fetched ${fetched.join(", ")}` : ""}` }
+          : { tone: "success", title: "Plugins synced", message: fetched.length ? `Fetched ${fetched.join(", ")}${res.reloaded ? " — enabled plugins are live" : ""}.` : "All locked plugins present." },
       );
       refreshAll();
     },
-    onError: (err: unknown) => setHint(`Couldn't sync: ${errMsg(err)}`),
+    onError: (err: unknown) => toast({ tone: "error", title: "Couldn't sync", message: errMsg(err) }),
   });
 
   const restart = useMutation({
     mutationFn: () => api.restart(),
-    onSuccess: () => setHint("Restarting server… the console will reconnect when it's back."),
-    onError: (err: unknown) => setHint(`Couldn't restart: ${errMsg(err)}`),
+    onSuccess: () => toast({ tone: "info", title: "Restarting server", message: "The console will reconnect when it's back." }),
+    onError: (err: unknown) => toast({ tone: "error", title: "Couldn't restart", message: errMsg(err) }),
   });
 
   // Which plugins have settings to fold in (ADR 0059) — the schema's plugin-tagged groups.
@@ -293,13 +291,12 @@ function LocalTab() {
             <Download size={14} /> Install from URL
           </Button>
         </div>
-        {hint ? <p className="plugin-hint">{hint}</p> : null}
 
         {missing.length ? (
           <Alert
             status="warning"
             action={
-              <Button type="button" variant="default" size="sm" disabled={sync.isPending} onClick={() => { setHint(null); sync.mutate(); }} title="Re-clone every locked plugin at its pinned commit">
+              <Button type="button" variant="default" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()} title="Re-clone every locked plugin at its pinned commit">
                 {sync.isPending ? <Loader2 size={13} className="spin" /> : <DownloadCloud size={13} />} Sync plugins
               </Button>
             }
@@ -347,7 +344,6 @@ function LocalTab() {
             disabled={restart.isPending}
             onClick={() => {
               if (window.confirm("Restart the server now? In-flight work finishes, then the console reconnects automatically.")) {
-                setHint("Restarting server…");
                 restart.mutate();
               }
             }}
@@ -370,16 +366,16 @@ function DiscoverTab() {
   const catalog = useQuery({ queryKey: ["plugin-catalog"], queryFn: () => api.pluginCatalog(), retry: false });
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("All");
-  const [hint, setHint] = useState<string | null>(null);
+  const toast = useToast();
 
   const install = useMutation({
     mutationFn: (p: CatalogPlugin) => api.installPlugin(p.repo),
     onSuccess: (res, p) => {
       qc.invalidateQueries({ queryKey: ["plugin-catalog"] });
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      setHint(`${p.name} installed${res.reloaded ? " + enabled" : ""}.`);
+      toast({ tone: "success", title: "Plugin installed", message: `${p.name}${res.reloaded ? " — enabled and live" : ""}.` });
     },
-    onError: (err: unknown, p) => setHint(`Couldn't install ${p.name}: ${errMsg(err)}`),
+    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
   const installingRepo = install.isPending ? install.variables?.repo : undefined;
 
@@ -391,7 +387,6 @@ function DiscoverTab() {
     <>
       <PanelHeader title="Discover" kicker={`${plugins.length} official plugins`} />
       <div className="stage-body">
-        {hint ? <p className="plugin-hint">{hint}</p> : null}
         <div className="plugin-discover-controls">
           <div className="plugin-search">
             <Search size={14} />
@@ -422,7 +417,7 @@ function DiscoverTab() {
                 ) : p.installed ? (
                   <StatusPill label={p.enabled ? "installed · on" : "installed"} tone="success" />
                 ) : (
-                  <Button type="button" disabled={install.isPending} onClick={() => { setHint(null); install.mutate(p); }}>
+                  <Button type="button" disabled={install.isPending} onClick={() => install.mutate(p)}>
                     {installingRepo === p.repo ? <Loader2 size={14} className="spin" /> : <Download size={14} />} Install
                   </Button>
                 )}
