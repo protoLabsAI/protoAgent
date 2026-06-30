@@ -146,6 +146,80 @@ except ImportError:
     _HAS_RUAMEL = False
 
 
+# Files that make up the live config tier — migrated as a unit by the one-shot
+# legacy-layout bridge below.
+_MIGRATED_CONFIG_FILES = ("langgraph-config.yaml", "secrets.yaml", ".setup-complete", "theme.json")
+
+
+def _legacy_config_dirs() -> list[Path]:
+    """Old-layout directories that may hold this instance's pre-redesign config, in
+    priority order. Computed independently of the (now-deleted) legacy resolvers.
+
+    Two shapes cover every deployment:
+      * flat under the instance root — ``<instance_root>/langgraph-config.yaml`` (the
+        desktop ``PROTOAGENT_HOME`` dir and a fleet member's ``<ws>`` dir used to hold
+        the config file directly), and
+      * the bundle/repo config dir ``<app_root>/config[/<iid>]`` (local default in
+        ``REPO/config``, the dev sandbox in ``REPO/config/dev``, the container in
+        ``/opt/protoagent/config``), plus an explicit ``PROTOAGENT_CONFIG_DIR`` when the
+        upgrading environment still exports the retired var.
+    """
+    p = instance_paths()
+    out: list[Path] = [p.instance_root]
+    cd = os.environ.get("PROTOAGENT_CONFIG_DIR", "").strip()
+    if cd:
+        out.append(Path(cd).expanduser())
+    else:
+        base = p.app_root / "config"
+        iid = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+        out.append(base / iid if iid else base)
+    cfg = p.config_dir.resolve()
+    return [d for d in out if d.resolve() != cfg]
+
+
+def migrate_legacy_layout() -> bool:
+    """One-shot, idempotent, non-destructive bridge from the pre-redesign on-disk
+    layout into the new ``instance_root/config``. Returns True if it copied anything.
+
+    Runs only when the new live config is ABSENT, then copies an old config bundle
+    (``langgraph-config.yaml`` + ``secrets.yaml`` + ``.setup-complete`` + ``theme.json``)
+    from the first legacy dir that has one — so a build upgraded in place keeps its
+    config, secrets and setup state with no user action. Copy (never move) leaves the
+    originals as harmless orphans; ``copy2`` preserves ``secrets.yaml``'s 0600 mode. A
+    no-op once migrated. Self-contained and deletable in a future major — the path
+    *resolver* stays single-rule; this is the only bridge from the old layout.
+    """
+    import shutil
+
+    p = instance_paths()
+    if p.config_yaml.exists():
+        return False
+    migrated = False
+    for src_dir in _legacy_config_dirs():
+        if not (src_dir / "langgraph-config.yaml").is_file():
+            continue
+        p.config_dir.mkdir(parents=True, exist_ok=True)
+        for name in _MIGRATED_CONFIG_FILES:
+            src, dst = src_dir / name, p.config_dir / name
+            if src.is_file() and not dst.exists():
+                shutil.copy2(src, dst)  # copy2 keeps secrets.yaml's 0600 mode
+                migrated = True
+        log.warning(
+            "[config] migrated legacy config layout %s → %s (one-time; the originals are "
+            "left untouched and can be removed once you've confirmed the upgrade)",
+            src_dir,
+            p.config_dir,
+        )
+        break
+    # The container's old runtime SOUL (entrypoint used to write /sandbox/SOUL.md).
+    legacy_soul = Path("/sandbox/SOUL.md")
+    if legacy_soul.is_file() and not p.soul_path.exists():
+        p.soul_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_soul, p.soul_path)
+        migrated = True
+    return migrated
+
+
 def ensure_live_config() -> bool:
     """Seed the live config on first run. Returns True only when it created the file.
 
@@ -162,6 +236,9 @@ def ensure_live_config() -> bool:
 
     Idempotent — does nothing once the live file exists, so edits are never clobbered.
     """
+    # Bridge an in-place upgrade first: if an old-layout config exists, copy it into the
+    # new instance_root/config so the seed-from-.example branch below never strands it.
+    migrate_legacy_layout()
     live = config_yaml_path()
     if live.exists():
         return False
