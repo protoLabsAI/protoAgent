@@ -62,3 +62,42 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 
 `GET /api/runtime/status` reports the store status; `GET /api/knowledge/search`
 backs the console browser.
+
+## Sharing knowledge across a fleet (the commons)
+
+By default each agent's knowledge store is **private** (`scope: scoped`) — what one
+agent learns, harvests, or ingests stays with it. To let a fleet pool knowledge, opt
+a store into a shared **commons** ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)),
+the same tiering model as [skills](/guides/skills#sharing-skills-across-a-fleet-the-commons):
+
+```yaml
+knowledge:
+  scope: layered          # read commons ∪ private, write private, promote to share
+commons:
+  path: ~/.protoagent/commons   # host-level, shared by every agent that points here
+```
+
+- **`scope: shared`** — the whole store *is* the commons (every write lands in it).
+- **`scope: layered`** — "shared brain, private hands": the agent reads
+  `commons ∪ private` (a second-level RRF fuses the two tiers, deduped by content) and
+  writes to its **private** tier, so in-progress facts never pollute the fleet. You lift
+  a proven chunk into the commons explicitly.
+
+The commons is **host-level and un-scoped** — every agent pointing at the same
+`commons.path` reads it, regardless of `instance.id`. Run two *isolated* fleets on one
+host by giving each a distinct `commons.path`. The boot log names the active tier and
+path (`[knowledge] tier=layered (… ∪ …)`).
+
+Promotion is operator-curated from the **console**, not a CLI: in **Knowledge → Store**,
+layered-mode chunks carry a `private`/`commons` tier badge with **Share** (lift a private
+chunk into the commons — every agent on the box can then recall it) and **Unshare**
+(remove it from the commons; the private copy, if any, is untouched). The same gestures
+are `POST /api/knowledge/{id}/promote` and `POST /api/knowledge/{id}/forget`. Nothing is
+auto-shared — the commons is trusted because promotion is explicit.
+
+::: warning One embed model per shared fleet
+A `shared`/`layered` fleet must agree on one `embed_model`. The commons is stamped with
+the model that first wrote it; an agent that joins with a different `embed_model` serves
+the commons tier **FTS5-only** (no incompatible-vector fusion) and logs a warning. Keep
+`embed_model` identical across every agent that shares a `commons.path`.
+:::
