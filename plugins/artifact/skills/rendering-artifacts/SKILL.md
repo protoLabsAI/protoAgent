@@ -85,9 +85,27 @@ Each edit is a **version** the user can step back through in the panel, so itera
 never destroying the previous version. Both default to the most-recent artifact; pass
 `artifact_id` to target another.
 
+## Did it render? (closing the loop)
+
+A React artifact that throws at render time (a bad import, an undefined component, or defining a
+component but never calling `render()`) used to fail **silently** — you'd get "Created" and no hint
+it broke. Now the sandbox reports its render result back:
+
+- When the panel is open, `show_artifact` / `update_artifact` / `rewrite_artifact` wait briefly and
+  **append the render verdict to their reply** — e.g. *"⚠ But it FAILED to render: Icon is not
+  defined"*. When that happens, **fix it** with `update_artifact` / `rewrite_artifact`; the artifact
+  still exists, so iterate on it (don't start over). A clean render says so too.
+- **`check_artifact(artifact_id?)`** — ask for the latest render verdict yourself (rendered cleanly
+  / failed with the error / no result yet). Useful when the create reply came back before the
+  render finished, or the panel was closed (open it to render).
+
+Treat a render error as the signal to iterate — that's the code→render→fix loop. Don't apologise and
+guess; read the error and make the targeted edit.
+
 ## Managing artifacts
 
 - **`list_artifacts()`** — see the ids/kinds/titles/version counts (to target an edit or delete).
+- **`check_artifact(artifact_id?)`** — the latest render verdict (see above).
 - **`delete_artifact(artifact_id)`** — remove one for cleanup. (The user can also delete from the
   panel's trash button.)
 

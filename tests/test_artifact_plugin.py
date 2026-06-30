@@ -25,6 +25,10 @@ def _load(monkeypatch, tmp_path):
     mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(mod)
+    # No real browser in tests → never block a tool on the async render verdict (#1458). The
+    # render-feedback tests drive the store directly; _await_render still returns an already-
+    # recorded result on its first (pre-sleep) check.
+    mod._RENDER_WAIT_MS = 0
     return mod
 
 
@@ -599,3 +603,94 @@ def test_no_premature_script_close_in_shell(monkeypatch, tmp_path):
         "exactly the slug-base + main module <script> closes; an extra literal </script> "
         "(comment/string) would close the module early — escape it as <\\/script>"
     )
+
+
+# ── render feedback: the code→render→fix loop (#1458) ───────────────────────────
+
+
+def _client(art):
+    from fastapi.testclient import TestClient
+
+    return TestClient(_app(art))
+
+
+def test_render_status_route_stamps_the_version(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    c = _client(art)
+    art.show_artifact.invoke({"kind": "react", "code": "x"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    r = c.post(
+        "/api/plugins/artifact/render-status",
+        json={"id": aid, "version": 1, "ok": False, "error": "Icon is not defined"},
+    )
+    assert r.status_code == 200 and r.json()["recorded"] is True
+    rec = art._read_store()["artifacts"][0]["versions"][0]["render"]
+    assert rec["ok"] is False and rec["error"] == "Icon is not defined" and rec["ts"] > 0
+
+
+def test_render_status_unknown_id_or_version_is_a_noop(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    c = _client(art)
+    art.show_artifact.invoke({"kind": "html", "code": "x"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    assert c.post("/api/plugins/artifact/render-status", json={"id": aid, "version": 9, "ok": True}).json()["recorded"] is False
+    assert c.post("/api/plugins/artifact/render-status", json={"id": "nope", "version": 1, "ok": True}).json()["recorded"] is False
+    assert "render" not in art._read_store()["artifacts"][0]["versions"][0]
+
+
+def test_render_error_string_is_capped(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    c = _client(art)
+    art.show_artifact.invoke({"kind": "html", "code": "x"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    c.post("/api/plugins/artifact/render-status", json={"id": aid, "version": 1, "ok": False, "error": "E" * 9000})
+    assert len(art._read_store()["artifacts"][0]["versions"][0]["render"]["error"]) == art._RENDER_ERR_MAX
+
+
+def test_check_artifact_reports_each_render_state(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    assert "No artifact to check" in art.check_artifact.invoke({})
+    art.show_artifact.invoke({"kind": "react", "code": "x"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    c = _client(art)
+    assert "no render result yet" in art.check_artifact.invoke({})
+    c.post("/api/plugins/artifact/render-status", json={"id": aid, "version": 1, "ok": True})
+    assert "rendered cleanly" in art.check_artifact.invoke({})
+    art.update_artifact.invoke({"old_string": "x", "new_string": "y"})  # v2: status resets
+    assert "no render result yet" in art.check_artifact.invoke({})
+    c.post("/api/plugins/artifact/render-status", json={"id": aid, "version": 2, "ok": False, "error": "boom"})
+    out = art.check_artifact.invoke({})
+    assert "render FAILED" in out and "boom" in out and "v2" in out
+
+
+def test_create_reply_surfaces_render_error_when_renderer_live(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "react", "code": "x"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    # a live renderer + an already-recorded error ⇒ the inline verdict surfaces it
+    store = art._read_store()
+    store["artifacts"][0]["versions"][0]["render"] = {"ok": False, "error": "Icon is not defined", "ts": art._now()}
+    art._write_store(store)
+    art._LAST_POLL_TS = art._now()
+    suffix = art._render_suffix(aid, 1)
+    assert "FAILED to render" in suffix and "Icon is not defined" in suffix
+    # a clean render reads as such
+    store = art._read_store()
+    store["artifacts"][0]["versions"][0]["render"] = {"ok": True, "error": "", "ts": art._now()}
+    art._write_store(store)
+    assert "rendered cleanly" in art._render_suffix(aid, 1)
+
+
+def test_render_wait_is_skipped_when_no_renderer(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art._LAST_POLL_TS = 0  # no panel poll ⇒ headless ⇒ no wait, no inline verdict
+    assert art._renderer_live() is False
+    out = art.show_artifact.invoke({"kind": "react", "code": "x"})
+    assert "FAILED to render" not in out and "rendered cleanly" not in out
+
+
+def test_history_poll_marks_a_renderer_live(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    assert art._renderer_live() is False
+    _client(art).get("/api/plugins/artifact/history")
+    assert art._renderer_live() is True

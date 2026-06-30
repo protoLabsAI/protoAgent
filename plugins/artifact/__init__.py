@@ -244,6 +244,91 @@ def _emit(event: str, data: dict) -> None:
         log.debug("[artifact] emit(%s) failed", event, exc_info=True)
 
 
+def _new_version(code: str, by: str = "agent") -> dict:
+    """A fresh version record. ``by`` is provenance: "agent" (a tool) or "user" (panel edit)."""
+    return {"code": code, "ts": _now(), "by": by}
+
+
+def _commit_version(store: dict, art: dict, code: str, by: str = "agent") -> int:
+    """Append a version to ``art``, move it to the front, persist, broadcast ``updated``, and
+    return the new 1-based version count. The shared tail of update/rewrite_artifact + the
+    panel's user-edit PUT — one place owns append→touch→write→emit ordering."""
+    nv = _new_version(code, by)
+    art["versions"].append(nv)
+    art["updated"] = nv["ts"]
+    _touch(store, art)
+    _write_store(store)  # may trim to _max_versions(), so count AFTER
+    v = len(art["versions"])
+    _emit("updated", {"id": art["id"], "version": v})
+    return v
+
+
+# ── Render feedback (#1458) ──────────────────────────────────────────────────
+# The render happens ASYNC in the browser sandbox, AFTER the tool returns. The shell
+# relays the sandbox's render result (ok / error) to POST /render-status, which stamps it
+# onto the version. So show_/update_/rewrite_artifact can wait BRIEFLY for that result and
+# report a render failure inline, closing the agent's code→render→fix loop. The wait only
+# kicks in when a renderer is actually live (the panel polled recently) — headless / closed
+# panel returns instantly, and the agent can still pull status later via check_artifact.
+_LAST_POLL_TS = 0  # ms of the last panel poll (/history or /current); 0 = never seen a renderer
+_RENDER_ERR_MAX = 2000  # cap a render-error string so a noisy stack can't bloat the store
+_RENDER_ACTIVE_MS = 4000  # a poll within this window ⇒ a renderer is live and will report back
+_RENDER_WAIT_MS = 3200  # max wait for a render result (≥ the sandbox's 3s no-mount guard)
+_RENDER_POLL_MS = 120  # how often the wait re-reads the store
+
+
+def _note_poll() -> None:
+    global _LAST_POLL_TS
+    _LAST_POLL_TS = _now()
+
+
+def _renderer_live() -> bool:
+    """True when the panel polled recently — i.e. a sandbox is mounted and WILL render the
+    new version and report its result. Gates the inline wait so headless never blocks."""
+    return _LAST_POLL_TS > 0 and (_now() - _LAST_POLL_TS) <= _RENDER_ACTIVE_MS
+
+
+def _version_render(art: dict, version: int) -> dict | None:
+    """The stored render result for 1-based ``version`` of ``art`` (or None)."""
+    vers = art.get("versions") or []
+    if 1 <= version <= len(vers):
+        r = vers[version - 1].get("render")
+        return r if isinstance(r, dict) else None
+    return None
+
+
+def _await_render(art_id: str, version: int) -> dict | None:
+    """Block up to ``_RENDER_WAIT_MS`` for the sandbox to report version ``version``'s render
+    result — but ONLY when a renderer is live, else return immediately. Checks the store
+    BEFORE each sleep, so an already-recorded result returns instantly. Runs in the tool's
+    worker thread, so the short sleep is safe (it doesn't block the event loop)."""
+    if not art_id or not _renderer_live():
+        return None
+    deadline = _now() + _RENDER_WAIT_MS
+    while True:
+        r = _version_render(_find(_read_store(), art_id), version)
+        if r is not None:
+            return r
+        if _now() >= deadline:
+            return None
+        time.sleep(_RENDER_POLL_MS / 1000)
+
+
+def _render_suffix(art_id: str, version: int) -> str:
+    """The inline render verdict appended to a create/edit reply, or '' when unknown."""
+    r = _await_render(art_id, version)
+    if r is None:
+        return ""
+    if r.get("ok"):
+        return " It rendered cleanly."
+    err = str(r.get("error") or "render failed").strip()
+    return (
+        f"\n\n⚠ But it FAILED to render:\n  {err}\n"
+        "Fix it with update_artifact / rewrite_artifact (the artifact still exists; "
+        "this error is advisory)."
+    )
+
+
 @tool
 def show_artifact(kind: str, code: str, title: str = "") -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
@@ -277,23 +362,24 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
     if err := _too_big(code):
         return err
     store = _read_store()
-    now = _now()
+    nv = _new_version(code)
     art = {
         "id": _new_id(),
         "title": title or "",
         "kind": k,
-        "versions": [{"code": code, "ts": now, "by": "agent"}],
-        "created": now,
-        "updated": now,
+        "versions": [nv],
+        "created": nv["ts"],
+        "updated": nv["ts"],
     }
     store["artifacts"].insert(0, art)
     store["current"] = art["id"]
     _write_store(store)
     _emit("created", {"id": art["id"], "kind": k, "title": title or ""})
-    return (
+    msg = (
         f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
         f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
     )
+    return msg + _render_suffix(art["id"], 1)
 
 
 @tool
@@ -326,14 +412,8 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
     new_code = src.replace(old_string, new_string, 1)
     if err := _too_big(new_code):
         return err
-    now = _now()
-    art["versions"].append({"code": new_code, "ts": now, "by": "agent"})
-    art["updated"] = now
-    _touch(store, art)
-    _write_store(store)
-    v = len(art["versions"])
-    _emit("updated", {"id": art["id"], "version": v})
-    return f"Updated artifact {art['id']} → version {v}."
+    v = _commit_version(store, art, new_code)
+    return f"Updated artifact {art['id']} → version {v}." + _render_suffix(art["id"], v)
 
 
 @tool
@@ -350,16 +430,10 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     art = _find(store, artifact_id or store["current"])
     if art is None:
         return "No artifact to rewrite. Create one with show_artifact first."
-    now = _now()
-    art["versions"].append({"code": code, "ts": now, "by": "agent"})
     if title:
         art["title"] = title
-    art["updated"] = now
-    _touch(store, art)
-    _write_store(store)
-    v = len(art["versions"])
-    _emit("updated", {"id": art["id"], "version": v})
-    return f"Rewrote artifact {art['id']} → version {v}."
+    v = _commit_version(store, art, code)
+    return f"Rewrote artifact {art['id']} → version {v}." + _render_suffix(art["id"], v)
 
 
 @tool
@@ -397,6 +471,36 @@ def get_artifact(artifact_id: str = "") -> str:
     title = art["title"] or "(untitled)"
     v = len(art["versions"])
     return f"Artifact {art['id']}  [{art['kind']}]  {title}  · v{v} — current source:\n\n{code}"
+
+
+@tool
+def check_artifact(artifact_id: str = "") -> str:
+    """Check whether an artifact's latest version actually RENDERED — the feedback channel for
+    the code→render→fix loop. Rendering happens async in the browser, so a create/edit can
+    return before the result is known; call this (or just iterate) to see how it went.
+
+    Returns the render verdict: rendered cleanly, FAILED with the captured error message, or
+    "no result yet" (the panel is closed / not showing this version — open the Artifact panel).
+    Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
+    another. Read-only."""
+    store = _read_store()
+    art = _find(store, artifact_id or store["current"])
+    if art is None:
+        return "No artifact to check. Use list_artifacts to see the ids, or show_artifact to create one."
+    v = len(art["versions"])
+    r = _version_render(art, v)
+    if r is None:
+        return (
+            f"Artifact {art['id']} v{v}: no render result yet — the Artifact panel may be "
+            "closed or not showing this version. Open it to render."
+        )
+    if r.get("ok"):
+        return f"Artifact {art['id']} v{v}: rendered cleanly."
+    err = str(r.get("error") or "render failed").strip()
+    return (
+        f"Artifact {art['id']} v{v}: render FAILED —\n  {err}\n"
+        "Fix it with update_artifact / rewrite_artifact."
+    )
 
 
 @tool
@@ -469,6 +573,7 @@ def _build_data_router():
     @router.get("/current")
     async def _current_artifact() -> dict:
         """The focused artifact's latest version (back-compat shape + version info)."""
+        _note_poll()  # a poll ⇒ a renderer is live (gates the inline render-error wait, #1458)
         store = _read_store()
         art = _find(store, store["current"])
         if art is None:
@@ -494,7 +599,32 @@ def _build_data_router():
     async def _history() -> dict:
         """The full store — every artifact with its version chain — for the panel's
         artifact picker + version navigation."""
+        _note_poll()  # a poll ⇒ a renderer is live (gates the inline render-error wait, #1458)
         return _read_store()
+
+    @router.post("/render-status")
+    async def _render_status(body: dict = Body(...)) -> dict:
+        """The sandbox's render verdict for a version, relayed by the shell (#1458): the
+        nested artifact frame reports ``{ok}`` once it mounts or ``{ok:false, error}`` when
+        it throws / never mounts. Stamped onto the version so check_artifact + the create/edit
+        tools can surface render failures back to the agent. Best-effort: unknown id/version
+        is a no-op (the panel may be a version behind), never an error."""
+        art_id = str(body.get("id") or "")
+        try:
+            version = int(body.get("version") or 0)
+        except (TypeError, ValueError):
+            version = 0
+        store = _read_store()
+        art = _find(store, art_id)
+        if art is None or not (1 <= version <= len(art.get("versions") or [])):
+            return {"ok": True, "recorded": False}
+        art["versions"][version - 1]["render"] = {
+            "ok": bool(body.get("ok")),
+            "error": str(body.get("error") or "")[:_RENDER_ERR_MAX],
+            "ts": _now(),
+        }
+        _write_store(store)
+        return {"ok": True, "recorded": True}
 
     @router.post("/ask")
     async def _ask(body: dict = Body(...)) -> dict:
@@ -542,13 +672,7 @@ def _build_data_router():
         art = _find(store, art_id)
         if art is None:
             raise HTTPException(404, f"unknown artifact {art_id}")
-        now = _now()
-        art["versions"].append({"code": code, "ts": now, "by": "user"})
-        art["updated"] = now
-        _touch(store, art)
-        _write_store(store)
-        v = len(art["versions"])
-        _emit("updated", {"id": art_id, "version": v})
+        v = _commit_version(store, art, code, by="user")
         return {"ok": True, "id": art_id, "version": v}
 
     @router.delete("/artifact/{art_id}")
@@ -578,6 +702,7 @@ def register(registry) -> None:
         rewrite_artifact,
         list_artifacts,
         get_artifact,
+        check_artifact,
         delete_artifact,
     ):
         registry.register_tool(t)
@@ -668,6 +793,7 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   // it auto-follows new versions). followNewest jumps to the newest artifact on create
   // unless the user navigated to an older one.
   var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "";
+  var renderingId = null, renderingVer = 0;  // the (id, 1-based version) currently in the frame — for render-status (#1458)
   var EXT = { html: "html", svg: "svg", mermaid: "mmd", react: "jsx" };
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   // The NESTED artifact iframe (sandboxed, no stylesheet access) gets the live theme
@@ -693,24 +819,34 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   // unhandledrejection handlers that lazily drop a fixed bottom overlay into the frame — so a
   // broken artifact shows WHY instead of a silent blank. Exposes window.__artErr(msg) for the
   // harness's own guards (e.g. the React no-mount check) to reuse.
-  var ERRBOOT = '<script>(function(){'
+  // Also REPORTS the render result up to the shell (#1458): rep(false,msg) on any error,
+  // rep(true) once it's confirmed rendered — the shell relays it to /render-status so the
+  // agent's create/edit reply (and check_artifact) can surface a render failure. Once-only
+  // (__artRep) so the first verdict wins. KIND (set by base) gates the on-load OK: react
+  // confirms via the no-mount guard's firstChild check instead (mount is async, post-load).
+  var ERRBOOT = '<script>(function(){var W=window;'
+    + 'function rep(ok,err){if(W.__artRep)return;W.__artRep=1;'
+    + 'try{parent.postMessage({type:"protoArtifact:render",ok:!!ok,error:err?String(err).slice(0,2000):""},"*");}catch(_){}}'
     + 'function show(m){var d=document.getElementById("__arterr");'
     + 'if(!d){d=document.createElement("div");d.id="__arterr";'
     + 'd.style.cssText="position:fixed;left:0;right:0;bottom:0;max-height:60%;overflow:auto;margin:0;padding:10px 13px;background:#2a0f12;color:#ffb4b4;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;border-top:2px solid #f87171;z-index:2147483647";'
-    + '(document.body||document.documentElement).appendChild(d);}d.textContent=String(m);}'
-    + 'window.__artErr=show;'
+    + '(document.body||document.documentElement).appendChild(d);}d.textContent=String(m);rep(false,m);}'
+    + 'W.__artErr=show;W.__artOk=function(){rep(true,"");};'
     + 'addEventListener("error",function(e){show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
     + 'addEventListener("unhandledrejection",function(e){show("⚠ "+((e.reason&&e.reason.message)||e.reason));});'
+    + 'addEventListener("load",function(){if(W.__artKind!=="react")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
-  function base(){
+  function base(kind){
     var cs = getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
     var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
         accent=tok("--pl-color-accent","#9b87f2"), border=tok("--pl-color-border","rgba(255,255,255,.08)");
     // Carry the live theme's key tokens into the nested frame (plugin-kit.css ships only the
     // DEFAULT palette); inline bg = no white flash; SHIM = the protoArtifact.ask bridge.
+    // __artKind lets ERRBOOT decide how to confirm a clean render (on-load vs react mount).
     return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+'}'
-      + 'html,body{margin:0;background:'+bg+';color:'+fg+'}</style>' + SHIM + ERRBOOT;
+      + 'html,body{margin:0;background:'+bg+';color:'+fg+'}</style>'
+      + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so
   // react/mermaid renders work fully OFFLINE — no cdnjs dependency. Still pinned with
@@ -761,27 +897,28 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     + '#md img{max-width:100%}#md .mermaid{background:none;border:0;padding:0}';
 
   function srcdoc(kind, code) {
-    if (kind === "html") return dsLink() + base() + code;
-    if (kind === "svg") return '<!doctype html>' + base() + '<body style="display:grid;place-items:center;min-height:100vh">' + code + '</body>';
-    if (kind === "mermaid") return '<!doctype html>' + base() + '<body><pre class="mermaid">' + esc(code) + '</pre>' +
+    if (kind === "html") return dsLink() + base(kind) + code;
+    if (kind === "svg") return '<!doctype html>' + base(kind) + '<body style="display:grid;place-items:center;min-height:100vh">' + code + '</body>';
+    if (kind === "mermaid") return '<!doctype html>' + base(kind) + '<body><pre class="mermaid">' + esc(code) + '</pre>' +
       cdn("mermaid") +
       '<script>mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run();<\/script></body>';
     if (kind === "markdown") return mdDoc(code);
     // `react`: import map + UMD react/react-dom/babel, compiled as a MODULE so `import` works
     // (no-import artifacts still run — they use the UMD React/ReactDOM globals as before).
-    if (kind === "react") return '<!doctype html>' + dsLink() + base() + '<body><div id="root"></div>' +
+    if (kind === "react") return '<!doctype html>' + dsLink() + base(kind) + '<body><div id="root"></div>' +
       '<script type="importmap">' + IMPORTMAP + '<\/script>' +
       cdn("react") + cdn("reactDom") + cdn("babel") +
       '<script type="text/babel" data-type="module" data-presets="react">' + code + '<\/script>' +
       // No-mount guard: a babel module that defines a component but never calls render() leaves
       // #root empty with NO thrown error — the silent blank that reads as "stuck". Poll briefly;
-      // if #root never gets a child and nothing else errored, surface an actionable message.
+      // mount → report a clean render (#1458); if #root never gets a child and nothing else
+      // errored, surface an actionable message (which also reports the failure up).
       '<script>(function(){var n=0,t=setInterval(function(){var r=document.getElementById("root");'
-      + 'if(r&&r.firstChild){clearInterval(t);return;}'
+      + 'if(r&&r.firstChild){clearInterval(t);if(window.__artOk)window.__artOk();return;}'
       + 'if(++n>=30){clearInterval(t);if(window.__artErr&&!document.getElementById("__arterr"))'
       + 'window.__artErr("Nothing rendered into #root — a React artifact must MOUNT itself, e.g. createRoot(document.getElementById(\'root\')).render(<App/>). Defining a component is not enough; you must call render().");'
       + '}},100);})();<\/script></body>';
-    return '<!doctype html>' + base() + '<body style="font-family:sans-serif;padding:16px">unsupported artifact kind</body>';
+    return '<!doctype html>' + base(kind) + '<body style="font-family:sans-serif;padding:16px">unsupported artifact kind</body>';
   }
   // markdown → HTML via the vendored `marked` ESM. The source is base64'd into the module
   // (unicode-safe; sidesteps quote / newline / closing-tag escaping pitfalls). A fenced
@@ -794,7 +931,7 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
       ? 'document.querySelectorAll("#md pre>code.language-mermaid").forEach(function(c){var d=document.createElement("pre");d.className="mermaid";d.textContent=c.textContent;c.parentNode.replaceWith(d);});'
         + 'if(window.mermaid){mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run();}'
       : "";
-    return '<!doctype html>' + dsLink() + base() + '<style>' + MD_CSS + '</style>' +
+    return '<!doctype html>' + dsLink() + base("markdown") + '<style>' + MD_CSS + '</style>' +
       '<body><div id="md" class="pl-prose"></div>' +
       '<script type="importmap">{"imports":{"marked":"' + V + 'marked.mjs"}}<\/script>' +
       (hasMermaid ? cdn("mermaid") : "") +
@@ -835,7 +972,7 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     $vprev.disabled = vi<=0; $vnext.disabled = vi>=a.versions.length-1;
     $empty.style.display="none";
     var key=a.id+"@"+vi;  // re-srcdoc only when the shown version actually changes
-    if(key!==lastRendered){ lastRendered=key; $frame.srcdoc=srcdoc(a.kind, v.code); $frame.style.display="block"; }
+    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; $frame.srcdoc=srcdoc(a.kind, v.code); $frame.style.display="block"; }
   }
 
   $art.addEventListener("change", function(e){
@@ -901,7 +1038,14 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   // the kit's own protoagent:init handshake messages are ignored here.
   window.addEventListener("message", async function(e){
     if(!$frame || e.source!==$frame.contentWindow) return;
-    var m=e.data||{}; if(m.type!=="protoArtifact:ask") return;
+    var m=e.data||{};
+    // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
+    // create/edit reply + check_artifact can surface a render failure. Best-effort POST.
+    if(m.type==="protoArtifact:render"){
+      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} }
+      return;
+    }
+    if(m.type!=="protoArtifact:ask") return;
     function reply(p){ try{ $frame.contentWindow.postMessage(Object.assign({type:"protoArtifact:result",id:m.id},p),"*"); }catch(_){} }
     try{
       var r=await kit.apiFetch("/api/plugins/artifact/ask",

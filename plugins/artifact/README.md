@@ -34,6 +34,8 @@ console view.
   - `rewrite_artifact(code, title?, artifact_id?)` — **full replace** → new version.
   - `get_artifact(artifact_id?)` — **read the current source** (kind/title/version + code), so you can
     take over an artifact you didn't author (read it, then `update_artifact`/`rewrite_artifact`).
+  - `check_artifact(artifact_id?)` — the latest **render verdict** (rendered cleanly / failed with the
+    captured error / no result yet), so a render failure feeds back into a fix instead of a silent blank.
   - `list_artifacts()` / `delete_artifact(artifact_id)` — manage them.
 - **View** "Artifact" (right rail) — a sandboxed renderer with an **artifact picker**, **version
   navigation** (step back/forward through edits), an **in-panel code editor** (edit the source and

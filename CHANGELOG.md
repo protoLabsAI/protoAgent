@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel; ADR 0038) is vendored in-tree under `plugins/artifact/` and ships with the agent enabled,
   a first-party surface like notes/docs (turn off per-instance via `plugins.disabled: [artifact]`).
   Folds in a pointer-lock fix so game/canvas artifacts can capture the pointer.
+- **Artifact render errors feed back to the agent** (#1458, artifact plugin 0.12.0) — when a React
+  (or other) artifact throws at render time or never mounts, the sandbox now reports the error up,
+  and `show_artifact` / `update_artifact` / `rewrite_artifact` surface it inline in their reply
+  (*"⚠ But it FAILED to render: Icon is not defined"*) when the panel is open. A new
+  `check_artifact` tool returns the latest render verdict on demand. Closes the code→render→fix
+  loop so the agent self-corrects instead of guessing. The wait is gated on a live panel, so
+  headless/closed-panel runs never block.
 
 ### Fixed
 - **Settings surfaces when the agent config shadows a host-scoped field** (#1459) — when a
