@@ -109,7 +109,10 @@ export function WorkBlock({
     </Tooltip>
   );
 
-  // While streaming, spotlight the most-recent tool below the summary.
+  // While streaming, spotlight ONLY the most-recent tool below the collapsed summary — the
+  // reasoning, interstitial narration, and the streaming answer stay folded in the disclosure
+  // (and the answer lands below the "Worked" summary once the turn settles). This is what keeps
+  // a chatty/tool-heavy turn reading as one clean batch instead of interim text + split groups.
   let spotlightIds: string[] = [];
   if (streaming) {
     const toolsParts = parts.filter((p): p is ToolsPart => p.kind === "tools");

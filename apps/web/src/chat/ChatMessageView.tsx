@@ -13,7 +13,7 @@ import { Markdown } from "./LazyMarkdown";
 import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
 import { WorkBlock } from "./WorkBlock";
-import { toolsForGroup } from "./parts";
+import { foldPlan, toolsForGroup } from "./parts";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the ⌘K palette
 // chat) and no actions render. Each callback is independently optional.
@@ -70,15 +70,12 @@ export function ChatMessageView({
           // just the answer. The "answer" is the trailing run of text parts; everything before
           // it is the work. User messages carry only text.
           const parts = message.parts!;
-          // The "answer" is the trailing run of text AND component parts — a component is
-          // emitted before its summary text, so it belongs with the answer (above the text),
-          // not folded into the work timeline (#1323). Everything before is the work.
-          let split = parts.length;
-          while (split > 0 && (parts[split - 1].kind === "text" || parts[split - 1].kind === "component")) split--;
-          const workParts = parts.slice(0, split);
-          const answerParts = parts.slice(split);
-          const hasTools = workParts.some((p) => p.kind === "tools");
-          const hasReasoning = workParts.some((p) => p.kind === "reasoning");
+          // The "answer" is the trailing run of text AND component parts — a component is emitted
+          // before its summary text, so it belongs with the answer (above the text), not folded
+          // into the work timeline (#1323). Everything before is the work. While STREAMING a folded
+          // (reason+tool) turn, foldPlan keeps an ambiguous trailing run as work so it can't flash
+          // into the main chat and then jump back into the WorkBlock when the next tool arrives.
+          const { fold, workParts, answerParts } = foldPlan(parts, streaming);
           const renderText = (part: ChatPart, key: string) =>
             part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
               <span className="chat-user-text" key={key}>{part.text}</span>
@@ -102,8 +99,8 @@ export function ChatMessageView({
             part.kind === "component" ? <ChatComponent key={`ac${i}`} spec={part.spec} /> : renderText(part, `a${i}`);
           return (
             <>
-              {hasTools && hasReasoning ? (
-                <WorkBlock parts={workParts} toolCalls={message.toolCalls} streaming={streaming && answerParts.length === 0} />
+              {fold ? (
+                <WorkBlock parts={workParts} toolCalls={message.toolCalls} streaming={streaming} />
               ) : (
                 workParts.map(renderInline)
               )}

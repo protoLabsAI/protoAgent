@@ -777,12 +777,24 @@ function ChatSessionSlot({
     // just noise. A form/question answer IS meaningful content, so those stay visible.
     const silent = hitl?.kind === "approval";
     setHitl(null);
-    void runTurn(typeof response === "string" ? response : JSON.stringify(response), { hidden: silent });
+    // For an approval resume, CONTINUE the original assistant message (the one that paused) so the
+    // pre- and post-approval tool cards live in ONE bubble / one WorkBlock — otherwise they split
+    // across two message bubbles with a gap between them. Forms/questions keep the new-bubble path
+    // (their answer is meaningful conversation).
+    void runTurn(
+      typeof response === "string" ? response : JSON.stringify(response),
+      silent ? { hidden: true, resumeMessageId: lastAssistantId } : {},
+    );
   }
 
   async function runTurn(
     content: string,
-    opts: { hidden?: boolean; sendAs?: string; images?: { b64: string; mime: string; name: string }[] } = {},
+    opts: {
+      hidden?: boolean;
+      sendAs?: string;
+      images?: { b64: string; mime: string; name: string }[];
+      resumeMessageId?: string;
+    } = {},
   ) {
     if (!session || !content) return;
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
@@ -795,7 +807,11 @@ function ChatSessionSlot({
       createdAt: Date.now(),
       status: "done",
     };
-    const assistantId = messageId();
+    // On an approval resume, CONTINUE the original assistant message (`resumeMessageId`) instead of
+    // minting a fresh bubble — so the pre- and post-approval tool cards extend ONE message / one
+    // WorkBlock with no inter-bubble gap. Otherwise mint a new assistant message as usual.
+    const resuming = opts.resumeMessageId != null;
+    const assistantId = opts.resumeMessageId ?? messageId();
     const assistant: ChatMessage = {
       id: assistantId,
       role: "assistant",
@@ -813,9 +829,14 @@ function ChatSessionSlot({
       chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? messages;
     // `hidden` (an approval resume, or a regenerate) sends `content` to the server but
     // omits the user bubble — the agent still receives it, the chat just doesn't show it.
+    // A resume flips the SAME assistant message back to streaming (keeping its parts/toolCalls).
     chatStore.updateMessages(
       session.id,
-      opts.hidden ? [...base, assistant] : [...base, userMessage, assistant],
+      resuming
+        ? base.map((m) => (m.id === assistantId ? { ...m, status: "streaming" } : m))
+        : opts.hidden
+          ? [...base, assistant]
+          : [...base, userMessage, assistant],
     );
     chatStore.setSessionStatus(session.id, "streaming");
     onError("");
