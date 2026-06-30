@@ -298,12 +298,29 @@ each a genuine DS gap with app-agnostic reuse:
 Delivered as the full contribute-back loop (build in `protoContent` → PR → DS release → bump
 `@protolabsai/ui` → adopt in-app), leading with P0 (smallest DS change, largest app reduction).
 
+**Delivered (2026-06-29 — the full loop, autonomous):**
+
+| Item | DS | App adopt |
+|---|---|---|
+| `ToastProvider position` | shipped (0.49.0) | #1438 |
+| `Button loading` (spinner + disabled + `aria-busy`) | protoContent #363 → **0.50.0** | #1439 |
+| `Input` `icon` + reuse segmented `Tabs` for the filter chips | protoContent #366 → **0.51.0** | #1441 |
+| `SecretInput` (password + reveal toggle) | protoContent #369 → **0.52.0** | #1442 |
+
+Reclassified during delivery: the "SegmentedControl/ChipGroup" need is met by the **existing**
+`Tabs variant="segmented"` (no new component). `FieldControl`/`PropertyRow` proved **redundant with
+the existing `FormField`**, and the `SettingInput` type→control switch is domain logic that stays
+app-side — so `SecretInput` is the one reusable primitive extracted from that surface. The headless
+**context-menu kit** is tracked separately in protoContent #341 (in flight); `TabBar
+onTabContextMenu` / `KeyRecorder` remain future DS gaps.
+
 ### 6.4 Slice plan (true-up)
 
 - **Phase 0** — this section (record + ledger).
 - **Phase 1 (correctness, auto-merge on green):** T1–T3 (#1428, done) · T4. Identity (T1/T2) folded in.
 - **Phase 2 (conventions, DRAFT under the UI local-test gate):** T5–T7 + delete the dead `hostLayer` path.
-- **Phase 4:** the §6.3 DS extraction wave.
+- **Phase 4:** the §6.3 DS extraction wave. — ✅ **DONE 2026-06-29** (DS 0.50.0–0.52.0; app
+  #1438/#1439/#1441/#1442). Context-menu kit (protoContent #341) tracked separately.
 
 ## 7. History — superseded 2026-06-10 proposal ("two scope-based homes")
 
