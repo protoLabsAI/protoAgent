@@ -4,7 +4,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Loader2, Save, Settings2 } from "lucide-react";
+import { ExternalLink, Save, Settings2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -130,8 +130,8 @@ function QuickSettingDialog({
             </Button>
           ) : null}
           <Button type="button" onClick={onClose} disabled={save.isPending}>Cancel</Button>
-          <Button variant="primary" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
-            {save.isPending ? <Loader2 className="spin" size={15} /> : <Save size={15} />} Save
+          <Button variant="primary" type="button" onClick={() => save.mutate()} loading={save.isPending} disabled={!dirtyKeys.length}>
+            {save.isPending ? null : <Save size={15} />} Save
           </Button>
         </>
       }

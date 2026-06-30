@@ -2,12 +2,12 @@
 // surface panels. Pure presentation, no state.
 
 import { Button, TextLink } from "@protolabsai/ui/primitives";
-import { ExternalLink, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
- * Ghost icon-button whose glyph spins while `busy`. The header "Refresh" in
- * Activity / Inbox / Schedule / Telemetry / Knowledge / Playbooks / Commons.
+ * Ghost icon-button that shows a spinner while `busy` (DS `Button loading`). The
+ * header "Refresh" in Activity / Inbox / Schedule / Telemetry / Knowledge / Playbooks.
  */
 export function RefreshButton({
   onClick,
@@ -21,15 +21,15 @@ export function RefreshButton({
   size?: number;
 }) {
   return (
-    <Button icon variant="ghost" type="button" onClick={onClick} disabled={busy} title={title} aria-label={title}>
-      <RefreshCw size={size} className={busy ? "spin" : undefined} />
+    <Button icon variant="ghost" type="button" onClick={onClick} loading={busy} title={title} aria-label={title}>
+      <RefreshCw size={size} />
     </Button>
   );
 }
 
 /**
  * "Test connection" button — a ShieldCheck that swaps to a spinner while
- * `pending`. `disabled` is OR-ed with `pending` (a pending test is also disabled).
+ * `pending` (DS `Button loading`). `disabled` still disables it independently.
  */
 export function TestConnectionButton({
   onClick,
@@ -43,8 +43,8 @@ export function TestConnectionButton({
   children?: ReactNode;
 }) {
   return (
-    <Button type="button" onClick={onClick} disabled={disabled || pending}>
-      {pending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+    <Button type="button" onClick={onClick} loading={pending} disabled={disabled}>
+      {pending ? null : <ShieldCheck size={15} />}
       {children}
     </Button>
   );

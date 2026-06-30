@@ -7,7 +7,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { Loader2, Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
+import { Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
@@ -168,10 +168,11 @@ function WorkflowsBody() {
                     variant="primary"
                     type="button"
                     onClick={doRun}
-                    disabled={run.isPending || missingRequired.length > 0}
+                    loading={run.isPending}
+                    disabled={missingRequired.length > 0}
                     title={missingRequired.length ? `missing: ${missingRequired.join(", ")}` : "Run workflow"}
                   >
-                    {run.isPending ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
+                    {run.isPending ? null : <Play size={16} />}
                     Run
                   </Button>
                   <Button

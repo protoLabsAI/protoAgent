@@ -1,6 +1,7 @@
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
-import { Bot, CheckCircle2, Loader2, Square, Trash2, XCircle } from "lucide-react";
+import { Spinner } from "@protolabsai/ui/data";
+import { Bot, CheckCircle2, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
@@ -198,7 +199,7 @@ export function BackgroundJobs() {
           aria-label={`Background agents${running ? ` — ${running} running` : ""}`}
           data-testid="background-jobs-pill"
         >
-          {running > 0 ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
+          {running > 0 ? <Spinner size={13} /> : <Bot size={13} />}
           {running > 0 ? <span>{running}</span> : null}
           {unread > 0 ? <span className="bg-jobs-unread" aria-label={`${unread} finished`} /> : null}
         </button>
@@ -243,7 +244,7 @@ function BgJobRow({
   const [expanded, setExpanded] = useState(false);
   const running = job.status === "running";
   const icon = running ? (
-    <Loader2 size={14} className="spin" />
+    <Spinner size={14} />
   ) : job.status === "failed" ? (
     <XCircle size={14} className="bg-jobs-fail" />
   ) : (
@@ -281,7 +282,7 @@ function BgJobRow({
               <span className="bg-jobs-tools">
                 {recentTools.map((t) => (
                   <span key={t.id} className={`bg-jobs-tool ${t.error ? "is-err" : t.done ? "is-done" : "is-run"}`}>
-                    {t.error ? <XCircle size={11} /> : t.done ? <CheckCircle2 size={11} /> : <Loader2 size={11} className="spin" />} {t.tool}
+                    {t.error ? <XCircle size={11} /> : t.done ? <CheckCircle2 size={11} /> : <Spinner size={11} />} {t.tool}
                   </span>
                 ))}
               </span>

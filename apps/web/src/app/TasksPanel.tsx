@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  Loader2,
   Play,
   Plus,
   Trash2,
@@ -91,11 +90,12 @@ function TaskCreateDialog({
           <Button
             type="button"
             variant="primary"
+            loading={busy}
             disabled={!canSubmit}
             data-testid="task-create-submit"
             onClick={() => onCreate(draft)}
           >
-            {busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Create task
+            {busy ? null : <Plus size={16} />} Create task
           </Button>
         </>
       }

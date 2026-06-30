@@ -414,10 +414,10 @@ function PlaybooksBody() {
                           variant="ghost"
                           title="Promote to the shared commons (every agent on this box can then reuse it)"
                           onClick={() => promote.mutate(p)}
-                          disabled={promotingId === p.id}
+                          loading={promotingId === p.id}
                           data-testid={`playbook-promote-${p.id}`}
                         >
-                          <ArrowUpToLine size={14} className={promotingId === p.id ? "spin" : ""} />
+                          <ArrowUpToLine size={14} />
                         </Button>
                       ) : null}
                       {isEditable(p) ? (

@@ -6,7 +6,7 @@ import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { useState, type JSX } from "react";
-import { Download, DownloadCloud, ExternalLink, Github, Loader2, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
+import { Download, DownloadCloud, ExternalLink, Github, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { installedPluginsQuery, pluginUpdatesQuery, queryKeys, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
@@ -84,12 +84,12 @@ function PluginRow({
               type="button"
               icon
               variant="ghost"
-              disabled={updating}
+              loading={updating}
               onClick={() => onUpdate(p)}
               title={`Update ${p.name} to the latest commit`}
               aria-label={`Update ${p.name}`}
             >
-              {updating ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
+              <RefreshCw size={15} />
             </Button>
           ) : null}
           {/* Configure opens a per-plugin settings dialog (ADR 0059) rather than expanding
@@ -110,11 +110,11 @@ function PluginRow({
             type="button"
             variant="ghost"
             size="sm"
-            disabled={busy}
+            loading={busy}
             onClick={() => onToggle(p)}
             title={on ? `Disable ${p.name}` : `Enable ${p.name}`}
           >
-            {busy ? <Loader2 size={14} className="spin" /> : on ? "Disable" : "Enable"}
+            {on ? "Disable" : "Enable"}
           </Button>
           {/* Uninstall — only plugins in the writable plugins dir (git-installed / local
               copies) are removable; in-tree built-ins are refused server-side, so they
@@ -125,12 +125,12 @@ function PluginRow({
               icon
               variant="ghost"
               className="plugin-row-danger"
-              disabled={removing}
+              loading={removing}
               onClick={() => onRemove(p)}
               title={`Uninstall ${p.name}`}
               aria-label={`uninstall ${p.id}`}
             >
-              {removing ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
+              <Trash2 size={15} />
             </Button>
           ) : null}
         </div>
@@ -294,8 +294,8 @@ function LocalTab() {
           <Alert
             status="warning"
             action={
-              <Button type="button" variant="default" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()} title="Re-clone every locked plugin at its pinned commit">
-                {sync.isPending ? <Loader2 size={13} className="spin" /> : <DownloadCloud size={13} />} Sync plugins
+              <Button type="button" variant="default" size="sm" loading={sync.isPending} onClick={() => sync.mutate()} title="Re-clone every locked plugin at its pinned commit">
+                {sync.isPending ? null : <DownloadCloud size={13} />} Sync plugins
               </Button>
             }
           >
@@ -339,11 +339,11 @@ function LocalTab() {
             type="button"
             variant="default"
             size="sm"
-            disabled={restart.isPending}
+            loading={restart.isPending}
             onClick={() => setRestartPending(true)}
             title="Gracefully restart the server process"
           >
-            {restart.isPending ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Restart server
+            {restart.isPending ? null : <RefreshCw size={13} />} Restart server
           </Button>
         </div>
       </div>
@@ -432,8 +432,8 @@ function DiscoverTab() {
                 ) : p.installed ? (
                   <StatusPill label={p.enabled ? "installed · on" : "installed"} tone="success" />
                 ) : (
-                  <Button type="button" disabled={install.isPending} onClick={() => install.mutate(p)}>
-                    {installingRepo === p.repo ? <Loader2 size={14} className="spin" /> : <Download size={14} />} Install
+                  <Button type="button" loading={installingRepo === p.repo} disabled={install.isPending} onClick={() => install.mutate(p)}>
+                    {installingRepo === p.repo ? null : <Download size={14} />} Install
                   </Button>
                 )}
               </div>

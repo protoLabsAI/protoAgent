@@ -1,7 +1,8 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
-import { ArrowDownToLine, Check, Clock, Coins, Copy, GitBranch, Gauge, Loader2, Maximize2, RotateCcw } from "lucide-react";
+import { Spinner } from "@protolabsai/ui/data";
+import { ArrowDownToLine, Check, Clock, Coins, Copy, GitBranch, Gauge, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
@@ -132,7 +133,7 @@ export function ChatMessageView({
       !(message.toolCalls && message.toolCalls.length) &&
       !(message.components && message.components.length) &&
       !message.reasoning ? (
-        <Loader2 className="spin" size={15} />
+        <Spinner size={15} />
       ) : null}
       {/* History fallback: a message persisted before component-parts existed renders its
           components here (after the answer). Live turns render them inline via ordered parts

@@ -3,7 +3,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowDownFromLine, ArrowUpToLine, Boxes, Library, Loader2, Plus, Share2, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, Boxes, Library, Plus, Share2, Trash2 } from "lucide-react";
 
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
@@ -122,8 +122,8 @@ function AddServerForm() {
       )}
 
       <div className="mcp-add-actions">
-        <Button type="submit" variant="ghost" disabled={busy || (mode === "json" ? !json.trim() : !formValid)}>
-          {busy ? <Loader2 size={14} className="spin" /> : mode === "json" ? "Import" : "Connect"}
+        <Button type="submit" variant="ghost" loading={busy} disabled={mode === "json" ? !json.trim() : !formValid}>
+          {mode === "json" ? "Import" : "Connect"}
         </Button>
         <Button type="button" variant="ghost" onClick={() => { reset(); setOpen(false); }}>Cancel</Button>
       </div>
@@ -205,11 +205,11 @@ function McpBody() {
                 <div className="plugin-row-actions">
                   <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
                   {layered && server.tier === "private" ? (
-                    <Button type="button" variant="ghost" disabled={busyName === server.name}
+                    <Button type="button" variant="ghost" loading={busyName === server.name}
                       onClick={() => promote.mutate(server.name)}
                       title={`Share ${server.name} to the box commons`} aria-label={`share ${server.name}`}
                     >
-                      <ArrowUpToLine size={14} className={busyName === server.name ? "spin" : ""} />
+                      {busyName === server.name ? null : <ArrowUpToLine size={14} />}
                     </Button>
                   ) : null}
                   {layered && server.tier === "commons" ? (
@@ -222,11 +222,11 @@ function McpBody() {
                   ) : null}
                   <Button type="button"
                     variant="ghost"
-                    disabled={removingName === server.name}
+                    loading={removingName === server.name}
                     onClick={() => remove.mutate(server.name)}
                     title={`Remove ${server.name}`}
                   >
-                    {removingName === server.name ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                    {removingName === server.name ? null : <Trash2 size={14} />}
                   </Button>
                 </div>
               </div>

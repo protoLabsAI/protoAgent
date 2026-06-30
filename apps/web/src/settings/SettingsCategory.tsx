@@ -4,7 +4,7 @@ import { Alert } from "@protolabsai/ui/data";
 import { Combobox, DropdownSelect, Input, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Boxes, Loader2, RotateCcw, Save } from "lucide-react";
+import { Boxes, RotateCcw, Save } from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -260,8 +260,8 @@ export function SettingsCategory({
               <>
                 {/* #1386 — pull the form gateway's model list into the Primary model dropdown, so
                     switching provider/key isn't a dead-end (the saved list is stale). */}
-                <Button type="button" onClick={() => getModels.mutate()} disabled={getModels.isPending || save.isPending}>
-                  {getModels.isPending ? <Loader2 className="spin" size={15} /> : <Boxes size={15} />} Get models
+                <Button type="button" onClick={() => getModels.mutate()} loading={getModels.isPending} disabled={save.isPending}>
+                  {getModels.isPending ? null : <Boxes size={15} />} Get models
                 </Button>
                 <TestConnectionButton onClick={() => testConn.mutate()} pending={testConn.isPending} disabled={save.isPending} />
               </>
@@ -389,8 +389,8 @@ function SettingRow({
           <p className="setting-inheritance">
             <Badge status={inherit.status}>{inherit.label}</Badge>
             {inherit.overridden && onReset ? (
-              <Button variant="ghost" size="sm" type="button" onClick={onReset} disabled={resetting}>
-                {resetting ? <Loader2 className="spin" size={13} /> : <RotateCcw size={13} />}
+              <Button variant="ghost" size="sm" type="button" onClick={onReset} loading={resetting}>
+                {resetting ? null : <RotateCcw size={13} />}
                 Reset to inherited
               </Button>
             ) : null}

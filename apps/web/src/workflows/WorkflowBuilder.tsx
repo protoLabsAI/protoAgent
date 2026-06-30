@@ -1,6 +1,6 @@
 import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
-import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { Plus, Save, Trash2, X } from "lucide-react";
 
 import { useState } from "react";
 
@@ -200,8 +200,8 @@ export function WorkflowBuilder({
         <Button variant="ghost" type="button" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <Button variant="primary" type="button" onClick={() => void save()} disabled={!valid || saving}>
-          {saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+        <Button variant="primary" type="button" onClick={() => void save()} loading={saving} disabled={!valid}>
+          {saving ? null : <Save size={16} />}
           Save workflow
         </Button>
       </div>

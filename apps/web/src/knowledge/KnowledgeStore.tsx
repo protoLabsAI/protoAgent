@@ -427,10 +427,10 @@ export function KnowledgeStore() {
                             type="button"
                             title="Share to the commons (every agent on this box can then recall it)"
                             onClick={() => promote.mutate(c)}
-                            disabled={promotingId === c.id}
+                            loading={promotingId === c.id}
                             aria-label={`share entry ${c.id}`}
                           >
-                            <ArrowUpToLine size={14} className={promotingId === c.id ? "spin" : ""} />
+                            <ArrowUpToLine size={14} />
                           </Button>
                         ) : null}
                         {c.tier === "commons" ? (

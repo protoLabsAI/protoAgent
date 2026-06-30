@@ -2,7 +2,7 @@ import { Input } from "@protolabsai/ui/forms";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink, Loader2, Plus, Search } from "lucide-react";
+import { ArrowLeft, ExternalLink, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api } from "../lib/api";
@@ -142,10 +142,11 @@ export function McpCatalogDialog({
             <Button
               type="button"
               variant="primary"
-              disabled={missing || add.isPending}
+              loading={add.isPending}
+              disabled={missing}
               onClick={() => add.mutate(selected)}
             >
-              {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add server
+              {add.isPending ? null : <Plus size={14} />} Add server
             </Button>
             <Button type="button" variant="ghost" onClick={back}>
               Cancel

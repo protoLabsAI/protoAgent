@@ -10,7 +10,7 @@ import { StatusDot } from "@protolabsai/ui/data";
 import { StatusPill } from "../app/StatusPill";
 import { HelpLink } from "../app/ui-kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api } from "../lib/api";
@@ -136,8 +136,8 @@ export function DelegatesSection() {
                 <span>{p ? probeLine(p) : d.description || d.error || ""}</span>
               </div>
               <div className="issue-actions">
-                <Button icon variant="ghost" title="Test" onClick={() => testRow.mutate(d)} disabled={testRow.isPending}>
-                  {testRow.isPending && testRow.variables?.name === d.name ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+                <Button icon variant="ghost" title="Test" onClick={() => testRow.mutate(d)} loading={testRow.isPending && testRow.variables?.name === d.name} disabled={testRow.isPending}>
+                  <ShieldCheck size={15} />
                 </Button>
                 <Button icon variant="ghost" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
                   <Pencil size={15} />
@@ -289,12 +289,12 @@ function DelegateForm({
       {err ? <p className="settings-status">{err}</p> : null}
 
       <div className="settings-group-actions">
-        <Button type="button" onClick={() => test.mutate()} disabled={test.isPending}>
-          {test.isPending ? <Loader2 className="spin" size={15} /> : <Plug size={15} />} Test
+        <Button type="button" onClick={() => test.mutate()} loading={test.isPending}>
+          {test.isPending ? null : <Plug size={15} />} Test
         </Button>
         <Button type="button" onClick={onClose}>Cancel</Button>
-        <Button variant="primary" type="button" onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
-          {save.isPending ? <Loader2 className="spin" size={15} /> : null} Save
+        <Button variant="primary" type="button" onClick={() => save.mutate()} loading={save.isPending} disabled={!name.trim()}>
+          Save
         </Button>
       </div>
     </div>

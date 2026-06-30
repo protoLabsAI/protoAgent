@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Input } from "@protolabsai/ui/forms";
 import { Dialog } from "@protolabsai/ui/overlays";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
@@ -79,10 +79,11 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
         />
         <Button
           variant="primary"
-          disabled={!url.trim() || install.isPending}
+          loading={install.isPending}
+          disabled={!url.trim()}
           onClick={() => { setStatus(""); install.mutate(); }}
         >
-          {install.isPending ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Install
+          {install.isPending ? null : <Plus size={15} />} Install
         </Button>
       </div>
       {status ? <p className="plugin-install-status" role="status">{status}</p> : null}

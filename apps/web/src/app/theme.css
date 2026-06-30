@@ -1670,15 +1670,8 @@ textarea {
   border-top: 1px solid var(--border);
 }
 
-.spin {
-  animation: spin 1000ms linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* The app `.spin` keyframe is retired — busy spinners now come from the DS
+   (`<Button loading>` and `<Spinner>`, @protolabsai/ui ≥ 0.50). */
 
 /* Below this width there isn't room for the rail + chat + side panel, so drop
    to two columns and hide the panel (reachable again by widening / the toggle).

@@ -11,7 +11,6 @@ import {
   Gauge,
   Inbox,
   LayoutDashboard,
-  Loader2,
   MessageSquare,
   PanelBottom,
   PanelLeft,

@@ -1,7 +1,7 @@
 import "./docviewer.css";
 
 import { Dialog } from "@protolabsai/ui/overlays";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@protolabsai/ui/data";
 import { useEffect, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
@@ -67,7 +67,7 @@ export function DocumentViewer() {
           doc.render()
         ) : loading ? (
           <div className="doc-viewer__status">
-            <Loader2 className="spin" size={16} /> Loading…
+            <Spinner size={16} /> Loading…
           </div>
         ) : error ? (
           <div className="doc-viewer__status" role="alert">

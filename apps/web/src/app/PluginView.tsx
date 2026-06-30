@@ -1,4 +1,5 @@
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { Spinner } from "@protolabsai/ui/data";
+import { AlertTriangle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
@@ -246,7 +247,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
           <>
             {!loaded ? (
               <div className="plugin-view-state">
-                <Loader2 className="spin" size={18} />
+                <Spinner size={18} />
                 <span>Loading {view.label}…</span>
               </div>
             ) : null}
