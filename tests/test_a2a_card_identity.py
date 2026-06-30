@@ -120,3 +120,36 @@ def test_card_description_default(monkeypatch):
     monkeypatch.setattr(server.STATE, "active_port", 7870, raising=False)
     card = a2a._build_agent_card_proto()
     assert card.description == a2a._DEFAULT_CARD_DESCRIPTION
+
+
+# ── protocol-version advertisement (A2A version negotiation) ─────────────────
+
+
+def test_card_dict_carries_protocol_version_hint(monkeypatch):
+    """The served card JSON exposes a top-level, proto-free protocolVersion hint —
+    so a delegating peer can pre-check compatibility without walking the proto
+    supportedInterfaces — and it AGREES with the native interface field."""
+    monkeypatch.setattr(server.STATE, "graph_config", _cfg(), raising=False)
+    monkeypatch.setattr(server.STATE, "plugin_a2a_skills", [], raising=False)
+    monkeypatch.setattr(server.STATE, "active_port", 7870, raising=False)
+    d = a2a.agent_card_dict(a2a._build_agent_card_proto())
+    assert d["protocolVersion"] == "1.0"
+    assert d["supportedVersions"] == ["1.0"]
+    # native proto field stays populated and agrees with the proto-free hint
+    jsonrpc = next(i for i in d["supportedInterfaces"] if i["protocolBinding"] == "JSONRPC")
+    assert jsonrpc["protocolVersion"] == d["protocolVersion"] == a2a.A2A_PROTOCOL_VERSION
+
+
+async def test_agent_card_route_serves_protocol_version(monkeypatch):
+    """The /.well-known/agent-card.json route serves the protocol-version hint."""
+    import json
+
+    monkeypatch.setattr(server.STATE, "graph_config", _cfg(), raising=False)
+    monkeypatch.setattr(server.STATE, "plugin_a2a_skills", [], raising=False)
+    monkeypatch.setattr(server.STATE, "active_port", 7870, raising=False)
+    routes = a2a.agent_card_routes(a2a._build_agent_card_proto())
+    assert routes and routes[0].path == "/.well-known/agent-card.json"
+    resp = await routes[0].endpoint(None)  # request is unused
+    body = json.loads(resp.body)
+    assert body["protocolVersion"] == "1.0"
+    assert body["supportedVersions"] == ["1.0"]

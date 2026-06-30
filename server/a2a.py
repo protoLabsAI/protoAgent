@@ -292,6 +292,50 @@ def _build_agent_card_proto():
     return card
 
 
+# The A2A *protocol* version this agent speaks — distinct from the agent's app
+# version (``_package_version`` → the card's ``version``). It mirrors the a2a-sdk
+# ``PROTOCOL_VERSION_1_0`` that ``build_agent_card`` writes into
+# ``supported_interfaces[].protocol_version`` and the ``A2A-Version: 1.0`` header
+# the runtime sends everywhere. One value, advertised in two shapes (see below).
+A2A_PROTOCOL_VERSION = "1.0"
+A2A_SUPPORTED_VERSIONS = (A2A_PROTOCOL_VERSION,)
+
+
+def agent_card_dict(card) -> dict:
+    """The JSON served at ``/.well-known/agent-card.json`` — a2a-sdk's canonical
+    camelCase card dict plus a small, proto-free protocol-version hint.
+
+    The proto ``AgentCard`` already carries the protocol version natively in
+    ``supportedInterfaces[].protocolVersion`` (``build_agent_card`` sets it to
+    1.0), but that's nested inside the proto-shaped interface list. We ALSO surface
+    a top-level ``protocolVersion`` + ``supportedVersions`` so a delegating peer can
+    pre-check version compatibility — and fail fast on a mismatch — without proto
+    knowledge or walking ``supportedInterfaces``. The proto card has no slot for
+    these extra top-level keys, so they're injected into the served JSON here
+    (``setdefault`` — never clobber a native key the sdk may add later)."""
+    from a2a.server.routes.agent_card_routes import agent_card_to_dict
+
+    d = agent_card_to_dict(card)
+    d.setdefault("protocolVersion", A2A_PROTOCOL_VERSION)
+    d.setdefault("supportedVersions", list(A2A_SUPPORTED_VERSIONS))
+    return d
+
+
+def agent_card_routes(card) -> list:
+    """Starlette route(s) for the agent card — like a2a-sdk's
+    ``create_agent_card_routes`` but serving ``agent_card_dict`` so the JSON carries
+    the proto-free protocol-version hint. Same well-known path + GET, so
+    ``add_a2a_routes_to_fastapi`` mounts it identically."""
+    from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def _get_agent_card(_request) -> JSONResponse:
+        return JSONResponse(agent_card_dict(card))
+
+    return [Route(path=AGENT_CARD_WELL_KNOWN_PATH, endpoint=_get_agent_card, methods=["GET"])]
+
+
 def _record_a2a_telemetry(outcome) -> None:
     """Write one per-turn telemetry row from an executor ``TurnOutcome``
     (ADR 0006 Slice 2). No-op when the telemetry store is off; best-effort so a
