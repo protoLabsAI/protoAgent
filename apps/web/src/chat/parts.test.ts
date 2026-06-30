@@ -160,18 +160,19 @@ describe("foldPlan", () => {
     expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
   });
 
-  it("folds a tool-only turn too (any tool → clean batch), deferring the answer while streaming", () => {
+  it("does NOT fold a tool-only turn — a simple tool result keeps its card inline (no reasoning to batch)", () => {
     const parts = [tools("a"), text("answer")];
-    // streaming: keep the answer folded (nothing below the WorkBlock yet)
-    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
-    // settled: the answer splits out below the "Worked" summary
-    expect(foldPlan(parts, false)).toEqual({ fold: true, workParts: [tools("a")], answerParts: [text("answer")] });
+    // No reasoning → not folded; the normal split applies, streaming or settled. The web_search
+    // card renders directly rather than collapsing behind a "Worked" summary.
+    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: [tools("a")], answerParts: [text("answer")] });
+    expect(foldPlan(parts, false)).toEqual({ fold: false, workParts: [tools("a")], answerParts: [text("answer")] });
   });
 
-  it("folds a tool+narration turn (no reasoning) — the shell-command case that used to split", () => {
-    // tools, interim narration, more tools — must fold (not render inline + split into batches)
+  it("does NOT fold a tool+narration turn without reasoning — reverts to the inline render", () => {
+    // tools + interim narration, no reasoning part → not folded; renders inline (the pre-#1417
+    // behaviour). Trailing part is a tool, so everything is work and nothing is deferred.
     const parts = [tools("a"), text("running the next one"), tools("b")];
-    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: parts, answerParts: [] });
   });
 
   it("does NOT fold a reasoning-only turn (no tools)", () => {
