@@ -113,3 +113,81 @@ def test_ensure_live_config_runs_migration(monkeypatch, tmp_path):
     # seed nothing; migration must carry the old config across.
     cio.ensure_live_config()
     assert paths.instance_paths().config_yaml.read_text() == "carried: over\n"
+
+
+# ── store-tier migration (box_root/<store> → box_root/default/<store>) ───────────
+
+
+def _seed_legacy_stores(box):
+    """Drop pre-redesign data stores flat under the box root + box-tier shared state."""
+    # Per-instance stores (these MOVE into instance_root):
+    (box / "checkpoints.db").write_text("ckpt")
+    (box / "skills.db").write_text("skills")
+    (box / "knowledge").mkdir()
+    (box / "knowledge" / "agent.db").write_text("kb")
+    (box / "memory").mkdir()
+    (box / "memory" / "s1.json").write_text("{}")
+    (box / "goals").mkdir()
+    (box / "goals" / "g.json").write_text("{}")
+    # Box-tier shared state (these STAY at the box root — never copied):
+    (box / "host-config.yaml").write_text("host: cfg")
+    (box / "commons").mkdir()
+    (box / "commons" / "skills.db").write_text("shared")
+    (box / ".instances").mkdir()
+    (box / ".instances" / "123.json").write_text("{}")
+    (box / ".data-version").write_text("{}")
+    (box / "workspaces").mkdir()
+    (box / "workspaces" / "fleet.json").write_text("{}")
+
+
+def test_migrates_default_instance_stores(monkeypatch, tmp_path):
+    """First boot of the default instance carries the flat box-root data stores into
+    ``box_root/default/<store>``; box-tier shared state is left alone."""
+    box, _ = _setup(monkeypatch, tmp_path)  # default instance
+    _seed_legacy_stores(box)
+
+    assert cio.migrate_legacy_layout() is True
+    inst = box / "default"
+    # per-instance stores carried (files + dirs):
+    assert (inst / "checkpoints.db").read_text() == "ckpt"
+    assert (inst / "skills.db").read_text() == "skills"
+    assert (inst / "knowledge" / "agent.db").read_text() == "kb"
+    assert (inst / "memory" / "s1.json").exists()
+    assert (inst / "goals" / "g.json").exists()
+    # originals untouched (copy, not move):
+    assert (box / "checkpoints.db").exists()
+    # box-tier shared state NOT copied under the instance root:
+    assert not (inst / "host-config.yaml").exists()
+    assert not (inst / "commons").exists()
+    assert not (inst / ".instances").exists()
+    assert not (inst / ".data-version").exists()
+    assert not (inst / "workspaces").exists()
+
+
+def test_store_migration_is_idempotent(monkeypatch, tmp_path):
+    """Second pass copies nothing (destinations already exist)."""
+    box, _ = _setup(monkeypatch, tmp_path)
+    _seed_legacy_stores(box)
+    assert cio.migrate_legacy_layout() is True
+    assert cio.migrate_legacy_layout() is False  # no-op once carried
+
+
+def test_store_migration_skipped_for_scoped_instance(monkeypatch, tmp_path):
+    """Only the DEFAULT instance auto-migrates — a named/dev instance re-inits."""
+    box, _ = _setup(monkeypatch, tmp_path, PROTOAGENT_INSTANCE="dev")
+    _seed_legacy_stores(box)
+    assert cio.migrate_legacy_layout() is False
+    assert not (box / "dev" / "checkpoints.db").exists()
+
+
+def test_store_migration_not_resurrected_after_config_present(monkeypatch, tmp_path):
+    """Once the live config exists (post-first-boot), the bridge is skipped entirely —
+    so a store the operator later clears is never re-copied from a legacy orphan."""
+    box, _ = _setup(monkeypatch, tmp_path)
+    p = paths.instance_paths()
+    p.config_dir.mkdir(parents=True)
+    p.config_yaml.write_text("already: migrated\n")
+    _seed_legacy_stores(box)  # legacy orphans still sitting at the box root
+
+    assert cio.migrate_legacy_layout() is False
+    assert not (box / "default" / "checkpoints.db").exists()  # not resurrected

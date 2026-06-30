@@ -41,7 +41,6 @@ from scheduler.interface import Job, is_cron, parse_iso_to_utc
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DB_DIR = "/sandbox/scheduler"
 _POLL_INTERVAL_S = 1.0
 _MISSED_FIRE_WINDOW_S = 24 * 60 * 60  # 24h
 
@@ -105,22 +104,16 @@ def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
     cheap and prevents an exotic typo from putting a sqlite file
     outside the configured scheduler dir.
     """
-    from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
-
     safe_name = _safe_segment(agent_name)
-    raw = os.environ.get("SCHEDULER_DB_DIR") or db_dir or DEFAULT_DB_DIR
-    base = scope_leaf(Path(str(raw)).expanduser() / safe_name)
-    try:
-        base.mkdir(parents=True, exist_ok=True)
-        probe = base / ".write-probe"
-        probe.touch()
-        probe.unlink()
-        return base / "jobs.db"
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / "scheduler" / safe_name)
-        fallback.mkdir(parents=True, exist_ok=True)
-        log.info("[scheduler] %s not writable; using %s instead", base, fallback)
-        return fallback / "jobs.db"
+    override = os.environ.get("SCHEDULER_DB_DIR") or db_dir
+    if override:
+        base = Path(str(override)).expanduser() / safe_name
+    else:
+        from infra.paths import instance_paths
+
+        base = instance_paths().store("scheduler") / safe_name
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "jobs.db"
 
 
 def _safe_segment(name: str) -> str:

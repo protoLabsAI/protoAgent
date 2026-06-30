@@ -94,25 +94,39 @@ def test_bad_name_rejected(root):
         manager.create("bad name")
 
 
-def test_root_is_instance_scoped(root, monkeypatch):
-    """ADR 0004: a scoped instance owns its own workspaces root (and so its own
-    fleet.json) — two co-located hubs must not share one fleet registry."""
-    assert manager.workspaces_root() == root  # unscoped → the plain root
+def test_root_override_wins(root):
+    """``PROTOAGENT_WORKSPACES_DIR`` is an explicit override — used verbatim (the
+    ``root`` fixture sets it), regardless of instance."""
+    assert manager.workspaces_root() == root
 
+
+def test_root_is_instance_scoped(tmp_path, monkeypatch):
+    """ADR 0004: a scoped instance owns its own workspaces root (``instance_root/
+    workspaces``, and so its own fleet.json) — two co-located hubs must not share one
+    fleet registry. Scope comes from the instance root now, not a scope_leaf knob."""
+    import infra.paths as paths
+
+    monkeypatch.delenv("PROTOAGENT_WORKSPACES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    paths.reset_instance_paths()
     scoped = manager.workspaces_root()
-    assert scoped == root.parent / "roxy" / root.name  # scope_leaf nesting
-    assert scoped != root
+    assert scoped == tmp_path / "roxy" / "workspaces"
 
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "other")
+    paths.reset_instance_paths()
     assert manager.workspaces_root() != scoped  # siblings don't share
 
 
-def test_fleet_state_follows_scoped_root(root, monkeypatch):
+def test_fleet_state_follows_scoped_root(tmp_path, monkeypatch):
     """fleet.json lives under the scoped root — a scoped hub's registry is its own."""
+    import infra.paths as paths
     from graph.fleet import supervisor
 
+    monkeypatch.delenv("PROTOAGENT_WORKSPACES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    paths.reset_instance_paths()
     assert supervisor._state_path() == manager.workspaces_root() / "fleet.json"
     assert "roxy" in supervisor._state_path().parts
 

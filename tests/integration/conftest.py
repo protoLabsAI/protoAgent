@@ -5,10 +5,11 @@ against a fake OpenAI gateway, on temp roots + free ports, and tears everything
 down. This is the integration layer the fleet had no coverage for — every prior
 fleet test mocked ``subprocess`` or ran single-instance.
 
-Isolation: each server gets its own tmp ``HOME`` so the (still-legacy, pre-Phase-4)
-``data_home()`` stores land under ``<tmp>/.protoagent`` instead of the real one,
-and ``PROTOAGENT_HOME`` puts its config at ``<tmp-home>/config`` (the new layout).
-Members the hub spawns inherit that tmp ``HOME``, so the whole fleet stays in tmp.
+Isolation: each server gets its own tmp ``HOME`` so the box tier (host-config,
+commons, heartbeats) lands under ``<tmp>/.protoagent`` instead of the real one, and
+``PROTOAGENT_HOME`` puts its config AND every per-instance data store under
+``<tmp-home>`` (the new instance_root layout). Members the hub spawns inherit that
+tmp ``HOME`` and get their own ``PROTOAGENT_HOME=<ws>``, so the whole fleet stays in tmp.
 
 These tests are SLOW (real boots) and opt-in: set ``PA_RUN_INTEGRATION=1`` to run
 them; the default ``pytest tests/`` skips them.
@@ -150,8 +151,8 @@ def fleet(tmp_path_factory, fake_gateway):
         port = free_port()
         env = {
             **os.environ,
-            "HOME": str(data_root),  # isolate data_home() → <data_root>/.protoagent (legacy stores)
-            "PROTOAGENT_HOME": str(home),  # instance_root → config at <home>/config (new layout)
+            "HOME": str(data_root),  # isolate data_home() → <data_root>/.protoagent (box tier: host/commons/heartbeats)
+            "PROTOAGENT_HOME": str(home),  # instance_root → config + every per-instance store under <home>
             "PROTOAGENT_HEADLESS_SETUP": "1",
             "OPENAI_API_KEY": "fake-integration-key",
             "PYTHONPATH": str(ROOT),

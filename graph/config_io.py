@@ -150,6 +150,28 @@ except ImportError:
 # legacy-layout bridge below.
 _MIGRATED_CONFIG_FILES = ("langgraph-config.yaml", "secrets.yaml", ".setup-complete", "theme.json")
 
+# Per-instance DATA stores that lived flat under the box root in the old layout
+# (``~/.protoagent/checkpoints.db``, ``~/.protoagent/knowledge``, …) and now live
+# under ``instance_root`` (``~/.protoagent/default/...``). The store-tier bridge
+# below carries them for the DEFAULT instance only. Box-tier shared state
+# (host-config.yaml, commons, .instances, .data-version, workspaces) is deliberately
+# NOT in either list — it stays at the box root, shared by every instance.
+_LEGACY_STORE_FILES = ("checkpoints.db", "telemetry.db", "skills.db", "a2a-tasks.db", "a2a-push.db")
+_LEGACY_STORE_DIRS = (
+    "knowledge",
+    "memory",
+    "scheduler",
+    "inbox",
+    "background",
+    "activity",
+    "audit",
+    "tasks",
+    "workflows",
+    "acp_sessions",
+    "goals",
+    "workspace",
+)
+
 
 def _legacy_config_dirs() -> list[Path]:
     """Old-layout directories that may hold this instance's pre-redesign config, in
@@ -217,7 +239,55 @@ def migrate_legacy_layout() -> bool:
         p.soul_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(legacy_soul, p.soul_path)
         migrated = True
+    # Carry the default instance's data stores into the new instance_root (first
+    # boot only — gated by the same absent-live-config condition above so a store
+    # the operator later clears is never resurrected). Only the DEFAULT instance
+    # auto-migrates; scoped sandboxes (e.g. the dev instance) re-init from scratch.
+    migrated = _migrate_legacy_stores(p) or migrated
     return migrated
+
+
+def _migrate_legacy_stores(p) -> bool:
+    """One-shot, idempotent, non-destructive copy of the pre-redesign data stores from
+    the flat box root into ``instance_root`` (``box_root/<store>`` → ``box_root/default/
+    <store>``). Returns True if it copied anything.
+
+    Only runs for the standard local DEFAULT instance (``instance_id == "default"`` and
+    ``box_root`` is the parent of ``instance_root``) — a ``PROTOAGENT_HOME`` deploy or a
+    named/dev instance has a distinct root and re-inits rather than inheriting the
+    default's data. Copy (never move); skip any store whose destination already exists.
+    Box-tier shared state is never touched. Best-effort — a copy failure must never
+    block boot."""
+    import shutil
+
+    if p.instance_id != "default" or p.box_root != p.instance_root.parent:
+        return False
+    moved: list[str] = []
+    for name in _LEGACY_STORE_FILES:
+        src, dst = p.box_root / name, p.instance_root / name
+        if src.is_file() and not dst.exists():
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                moved.append(name)
+            except OSError as exc:
+                log.warning("[migrate] could not carry store file %s: %s", name, exc)
+    for name in _LEGACY_STORE_DIRS:
+        src, dst = p.box_root / name, p.instance_root / name
+        if src.is_dir() and not dst.exists():
+            try:
+                shutil.copytree(src, dst)
+                moved.append(f"{name}/")
+            except OSError as exc:
+                log.warning("[migrate] could not carry store dir %s: %s", name, exc)
+    if moved:
+        log.warning(
+            "[migrate] carried default-instance data stores into %s (one-time; originals "
+            "left untouched, removable once you've confirmed the upgrade): %s",
+            p.instance_root,
+            ", ".join(moved),
+        )
+    return bool(moved)
 
 
 def ensure_live_config() -> bool:

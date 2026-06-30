@@ -62,8 +62,9 @@ def test_member_crash_detected_then_restart(fleet):
     m = _member(hub, mid)
     assert m and m.get("running") and int(m.get("pid")) == pid1, f"member not listed as running: {m}"
 
-    # Where the member's data lives -- we confirm it survives the restart.
-    ws_dirs = list(hub.data_root.glob(f"**/workspaces/{mid}"))
+    # Where the member's data lives -- we confirm it survives the restart. Workspaces are
+    # HUB-instance-scoped (instance_root/workspaces = PROTOAGENT_HOME/workspaces = hub.home).
+    ws_dirs = list(hub.home.glob(f"workspaces/{mid}"))
     assert ws_dirs, "member workspace dir not found before crash"
     ws_dir = ws_dirs[0]
 

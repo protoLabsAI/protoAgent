@@ -27,19 +27,28 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _restore_env():
+    """``_reload_memory`` applies env overrides persistently (the path is now resolved
+    lazily by ``memory_path()`` at write time, not captured at import), so snapshot +
+    restore ``os.environ`` around each test to keep MEMORY_PATH from leaking."""
+    snapshot = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(snapshot)
+
+
 def _reload_memory(env_overrides: dict | None = None):
-    """Reload graph.middleware.memory with given env overrides active.
+    """Apply env overrides (persistently — see ``_restore_env``) and reload
+    graph.middleware.memory so the import-time ``PROTOAGENT_DISABLE_MEMORY`` flag is
+    re-read. Returns the module so tests can call ``_persist_session`` with a known
+    MEMORY_PATH / PROTOAGENT_DISABLE_MEMORY state (the path itself resolves lazily)."""
+    os.environ.update(env_overrides or {})
+    if "graph.middleware.memory" in sys.modules:
+        del sys.modules["graph.middleware.memory"]
+    import graph.middleware.memory as mod
 
-    Returns the freshly-imported module so tests can call _persist_session
-    with a known MEMORY_PATH / PROTOAGENT_DISABLE_MEMORY state.
-    """
-    env_overrides = env_overrides or {}
-    with patch.dict(os.environ, env_overrides, clear=False):
-        if "graph.middleware.memory" in sys.modules:
-            del sys.modules["graph.middleware.memory"]
-        import graph.middleware.memory as mod
-
-        return mod
+    return mod
 
 
 def _make_state(
@@ -565,20 +574,19 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_default_memory_path_uses_data_home(monkeypatch):
-    """Without MEMORY_PATH, the default resolves under data_home() — the
-    /sandbox-in-a-container, else ~/.protoagent writable fallback every other
-    store uses. The old literal /sandbox/memory/ silently skipped persistence
-    on non-container hosts and, on Windows, wrote to \\sandbox at the drive
-    root (caught by the desktop sidecar smoke)."""
+def test_default_memory_path_uses_instance_store(monkeypatch):
+    """Without MEMORY_PATH, the default resolves to the per-instance
+    ``instance_root/memory`` store — always writable (the old literal /sandbox/memory
+    silently skipped persistence on non-container hosts)."""
     from pathlib import Path
 
-    from infra.paths import data_home
+    from infra.paths import instance_paths, reset_instance_paths
 
     monkeypatch.delenv("MEMORY_PATH", raising=False)
     monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
     monkeypatch.delenv("PROTOAGENT_AUTO_SCOPE", raising=False)
+    reset_instance_paths()
     sys.modules.pop("graph.middleware.memory", None)
     import graph.middleware.memory as mod
 
-    assert Path(mod.MEMORY_PATH) == data_home() / "memory"
+    assert Path(mod.memory_path()) == instance_paths().store("memory")

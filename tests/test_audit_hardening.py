@@ -45,9 +45,14 @@ def test_session_stats_capped(tmp_path, monkeypatch):
 
 
 def test_instance_scoping(tmp_path, monkeypatch):
-    # PROTOAGENT_INSTANCE namespaces the path under an instance segment.
+    # The DEFAULT audit path is the per-instance instance_root/audit/audit.jsonl, so
+    # PROTOAGENT_INSTANCE namespaces it. An explicit path is honored verbatim.
+    import infra.paths as paths
+
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "inst-a")
-    a = AuditLogger(path=tmp_path / "audit.jsonl")
+    paths.reset_instance_paths()
+    a = AuditLogger()  # no explicit path → per-instance default
     a.log(session_id="s", tool="t", args={}, result_summary="", duration_ms=1, success=True)
-    assert "inst-a" in str(a.path)
+    assert a.path == tmp_path / "inst-a" / "audit" / "audit.jsonl"
     assert json.loads(a.path.read_text().splitlines()[0])["tool"] == "t"

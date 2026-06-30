@@ -1,9 +1,9 @@
 """In-process tasks issue store (Sprint B).
 
 A small SQLite-backed issue tracker the server owns — the agent's planning/task
-surface and the console's Tasks panel both read/write it. Instance-scoped
-(``paths.scope_leaf``) so several agents don't share one board. No `br` CLI, no
-per-project `.tasks/` directory.
+surface and the console's Tasks panel both read/write it. Per-instance
+(``instance_root/tasks/issues.db``) so several agents don't share one board. No
+`br` CLI, no per-project `.tasks/` directory.
 
 Issue shape (the fields the console + tools use):
   id, title, description, status, priority, issue_type, assignee,
@@ -19,9 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from infra.paths import scope_leaf
-
-
 def _publish(topic: str, data: dict) -> None:
     """Best-effort bus push so the console Tasks panel can invalidate live on a change
     instead of polling every 5s (#1310). No-op when the host hasn't wired a publisher
@@ -34,8 +31,6 @@ def _publish(topic: str, data: dict) -> None:
     except Exception:  # noqa: BLE001
         pass
 
-DEFAULT_DB_PATH = "/sandbox/tasks/issues.db"
-
 # Open lifecycle states (closed is terminal). Mirrors the console's
 # issueStatusOrder; `tombstone` is intentionally absent (we hard-delete).
 VALID_STATUSES = ("open", "in_progress", "blocked", "deferred", "closed")
@@ -47,14 +42,14 @@ def _now() -> str:
 
 
 def _resolve_db_path(db_path: str | None) -> Path:
-    """``TASKS_DB_PATH`` (or legacy ``BEADS_DB_PATH``) env → constructor arg →
-    default. Falls back from a non-writable ``/sandbox`` to ``~/.protoagent`` for
-    local dev, then instance-scoped — same shape as the knowledge store."""
-    raw = os.environ.get("TASKS_DB_PATH") or os.environ.get("BEADS_DB_PATH") or db_path or DEFAULT_DB_PATH
-    p = Path(raw).expanduser()
-    if str(p).startswith("/sandbox") and not Path("/sandbox").is_dir():
-        p = Path.home() / ".protoagent" / "tasks" / "issues.db"
-    return scope_leaf(p)
+    """``TASKS_DB_PATH`` (or legacy ``BEADS_DB_PATH``) env → constructor arg
+    (both verbatim) → the per-instance ``instance_root/tasks/issues.db`` store."""
+    raw = os.environ.get("TASKS_DB_PATH") or os.environ.get("BEADS_DB_PATH") or db_path
+    if raw:
+        return Path(raw).expanduser()
+    from infra.paths import instance_paths
+
+    return instance_paths().store("tasks") / "issues.db"
 
 
 class TaskStore:

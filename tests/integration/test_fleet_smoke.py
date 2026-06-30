@@ -69,11 +69,13 @@ def test_member_config_resolves_under_new_layout(fleet):
     assert st == 200, f"create member failed: {st} {raw[:300]}"
     mid = json.loads(raw)["agent"]["id"]
 
-    # The member's config lives at <ws>/config/langgraph-config.yaml under the isolated data root.
-    matches = list(hub.data_root.glob(f"**/workspaces/{mid}/config/langgraph-config.yaml"))
+    # Workspaces are HUB-instance-scoped now (``instance_root/workspaces`` =
+    # ``PROTOAGENT_HOME/workspaces`` = under hub.home), so the member's config lives at
+    # <hub.home>/workspaces/<ws>/config/langgraph-config.yaml.
+    matches = list(hub.home.glob(f"workspaces/{mid}/config/langgraph-config.yaml"))
     assert matches, (
-        "member config not at <ws>/config/ (new layout). langgraph-config.yaml files under root: "
-        f"{[str(p) for p in hub.data_root.rglob('langgraph-config.yaml')]}"
+        "member config not at <ws>/config/ (new layout). langgraph-config.yaml files under hub home: "
+        f"{[str(p) for p in hub.home.rglob('langgraph-config.yaml')]}"
     )
     # It carries the inherited fake gateway — i.e. config wrote + read back at the un-double-scoped path.
     assert "127.0.0.1" in matches[0].read_text(), "member config did not inherit the host gateway"

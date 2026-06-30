@@ -24,7 +24,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from infra.paths import scope_leaf
+from infra.paths import instance_paths
 from runtime.state import STATE
 from server import AGENT_NAME_ENV, _event_bus, agent_name
 from server.chat import chat
@@ -650,23 +650,14 @@ def _build_plugins(config, existing_tools=None):
 
 
 def _resolve_checkpoint_db(configured: str) -> str:
-    """Pick a writable checkpoint DB path; fall back to ~/.protoagent when the
-    configured dir (default /sandbox) isn't creatable (e.g. local dev)."""
-    import os
-    from pathlib import Path
+    """The durable checkpoint DB — ``instance_root/checkpoints.db`` (per-instance).
 
-    candidate = Path(configured).expanduser()
-    try:
-        candidate.parent.mkdir(parents=True, exist_ok=True)
-        if os.access(candidate.parent, os.W_OK):
-            scoped = scope_leaf(candidate)
-            scoped.parent.mkdir(parents=True, exist_ok=True)
-            return str(scoped)
-    except OSError:
-        pass
-    fallback = scope_leaf(Path.home() / ".protoagent" / "checkpoints.db")
-    fallback.parent.mkdir(parents=True, exist_ok=True)
-    return str(fallback)
+    ``configured`` (``config.checkpoint_db_path``) only gates persistence on/off in
+    ``_build_checkpointer``; the path itself is the per-instance store, always
+    writable, so there's no /sandbox→~/.protoagent fallback dance any more."""
+    path = instance_paths().store("checkpoints.db")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _build_checkpointer(config):
@@ -868,21 +859,16 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
 
 
 def _build_inbox_store(config):
-    """Durable inbound inbox (ADR 0003). Path resolves like the other stores
-    (/sandbox → ~/.protoagent fallback), namespaced by agent name."""
+    """Durable inbound inbox (ADR 0003), namespaced by agent name. ``inbox_db_path``
+    config (a dir) is used verbatim; else the per-instance ``instance_root/inbox`` store."""
     from inbox import InboxStore
 
     name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
-    configured = scope_leaf(Path(getattr(config, "inbox_db_path", "") or "/sandbox/inbox") / f"{name}.db")
-    try:
-        configured.parent.mkdir(parents=True, exist_ok=True)
-        if not os.access(configured.parent, os.W_OK):
-            raise OSError
-        path = str(configured)
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / "inbox" / f"{name}.db")
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        path = str(fallback)
+    configured = getattr(config, "inbox_db_path", "") or ""
+    base = Path(configured).expanduser() if configured else instance_paths().store("inbox")
+    db = base / f"{name}.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    path = str(db)
     try:
         return InboxStore(path)
     except Exception:
@@ -893,8 +879,8 @@ def _build_inbox_store(config):
 def _build_background_manager(config):
     """Background subagent manager (ADR 0050). Fires detached jobs as self-POSTed A2A
     turns, so it derives the invoke URL + auth exactly like ``_build_scheduler`` (so a
-    wizard rename can't break self-invocation). The store path resolves like the other
-    stores (/sandbox → ~/.protoagent fallback), namespaced by agent name. Reconciles any
+    wizard rename can't break self-invocation). The store is the per-instance
+    ``instance_root/background`` store, namespaced by agent name. Reconciles any
     job left ``running`` by a prior crash on startup. Returns ``None`` when disabled or
     the store can't be built (the ``task`` tool then falls back to synchronous execution)."""
     if os.environ.get("BACKGROUND_DISABLED", "").lower() in ("1", "true", "yes"):
@@ -903,16 +889,9 @@ def _build_background_manager(config):
     from background import BackgroundManager, BackgroundStore
 
     name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
-    configured = scope_leaf(Path("/sandbox/background") / f"{name}.db")
-    try:
-        configured.parent.mkdir(parents=True, exist_ok=True)
-        if not os.access(configured.parent, os.W_OK):
-            raise OSError
-        path = str(configured)
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / "background" / f"{name}.db")
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        path = str(fallback)
+    db = instance_paths().store("background") / f"{name}.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    path = str(db)
     try:
         store = BackgroundStore(path)
     except Exception:
@@ -957,21 +936,14 @@ def _build_background_manager(config):
 
 
 def _build_activity_log(config):
-    """Provenance feed store (ADR 0022). Path resolves like the inbox store
-    (/sandbox → ~/.protoagent fallback), namespaced by agent name."""
+    """Provenance feed store (ADR 0022) — the per-instance ``instance_root/activity``
+    store, namespaced by agent name."""
     from activity import ActivityLog
 
     name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
-    configured = scope_leaf(Path("/sandbox/activity") / f"{name}.db")
-    try:
-        configured.parent.mkdir(parents=True, exist_ok=True)
-        if not os.access(configured.parent, os.W_OK):
-            raise OSError
-        path = str(configured)
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / "activity" / f"{name}.db")
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        path = str(fallback)
+    db = instance_paths().store("activity") / f"{name}.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    path = str(db)
     try:
         return ActivityLog(path)
     except Exception:
@@ -980,23 +952,21 @@ def _build_activity_log(config):
 
 
 def _build_telemetry_store(config):
-    """Local per-turn telemetry store (ADR 0006 Slice 2). Path resolves like the
-    other stores (/sandbox → ~/.protoagent fallback) and is instance-scoped
-    (ADR 0004). Off when ``telemetry.enabled`` is false; best-effort otherwise."""
+    """Local per-turn telemetry store (ADR 0006 Slice 2). ``telemetry.db_path`` config
+    is used verbatim when an operator overrides it; the legacy ``/sandbox`` default maps
+    to the per-instance ``instance_root/telemetry.db`` store. Off when ``telemetry.enabled``
+    is false; best-effort otherwise."""
     if not getattr(config, "telemetry_enabled", True):
         return None
     from observability.telemetry_store import TelemetryStore
 
-    configured = scope_leaf(Path(getattr(config, "telemetry_db_path", "") or "/sandbox/telemetry.db"))
-    try:
-        configured.parent.mkdir(parents=True, exist_ok=True)
-        if not os.access(configured.parent, os.W_OK):
-            raise OSError
-        path = str(configured)
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / "telemetry.db")
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        path = str(fallback)
+    configured = getattr(config, "telemetry_db_path", "") or ""
+    if configured and not str(configured).startswith("/sandbox"):
+        db = Path(configured).expanduser()
+    else:
+        db = instance_paths().store("telemetry.db")
+    db.parent.mkdir(parents=True, exist_ok=True)
+    path = str(db)
     try:
         store = TelemetryStore(path)
         log.info("[telemetry] store ready at %s", path)
@@ -1017,32 +987,22 @@ def _commons_dir(config):
 
 
 def _resolve_skills_db(configured: str, *, shared: bool = False, commons=None) -> str:
-    """Pick a writable skills DB path.
+    """Pick the skills DB path.
 
     When ``shared`` (ADR 0041, tiered stores), the skills library is the COMMONS:
-    resolved un-scoped so every agent on the host shares one DB. Otherwise it's
-    per-instance scoped (``scope_leaf``), falling back to ~/.protoagent when the
-    configured dir (default /sandbox) isn't creatable."""
-    import os
+    box-level + un-scoped so every agent on the host shares one DB. Otherwise it's
+    the per-instance ``instance_root/skills.db`` (``configured`` is no longer a
+    location knob — the instance root IS the scope)."""
     from pathlib import Path
 
     if shared:
-        path = Path(commons or (Path.home() / ".protoagent" / "commons")) / "skills.db"
+        path = Path(commons or instance_paths().commons_dir) / "skills.db"
         path.parent.mkdir(parents=True, exist_ok=True)
         return str(path)
 
-    candidate = Path(configured)
-    try:
-        candidate.parent.mkdir(parents=True, exist_ok=True)
-        if os.access(candidate.parent, os.W_OK):
-            scoped = scope_leaf(candidate)
-            scoped.parent.mkdir(parents=True, exist_ok=True)
-            return str(scoped)
-    except OSError:
-        pass
-    fallback = scope_leaf(Path.home() / ".protoagent" / "skills.db")
-    fallback.parent.mkdir(parents=True, exist_ok=True)
-    return str(fallback)
+    db = instance_paths().store("skills.db")
+    db.parent.mkdir(parents=True, exist_ok=True)
+    return str(db)
 
 
 def _run_on_server_loop(make_coro, what: str) -> None:

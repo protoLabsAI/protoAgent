@@ -54,19 +54,23 @@ def test_plugin_roots_from_uses_plugins_root(tmp_path):
     assert overridden[-1] == tmp_path / "elsewhere"
 
 
-# ── Path: host_config_path's scope_leaf branch (cascade tests always override) ───
+# ── Path: host_config_path is BOX-tier, shared by every instance on the machine ──
 
 
-def test_host_config_path_scoped_per_instance(monkeypatch):
-    """``host_config_path()`` scope_leafs per instance when ``PROTOAGENT_HOST_CONFIG``
-    isn't set, so co-located hubs stay isolated (#813). The settings-cascade tests
-    always pin an explicit path, so this branch was never exercised."""
+def test_host_config_path_is_box_shared(monkeypatch, tmp_path):
+    """``host_config_path()`` is the BOX-tier Host layer (``box_root/host-config.yaml``),
+    NOT under the instance root — every instance the machine owns reads the one
+    machine-wide Host config (that's the point of the layer). The settings-cascade tests
+    always pin an explicit ``PROTOAGENT_HOST_CONFIG``, so this branch was never exercised."""
     import infra.paths as paths
 
     monkeypatch.delenv("PROTOAGENT_HOST_CONFIG", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "hub-9")
+    paths.reset_instance_paths()
     p = paths.host_config_path()
-    assert p.name == "host-config.yaml" and "hub-9" in p.parts
+    assert p == tmp_path / "host-config.yaml"  # box-shared — NOT under the hub-9 instance root
+    assert "hub-9" not in p.parts
 
 
 # ── Shared skills (ADR 0041): behavioral commons, not just the path string ───────

@@ -1,10 +1,10 @@
 """Audit logging for protoAgent tool executions.
 
 Append-only JSONL of tool-call metadata, enriched with Langfuse trace context for
-cross-referencing. The path is **instance-scoped** (ADR 0004) and resolved lazily
-so it picks up ``PROTOAGENT_INSTANCE`` (seeded during boot, after this module is
-imported). The file **rotates** at a size cap so a busy agent can't fill the disk,
-and ``get_recent`` reads only a bounded tail so a large log can't OOM a read.
+cross-referencing. The path is **per-instance** (ADR 0004 — ``instance_root/audit/
+audit.jsonl``) and resolved lazily so the env identity is finalized first. The file
+**rotates** at a size cap so a busy agent can't fill the disk, and ``get_recent``
+reads only a bounded tail so a large log can't OOM a read.
 """
 
 import json
@@ -20,45 +20,40 @@ _MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 _TAIL_BYTES = 512 * 1024  # get_recent reads at most the last 512 KB
 _MAX_SESSIONS = 1000  # cap the in-memory per-session stats dict
 
-_DEFAULT_LEAF = Path("/sandbox") / "audit" / "audit.jsonl"
-
-
 class AuditLogger:
-    """Append-only JSONL audit log for tool executions (rotating, instance-scoped)."""
+    """Append-only JSONL audit log for tool executions (rotating, per-instance)."""
 
     def __init__(self, path: str | Path | None = None):
-        # Configured base path; the real (instance-scoped, writable) path is
-        # resolved on first use so PROTOAGENT_INSTANCE is already seeded.
-        self._base = Path(path) if path else _DEFAULT_LEAF
+        # An explicit path is used verbatim; otherwise the real (per-instance,
+        # writable) path is resolved on first use so the env identity is finalized.
+        self._base = Path(path) if path else None
         self._resolved: Path | None = None
         self._session_stats: "OrderedDict[str, dict]" = OrderedDict()
 
     def _ensure_path(self) -> Path | None:
-        """Resolve + create the instance-scoped path, with the standard
-        ``/sandbox`` → ``~/.protoagent`` writable fallback. Memoized. ``None`` if
-        nothing is writable (audit then degrades to a no-op)."""
+        """Resolve + create the audit path. Memoized. ``None`` if the dir isn't
+        creatable (audit then degrades to a no-op)."""
         if self._resolved is not None:
             return self._resolved
-        from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
-
-        candidate = scope_leaf(self._base)
+        candidate = self._default_path() if self._base is None else self._base
         try:
             candidate.parent.mkdir(parents=True, exist_ok=True)
             self._resolved = candidate
             return candidate
         except OSError:
-            fb = scope_leaf(Path.home() / ".protoagent" / "audit" / candidate.name)
-            try:
-                fb.parent.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                return None
-            self._resolved = fb
-            return fb
+            return None
+
+    @staticmethod
+    def _default_path() -> Path:
+        """The per-instance default: ``instance_root/audit/audit.jsonl``."""
+        from infra.paths import instance_paths
+
+        return instance_paths().store("audit") / "audit.jsonl"
 
     @property
     def path(self) -> Path:
         """The resolved on-disk path (for callers/tests that read it directly)."""
-        return self._ensure_path() or scope_leaf_safe(self._base)
+        return self._ensure_path() or (self._base or self._default_path())
 
     def _maybe_rotate(self, path: Path) -> None:
         try:
@@ -166,16 +161,6 @@ class AuditLogger:
             "avg_ms": stats["total_ms"] // max(stats["tool_calls"], 1),
             "tools_used": sorted(stats.get("tools_used", set())),
         }
-
-
-def scope_leaf_safe(p: Path) -> Path:
-    """``scope_leaf`` without raising — used only for the ``.path`` fallback."""
-    try:
-        from infra.paths import scope_leaf
-
-        return scope_leaf(p)
-    except Exception:
-        return p
 
 
 def _sanitize_args(args: dict[str, Any]) -> dict[str, Any]:

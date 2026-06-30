@@ -46,14 +46,18 @@ def test_shared_skills_resolve_to_commons_not_scoped(monkeypatch, tmp_path):
     from server.agent_init import _resolve_skills_db
 
     commons = tmp_path / "commons"
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path / "box"))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "agentA")
+    paths.reset_instance_paths()
     shared_a = _resolve_skills_db("/x/skills.db", shared=True, commons=commons)
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "agentB")
+    paths.reset_instance_paths()
     shared_b = _resolve_skills_db("/x/skills.db", shared=True, commons=commons)
-    scoped_b = _resolve_skills_db(str(tmp_path / "cfg" / "skills.db"), shared=False)
+    scoped_b = _resolve_skills_db("/x/skills.db", shared=False)  # per-instance: instance_root/skills.db
 
     assert shared_a == shared_b == str(commons / "skills.db")  # one commons for all agents
     assert "agentB" in scoped_b and scoped_b != shared_a  # scoped is per-instance
+    assert scoped_b == str(tmp_path / "box" / "agentB" / "skills.db")
 
 
 def test_skills_tier_config_parses(tmp_path):
@@ -87,13 +91,17 @@ def test_register_unregister_heartbeat(monkeypatch, tmp_path):
     assert not f.exists()
 
 
-def test_scoped_heartbeats_live_in_scoped_root(monkeypatch, tmp_path):
+def test_heartbeats_live_at_box_root(monkeypatch, tmp_path):
+    """Heartbeats are BOX-tier — ``box_root/.instances`` regardless of the instance id,
+    so a live sibling anywhere on the machine is detectable (#813)."""
     _home(monkeypatch, tmp_path)
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    paths.reset_instance_paths()
     paths.register_instance(7874, "roxy")
     import os
 
-    assert (tmp_path / "roxy" / ".instances" / f"{os.getpid()}.json").exists()
+    assert (tmp_path / ".instances" / f"{os.getpid()}.json").exists()  # box-tier, NOT under roxy
+    assert not (tmp_path / "roxy" / ".instances").exists()
     paths.unregister_instance()
 
 
@@ -135,13 +143,16 @@ def test_runtime_status_carries_warnings():
 
 def test_instance_uid_stable_and_scoped(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
+    paths.reset_instance_paths()
     uid = paths.instance_uid()
     assert uid and paths.instance_uid() == uid  # created once, then stable
-    assert (tmp_path / ".instance-uid").read_text().strip() == uid
+    # default instance → instance_root is box_root/default
+    assert (tmp_path / "default" / ".instance-uid").read_text().strip() == uid
 
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    paths.reset_instance_paths()
     scoped = paths.instance_uid()
-    assert scoped and scoped != uid  # different data root → different uid
+    assert scoped and scoped != uid  # different instance root → different uid
     assert (tmp_path / "roxy" / ".instance-uid").exists()
 
 

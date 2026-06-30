@@ -233,25 +233,16 @@ class ValidatingPushNotificationSender(BasePushNotificationSender):
 
 
 def _resolve_db_path(leaf: str) -> str:
-    """Resolve a writable SQLite path for ``leaf`` (e.g. ``a2a-tasks.db``).
+    """Resolve the writable SQLite path for ``leaf`` (e.g. ``a2a-tasks.db``).
 
-    Mirrors the bespoke stores: prefer ``/sandbox/<leaf>``; fall back to
-    ``~/.protoagent/<leaf>`` when the sandbox dir isn't writable (local dev).
-    Both run through ``scope_leaf`` for per-instance scoping (ADR 0004), so the
-    instance segment survives the fallback.
+    A file directly under the per-instance ``instance_root`` (``store(leaf)`` →
+    ``instance_root/<leaf>``), so co-located instances keep disjoint task/push DBs.
     """
-    from infra.paths import scope_leaf
+    from infra.paths import instance_paths
 
-    configured = scope_leaf(Path("/sandbox") / leaf)
-    try:
-        configured.parent.mkdir(parents=True, exist_ok=True)
-        if not os.access(configured.parent, os.W_OK):
-            raise OSError
-        return str(configured)
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / leaf)
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        return str(fallback)
+    path = instance_paths().store(leaf)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def make_sqlite_engine(db_path: str) -> AsyncEngine:

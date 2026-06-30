@@ -1,6 +1,6 @@
 """SessionSummaryMiddleware — persists a session summary on each terminal turn.
 
-Writes a reasoning-stripped JSON summary of the session to disk (``MEMORY_PATH``)
+Writes a reasoning-stripped JSON summary of the session to disk (``memory_path()``)
 on the terminal turn and on session end, enabling cross-session memory across
 restarts — read back by ``KnowledgeMiddleware`` as a ``<prior_sessions>`` block.
 
@@ -15,6 +15,7 @@ import logging
 import os
 import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -24,28 +25,31 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configuration — read once at module init
+# Configuration
 # ---------------------------------------------------------------------------
 
-from infra.paths import data_home, scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
-
-# ``PROTOAGENT_INSTANCE`` is seeded by server init before the graph (and this
-# middleware) is built, so the instance segment applies here too.
-#
-# Default via data_home(): ``/sandbox/memory`` in a container, else
-# ``~/.protoagent/memory`` — the writable fallback every other store already
-# uses. The old literal ``/sandbox/memory/`` silently skipped persistence on
-# any non-container host (read-only ``/``), and on Windows resolved
-# drive-relative and wrote to ``\sandbox`` at the drive root (caught by the
-# desktop sidecar smoke).
-MEMORY_PATH = str(scope_leaf(os.environ.get("MEMORY_PATH") or data_home() / "memory"))
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 
 if _PERSISTENCE_DISABLED:
     log.debug("[memory] persistence disabled via PROTOAGENT_DISABLE_MEMORY")
 else:
-    log.info("[memory] session persistence enabled — path: %s", MEMORY_PATH)
+    log.info("[memory] session persistence enabled")
+
+
+def memory_path() -> str:
+    """The session-memory dir, resolved lazily on each call — NOT an import-time
+    constant (env identity is finalized after this module imports).
+
+    ``MEMORY_PATH`` env wins (verbatim); else the per-instance ``instance_root/memory``
+    store. The old literal ``/sandbox/memory`` silently skipped persistence on any
+    non-container host (read-only ``/``); the instance store is always writable."""
+    raw = os.environ.get("MEMORY_PATH", "").strip()
+    if raw:
+        return str(Path(raw).expanduser())
+    from infra.paths import instance_paths
+
+    return str(instance_paths().store("memory"))
 
 
 # ---------------------------------------------------------------------------
@@ -147,20 +151,21 @@ def _persist_session(state: dict, trace_id: str) -> None:
         summary["tool_calls_total_count"] = total_count
 
     # --- Ensure directory exists ---
+    base = memory_path()
     try:
-        os.makedirs(MEMORY_PATH, exist_ok=True)
-        log.debug("[memory] ensured directory: %s", MEMORY_PATH)
+        os.makedirs(base, exist_ok=True)
+        log.debug("[memory] ensured directory: %s", base)
     except OSError as exc:
-        log.warning("[memory] cannot create directory %s: %s — skipping persistence", MEMORY_PATH, exc)
+        log.warning("[memory] cannot create directory %s: %s — skipping persistence", base, exc)
         return
 
     # --- Atomic write ---
     filename = f"{session_id or 'unknown'}.json"
-    dest = os.path.join(MEMORY_PATH, filename)
+    dest = os.path.join(base, filename)
     tmp_fd = None
     tmp_path = None
     try:
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=MEMORY_PATH, suffix=".tmp")
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=base, suffix=".tmp")
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             json.dump(summary, fh, indent=2, default=str)
             tmp_fd = None  # fdopen took ownership
@@ -189,7 +194,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
 
 
 def load_prior_sessions(
-    memory_path: str = MEMORY_PATH,
+    memory_dir: str | None = None,
     max_sessions: int = 10,
     max_tokens: int = 2000,
 ) -> str:
@@ -200,18 +205,21 @@ def load_prior_sessions(
     up to ``max_sessions`` newest JSON files, drops oldest-first to fit
     ``max_tokens`` (char/4 approximation), and **strips reasoning at read** so a
     file written before the persist-time strip (or by an older build) still
-    can't inject ``<scratch_pad>`` into the prompt. Never raises.
+    can't inject ``<scratch_pad>`` into the prompt. ``memory_dir`` defaults to the
+    writer's resolved ``memory_path()``. Never raises.
     """
     from graph.output_format import strip_reasoning
 
-    if not os.path.isdir(memory_path):
+    if memory_dir is None:
+        memory_dir = memory_path()
+    if not os.path.isdir(memory_dir):
         return ""
     try:
         entries: list[tuple[float, str]] = []
-        for fname in os.listdir(memory_path):
+        for fname in os.listdir(memory_dir):
             if not fname.endswith(".json"):
                 continue
-            fpath = os.path.join(memory_path, fname)
+            fpath = os.path.join(memory_dir, fname)
             try:
                 entries.append((os.path.getmtime(fpath), fpath))
             except OSError:
@@ -268,7 +276,7 @@ def load_prior_sessions(
 class SessionSummaryMiddleware(AgentMiddleware):
     """Persist a session summary on the terminal turn (+ on session end).
 
-    Writes a reasoning-stripped JSON summary to ``MEMORY_PATH``, read back by
+    Writes a reasoning-stripped JSON summary to ``memory_path()``, read back by
     ``KnowledgeMiddleware`` as ``<prior_sessions>`` for cross-session continuity.
 
     **Write-only.** It does not write to the knowledge store (ADR 0021 — see
