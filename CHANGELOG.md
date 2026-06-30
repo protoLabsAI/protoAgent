@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a first-party surface like notes/docs (turn off per-instance via `plugins.disabled: [artifact]`).
   Folds in a pointer-lock fix so game/canvas artifacts can capture the pointer.
 
+### Fixed
+- **Settings surfaces when the agent config shadows a host-scoped field** (#1459) — when a
+  `scope="host"` field (e.g. `model.api_base`) is set in both `host-config.yaml` and the agent
+  leaf (`langgraph-config.yaml`), the agent value wins at runtime (ADR 0047) but the host console
+  used to badge it a plain "box default", hiding the override. It now shows an **"overridden by
+  agent config"** warning with Reset-to-inherited (which removes the agent override so the box
+  default applies), and config load logs a warning naming each shadowed key.
+
 ## [0.76.0] - 2026-06-30
 
 ### Added

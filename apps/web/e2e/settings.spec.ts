@@ -150,6 +150,11 @@ test("host-scoped fields show the 'box default' badge inline in Model", async ({
   );
   // An agent-scoped field (no host layer) carries no inheritance badge on the host.
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
+  // A host-scoped field the agent leaf ALSO sets (model.temperature, source=agent) is shadowed:
+  // the host console warns instead of mislabelling it "box default", and offers reset (issue #1459).
+  const temp = page.locator('.setting-row[data-key="model.temperature"]');
+  await expect(temp.locator(".setting-inheritance")).toContainText("overridden by agent config");
+  await expect(temp.getByRole("button", { name: /Reset to inherited/ })).toBeVisible();
 });
 
 // On the host these same host-scoped edits save to the host layer (ADR 0047): the mock echoes

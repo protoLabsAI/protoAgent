@@ -343,7 +343,12 @@ function inheritance(field: SettingsField, onHost: boolean): { label: string; st
   if (onHost) {
     // On the host console you ARE the box: a host-scoped field is the shared default every
     // agent inherits (not "inherited from" anything); agent-scoped fields are the host's own.
-    if (field.scope === "host") return { label: "box default", status: "info", overridden: false };
+    // But if the agent leaf ALSO sets it (source=="agent"), the leaf WINS at runtime (ADR 0047)
+    // and silently shadows the box default — surface that as a warning + reset (issue #1459).
+    if (field.scope === "host")
+      return field.source === "agent"
+        ? { label: "overridden by agent config", status: "warning", overridden: true }
+        : { label: "box default", status: "info", overridden: false };
     return null;
   }
   // A fleet member (non-host): the ADR 0047 inheritance view.
@@ -400,6 +405,14 @@ function SettingRow({
             per-agent leaf override (not the box default) — make that effect explicit. */}
         {showInheritance && !onHost && dirty && field.scope === "host" && field.source !== "agent" ? (
           <p className="setting-override-note">Saving overrides the box default for this agent only.</p>
+        ) : null}
+        {/* Host console: this box default is shadowed by the agent leaf — the shown value is the
+            effective (agent) value that wins, so editing the box default here has no runtime effect
+            until the agent override is removed via Reset to inherited (issue #1459). */}
+        {showInheritance && onHost && field.scope === "host" && field.source === "agent" ? (
+          <p className="setting-override-note">
+            The agent config overrides this box default — the agent value shown is what runs. Reset to use the box default.
+          </p>
         ) : null}
       </div>
       <div className="setting-control">

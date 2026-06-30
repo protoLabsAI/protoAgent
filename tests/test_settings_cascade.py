@@ -10,6 +10,7 @@ PROTOAGENT_HOST_CONFIG is defaulted to an absent path by conftest, so tests star
 with NO host layer and opt in by pointing it at a temp file.
 """
 
+import logging
 import textwrap
 from pathlib import Path
 
@@ -64,6 +65,37 @@ def test_host_cannot_inject_agent_scoped_key(tmp_path, monkeypatch):
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.goal_enabled is True  # host's agent-scoped goal.enabled IGNORED (default)
     assert cfg.model_name == "host-model"  # host's host-scoped key DID apply
+
+
+def test_agent_shadowing_host_key_warns(tmp_path, monkeypatch, caplog):
+    """A host-scoped key set in BOTH layers with differing values logs a shadow warning
+    (issue #1459): the agent wins, so the box default is silently overridden — surface it."""
+    _host_yaml(tmp_path, "model:\n  api_base: http://host-gw/v1\n", monkeypatch)
+    path = _agent_yaml(tmp_path, "model:\n  api_base: http://agent-gw/v1\n")
+    with caplog.at_level(logging.WARNING, logger="protoagent.config"):
+        cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.api_base == "http://agent-gw/v1"  # agent wins (unchanged behavior)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("shadow" in m.lower() and "model.api_base" in m for m in msgs), msgs
+
+
+def test_no_shadow_warning_when_values_match(tmp_path, monkeypatch, caplog):
+    """No noise when the agent leaf merely repeats the host value — nothing is shadowed."""
+    _host_yaml(tmp_path, "model:\n  api_base: http://same-gw/v1\n", monkeypatch)
+    path = _agent_yaml(tmp_path, "model:\n  api_base: http://same-gw/v1\n")
+    with caplog.at_level(logging.WARNING, logger="protoagent.config"):
+        LangGraphConfig.from_yaml(path)
+    assert not any("shadow" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_no_shadow_warning_when_agent_silent(tmp_path, monkeypatch, caplog):
+    """A host default the agent never sets is plain inheritance, not a shadow — no warning."""
+    _host_yaml(tmp_path, "model:\n  api_base: http://host-gw/v1\n", monkeypatch)
+    path = _agent_yaml(tmp_path, "goal:\n  enabled: true\n")
+    with caplog.at_level(logging.WARNING, logger="protoagent.config"):
+        cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.api_base == "http://host-gw/v1"  # inherited
+    assert not any("shadow" in r.getMessage().lower() for r in caplog.records)
 
 
 def test_host_cannot_set_a_secret(tmp_path, monkeypatch):
