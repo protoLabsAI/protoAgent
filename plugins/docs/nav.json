@@ -589,6 +589,10 @@
           "title": "ADR 0063 — Scoped, user-rebindable keybinding system"
         },
         {
+          "path": "adr/0064-coder-execution-grounded-code-solve.md",
+          "title": "0064 — `coder`: execution-grounded code-solve (the board's verifier-grounded coder)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
