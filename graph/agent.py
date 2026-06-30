@@ -20,7 +20,7 @@ from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
-from tools.lg_tools import _session_id_from, get_all_tools
+from tools.lg_tools import HITL_TOOL_NAMES, _session_id_from, get_all_tools
 
 
 def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None, extra_middleware=None):
@@ -209,6 +209,25 @@ class SubagentError(RuntimeError):
     string (which read as success). ``task_batch`` reports it inline and continues."""
 
 
+def _subagent_tools(sub_config, tool_map: dict) -> list:
+    """Resolve a subagent's bound tools from its allowlist, hard-denying the lead-only HITL
+    interrupt tools (``HITL_TOOL_NAMES``) even if the config lists them. A subagent runs on a
+    checkpointer-less graph, so ``ask_human`` / ``request_user_input`` would fail opaquely
+    mid-delegation — this is the enforced backstop to the convention that no subagent allowlist
+    names them, so a fork can't enable one by editing a ``SubagentConfig.tools`` list."""
+    blocked = [n for n in sub_config.tools if n in HITL_TOOL_NAMES]
+    if blocked:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[subagent] '%s' lists HITL tool(s) %s — dropping them; a subagent can't resume a "
+            "LangGraph interrupt (no checkpointer). Remove them from its tools list.",
+            sub_config.name,
+            blocked,
+        )
+    return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in HITL_TOOL_NAMES]
+
+
 async def _run_subagent(
     *,
     config,
@@ -233,7 +252,7 @@ async def _run_subagent(
     if not sub_config:
         return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
 
-    sub_tools = [tool_map[name] for name in sub_config.tools if name in tool_map]
+    sub_tools = _subagent_tools(sub_config, tool_map)
     if not sub_tools:
         return f"Error: No tools available for subagent '{subagent_type}'."
 

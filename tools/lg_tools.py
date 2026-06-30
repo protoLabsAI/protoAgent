@@ -1110,6 +1110,14 @@ def _build_curation_tools():
     return [recent_activity, list_skills, save_skill]
 
 
+# Lead-only HITL tools: each pauses the lead A2A turn via a LangGraph interrupt that only the
+# lead turn's runner resumes. A subagent runs on a checkpointer-less graph, so binding one
+# would fail opaquely mid-delegation — graph.agent hard-denies these from every subagent's
+# tool set (``_subagent_tools``) regardless of its allowlist. Keep this in sync if a new
+# interrupt-based tool is added.
+HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
+
+
 def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False):
     """Return every LangChain tool the lead agent + subagents can use.
 
@@ -1124,11 +1132,11 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
     """
-    # ask_human AND request_user_input are lead-agent HITL tools — each pauses the A2A
-    # turn via a LangGraph interrupt that only the lead turn's runner resumes. Subagents
-    # (run outside that runner, on a graph with no checkpointer) must not get either, so
-    # they're gated by allowlist: present in the full set for the lead agent, absent from
-    # every subagent allowlist in graph/subagents/config.py. Don't add them to one.
+    # ask_human AND request_user_input are lead-agent HITL tools (HITL_TOOL_NAMES) — each
+    # pauses the A2A turn via a LangGraph interrupt that only the lead turn's runner resumes.
+    # Subagents (run outside that runner, on a graph with no checkpointer) must not get either:
+    # they're absent from every subagent allowlist in graph/subagents/config.py AND hard-denied
+    # in graph.agent._subagent_tools, so a fork can't enable one via a tools list either.
     # show_component (inline component rendering, ADR 0051 / #1323): table/keyvalue/timeline
     # widgets rendered inline in chat by the console's extensible component registry.
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, load_skill, show_component]

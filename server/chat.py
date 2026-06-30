@@ -324,7 +324,13 @@ def _interrupt_payload(val) -> dict:
 async def _pending_interrupt_value(config: dict):
     """Return the value of a pending LangGraph interrupt (ask_human / HITL) for
     this thread, or ``None``. Both chat paths read the same snapshot to detect a
-    turn that paused for human input instead of producing a final answer."""
+    turn that paused for human input instead of producing a final answer.
+
+    Returns a single value because the graph only ever has one interrupt pending:
+    ``create_agent`` / ``ToolNode`` runs an assistant turn's tool calls SEQUENTIALLY, so the
+    first ask_human / request_user_input ``interrupt()`` halts the tool node before the next
+    tool runs (verified). Multiple HITL calls therefore surface as back-to-back pauses — each
+    drained on its own resume by the lead/autonomous turn loop — not as one batch."""
     try:
         snapshot = await STATE.graph.aget_state(config)
     except Exception:
@@ -335,6 +341,15 @@ async def _pending_interrupt_value(config: dict):
             pending.extend(getattr(t, "interrupts", ()) or ())
     if not pending:
         return None
+    if len(pending) > 1:
+        # Tripwire: with sequential tool execution this can't happen. If a LangGraph change
+        # ever makes interrupts pend simultaneously, surfacing only pending[0] would silently
+        # drop the rest — warn loudly so we build real multi-interrupt handling instead.
+        log.warning(
+            "[hitl] %d pending interrupts at once — only the first is surfaced; tool execution "
+            "is expected to be sequential, so this signals a behavior change to handle.",
+            len(pending),
+        )
     return getattr(pending[0], "value", pending[0])
 
 

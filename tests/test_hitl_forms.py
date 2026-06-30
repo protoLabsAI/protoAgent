@@ -183,3 +183,47 @@ async def test_autonomous_turn_force_completes_after_cap(monkeypatch):
     assert fake.resume_values.count(chat_mod._AUTONOMOUS_HITL_SENTINEL) == chat_mod._MAX_AUTONOMOUS_AUTOANSWERS
     assert len(fake.resume_values) == chat_mod._MAX_AUTONOMOUS_AUTOANSWERS + 1
     assert len(cleared) == 1  # the stray interrupt was cleared exactly once
+
+
+# ── multiple-pending-interrupt tripwire ───────────────────────────────────────
+# create_agent runs an assistant turn's tool calls sequentially, so only ONE interrupt ever
+# pends; _pending_interrupt_value returns it. If multiple ever pend (a LangGraph behavior
+# change), it warns rather than silently dropping the rest.
+
+
+class _FakeInterrupt:
+    def __init__(self, value):
+        self.value = value
+
+
+class _FakeSnapshot:
+    def __init__(self, interrupts):
+        self.interrupts = interrupts
+        self.tasks = ()
+
+
+class _FakeGraph:
+    def __init__(self, interrupts):
+        self._interrupts = interrupts
+
+    async def aget_state(self, config):
+        return _FakeSnapshot(self._interrupts)
+
+
+@pytest.mark.asyncio
+async def test_single_pending_interrupt_returns_value(monkeypatch):
+    monkeypatch.setattr(STATE, "graph", _FakeGraph([_FakeInterrupt("merge it?")]), raising=False)
+    assert await chat_mod._pending_interrupt_value({"configurable": {"thread_id": "t"}}) == "merge it?"
+
+
+@pytest.mark.asyncio
+async def test_multiple_pending_interrupts_warn_and_return_first(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(
+        STATE, "graph", _FakeGraph([_FakeInterrupt("first"), _FakeInterrupt("second")]), raising=False
+    )
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        val = await chat_mod._pending_interrupt_value({"configurable": {"thread_id": "t"}})
+    assert val == "first"  # still surfaces the first; never drops silently or raises
+    assert any("pending interrupts at once" in r.getMessage() for r in caplog.records)
