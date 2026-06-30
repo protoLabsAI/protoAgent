@@ -20,6 +20,7 @@ import hashlib
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -407,3 +408,231 @@ def colocation_warning() -> str | None:
         "They can clobber each other's chat history, knowledge and stores — give each "
         "instance its own PROTOAGENT_INSTANCE id (or stop the extra one)."
     )
+
+
+# ── Two-tier instance paths (box / instance) ─────────────────────────────────
+# One resolution model that replaces the import-time path constants + the
+# scope_leaf/_config_scope double-scoping. Resolved ONCE from the environment into
+# an injectable, frozen object. Three tiers mirror the ADR-0047 cascade:
+#
+#   App      app_root/config        read-only bundle seed (example yaml, SOUL, presets)
+#   Box      box_root               machine-shared: host-config.yaml (Host layer),
+#                                    commons, heartbeats, data-version, cache
+#   Instance instance_root          per-agent: config leaf, plugins, every store
+#
+# Resolution (two orthogonal knobs — PROTOAGENT_HOME moves only the instance tier):
+#   box_root      = PROTOAGENT_BOX_ROOT  else  data_home()        # shared, never scoped
+#   instance_root = PROTOAGENT_HOME                               # terminal: the dir IS the root
+#                 | box_root / PROTOAGENT_INSTANCE                # named instance under the box
+#                 | box_root / "default"                         # neither → "default"
+#
+# instance_root IS the scoped leaf — scope_leaf is never applied to it, which is
+# what deletes the whole double-scope bug class.
+
+
+def _app_root() -> Path:
+    """Read-only bundle root: ``_MEIPASS`` when PyInstaller-frozen, else the repo
+    root (two levels up from this module)."""
+    import sys
+
+    if getattr(sys, "frozen", False):  # PyInstaller onefile — bundle at _MEIPASS (#894)
+        return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    return Path(__file__).resolve().parents[1]
+
+
+def _box_root() -> Path:
+    """Machine-shared base: ``PROTOAGENT_BOX_ROOT`` override else ``data_home()``.
+    Never scoped — the Host cascade layer + commons live here, inherited by every
+    instance this machine owns (the default, the dev sandbox, every fleet member)."""
+    raw = os.environ.get("PROTOAGENT_BOX_ROOT", "").strip()
+    return Path(raw).expanduser() if raw else data_home()
+
+
+@dataclass(frozen=True)
+class InstancePaths:
+    """Every on-disk location for one agent instance, resolved once from the
+    environment (see ``instance_paths()``). Derived accessors compose the three
+    roots; nothing here is computed at import time."""
+
+    instance_id: str
+    box_root: Path
+    instance_root: Path
+    app_root: Path
+
+    # ── App tier (read-only bundle seed) ──
+    @property
+    def bundle_dir(self) -> Path:
+        return self.app_root / "config"
+
+    @property
+    def config_example(self) -> Path:
+        return self.bundle_dir / "langgraph-config.example.yaml"
+
+    @property
+    def soul_source(self) -> Path:
+        return self.bundle_dir / "SOUL.md"
+
+    @property
+    def presets_dir(self) -> Path:
+        return self.bundle_dir / "soul-presets"
+
+    # ── Box tier (machine-shared) ──
+    @property
+    def host_config(self) -> Path:
+        raw = os.environ.get("PROTOAGENT_HOST_CONFIG", "").strip()
+        return Path(raw).expanduser() if raw else self.box_root / "host-config.yaml"
+
+    @property
+    def commons_dir(self) -> Path:
+        return self.box_root / "commons"
+
+    @property
+    def commons_skills_db(self) -> Path:
+        return self.commons_dir / "skills.db"
+
+    @property
+    def instances_dir(self) -> Path:
+        return self.box_root / ".instances"
+
+    @property
+    def data_version_file(self) -> Path:
+        return self.box_root / ".data-version"
+
+    @property
+    def cache_dir(self) -> Path:
+        return self.box_root / "cache"
+
+    # ── Instance tier (per-agent) ──
+    @property
+    def config_dir(self) -> Path:
+        return self.instance_root / "config"
+
+    @property
+    def config_yaml(self) -> Path:
+        return self.config_dir / "langgraph-config.yaml"
+
+    @property
+    def secrets_yaml(self) -> Path:
+        return self.config_dir / "secrets.yaml"
+
+    @property
+    def setup_marker(self) -> Path:
+        return self.config_dir / ".setup-complete"
+
+    @property
+    def theme_json(self) -> Path:
+        return self.config_dir / "theme.json"
+
+    @property
+    def soul_path(self) -> Path:
+        return self.config_dir / "SOUL.md"
+
+    @property
+    def plugins_dir(self) -> Path:
+        raw = os.environ.get("PROTOAGENT_PLUGINS_DIR", "").strip()
+        return Path(raw).expanduser() if raw else self.instance_root / "plugins"
+
+    @property
+    def plugins_lock(self) -> Path:
+        raw = os.environ.get("PROTOAGENT_PLUGINS_LOCK", "").strip()
+        return Path(raw).expanduser() if raw else self.instance_root / "plugins.lock"
+
+    @property
+    def workspace_dir(self) -> Path:
+        """Fenced filesystem-toolset sandbox (the agent's working dir)."""
+        raw = os.environ.get("PROTOAGENT_WORKSPACE", "").strip()
+        return Path(raw).expanduser() if raw else self.instance_root / "workspace"
+
+    @property
+    def skills_dir(self) -> Path:
+        return self.instance_root / "skills"
+
+    @property
+    def instance_uid_file(self) -> Path:
+        return self.instance_root / ".instance-uid"
+
+    # Fleet registry — HUB-instance-scoped (NOT box-shared). A member's instance_root
+    # has its own (empty) workspaces/, so the supervisor's shutdown_all stays "hub-only
+    # by construction" — a booting member can't read the hub registry and SIGTERM siblings.
+    @property
+    def workspaces_dir(self) -> Path:
+        return self.instance_root / "workspaces"
+
+    @property
+    def fleet_json(self) -> Path:
+        return self.workspaces_dir / "fleet.json"
+
+    @property
+    def remotes_json(self) -> Path:
+        return self.workspaces_dir / "remotes.json"
+
+    def store(self, name: str) -> Path:
+        """A per-instance store path under ``instance_root`` (e.g. ``store("knowledge")``)."""
+        return self.instance_root / name
+
+    def explain(self) -> dict:
+        """Flat dict of id + roots + every resolved path (powers ``config explain``)."""
+        return {
+            "instance_id": self.instance_id,
+            "box_root": str(self.box_root),
+            "instance_root": str(self.instance_root),
+            "app_root": str(self.app_root),
+            "paths": {
+                "config_yaml": str(self.config_yaml),
+                "secrets_yaml": str(self.secrets_yaml),
+                "setup_marker": str(self.setup_marker),
+                "theme_json": str(self.theme_json),
+                "soul_path": str(self.soul_path),
+                "plugins_dir": str(self.plugins_dir),
+                "plugins_lock": str(self.plugins_lock),
+                "workspace_dir": str(self.workspace_dir),
+                "skills_dir": str(self.skills_dir),
+                "workspaces_dir": str(self.workspaces_dir),
+                "fleet_json": str(self.fleet_json),
+                "host_config": str(self.host_config),
+                "commons_dir": str(self.commons_dir),
+                "instances_dir": str(self.instances_dir),
+                "data_version_file": str(self.data_version_file),
+                "cache_dir": str(self.cache_dir),
+                "bundle_dir": str(self.bundle_dir),
+            },
+        }
+
+
+def _resolve_instance_paths() -> InstancePaths:
+    box = _box_root()
+    home = os.environ.get("PROTOAGENT_HOME", "").strip()
+    inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+    if home:
+        root = Path(home).expanduser()
+        iid = _safe_segment(inst) if inst else _safe_segment(root.name)
+    elif inst:
+        iid = _safe_segment(inst)
+        root = box / iid
+    else:
+        iid = "default"
+        root = box / "default"
+    return InstancePaths(instance_id=iid, box_root=box, instance_root=root, app_root=_app_root())
+
+
+_CURRENT_PATHS: InstancePaths | None = None
+
+
+def instance_paths() -> InstancePaths:
+    """The resolved paths for THIS process — resolved once from the environment on
+    first call, then cached. Identity comes from env only (``PROTOAGENT_HOME`` /
+    ``PROTOAGENT_INSTANCE`` / ``PROTOAGENT_BOX_ROOT``), never from config-file
+    content, so a correctly-scoped config is read on the first try (no
+    chicken-and-egg, no ``_seed_instance_env`` re-scope window)."""
+    global _CURRENT_PATHS
+    if _CURRENT_PATHS is None:
+        _CURRENT_PATHS = _resolve_instance_paths()
+    return _CURRENT_PATHS
+
+
+def reset_instance_paths() -> None:
+    """Clear the cached singleton so the next ``instance_paths()`` re-resolves from
+    the (possibly monkeypatched) environment. Any test that sets a ``PROTOAGENT_*``
+    root var or patches ``data_home`` MUST call this — use the autouse fixture."""
+    global _CURRENT_PATHS
+    _CURRENT_PATHS = None
