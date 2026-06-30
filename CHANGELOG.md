@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Cross-machine fleet hardening — A2A federation is fault-transparent** (#1468, #1476) — a peer
+  delegate (`delegate_to` over A2A) no longer cuts off a long-running task at a fixed 30s: the poll
+  loop runs to a configurable `poll_timeout_s` (default 300s) so the delegator waits while the peer
+  keeps working. Transport + protocol failures now map to a legible cause — *unreachable* vs *timed
+  out* vs a clear `VERSION_NOT_SUPPORTED` (instead of an opaque `-32009`) — and the agent card
+  advertises its A2A `protocolVersion` / `supportedVersions` so a delegate pre-checks compatibility
+  and fails fast on a version mismatch.
+- **Remote fleet members surface their health immediately** (#1470) — registering a remote
+  (`POST /api/fleet/remotes`) now probes its agent card on the spot and returns reachability +
+  version (an unreachable peer is reported, not silently accepted), the running-state probe TTL
+  tightened to match the console poll, and the delegate health prober backs off exponentially so a
+  flaky peer degrades gracefully instead of ping-ponging.
+- **Discovery auto-sweeps on hub boot** (#1471) — the hub kicks off a background discovery sweep at
+  startup (mDNS + tailnet + local) and caches the peers it finds, so the first console *Add to
+  fleet* is instant instead of waiting for a manual scan. Best-effort; peers are only surfaced,
+  never auto-added.
+- **`config explain` diagnostic** (#1475) — `python -m server config explain` (and
+  `GET /api/config/explain`) print this instance's id, both roots, every resolved on-disk path, and
+  the per-field settings cascade with provenance (App → Host → Agent), secrets redacted. The
+  supported way to answer "where is my config / where did my key go".
+- **Real multi-instance fleet test harness** (#1467, #1472) — a real-subprocess integration harness
+  (opt-in `PA_RUN_INTEGRATION=1`) boots an actual hub + members and exercises the proxy round-trip,
+  cross-instance A2A delegation, instance isolation, and member crash → detect → restart — the live
+  multi-agent coverage the fleet previously had none of.
 - **Artifact is now a bundled core plugin, on by default** (#1443) — the generative-UI surface
   (`show_artifact` — charts, diagrams, Mermaid, Markdown, or live React rendered into a sandboxed
   panel; ADR 0038) is vendored in-tree under `plugins/artifact/` and ships with the agent enabled,
@@ -31,7 +55,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cards (single-select; `type: "array"` for multi-select), alongside the existing
   text/number/boolean/enum fields. See [Starter tools](/reference/starter-tools).
 
+### Changed
+- **Two-tier instance paths (box / instance) — one resolution rule, no more double-scoping**
+  (#1463, #1465) — every on-disk location is now resolved once from the environment into a single
+  injectable model (`infra.paths.InstancePaths`) with three tiers mirroring the settings cascade:
+  **App** (read-only bundle seed), **Box** (machine-shared: the Host config layer + commons), and
+  **Instance** (per-agent: config, secrets, plugins, every store). `PROTOAGENT_HOME` relocates an
+  instance's root; `PROTOAGENT_INSTANCE` names one under the box; neither → `default`.
+  `PROTOAGENT_CONFIG_DIR` is **retired** (desktop, Docker, and fleet members now set
+  `PROTOAGENT_HOME`), and live config is never written into the repo tree. This removes the
+  config-vs-data root split and the `PROTOAGENT_CONFIG_DIR`+`PROTOAGENT_INSTANCE` collision that
+  required a destructive self-heal. **Existing installs upgrade with no action** — a one-shot,
+  idempotent, non-destructive boot migration copies old-layout config + secrets (and the default
+  instance's data) into the new location. Use `config explain` to see the resolved layout.
+
 ### Fixed
+- **A crashed co-located fleet member is now detected and restartable** (#1474) — a member the hub
+  spawned is its child process, so a SIGKILL crash left it a zombie that `os.kill(pid, 0)` reported
+  as *alive*: `/api/fleet` kept showing it running and a restart no-op'd on the dead pid. `_alive()`
+  now reaps the zombie first (a targeted `waitpid`, so it never steals another child's exit status),
+  so the crash is detected passively and a restart spawns a fresh process. (Surfaced by the new
+  multi-instance crash→restart test.)
 - **Autonomous turns no longer deadlock on a human-input pause** (#1464, #1466) — a
   `scheduler` / `inbox` / `webhook` / `background` turn that calls `ask_human` /
   `request_user_input` has no operator to answer, so the task used to park in `input-required`
