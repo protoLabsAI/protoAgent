@@ -24,19 +24,28 @@ import tempfile
 
 from .solve import Verdict
 
-# pytest's terminal summary, e.g. "===== 1 failed, 2 passed in 0.03s ====="
-_SUMMARY = re.compile(r"(\d+)\s+(passed|failed|error|errors)", re.IGNORECASE)
+# Count tokens within pytest's summary line, e.g. "1 failed, 2 passed".
+_SUMMARY = re.compile(r"(\d+)\s+(passed|failed|error|errors|skipped)", re.IGNORECASE)
+# pytest prints its result counts on ONE line ending in "in <time>s" (e.g.
+# "1 failed, 2 passed in 0.03s"). We scope count-parsing to that line so a
+# candidate that PRINTS "1000 passed" to stdout can't pollute the verdict.
+_SUMMARY_LINE = re.compile(r"\bin\s+[\d.]+\s*s\b")
 # Per-test failure lines, e.g. "FAILED test_solution.py::test_adds - assert ..."
 _FAILED = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)", re.MULTILINE)
 
 
 def _parse(output: str, returncode: int) -> Verdict:
-    counts = {"passed": 0, "failed": 0, "error": 0, "errors": 0}
-    for n, kind in _SUMMARY.findall(output):
+    # The pytest summary is the LAST line that has both a count token and the
+    # "in <time>s" suffix; later wins (pytest's own line is last).
+    summary = ""
+    for line in output.splitlines():
+        if _SUMMARY_LINE.search(line) and _SUMMARY.search(line):
+            summary = line
+    counts = {"passed": 0, "failed": 0, "error": 0, "errors": 0, "skipped": 0}
+    for n, kind in _SUMMARY.findall(summary):
         counts[kind.lower()] = int(n)
     failed = counts["failed"] + counts["error"] + counts["errors"]
-    passed_n = counts["passed"]
-    total = passed_n + failed
+    total = counts["passed"] + failed
     failing = [m.split(" ")[0] for m in _FAILED.findall(output)]
     # No parsed counts but a non-zero exit (collection error, import failure, no
     # tests) ⇒ treat as failed, not silently passed.
@@ -57,6 +66,11 @@ async def run_tests(
     """Write ``code`` to ``<solution_name>.py`` + ``tests`` to ``test_<solution_name>.py``
     in a temp dir and run pytest there. ``tests`` should import from
     ``solution_name`` (e.g. ``from solution import add``)."""
+    if getattr(sys, "frozen", False):
+        # In a PyInstaller build, ``sys.executable`` is the frozen server binary, not a
+        # Python interpreter — ``-m pytest`` would relaunch the server. No standalone
+        # Python to run the tests, so fail cleanly (same guard as execute_code).
+        return Verdict(passed=False, output="coder verifier unavailable in the packaged desktop app (no standalone Python to run pytest)")
     with tempfile.TemporaryDirectory(prefix="coder_") as d:
         with open(os.path.join(d, f"{solution_name}.py"), "w") as f:
             f.write(code)

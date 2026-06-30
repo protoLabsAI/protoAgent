@@ -12,6 +12,7 @@ returned callable matches the ladder's ``generate(prompt, *, feedback)`` contrac
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Optional
@@ -19,6 +20,22 @@ from typing import Optional
 log = logging.getLogger("protoagent.plugins.coder")
 
 _FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
+
+# best-of-k dispatches `generate` CONCURRENTLY (solve.py asyncio.gather). An `acp`
+# delegate is a single stateful session (one cached AcpClient keyed by name+workdir);
+# concurrent `prompt()`s on it interleave and corrupt each other — its own docstring
+# says callers must serialize. So we hold a per-delegate lock for stateful (acp)
+# delegates; stateless ones (openai/a2a: fresh client per dispatch) stay parallel.
+# True independent-parallel acp attempts need a worktree per candidate — the P2 path.
+_STATEFUL_TYPES = {"acp"}
+_DISPATCH_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(name: str) -> asyncio.Lock:
+    lk = _DISPATCH_LOCKS.get(name)
+    if lk is None:
+        lk = _DISPATCH_LOCKS[name] = asyncio.Lock()
+    return lk
 
 
 def extract_code(text: str) -> str:
@@ -63,13 +80,19 @@ def make_delegate_generator(delegate_name: str, *, solution_name: str = "solutio
             log.exception("[coder] reading delegates config failed")
             roster = []
         reg = DelegateRegistry(roster)
-        if reg.get(delegate_name) is None:
+        d = reg.get(delegate_name)
+        if d is None:
             available = ", ".join(reg.names()) or "(none)"
             raise ValueError(
                 f"coder: delegate {delegate_name!r} not found. Declare it under `delegates` "
                 f"(an openai model endpoint, or an acp coder). Available: {available}"
             )
-        reply = await reg.dispatch(delegate_name, _prompt(task, solution_name=solution_name, feedback=feedback))
+        prompt = _prompt(task, solution_name=solution_name, feedback=feedback)
+        if d.type in _STATEFUL_TYPES:
+            async with _lock_for(delegate_name):  # serialize concurrent best-of-k on one session
+                reply = await reg.dispatch(delegate_name, prompt)
+        else:
+            reply = await reg.dispatch(delegate_name, prompt)
         return extract_code(reply)
 
     return generate
