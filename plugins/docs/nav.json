@@ -167,6 +167,10 @@
           "title": "Command palette (⌘K)"
         },
         {
+          "path": "guides/phone-access.md",
+          "title": "Access from your phone (LAN / Tailscale)"
+        },
+        {
           "path": "guides/headless.md",
           "title": "Run headless (API + A2A)"
         }

@@ -72,6 +72,45 @@ sign-in prompt it's cached in that browser's `localStorage`. Know the trade-off:
   if the console is ever exposed beyond localhost, is an egress limit (a CSP `connect-src`
   allowlist) that blocks exfiltration for both the browser and the desktop.
 
+## Expose it with a tunnel (ngrok / Cloudflare)
+
+To reach the agent on a **public hostname** without opening a router port, front it with a
+tunnel. The tunnel terminates TLS and forwards to the container's published port; protoAgent
+itself can stay bound to `127.0.0.1`. Two non-negotiables when you do this:
+
+- **Keep `A2A_AUTH_TOKEN` set.** A tunnel makes the *whole* operator API
+  (`/api/*` plugin-install + config rewrite, `/v1/*`, `/a2a`) internet-reachable — the bearer
+  gate is the only thing fencing it. (For LAN/tailnet-only access, prefer
+  [Tailscale](/guides/phone-access#tailscale-reach-it-from-anywhere) — no public surface at all.)
+- **Set [`A2A_PUBLIC_URL`](/reference/environment-variables#a2a-agent-card-endpoint)** to the
+  tunnel hostname, so the agent card advertises the address peers actually use (not the bound
+  loopback port).
+
+**ngrok** — ephemeral hostname, good for a quick share or a phone demo:
+
+```bash
+ngrok http 7870
+# → Forwarding https://abc123.ngrok-free.app -> http://localhost:7870
+export A2A_PUBLIC_URL=https://abc123.ngrok-free.app
+```
+
+**Cloudflare Tunnel** (`cloudflared`) — a stable hostname mapped to your domain, no inbound
+ports:
+
+```bash
+# quick, throwaway URL:
+cloudflared tunnel --url http://localhost:7870
+# or a named tunnel routed to agent.example.com, then:
+export A2A_PUBLIC_URL=https://agent.example.com
+```
+
+Because the console authenticates over the tunnel too, add the tunnel origin to
+[`A2A_ALLOWED_ORIGINS`](/reference/environment-variables#streaming-origin-verification) if
+you've enabled origin verification — otherwise the SSE/WebSocket streams it relies on get a
+`403`. For a second factor in front of the bearer token, layer the tunnel's own access
+control (Cloudflare Access, an ngrok OAuth policy, or a fronting auth proxy) — the
+`localStorage`-cached token above is *all* the app-level auth there is.
+
 ## Day-2
 
 | Want to… | Do |
