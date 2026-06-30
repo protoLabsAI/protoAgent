@@ -11,10 +11,10 @@ description: >-
   WebUI do it. React artifacts can import a curated offline set (d3, chart.js, lucide) and the
   protoLabs design-system @pl/ui wrappers. The shell page is served by this plugin and iframed;
   the agent's generated code renders in a nested sandbox with no access to the console.
-# Bundled into core (protoAgent #1443) but lean-core OFF by default — opt in with
-# `plugins: { enabled: [artifact] }` in config (or flip this to `true`). Pulled in-tree
-# so the generative-UI surface ships with the agent and iterates in the monorepo.
-enabled: false
+# Bundled into core (protoAgent #1443) and ON by default — a first-party generative-UI
+# surface (like notes/docs). Turn it off per-instance with `plugins: { disabled: [artifact] }`.
+# Pulled in-tree so it ships with the agent and iterates in the monorepo.
+enabled: true
 capabilities:
   # Truly no network: the server makes no outbound calls, and the react/mermaid libs
   # are VENDORED + served same-origin, so artifacts render fully offline (no cdnjs).

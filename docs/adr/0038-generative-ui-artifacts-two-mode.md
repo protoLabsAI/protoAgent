@@ -4,8 +4,9 @@
 
 **Update (2026-06-30, #1443):** the artifact plugin — first shipped as a standalone repo — is now
 **bundled into core** under `plugins/artifact/`, vendored back in-tree so the generative-UI surface
-ships with the agent and iterates in the monorepo. It stays lean-core **off by default**
-(`enabled: false`; opt in via `plugins.enabled: [artifact]`). The sandbox model (D1) is unchanged.
+ships with the agent and iterates in the monorepo. It ships **on by default** (`enabled: true`),
+a first-party surface like notes/docs; turn it off per-instance via `plugins.disabled: [artifact]`.
+The sandbox model (D1) is unchanged.
 
 ## Context
 
