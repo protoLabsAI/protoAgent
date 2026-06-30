@@ -44,11 +44,6 @@ export function SettingsCategory({
   title = "Settings",
   emptyHint,
   footer,
-  // ADR 0047 host-defaults view: when true this renders ONLY the host-scoped
-  // (box-shared) fields and a Save writes to the host layer instead of the agent
-  // leaf. The default (false) is the per-agent Settings — every field, with the
-  // inherited-vs-overridden badge + reset-to-inherited affordance.
-  hostLayer = false,
   // ADR 0059 — when set, render ONLY this plugin's group (its config folded into the
   // plugin's row in the Plugins surface). Pairs with category="Plugins".
   pluginId,
@@ -58,23 +53,18 @@ export function SettingsCategory({
   title?: string;
   emptyHint?: string;
   footer?: ReactNode;
-  hostLayer?: boolean;
   pluginId?: string;
 }) {
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(settingsSchemaQuery());
   const groups = useMemo(() => {
-    // One category, or (host-defaults view) several aggregated into one panel.
+    // One category, or several aggregated into one panel (the `categories` prop).
     const inScope = (g: SettingsGroup) =>
       categories ? categories.includes(g.category || "Plugins") : (g.category || "Plugins") === category;
     let selected = data.groups.filter(inScope);
     if (pluginId) selected = selected.filter((g) => g.plugin_id === pluginId);  // one plugin's group (ADR 0059)
-    if (!hostLayer) return selected;
-    // Host-defaults view: keep only the host-scoped fields, dropping now-empty groups.
-    return selected
-      .map((g) => ({ ...g, fields: g.fields.filter((f) => f.scope === "host") }))
-      .filter((g) => g.fields.length);
-  }, [data.groups, category, categories, hostLayer, pluginId]);
+    return selected;
+  }, [data.groups, category, categories, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const dirtyKeys = Object.keys(dirty);
   // Action feedback is a TOAST, not an inline line — transient success/error belongs in the
@@ -109,12 +99,10 @@ export function SettingsCategory({
 
   // Which layer a Save lands in (ADR 0047). On the HOST console a host-scoped field sets the
   // box default (host layer) while an agent-scoped field is the host agent's own (agent leaf)
-  // — so split the write by scope. On a fleet member everything overrides into that agent's
-  // leaf. (`hostLayer` is the legacy host-defaults panel, kept for embedded/plugin callers.)
+  // — so split the write by scope. On a fleet member everything overrides into that agent's leaf.
   const onHost = isHostConsole();
   const save = useMutation({
     mutationFn: async () => {
-      if (hostLayer) return api.saveSettings(dirty, "host");
       if (!onHost) return api.saveSettings(dirty, "agent");
       const scopeOf = (k: string) =>
         groups.flatMap((g) => g.fields).find((f) => f.key === k)?.scope ?? "agent";
@@ -230,7 +218,7 @@ export function SettingsCategory({
           field={withGatewayModels(field)}
           dirty={field.key in dirty}
           value={field.key in dirty ? dirty[field.key] : field.value}
-          showInheritance={!hostLayer}
+          showInheritance
           onHost={onHost}
           onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
           onReset={() => reset.mutate([field.key])}
@@ -262,11 +250,9 @@ export function SettingsCategory({
         kicker={
           dirtyKeys.length
             ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}`
-            : hostLayer
-              ? "saves to the box-shared host defaults"
-              : runtimeField
-                ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
-                : "applies on save"
+            : runtimeField
+              ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
+              : "applies on save"
         }
         actions={
           <>
@@ -291,14 +277,6 @@ export function SettingsCategory({
         }
       />
       <div className="stage-body">
-        {hostLayer ? (
-          <Alert status="info" className="settings-banner">
-            <strong>Global · box-shared defaults</strong> (ADR 0047) — edits here write to this
-            hub's <code>host-config.yaml</code> and become the inherited default for every agent the
-            hub manages that hasn't set its own value. Per-agent overrides win. (Usually one hub per
-            machine; a machine running several hubs keeps a host-config per hub.)
-          </Alert>
-        ) : null}
         {acpAgent ? (
           <Alert status="info" className="settings-banner">
             Running on <strong>{acpAgent}</strong> (ACP) — it drives each turn with its own tools.
