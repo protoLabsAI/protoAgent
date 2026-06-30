@@ -193,7 +193,7 @@ def register_config_routes(app) -> None:
         (type, default, restart-vs-hot-reload, description). Drives the
         operator console's Settings surface."""
         from graph.config import _load_host_layer
-        from graph.config_io import CONFIG_YAML_PATH, list_gateway_models, load_yaml_doc
+        from graph.config_io import config_yaml_path, list_gateway_models, load_yaml_doc
         from graph.settings_schema import build_schema
 
         models: list[str] = []
@@ -202,7 +202,8 @@ def register_config_routes(app) -> None:
         # Per-layer provenance (ADR 0047): the raw agent leaf doc + the filtered Host
         # layer let build_schema report each field's `source` (agent/host/default) so
         # the UI can badge inherited-vs-overridden.
-        agent_doc = load_yaml_doc(CONFIG_YAML_PATH) if CONFIG_YAML_PATH.exists() else {}
+        _cfg_yaml = config_yaml_path()
+        agent_doc = load_yaml_doc(_cfg_yaml) if _cfg_yaml.exists() else {}
         host_doc = _load_host_layer()
         return {
             "groups": build_schema(

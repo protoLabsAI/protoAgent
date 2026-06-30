@@ -116,7 +116,7 @@ def _default_stubs() -> dict:
         "graph": {},
         "graph.sdk": {},  # run_subagent / subagent_types / config / complete
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
-        "graph.config_io": {"SECRETS_YAML_PATH": Path("config/secrets.yaml")},
+        "graph.config_io": {"secrets_yaml_path": lambda: Path("config/secrets.yaml")},
         "graph.goals": {},
         "graph.goals.types": {
             "VerifyResult": type("VerifyResult", (), {"__init__": lambda self, **kw: self.__dict__.update(kw)})

@@ -197,14 +197,14 @@ def test_build_schema_agent_override_of_host_field_shows_as_agent_source():
 
 
 def _point_config_at(tmp_path, monkeypatch):
-    """Repoint the live agent leaf (CONFIG_YAML_PATH) + secrets at a temp dir so a
+    """Repoint the live agent leaf (config_yaml_path) + secrets at a temp dir so a
     save touches a scratch file, not the repo's config/. Returns the leaf path."""
     import graph.config_io as cio
 
     leaf = tmp_path / "langgraph-config.yaml"
     secrets = tmp_path / "secrets.yaml"
-    monkeypatch.setattr(cio, "CONFIG_YAML_PATH", leaf, raising=False)
-    monkeypatch.setattr(cio, "SECRETS_YAML_PATH", secrets, raising=False)
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "secrets_yaml_path", lambda: secrets)
     return leaf
 
 
@@ -239,8 +239,12 @@ def test_host_layer_save_writes_host_config(tmp_path, monkeypatch):
     assert hp.exists()
     written = _yaml.safe_load(hp.read_text())
     assert written["model"]["name"] == "box-default-model"
-    # The agent leaf was NOT touched by the host write.
-    assert not leaf.exists()
+    # The host value was NOT written into the agent leaf (plugin-schema discovery may
+    # seed a fresh template leaf, exactly as boot does — but the host key never leaks
+    # into it, so it can't shadow the host default).
+    if leaf.exists():
+        leaf_doc = _yaml.safe_load(leaf.read_text()) or {}
+        assert (leaf_doc.get("model") or {}).get("name") != "box-default-model"
 
     # Cascade: a config loaded from a silent agent leaf inherits the host default.
     leaf.write_text("goal:\n  enabled: true\n")
@@ -368,7 +372,7 @@ def test_agent_layer_save_unchanged(tmp_path, monkeypatch):
     written = _yaml.safe_load(leaf.read_text())
     assert written["model"]["name"] == "agent-model"
     assert "api_key" not in written["model"]  # secret split out, as always
-    secrets = _yaml.safe_load(cio.SECRETS_YAML_PATH.read_text())
+    secrets = _yaml.safe_load(cio.secrets_yaml_path().read_text())
     assert secrets["model"]["api_key"] == "sk-secret"
     assert not hp.exists()  # host file never created by an agent save
 

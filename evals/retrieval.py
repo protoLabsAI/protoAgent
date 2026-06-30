@@ -207,10 +207,10 @@ def sweep(
 def _gateway_embed_fn() -> EmbedFn:
     """The real embedder, built from the live config + secrets (same path as boot)."""
     from graph.config import LangGraphConfig
-    from graph.config_io import CONFIG_YAML_PATH
+    from graph.config_io import config_yaml_path
     from graph.llm import create_embed_fn
 
-    cfg = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    cfg = LangGraphConfig.from_yaml(config_yaml_path())
     fn = create_embed_fn(cfg)
     if fn is None:
         raise SystemExit("no embedder: set knowledge.embed_model + a gateway api_key, or run with --embedder bow")

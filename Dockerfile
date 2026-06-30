@@ -107,30 +107,12 @@ RUN chmod +x /opt/protoagent/entrypoint.sh
 # dist/ lands here — the builder's node_modules stay in the discarded stage.
 COPY --from=web-builder /build/apps/web/dist /opt/protoagent/apps/web/dist
 
-# Sandbox workspace + knowledge/audit dirs
+# Sandbox workspace + knowledge/audit dirs. /sandbox is the container's instance
+# root (PROTOAGENT_HOME=/sandbox, set in entrypoint.sh): live config + secrets +
+# setup marker + SOUL.md live at /sandbox/config/*, plugins at /sandbox/plugins,
+# every store under /sandbox/ — all persisted by the protoagent-sandbox volume.
 RUN mkdir -p /sandbox /tmp/sandbox /sandbox/audit /sandbox/knowledge \
     && chown -R sandbox:sandbox /sandbox /tmp/sandbox
-
-# Make /opt/protoagent/config writable by the sandbox user so the
-# drawer and setup wizard can persist edits from inside the container.
-RUN chown -R sandbox:sandbox /opt/protoagent/config
-
-# Declare config as a volume so setup completion (``.setup-complete``
-# marker + any YAML / SOUL.md edits) survives ``docker run`` without
-# a -v flag.
-#
-# Lifecycle note: without an explicit mount, Docker creates an
-# ANONYMOUS volume on every ``docker run``. Those accumulate and the
-# volume is NOT removed when the container is removed unless you pass
-# ``--rm -v``. For long-lived deployments, use a named volume or a
-# host mount so upgrades don't silently carry stale config forward:
-#
-#   docker run -v my-agent-config:/opt/protoagent/config my-agent:latest
-#
-# or a bind mount:
-#
-#   docker run -v /srv/my-agent/config:/opt/protoagent/config my-agent:latest
-VOLUME ["/opt/protoagent/config"]
 
 ENV PYTHONPATH=/opt/protoagent
 # UI tier baked from the build arg (ADR 0010): the image runs `--ui $UI` (default

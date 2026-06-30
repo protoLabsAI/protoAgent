@@ -90,7 +90,8 @@ fn augmented_sidecar_path() -> String {
 ///
 /// The frozen binary is read-only, so its writable state (live config,
 /// secrets, setup marker) is pointed at the per-user app-config dir via
-/// `PROTOAGENT_CONFIG_DIR`. Failures are logged, not fatal — the window still
+/// `PROTOAGENT_HOME` — the per-user dir becomes the instance root, so config
+/// lands under `<dir>/config`. Failures are logged, not fatal — the window still
 /// opens (and shows the API error) rather than the whole app refusing to boot.
 fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
     let config_dir = match app.path().app_config_dir() {
@@ -123,7 +124,7 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         // So the sidecar exits if we die without a clean kill (the frozen
         // onefile's child process otherwise outlives us, holding its port).
         .env("PROTOAGENT_PARENT_PID", std::process::id().to_string())
-        .env("PROTOAGENT_CONFIG_DIR", config_dir.to_string_lossy().to_string());
+        .env("PROTOAGENT_HOME", config_dir.to_string_lossy().to_string());
 
     // A Finder/Dock/launchd launch strips PATH down to launchd's minimal set, hiding
     // Homebrew/nvm/Volta/asdf — so delegate launch commands (`npx`, ACP adapters) fail
