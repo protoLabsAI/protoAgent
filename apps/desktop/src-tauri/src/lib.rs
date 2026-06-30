@@ -546,13 +546,30 @@ pub fn run() {
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
             );
+            // A `target="_blank"` / `window.open` from a (sandboxed) plugin iframe asks
+            // the host to spawn a child window. We don't host child windows, so without
+            // a handler WKWebView silently drops the request and the click does nothing
+            // — e.g. the GitHub plugin's PR/issue links were dead in the desktop app.
+            // Open external http(s) links in the system browser (shell:allow-open) and
+            // deny the in-app window. (Browsers handle this implicitly via allow-popups;
+            // the desktop shell has to do it explicitly.)
+            let link_opener = app.handle().clone();
             let mut win = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("protoAgent")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(980.0, 640.0)
                 .resizable(true)
                 .center()
-                .initialization_script(&init);
+                .initialization_script(&init)
+                .on_new_window(move |url, _features| {
+                    let target = url.as_str();
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        if let Err(e) = link_opener.shell().open(target, None) {
+                            log::error!("desktop: failed to open external link {target}: {e}");
+                        }
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                });
             // Invisible title bar (macOS): no opaque chrome — content fills the
             // frame and the native traffic lights float top-left. The web shell
             // restores window-dragging + insets its topbar for the lights
