@@ -362,6 +362,7 @@ async def run_manual_subagent(
         inbox_store=STATE.inbox_store,
         tasks_store=STATE.tasks_store,
         goal_enabled=getattr(config, "goal_enabled", False),
+        graph_config=config,
     )
     if extra_tools:
         all_tools = all_tools + list(extra_tools)
@@ -808,6 +809,8 @@ def create_agent_graph(
         # Subagent builds deliberately omit it: subagents are bounded by
         # max_turns and must not self-set goals.
         goal_enabled=config.goal_enabled,
+        # Lets knowledge_ingest build the gateway STT/vision fns for audio/video/image.
+        graph_config=config,
     )
 
     if extra_tools:
@@ -894,7 +897,7 @@ def create_simple_agent(config: LangGraphConfig, knowledge_store=None, scheduler
     from langgraph.prebuilt import create_react_agent
 
     llm = create_llm(config)
-    all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
+    all_tools = get_all_tools(knowledge_store, scheduler=scheduler, graph_config=config)
 
     system_prompt = build_system_prompt(include_subagents=False)
 

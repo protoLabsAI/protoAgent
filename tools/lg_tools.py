@@ -462,6 +462,7 @@ SCHEDULER_TOOL_NAMES: tuple[str, ...] = (
 )
 MEMORY_TOOL_NAMES: tuple[str, ...] = (
     "memory_ingest",
+    "knowledge_ingest",
     "memory_recall",
     "memory_list",
     "memory_stats",
@@ -504,8 +505,14 @@ def _build_inbox_tools(inbox_store) -> list:
     return [check_inbox]
 
 
-def _build_memory_tools(knowledge_store) -> list:
-    """Bind memory tools to a ``KnowledgeStore``. Returns a list."""
+def _build_memory_tools(knowledge_store, graph_config=None) -> list:
+    """Bind memory tools to a ``KnowledgeStore``. Returns a list.
+
+    ``graph_config`` (the ``LangGraphConfig``) is threaded only so
+    ``knowledge_ingest`` can build the gateway speech-to-text / vision functions
+    for audio/video/image sources. It's optional — without it those media paths
+    report "not configured" and the text/URL/PDF paths work unchanged.
+    """
 
     @tool
     async def memory_ingest(
@@ -536,6 +543,99 @@ def _build_memory_tools(knowledge_store) -> list:
         if chunk_id is None:
             return "Error: failed to store chunk (knowledge store unavailable)."
         return f"Stored chunk {chunk_id} in {domain!r}."
+
+    @tool
+    async def knowledge_ingest(source: str, domain: str = "general", title: str | None = None) -> str:
+        """Fetch, extract, and store a URL or local file into long-term knowledge.
+
+        Unlike ``memory_ingest`` (which stores text you already have), this runs
+        the full ingestion pipeline: it pulls the SOURCE, turns it into text, and
+        chunks + embeds it for recall. Reach for this the moment the operator
+        hands you a link or a file to "remember", "read", "ingest", "add to the
+        knowledge base", or "summarize and keep". Do NOT try to web_search or
+        fetch_url a YouTube/media link yourself — this is the only path that gets
+        a transcript or decodes a file.
+
+        Handles:
+          - URLs — web articles (HTML) and YouTube links (transcript)
+          - documents — PDF, plain text, Markdown (by local file path)
+          - media — audio (mp3/wav/m4a…) and video (mp4/mov/mkv…) by local file
+            path, transcribed via the gateway speech-to-text model (slow for long
+            recordings — it runs the whole track through STT)
+          - images — described via the gateway vision model
+
+        Args:
+            source: an ``http(s)`` URL (including YouTube) OR a local file path.
+            domain: knowledge bucket to file it under (default ``"general"``).
+            title: optional heading; otherwise the source's own title is used.
+
+        Returns a one-line summary (title, type, chars, chunk count). If a source
+        needs something that isn't configured (e.g. video needs ``ffmpeg`` plus
+        ``knowledge.transcribe_model``), it says so rather than failing opaquely.
+        """
+        import asyncio
+        from pathlib import Path
+
+        from ingestion import (
+            MissingDependency,
+            UnsupportedSource,
+            extract_bytes,
+            extract_url,
+        )
+        from knowledge import add_document
+
+        src = (source or "").strip()
+        if not src:
+            return "Error: provide a URL or a local file path to ingest."
+
+        # Gateway STT/vision for media — None if no model is configured, which
+        # makes audio/video/image raise a clean "not configured" error while
+        # text/URL/PDF/YouTube paths are unaffected.
+        transcribe = describe = None
+        if graph_config is not None:
+            try:
+                from graph.llm import create_describe_image_fn, create_transcribe_fn
+
+                transcribe = create_transcribe_fn(graph_config)
+                describe = create_describe_image_fn(graph_config)
+            except Exception:  # noqa: BLE001 — media stays optional; text/URL unaffected
+                pass
+
+        try:
+            if src.lower().startswith(("http://", "https://")):
+                result = await asyncio.to_thread(extract_url, src, transcribe=transcribe)
+                origin = src
+            else:
+                path = Path(src).expanduser()
+                if not path.is_file():
+                    return f"Error: no such file: {src} — pass an http(s) URL or an existing local file path."
+                data = await asyncio.to_thread(path.read_bytes)
+                result = await asyncio.to_thread(
+                    extract_bytes, path.name, data, None, transcribe=transcribe, describe=describe
+                )
+                origin = str(path)
+        except MissingDependency as exc:
+            return f"Can't ingest that source — a required dependency or model isn't available: {exc}"
+        except UnsupportedSource as exc:
+            return f"Unsupported source type: {exc}"
+        except Exception as exc:  # noqa: BLE001 — surface extraction failure to the model, never crash the turn
+            return f"Extraction failed: {exc}"
+
+        heading = (title or "").strip() or result.title or None
+        ids = await asyncio.to_thread(
+            lambda: add_document(
+                knowledge_store,
+                result.text,
+                domain=(domain or "general").strip() or "general",
+                heading=heading,
+                source=origin,
+                source_type=result.source_type,
+            )
+        )
+        if not ids:
+            return "Nothing ingested — no text could be extracted from that source."
+        label = heading or origin
+        return f"Ingested {label!r} ({result.source_type}, {len(result.text)} chars) → {len(ids)} chunk(s) in {domain!r}."
 
     @tool
     async def memory_recall(query: str, k: int = 5) -> str:
@@ -615,7 +715,7 @@ def _build_memory_tools(knowledge_store) -> list:
             return f"No memory chunk #{cid} found — nothing deleted."
         return f"Forgot memory chunk #{cid}." + (f" ({reason})" if reason else "")
 
-    return [memory_ingest, memory_recall, memory_list, memory_stats, forget_memory]
+    return [memory_ingest, knowledge_ingest, memory_recall, memory_list, memory_stats, forget_memory]
 
 
 # ── scheduler tools ──────────────────────────────────────────────────────────
@@ -1118,16 +1218,21 @@ def _build_curation_tools():
 HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
 
 
-def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False):
+def get_all_tools(
+    knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False, graph_config=None
+):
     """Return every LangChain tool the lead agent + subagents can use.
 
     Optional dependencies:
 
     - ``knowledge_store`` enables the memory tools (memory_ingest,
-      memory_recall, memory_list, memory_stats).
+      knowledge_ingest, memory_recall, memory_list, memory_stats).
     - ``scheduler`` enables the scheduler tools (schedule_task,
       list_schedules, cancel_schedule). Accepts any backend that
       implements ``scheduler.interface.SchedulerBackend``.
+    - ``graph_config`` (the ``LangGraphConfig``) lets ``knowledge_ingest``
+      build the gateway STT/vision functions for audio/video/image sources.
+      Optional — without it, only the text/URL/PDF/YouTube ingest paths work.
 
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
@@ -1153,7 +1258,7 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_
     # 0018/0019) — an installed comms plugin registers its tools when a token is set;
     # nothing to wire here.
     if knowledge_store is not None:
-        tools.extend(_build_memory_tools(knowledge_store))
+        tools.extend(_build_memory_tools(knowledge_store, graph_config))
     if scheduler is not None:
         tools.extend(_build_scheduler_tools(scheduler))
     if inbox_store is not None:

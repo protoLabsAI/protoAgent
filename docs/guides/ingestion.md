@@ -15,6 +15,21 @@ handles plain text, Markdown, HTML, PDF, audio, video, and web/YouTube URLs.
 and audio/video (`mp3, wav, m4a, flac, ogg, opus, aac, mp4, mov, mkv, webm, avi, m4v`).
 You'll see `Added N chunks from "<title>"`.
 
+## From the agent
+
+The agent can ingest **on its own** with the `knowledge_ingest(source, domain, title?)`
+tool — `source` is an `http(s)` URL (including YouTube) or a local file path. Hand it a
+link or a file in chat ("read this and remember it", "ingest this PDF") and it runs the
+same pipeline below, rather than trying to `web_search`/`fetch_url` a media link (which
+can't get a transcript). It's distinct from `memory_ingest`, which only stores text the
+agent already has — see the [tool table](/guides/knowledge#the-agents-memory-tools).
+
+Audio/video/image paths need the same setup as the console (`knowledge.transcribe_model`
+/ `knowledge.image_describe_model`, plus `ffmpeg` on PATH for video); if one isn't
+configured the tool says so instead of failing silently. The tool is on whenever a
+knowledge store is wired — the agent runs `knowledge_ingest` as one turn, so a long
+recording will take as long as its transcription does.
+
 ## From the API
 
 ```bash

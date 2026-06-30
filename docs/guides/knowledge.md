@@ -55,6 +55,7 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 | Tool | What it does |
 |---|---|
 | `memory_ingest(content, domain, heading?)` | store a self-contained fact/note for later recall |
+| `knowledge_ingest(source, domain, title?)` | fetch + extract + store a **URL or local file** — YouTube/web/PDF/audio/video — through the full [ingestion pipeline](/guides/ingestion#from-the-agent) |
 | `memory_recall(query, k=5)` | search long-term memory (hybrid, or FTS5 if the breaker is open) |
 | `memory_list(domain?, limit=10)` | browse recent chunks (used by `/dream` consolidation) |
 | `memory_stats()` | per-domain chunk counts |

@@ -129,6 +129,7 @@ _TOOL_CATEGORY = {
     "fetch_url": "Web & research",
     # Memory
     "memory_ingest": "Memory",
+    "knowledge_ingest": "Memory",
     "memory_recall": "Memory",
     "memory_list": "Memory",
     "memory_stats": "Memory",
