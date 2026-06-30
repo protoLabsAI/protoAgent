@@ -1,6 +1,6 @@
 import "./keybindings.css";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Kbd } from "@protolabsai/ui/primitives";
 import { useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
@@ -68,7 +68,7 @@ export function KeybindingsPanel() {
     <div className="kb-panel">
       <div className="kb-panel__head">
         <p className="muted kb-panel__hint">
-          Click a shortcut to rebind it. Note: <kbd>⌘T</kbd>, <kbd>⌘1–9</kbd> and <kbd>⌃Tab</kbd> are
+          Click a shortcut to rebind it. Note: <Kbd>⌘T</Kbd>, <Kbd>⌘1–9</Kbd> and <Kbd>⌃Tab</Kbd> are
           reserved by the browser — they work in the desktop app; in a browser, rebind to a free combo.
         </p>
         <Button variant="ghost" size="sm" onClick={resetAll} disabled={overrideCount === 0}>

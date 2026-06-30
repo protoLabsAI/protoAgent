@@ -1,7 +1,7 @@
 // Small shared UI leaves — the button/link idioms repeated verbatim across the
 // surface panels. Pure presentation, no state.
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, TextLink } from "@protolabsai/ui/primitives";
 import { ExternalLink, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -53,8 +53,8 @@ export function TestConnectionButton({
 /** External help link with a trailing ExternalLink glyph (and safe `rel`). */
 export function HelpLink({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <a className="settings-help-link" href={href} target="_blank" rel="noreferrer">
+    <TextLink className="settings-help-link" href={href} external>
       {children} <ExternalLink size={13} />
-    </a>
+    </TextLink>
   );
 }
