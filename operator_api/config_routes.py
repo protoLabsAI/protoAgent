@@ -86,6 +86,17 @@ def register_config_routes(app) -> None:
             "soul": read_soul(),
         }
 
+    @app.get("/api/config/explain")
+    async def _api_config_explain():
+        """Read-only diagnostic: this instance's identity, both roots, every
+        resolved path, and the per-field cascade provenance — the console/curl
+        counterpart of ``python -m server config explain``. Passes the LIVE
+        config so the cascade reflects what's actually running; secrets are
+        redacted to a set/unset marker, never echoed."""
+        from graph.config_explain import build_config_explain
+
+        return build_config_explain(STATE.graph_config)
+
     @app.post("/api/config")
     async def _api_post_config(req: ConfigReloadRequest):
         # Offload off the event loop (#497) — the reload's graph compile is heavy
