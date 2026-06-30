@@ -57,21 +57,21 @@ def _make_rich_plugin_repo(root: Path, pid: str = "demo_kit") -> Path:
 
 @pytest.fixture
 def agent(tmp_path, monkeypatch):
-    """One host agent's data area — install dir, lock, config dir + secrets — all temp."""
+    """One host agent's data area — install dir, lock, config + secrets — all temp."""
     import graph.config_io as cio
 
     cfg = tmp_path / "cfg"
     cfg.mkdir()
-    monkeypatch.setattr(installer, "LOCK_PATH", tmp_path / "plugins.lock")
-    # The REAL single-agent layout: the install dir IS <config-dir>/plugins, the same
-    # dir _resolve_plugin_config roots at (`config_dir/plugins`). Keeping these aligned
-    # is exactly what the double-scope bug broke — model it faithfully.
+    monkeypatch.setattr(installer, "lock_path", lambda: tmp_path / "plugins.lock")
+    # The REAL single-agent layout: the install dir is the instance plugins root
+    # (PROTOAGENT_PLUGINS_DIR), the same dir _resolve_plugin_config roots at
+    # (instance_paths().plugins_dir). Keeping these aligned is what the double-scope
+    # bug broke — model it faithfully.
     monkeypatch.setenv("PROTOAGENT_PLUGINS_DIR", str(cfg / "plugins"))
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(cfg))
-    # save_secrets / uninstall-purge resolve the secrets file via these module constants;
+    # save_secrets / uninstall-purge resolve config + secrets via these accessors;
     # point them at the temp config dir so the round-trip stays in the sandbox.
-    monkeypatch.setattr(cio, "SECRETS_YAML_PATH", cfg / "secrets.yaml")
-    monkeypatch.setattr(cio, "CONFIG_YAML_PATH", cfg / "langgraph-config.yaml")
+    monkeypatch.setattr(cio, "secrets_yaml_path", lambda: cfg / "secrets.yaml")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: cfg / "langgraph-config.yaml")
     return tmp_path
 
 

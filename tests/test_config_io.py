@@ -238,11 +238,8 @@ def test_ensure_live_config_seeds_from_example(monkeypatch, tmp_path: Path) -> N
     example = tmp_path / "langgraph-config.example.yaml"
     live = tmp_path / "langgraph-config.yaml"
     example.write_text("model:\n  name: from-template\n")
-    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
-    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
-    # Unscoped path (live == base): seeds from the EXAMPLE template, not a scoped-from-base
-    # copy. Pin _BASE too so `scoped` is False regardless of a local config/langgraph-config.yaml.
-    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", live)
+    monkeypatch.setattr(config_io, "config_example_path", lambda: example)
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
 
     assert config_io.ensure_live_config() is True
     assert live.exists()
@@ -256,8 +253,8 @@ def test_ensure_live_config_does_not_clobber_existing(monkeypatch, tmp_path: Pat
     live = tmp_path / "langgraph-config.yaml"
     example.write_text("model:\n  name: from-template\n")
     live.write_text("model:\n  name: user-edited\n")
-    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
-    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
+    monkeypatch.setattr(config_io, "config_example_path", lambda: example)
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
 
     assert config_io.ensure_live_config() is False
     assert "user-edited" in live.read_text()  # untouched
@@ -266,11 +263,8 @@ def test_ensure_live_config_does_not_clobber_existing(monkeypatch, tmp_path: Pat
 def test_ensure_live_config_noop_without_example(monkeypatch, tmp_path: Path) -> None:
     from graph import config_io
 
-    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", tmp_path / "absent.example.yaml")
-    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", tmp_path / "langgraph-config.yaml")
-    # Unscoped (live == base) so `scoped` is False and the seed source is the (absent)
-    # example — not a local config/langgraph-config.yaml that would otherwise be the base.
-    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", tmp_path / "langgraph-config.yaml")
+    monkeypatch.setattr(config_io, "config_example_path", lambda: tmp_path / "absent.example.yaml")
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: tmp_path / "langgraph-config.yaml")
 
     assert config_io.ensure_live_config() is False
     assert not (tmp_path / "langgraph-config.yaml").exists()
@@ -285,9 +279,8 @@ def test_ensure_live_config_seeds_from_seed_config_env(monkeypatch, tmp_path: Pa
     live = tmp_path / "langgraph-config.yaml"
     example.write_text("model:\n  name: from-template\n")
     seed.write_text("model:\n  name: from-seed\n")
-    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
-    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
-    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", live)
+    monkeypatch.setattr(config_io, "config_example_path", lambda: example)
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
     monkeypatch.setenv("PROTOAGENT_SEED_CONFIG", str(seed))
 
     assert config_io.ensure_live_config() is True
@@ -302,9 +295,8 @@ def test_seed_config_env_missing_falls_back_to_example(monkeypatch, tmp_path: Pa
     example = tmp_path / "langgraph-config.example.yaml"
     live = tmp_path / "langgraph-config.yaml"
     example.write_text("model:\n  name: from-template\n")
-    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
-    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
-    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", live)
+    monkeypatch.setattr(config_io, "config_example_path", lambda: example)
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
     monkeypatch.setenv("PROTOAGENT_SEED_CONFIG", str(tmp_path / "does-not-exist.yaml"))
 
     assert config_io.ensure_live_config() is True
@@ -315,75 +307,45 @@ def test_seed_config_env_missing_falls_back_to_example(monkeypatch, tmp_path: Pa
 
 
 def test_read_soul_falls_back_to_source(monkeypatch, tmp_path: Path) -> None:
-    """When /sandbox/SOUL.md doesn't exist (local dev), fall through
-    to the repo config dir so drawer edits are still visible."""
+    """When the instance has no SOUL.md yet, fall through to the bundled seed so
+    a fresh agent still shows a persona."""
     from graph import config_io
 
-    # Point the runtime path at an unreachable location so the source
-    # fallback is exercised.
-    fake_runtime = tmp_path / "nonexistent" / "SOUL.md"
     fake_source = tmp_path / "SOUL-source.md"
     fake_source.write_text("from source", encoding="utf-8")
-
-    monkeypatch.setattr(config_io, "SOUL_RUNTIME_PATH", fake_runtime)
-    monkeypatch.setattr(config_io, "SOUL_SOURCE_PATH", fake_source)
+    # An empty instance root → no <root>/config/SOUL.md, exercising the seed fallback.
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "empty-home"))
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: fake_source)
 
     assert config_io.read_soul() == "from source"
 
 
-def test_read_soul_prefers_runtime(monkeypatch, tmp_path: Path) -> None:
+def test_read_soul_prefers_instance(monkeypatch, tmp_path: Path) -> None:
     from graph import config_io
 
-    runtime = tmp_path / "runtime" / "SOUL.md"
-    runtime.parent.mkdir()
-    runtime.write_text("runtime wins", encoding="utf-8")
+    home = tmp_path / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "config" / "SOUL.md").write_text("instance wins", encoding="utf-8")
     source = tmp_path / "SOUL-source.md"
     source.write_text("source loses", encoding="utf-8")
 
-    monkeypatch.setattr(config_io, "SOUL_RUNTIME_PATH", runtime)
-    monkeypatch.setattr(config_io, "SOUL_SOURCE_PATH", source)
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: source)
 
-    assert config_io.read_soul() == "runtime wins"
+    assert config_io.read_soul() == "instance wins"
 
 
-def test_write_soul_writes_source_always(monkeypatch, tmp_path: Path) -> None:
-    """The source-of-truth write (config/SOUL.md) must always succeed;
-    the runtime write is best-effort (skipped when /sandbox missing)."""
+def test_write_soul_writes_instance_soul(monkeypatch, tmp_path: Path) -> None:
+    """write_soul persists to the instance's <root>/config/SOUL.md (mkdir parents)."""
     from graph import config_io
 
-    # Runtime points at a path whose parent doesn't exist — should skip
-    # gracefully.
-    runtime = tmp_path / "no-sandbox-here" / "SOUL.md"
-    source = tmp_path / "src" / "SOUL.md"
-
-    monkeypatch.setattr(config_io, "SOUL_RUNTIME_PATH", runtime)
-    monkeypatch.setattr(config_io, "SOUL_SOURCE_PATH", source)
+    home = tmp_path / "home"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
 
     written = config_io.write_soul("hello world")
-    assert source in written
-    assert runtime not in written
-    assert source.read_text() == "hello world"
-
-
-def test_write_soul_writes_both_when_runtime_parent_exists(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    from graph import config_io
-
-    runtime_dir = tmp_path / "sandbox"
-    runtime_dir.mkdir()
-    runtime = runtime_dir / "SOUL.md"
-    source = tmp_path / "src" / "SOUL.md"
-
-    monkeypatch.setattr(config_io, "SOUL_RUNTIME_PATH", runtime)
-    monkeypatch.setattr(config_io, "SOUL_SOURCE_PATH", source)
-
-    written = config_io.write_soul("dual write")
-    assert runtime in written
-    assert source in written
-    assert runtime.read_text() == "dual write"
-    assert source.read_text() == "dual write"
+    target = home / "config" / "SOUL.md"
+    assert target in written
+    assert target.read_text() == "hello world"
 
 
 # ── Gateway model listing ────────────────────────────────────────────────────
@@ -574,14 +536,13 @@ def test_setup_marker_lifecycle(monkeypatch, tmp_path):
     Reset on a missing marker is a no-op, not an error."""
     from graph import config_io
 
-    marker = tmp_path / ".setup-complete"
-    monkeypatch.setattr(config_io, "SETUP_MARKER_PATH", marker)
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
 
     assert config_io.is_setup_complete() is False
 
     config_io.mark_setup_complete()
     assert config_io.is_setup_complete() is True
-    assert marker.exists()
+    assert config_io.setup_marker_path().exists()
 
     config_io.mark_setup_complete()  # idempotent
     assert config_io.is_setup_complete() is True
@@ -593,16 +554,15 @@ def test_setup_marker_lifecycle(monkeypatch, tmp_path):
 
 
 def test_mark_setup_complete_creates_parent_dir(monkeypatch, tmp_path):
-    """If config/ doesn't exist yet, mark_setup_complete must create
-    it — otherwise a fresh clone with a pristine filesystem fails
+    """If the instance config dir doesn't exist yet, mark_setup_complete must
+    create it — otherwise a fresh instance with a pristine filesystem fails
     on first wizard run."""
     from graph import config_io
 
-    marker = tmp_path / "fresh" / "config" / ".setup-complete"
-    monkeypatch.setattr(config_io, "SETUP_MARKER_PATH", marker)
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "fresh"))
 
     config_io.mark_setup_complete()
-    assert marker.exists()
+    assert config_io.setup_marker_path().exists()
 
 
 # ── SOUL.md presets ─────────────────────────────────────────────────────────
@@ -673,64 +633,28 @@ def test_list_soul_presets_missing_dir_returns_empty(monkeypatch, tmp_path):
     from graph import config_io
 
     fake = tmp_path / "does-not-exist"
-    monkeypatch.setattr(config_io, "PRESETS_DIR", fake)
+    monkeypatch.setattr(config_io, "presets_dir", lambda: fake)
 
     assert config_io.list_soul_presets() == []
 
 
-def test_ensure_live_config_scoped_inherits_base(monkeypatch, tmp_path: Path) -> None:
-    """A PROTOAGENT_INSTANCE-scoped config seeds from the unscoped base (config + secrets +
-    setup-marker) so a new instance boots usable instead of into the wizard (ADR 0004)."""
-    from infra import paths
-    from graph import config_io
-
-    base = tmp_path / "langgraph-config.yaml"
-    base.write_text("model:\n  name: base-config\n")
-    base_secrets = tmp_path / "secrets.yaml"
-    base_secrets.write_text("model:\n  api_key: SEKRET\n")
-    base_marker = tmp_path / ".setup-complete"
-    base_marker.write_text("")
-    scoped = tmp_path / "foo" / "langgraph-config.yaml"
-    scoped_secrets = tmp_path / "foo" / "secrets.yaml"
-    scoped_marker = tmp_path / "foo" / ".setup-complete"
-
-    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", base)
-    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", scoped)
-    monkeypatch.setattr(config_io, "_BASE_SECRETS_YAML", base_secrets)
-    monkeypatch.setattr(config_io, "SECRETS_YAML_PATH", scoped_secrets)
-    monkeypatch.setattr(config_io, "_BASE_SETUP_MARKER", base_marker)
-    monkeypatch.setattr(config_io, "SETUP_MARKER_PATH", scoped_marker)
-    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", tmp_path / "missing.example.yaml")
-    monkeypatch.setattr(paths, "instance_id", lambda: "foo")
-
-    assert config_io.ensure_live_config() is True
-    assert "base-config" in scoped.read_text()  # inherited the base config
-    assert scoped_secrets.read_text() == base_secrets.read_text()  # + secrets
-    assert scoped_marker.exists()  # + setup state (no re-wizard)
+# ── instance installed-plugin config resolution (ADR 0055 P0) ────────────────────
 
 
-# ── scoped-instance installed-plugin config resolution (ADR 0055 P0) ─────────────
-
-
-def test_scoped_instance_resolves_unscoped_installed_plugin_config(tmp_path, monkeypatch):
-    """A plugin installed in the UNSCOPED live plugins dir must have its config section
-    resolved even when the config dir is instance-scoped (`PROTOAGENT_INSTANCE` →
-    config/<id>/), since the scoped dir has no plugins/ of its own and installs are
-    unscoped. Regression: a scoped instance loaded its installed plugins but silently
-    dropped their config sections (db_path/settings → manifest defaults), which broke
-    per-instance board isolation."""
+def test_instance_resolves_installed_plugin_config(tmp_path, monkeypatch):
+    """A plugin installed under the instance's plugins dir
+    (``instance_paths().plugins_dir``, a sibling of ``config/``) has its config
+    section resolved by ``_resolve_plugin_config`` — no de-scope dance, since the
+    instance root IS the scoped leaf and config + plugins share one tier."""
     from graph.config import _resolve_plugin_config
 
-    base = tmp_path / "config"
-    pdir = base / "plugins" / "demo"  # installs are UNSCOPED, under <base>/plugins
+    home = tmp_path / "home"
+    pdir = home / "plugins" / "demo"  # instance plugins live at <root>/plugins
     pdir.mkdir(parents=True)
     (pdir / "protoagent.plugin.yaml").write_text(
         'id: demo\nname: Demo\nversion: 0.1.0\ndescription: t\nconfig_section: demo\nconfig:\n  db_path: ""\n'
     )
-    monkeypatch.setenv("PROTOAGENT_INSTANCE", "inst")  # → instance_id() == "inst"
-    scoped = base / "inst"  # the instance-scoped config dir (config/<id>/) — no plugins/ here
-    scoped.mkdir()
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))  # instance_paths().plugins_dir == <home>/plugins
     data = {"plugins": {"enabled": ["demo"]}, "demo": {"db_path": "/sandbox/x.db"}}
-    out = _resolve_plugin_config(data, {}, config_dir=scoped)
-    # de-scoped to <base>/plugins → demo discovered → its config section resolved
+    out = _resolve_plugin_config(data, {}, config_dir=home / "config")
     assert out.get("demo", {}).get("db_path") == "/sandbox/x.db"

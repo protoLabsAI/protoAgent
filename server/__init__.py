@@ -97,7 +97,7 @@ def _resolve_operator_project_root() -> str:
     isn't a real workspace, so the console's project-scoped APIs (notes/tasks)
     fail with "project_path does not exist". Resolve a stable, writable dir
     instead: an explicit ``PROTOAGENT_PROJECT_DIR`` wins; else (when frozen) the
-    per-user app dir the desktop already provides via ``PROTOAGENT_CONFIG_DIR``,
+    per-user app dir the desktop already provides via ``PROTOAGENT_HOME``,
     else the home dir."""
     env = os.environ.get("PROTOAGENT_PROJECT_DIR")
     if env:
@@ -112,7 +112,7 @@ def _resolve_operator_project_root() -> str:
         if chosen.is_dir():
             return str(chosen.resolve())
     if getattr(sys, "frozen", False):
-        cfg = os.environ.get("PROTOAGENT_CONFIG_DIR")
+        cfg = os.environ.get("PROTOAGENT_HOME")
         base = Path(cfg) if cfg else Path.home()
         return str(base.expanduser().resolve())
     return str(_bundle_root())
@@ -248,7 +248,6 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _resolve_skills_db,
     _retire_thread,
     _run_on_server_loop,
-    _seed_instance_env,
     _start_scheduler_async,
     _stop_scheduler_async,
     _sync_autostart_with_config,
@@ -364,14 +363,14 @@ def _main():
     if args.setup:
         from graph.config import LangGraphConfig
         from graph.config_io import (
-            CONFIG_YAML_PATH,
+            config_yaml_path,
             ensure_live_config,
             mark_setup_complete,
             validate_for_headless,
         )
 
         ensure_live_config()
-        cfg = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+        cfg = LangGraphConfig.from_yaml(config_yaml_path())
         ok, reason = validate_for_headless(cfg)
         if not ok:
             print(f"setup: config invalid — {reason}", file=sys.stderr)

@@ -69,7 +69,7 @@ def run_workspace_cli(argv: list[str]) -> int:
             env, cmd = manager.run_exec(args.name, args.rest or [])
             os.environ.update(env)
             print(
-                f"→ workspace {args.name}: {env['PROTOAGENT_CONFIG_DIR']} (instance={env['PROTOAGENT_INSTANCE']})",
+                f"→ workspace {args.name}: {env['PROTOAGENT_HOME']} (instance={env['PROTOAGENT_INSTANCE']})",
                 file=sys.stderr,
             )
             os.execvp(cmd[0], cmd)  # replace this process with the server

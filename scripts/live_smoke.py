@@ -79,8 +79,11 @@ def _wait_healthz(port: int, timeout: float = 90.0) -> bool:
 def main() -> int:
     args = _parse_args()
     fake_port, agent_port = _free_port(), _free_port()
-    cfg_dir = Path(tempfile.mkdtemp(prefix="smoke-cfg-"))
-    (cfg_dir / "langgraph-config.yaml").write_text(
+    # home_dir IS the instance root (PROTOAGENT_HOME): config lands at
+    # <home>/config/langgraph-config.yaml, plugins at <home>/plugins, etc.
+    home_dir = Path(tempfile.mkdtemp(prefix="smoke-home-"))
+    (home_dir / "config").mkdir(parents=True, exist_ok=True)
+    (home_dir / "config" / "langgraph-config.yaml").write_text(
         "model:\n"
         "  name: protolabs/reasoning\n"
         f"  api_base: http://127.0.0.1:{fake_port}/v1\n"
@@ -89,7 +92,7 @@ def main() -> int:
     env = {
         **os.environ,
         "OPENAI_API_KEY": "fake-smoke-key",
-        "PROTOAGENT_CONFIG_DIR": str(cfg_dir),
+        "PROTOAGENT_HOME": str(home_dir),
         "PROTOAGENT_INSTANCE": "cismoke",
         "PROTOAGENT_HEADLESS_SETUP": "1",
         "PYTHONPATH": str(ROOT),
@@ -101,7 +104,7 @@ def main() -> int:
         # app won't have the repo on disk either.
         env.pop("PYTHONPATH", None)
         agent_cmd = [str(Path(args.bin_path).resolve()), "--ui", "none", "--port", str(agent_port)]
-        agent_cwd = str(cfg_dir)
+        agent_cwd = str(home_dir)
     else:
         agent_cmd = [sys.executable, "-m", "server", "--ui", "none", "--port", str(agent_port)]
         agent_cwd = str(ROOT)

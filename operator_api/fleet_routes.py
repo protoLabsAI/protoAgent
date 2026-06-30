@@ -144,11 +144,11 @@ def register_fleet_routes(app) -> None:
         # its plugins — only if the host is actually configured (fresh host → plain blank template).
         inherit_model = None
         if bool(body.get("inherit_config", True)):
-            from graph.config_io import _live_config_dir
+            from graph.config_io import config_yaml_path
 
-            cfg_dir = _live_config_dir()
-            if (cfg_dir / "langgraph-config.yaml").exists():
-                inherit_model = str(cfg_dir)
+            cfg_yaml = config_yaml_path()
+            if cfg_yaml.exists():
+                inherit_model = str(cfg_yaml.parent)
         try:
             # create() may overlay the host model + install a bundle (subprocess) — off the loop.
             ws = await asyncio.to_thread(

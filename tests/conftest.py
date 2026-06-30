@@ -11,6 +11,25 @@ import os
 import site
 import sys
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_instance_paths():
+    """Re-resolve ``infra.paths.instance_paths()`` cleanly for every test.
+
+    The frozen ``InstancePaths`` singleton is resolved-once-and-cached from the
+    environment (PROTOAGENT_HOME / PROTOAGENT_INSTANCE / PROTOAGENT_BOX_ROOT), so a
+    test that sets one of those vars (or monkeypatches ``data_home``) needs the
+    cache cleared or it'd read a stale path. Reset BEFORE (so a test's env is seen
+    on the first ``instance_paths()`` call) and AFTER (so a stale cache never leaks
+    into the next test)."""
+    from infra.paths import reset_instance_paths
+
+    reset_instance_paths()
+    yield
+    reset_instance_paths()
+
 
 def pytest_configure(config):  # noqa: ARG001
     """Prepend site-packages to sys.path before any test imports occur."""

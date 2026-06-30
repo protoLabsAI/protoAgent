@@ -15,10 +15,10 @@ mkdir -p /home/sandbox/.local
 # Persistent volume dirs (mounted by the stack)
 mkdir -p /sandbox/audit /sandbox/knowledge
 
-# Copy persona into workspace if one is shipped
-if [ -f /opt/protoagent/config/SOUL.md ]; then
-    cp /opt/protoagent/config/SOUL.md /sandbox/SOUL.md
-fi
+# /sandbox IS this container's instance root (and box root): config lives at
+# /sandbox/config/*, plugins at /sandbox/plugins, every store under /sandbox/.
+# read_soul seeds /sandbox/config/SOUL.md from the bundled default on first run.
+export PROTOAGENT_HOME=/sandbox
 
 # ADR 0023: server.py was promoted to a `server/` package. Launch it as a
 # module with the install dir on PYTHONPATH so the package (and its sibling

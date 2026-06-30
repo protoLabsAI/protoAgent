@@ -46,13 +46,12 @@ def _layered_index():
     ``(index, commons_path)`` so the caller can surface which commons is in use: it's
     host-level + un-scoped, so showing the path guards the shared-host footgun (ADR 0041)."""
     from graph.config import LangGraphConfig
-    from graph.config_io import _live_config_dir
+    from graph.config_io import config_yaml_path
     from graph.skills.index import SkillsIndex
     from graph.skills.layered import LayeredSkillsIndex
-    from server.agent_init import _commons_dir, _resolve_skills_db, _seed_instance_env
+    from server.agent_init import _commons_dir, _resolve_skills_db
 
-    cfg = LangGraphConfig.from_yaml(str(_live_config_dir() / "langgraph-config.yaml"))
-    _seed_instance_env(cfg)  # so the private path resolves to THIS agent's scope
+    cfg = LangGraphConfig.from_yaml(config_yaml_path())
     commons = _commons_dir(cfg)
     private = SkillsIndex(db_path=_resolve_skills_db(cfg.skills_db_path, shared=False))
     shared_path = _resolve_skills_db(cfg.skills_db_path, shared=True, commons=commons)
@@ -65,11 +64,10 @@ def _resolve_tier_db(tier: str) -> str:
     same resolution the running agent uses — so the curator targets a single backend
     (never a layered union, which would make rowid-based deletes ambiguous)."""
     from graph.config import LangGraphConfig
-    from graph.config_io import _live_config_dir
-    from server.agent_init import _commons_dir, _resolve_skills_db, _seed_instance_env
+    from graph.config_io import config_yaml_path
+    from server.agent_init import _commons_dir, _resolve_skills_db
 
-    cfg = LangGraphConfig.from_yaml(str(_live_config_dir() / "langgraph-config.yaml"))
-    _seed_instance_env(cfg)
+    cfg = LangGraphConfig.from_yaml(config_yaml_path())
     if tier == "commons":
         return _resolve_skills_db(cfg.skills_db_path, shared=True, commons=_commons_dir(cfg))
     return _resolve_skills_db(cfg.skills_db_path, shared=False)

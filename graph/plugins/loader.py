@@ -131,9 +131,10 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
     the module does NOT call ``register`` — only defines its functions — so this
     is side-effect-free apart from running the server.
     """
-    from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+    from infra.paths import instance_paths
 
-    roots = [_BUNDLE_CONFIG_DIR.parent / "plugins", _live_config_dir() / "plugins"]
+    ip = instance_paths()
+    roots = [ip.app_root / "plugins", ip.plugins_dir]
     for manifest in discover_plugins(roots):
         if manifest.id != plugin_id:
             continue
@@ -166,9 +167,9 @@ def _host_version() -> str:
     except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
         pass
 
-    from graph.config_io import _BUNDLE_CONFIG_DIR
+    from infra.paths import instance_paths
 
-    pyproject = _BUNDLE_CONFIG_DIR.parent / "pyproject.toml"
+    pyproject = instance_paths().app_root / "pyproject.toml"
     try:
         m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE)
         if m:
@@ -428,9 +429,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
 
 
 def _plugin_roots(config) -> list[Path]:
-    from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+    from infra.paths import instance_paths
 
-    repo_root = _BUNDLE_CONFIG_DIR.parent
+    ip = instance_paths()
     live_override = getattr(config, "plugins_dir", "") or ""
-    live_root = Path(live_override).expanduser() if live_override else (_live_config_dir() / "plugins")
-    return [repo_root / "plugins", live_root]  # bundle first, live overrides
+    live_root = Path(live_override).expanduser() if live_override else ip.plugins_dir
+    return [ip.app_root / "plugins", live_root]  # bundle first, live overrides

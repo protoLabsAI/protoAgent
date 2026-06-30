@@ -114,23 +114,30 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
         return []
 
 
-def plugin_roots_from(config_dir: Path, dir_override: str = "") -> list[Path]:
-    """Bundle + live plugin roots, computed from a config dir (no config object)."""
-    from graph.config_io import _BUNDLE_CONFIG_DIR
+def plugin_roots_from(plugins_root: Path, dir_override: str = "") -> list[Path]:
+    """Bundle + live plugin roots (no config object).
 
-    live = Path(dir_override).expanduser() if dir_override else (config_dir / "plugins")
-    return [_BUNDLE_CONFIG_DIR.parent / "plugins", live]
+    ``plugins_root`` is the instance's live plugins dir (e.g.
+    ``instance_paths().plugins_dir``); a non-empty ``dir_override`` (config
+    ``plugins.dir``) wins over it. The bundle root ships in-tree under the app
+    root (``app_root/plugins``)."""
+    from infra.paths import instance_paths
+
+    live = Path(dir_override).expanduser() if dir_override else Path(plugins_root)
+    return [instance_paths().app_root / "plugins", live]
 
 
 def live_plugin_config_schemas() -> list[PluginConfigSchema]:
     """Discover schemas from the **live** config (for config_io + settings_schema,
     which operate on the running config without a config object)."""
     try:
-        from graph.config_io import _live_config_dir, load_yaml_doc
+        from infra.paths import instance_paths
+
+        from graph.config_io import load_yaml_doc
 
         data = load_yaml_doc() or {}
         plugins = data.get("plugins") or {}
-        roots = plugin_roots_from(_live_config_dir(), str(plugins.get("dir") or ""))
+        roots = plugin_roots_from(instance_paths().plugins_dir, str(plugins.get("dir") or ""))
         return discover_plugin_config(
             roots,
             set(plugins.get("enabled") or []),
@@ -152,11 +159,13 @@ def installed_plugin_config_schemas(*, strict: bool = False) -> list[PluginConfi
     secret-routing / redaction callers can fail SAFE instead of treating a transient
     failure as "no secrets"."""
     try:
-        from graph.config_io import _live_config_dir, load_yaml_doc
+        from infra.paths import instance_paths
+
+        from graph.config_io import load_yaml_doc
         from graph.plugins.loader import discover_plugins
 
         data = load_yaml_doc() or {}
-        roots = plugin_roots_from(_live_config_dir(), str((data.get("plugins") or {}).get("dir") or ""))
+        roots = plugin_roots_from(instance_paths().plugins_dir, str((data.get("plugins") or {}).get("dir") or ""))
         all_ids = {m.id for m in discover_plugins(roots)}
         return discover_plugin_config(roots, all_ids, set(), strict=strict)  # every installed plugin, on or off
     except Exception:  # noqa: BLE001

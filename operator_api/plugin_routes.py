@@ -143,10 +143,11 @@ def register_plugin_routes(app) -> None:
         or id; one-click install runs `plugin install <repo>` (ADR 0058)."""
         import json
 
-        from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+        from infra.paths import instance_paths
 
+        ip = instance_paths()
         entries: list[dict] = []
-        for base in (_live_config_dir(), _BUNDLE_CONFIG_DIR):
+        for base in (ip.config_dir, ip.bundle_dir):
             f = base / "plugin-catalog.json"
             if f.exists():
                 try:
@@ -169,7 +170,7 @@ def register_plugin_routes(app) -> None:
             repo = entry.get("repo") or entry.get("install_url") or ""
             # Bundled built-in (still in the repo's plugins/ tree) — already present, can't
             # be git-installed over (the installer's built-in guard); show as "Bundled".
-            bundled = bool(eid) and (installer.REPO_ROOT / "plugins" / eid).exists()
+            bundled = bool(eid) and (installer.bundled_plugins_dir() / eid).exists()
             inst_id = by_url.get(_norm(repo)) or (eid if eid in by_id else None)
             out.append(
                 {
@@ -238,12 +239,10 @@ def register_plugin_routes(app) -> None:
             # operator value (or a key they've already set) is never clobbered.
             bundle_config = summary.get("config") if "bundle" in summary else None
             if bundle_config:
-                from graph.config_io import load_yaml_doc
+                from graph.config_io import config_yaml_path, load_yaml_doc
                 from graph.plugins.installer import bundle_config_overlay
 
-                import graph.config_io as _cio
-
-                current = load_yaml_doc(_cio.CONFIG_YAML_PATH)
+                current = load_yaml_doc(config_yaml_path())
                 overlay = bundle_config_overlay(bundle_config, current if isinstance(current, dict) else {})
                 config_updates.update(overlay)
 

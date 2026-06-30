@@ -58,7 +58,7 @@ def test_save_and_load_secrets_round_trip(monkeypatch, tmp_path: Path) -> None:
     from graph import config_io
 
     secrets_path = tmp_path / "secrets.yaml"
-    monkeypatch.setattr(config_io, "SECRETS_YAML_PATH", secrets_path)
+    monkeypatch.setattr(config_io, "secrets_yaml_path", lambda: secrets_path)
 
     config_io.save_secrets({"model": {"api_key": "sk-1"}})
     config_io.save_secrets({"auth": {"token": "bearer-2"}})  # merge, don't clobber
@@ -73,7 +73,7 @@ def test_save_secrets_noop_on_empty(monkeypatch, tmp_path: Path) -> None:
     from graph import config_io
 
     secrets_path = tmp_path / "secrets.yaml"
-    monkeypatch.setattr(config_io, "SECRETS_YAML_PATH", secrets_path)
+    monkeypatch.setattr(config_io, "secrets_yaml_path", lambda: secrets_path)
     config_io.save_secrets({})
     assert not secrets_path.exists()
 
@@ -89,16 +89,15 @@ def test_from_yaml_overlays_secrets_file(tmp_path: Path) -> None:
     assert cfg.auth_token == "bearer-overlay"
 
 
-def test_live_config_dir_honors_env_override(monkeypatch, tmp_path: Path) -> None:
-    # The desktop sidecar points PROTOAGENT_CONFIG_DIR at a writable app-data
-    # dir so a read-only frozen binary can still persist setup.
+def test_config_path_honors_home_override(monkeypatch, tmp_path: Path) -> None:
+    # The desktop sidecar points PROTOAGENT_HOME at a writable app-data dir so a
+    # read-only frozen binary can still persist setup — config lands under
+    # <home>/config (the instance root IS that dir).
     from graph import config_io
 
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path / "appdata"))
-    assert config_io._live_config_dir() == tmp_path / "appdata"
-
-    monkeypatch.delenv("PROTOAGENT_CONFIG_DIR", raising=False)
-    assert config_io._live_config_dir() == config_io._BUNDLE_CONFIG_DIR
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "appdata"))
+    assert config_io.config_yaml_path() == tmp_path / "appdata" / "config" / "langgraph-config.yaml"
+    assert config_io.secrets_yaml_path() == tmp_path / "appdata" / "config" / "secrets.yaml"
 
 
 def test_from_yaml_without_secrets_leaves_blank_for_env_fallback(tmp_path: Path) -> None:
@@ -126,7 +125,7 @@ def test_disabled_plugin_secret_routes_to_secrets_not_plaintext(tmp_path, monkey
     )
     (pdir / "__init__.py").write_text("def register(registry):\n    pass\n")
     (cfg / "langgraph-config.yaml").write_text("plugins:\n  enabled: []\n")  # offp NOT enabled
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("PROTOAGENT_HOME", str(cfg))  # instance_paths().plugins_dir == cfg/plugins
 
     main, secrets = split_secret_updates({"offp": {"api_key": "sek-ret"}})
     assert secrets == {"offp": {"api_key": "sek-ret"}}  # routed to the secret half

@@ -27,13 +27,23 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+from infra.paths import instance_paths
+
 from graph.plugins.manifest import PluginManifest, load_manifest
 
 log = logging.getLogger(__name__)
 
-REPO_ROOT = _BUNDLE_CONFIG_DIR.parent
-LOCK_PATH = Path(os.environ.get("PROTOAGENT_PLUGINS_LOCK", str(REPO_ROOT / "plugins.lock")))
+
+def bundled_plugins_dir() -> Path:
+    """In-tree bundled (built-in) plugins root — ``app_root/plugins``. Resolved at
+    call time so the env (PyInstaller _MEIPASS) is honored, never import-time."""
+    return instance_paths().app_root / "plugins"
+
+
+def lock_path() -> Path:
+    """The ``plugins.lock`` for THIS instance — ``instance_paths().plugins_lock``
+    (honors ``PROTOAGENT_PLUGINS_LOCK``)."""
+    return instance_paths().plugins_lock
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 # A git ref we'll accept from a caller — branch/tag/sha shapes only. Keeps a ref
@@ -60,9 +70,9 @@ class InstallError(RuntimeError):
 
 
 def live_plugins_dir() -> Path:
-    """Where git-installed plugins land — the live dir the loader discovers."""
-    override = os.environ.get("PROTOAGENT_PLUGINS_DIR", "")
-    return Path(override).expanduser() if override else (_live_config_dir() / "plugins")
+    """Where git-installed plugins land — the live dir the loader discovers
+    (``instance_paths().plugins_dir``, honoring ``PROTOAGENT_PLUGINS_DIR``)."""
+    return instance_paths().plugins_dir
 
 
 def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> str:
@@ -102,17 +112,20 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
 
 
 def _read_lock() -> dict:
-    if LOCK_PATH.exists():
+    lock = lock_path()
+    if lock.exists():
         try:
-            return json.loads(LOCK_PATH.read_text())
+            return json.loads(lock.read_text())
         except (json.JSONDecodeError, OSError):
-            log.warning("[plugins] %s is unreadable — starting a fresh lock", LOCK_PATH)
+            log.warning("[plugins] %s is unreadable — starting a fresh lock", lock)
     return {"plugins": []}
 
 
 def _write_lock(data: dict) -> None:
     data["plugins"].sort(key=lambda e: e.get("id", ""))
-    LOCK_PATH.write_text(json.dumps(data, indent=2) + "\n")
+    lock = lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:
@@ -138,7 +151,9 @@ def configured_allowlist() -> list[str] | None:
     try:
         import yaml
 
-        cfg_path = _live_config_dir() / "langgraph-config.yaml"
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
         if not cfg_path.exists():
             return None
         data = yaml.safe_load(cfg_path.read_text()) or {}
@@ -374,7 +389,7 @@ def install(
         pid = manifest.id
 
         # No silent shadowing of a built-in (repo) plugin.
-        if (REPO_ROOT / "plugins" / pid).exists():
+        if (bundled_plugins_dir() / pid).exists():
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
 
         # Frozen runtime (desktop): no pip — a plugin can only run if its declared
@@ -530,9 +545,9 @@ def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
     always the `plugins.enabled`/`disabled` entry (a dangling enabled entry is just
     broken); with ``purge`` also the plugin's `config_section` block. Comment-safe
     (ruamel). Returns True if anything changed."""
-    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.config_io import config_yaml_path, load_yaml_doc, save_yaml_doc
 
-    cfg = _live_config_dir() / "langgraph-config.yaml"
+    cfg = config_yaml_path()
     if not cfg.exists():
         return False
     doc = load_yaml_doc(cfg)
@@ -557,9 +572,9 @@ def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
 
 def _clean_secrets(section: str) -> bool:
     """Remove the plugin's section from the live secrets.yaml overlay (purge only)."""
-    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.config_io import load_yaml_doc, save_yaml_doc, secrets_yaml_path
 
-    sec = _live_config_dir() / "secrets.yaml"
+    sec = secrets_yaml_path()
     if not sec.exists():
         return False
     doc = load_yaml_doc(sec)
@@ -576,7 +591,7 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     With ``purge=True`` ALSO removes the plugin's config section + its secrets.
     Built-ins are refused; pip deps are NEVER auto-removed (shared venv) — they're
     returned for the operator to remove. Returns a report dict."""
-    if (REPO_ROOT / "plugins" / plugin_id).exists():
+    if (bundled_plugins_dir() / plugin_id).exists():
         raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
     target = live_plugins_dir() / plugin_id
     # Read the manifest BEFORE deleting — purge needs the config section + we report
@@ -634,7 +649,7 @@ def install_deps(plugin_id: str) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Returns the deps."""
     manifest = None
-    for base in (live_plugins_dir(), REPO_ROOT / "plugins"):
+    for base in (live_plugins_dir(), bundled_plugins_dir()):
         if (base / plugin_id / "protoagent.plugin.yaml").exists():
             manifest = load_manifest(base / plugin_id)
             break

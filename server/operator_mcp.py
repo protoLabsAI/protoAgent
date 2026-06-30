@@ -146,9 +146,9 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(level=logging.INFO)
     from graph.config import LangGraphConfig
-    from graph.config_io import CONFIG_YAML_PATH
+    from graph.config_io import config_yaml_path
 
-    config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    config = LangGraphConfig.from_yaml(config_yaml_path())
     # An explicit allowlist from the caller (e.g. the ACP runtime spawning this) overrides
     # the YAML — so the exposed set matches the runtime's intent, not whatever's on disk.
     env_tools = os.environ.get("OPERATOR_MCP_TOOLS")

@@ -1,10 +1,12 @@
 """Workspace lifecycle (ADR 0041) — create / list / run / remove.
 
-A workspace is a directory ``<root>/<name>/`` that *is* an agent: its
-``langgraph-config.yaml`` + ``secrets.yaml`` + (once a bundle installs) ``plugins.lock``
-+ ``config/plugins/`` live there (so ``PROTOAGENT_CONFIG_DIR=<ws>`` makes it the whole
-identity), and ``instance.id = <name>`` scopes its private data to ``~/.protoagent/<name>/*``.
-``workspace.yaml`` is the registry record (id, port, bundle, created).
+A workspace is a directory ``<root>/<name>/`` that *is* an agent's instance root:
+its ``config/langgraph-config.yaml`` + ``config/secrets.yaml`` + (once a bundle
+installs) ``plugins.lock`` + ``plugins/`` live there, so launching it with
+``PROTOAGENT_HOME=<ws>`` makes the workspace dir the member's whole instance root
+(config under ``<ws>/config``, plugins under ``<ws>/plugins``). ``PROTOAGENT_INSTANCE=<id>``
+scopes its private data stores to ``~/.protoagent/<id>/*``. ``workspace.yaml`` is the
+registry record (id, port, bundle, created), kept at the workspace root.
 
 This module only orchestrates the existing knobs — no new runtime, no new storage
 format. ``run`` returns the env + argv for the CLI to ``exec`` the normal server.
@@ -241,7 +243,11 @@ def create(
         raise WorkspaceError(f"workspace {wid!r} already exists at {ws}")
     ws.mkdir(parents=True)
 
-    cfg = ws / "langgraph-config.yaml"
+    # The member reads its config at <ws>/config/ (instance_root=<ws> → config tier
+    # under <ws>/config), so scaffold there.
+    cfg_dir = ws / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg = cfg_dir / "langgraph-config.yaml"
     if from_config:
         src = Path(from_config).expanduser()
         src_cfg = src / "langgraph-config.yaml" if src.is_dir() else src
@@ -251,11 +257,11 @@ def create(
         shutil.copyfile(src_cfg, cfg)
         src_sec = (src if src.is_dir() else src.parent) / "secrets.yaml"
         if src_sec.exists():
-            shutil.copyfile(src_sec, ws / "secrets.yaml")
+            shutil.copyfile(src_sec, cfg_dir / "secrets.yaml")
         _stamp_identity(cfg, name, shared_skills, instance_id=wid)
     else:
         cfg.write_text(_CONFIG_TEMPLATE.format(name=name, id=wid))
-        (ws / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
+        (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
         if inherit_model:
             _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
         if shared_skills:
@@ -393,8 +399,8 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         new["model"] = host["model"]
         save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
     src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
-    if src_sec.exists():  # carries the api_key so the gateway actually works
-        shutil.copyfile(src_sec, ws / "secrets.yaml")
+    if src_sec.exists():  # carries the api_key so the gateway actually works — sits next to cfg
+        shutil.copyfile(src_sec, cfg.parent / "secrets.yaml")
 
 
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: str | None = None) -> None:
@@ -414,12 +420,11 @@ def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: s
 
 def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
     """Install a bundle (or plugin) into the workspace via a scoped subprocess —
-    fresh env so the installer's module-level lock path picks up this workspace."""
+    ``PROTOAGENT_HOME=<ws>`` makes the workspace the installer's instance root, so
+    plugins land at ``<ws>/plugins`` and the lock at ``<ws>/plugins.lock``."""
     env = {
         **os.environ,
-        "PROTOAGENT_CONFIG_DIR": str(ws),
-        "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"),
-        "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock"),
+        "PROTOAGENT_HOME": str(ws),
     }
     proc = subprocess.run(
         [sys.executable, "-m", "server", "plugin", "install", bundle],
@@ -442,17 +447,20 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
 def run_exec(ident: str, passthrough: list[str]) -> tuple[dict, list[str]]:
     """Return ``(env_overrides, argv)`` to launch this workspace's server. The CLI
     applies the env and ``exec``s — so the workspace runs as a normal server with
-    its config dir + instance + port wired in. ``ident`` is an id or display name."""
+    its instance root + id + port wired in. ``ident`` is an id or display name.
+
+    ``PROTOAGENT_HOME=<ws>`` makes the workspace dir the member's instance root
+    (config at ``<ws>/config``, plugins at ``<ws>/plugins``, lock at
+    ``<ws>/plugins.lock`` — all derived); ``PROTOAGENT_INSTANCE=<id>`` scopes its
+    private data stores."""
     found = _find(ident)
     ws = Path(found["path"]) if found else _ws_dir(ident)
     rec = _read_record(ws)
     if rec is None:
         raise WorkspaceError(f"no workspace {ident!r} at {ws}")
     env = {
-        "PROTOAGENT_CONFIG_DIR": str(ws),
+        "PROTOAGENT_HOME": str(ws),
         "PROTOAGENT_INSTANCE": str(rec.get("id", ident)),
-        "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"),
-        "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock"),
     }
     argv = [sys.executable, "-m", "server", "--port", str(rec.get("port", PORT_BASE + 1)), *passthrough]
     return env, argv
@@ -498,7 +506,7 @@ def rename(ident: str, new_name: str) -> dict:
     rec = _read_record(ws) or {}
     rec["name"] = new_name
     atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
-    cfg = ws / "langgraph-config.yaml"
+    cfg = ws / "config" / "langgraph-config.yaml"
     if cfg.exists():  # keep the agent's self-identity in step with the display name
         _stamp_identity(cfg, new_name, False, instance_id=rec.get("id", found["id"]))
     return {"id": found["id"], "name": new_name}

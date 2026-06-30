@@ -7,20 +7,31 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import graph.config_io as cio
+import infra.paths as paths
 import runtime.state as rs
 from graph.plugins import installer
 from operator_api.plugin_routes import register_plugin_routes
 
 
-def _client(catalog_dir):
+def _client():
     app = FastAPI()
     register_plugin_routes(app)
     return TestClient(app)
 
 
+def _pin_paths(monkeypatch, root):
+    """Pin instance_paths() at ``root`` so config_dir + bundle_dir + bundled plugins
+    all resolve under a sandbox: config/bundle catalog at ``<root>/config``, bundled
+    built-ins at ``<root>/plugins``."""
+    fake = paths.InstancePaths(instance_id="t", box_root=root, instance_root=root, app_root=root)
+    monkeypatch.setattr(paths, "_CURRENT_PATHS", fake)
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    return root / "config"
+
+
 def test_catalog_served_with_install_state(monkeypatch, tmp_path):
-    (tmp_path / "plugin-catalog.json").write_text(
+    cfg = _pin_paths(monkeypatch, tmp_path)
+    (cfg / "plugin-catalog.json").write_text(
         json.dumps(
             {
                 "plugins": [
@@ -31,10 +42,7 @@ def test_catalog_served_with_install_state(monkeypatch, tmp_path):
             }
         )
     )
-    # Catalog resolves from the bundle dir; live dir empty; no built-ins present.
-    monkeypatch.setattr(cio, "_BUNDLE_CONFIG_DIR", tmp_path)
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path / "nolive"))
-    monkeypatch.setattr(installer, "REPO_ROOT", tmp_path)  # tmp_path/plugins doesn't exist → nothing bundled
+    # <root>/plugins doesn't exist → nothing bundled.
     # artifact installed (matched by repo URL, even with a trailing .git) + enabled; terminal installed, disabled.
     monkeypatch.setattr(
         installer,
@@ -46,7 +54,7 @@ def test_catalog_served_with_install_state(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(rs.STATE, "plugin_meta", [{"id": "artifact", "enabled": True}], raising=False)
 
-    r = _client(tmp_path).get("/api/plugins/catalog")
+    r = _client().get("/api/plugins/catalog")
     assert r.status_code == 200
     plugs = {p["id"]: p for p in r.json()["plugins"]}
     assert len(plugs) == 3
@@ -56,24 +64,21 @@ def test_catalog_served_with_install_state(monkeypatch, tmp_path):
 
 
 def test_catalog_marks_bundled_builtin(monkeypatch, tmp_path):
-    (tmp_path / "plugin-catalog.json").write_text(
+    cfg = _pin_paths(monkeypatch, tmp_path)
+    (cfg / "plugin-catalog.json").write_text(
         json.dumps({"plugins": [{"id": "discord", "name": "Discord", "repo": "https://github.com/x/discord-plugin"}]})
     )
-    monkeypatch.setattr(cio, "_BUNDLE_CONFIG_DIR", tmp_path)
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path / "nolive"))
     monkeypatch.setattr(installer, "list_installed", lambda: [])
     monkeypatch.setattr(rs.STATE, "plugin_meta", [], raising=False)
-    # A repo root whose plugins/discord exists → that catalog entry is "bundled".
+    # A bundled built-in: <root>/plugins/discord exists → that catalog entry is "bundled".
     (tmp_path / "plugins" / "discord").mkdir(parents=True)
-    monkeypatch.setattr(installer, "REPO_ROOT", tmp_path)
 
-    plugs = {p["id"]: p for p in _client(tmp_path).get("/api/plugins/catalog").json()["plugins"]}
+    plugs = {p["id"]: p for p in _client().get("/api/plugins/catalog").json()["plugins"]}
     assert plugs["discord"]["bundled"] is True and plugs["discord"]["installed"] is False
 
 
 def test_catalog_empty_when_no_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(cio, "_BUNDLE_CONFIG_DIR", tmp_path)
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path / "nolive"))
+    _pin_paths(monkeypatch, tmp_path)  # no plugin-catalog.json anywhere under root
     monkeypatch.setattr(installer, "list_installed", lambda: [])
     monkeypatch.setattr(rs.STATE, "plugin_meta", [], raising=False)
-    assert _client(tmp_path).get("/api/plugins/catalog").json() == {"plugins": []}
+    assert _client().get("/api/plugins/catalog").json() == {"plugins": []}

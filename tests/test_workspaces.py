@@ -24,14 +24,14 @@ def test_new_ls_run_rm(root):
     assert s["name"] == "alpha" and s["id"].startswith("alpha-") and s["id"] != "alpha"
     assert s["port"] == 7871
     ws = root / s["id"]
-    assert (ws / "langgraph-config.yaml").exists() and (ws / "workspace.yaml").exists()
-    cfg = yaml.safe_load((ws / "langgraph-config.yaml").read_text())
+    assert (ws / "config" / "langgraph-config.yaml").exists() and (ws / "workspace.yaml").exists()
+    cfg = yaml.safe_load((ws / "config" / "langgraph-config.yaml").read_text())
     assert cfg["instance"]["id"] == s["id"] and cfg["identity"]["name"] == "alpha"
 
     assert [w["name"] for w in manager.list_workspaces()] == ["alpha"]
 
     env, argv = manager.run_exec("alpha", [])  # resolves by display name too
-    assert env["PROTOAGENT_CONFIG_DIR"] == str(ws)
+    assert env["PROTOAGENT_HOME"] == str(ws)  # <ws> IS the member's instance root
     assert env["PROTOAGENT_INSTANCE"] == s["id"]
     assert "--port" in argv and "7871" in argv
 
@@ -63,7 +63,7 @@ def test_rename_changes_display_not_id(root):
     assert out == {"id": s["id"], "name": "nova"}  # id (slug/data scope) untouched
     ws = manager._find("nova")
     assert ws and ws["id"] == s["id"] and (root / s["id"]).exists()
-    cfg = yaml.safe_load((root / s["id"] / "langgraph-config.yaml").read_text())
+    cfg = yaml.safe_load((root / s["id"] / "config" / "langgraph-config.yaml").read_text())
     assert cfg["identity"]["name"] == "nova" and cfg["instance"]["id"] == s["id"]
     assert manager._find("nova-x") is None and manager._find(s["id"])["name"] == "nova"
 
@@ -82,11 +82,11 @@ def test_from_config_clones_and_restamps(root, tmp_path):
     )
     (src / "secrets.yaml").write_text("model: { api_key: k }\n")
     s = manager.create("clone", from_config=str(src), shared_skills=True)
-    cfg = yaml.safe_load((root / s["id"] / "langgraph-config.yaml").read_text())
+    cfg = yaml.safe_load((root / s["id"] / "config" / "langgraph-config.yaml").read_text())
     assert cfg["identity"]["name"] == "clone" and cfg["instance"]["id"] == s["id"]
     assert cfg["model"]["name"] == "keep-me"  # other config preserved
     assert cfg["skills"]["shared"] is True
-    assert (root / s["id"] / "secrets.yaml").exists()  # secrets cloned too
+    assert (root / s["id"] / "config" / "secrets.yaml").exists()  # secrets cloned too
 
 
 def test_bad_name_rejected(root):

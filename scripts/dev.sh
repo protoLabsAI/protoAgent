@@ -3,11 +3,11 @@
 # Launch an ISOLATED dev instance of protoAgent so testing never touches your real
 # ("prod") agent data.
 #
-# Uses PROTOAGENT_INSTANCE scoping (ADR 0004): the dev instance gets its own config
-# + data leaves under the same homes, SEEDED from the default's config on first run
-# (so it boots with your gateway already configured — no re-setup wizard) but with
-# FRESH, separate chat / tasks / knowledge / checkpoint data. Your default instance
-# (config/ + ~/.protoagent, port 7870) is left completely untouched.
+# Uses PROTOAGENT_INSTANCE scoping (ADR 0004): the dev instance is its own instance
+# root at ~/.protoagent/dev (config under ~/.protoagent/dev/config, plugins under
+# ~/.protoagent/dev/plugins) with FRESH, separate chat / tasks / knowledge /
+# checkpoint data. Your default instance (~/.protoagent/default, port 7870) is left
+# completely untouched.
 #
 #   scripts/dev.sh                 # → PROTOAGENT_INSTANCE=dev on http://127.0.0.1:7871
 #   PORT=7882 scripts/dev.sh       # pick a different port

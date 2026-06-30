@@ -160,10 +160,11 @@ def register_mcp_routes(app) -> None:
         `installed` by name so the picker shows what's already configured."""
         import json
 
-        from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+        from infra.paths import instance_paths
 
+        ip = instance_paths()
         entries: list[dict] = []
-        for base in (_live_config_dir(), _BUNDLE_CONFIG_DIR):
+        for base in (ip.config_dir, ip.bundle_dir):
             f = base / "mcp-catalog.json"
             if f.exists():
                 try:

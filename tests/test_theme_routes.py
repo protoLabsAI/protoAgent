@@ -7,7 +7,7 @@ import pytest
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from operator_api.theme_routes import register_theme_routes

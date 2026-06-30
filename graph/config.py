@@ -51,25 +51,20 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
     For every plugin that claims a top-level section, merge: manifest defaults ⊕
     the (secret-stripped) YAML section ⊕ the secrets overlay for its secret keys.
     Best-effort — never breaks config load. Returns ``{section: resolved_dict}``.
+
+    Plugins live at ``instance_paths().plugins_dir`` — the instance tier's own
+    plugins root (a sibling of ``config/``, honoring ``PROTOAGENT_PLUGINS_DIR`` and
+    the config ``plugins.dir`` override). No de-scope dance: the instance root IS
+    the scoped leaf, so config and plugins share one tier. (``config_dir`` is kept
+    for call compatibility but no longer determines the plugins location.)
     """
     try:
+        from infra.paths import instance_paths
+
         from graph.plugins.pconfig import discover_plugin_config, plugin_roots_from
 
         plugins = data.get("plugins") or {}
-        # Discover installed plugins from the UNSCOPED live plugins dir. A
-        # PROTOAGENT_INSTANCE-scoped config lives at `<base>/<instance_id>/`, but
-        # installs are unscoped under `<base>/plugins` (and the loader discovers them
-        # there). So de-scope the config dir — drop the instance-id leaf — before
-        # computing roots; otherwise a scoped instance loads its installed plugins but
-        # never resolves their config sections (db_path/settings silently default,
-        # breaking per-instance board isolation — ADR 0055 P0). De-scoping only when
-        # the dir IS the instance leaf keeps the default + tests (custom config_dir)
-        # unchanged.
-        from infra.paths import instance_id as _instance_id
-
-        iid = _instance_id()
-        live_dir = config_dir.parent if (iid and config_dir.name == iid) else config_dir
-        roots = plugin_roots_from(live_dir, str(plugins.get("dir") or ""))
+        roots = plugin_roots_from(instance_paths().plugins_dir, str(plugins.get("dir") or ""))
         schemas = discover_plugin_config(
             roots,
             set(plugins.get("enabled") or []),

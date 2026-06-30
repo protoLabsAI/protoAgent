@@ -25,31 +25,32 @@ def ws_root(tmp_path, monkeypatch):
 # ── Fleet: the create-side / run-side plugin-dir alignment (the bug's seam) ──────
 
 
-def test_run_exec_wires_plugin_dirs_unscoped(ws_root):
-    """A member's PROTOAGENT_PLUGINS_DIR is ``<ws>/plugins`` — UN-scoped, co-located
-    with its config dir (``<ws>``). The double-scope bug nested the config under
-    ``<ws>/<id>/`` while the plugins stayed at ``<ws>/plugins``, so the member's
-    plugin-config resolver looked in the wrong dir. Pin them to the same root."""
+def test_run_exec_wires_home_and_instance(ws_root):
+    """A member launches with ``PROTOAGENT_HOME=<ws>`` (so config at ``<ws>/config``,
+    plugins at ``<ws>/plugins``, lock at ``<ws>/plugins.lock`` all derive from one
+    instance root) + ``PROTOAGENT_INSTANCE=<id>`` (data-store scope). The single root
+    is what deletes the old double-scope bug class."""
     s = manager.create("alpha")
     ws = ws_root / s["id"]
     env, _argv = manager.run_exec("alpha", [])
-    assert env["PROTOAGENT_CONFIG_DIR"] == str(ws)
-    assert env["PROTOAGENT_PLUGINS_DIR"] == str(ws / "plugins")
-    assert env["PROTOAGENT_PLUGINS_LOCK"] == str(ws / "plugins.lock")
+    assert env["PROTOAGENT_HOME"] == str(ws)
+    assert env["PROTOAGENT_INSTANCE"] == s["id"]
+    # The member's config + plugins both derive from <ws> (config/ + plugins/ siblings).
+    assert (ws / "config" / "langgraph-config.yaml").exists()
 
 
-# ── Path: plugin_roots_from joins config_dir (the wrong-dir computation) ─────────
+# ── Path: plugin_roots_from uses the instance plugins root ───────────────────────
 
 
-def test_plugin_roots_from_joins_config_dir(tmp_path):
-    """``plugin_roots_from(config_dir)`` resolves the live plugins root as
-    ``config_dir/plugins`` — the join a nested config_dir poisoned. A dir override
-    wins over the default."""
+def test_plugin_roots_from_uses_plugins_root(tmp_path):
+    """``plugin_roots_from(plugins_root)`` returns the given live plugins root (e.g.
+    ``instance_paths().plugins_dir``) as the live root; a dir override wins over it.
+    The bundle root is the in-tree ``app_root/plugins``."""
     from graph.plugins.pconfig import plugin_roots_from
 
-    roots = plugin_roots_from(tmp_path)
+    roots = plugin_roots_from(tmp_path / "plugins")
     assert roots[-1] == tmp_path / "plugins"
-    overridden = plugin_roots_from(tmp_path, str(tmp_path / "elsewhere"))
+    overridden = plugin_roots_from(tmp_path / "plugins", str(tmp_path / "elsewhere"))
     assert overridden[-1] == tmp_path / "elsewhere"
 
 

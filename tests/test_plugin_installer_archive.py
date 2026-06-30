@@ -38,12 +38,15 @@ class _Resp:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """Installer lock + install dir + config dir in a temp area; archive fetch
+    """Installer lock + install dir + config/secrets in a temp area; archive fetch
     forced so the test never shells out to git."""
-    monkeypatch.setattr(installer, "LOCK_PATH", tmp_path / "plugins.lock")
+    import graph.config_io as cio
+
+    monkeypatch.setattr(installer, "lock_path", lambda: tmp_path / "plugins.lock")
     monkeypatch.setenv("PROTOAGENT_PLUGINS_DIR", str(tmp_path / "installed"))
     (tmp_path / "cfg").mkdir()
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: tmp_path / "cfg" / "langgraph-config.yaml")
+    monkeypatch.setattr(cio, "secrets_yaml_path", lambda: tmp_path / "cfg" / "secrets.yaml")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "archive")
     return tmp_path
 

@@ -75,7 +75,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     from graph.config import LangGraphConfig
     from graph.config_io import (
-        CONFIG_YAML_PATH,
+        config_yaml_path,
         ensure_live_config,
         is_setup_complete,
         mark_setup_complete,
@@ -98,10 +98,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
         log.warning("[data-version] %s", _dv_warn)
 
     # Seed the untracked live config from the .example template on first run.
-    # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
-    # it at per-user app-data), so load through it rather than a fixed path.
+    # config_yaml_path() resolves to <instance_root>/config/langgraph-config.yaml
+    # (env-driven via PROTOAGENT_HOME / PROTOAGENT_INSTANCE), so load through it.
     ensure_live_config()
-    STATE.graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    STATE.graph_config = LangGraphConfig.from_yaml(config_yaml_path())
     # Fork tool denylist (config ``tools.disabled``) — applied before any
     # get_all_tools() call so dropped tools never reach the graph.
     from tools.lg_tools import set_disabled_tools
@@ -117,11 +117,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
     from security import policy
 
     policy.set_callback_allowlist(STATE.graph_config.security_callback_allowlist)
-    # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
-    # every store (incl. the env-reading knowledge/scheduler/memory modules) nests
-    # under the same id. Opt-in — empty config.instance_id leaves paths unchanged.
-    # Set before any store is built or the memory middleware is imported.
-    _seed_instance_env(STATE.graph_config)
+    # Instance identity is env-only (ADR 0004 / InstancePaths): PROTOAGENT_HOME /
+    # PROTOAGENT_INSTANCE are resolved at boot by infra.paths — never seeded from
+    # config-file content — so a correctly-scoped config is read on the first try.
     # Conversation checkpointer: durable SQLite when a path is configured (chat
     # history survives restarts), else in-memory. Bound into the graph at
     # compile time below — a checkpointer in the invoke config is ignored.
@@ -478,7 +476,8 @@ def _build_skills_index(config, extra_skill_dirs=None):
     try:
         from pathlib import Path
 
-        from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+        from infra.paths import instance_paths
+
         from graph.skills.index import SkillsIndex
         from graph.skills.loader import seed_skills_index
 
@@ -500,8 +499,9 @@ def _build_skills_index(config, extra_skill_dirs=None):
             db_path = _resolve_skills_db(config.skills_db_path, shared=(scope == "shared"), commons=commons)
             index = SkillsIndex(db_path=db_path)
 
-        live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (_live_config_dir() / "skills")
-        roots = [_BUNDLE_CONFIG_DIR / "skills", live_root]  # bundle first, live overrides
+        _ip = instance_paths()
+        live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (_ip.config_dir / "skills")
+        roots = [_ip.bundle_dir / "skills", live_root]  # bundle first, live overrides
         roots.extend(Path(d) for d in (extra_skill_dirs or []))  # plugin-bundled skills
         # Operator-authored skills (UI/console CRUD) live under the data home and
         # win last — an explicit edit always overrides a bundled/plugin example.
@@ -647,17 +647,6 @@ def _build_plugins(config, existing_tools=None):
         from graph.plugins.loader import PluginLoadResult
 
         return PluginLoadResult()
-
-
-def _seed_instance_env(config) -> None:
-    """Seed PROTOAGENT_INSTANCE from config.instance_id (ADR 0004), unless the
-    env is already set (env wins). Opt-in: no id → no scoping → legacy paths."""
-    if os.environ.get("PROTOAGENT_INSTANCE", "").strip():
-        return
-    iid = (getattr(config, "instance_id", "") or "").strip()
-    if iid:
-        os.environ["PROTOAGENT_INSTANCE"] = iid
-        log.info("[instance] data scoped to instance id %r (ADR 0004)", iid)
 
 
 def _resolve_checkpoint_db(configured: str) -> str:
@@ -1243,12 +1232,12 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
-    from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
+    from graph.config_io import config_yaml_path, ensure_live_config, is_setup_complete
     from tools.lg_tools import get_all_tools
 
     ensure_live_config()
     try:
-        new_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+        new_config = LangGraphConfig.from_yaml(config_yaml_path())
     except Exception as e:
         log.exception("[reload] config load failed")
         return False, f"config load failed: {e}"
@@ -1553,7 +1542,7 @@ def _prune_shadowing_agent_keys(host_only: dict) -> list[str]:
     import graph.config_io as _cio
     from graph.config_io import load_yaml_doc, save_yaml_doc
 
-    leaf = _cio.CONFIG_YAML_PATH  # resolved at call time (honors a repoint)
+    leaf = _cio.config_yaml_path()  # resolved at call time (honors a repoint)
     if not Path(leaf).exists():
         return []  # no agent leaf on disk → nothing can shadow; don't seed one
     doc = load_yaml_doc(leaf)
@@ -1648,7 +1637,7 @@ def _apply_settings_changes(
 
                 main_config, secret_updates = split_secret_updates(config)
                 save_secrets(secret_updates)
-                leaf = _cio.CONFIG_YAML_PATH  # resolved at call time (honors a repoint)
+                leaf = _cio.config_yaml_path()  # resolved at call time (honors a repoint)
                 doc = load_yaml_doc(leaf)
                 apply_updates_to_yaml(doc, main_config)
                 strip_secrets_from_doc(doc)
@@ -1694,7 +1683,7 @@ def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
     messages: list[str] = []
     if keys:
         try:
-            leaf = _cio.CONFIG_YAML_PATH  # resolved at call time (honors a repoint)
+            leaf = _cio.config_yaml_path()  # resolved at call time (honors a repoint)
             doc = load_yaml_doc(leaf)
             pop_keys_from_yaml(doc, keys)
             save_yaml_doc(doc, leaf)

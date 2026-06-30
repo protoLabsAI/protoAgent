@@ -36,18 +36,12 @@ def test_fail_without_api_base():
 
 
 def test_marker_roundtrip(tmp_path, monkeypatch):
-    # Point the config dir at a temp location so we don't touch the real marker.
-    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path))
-    import importlib
-
+    # Point the instance root at a temp location so we don't touch the real marker.
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
     import graph.config_io as cio
 
-    importlib.reload(cio)
-    try:
-        assert cio.is_setup_complete() is False
-        cio.mark_setup_complete()
-        assert cio.is_setup_complete() is True
-        cio.reset_setup()
-        assert cio.is_setup_complete() is False
-    finally:
-        importlib.reload(cio)  # restore module state for other tests
+    assert cio.is_setup_complete() is False
+    cio.mark_setup_complete()
+    assert cio.is_setup_complete() is True
+    cio.reset_setup()
+    assert cio.is_setup_complete() is False

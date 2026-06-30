@@ -42,11 +42,11 @@ services:
     tmpfs:
       - /tmp:size=256M,uid=1001,gid=1001
       - /home/sandbox:size=64M,uid=1001,gid=1001
-    # Persistent state: knowledge DB, audit log, scheduler jobs all live under
-    # /sandbox; wizard/drawer edits under /opt/protoagent/config.
+    # Persistent state: /sandbox IS the instance root (PROTOAGENT_HOME=/sandbox) —
+    # live config + secrets + setup marker + SOUL.md (/sandbox/config/*), plugins
+    # (/sandbox/plugins), knowledge DB, audit log, scheduler jobs all under /sandbox.
     volumes:
       - protoagent-sandbox:/sandbox
-      - protoagent-config:/opt/protoagent/config
 
     # Published to LOOPBACK only by default: the container binds 0.0.0.0
     # internally (entrypoint), so this host-side port binding is the network
@@ -81,4 +81,3 @@ services:
 
 volumes:
   protoagent-sandbox:
-  protoagent-config:
