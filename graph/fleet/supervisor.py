@@ -82,11 +82,31 @@ def _save_state(state: dict) -> None:
     atomic_write(_state_path(), json.dumps(state, indent=2) + "\n")
 
 
+def _reap(pid: int) -> None:
+    """Reap ``pid`` if it's a dead child of this hub so it stops lingering as a zombie.
+
+    A member spawned by *this* hub is a child process (``start()`` Popen, detached but
+    still our child). When it dies — e.g. a SIGKILL crash — it stays a **zombie** in the
+    process table until reaped, and ``os.kill(pid, 0)`` reports a zombie as *alive*. That
+    masks the crash from ``status()``/``is_running()`` (the member shows ``running`` after
+    it's gone) and makes ``start()`` short-circuit on the dead pid (a no-op restart).
+
+    A *targeted* non-blocking ``waitpid`` reaps only this pid — it never steals another
+    child's exit status (the SIGCHLD-reaper footgun), and it raises ``ECHILD`` (ignored)
+    when the pid isn't our child (e.g. a member reparented to init after a hub restart —
+    which init then reaps itself, so it never becomes a lingering zombie here anyway)."""
+    try:
+        os.waitpid(int(pid), os.WNOHANG)
+    except (OSError, ValueError):
+        pass  # ECHILD (not our child / already reaped), or a bad pid — nothing to do
+
+
 def _alive(pid: int | None) -> bool:
     if not pid:
         return False
+    _reap(pid)  # clear a crashed child's zombie first, so the probe below sees it as gone
     try:
-        os.kill(int(pid), 0)  # signal 0 = liveness probe
+        os.kill(int(pid), 0)  # signal 0 = liveness probe (a reaped zombie → ProcessLookupError)
         return True
     except (OSError, ValueError):
         return False

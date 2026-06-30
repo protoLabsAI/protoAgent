@@ -1,23 +1,19 @@
 """Real-subprocess fleet CRASH -> DETECT -> RESTART coverage.
 
 Boots a hub, has it spawn a real member, hard-kills the member with SIGKILL
-(no graceful shutdown), then drives the operator's recovery path: the hub stops
-seeing the member (its port is dead -> the reverse proxy can't reach it), the
-crashed member is reconciled out of the fleet registry (``/api/fleet`` reports it
-not-running), and it is restarted to a fresh, healthy process with a NEW pid and
-its data dir intact.
+(no graceful shutdown), then asserts the hub detects it down PASSIVELY (a plain
+``/api/fleet`` poll reports it not-running) and restarts it to a fresh, healthy
+process with a NEW pid and its data dir intact.
 
 This is the failure mode the harness had no coverage for: every prior fleet test
 only exercised the happy spawn/proxy path, never a member dying underneath the hub.
 
-NOTE on the reconcile ``stop`` between crash and restart: a SIGKILLed member is a
-zombie child of the hub until the hub reaps it, and ``os.kill(pid, 0)`` reports a
-zombie as alive. So a *passive* ``/api/fleet`` poll keeps showing ``running: True``,
-and ``supervisor.start`` would short-circuit on the still-"alive" pid (a no-op that
-returns the dead pid). The hub reaps the zombie the next time it spawns a
-subprocess; ``POST /api/fleet/{name}/stop`` (the console's "clear a dead member"
-action) does exactly that, after which ``status()`` reports the member down and a
-restart spawns a genuinely new process. See the PR notes / ``risks``.
+A SIGKILLed member is the hub's child and lingers as a zombie until reaped, and
+``os.kill(pid, 0)`` reports a zombie as alive — which used to mask the crash from
+``status()`` and make ``supervisor.start`` no-op on the dead pid. ``_alive`` now
+reaps the zombie (targeted ``waitpid``) before probing, so passive detection works
+and a restart spawns a genuinely new process — no operator ``stop`` reconcile
+needed. (See ``graph/fleet/supervisor._reap``.)
 
 Slow + opt-in: ``PA_RUN_INTEGRATION=1 pytest tests/integration``.
 """
@@ -74,21 +70,18 @@ def test_member_crash_detected_then_restart(fleet):
     # CRASH: hard-kill the member (SIGKILL = no shutdown hook, like a real crash).
     os.kill(pid1, signal.SIGKILL)
 
-    # DETECT (immediate, real): the member's port is dead, so the hub proxy can no
-    # longer reach it -- /agents/<id>/healthz stops returning 200.
+    # DETECT (passive): a plain GET /api/fleet must report the member down. The crashed
+    # member is the hub's child and lingers as a zombie, but status() -> _alive() reaps
+    # it (targeted waitpid) so the dead pid is seen as gone -- no operator "stop" needed.
+    dead = poll(lambda: (_member(hub, mid) or {}).get("running") is False, timeout=30)
+    assert dead, f"hub never marked the crashed member dead (zombie not reaped?): {_member(hub, mid)}"
+
+    # And the proxy can no longer reach it either (its port is dead).
     down = poll(lambda: http_get(f"{hub.base}/agents/{mid}/healthz", timeout=3)[0] != 200, timeout=30)
     assert down, "hub proxy still reached the member after it was killed"
 
-    # RECONCILE: clear the dead member from the fleet registry. This reaps the zombie
-    # and removes the stale entry; tolerate 200 (stopped now) or 400 (already gone).
-    st, _ = http_post(f"{hub.base}/api/fleet/victim/stop", {}, timeout=30)
-    assert st in (200, 400), f"unexpected stop status for crashed member: {st}"
-
-    # /api/fleet now reports the member not-running (status() pruned the dead pid).
-    dead = poll(lambda: (_member(hub, mid) or {}).get("running") is False, timeout=30)
-    assert dead, f"hub never marked the crashed member dead: {_member(hub, mid)}"
-
     # RESTART by NAME (the /api/fleet/{name}/start route resolves id-or-name -> supervisor.start).
+    # With the zombie reaped, start() does NOT short-circuit on the dead pid -- it spawns fresh.
     st, raw = http_post(f"{hub.base}/api/fleet/victim/start", {}, timeout=180)
     assert st == 200, f"restart failed: {st} {raw[:300]}"
     restarted = json.loads(raw)["agent"]
