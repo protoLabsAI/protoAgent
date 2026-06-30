@@ -148,6 +148,7 @@ are on by default, and the rest are opt-in (enable via `plugins.enabled`):
 | [`delegates`](./plugins/delegates/) | tool · settings | **Built-in** — `delegate_to` over a2a / openai / acp, managed in Workspace ▸ Delegates |
 | [`notes`](./plugins/notes/) | tools · view | **On by default** — one shared markdown note the agent and operator both read/write |
 | [`docs`](./plugins/docs/) | tools · view · skill | **On by default** — offline search over protoAgent's own docs |
+| [`artifact`](./plugins/artifact/) | tools · view · skill | Generative UI — `show_artifact` renders charts, diagrams, Mermaid, Markdown, or live React into a sandboxed panel ([ADR 0038](./docs/adr/0038-generative-ui-artifacts-two-mode.md)) |
 | [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
 | [`workflows`](./plugins/workflows/) | tools | Declarative multi-step subagent workflows (DAG recipes) |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
@@ -156,10 +157,7 @@ are on by default, and the rest are opt-in (enable via `plugins.enabled`):
 
 Integrations like **Discord**, **Slack** (Socket Mode `ChatAdapter`) and **Google**
 Gmail/Calendar (managed MCP server with in-app OAuth) install as **external plugins** from
-their own repos — see the [plugin directory](https://agent.protolabs.studio/plugins). So does
-**Artifact** — the agent's `show_artifact` tool renders a chart, diagram, Mermaid, Markdown,
-or live React widget into a sandboxed console panel for "show me" requests
-([ADR 0038](./docs/adr/0038-generative-ui-artifacts-two-mode.md)).
+their own repos — see the [plugin directory](https://agent.protolabs.studio/plugins).
 
 **Chat integrations** (Discord, Telegram, Slack, …) share a contract — implement a
 small `ChatAdapter` (connect / receive / send) + a manifest and the admin-gating,

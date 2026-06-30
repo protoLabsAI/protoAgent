@@ -1,0 +1,50 @@
+id: artifact
+name: Artifact
+version: 0.11.3
+# Needs the host to serve the DS plugin-kit at /_ds/ (protoAgent #893, v0.34.0) —
+# the shell page links it for theming + the authed handshake, and artifacts inject it
+# so `.pl-*` design-system classes work inside the sandbox.
+min_protoagent_version: "0.34.0"
+description: >-
+  A generative-UI surface (ADR 0038): the agent renders HTML / Markdown / charts / Mermaid
+  diagrams / SVG / React on demand into a sandboxed iframe — the way Claude Artifacts and Open
+  WebUI do it. React artifacts can import a curated offline set (d3, chart.js, lucide) and the
+  protoLabs design-system @pl/ui wrappers. The shell page is served by this plugin and iframed;
+  the agent's generated code renders in a nested sandbox with no access to the console.
+# Bundled into core (protoAgent #1443) but lean-core OFF by default — opt in with
+# `plugins: { enabled: [artifact] }` in config (or flip this to `true`). Pulled in-tree
+# so the generative-UI surface ships with the agent and iterates in the monorepo.
+enabled: false
+capabilities:
+  # Truly no network: the server makes no outbound calls, and the react/mermaid libs
+  # are VENDORED + served same-origin, so artifacts render fully offline (no cdnjs).
+  network: []
+  filesystem: scoped     # a small artifact history under the instance data dir
+# Operator config (ADR 0019) — `config:` declares the defaults; `settings:` renders the
+# editable fields in Settings ▸ Plugins (no restart; an env var of the same knob still
+# overrides for headless/ACP setups, precedence env > UI > default).
+config:
+  ask_enabled: false
+  ask_system: ""
+  history: 20
+  max_versions: 50
+  max_code_kb: 512
+  ask_max_chars: 4000
+settings:
+  - { key: ask_enabled, label: "Interactive artifacts", type: bool, description: "Let artifacts call back to the agent via window.protoArtifact.ask() — turns them into mini-apps (game NPCs, tutors, generators). Off by default: it lets artifact code trigger LLM calls." }
+  - { key: ask_system, label: "Ask system instruction", type: string, description: "Optional system prompt wrapping every window.protoArtifact.ask() call (e.g. a persona or guardrails). Only used when interactive artifacts are on." }
+  - { key: ask_max_chars, label: "Ask prompt limit (chars)", type: number, description: "Max characters for an artifact's ask() prompt." }
+  - { key: history, label: "Artifacts kept", type: number, description: "How many artifacts to keep in the panel; the oldest is evicted past this." }
+  - { key: max_versions, label: "Versions per artifact", type: number, description: "Max edit-versions kept per artifact (oldest edits trimmed)." }
+  - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
+# The shell page is PUBLIC (an iframe page-load can't carry a bearer, and the page
+# derives its slug base from /plugins/…); its data routes are gated under
+# /api/plugins/artifact (plugin-view rule 2).
+views:
+  - { id: artifact, label: "Artifact", icon: "Sparkles", placement: right, path: "/plugins/artifact/view" }
+# Event contract (ADR 0039) — broadcast when an artifact is created/edited/removed, so the
+# console lights the Artifact rail icon (created/updated) even when the panel is closed.
+emits:
+  - artifact.created
+  - artifact.updated
+  - artifact.deleted
