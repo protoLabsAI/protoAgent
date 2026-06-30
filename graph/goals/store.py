@@ -2,9 +2,9 @@
 
 Goals outlive a single graph run (and the frequent graph rebuilds the server
 does on config reload), so state is written to disk keyed by ``session_id``.
-Path resolution mirrors the memory/knowledge subsystems: ``GOAL_PATH`` env →
-``/sandbox/goals`` → ``~/.protoagent/goals`` fallback when the sandbox path
-isn't writable (e.g. running locally without ``/sandbox``).
+Path resolution mirrors the memory/knowledge subsystems: ``GOAL_PATH`` env
+(verbatim) → the per-instance ``instance_root/goals`` store → a temp dir as a
+last resort if nothing is writable.
 """
 
 from __future__ import annotations
@@ -34,20 +34,18 @@ def _publish(topic: str, data: dict) -> None:
 
 
 def _resolve_base() -> Path:
-    # Per-instance scoping (ADR 0004): namespace by PROTOAGENT_INSTANCE so two
-    # agents on one machine don't share a goals dir — without this, scheduled /
+    # Per-instance (ADR 0004): the default sits at ``instance_root/goals`` so two
+    # agents on one machine don't share a goals dir — without isolation, scheduled /
     # activity turns (shared session id "system:activity") collide and goals leak
-    # across agents. No-op when PROTOAGENT_INSTANCE is unset (single instance).
-    from infra.paths import scope_leaf
+    # across agents. ``GOAL_PATH`` env overrides verbatim.
+    from infra.paths import instance_paths
 
     candidates = []
     env = os.environ.get("GOAL_PATH", "").strip()
     if env:
-        candidates.append(Path(env))
-    candidates.append(Path("/sandbox/goals"))
-    candidates.append(Path.home() / ".protoagent" / "goals")
-    for raw in candidates:
-        path = scope_leaf(raw)
+        candidates.append(Path(env).expanduser())
+    candidates.append(instance_paths().store("goals"))
+    for path in candidates:
         try:
             path.mkdir(parents=True, exist_ok=True)
             # confirm writable
@@ -58,7 +56,7 @@ def _resolve_base() -> Path:
         except OSError:
             continue
     # Last resort: a temp dir (keeps the server alive even if nothing is writable).
-    fallback = scope_leaf(Path(tempfile.gettempdir()) / "protoagent_goals")
+    fallback = Path(tempfile.gettempdir()) / "protoagent_goals"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 

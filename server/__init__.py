@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from events import ACTIVITY_CONTEXT, EventBus
-from infra.paths import scope_leaf
 from runtime.state import STATE, get_state
 from graph.output_format import extract_output
 

@@ -44,11 +44,11 @@ def _build_graph(monkeypatch, memory_dir, store, replies):
 
     # test_memory_persistence importlib.reload()s this module under various env,
     # which can leave the module in a polluted state for whatever runs after it:
-    #  - MEMORY_PATH pointing at a stale temp dir,
     #  - _PERSISTENCE_DISABLED left True (a reload with PROTOAGENT_DISABLE_MEMORY=1),
     #  - graph.agent's imported class pointing at the pre-reload version.
-    # Pin all three so this test is independent of run order and CI-vs-local env.
-    monkeypatch.setattr(memmod, "MEMORY_PATH", str(memory_dir), raising=False)
+    # Pin both, and route memory_path() at the temp dir (MEMORY_PATH env wins, read
+    # lazily), so this test is independent of run order and CI-vs-local env.
+    monkeypatch.setenv("MEMORY_PATH", str(memory_dir))
     monkeypatch.setattr(memmod, "_PERSISTENCE_DISABLED", False, raising=False)
     monkeypatch.setattr(agentmod, "SessionSummaryMiddleware", memmod.SessionSummaryMiddleware, raising=False)
 

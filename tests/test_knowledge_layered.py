@@ -22,14 +22,18 @@ def _stores(tmp_path):
 
 
 def test_unscoped_path_is_verbatim(tmp_path, monkeypatch):
-    """scoped=False uses the path verbatim (no scope_leaf) — the host-level commons
-    every agent shares regardless of instance id."""
-    monkeypatch.setenv("PROTOAGENT_INSTANCE", "agent-7")
+    """scoped=False uses the path verbatim — the host-level commons every agent shares
+    regardless of instance id. A scoped store's DEFAULT lives under the instance root."""
+    import infra.paths as paths
+
     monkeypatch.delenv("KNOWLEDGE_DB_PATH", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "agent-7")
+    paths.reset_instance_paths()
     p = str(tmp_path / "commons" / "knowledge.db")
-    assert str(KnowledgeStore(p, scoped=False).path) == p  # un-scoped
-    # ...whereas a scoped store namespaces the path to the instance.
-    assert "agent-7" in str(KnowledgeStore(p, scoped=True).path)
+    assert str(KnowledgeStore(p, scoped=False).path) == p  # un-scoped, verbatim
+    # ...whereas a scoped store's default namespaces under the instance root.
+    assert KnowledgeStore(None, scoped=True).path == tmp_path / "agent-7" / "knowledge" / "agent.db"
 
 
 def test_meta_roundtrip(tmp_path):

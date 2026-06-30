@@ -27,20 +27,22 @@ _RECIPES = Path(__file__).parent / "recipes"
 
 def _build_registry(extra_dirs: list[str] | None) -> WorkflowRegistry:
     """Bundled recipes + other enabled plugins' recipe dirs (ADR 0027) + a writable dir
-    (user/agent-saved recipes win on a name clash)."""
-    from infra.paths import scope_leaf
+    (user/agent-saved recipes win on a name clash). ``workflow_dir`` config is used
+    verbatim when an operator overrides it; the legacy ``/sandbox`` default maps to the
+    per-instance ``instance_root/workflows`` store."""
+    from infra.paths import instance_paths
 
     dirs: list[str] = [str(_RECIPES)]
     for d in extra_dirs or []:
         if Path(d).is_dir():
             dirs.append(str(d))
     cfg = sdk.config()
-    writable = scope_leaf(Path(getattr(cfg, "workflow_dir", "~/.protoagent/workflows")).expanduser())
-    try:
-        writable.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        writable = scope_leaf(Path.home() / ".protoagent" / "workflows")
-        writable.mkdir(parents=True, exist_ok=True)
+    configured = getattr(cfg, "workflow_dir", "") or ""
+    if configured and not str(configured).startswith("/sandbox"):
+        writable = Path(configured).expanduser()
+    else:
+        writable = instance_paths().store("workflows")
+    writable.mkdir(parents=True, exist_ok=True)
     dirs.append(str(writable))
     return WorkflowRegistry(dirs, writable_dir=str(writable))
 

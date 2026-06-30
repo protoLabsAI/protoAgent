@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from infra import paths
+import infra.paths as paths
 from scheduler.local import (
     LocalScheduler,
     _acquire_jobs_lock,
@@ -12,51 +12,31 @@ from scheduler.local import (
 )
 
 
-# ── scope_leaf ───────────────────────────────────────────────────────────────
-
-
-def test_scope_leaf_is_noop_without_instance(monkeypatch):
-    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
-    assert str(paths.scope_leaf("/sandbox/checkpoints.db")) == "/sandbox/checkpoints.db"
-    assert str(paths.scope_leaf("/sandbox/knowledge/agent.db")) == "/sandbox/knowledge/agent.db"
-
-
-def test_scope_leaf_nests_under_instance(monkeypatch):
-    monkeypatch.setenv("PROTOAGENT_INSTANCE", "alice")
-    assert str(paths.scope_leaf("/sandbox/checkpoints.db")) == "/sandbox/alice/checkpoints.db"
-    assert str(paths.scope_leaf("/sandbox/knowledge/agent.db")) == "/sandbox/knowledge/alice/agent.db"
-    assert str(paths.scope_leaf("/sandbox/workflows")) == "/sandbox/alice/workflows"
-
-
-def test_scope_leaf_sanitizes_dangerous_ids(monkeypatch):
-    monkeypatch.setenv("PROTOAGENT_INSTANCE", "../../etc")
-    out = paths.scope_leaf("/sandbox/x.db")
-    # Path separators are flattened to a single segment, so the id can't escape
-    # the intended directory (no "/" in the inserted segment).
-    assert out == __import__("pathlib").Path("/sandbox/.._.._etc/x.db")
-    assert "/" not in out.parent.name  # single sanitized segment
-    assert out.parts[:2] == ("/", "sandbox")  # stays under the base
-
-
-def test_two_instances_get_disjoint_paths(monkeypatch):
-    monkeypatch.setenv("PROTOAGENT_INSTANCE", "alice")
-    a = str(paths.scope_leaf("/sandbox/checkpoints.db"))
-    monkeypatch.setenv("PROTOAGENT_INSTANCE", "bob")
-    b = str(paths.scope_leaf("/sandbox/checkpoints.db"))
-    assert a != b
-
-
-# ── scheduler resolver honors the instance id ────────────────────────────────
+# ── scheduler resolver: per-instance default vs explicit override ─────────────
 
 
 def test_scheduler_db_path_nests_under_instance(tmp_path, monkeypatch):
+    """The default jobs.db sits under the per-instance store
+    (``instance_root/scheduler/<agent>/jobs.db``), so two instances don't collide."""
+    monkeypatch.delenv("SCHEDULER_DB_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "alice")
-    monkeypatch.setenv("SCHEDULER_DB_DIR", str(tmp_path))
+    paths.reset_instance_paths()
     from scheduler.local import _resolve_db_path
 
     p = _resolve_db_path(None, "myagent")
-    # .../alice/myagent/jobs.db — instance segment present, agent segment present
-    assert "alice" in p.parts and "myagent" in p.parts and p.name == "jobs.db"
+    assert p == tmp_path / "alice" / "scheduler" / "myagent" / "jobs.db"
+
+
+def test_scheduler_db_dir_override_is_verbatim(tmp_path, monkeypatch):
+    """``SCHEDULER_DB_DIR`` (or the ``db_dir`` arg) is an explicit override — used
+    verbatim, only the agent segment appended (no instance scoping on top)."""
+    monkeypatch.setenv("SCHEDULER_DB_DIR", str(tmp_path))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "alice")
+    from scheduler.local import _resolve_db_path
+
+    p = _resolve_db_path(None, "myagent")
+    assert p == tmp_path / "myagent" / "jobs.db"  # no "alice" segment
 
 
 # ── owner-lock interlock ─────────────────────────────────────────────────────

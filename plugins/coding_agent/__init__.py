@@ -95,12 +95,12 @@ def _session_id_path(spec: dict) -> Path:
     """Where this agent's ACP session id is persisted, so a restart can
     ``session/load`` the same thread instead of starting fresh (#970). Keyed by a
     digest of the full launch+policy signature (the same tuple as the client cache),
-    and ``scope_leaf``'d per instance like every other store so co-located hubs stay
-    isolated. Imported lazily to keep this library host-free for its unit tests."""
-    from infra.paths import data_home, scope_leaf
+    a file under the per-instance ``instance_root/acp_sessions`` store so co-located
+    hubs stay isolated. Imported lazily to keep this library host-free for its unit tests."""
+    from infra.paths import instance_paths
 
     digest = hashlib.sha256(repr(_cache_key(spec)).encode()).hexdigest()[:16]
-    return scope_leaf(data_home() / "acp_sessions" / f"{digest}.json")
+    return instance_paths().store("acp_sessions") / f"{digest}.json"
 
 
 def _client_for(spec: dict) -> AcpClient:

@@ -1,6 +1,8 @@
 # 0042 — Fleet supervisor & unified console (background agents, in-place switching)
 
-- Status: Accepted (v0.31.0)
+- Status: Accepted (v0.31.0). Member launch now sets `PROTOAGENT_HOME=<workspace>` (not the retired
+  `PROTOAGENT_CONFIG_DIR`) per [ADR 0065](0065-two-tier-instance-paths.md); the fleet model is
+  otherwise unchanged.
 - Date: 2026-06-09
 - Builds on: ADR 0004 (per-instance scoping), 0027 (plugins), 0040 (bundles), 0041
   (workspaces & tiered stores).

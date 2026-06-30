@@ -104,38 +104,34 @@ class Chunk:
 
 
 def _resolve_path(db_path: str | Path | None, *, scoped: bool = True) -> Path:
-    """Pick a writable DB path. Env > arg > default; fall back to ~/.protoagent.
+    """Pick the DB path. ``KNOWLEDGE_DB_PATH`` env (or the ``db_path`` arg) is used
+    verbatim; otherwise the per-instance ``instance_root/knowledge/agent.db`` store.
 
-    ``scoped=False`` (ADR 0041, tiered stores) skips both the ``KNOWLEDGE_DB_PATH``
-    env override and ``scope_leaf`` — the path is used verbatim. The shared
-    **commons** knowledge store is host-level + un-scoped, so every agent on the box
-    reads one DB regardless of ``instance.id`` (mirrors ``_resolve_skills_db(shared=True)``).
+    ``scoped=False`` (ADR 0041, tiered stores) skips the ``KNOWLEDGE_DB_PATH`` env
+    override and the per-instance default — the ``db_path`` is used verbatim. The
+    shared **commons** knowledge store is host-level + un-scoped, so every agent on
+    the box reads one DB regardless of ``instance.id`` (mirrors
+    ``_resolve_skills_db(shared=True)``).
     """
-    from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
-
     if not scoped:
         p = Path(db_path or DEFAULT_DB_PATH)
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    raw = os.environ.get("KNOWLEDGE_DB_PATH") or db_path or DEFAULT_DB_PATH
-    p = scope_leaf(raw)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Probe writability
-        probe = p.parent / ".write-probe"
-        probe.touch()
-        probe.unlink()
-        return p
-    except OSError:
-        fallback = scope_leaf(Path.home() / ".protoagent" / "knowledge" / "agent.db")
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        log.info(
-            "[knowledge] %s not writable; using %s instead",
-            p,
-            fallback,
-        )
-        return fallback
+    # ``KNOWLEDGE_DB_PATH`` env is an explicit operator override (verbatim). The
+    # ``db_path`` arg is an override too UNLESS it's the legacy ``/sandbox`` default
+    # (the config-field default), which now maps to the per-instance store.
+    env = os.environ.get("KNOWLEDGE_DB_PATH", "").strip()
+    if env:
+        p = Path(env).expanduser()
+    elif db_path and not str(db_path).startswith("/sandbox"):
+        p = Path(db_path).expanduser()
+    else:
+        from infra.paths import instance_paths
+
+        p = instance_paths().store("knowledge") / "agent.db"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _now_iso() -> str:

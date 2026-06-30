@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   required a destructive self-heal. **Existing installs upgrade with no action** — a one-shot,
   idempotent, non-destructive boot migration copies old-layout config + secrets (and the default
   instance's data) into the new location. Use `config explain` to see the resolved layout.
+  Every data store (checkpoints, knowledge, memory, scheduler, inbox, activity, telemetry, audit,
+  tasks, a2a, workflows, …) now lives under the instance root; the Host config layer is box-shared
+  (one machine-wide `host-config.yaml`, the layer's intent); shared commons stay shared; and the
+  legacy `scope_leaf` scoping knob is removed. (ADR 0065; supersedes the path mechanics of ADR
+  0004/0041 and re-amends the host-file location in ADR 0047.)
 
 ### Fixed
 - **Docs reader: in-content cross-reference links route in-app instead of breaking the iframe**
