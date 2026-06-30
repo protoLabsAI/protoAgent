@@ -1,4 +1,4 @@
-import { Input } from "@protolabsai/ui/forms";
+import { Input, SecretInput } from "@protolabsai/ui/forms";
 import { Tabs } from "@protolabsai/ui/navigation";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
@@ -130,13 +130,22 @@ export function McpCatalogDialog({
                 {inp.label}
                 {inp.required ? " *" : ""}
               </span>
-              <Input
-                type={inp.secret ? "password" : "text"}
-                placeholder={inp.placeholder}
-                value={values[inp.key] ?? ""}
-                onChange={(e) => setValues((v) => ({ ...v, [inp.key]: e.target.value }))}
-                aria-label={inp.label}
-              />
+              {inp.secret ? (
+                <SecretInput
+                  placeholder={inp.placeholder}
+                  value={values[inp.key] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [inp.key]: e.target.value }))}
+                  aria-label={inp.label}
+                />
+              ) : (
+                <Input
+                  type="text"
+                  placeholder={inp.placeholder}
+                  value={values[inp.key] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [inp.key]: e.target.value }))}
+                  aria-label={inp.label}
+                />
+              )}
             </label>
           ))}
           <div className="mcp-add-actions">

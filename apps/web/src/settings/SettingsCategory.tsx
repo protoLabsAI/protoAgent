@@ -1,7 +1,7 @@
 import "./settings.css";
 
 import { Alert } from "@protolabsai/ui/data";
-import { Combobox, DropdownSelect, Input, Switch, Textarea } from "@protolabsai/ui/forms";
+import { Combobox, DropdownSelect, Input, SecretInput, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Boxes, RotateCcw, Save } from "lucide-react";
@@ -537,10 +537,9 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   }
   if (field.type === "secret") {
     return (
-      <Input
+      <SecretInput
         id={id}
         className="setting-input"
-        type="password"
         autoComplete="new-password"
         value={typeof value === "string" ? value : ""}
         placeholder={field.is_set ? "•••••••• (set — leave blank to keep)" : "unset"}

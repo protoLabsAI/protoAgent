@@ -1,5 +1,5 @@
 import { Button } from "@protolabsai/ui/primitives";
-import { Input } from "@protolabsai/ui/forms";
+import { SecretInput } from "@protolabsai/ui/forms";
 import { Dialog } from "@protolabsai/ui/overlays";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, useSyncExternalStore } from "react";
@@ -55,8 +55,7 @@ export function AuthGate() {
           This instance is token-gated. Paste the operator token (the server's{" "}
           <code>A2A_AUTH_TOKEN</code>) to connect — it's kept in this browser only.
         </p>
-        <Input
-          type="password"
+        <SecretInput
           autoFocus
           placeholder="operator token"
           aria-label="Operator token"

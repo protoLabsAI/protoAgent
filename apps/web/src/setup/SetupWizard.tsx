@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { DropdownSelect, Field, FormField, Input, RadioCard, RadioCardGroup, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Field, FormField, Input, RadioCard, RadioCardGroup, SecretInput, Textarea } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import { Alert, Spinner } from "@protolabsai/ui/data";
 import {
@@ -514,8 +514,7 @@ export function SetupWizard({
                   <div className="setup-grid two">
                     <Field label="API base" value={state.apiBase} onValueChange={(value) => update({ apiBase: value })} />
                     <FormField label="API key">
-                      <Input
-                        type="password"
+                      <SecretInput
                         value={state.apiKey}
                         onChange={(event) => update({ apiKey: event.target.value })}
                         autoComplete="off"

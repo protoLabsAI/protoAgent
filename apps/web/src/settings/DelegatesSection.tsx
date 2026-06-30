@@ -1,7 +1,7 @@
 import "./settings.css";
 import "./delegates.css";
 
-import { DropdownSelect, Input, RadioCard, RadioCardGroup, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, RadioCard, RadioCardGroup, SecretInput, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 
@@ -327,8 +327,7 @@ function DelegateField({
     control = <Textarea rows={3} placeholder={field.placeholder} {...common} />;
   } else if (field.kind === "secret") {
     control = (
-      <Input
-        type="password"
+      <SecretInput
         autoComplete="new-password"
         placeholder={hasStoredSecret ? "•••••••• (set — leave blank to keep)" : field.placeholder || "unset"}
         {...common}
