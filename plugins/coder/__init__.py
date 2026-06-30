@@ -39,6 +39,10 @@ def _build_coder_solve_tool(cfg: dict):
     k = int(cfg.get("k", 3))
     tree_depth = int(cfg.get("tree_depth", 2))
     test_timeout = float(cfg.get("test_timeout", 60.0))
+    # Optional rung 4 (ADR 0064): a richer generator (e.g. protolabs/fusion, an openai
+    # delegate) tried only after the cheaper rungs fail their tests. Off unless set.
+    fusion_delegate = str(cfg.get("fusion_delegate") or "").strip()
+    fusion_k = int(cfg.get("fusion_k", 2))
 
     description = (
         "Solve a VERIFIABLE coding task and return a TEST-VERIFIED solution. Pass `task` "
@@ -61,6 +65,10 @@ def _build_coder_solve_tool(cfg: dict):
         if not (task and task.strip()):
             return "coder_solve: `task` is required."
         gen = make_delegate_generator(delegate_name, solution_name=solution_name)
+        # Rung 4 fires only when a fusion delegate is configured; otherwise the ladder
+        # stops at tree-search. The fusion rung is also test-gated AND budget-gated in
+        # solve(), so it pays fusion's ~3× cost only on genuinely hard problems.
+        fusion_gen = make_delegate_generator(fusion_delegate, solution_name=solution_name) if fusion_delegate else None
         verify = None
         if tests and tests.strip():
             async def verify(code: str):
@@ -74,6 +82,8 @@ def _build_coder_solve_tool(cfg: dict):
                 budget=Budget(budget_total),
                 k=k,
                 tree_depth=tree_depth,
+                fusion_generate=fusion_gen,
+                fusion_k=fusion_k,
             )
         except Exception as exc:  # noqa: BLE001 — surface as a tool result, not a crash
             log.exception("[coder] solve failed")

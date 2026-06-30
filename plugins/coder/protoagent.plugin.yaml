@@ -33,6 +33,8 @@ config:
   tree_depth: 2       # refine-on-failing-tests depth (rung 3)
   test_timeout: 60.0  # per-candidate pytest timeout (seconds)
   solution_name: "solution"  # module name candidates are written to / tests import
+  fusion_delegate: ""  # optional rung 4: a richer generator (e.g. protolabs/fusion); off when blank
+  fusion_k: 2          # fusion candidates per attempt at the top rung
 settings:
   - { key: delegate, label: "Coder delegate", type: string, group: "Coder", description: "Declared delegate name to generate candidates against — an openai model endpoint, or an acp coder. Required." }
   - { key: budget, label: "Generation budget", type: number, group: "Coder", description: "Hard cap on total generations across the ladder. The fusion rung is budget-gated on top of being test-gated." }
@@ -40,3 +42,5 @@ settings:
   - { key: tree_depth, label: "Tree-search depth", type: number, group: "Coder", description: "How many refine-on-failing-tests rounds rung 3 runs." }
   - { key: test_timeout, label: "Test timeout (s)", type: number, group: "Coder", description: "Hard timeout per candidate's pytest run before it's killed." }
   - { key: solution_name, label: "Solution module name", type: string, group: "Coder", description: "Module candidates are written to; caller tests import from it (e.g. `from solution import add`)." }
+  - { key: fusion_delegate, label: "Fusion delegate (rung 4)", type: string, group: "Coder", description: "Optional: a declared delegate (e.g. protolabs/fusion) used as the top rung — tried only after greedy/best-of-k/tree-search fail their tests. Blank disables rung 4." }
+  - { key: fusion_k, label: "Fusion candidates", type: number, group: "Coder", description: "How many fusion candidates to generate + execution-select at the top rung." }
