@@ -41,6 +41,13 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
 
     middleware.append(WaitYieldMiddleware())
 
+    # Break a no-progress tool loop (#1446) — the same tool + args returning the
+    # same result over and over. Nudge once, then end the turn instead of spinning
+    # to the recursion limit. No-op on any healthy/varied history.
+    from graph.middleware.stall_guard import StallGuardMiddleware
+
+    middleware.append(StallGuardMiddleware())
+
     # Mid-turn user steering (spike) — fold queued user input into the running
     # turn at the next model call, so a user can redirect ongoing work without
     # stopping the stream. No-op when nothing was injected this turn.
