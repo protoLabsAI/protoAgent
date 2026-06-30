@@ -127,7 +127,9 @@ async def solve(
 
     # ── Rung 1: greedy ────────────────────────────────────────────────────────
     if not budget.can_afford(1):
-        return SolveResult(None, False, "none", budget.spent, 0, note="budget exhausted before any generation")
+        # No generation happened, so the oracle never ran ⇒ passed=None ("unknown"),
+        # not False ("ran and failed") — keep the SolveResult.passed contract honest.
+        return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
     code = await generate(task, feedback=None)
     budget.spend(1)
     tried += 1
@@ -159,6 +161,9 @@ async def solve(
         v = await verify(refined)
         if v.passed:
             return SolveResult(refined, True, "tree-search", budget.spent, tried, v, f"solved by refine@{depth + 1}")
+        # `<=` (vs `<` in best-of-k/fusion) is deliberate: a refine chain continues
+        # from the LATEST attempt's feedback, so an equal-failure refinement still
+        # advances `best` to keep the next round's feedback consistent with it.
         if v.failed <= best_verdict.failed:
             best, best_verdict = refined, v
 
