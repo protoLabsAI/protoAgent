@@ -601,6 +601,10 @@
           "title": "0064 — `coder`: execution-grounded code-solve (the board's verifier-grounded coder)"
         },
         {
+          "path": "adr/0065-two-tier-instance-paths.md",
+          "title": "0065 — Two-tier instance paths (box / instance) + single resolution rule"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

@@ -1,6 +1,9 @@
 # 0041 — Workspaces & tiered stores (the fleet-on-one-host model)
 
-- Status: Accepted (v0.31.0)
+- Status: Accepted (v0.31.0). The `PROTOAGENT_CONFIG_DIR` / "a workspace *is* a config dir" path
+  model here is superseded by [ADR 0065](0065-two-tier-instance-paths.md) — a workspace is now an
+  `instance_root` (launched with `PROTOAGENT_HOME`), and the tiered-store layout moved to the
+  box/instance model. The workspace + tiered-store concepts stand; only the path mechanism changed.
 - Date: 2026-06-09
 - Builds on: ADR 0004 (per-instance data scoping), ADR 0027 (git-installable plugins), ADR 0040
   (plugin bundles).

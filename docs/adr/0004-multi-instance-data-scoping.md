@@ -1,6 +1,9 @@
 # ADR 0004 — Multi-Instance Data Scoping
 
-- **Status:** Accepted (2026-05-30) — implemented (instance scoping + scheduler owner-lock)
+- **Status:** Accepted (2026-05-30) — implemented (instance scoping + scheduler owner-lock).
+  **The path-scoping *mechanism* (`scope_leaf`, unset-id = unscoped) is superseded by
+  [ADR 0065](0065-two-tier-instance-paths.md)** (two-tier box/instance paths, single resolution
+  rule, every instance scoped). The multi-instance *goal* stands; only the mechanism changed.
 - **Date:** 2026-05-30
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, deployment, state, scheduler, knowledge, multi-instance
