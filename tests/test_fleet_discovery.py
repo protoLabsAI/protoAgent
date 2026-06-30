@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 import types
 
 import pytest
@@ -21,6 +22,8 @@ from graph.fleet import discovery
 def _reset_zc(monkeypatch):
     monkeypatch.setattr(discovery, "_zc", None)
     monkeypatch.setattr(discovery, "_info", None)
+    monkeypatch.setattr(discovery, "_peer_cache", {})  # fresh boot-sweep cache per test
+    monkeypatch.setattr(discovery, "_sweep_task", None)
 
 
 class _FakeZeroconf:
@@ -187,3 +190,101 @@ def test_discover_collapses_colocated_mdns_with_local_scan(monkeypatch):
     # And a KNOWN fleet peer's own advert (LAN ip + its port) is excluded the same way.
     found = asyncio.run(discovery.discover(known={("127.0.0.1", 7874)}))
     assert [f["name"] for f in found] == ["remote"]
+
+
+# ── boot sweep + peer cache (auto-sweep on hub boot) ──────────────────────────
+def _stub_channels(monkeypatch, *, local=None, tailnet=None, mdns=None):
+    """Replace the three live discovery channels with fixed results (or a raiser)."""
+
+    async def fake_local(port_range, skip):
+        if isinstance(local, Exception):
+            raise local
+        return list(local or [])
+
+    async def fake_tailnet(port_range, known):
+        if isinstance(tailnet, Exception):
+            raise tailnet
+        return list(tailnet or [])
+
+    def fake_mdns(timeout):
+        if isinstance(mdns, Exception):
+            raise mdns
+        return list(mdns or [])
+
+    monkeypatch.setattr(discovery, "_scan_local", fake_local)
+    monkeypatch.setattr(discovery, "_scan_tailnet", fake_tailnet)
+    monkeypatch.setattr(discovery, "_browse_mdns", fake_mdns)
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "10.0.0.9")  # never matches the fakes
+
+
+def test_boot_sweep_populates_cache(monkeypatch):
+    """The at-boot sweep caches whatever the channels surfaced, keyed by (host, port)."""
+    _stub_channels(
+        monkeypatch,
+        local=[{"name": "loc", "url": "http://127.0.0.1:7871", "host": "127.0.0.1", "port": 7871}],
+        mdns=[{"name": "lan", "url": "http://192.168.5.40:7871", "host": "192.168.5.40", "port": 7871}],
+    )
+    assert discovery.cached_peers() == []  # cold before the sweep
+
+    swept = asyncio.run(discovery.boot_sweep())
+    assert sorted(p["name"] for p in swept) == ["lan", "loc"]
+    assert sorted(p["name"] for p in discovery.cached_peers()) == ["lan", "loc"]
+    assert ("192.168.5.40", 7871) in discovery._peer_cache  # stamped by (host, port)
+
+
+def test_cached_peers_returned_without_fresh_scan(monkeypatch):
+    """Once the cache is warm, a later discover() surfaces the cached peer even though the
+    live scan finds nothing — the first console open is instant, not blank."""
+    discovery._remember(
+        [{"name": "booted-sibling", "url": "http://192.168.5.50:7872", "host": "192.168.5.50", "port": 7872}]
+    )
+    _stub_channels(monkeypatch)  # all three channels return nothing
+
+    found = asyncio.run(discovery.discover())
+    assert [f["name"] for f in found] == ["booted-sibling"]
+
+    # …but a cached peer that's since been added to the fleet (in `known`) is NOT re-surfaced.
+    found = asyncio.run(discovery.discover(known={("192.168.5.50", 7872)}))
+    assert found == []
+
+
+def test_boot_sweep_swallows_channel_failure(monkeypatch):
+    """A channel blowing up never propagates out of the sweep — it returns [] and the cache
+    stays empty rather than crashing boot."""
+    _stub_channels(monkeypatch, local=RuntimeError("scan exploded"))
+
+    result = asyncio.run(discovery.boot_sweep())  # must not raise
+    assert result == []
+    assert discovery.cached_peers() == []
+
+
+def test_stale_cached_peers_age_out(monkeypatch):
+    """Cached peers older than the TTL stop surfacing (a peer that went away)."""
+    discovery._remember([{"name": "gone", "url": "http://192.168.5.60:7873", "host": "192.168.5.60", "port": 7873}])
+    # Backdate the entry past the TTL.
+    peer, _ = discovery._peer_cache[("192.168.5.60", 7873)]
+    discovery._peer_cache[("192.168.5.60", 7873)] = (peer, time.time() - discovery._CACHE_TTL_S - 1)
+    _stub_channels(monkeypatch)
+
+    assert asyncio.run(discovery.discover()) == []
+    assert ("192.168.5.60", 7873) not in discovery._peer_cache  # aged out on read
+
+
+def test_start_boot_sweep_schedules_task_on_loop(monkeypatch):
+    """start_boot_sweep() fires the sweep on the running loop and holds a task ref; with no
+    running loop it just no-ops."""
+    discovery.start_boot_sweep()  # no running loop here → skipped, no raise
+    assert discovery._sweep_task is None
+
+    _stub_channels(
+        monkeypatch,
+        local=[{"name": "loc", "url": "http://127.0.0.1:7871", "host": "127.0.0.1", "port": 7871}],
+    )
+
+    async def _drive():
+        discovery.start_boot_sweep()
+        assert discovery._sweep_task is not None
+        await discovery._sweep_task  # let the fire-and-forget task complete
+
+    asyncio.run(_drive())
+    assert [p["name"] for p in discovery.cached_peers()] == ["loc"]

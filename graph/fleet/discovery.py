@@ -24,6 +24,8 @@ import logging
 import os
 import socket
 import subprocess
+import time
+from collections.abc import Iterable
 
 import httpx
 
@@ -32,6 +34,42 @@ log = logging.getLogger(__name__)
 _SERVICE_TYPE = "_protoagent._tcp.local."
 _zc = None  # the advertised Zeroconf instance (None until advertise())
 _info = None
+
+# ── boot-sweep peer cache (ADR 0042 §I) ───────────────────────────────────────
+# Peers found by the at-boot background sweep (and every subsequent ``discover()``)
+# are remembered here keyed by ``(host, port)`` with a wall-clock timestamp, so the
+# FIRST console ``GET /api/fleet/discover`` is instant — siblings that booted
+# alongside us are surfaced from the cache while the live scan runs, rather than only
+# after a manual rescan. Entries age out after ``_CACHE_TTL_S`` so a peer that goes
+# away stops surfacing. Read/written only on the event loop (inside ``discover()`` or
+# the sweep task), so no lock is needed.
+_peer_cache: dict[tuple, tuple[dict, float]] = {}
+_CACHE_TTL_S = 300.0  # cached peers surface for 5 min after they were last seen
+_sweep_task = None  # holds the boot-sweep task so it isn't GC'd mid-flight
+
+
+def _remember(peers: Iterable[dict]) -> None:
+    """Stamp ``peers`` into the boot-sweep cache (each with ``time.time()``)."""
+    now = time.time()
+    for p in peers:
+        _peer_cache[(p["host"], p["port"])] = (dict(p), now)
+
+
+def _cached_peers() -> list[tuple[tuple, dict]]:
+    """``(key, peer)`` for cached peers still within TTL; ages the stale ones out."""
+    now = time.time()
+    live: list[tuple[tuple, dict]] = []
+    for key, (peer, ts) in list(_peer_cache.items()):
+        if now - ts <= _CACHE_TTL_S:
+            live.append((key, peer))
+        else:
+            _peer_cache.pop(key, None)
+    return live
+
+
+def cached_peers() -> list[dict]:
+    """Currently-cached discovery candidates (within TTL). Best-effort, may be stale."""
+    return [peer for _, peer in _cached_peers()]
 
 # App-layer defaults for the discovery knobs (Host layer, ADR 0047 D8) — used when no
 # live config is loaded (CLI/test context). Mirror the LangGraphConfig dataclass defaults.
@@ -291,4 +329,51 @@ async def discover(
         if (a["host"], a["port"]) in known:
             continue
         out[(a["host"], a["port"])] = a
+    _remember(out.values())  # warm the boot-sweep cache with THIS scan's live hits
+    # Merge in still-fresh cached peers (e.g. from the at-boot sweep) that this live scan
+    # missed, so the first console open is instant instead of waiting on a manual rescan.
+    # Filtered by ``known`` (don't surface a peer already in the fleet) and aged out by TTL.
+    for key, peer in _cached_peers():
+        if key in known:
+            continue
+        out.setdefault(key, peer)
     return list(out.values())
+
+
+# ── boot sweep ─────────────────────────────────────────────────────────────────
+async def boot_sweep(
+    *,
+    known: set | None = None,
+    port_range: tuple[int, int] | None = None,
+    timeout: float = 1.5,
+    mdns: bool | None = None,
+) -> list[dict]:
+    """One-shot background discovery sweep run at hub boot. Warms ``_peer_cache`` so peers
+    that booted alongside us are surfaced on the first ``discover()`` without a manual scan.
+
+    Best-effort: every failure (a channel raising, no network, etc.) is swallowed and logged
+    at info — discovery only ever *surfaces* candidates, so a miss never breaks anything."""
+    try:
+        peers = await discover(known=known, port_range=port_range, timeout=timeout, mdns=mdns)
+        log.info("[discovery] boot sweep cached %d peer(s)", len(peers))
+        return peers
+    except Exception:  # noqa: BLE001 — discovery is best-effort, never blocks/breaks boot
+        log.info("[discovery] boot sweep failed — continuing without a warm cache", exc_info=True)
+        return []
+
+
+def start_boot_sweep(**kwargs) -> None:
+    """Fire-and-forget the boot sweep on the running loop (idempotent, non-blocking).
+
+    ``discover()`` offloads the sync zeroconf browse to a thread itself, so scheduling the
+    coroutine on the loop is safe. A reference is held in ``_sweep_task`` so the task isn't
+    garbage-collected mid-flight. No running loop (CLI context) ⇒ skipped, never raises."""
+    global _sweep_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        log.debug("[discovery] start_boot_sweep called without a running loop — skipping")
+        return
+    if _sweep_task is not None and not _sweep_task.done():
+        return  # already sweeping — don't pile on
+    _sweep_task = loop.create_task(boot_sweep(**kwargs))

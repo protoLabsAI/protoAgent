@@ -540,6 +540,13 @@ def _main():
             from graph.fleet import discovery
 
             await asyncio.to_thread(discovery.advertise, agent_name(), int(getattr(STATE, "active_port", 0) or 0))
+            # …and kick off a one-shot BACKGROUND sweep so peers that booted alongside us are
+            # cached and the first console GET /api/fleet/discover is instant (instead of only
+            # finding them after a manual rescan). Fire-and-forget on the loop — discover()
+            # offloads the sync zeroconf browse to a thread itself, so boot is never blocked;
+            # every failure is swallowed inside, and discovered peers are only surfaced as
+            # candidates (never auto-added to the fleet).
+            discovery.start_boot_sweep()
         except Exception:
             log.exception("[discovery] mDNS advertise failed")
 
