@@ -112,6 +112,7 @@ export default defineConfig({
           items: [
             { text: "Delegates (agents & endpoints)", link: "/guides/delegates" },
             { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
+            { text: "Verifier-grounded coder (coder_solve)", link: "/guides/coder" },
             { text: "Fleet (many agents on one host)", link: "/guides/fleet" },
             { text: "Portfolio (one PM across boards)", link: "/guides/portfolio" },
           ],

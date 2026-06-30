@@ -113,6 +113,10 @@
           "title": "Spawn CLI coding agents (ACP)"
         },
         {
+          "path": "guides/coder.md",
+          "title": "Verifier-grounded coder (coder_solve)"
+        },
+        {
           "path": "guides/fleet.md",
           "title": "Fleet (many agents on one host)"
         },
@@ -587,6 +591,10 @@
         {
           "path": "adr/0063-keybinding-system.md",
           "title": "ADR 0063 — Scoped, user-rebindable keybinding system"
+        },
+        {
+          "path": "adr/0064-coder-execution-grounded-code-solve.md",
+          "title": "0064 — `coder`: execution-grounded code-solve (the board's verifier-grounded coder)"
         },
         {
           "path": "adr/index.md",

@@ -1,0 +1,42 @@
+id: coder
+name: Coder (execution-grounded code-solve)
+version: 0.1.0
+description: >-
+  Execution-grounded code-solve (ADR 0064) — the verifier-grounded coder for
+  VERIFIABLE coding tasks. Contributes a `coder_solve` tool + a `coder` subagent
+  that turn "implement X, here are the tests" into a TEST-VERIFIED solution via a
+  difficulty-gated search ladder (greedy → best-of-k + execution-select →
+  tree-search refine-on-failing-tests → fusion), gated on the tests actually
+  passing — not an LLM judge. Composes the `delegates` plugin (candidate
+  generation over an openai/acp delegate) + a subprocess pytest runner (the
+  verifier); it does not reimplement the spawn primitive. With no tests it
+  degrades to a single un-verified candidate — it shines on verifiable work.
+# Runs model-authored code in a subprocess (isolation, NOT a true sandbox — like
+# execute_code), so it ships DISABLED. Enable for a trusted model or a hardened
+# container: `plugins: { enabled: [delegates, coder] }`.
+enabled: false
+# Needs at least one declared delegate to generate against (ADR 0025).
+requires_plugins: [delegates]
+
+# Declarative capabilities (surfaced in the console for transparency).
+capabilities:
+  network: []
+  filesystem: workspace
+  subprocess: ["python"]
+
+# Plugin config + Settings (ADR 0019) — claims the top-level `coder` section.
+config_section: coder
+config:
+  delegate: ""        # REQUIRED: a declared delegate name (openai endpoint or acp coder)
+  budget: 6           # hard cap on total generations across the whole ladder
+  k: 3                # best-of-k width (rung 2)
+  tree_depth: 2       # refine-on-failing-tests depth (rung 3)
+  test_timeout: 60.0  # per-candidate pytest timeout (seconds)
+  solution_name: "solution"  # module name candidates are written to / tests import
+settings:
+  - { key: delegate, label: "Coder delegate", type: string, group: "Coder", description: "Declared delegate name to generate candidates against — an openai model endpoint, or an acp coder. Required." }
+  - { key: budget, label: "Generation budget", type: number, group: "Coder", description: "Hard cap on total generations across the ladder. The fusion rung is budget-gated on top of being test-gated." }
+  - { key: k, label: "Best-of-k width", type: number, group: "Coder", description: "How many candidates rung 2 generates before execution-select." }
+  - { key: tree_depth, label: "Tree-search depth", type: number, group: "Coder", description: "How many refine-on-failing-tests rounds rung 3 runs." }
+  - { key: test_timeout, label: "Test timeout (s)", type: number, group: "Coder", description: "Hard timeout per candidate's pytest run before it's killed." }
+  - { key: solution_name, label: "Solution module name", type: string, group: "Coder", description: "Module candidates are written to; caller tests import from it (e.g. `from solution import add`)." }
