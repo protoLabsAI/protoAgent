@@ -57,13 +57,9 @@
 /* Discover (ADR 0059) — the in-app official-plugin directory: search + category
    filter over a grid of installable cards. */
 .plugin-discover-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 12px; }
-.plugin-search { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; padding: 6px 10px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 7px; }
-.plugin-search > svg { color: var(--fg-muted); flex-shrink: 0; }
-.plugin-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font-size: 13px; outline: none; }
-.plugin-cats { display: flex; gap: 6px; flex-wrap: wrap; }
-.plugin-cat { padding: 4px 10px; font-size: 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--fg-secondary); cursor: pointer; transition: border-color 0.15s, color 0.15s; }
-.plugin-cat:hover { border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent); }
-.plugin-cat.on { background: color-mix(in srgb, var(--pl-color-brand-lavender) 18%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 55%, transparent); color: var(--fg); }
+/* Search (DS Input + `icon`) and category filter (DS segmented Tabs) own their
+   styling now; the controls row just sizes the search to fill. */
+.plugin-search { flex: 1; min-width: 200px; }
 .plugin-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
 .plugin-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-raised); }
 .plugin-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

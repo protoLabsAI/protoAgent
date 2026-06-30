@@ -8,7 +8,8 @@ import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tansta
 import { useState, type JSX } from "react";
 import { Download, DownloadCloud, ExternalLink, Github, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
 
-import { PanelHeader } from "@protolabsai/ui/navigation";
+import { Input } from "@protolabsai/ui/forms";
+import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { installedPluginsQuery, pluginUpdatesQuery, queryKeys, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { StagePanel } from "../app/ErrorBoundary";
 import { errMsg } from "../lib/format";
@@ -403,15 +404,23 @@ function DiscoverTab() {
       <PanelHeader title="Discover" kicker={`${plugins.length} official plugins`} />
       <div className="stage-body">
         <div className="plugin-discover-controls">
-          <div className="plugin-search">
-            <Search size={14} />
-            <input placeholder="Search plugins…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search plugins" />
-          </div>
-          <div className="plugin-cats">
-            {categories.map((c) => (
-              <button key={c} type="button" className={c === cat ? "plugin-cat on" : "plugin-cat"} onClick={() => setCat(c)}>{c}</button>
-            ))}
-          </div>
+          <Input
+            className="plugin-search"
+            icon={<Search size={14} />}
+            type="search"
+            placeholder="Search plugins…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="Search plugins"
+          />
+          <Tabs
+            variant="segmented"
+            responsive
+            ariaLabel="filter plugins by category"
+            items={categories.map((c) => ({ id: c, label: c }))}
+            active={cat}
+            onSelect={setCat}
+          />
         </div>
         {catalog.isLoading ? <p className="muted">Loading directory…</p> : null}
         {catalog.isError ? <p className="plugin-hint">Couldn't load the catalog: {errMsg(catalog.error)}</p> : null}

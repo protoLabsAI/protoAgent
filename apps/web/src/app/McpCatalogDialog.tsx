@@ -1,4 +1,5 @@
 import { Input } from "@protolabsai/ui/forms";
+import { Tabs } from "@protolabsai/ui/navigation";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -156,27 +157,23 @@ export function McpCatalogDialog({
       ) : (
         <>
           <div className="mcp-catalog-controls">
-            <div className="mcp-catalog-search">
-              <Search size={14} />
-              <input
-                placeholder="Search servers"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                aria-label="search MCP servers"
-              />
-            </div>
-            <div className="mcp-catalog-cats">
-              {categories.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`mcp-catalog-cat${c === cat ? " on" : ""}`}
-                  onClick={() => setCat(c)}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
+            <Input
+              className="mcp-catalog-search"
+              icon={<Search size={14} />}
+              type="search"
+              placeholder="Search servers"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="search MCP servers"
+            />
+            <Tabs
+              variant="segmented"
+              responsive
+              ariaLabel="filter servers by category"
+              items={categories.map((c) => ({ id: c, label: c }))}
+              active={cat}
+              onSelect={setCat}
+            />
           </div>
           {catalog.isError ? (
             <p className="plugin-hint">Couldn't load the server directory.</p>

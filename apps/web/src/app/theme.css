@@ -722,52 +722,11 @@ select:disabled {
   flex-wrap: wrap;
   margin: 2px 0 12px;
 }
+/* The search box (DS Input + `icon`) and category filter (DS segmented Tabs)
+   own their own styling now; the controls row just sizes the search to fill. */
 .mcp-catalog-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   flex: 1;
   min-width: 200px;
-  padding: 6px 10px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
-.mcp-catalog-search > svg {
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
-.mcp-catalog-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--fg);
-  font-size: 13px;
-  outline: none;
-}
-.mcp-catalog-cats {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.mcp-catalog-cat {
-  padding: 4px 10px;
-  font-size: 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.mcp-catalog-cat:hover {
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);
-}
-.mcp-catalog-cat.on {
-  background: color-mix(in srgb, var(--pl-color-brand-lavender) 18%, transparent);
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 55%, transparent);
-  color: var(--fg);
 }
 .mcp-catalog-grid {
   display: grid;
