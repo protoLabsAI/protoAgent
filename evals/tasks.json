@@ -297,5 +297,16 @@
       ],
       "threshold": 0.75
     }
+  },
+  {
+    "id": "coder_solve_verifiable",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Verifiable coding task → coder_solve returns a test-passing solution",
+    "requires_env": ["CODER_EVAL"],
+    "prompt": "Use the coder_solve tool to implement a Python function add(a, b) that returns their sum. Pass these tests verbatim:\n```python\nfrom solution import add\n\ndef test_add():\n    assert add(2, 3) == 5\n    assert add(-1, 1) == 0\n    assert add(0, 0) == 0\n```\nThen tell me whether all tests passed and which rung solved it.",
+    "expected_tools": ["coder_solve"],
+    "expected_patterns": ["passed"],
+    "timeout_s": 240
   }
 ]

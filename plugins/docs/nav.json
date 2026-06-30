@@ -113,6 +113,10 @@
           "title": "Spawn CLI coding agents (ACP)"
         },
         {
+          "path": "guides/coder.md",
+          "title": "Verifier-grounded coder (coder_solve)"
+        },
+        {
           "path": "guides/fleet.md",
           "title": "Fleet (many agents on one host)"
         },

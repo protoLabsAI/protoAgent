@@ -69,19 +69,26 @@ runs no board; it only sees the better outcome + cost in `portfolio_rollup`).
 The escalation ladder — spawn N candidates, *run their tests*, select the passing
 one, refine on the failures — is **deterministic control flow over delegate calls +
 a verifier**, not something a single prompted LLM does. So `coder`'s core is a
-**`solve()` orchestrator** (a library in the plugin), exposed through two faces over
-one engine:
+**`solve()` orchestrator** (a library in the plugin). It is reached as a **tool**,
+not as the subagent itself: a `SubagentConfig` is a *prompted LLM loop* (ADR 0020)
+and cannot run deterministic gating — but a LangChain tool runs arbitrary Python, so
+the ladder lives in a **`coder_solve` tool** that wraps `solve()`. That one engine is
+exposed three (composing) ways:
 
-1. **Subagent face** (ADR 0002/0020) — registered in `SUBAGENT_REGISTRY` so the lead
-   agent can `task()`-delegate an ad-hoc verifiable subtask and it appears in the
-   **Subagents panel**. Progressive disclosure: the lead sees the verified result,
-   not the rollouts.
-2. **Board face** — `projectBoard-plugin`'s loop calls `solve()` as its **per-feature
-   coder**, replacing the bare single `delegate_to(acp)` shot. This is the seam that
-   makes the board verifier-grounded (board-side wiring lands in
-   `projectBoard-plugin`; see "The board seam").
+1. **Tool** (`coder_solve`) — the deterministic surface. The lead agent calls it
+   directly; it runs the ladder and returns the verified result. This *is* the
+   orchestrator's public face.
+2. **Subagent face** (ADR 0002/0020) — a **thin prompted wrapper** registered in
+   `SUBAGENT_REGISTRY` whose only job is to call `coder_solve` once and relay the
+   result. It exists for ergonomics + the **Subagents panel** + progressive
+   disclosure (the lead sees the verdict, not the rollouts) — it does *not*
+   re-implement the search in prose.
+3. **Board face** — `projectBoard-plugin`'s loop calls `solve()` (the library)
+   directly as its **per-feature coder**, replacing the bare single
+   `delegate_to(acp)` shot. This is the seam that makes the board verifier-grounded
+   (board-side wiring lands in `projectBoard-plugin`; see "The board seam").
 
-Both faces share the same orchestrator, verifier contract, and cost accounting.
+All three share the same orchestrator, verifier contract, and cost accounting.
 
 ### The ladder — gated on tests, not on "did anything happen"
 
