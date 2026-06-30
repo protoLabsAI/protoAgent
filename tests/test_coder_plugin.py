@@ -70,6 +70,46 @@ async def test_tree_search_uses_failing_feedback():
     assert "failing" in calls["feedbacks"][-1]
 
 
+async def test_fusion_rung_fires_only_after_cheaper_rungs_fail():
+    # greedy + best-of-k + tree-search all "bad"; the fusion generator returns "good".
+    # Fusion must fire last and solve. Budget large enough to reach it.
+    gen, gcalls = _gen_sequence(["bad"])  # everything from the base generator fails
+
+    fcalls = {"n": 0}
+
+    async def fusion_gen(task, *, feedback=None):
+        fcalls["n"] += 1
+        return "good"
+
+    res = await solve(
+        "t",
+        generate=gen,
+        verify=_verify_passes_on("good"),
+        budget=Budget(12),
+        k=3,
+        tree_depth=2,
+        fusion_generate=fusion_gen,
+        fusion_k=2,
+    )
+    assert res.passed is True
+    assert res.rung == "fusion"
+    assert fcalls["n"] >= 1  # fusion was actually invoked
+    assert gcalls["n"] >= 1  # cheaper rungs ran first
+
+
+async def test_fusion_not_invoked_when_cheaper_rung_solves():
+    gen, _ = _gen_sequence(["good"])  # greedy solves immediately
+    fcalls = {"n": 0}
+
+    async def fusion_gen(task, *, feedback=None):
+        fcalls["n"] += 1
+        return "good"
+
+    res = await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(12), fusion_generate=fusion_gen)
+    assert res.rung == "greedy"
+    assert fcalls["n"] == 0  # fusion never paid for
+
+
 async def test_no_oracle_degrades_to_greedy():
     gen, calls = _gen_sequence(["whatever"])
     res = await solve("t", generate=gen, verify=None, budget=Budget(6))

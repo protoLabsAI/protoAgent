@@ -28,8 +28,13 @@ Each rung fires **only when the cheaper one fails its tests**:
 1. greedy        1-shot                                   cheap; solves most
 2. best-of-k     k candidates → run tests → select         headroom recovery
 3. tree-search   refine on the *failing* tests, bounded     grounded fix loop
-4. fusion        richer candidates → execute-select         hardest (roadmap)
+4. fusion        richer candidates → execute-select         hardest (opt-in)
 ```
+
+Rung 4 is opt-in: set `coder.fusion_delegate` to a richer generator (e.g.
+`protolabs/fusion`, an `openai` delegate). It fires **only** after the cheaper rungs
+fail their tests and only while budget remains, so it pays fusion's ~3× cost solely
+on genuinely hard, verifiable problems — "fusion proposes, the tests dispose."
 
 The gate is **test pass/fail**, never an LLM judge. With **no tests**, `coder`
 degrades to a single un-verified candidate and says so — it shines on verifiable
@@ -61,6 +66,8 @@ coder:
   tree_depth: 2                 # refine-on-failing-tests rounds (rung 3)
   test_timeout: 60.0            # per-candidate pytest timeout (seconds)
   solution_name: solution       # module candidates are written to; tests import it
+  # fusion_delegate: fusion     # optional rung 4 — a richer generator (declare it in delegates)
+  # fusion_k: 2                 # fusion candidates per attempt at the top rung
 ```
 
 ## Worked example
