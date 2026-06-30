@@ -119,9 +119,10 @@ test("deleting a playbook confirms first, then removes it", async ({ page }) => 
   await expect(surface.getByText("pr-triage-flow")).toBeHidden();
 });
 
-test("a failed skills load surfaces a toast (errors are no longer swallowed)", async ({ page }) => {
+test("a failed skills load surfaces an in-panel error card (errors are no longer swallowed)", async ({ page }) => {
   // PlaybooksSurface is embedded in Settings ▸ Skills with no error host; it used to delegate
-  // failures to a no-op onError prop and swallow them. It now self-reports via toast.
+  // failures to a no-op onError prop and swallow them. The list now reads via useSuspenseQuery,
+  // so a failed load throws into the StagePanel ErrorBoundary → a contained, retryable card.
   await page.route("**/api/playbooks", (route) =>
     route.request().method() === "GET"
       ? route.fulfill({ status: 500, json: { detail: "boom" } })
@@ -130,5 +131,5 @@ test("a failed skills load surfaces a toast (errors are no longer swallowed)", a
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
-  await expect(page.locator(".pl-toast", { hasText: /Skills/i })).toBeVisible();
+  await expect(page.getByTestId("playbooks-surface").getByText(/Couldn't load the skills/i)).toBeVisible();
 });

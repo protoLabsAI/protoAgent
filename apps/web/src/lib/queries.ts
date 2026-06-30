@@ -23,6 +23,7 @@ export const queryKeys = {
   pluginUpdates: ["plugins", "updates"] as const,
   fleet: ["fleet"] as const,
   archetypes: ["archetypes"] as const,
+  playbooks: ["playbooks"] as const,
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll
@@ -191,4 +192,13 @@ export const acpAgentsQuery = () =>
     queryFn: () => api.acpAgents(),
     staleTime: Infinity, // a static catalog — fetch once
     retry: false,
+  });
+
+// The skills/playbooks index (ADR 0009) — the list view (no prompt bodies). The
+// surface filters it client-side; invalidated after author/edit/promote/unshare
+// (a delete updates the cache directly since it removes a single known row).
+export const playbooksQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.playbooks,
+    queryFn: () => api.playbooks(),
   });

@@ -1,14 +1,17 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { ArrowDownFromLine, ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
-
-import { useEffect, useMemo, useState } from "react";
-
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { ArrowDownFromLine, ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
+
+import { useMemo, useState } from "react";
+
 import { RefreshButton } from "../app/ui-kit";
+import { StagePanel } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
+import { playbooksQuery, queryKeys } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { Playbook } from "../lib/types";
 
@@ -165,43 +168,136 @@ function SourceBadge({ p }: { p: Playbook }) {
   );
 }
 
-export function PlaybooksSurface() {
-  // Self-reports failures via toast. This surface only ever renders inside Settings ▸ Skills, where
-  // the old `onError` callback prop defaulted to a no-op and silently swallowed every failure. A
-  // blank message is a clear-no-op (toasts auto-dismiss on their own).
+// The body reads the skills index with `useSuspenseQuery` (ADR 0013): the initial
+// load is a <Suspense> fallback and a failure is the <StagePanel> retry card — no
+// useEffect / busy-flag / try-catch. Every write is a `useMutation` that toasts on
+// failure (the old no-op `onError` prop swallowed those) and invalidates the list;
+// a delete patches the cache directly (it removes one known row).
+function PlaybooksBody() {
+  const { data, isFetching } = useSuspenseQuery(playbooksQuery());
+  const enabled = data.enabled;
+  const playbooks = data.playbooks;
+  const qc = useQueryClient();
   const toast = useToast();
   const onError = (message: string) => {
     if (message) toast({ tone: "error", title: "Skills", message });
   };
-  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
-  const [enabled, setEnabled] = useState(true);
-  const [loading, setLoading] = useState(false);
+
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<Playbook | null>(null);
-  const [promoting, setPromoting] = useState<number | null>(null);
   const [forgetPending, setForgetPending] = useState<Playbook | null>(null);
 
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [saving, setSaving] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const r = await api.playbooks();
-      setEnabled(r.enabled);
-      setPlaybooks(r.playbooks || []);
-      onError("");
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setLoading(false);
-    }
+  const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.playbooks });
+
+  function cancelForm() {
+    setAdding(false);
+    setEditingId(null);
+    setDraft(EMPTY_DRAFT);
   }
-  useEffect(() => {
-    void load();
-  }, []);
+
+  function openCreate() {
+    setEditingId(null);
+    setDraft(EMPTY_DRAFT);
+    setAdding(true);
+  }
+
+  // Open the editor: fetch the skill WITH its body (the list omits prompt bodies)
+  // to pre-fill the draft, then switch the dialog into edit mode.
+  const startEdit = useMutation({
+    mutationFn: (p: Playbook) => api.getPlaybook(p.id),
+    onSuccess: (r, p) => {
+      const s = r.skill;
+      if (!s) {
+        onError("could not load that skill");
+        return;
+      }
+      setAdding(false);
+      setDraft({
+        name: s.name,
+        description: s.description,
+        body: s.prompt_template || "",
+        tools: (s.tools_used || []).join(", "),
+        userFacing: !!s.user_facing,
+        userOnly: !!s.user_only,
+        slash: s.slash || "",
+      });
+      setEditingId(p.id);
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+
+  const saveSkill = useMutation({
+    mutationFn: () => {
+      const payload = {
+        name: draft.name.trim(),
+        description: draft.description.trim(),
+        prompt_template: draft.body,
+        tools_used: draft.tools
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+        user_facing: draft.userFacing || draft.userOnly,
+        user_only: draft.userOnly,
+        slash: draft.slash.trim(),
+      };
+      return editingId !== null ? api.updatePlaybook(editingId, payload) : api.createPlaybook(payload);
+    },
+    onSuccess: (r) => {
+      if (!r.skill) {
+        onError("save failed");
+        return;
+      }
+      cancelForm();
+      invalidate();
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+
+  const promote = useMutation({
+    mutationFn: (p: Playbook) => api.promotePlaybook(p.id),
+    onSuccess: (r) => {
+      if (!r.promoted) {
+        onError(r.error || "promote failed");
+        return;
+      }
+      invalidate(); // the skill now also reads from the commons tier
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+  const promotingId = promote.isPending ? promote.variables?.id : undefined;
+
+  // Unshare = forget from the commons (the inverse of promote). Confirmed, since it
+  // affects every agent on the box. A private copy of the skill (if any) is untouched.
+  const unshare = useMutation({
+    mutationFn: (p: Playbook) => api.forgetPlaybook(p.id),
+    onSuccess: (r) => {
+      if (!r.forgotten) {
+        onError(r.error || "unshare failed");
+        return;
+      }
+      invalidate();
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+
+  // Delete removes one known row, so patch the cached list directly rather than refetch.
+  const del = useMutation({
+    mutationFn: (p: Playbook) => api.deletePlaybook(p.id),
+    onSuccess: (r, p) => {
+      if (!r.deleted) {
+        onError(r.error || "delete failed");
+        return;
+      }
+      qc.setQueryData<{ enabled: boolean; playbooks: Playbook[] }>(queryKeys.playbooks, (old) =>
+        old ? { ...old, playbooks: old.playbooks.filter((x) => x.id !== p.id) } : old,
+      );
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -221,127 +317,8 @@ export function PlaybooksSurface() {
   const layered = playbooks.some((p) => p.tier);
   const fromCommons = filtered.filter((p) => p.tier === "commons").length;
 
-  function openCreate() {
-    setEditingId(null);
-    setDraft(EMPTY_DRAFT);
-    setAdding(true);
-  }
-
-  async function startEdit(p: Playbook) {
-    setAdding(false);
-    try {
-      const r = await api.getPlaybook(p.id);
-      const s = r.skill;
-      if (!s) {
-        onError("could not load that skill");
-        return;
-      }
-      setDraft({
-        name: s.name,
-        description: s.description,
-        body: s.prompt_template || "",
-        tools: (s.tools_used || []).join(", "),
-        userFacing: !!s.user_facing,
-        userOnly: !!s.user_only,
-        slash: s.slash || "",
-      });
-      setEditingId(p.id);
-      onError("");
-    } catch (e) {
-      onError(errMsg(e));
-    }
-  }
-
-  function cancelForm() {
-    setAdding(false);
-    setEditingId(null);
-    setDraft(EMPTY_DRAFT);
-  }
-
-  async function save() {
-    setSaving(true);
-    try {
-      const payload = {
-        name: draft.name.trim(),
-        description: draft.description.trim(),
-        prompt_template: draft.body,
-        tools_used: draft.tools
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-        user_facing: draft.userFacing || draft.userOnly,
-        user_only: draft.userOnly,
-        slash: draft.slash.trim(),
-      };
-      const r = editingId !== null ? await api.updatePlaybook(editingId, payload) : await api.createPlaybook(payload);
-      if (!r.skill) {
-        onError("save failed");
-        return;
-      }
-      cancelForm();
-      onError("");
-      await load();
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function promote(p: Playbook) {
-    setPromoting(p.id);
-    try {
-      const r = await api.promotePlaybook(p.id);
-      if (!r.promoted) {
-        onError(r.error || "promote failed");
-        return;
-      }
-      onError("");
-      await load(); // the skill now also reads from the commons tier
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setPromoting(null);
-    }
-  }
-
-  // Unshare = forget from the commons (the inverse of promote). Confirmed, since it
-  // affects every agent on the box. A private copy of the skill (if any) is untouched.
-  async function confirmUnshare() {
-    if (!forgetPending) return;
-    const p = forgetPending;
-    setForgetPending(null);
-    try {
-      const r = await api.forgetPlaybook(p.id);
-      if (!r.forgotten) {
-        onError(r.error || "unshare failed");
-        return;
-      }
-      onError("");
-      await load();
-    } catch (e) {
-      onError(errMsg(e));
-    }
-  }
-
-  async function confirmDelete() {
-    if (!pending) return;
-    const id = pending.id;
-    setPending(null);
-    try {
-      const r = await api.deletePlaybook(id);
-      if (!r.deleted) {
-        onError(r.error || "delete failed");
-        return;
-      }
-      setPlaybooks((ps) => ps.filter((p) => p.id !== id));
-    } catch (e) {
-      onError(errMsg(e));
-    }
-  }
-
   return (
-    <section className="panel stage-panel" data-testid="playbooks-surface">
+    <>
       <PanelHeader
         title="Skills"
         kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned${layered ? ` · ${fromCommons} from commons` : ""}`}
@@ -362,7 +339,7 @@ export function PlaybooksSurface() {
                 <Plus size={16} />
               </Button>
             ) : null}
-            <RefreshButton onClick={() => void load()} busy={loading} />
+            <RefreshButton onClick={invalidate} busy={isFetching} />
           </>
         }
       />
@@ -436,11 +413,11 @@ export function PlaybooksSurface() {
                           icon
                           variant="ghost"
                           title="Promote to the shared commons (every agent on this box can then reuse it)"
-                          onClick={() => void promote(p)}
-                          disabled={promoting === p.id}
+                          onClick={() => promote.mutate(p)}
+                          disabled={promotingId === p.id}
                           data-testid={`playbook-promote-${p.id}`}
                         >
-                          <ArrowUpToLine size={14} className={promoting === p.id ? "spin" : ""} />
+                          <ArrowUpToLine size={14} className={promotingId === p.id ? "spin" : ""} />
                         </Button>
                       ) : null}
                       {isEditable(p) ? (
@@ -450,7 +427,7 @@ export function PlaybooksSurface() {
                             icon
                             variant="ghost"
                             title="Edit skill"
-                            onClick={() => void startEdit(p)}
+                            onClick={() => startEdit.mutate(p)}
                             data-testid={`playbook-edit-${p.id}`}
                           >
                             <Pencil size={14} />
@@ -495,7 +472,10 @@ export function PlaybooksSurface() {
         title="Delete skill?"
         confirmLabel="Delete"
         destructive
-        onConfirm={() => void confirmDelete()}
+        onConfirm={() => {
+          if (pending) del.mutate(pending);
+          setPending(null);
+        }}
         onClose={() => setPending(null)}
       >
         {pending
@@ -508,7 +488,10 @@ export function PlaybooksSurface() {
         title="Unshare from the commons?"
         confirmLabel="Unshare"
         destructive
-        onConfirm={() => void confirmUnshare()}
+        onConfirm={() => {
+          if (forgetPending) unshare.mutate(forgetPending);
+          setForgetPending(null);
+        }}
         onClose={() => setForgetPending(null)}
       >
         {forgetPending
@@ -528,12 +511,20 @@ export function PlaybooksSurface() {
         <SkillForm
           draft={draft}
           setDraft={setDraft}
-          onSave={() => void save()}
+          onSave={() => saveSkill.mutate()}
           onCancel={cancelForm}
-          saving={saving}
+          saving={saveSkill.isPending}
           saveLabel={editingId !== null ? "Save changes" : "Create skill"}
         />
       </Dialog>
-    </section>
+    </>
+  );
+}
+
+export function PlaybooksSurface() {
+  return (
+    <StagePanel label="skills" testId="playbooks-surface">
+      <PlaybooksBody />
+    </StagePanel>
   );
 }
