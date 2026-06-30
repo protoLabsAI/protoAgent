@@ -257,6 +257,9 @@ export function PluginView({ view }: { view: PluginViewType }) {
             {reachable ? (
               // sandbox: allow-popups (+ -to-escape-sandbox) so links / window.open inside
               // a plugin open as normal un-sandboxed pages instead of being blocked.
+              // allow-pointer-lock so a plugin (or a nested artifact iframe inside it) can
+              // capture the mouse — needed for games / canvas / 3D; pointer lock must be
+              // granted at EVERY nesting level, and Esc always releases it.
               // allow: clipboard via Permissions-Policy (no sandbox token exists for it) so
               // copy/paste works in plugin UIs.
               <iframe
@@ -264,7 +267,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
                 className="plugin-view-frame"
                 src={apiUrl(src)}
                 title={view.label}
-                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
                 allow="clipboard-read; clipboard-write"
                 onLoad={handleLoad}
                 onError={() => setError(`The plugin page at ${src} didn’t respond.`)}
