@@ -213,6 +213,7 @@ from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A s
     _agent_skills,
     _bearer_configured,
     _build_agent_card_proto,
+    agent_card_routes,
     assert_routable_card_url,
     _package_version,
     _record_a2a_telemetry,
@@ -689,7 +690,6 @@ def _main():
     # emits the four custom extensions. Task + push-config state is durable
     # (SQLite via a2a_impl.stores), and push callbacks are SSRF-guarded.
     from a2a.server.request_handlers import DefaultRequestHandler
-    from a2a.server.routes.agent_card_routes import create_agent_card_routes
     from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 
@@ -805,7 +805,10 @@ def _main():
     )
     add_a2a_routes_to_fastapi(
         fastapi_app,
-        agent_card_routes=create_agent_card_routes(a2a_card),
+        # ``agent_card_routes`` (server.a2a) serves the same well-known card as
+        # a2a-sdk's ``create_agent_card_routes`` plus a proto-free protocolVersion
+        # hint, so a delegating peer can pre-check version compatibility (ADR 0051).
+        agent_card_routes=agent_card_routes(a2a_card),
         jsonrpc_routes=create_jsonrpc_routes(a2a_request_handler, rpc_url="/a2a"),
     )
     log.info("[a2a] a2a-sdk routes mounted (JSON-RPC at /a2a, card at /.well-known/agent-card.json)")

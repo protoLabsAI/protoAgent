@@ -315,6 +315,95 @@ async def test_a2a_dispatch_sends_version_header(monkeypatch):
     assert captured["headers"].get("A2A-Version") == "1.0"
 
 
+# ── a2a protocol-version negotiation ──────────────────────────────────────────
+
+
+class _CardClient(_FakeClient):
+    """Fake httpx client answering BOTH the agent-card GET (probe / version
+    pre-check) and the JSON-RPC POST (dispatch), so the a2a version pre-flight is
+    exercised fully offline."""
+
+    def __init__(self, card, rpc=None, **kw):
+        self._card = card
+        self._rpc = rpc or {"result": {"artifacts": [{"parts": [{"kind": "text", "text": "hi from peer"}]}]}}
+
+    async def get(self, url, **kw):
+        return _FakeResp(self._card)
+
+    async def post(self, url, **kw):
+        return _FakeResp(self._rpc)
+
+
+async def test_a2a_probe_returns_peer_protocol_version(monkeypatch):
+    """probe() captures the peer's advertised A2A protocol version (the native
+    supportedInterfaces field) — distinct from the peer's app `version`."""
+    import httpx
+
+    from security import policy
+
+    card = {
+        "name": "peer",
+        "version": "1.2.3",
+        "supportedInterfaces": [{"protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CardClient(card))
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
+    d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
+    res = await ADAPTERS["a2a"].probe(d)
+    assert res["ok"] is True
+    assert res["protocol_version"] == "1.0"
+    assert res["supported_versions"] == ["1.0"]
+    assert res["version"] == "1.2.3"  # peer APP version, distinct from the protocol version
+
+
+async def test_a2a_probe_reads_proto_free_hint(monkeypatch):
+    """probe() also understands the top-level protocolVersion/supportedVersions
+    hint a peer may expose without the proto supportedInterfaces list."""
+    import httpx
+
+    from security import policy
+
+    card = {"name": "peer", "protocolVersion": "1.0", "supportedVersions": ["1.0"]}
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CardClient(card))
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
+    d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
+    res = await ADAPTERS["a2a"].probe(d)
+    assert res["protocol_version"] == "1.0" and res["supported_versions"] == ["1.0"]
+
+
+async def test_a2a_dispatch_rejects_version_mismatch(monkeypatch):
+    """A peer that clearly advertises an A2A version we can't speak (e.g. 0.3) must
+    fail fast with a legible mismatch — not get a 1.0 call sent and wait for an
+    opaque -32009 mid-dispatch."""
+    import httpx
+
+    from security import policy
+
+    card = {"name": "old-peer", "supportedInterfaces": [{"protocolVersion": "0.3"}]}
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CardClient(card))
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
+    d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
+    with pytest.raises(DelegateError) as ei:
+        await ADAPTERS["a2a"].dispatch(d, "q")
+    msg = str(ei.value)
+    assert "0.3" in msg and "refusing" in msg.lower()
+
+
+async def test_a2a_dispatch_proceeds_when_card_omits_version(monkeypatch):
+    """An older peer / partial card that advertises no protocol version must NOT be
+    blocked by the best-effort pre-check — dispatch falls through (the -32009
+    mapping still covers a genuine incompatibility)."""
+    import httpx
+
+    from security import policy
+
+    card = {"name": "peer"}  # nothing about protocol version anywhere
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CardClient(card))
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
+    d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
+    assert await ADAPTERS["a2a"].dispatch(d, "q") == "hi from peer"
+
+
 async def test_acp_dispatch_reuses_client(monkeypatch):
     import plugins.coding_agent as CA
 

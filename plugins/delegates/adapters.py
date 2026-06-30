@@ -160,6 +160,42 @@ def _a2a_error_detail(d: Delegate, err: object) -> str:
     return f"delegate {d.name!r}: {msg or err}"
 
 
+# The A2A protocol version(s) our delegate client can speak (it sends the
+# ``A2A-Version: 1.0`` header + the 1.0 SendMessage/GetTask dialect). Used to
+# pre-check a peer's advertised version and fail fast on a clear mismatch.
+_A2A_SUPPORTED_VERSIONS = ("1.0",)
+
+
+def _advertised_a2a_versions(card: dict) -> list[str]:
+    """Every A2A protocol version a peer's agent-card advertises (de-duped, in
+    first-seen order), or ``[]`` if the card says nothing about it.
+
+    Reads the native proto field (``supportedInterfaces[].protocolVersion``) AND
+    the proto-free top-level hint (``protocolVersion`` / ``supportedVersions``)
+    that protoLabs agents also expose — so an older or non-protoLabs peer is still
+    understood when it advertises its version in either shape. ``[]`` means
+    *don't know* (older peers, partial cards): callers must treat that as
+    best-effort and NOT block."""
+    if not isinstance(card, dict):
+        return []
+    seen: list[str] = []
+
+    def _add(v: object) -> None:
+        s = str(v or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+
+    for iface in card.get("supportedInterfaces") or []:
+        if isinstance(iface, dict):
+            _add(iface.get("protocolVersion"))
+    _add(card.get("protocolVersion"))
+    versions = card.get("supportedVersions")
+    if isinstance(versions, (list, tuple)):
+        for v in versions:
+            _add(v)
+    return seen
+
+
 class A2aAdapter(Adapter):
     type = "a2a"
     label = "A2A agent"
@@ -225,6 +261,20 @@ class A2aAdapter(Adapter):
         blocked = policy.check_url(d.url)
         if blocked:
             raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
+        # Pre-flight protocol-version check (best-effort). Fetch the peer's card and, if
+        # it CLEARLY advertises an A2A protocol version we can't speak, fail fast with a
+        # legible mismatch instead of sending and waiting for the opaque -32009
+        # VERSION_NOT_SUPPORTED mid-dispatch. A silent/unreachable card never blocks — we
+        # fall through to dispatch, whose -32009 mapping (``_a2a_error_detail``) still applies.
+        info = await self.probe(d)
+        advertised = info.get("supported_versions") or []
+        if advertised and not any(v in _A2A_SUPPORTED_VERSIONS for v in advertised):
+            raise DelegateError(
+                f"delegate {d.name!r} advertises A2A protocol {'/'.join(advertised)} but this agent "
+                f"speaks {'/'.join(_A2A_SUPPORTED_VERSIONS)} — refusing to dispatch (an older peer "
+                "would reject the call with -32009 VERSION_NOT_SUPPORTED). Upgrade the peer, or point "
+                "its url at a 1.0 /a2a endpoint."
+            )
         # A2A-Version is mandatory for an a2a-sdk >=1.0 peer: a missing header defaults
         # to 0.3 on the receiver → -32009 VERSION_NOT_SUPPORTED (ADR 0051 audit). The
         # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
@@ -310,8 +360,23 @@ class A2aAdapter(Adapter):
                 r, ms = await _timed(client.get(card))
             if r.status_code >= 400:
                 return {"ok": False, "latency_ms": ms, "error": f"HTTP {r.status_code}"}
-            name = (r.json() or {}).get("name", "")
-            return {"ok": True, "latency_ms": ms, "detail": f"agent-card OK ({name})"}
+            body = r.json() or {}
+            name = body.get("name", "")
+            # Capture the peer's advertised A2A protocol version(s) so a caller (and
+            # dispatch's pre-check) can fail fast on a version mismatch. ``version`` is
+            # the peer's APP version (distinct); ``protocol_version`` is the primary
+            # advertised protocol, "" when the card is silent (older peers).
+            advertised = _advertised_a2a_versions(body)
+            pv = advertised[0] if advertised else ""
+            detail = f"agent-card OK ({name})" + (f", A2A {pv}" if pv else "")
+            return {
+                "ok": True,
+                "latency_ms": ms,
+                "protocol_version": pv,
+                "supported_versions": advertised,
+                "version": body.get("version", ""),
+                "detail": detail,
+            }
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)[:200]}
 
