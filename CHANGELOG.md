@@ -12,11 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Artifact is now a bundled core plugin** (#1443) — the generative-UI surface (`show_artifact` —
-  charts, diagrams, Mermaid, Markdown, or live React rendered into a sandboxed panel; ADR 0038) is
-  vendored in-tree under `plugins/artifact/` and ships with the agent, **off by default**. Opt in
-  with `plugins.enabled: [artifact]` (or flip the manifest's `enabled: true`). Folds in a
-  pointer-lock fix so game/canvas artifacts can capture the pointer.
+- **Artifact is now a bundled core plugin, on by default** (#1443) — the generative-UI surface
+  (`show_artifact` — charts, diagrams, Mermaid, Markdown, or live React rendered into a sandboxed
+  panel; ADR 0038) is vendored in-tree under `plugins/artifact/` and ships with the agent enabled,
+  a first-party surface like notes/docs (turn off per-instance via `plugins.disabled: [artifact]`).
+  Folds in a pointer-lock fix so game/canvas artifacts can capture the pointer.
 
 ## [0.76.0] - 2026-06-30
 
