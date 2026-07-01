@@ -34,10 +34,15 @@ def run_fleet_cli(argv: list[str]) -> int:
             rows = supervisor.up(args.names or None)
             if not rows:
                 print("(no workspaces — create one: python -m server workspace new <name>)")
+            failed = False
             for r in rows:
+                if r.get("error"):  # died at boot — start() surfaced the log tail
+                    failed = True
+                    print(f"  ✗ {r['name']:16} {r['error']}", file=sys.stderr)
+                    continue
                 tag = "already running" if r.get("already") else "started"
                 print(f"  ✓ {r['name']:16} {tag} (:{r.get('port')}, pid {r.get('pid')})")
-            return 0
+            return 1 if failed else 0
         if args.cmd == "down":
             rows = supervisor.down(args.names or None)
             if not rows:

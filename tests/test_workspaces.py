@@ -238,3 +238,26 @@ def test_apply_bundle_config_defaults_noop_without_config(root):
     (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "stack", "plugins": ["a"]}]}))
     assert manager._apply_bundle_config_defaults(cfg, ws / "plugins.lock") == {}
     assert cfg.read_text() == before  # untouched
+
+
+def test_server_argv_frozen_vs_source(monkeypatch):
+    """The spawn prefix must adapt to the frozen desktop sidecar: there
+    ``sys.executable`` IS the server entrypoint, and a ``-m server`` prefix dies at
+    argparse with "unrecognized arguments" — created agents never booted in the
+    desktop app (#1565 fallout)."""
+    import sys
+
+    assert manager._server_argv() == [sys.executable, "-m", "server"]  # source checkout
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert manager._server_argv() == [sys.executable]
+
+
+def test_run_exec_frozen_argv(root, monkeypatch):
+    """In a frozen build the member launches as ``<sidecar> --port …`` directly."""
+    import sys
+
+    manager.create("gamma")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    _, argv = manager.run_exec("gamma", ["--ui", "none"])
+    assert argv[0] == sys.executable and "-m" not in argv
+    assert argv[1] == "--port" and argv[-2:] == ["--ui", "none"]

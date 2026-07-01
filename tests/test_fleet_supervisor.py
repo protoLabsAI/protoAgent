@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import os
+import signal
+import socket
+import time
+
 import pytest
 
 from graph.workspaces import manager
 from graph.fleet import supervisor
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 @pytest.fixture
@@ -15,12 +26,19 @@ def fleet(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
 
     class FakeProc:
+        returncode = None
+
         def __init__(self, *a, **k):
             self.pid = 99001
             alive.add(99001)
 
+        def poll(self):  # boot watch: still running
+            return None
+
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    # Fake spawns never bind a port — short-circuit the boot watch to "it's up".
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
     def fake_kill(pid, sig):  # SIGTERM/SIGKILL "kills" the fake process
         alive.discard(int(pid))
@@ -65,13 +83,19 @@ def test_keep_n_warm_evicts_lru(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
 
     class FakeProc:
+        returncode = None
+
         def __init__(self, *a, **k):
             seq["n"] += 1
             self.pid = seq["n"]
             alive.add(self.pid)
 
+        def poll(self):  # boot watch: still running
+            return None
+
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
     ids = {}
@@ -308,13 +332,19 @@ def _multi_fleet(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
 
     class FakeProc:
+        returncode = None
+
         def __init__(self, *a, **k):
             seq["n"] += 1
             self.pid = seq["n"]
             alive.add(self.pid)
 
+        def poll(self):  # boot watch: still running
+            return None
+
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
     def fake_kill(pid, sig):
         killed.append((int(pid), int(sig)))
@@ -364,13 +394,19 @@ def test_shutdown_all_sigkills_straggler(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
 
     class FakeProc:
+        returncode = None
+
         def __init__(self, *a, **k):
             seq["n"] += 1
             self.pid = seq["n"]
             alive.add(self.pid)
 
+        def poll(self):  # boot watch: still running
+            return None
+
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
     def stubborn_kill(pid, sig):  # ignores SIGTERM; dies only on SIGKILL
         sigs.append(int(sig))
@@ -445,3 +481,65 @@ def test_reconcile_on_boot_stamps_and_returns_previous(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_mod, "package_version", lambda: "0.2.0")
     assert supervisor.reconcile_on_boot() == "0.1.0"  # the update is visible once…
     assert supervisor._version_stamp_path().read_text().strip() == "0.2.0"  # …then re-stamped
+
+
+# ── boot-failure feedback (#1565 fallout) ─────────────────────────────────────
+# A member that dies at boot used to report `running: true` (the pid existed for a
+# moment) and just show up dead on the next poll — the reason lived only in
+# agent.log, which nothing surfaced. start() now watches the fresh spawn and raises
+# with the log tail; these run REAL subprocesses (no FakeProc) to prove it.
+
+
+def _real_spawn_env(tmp_path, monkeypatch, argv):
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(manager, "run_exec", lambda ident, passthrough: ({}, argv))
+
+
+def test_start_surfaces_boot_death(tmp_path, monkeypatch):
+    import sys
+
+    _real_spawn_env(
+        tmp_path,
+        monkeypatch,
+        [sys.executable, "-c", "import sys; sys.stderr.write('kaboom: unrecognized arguments'); sys.exit(3)"],
+    )
+    ws = manager.create("dies", port=_free_port())  # free port — nothing binds it; the child exits first
+    with pytest.raises(supervisor.FleetError) as exc:
+        supervisor.start("dies")
+    msg = str(exc.value)
+    assert "exit code 3" in msg and "kaboom" in msg  # the reason, not a generic failure
+    assert not supervisor.is_running("dies")  # the dead entry was reaped, not left as a zombie
+    assert (tmp_path / "ws" / ws["id"] / "agent.log").exists()
+
+
+def test_start_returns_once_port_binds(tmp_path, monkeypatch):
+    import sys
+
+    port = _free_port()  # a genuinely free port for the fake member to bind
+    child = (
+        "import socket,time\n"
+        f"s=socket.socket(); s.bind(('127.0.0.1',{port})); s.listen(1)\n"
+        "time.sleep(30)\n"
+    )
+    _real_spawn_env(tmp_path, monkeypatch, [sys.executable, "-c", child])
+    manager.create("binds", port=port)
+    t0 = time.monotonic()
+    try:
+        rec = supervisor.start("binds")
+        assert rec["running"] and not rec["already"]
+        assert time.monotonic() - t0 < supervisor._BOOT_WATCH_SECONDS  # early exit on bind, not the full watch
+    finally:
+        try:
+            os.kill(rec["pid"], signal.SIGKILL)
+        except (OSError, UnboundLocalError):
+            pass
+
+
+def test_up_reports_boot_death_and_continues(tmp_path, monkeypatch):
+    import sys
+
+    _real_spawn_env(tmp_path, monkeypatch, [sys.executable, "-c", "raise SystemExit(2)"])
+    manager.create("brokey", port=_free_port())
+    rows = supervisor.up(["brokey"])  # must not raise — the row carries the error
+    assert rows[0]["name"] == "brokey" and rows[0]["running"] is False
+    assert "exit code 2" in rows[0]["error"]

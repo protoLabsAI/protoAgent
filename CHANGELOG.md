@@ -184,6 +184,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer auto-merge and freeze the Pages deploy.
 
 ### Fixed
+- **Fleet agents now actually start in the desktop app, and a boot failure tells
+  you why.** Creating a new agent (the ADR 0042 new-agent flow) silently produced
+  a dead member in the frozen desktop build: members were spawned as
+  `<sys.executable> -m server …`, but in the PyInstaller sidecar `sys.executable`
+  *is* the server entrypoint, so every spawn died at argparse with
+  `unrecognized arguments: -m server` — visible only in the workspace's
+  `agent.log`, which nothing surfaced. The spawn (and the workspace bundle
+  installer) is now frozen-aware, and `supervisor.start()` watches the fresh
+  process: if it exits during boot, the state entry is reaped and the API returns
+  a readable 400 carrying the exit code + the fresh `agent.log` tail (the console
+  already toasts it; `fleet up` prints it per-member and keeps going).
 - **Settings `string_list` fields can now carry an empty-string entry** — a
   literal `""` (or `''`) token in the comma-separated editor parses to the empty
   string and round-trips back as `""`. Needed for

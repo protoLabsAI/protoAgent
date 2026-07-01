@@ -20,12 +20,19 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
 
     class FakeProc:
+        returncode = None
+
         def __init__(self, *a, **k):
             self.pid = 4242
             alive.add(4242)
 
+        def poll(self):  # boot watch: still running
+            return None
+
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    # Fake spawns never bind a port — short-circuit the boot watch to "it's up".
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
     app = FastAPI()
