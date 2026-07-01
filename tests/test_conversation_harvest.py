@@ -28,9 +28,16 @@ class _FakeKnowledge:
     def __init__(self):
         self.chunks = []
 
-    def add_chunk(self, content, domain=None, heading=None, *, source=None, namespace=None, **kw):
+    def add_chunk(self, content, domain=None, heading=None, *, source=None, source_type=None, namespace=None, **kw):
         self.chunks.append(
-            {"content": content, "domain": domain, "heading": heading, "source": source, "namespace": namespace}
+            {
+                "content": content,
+                "domain": domain,
+                "heading": heading,
+                "source": source,
+                "source_type": source_type,
+                "namespace": namespace,
+            }
         )
         return f"chunk-{len(self.chunks)}"
 
@@ -74,6 +81,8 @@ def test_harvest_thread_summarizes_into_knowledge(tmp_path):
     assert "teal" in kb.chunks[0]["content"]
     # Provenance (ADR 0069 D5): the row links back to the retired thread.
     assert kb.chunks[0]["source"] == "a2a:chat-1"
+    # Trust tier (ADR 0069 D8): harvest rows rank agent-derived.
+    assert kb.chunks[0]["source_type"] == "harvest"
 
 
 def test_harvest_extracts_facts_when_enabled(tmp_path):

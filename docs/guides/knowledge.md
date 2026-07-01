@@ -130,6 +130,67 @@ returns `{"injections": [...]}` newest-first — omit `session_id` for all sessi
 Each row: `ts`, `session_id`, `digest_session_ids`, `hot_chunk_ids`,
 `rag_chunk_ids`, `approx_tokens`.
 
+### Trust tiers (ADR 0069 D8)
+
+Not everything in the store deserves the same seat at the table. Every chunk's
+`source_type` names the write path that created it, and those paths rank into
+**three deterministic trust tiers** (`knowledge/trust.py` — a code-level map,
+not config):
+
+| Tier | Label | Write paths |
+|---|---|---|
+| 3 | `operator` | console knowledge browser add/edit, memory-inspector hot edit (`source_type: operator`/`manual`) |
+| 2 | `agent` | extracted facts (`extracted`), harvest summaries (`harvest`), `memory_ingest` + compaction archives (`conversation`), findings (`chat`) |
+| 1 | `external` | everything ingested: web pages (`html`), YouTube transcripts, PDFs, transcribed media, pasted docs — **and any unknown/unstamped `source_type`** (least trust by default, incl. rows written before stamping existed) |
+
+Two things happen with the tier:
+
+- **Auto-injection down-weights low tiers, always.** The per-turn RAG hits are
+  stable-sorted by tier after retrieval — an external/ingested hit never
+  outranks an operator- or agent-authored one; relevance order is preserved
+  within a tier. Deterministic and post-score, so it behaves identically on
+  the plain, hybrid, and layered stores.
+- **A trust floor can exclude tiers entirely:**
+
+```yaml
+knowledge:
+  inject_min_trust: 1   # default: nothing excluded (down-weighting only)
+  # inject_min_trust: 2 # exclude ingested/external content from auto-injection
+  # inject_min_trust: 3 # auto-inject operator-authored rows only
+```
+
+The floor gates **only the automatic injection** — like `inject_namespaces`,
+tool-driven recall (`memory_recall`) is never gated, so excluded content stays
+reachable on demand with the model's intent visible as a tool call. The tier is
+visible everywhere it travels: auto-injected lines end with
+`(stored 2026-07-01; trust: external)`, and `memory_recall` / `memory_list`
+citations carry the same `trust:` label.
+
+### Hot-memory write visibility (ADR 0069 D8)
+
+`domain="hot"` chunks are injected in front of the model **every turn**, which
+makes a silent hot write the highest-leverage poisoning move there is. Two
+controls:
+
+- **Every hot write is a visible event.** Any write that creates a hot chunk —
+  the agent's `memory_ingest`, the console routes, a plugin via the SDK —
+  emits `memory.hot_written` on the plugin event bus ([ADR 0039](/adr/0039-plugin-event-bus))
+  with `{chunk_id, source, source_type, preview}`. Consoles and plugins can
+  subscribe (`HOST.on("memory.hot_written", …)`) to toast/log it.
+- **An optional confirm gate** for multi-user or higher-paranoia setups:
+
+```yaml
+knowledge:
+  hot_write_confirm: false  # default: agent hot writes allowed (single-operator flow)
+  # hot_write_confirm: true # memory_ingest REFUSES domain="hot" writes with a clear
+                            # error telling the model to ask you; only the console
+                            # (Knowledge → Store / memory inspector) writes hot memory
+```
+
+The gate binds the **agent's own write path** (`memory_ingest`) — the simple
+mechanism: a refusal with instructions, nothing is parked or half-stored.
+Operator console surfaces stamp `source_type: operator` and are unaffected.
+
 ### Staleness: supersede, don't delete
 
 LLMs demonstrably can't self-adjudicate freshness, so protoAgent handles

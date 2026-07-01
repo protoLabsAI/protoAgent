@@ -140,6 +140,39 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# Preview length in the hot-write event payload — enough for a console toast /
+# Activity line to be meaningful, small enough to never bloat the bus.
+_HOT_EVENT_PREVIEW_CHARS = 160
+
+
+def _publish_hot_write(chunk_id: int, source: str | None, source_type: str | None, content: str) -> None:
+    """Emit ``memory.hot_written`` on the plugin event bus (ADR 0069 D8).
+
+    ``domain="hot"`` chunks are injected in front of the model EVERY turn, so a
+    write to that domain must be visible, not silent — this is how the console
+    notification path (and any ADR 0039 subscriber) learns one landed, whoever
+    wrote it (agent tool, operator route, plugin SDK). Best-effort via the
+    late-bound ``HOST.publish`` seam (same pattern as ``tasks/store.py``): a
+    missing bus (unit tests, standalone use) or a bus hiccup must never break
+    a store write. The lazy import keeps ``knowledge`` free of a hard ``graph``
+    dependency."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(
+                "memory.hot_written",
+                {
+                    "chunk_id": chunk_id,
+                    "source": source or "",
+                    "source_type": source_type or "",
+                    "preview": (content or "")[:_HOT_EVENT_PREVIEW_CHARS],
+                },
+            )
+    except Exception:  # noqa: BLE001 — visibility must never break a write
+        log.debug("[knowledge] hot-write event publish failed", exc_info=True)
+
+
 # LIKE escaping — sqlite treats ``%`` and ``_`` as wildcards in LIKE
 # patterns. Without escaping, a search for ``"100%"`` matches every row
 # starting with ``"100"`` instead of literal "100%". We escape them
@@ -430,7 +463,13 @@ class KnowledgeStore:
                 (content, domain, heading, source, source_type, finding_type, namespace, now, now),
             )
             db.commit()
-            return int(cur.lastrowid)
+            chunk_id = int(cur.lastrowid)
+            # Hot-memory write visibility (ADR 0069 D8): every write funnels
+            # through here, so this one hook covers every writer of the
+            # always-on domain — agent tool, operator routes, plugin SDK.
+            if domain == "hot":
+                _publish_hot_write(chunk_id, source, source_type, content)
+            return chunk_id
         except sqlite3.DatabaseError:
             log.exception("[knowledge] add_chunk failed")
             return None
