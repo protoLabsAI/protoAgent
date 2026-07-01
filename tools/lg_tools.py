@@ -806,6 +806,27 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
 # instances on the same machine never see each other's jobs.
 
 
+def _humanize_duration(seconds: int) -> str:
+    """Turn a raw second count into a short, human phrase (300 -> "5 minutes").
+
+    Keeps the ``wait`` confirmation conversational so the agent can relay it
+    naturally instead of parroting a machine-y "300s / ISO timestamp"."""
+    s = max(1, int(seconds))
+    if s < 60:
+        return f"{s} second{'s' if s != 1 else ''}"
+    mins, secs = divmod(s, 60)
+    if mins < 60:
+        parts = [f"{mins} minute{'s' if mins != 1 else ''}"]
+        if secs:
+            parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+        return " ".join(parts)
+    hours, mins = divmod(mins, 60)
+    parts = [f"{hours} hour{'s' if hours != 1 else ''}"]
+    if mins:
+        parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+    return " ".join(parts)
+
+
 def _build_scheduler_tools(scheduler) -> list:
     """Bind scheduler tools to a ``SchedulerBackend``. Returns a list."""
 
@@ -930,9 +951,13 @@ def _build_scheduler_tools(scheduler) -> list:
                 contract." This is your only context when you wake, so be
                 specific about what to do and which entities are involved.
 
-        Returns a confirmation with the resume time. For an absolute time or a
-        recurring schedule use ``schedule_task`` instead — ``wait`` is for
-        "yield for a bit, then pick this back up".
+        Returns a short confirmation of the scheduled wait. Do NOT echo this
+        return value verbatim into chat — it's a status line for you, not a reply
+        to the user. If you say anything, paraphrase it conversationally and
+        briefly (e.g. "Okay, I'll check back in about 5 minutes."); never paste
+        the raw string or an ISO timestamp. For an absolute time or a recurring
+        schedule use ``schedule_task`` instead — ``wait`` is for "yield for a
+        bit, then pick this back up".
         """
         if not (then or "").strip():
             return "Error: `then` is required — describe what to do on resume."
@@ -949,10 +974,14 @@ def _build_scheduler_tools(scheduler) -> list:
         # LangGraph, which silently dropped this resume to the Activity thread.
         ctx = _session_id_from(state) or None
         try:
-            job = await asyncio.to_thread(scheduler.add_job, then, when, context_id=ctx)
+            await asyncio.to_thread(scheduler.add_job, then, when, context_id=ctx)
         except Exception as exc:  # noqa: BLE001
             return f"Error: couldn't schedule the wake-up: {exc}"
-        return f"Yielding for {secs}s — turn ending now. You'll be re-invoked at {job.next_fire or when} to: {then}"
+        # Concise, human-friendly summary — the agent should paraphrase this, not
+        # echo it (the old ISO timestamp / "re-invoked at" phrasing read as raw
+        # system text when parroted into chat). Machine-relevant facts stay intact:
+        # the humanized duration and the resume instruction.
+        return f"Wait scheduled: {_humanize_duration(secs)}. Will resume to: {then}"
 
     return [schedule_task, list_schedules, cancel_schedule, wait]
 

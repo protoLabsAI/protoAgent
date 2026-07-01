@@ -25,14 +25,14 @@ def _tool_msg(name: str, content: str = "ok", status: str | None = None) -> Tool
 
 
 def test_just_waited_true_after_successful_wait():
-    msgs = [HumanMessage("go"), AIMessage("…"), _tool_msg("wait", "Yielding for 40s …")]
+    msgs = [HumanMessage("go"), AIMessage("…"), _tool_msg("wait", "Wait scheduled: 40 seconds …")]
     assert _just_waited(msgs) is True
 
 
 def test_just_waited_false_on_fresh_turn():
     # A new stimulus is the trailing message — wait may be deep in history but
     # didn't just run.
-    msgs = [_tool_msg("wait", "Yielding …"), AIMessage("done"), HumanMessage("new task")]
+    msgs = [_tool_msg("wait", "Wait scheduled: …"), AIMessage("done"), HumanMessage("new task")]
     assert _just_waited(msgs) is False
 
 
@@ -43,7 +43,7 @@ def test_just_waited_false_for_other_tools():
 
 def test_just_waited_true_with_parallel_tools():
     # wait alongside another tool in the same step still yields.
-    msgs = [AIMessage("…"), _tool_msg("st_ship", "ok"), _tool_msg("wait", "Yielding …")]
+    msgs = [AIMessage("…"), _tool_msg("st_ship", "ok"), _tool_msg("wait", "Wait scheduled: …")]
     assert _just_waited(msgs) is True
 
 
@@ -56,7 +56,7 @@ def test_just_waited_false_when_wait_errored():
 
 def test_middleware_jumps_to_end_only_after_wait():
     mw = WaitYieldMiddleware()
-    waited = {"messages": [AIMessage("…"), _tool_msg("wait", "Yielding …")]}
+    waited = {"messages": [AIMessage("…"), _tool_msg("wait", "Wait scheduled: …")]}
     assert mw.before_model(waited, None) == {"jump_to": "end"}
 
     fresh = {"messages": [HumanMessage("hello")]}
@@ -101,7 +101,7 @@ async def test_wait_schedules_a_one_shot_in_the_future():
     fire = datetime.fromisoformat(schedule)  # parses ISO-8601 (one-shot)
     delta = (fire - datetime.now(UTC)).total_seconds()
     assert 30 < delta <= 41  # ~40s out
-    assert "Dock and sell ore." in out and "re-invoked" in out
+    assert "Dock and sell ore." in out and "resume" in out.lower()
 
 
 @pytest.mark.asyncio

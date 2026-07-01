@@ -389,8 +389,8 @@ async def _clear_pending_interrupt(config: dict) -> None:
 
 def _last_tool_text(result) -> str:
     """The last tool result's text in a turn — the fallback when a turn produced
-    no assistant text (e.g. a ``wait`` yield, whose 'Yielding…' confirmation is a
-    ToolMessage, not an AIMessage)."""
+    no assistant text (e.g. a ``wait`` yield, whose 'Wait scheduled…' confirmation
+    is a ToolMessage, not an AIMessage)."""
     from langchain_core.messages import ToolMessage
 
     for msg in reversed((result or {}).get("messages", [])):
