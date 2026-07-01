@@ -1,5 +1,35 @@
 [
   {
+    "version": "v0.78.0",
+    "date": "2026-07-01",
+    "changes": [
+      "Developer panel — view & toggle developer flags",
+      "Developer flags — backend foundation",
+      "Chat composer: terminal-style input history",
+      "Artifact panel: pan & zoom for diagrams",
+      "registerKeybinding on the fork extension seam",
+      "Watch primitive — supervise many external conditions at once",
+      "sdk.run_in_session(session_id, prompt)",
+      "Two-credential auth: auth.federation_token",
+      "Console set-goal form",
+      "Chat: slash commands trigger mid-input + render as command bubbles",
+      "Agent switcher: always available, with a Fleet-settings shortcut",
+      "Chat: Cmd/Ctrl+O toggles the latest tool-call block",
+      "Chat: /compact — summarize + archive a long thread",
+      "Knowledge panel: Upload / Add now open in a dialog",
+      "Goal mode is now drive-only; the monitor disposition is retired",
+      "Goal continuation protocol → tools",
+      "The A2A-streaming and non-streaming goal drive loops are unified (#1497), fixing a fresh-context thread-id drift.",
+      "Settings sub-panels share one container",
+      "wait tool output is conversational",
+      "Desktop app builds are on-demand",
+      "RCE-via-chat closed",
+      "Watch evaluation is serialized per watch id",
+      "New ADR 0066 (federation token + operator channel) and ADR 0067 (watch primitive); ADR 0030 marked superseded",
+      "PROTO.md § Run it"
+    ]
+  },
+  {
     "version": "v0.77.0",
     "date": "2026-07-01",
     "changes": [
