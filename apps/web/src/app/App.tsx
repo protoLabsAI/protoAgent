@@ -87,7 +87,7 @@ import {
   type RightPanel,
   type Surface,
 } from "../state/uiStore";
-import { api, apiUrl, authToken, is401 } from "../lib/api";
+import { api, apiUrl, authToken, is401, isAgentNotRunning, currentSlug, agentHref, activateSlugAgent } from "../lib/api";
 import { PluginView, consoleTheme } from "./PluginView";
 import { UtilityWidget } from "./UtilityWidget";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
@@ -368,6 +368,19 @@ export function App() {
   // copy/escape-hatch swap. STUCK_AFTER_MS=45s — past it, offer "Continue anyway"
   // so a graph that never compiles can't trap the operator on the loading screen.
   const bootFailed = !runtime && runtimeQ.isError;
+  // Focused fleet agent is DOWN (ADR 0042): a non-host slug whose boot probe keeps 409'ing
+  // ("agent not running") past a normal spawn window — `activate` didn't bring it up (or it
+  // failed to start). Without this the operator waited out the full ~30 retries for a generic
+  // "isn't responding" gate whose "Continue anyway" just opens a 409-broken app. Detect it
+  // early (≥6 retries ≈ ~6s at the 1s delay) and offer targeted recovery: return to the host
+  // console, or try starting the agent again. `failureReason`/`failureCount` are live during
+  // retries (TanStack Query v5), so recovery shows before the probe fully gives up.
+  const focusedSlug = currentSlug();
+  const agentDown =
+    focusedSlug !== "host" &&
+    !runtime &&
+    isAgentNotRunning(runtimeQ.failureReason) &&
+    runtimeQ.failureCount >= 6;
   // Token-gated first run (#873): the boot probe itself 401s. The BootGate's
   // "Starting… / isn't responding" copy is wrong for that — and its overlay
   // (z-1900) would cover the AuthGate dialog (z-1000) — so the gate yields to
@@ -742,19 +755,47 @@ export function App() {
           <BootGate
             logo={<ProtoLabsIcon variant="outline" size={56} decorative gradientStroke tone="accent" />}
             title={
-              bootFailed
-                ? `${bootName} isn’t responding`
-                : `Starting ${bootName}…`
+              agentDown
+                ? `Agent “${focusedSlug}” isn’t running`
+                : bootFailed
+                  ? `${bootName} isn’t responding`
+                  : `Starting ${bootName}…`
             }
             detail={
-              bootFailed
-                ? "The engine didn’t come up in time. It may still be warming up — give it another moment, then retry."
-                : bootStuck
-                  ? "This is taking longer than usual. The engine may still be compiling, or it may need attention in Settings."
-                  : "Warming up the engine — first launch (and finishing setup) can take up to a minute. Later launches are quick."
+              agentDown
+                ? "This fleet agent didn’t start. Return to the host console to keep working, or try starting it again."
+                : bootFailed
+                  ? "The engine didn’t come up in time. It may still be warming up — give it another moment, then retry."
+                  : bootStuck
+                    ? "This is taking longer than usual. The engine may still be compiling, or it may need attention in Settings."
+                    : "Warming up the engine — first launch (and finishing setup) can take up to a minute. Later launches are quick."
             }
             action={
-              bootFailed ? (
+              agentDown ? (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      window.location.href = agentHref("host");
+                    }}
+                  >
+                    Return to host
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      void (async () => {
+                        await activateSlugAgent();
+                        void runtimeQ.refetch();
+                      })();
+                    }}
+                  >
+                    Try to start it
+                  </Button>
+                </div>
+              ) : bootFailed ? (
                 <Button variant="primary" size="sm" onClick={() => void runtimeQ.refetch()}>
                   Retry
                 </Button>

@@ -313,6 +313,14 @@ export function isColdStart(error: unknown): boolean {
   return true; // no HTTP response at all ⇒ not reachable yet (desktop sidecar booting)
 }
 
+/** The fleet proxy's "agent isn't running/registered" signal (ADR 0042): a 409 from a
+ *  slug-routed call. Distinct from `isColdStart` (which also rides 502/no-response) — this
+ *  is specifically "the focused fleet agent is down", used to offer a return-to-host recovery
+ *  once it persists past a normal spawn window instead of the generic "isn't responding" gate. */
+export function isAgentNotRunning(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}
+
 /** True for a 401 from request() — retrying can't help until the operator supplies
  *  a token (#873); the AuthGate owns recovery. */
 export function is401(error: unknown): boolean {
