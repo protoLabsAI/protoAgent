@@ -26,9 +26,17 @@ agent already has — see the [tool table](/guides/knowledge#the-agents-memory-t
 
 Audio/video/image paths need the same setup as the console (`knowledge.transcribe_model`
 / `knowledge.image_describe_model`, plus `ffmpeg` on PATH for video); if one isn't
-configured the tool says so instead of failing silently. The tool is on whenever a
-knowledge store is wired — the agent runs `knowledge_ingest` as one turn, so a long
-recording will take as long as its transcription does.
+configured the tool says so instead of failing silently.
+
+**Slow sources run in the background so they never block the chat.** Anything that fetches
+over the network (any URL, including YouTube) or transcribes media (audio/video) is detached
+as a [background job](/adr/0050-background-subagents-reactive-notifications) — the tool
+returns a job id immediately, and the result is delivered back into the conversation (and the
+console's background jobs surface) when indexing finishes, so a 20-minute video never freezes
+the turn. Only a small local text/Markdown file (≤64 KB) ingests inline. It's the same
+durable background machinery as `task(run_in_background=true)`: concurrency-capped, cancellable,
+and it survives past the turn. (With the background subsystem disabled via `BACKGROUND_DISABLED`,
+the tool falls back to inline/blocking ingestion.)
 
 ## From the API
 
