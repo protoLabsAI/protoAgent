@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `portfolio-manager-stack`); the stale URL no longer installed what the card promised. Those
   stacks self-register as archetypes when installed, and the URL is now a data edit rather than
   a code constant.
+- **Instance collision warning no longer false-alarms on a shared box root** (#1552). The boot
+  "another instance can clobber your chat/knowledge/stores" warning keyed on the shared
+  `box_root`, so it fired for any second process on the machine — including a `dev` instance
+  (`~/.protoagent/dev`) that keeps entirely separate data. It now keys on **`instance_root`**:
+  it warns only when another live process shares *this* instance's data root (a genuine
+  clobber, e.g. the same instance run twice), and stays silent for box-only co-residents with
+  distinct `PROTOAGENT_INSTANCE` ids.
 
 ## [0.78.0] - 2026-07-01
 

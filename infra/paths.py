@@ -321,7 +321,18 @@ def register_instance(port: int | None = None, identity: str = "") -> None:
     try:
         d = _instances_dir()
         d.mkdir(parents=True, exist_ok=True)
-        (d / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "port": port, "identity": identity}))
+        # Record the instance_root so colocation_warning can distinguish a genuine
+        # same-instance clobber from a harmless box-only co-resident (#1552).
+        (d / f"{os.getpid()}.json").write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "port": port,
+                    "identity": identity,
+                    "instance_root": str(instance_paths().instance_root),
+                }
+            )
+        )
     except Exception:  # noqa: BLE001
         pass
 
@@ -357,26 +368,41 @@ def colocated_instances() -> list[dict]:
                 rec = json.loads(f.read_text())
             except (OSError, ValueError):
                 rec = {}
-            out.append({"pid": pid, "port": rec.get("port"), "identity": rec.get("identity") or ""})
+            out.append(
+                {
+                    "pid": pid,
+                    "port": rec.get("port"),
+                    "identity": rec.get("identity") or "",
+                    "instance_root": rec.get("instance_root") or "",
+                }
+            )
     except Exception:  # noqa: BLE001
         return out
     return out
 
 
 def colocation_warning() -> str | None:
-    """A user-facing warning when another live instance shares this data root, else None."""
-    others = colocated_instances()
-    if not others:
+    """A user-facing warning when another live process shares THIS instance's data root
+    — i.e. the same ``instance_root`` (every store lives there, so they WOULD clobber each
+    other's chat / knowledge / checkpoints). Returns None otherwise.
+
+    Two instances that merely share the ``box_root`` (distinct ``PROTOAGENT_INSTANCE`` ids —
+    e.g. the desktop app on ``~/.protoagent`` plus a ``dev`` instance on ``~/.protoagent/dev``)
+    keep entirely separate stores and are NOT a clobber risk, so they are not flagged (#1552).
+    A co-resident whose heartbeat predates this field (no ``instance_root`` recorded) can't be
+    confirmed same-instance, so it's treated as distinct — favouring no false alarm."""
+    mine = str(instance_paths().instance_root)
+    same = [o for o in colocated_instances() if o.get("instance_root") == mine]
+    if not same:
         return None
     who = ", ".join(
         f"{o['identity'] or 'unknown'} (pid {o['pid']}" + (f", port {o['port']})" if o.get("port") else ")")
-        for o in others
+        for o in same
     )
-    root = instance_paths().box_root
     return (
-        f"Another running instance shares this machine's data root ({root}): {who}. "
-        "They can clobber each other's chat history, knowledge and stores — give each "
-        "instance its own PROTOAGENT_INSTANCE id (or stop the extra one)."
+        f"Another running process shares THIS instance's data root ({mine}): {who}. "
+        "They will clobber each other's chat history, knowledge and stores — stop one, or run "
+        "them as separate instances (a distinct PROTOAGENT_INSTANCE id, each on its own port)."
     )
 
 

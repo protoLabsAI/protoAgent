@@ -105,17 +105,46 @@ def test_heartbeats_live_at_box_root(monkeypatch, tmp_path):
     paths.unregister_instance()
 
 
-def test_colocated_sibling_detected_and_warned(monkeypatch, tmp_path):
+def test_colocated_sibling_same_instance_is_warned(monkeypatch, tmp_path):
+    """A sibling on the SAME instance_root (here: the unscoped default = box_root) shares
+    every store, so it IS a clobber warning."""
+    import json
+
     home = _home(monkeypatch, tmp_path)
+    mine = str(paths.instance_paths().instance_root)  # this process's instance_root
     d = home / ".instances"
     d.mkdir()
-    (d / "12345.json").write_text('{"pid": 12345, "port": 7871, "identity": "roxy"}')
+    (d / "12345.json").write_text(
+        json.dumps({"pid": 12345, "port": 7871, "identity": "roxy", "instance_root": mine})
+    )
     monkeypatch.setattr(paths, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
     sibs = paths.colocated_instances()
-    assert sibs == [{"pid": 12345, "port": 7871, "identity": "roxy"}]
+    assert sibs == [{"pid": 12345, "port": 7871, "identity": "roxy", "instance_root": mine}]
     w = paths.colocation_warning()
-    assert "roxy" in w and "PROTOAGENT_INSTANCE" in w and str(home) in w
+    assert w and "roxy" in w and mine in w
+
+
+def test_box_only_coresident_is_not_warned(monkeypatch, tmp_path):
+    """#1552: a sibling that shares only the box_root — a DIFFERENT instance_root (e.g. a
+    ``dev`` instance under ``box_root/dev``) — keeps entirely separate stores, so it's
+    detected on the box but is NOT a clobber warning (the old false positive)."""
+    import json
+
+    home = _home(monkeypatch, tmp_path)
+    other = str(home / "a-different-instance")  # a distinct instance_root under the same box
+    assert other != str(paths.instance_paths().instance_root)
+    d = home / ".instances"
+    d.mkdir()
+    (d / "12345.json").write_text(
+        json.dumps({"pid": 12345, "port": 7871, "identity": "dev", "instance_root": other})
+    )
+    monkeypatch.setattr(paths, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
+    # Still discoverable on the box…
+    assert paths.colocated_instances()[0]["identity"] == "dev"
+    # …but a DISTINCT instance_root is not a data-loss warning.
+    assert paths.colocation_warning() is None
 
 
 def test_stale_heartbeats_pruned(monkeypatch, tmp_path):
