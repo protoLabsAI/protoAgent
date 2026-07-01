@@ -473,23 +473,25 @@ def test_ask_bridge_is_wired(monkeypatch, tmp_path):
     assert "e.source!==$frame.contentWindow" in html
 
 
-def test_graphic_kinds_get_a_panzoom_viewport(monkeypatch, tmp_path):
-    """svg + mermaid render into a transform-driven pan/zoom viewport (#1495): scroll-wheel
-    zoom (cursor-anchored), click-drag pan, and a Reset-to-fit control. Both kinds share the
-    one `viewport(...)` wrapper; mermaid re-fits after its async render via window.__artFit."""
+def test_graphic_kinds_get_a_crisp_fit_to_window_viewport(monkeypatch, tmp_path):
+    """svg + mermaid render into a CRISP fit-to-window viewport (#1517): the <svg> scales as a
+    VECTOR to fit the frame (max-width/height:100% !important — the !important beats mermaid's
+    inline max-width:Npx). No CSS transform / raster layer, which pixelated on zoom-in in
+    WKWebView; pan/zoom is intentionally traded away for crispness. Both kinds share the one
+    `viewport(...)` wrapper."""
     html = _load(monkeypatch, tmp_path)._SHELL_HTML
-    # the viewport scaffold + controls exist.
-    assert 'id="__vp"' in html and 'id="__cv"' in html
-    assert 'id="__zi"' in html and 'id="__zo"' in html and 'id="__zr"' in html  # zoom in/out/reset
-    # wheel-to-zoom (cursor-anchored) + drag-to-pan wiring.
-    assert 'addEventListener("wheel"' in html and "{passive:false}" in html
-    assert 'addEventListener("pointerdown"' in html and 'addEventListener("pointermove"' in html
-    assert "transform-origin:0 0" in html  # transform applied to #__cv
-    # both graphic kinds route through the shared wrapper; the old bare-centering is gone.
+    # the viewport container exists and fits the svg crisply as a vector.
+    assert 'id="__vp"' in html
+    assert "max-width:100% !important" in html and "max-height:100% !important" in html
+    assert "width:auto !important" in html and "height:auto !important" in html
+    # both graphic kinds route through the shared wrapper.
     assert "function viewport(inner)" in html
-    assert "place-items:center" not in html  # svg no longer just centers a static graphic
-    # mermaid's async render re-fits the freshly-drawn <svg>.
-    assert "window.__artFit" in html
+    # the old transform-driven raster pan/zoom scaffold + controls are GONE (they pixelated).
+    assert 'id="__cv"' not in html
+    assert 'id="__zi"' not in html and 'id="__zo"' not in html and 'id="__zr"' not in html
+    assert "will-change" not in html and "transform-origin" not in html
+    assert 'addEventListener("wheel"' not in html  # no scroll-zoom
+    assert "__artFit" not in html  # no async re-fit — the fit is pure CSS now
 
 
 def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
