@@ -112,6 +112,37 @@ def test_discover_live_overrides_bundle(tmp_path, monkeypatch) -> None:
     assert found["dup"] == "from-live"
 
 
+def _mk_versioned(root: Path, pid: str, version: str, desc: str) -> None:
+    d = root / pid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "protoagent.plugin.yaml").write_text(
+        f"id: {pid}\nname: {pid}\nversion: {version}\ndescription: {desc}\n", encoding="utf-8"
+    )
+
+
+def test_discover_stale_untracked_older_does_not_shadow_newer_bundle(tmp_path) -> None:
+    # The artifact-shadow bug: an UNTRACKED leftover from when the plugin was git-installed
+    # (@0.11.3) must NOT shadow the newer bundled copy (@0.14.0) — else it never updates with
+    # the app. Older + untracked → the bundle wins.
+    bundle = tmp_path / "bundle"
+    live = tmp_path / "live"
+    _mk_versioned(bundle, "dup", "0.14.0", "from-bundle")
+    _mk_versioned(live, "dup", "0.11.3", "from-live")
+    found = {m.id: (m.version, m.description) for m in discover_plugins([bundle, live], tracked_ids=set())}
+    assert found["dup"] == ("0.14.0", "from-bundle")
+
+
+def test_discover_tracked_override_wins_at_any_version(tmp_path) -> None:
+    # An INTENTIONAL install (tracked in plugins.lock) still overrides the bundle — even when
+    # it's OLDER — because it's a deliberate pin, not a stale leftover.
+    bundle = tmp_path / "bundle"
+    live = tmp_path / "live"
+    _mk_versioned(bundle, "dup", "0.14.0", "from-bundle")
+    _mk_versioned(live, "dup", "0.11.3", "from-live")
+    found = {m.id: m.description for m in discover_plugins([bundle, live], tracked_ids={"dup"})}
+    assert found["dup"] == "from-live"
+
+
 def test_disabled_plugin_not_loaded(tmp_path, monkeypatch) -> None:
     root = tmp_path / "plugins"
     _make_plugin(root, "offplug", enabled=False, tool="off_tool")

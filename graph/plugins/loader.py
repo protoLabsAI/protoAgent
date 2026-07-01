@@ -50,9 +50,43 @@ class PluginLoadResult:
     meta: list[dict] = field(default_factory=list)
 
 
-def discover_plugins(roots: list[Path]) -> list[PluginManifest]:
-    """Find plugins (dirs with a manifest) under *roots*. Live overrides bundle
-    by id (later root wins)."""
+def _version_key(v: str) -> tuple[int, int, int]:
+    """Best-effort semver sort key: ``"0.14.0" → (0, 14, 0)``. A non-numeric part
+    sorts as ``-1`` so a malformed version can't spuriously beat a real one."""
+    parts: list[int] = []
+    for p in str(v or "0").split(".")[:3]:
+        m = re.match(r"\d+", p.strip())
+        parts.append(int(m.group()) if m else -1)
+    while len(parts) < 3:
+        parts.append(0)
+    return (parts[0], parts[1], parts[2])
+
+
+def _tracked_ids() -> set[str]:
+    """Plugin ids recorded in ``plugins.lock`` — an INTENTIONAL install/override, vs
+    an untracked hand-placed/leftover copy. Best-effort (empty on any error)."""
+    try:
+        from graph.plugins import installer
+
+        return {e.get("id") for e in installer._read_lock().get("plugins", []) if e.get("id")}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def discover_plugins(roots: list[Path], *, tracked_ids: set[str] | None = None) -> list[PluginManifest]:
+    """Find plugins (dirs with a manifest) under *roots*, later roots (the live/installed
+    dir) taking precedence over earlier ones (the bundled dir) by id — but ONLY when the live
+    copy that is UNTRACKED (not in ``plugins.lock``) only wins when it's NOT OLDER than the
+    bundled one.
+
+    This stops a stale, untracked leftover from shadowing the bundled plugin: a plugin that was
+    once git-installed (e.g. artifact @ 0.11.3) and later bundled in-tree at a newer version
+    (0.14.0) would otherwise stay stuck on the old installed copy forever, never updating with
+    the app. An intentional install/override (tracked in the lock) still wins at ANY version;
+    a same-or-newer untracked copy (a dev override) still wins too. ``tracked_ids`` defaults to
+    the ``plugins.lock`` ids."""
+    if tracked_ids is None:
+        tracked_ids = _tracked_ids()
     by_id: dict[str, PluginManifest] = {}
     for root in roots:
         if not (root and root.exists() and root.is_dir()):
@@ -61,7 +95,14 @@ def discover_plugins(roots: list[Path]) -> list[PluginManifest]:
             if not child.is_dir():
                 continue
             manifest = load_manifest(child)
-            if manifest is not None:
+            if manifest is None:
+                continue
+            incumbent = by_id.get(manifest.id)
+            if (
+                incumbent is None
+                or manifest.id in tracked_ids
+                or _version_key(manifest.version) >= _version_key(incumbent.version)
+            ):
                 by_id[manifest.id] = manifest
     return list(by_id.values())
 
