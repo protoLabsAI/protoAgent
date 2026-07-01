@@ -22,6 +22,11 @@ export type ChatSession = {
   // metadata.bypass_permissions so the server auto-approves run_command (no HITL gate). A
   // deliberately dangerous escape hatch — default OFF; the composer shows a loud chip while on.
   bypassPermissions?: boolean;
+  // Per-tab incognito mode (ADR 0069 D3b): while ON, EVERY message sent from this tab
+  // carries metadata.incognito — the server skips memory persistence AND injection for
+  // that turn. The flag is per-MESSAGE server-side, so it must ride every send: a mixed
+  // thread would leak earlier incognito content into a later non-incognito turn's summary.
+  incognito?: boolean;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -76,7 +81,7 @@ function titleFromMessages(messages: ChatMessage[]) {
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
 
-function createSession(): ChatSession {
+function createSession(opts: { incognito?: boolean } = {}): ChatSession {
   const now = Date.now();
   return {
     id: id("chat"),
@@ -84,6 +89,7 @@ function createSession(): ChatSession {
     messages: [],
     createdAt: now,
     updatedAt: now,
+    ...(opts.incognito ? { incognito: true } : {}),
   };
 }
 
@@ -351,8 +357,8 @@ export const chatStore = {
     return state;
   },
 
-  createSession() {
-    const session = createSession();
+  createSession(opts: { incognito?: boolean } = {}) {
+    const session = createSession(opts);
     setState((current) => {
       // New tabs append to the RIGHT; cap at MAX_SESSIONS by dropping the oldest (left).
       const sessions = [...current.sessions, session].slice(-MAX_SESSIONS);
@@ -489,6 +495,17 @@ export const chatStore = {
       ...current,
       sessions: current.sessions.map((session) =>
         session.id === sessionId ? { ...session, bypassPermissions: on || undefined } : session,
+      ),
+    }));
+  },
+
+  // Per-tab incognito toggle (ADR 0069 D3b). Persisted with the session so the mode
+  // survives reload — every send while ON carries metadata.incognito.
+  setSessionIncognito(sessionId: string, on: boolean) {
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId ? { ...session, incognito: on || undefined } : session,
       ),
     }));
   },

@@ -27,6 +27,11 @@ export const queryKeys = {
   playbooks: ["playbooks"] as const,
   knowledge: ["knowledge"] as const,
   flags: ["flags"] as const,
+  // Memory inspector (ADR 0069 D7) — subtree so one invalidate refreshes all panels.
+  memory: ["memory"] as const,
+  memorySessions: ["memory", "sessions"] as const,
+  memoryHot: ["memory", "hot"] as const,
+  memoryInjections: ["memory", "injections"] as const,
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll

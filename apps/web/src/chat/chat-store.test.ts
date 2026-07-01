@@ -391,3 +391,43 @@ describe("cross-tab persistence", () => {
     expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(before);
   });
 });
+
+// Incognito threads (ADR 0069 D3b): the flag lives ON the session (persisted with it)
+// so ChatSurface can stamp metadata.incognito onto EVERY send while it's on — the
+// backend flag is per-message, and a mixed thread would leak earlier incognito content
+// into a later non-incognito turn's summary.
+describe("incognito sessions", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.resetModules(); // fresh module-level store per test
+  });
+
+  it("createSession({incognito:true}) marks the new session; default stays unmarked", async () => {
+    const { chatStore } = await import("./chat-store");
+    const plain = chatStore.createSession();
+    expect(plain.incognito).toBeUndefined();
+    const priv = chatStore.createSession({ incognito: true });
+    expect(priv.incognito).toBe(true);
+    const snap = chatStore.getSnapshot();
+    expect(snap.sessions.find((s) => s.id === priv.id)?.incognito).toBe(true);
+    expect(snap.currentSessionId).toBe(priv.id); // new tab becomes current, as always
+  });
+
+  it("setSessionIncognito toggles on and off (off drops the key entirely)", async () => {
+    const { chatStore } = await import("./chat-store");
+    const s = chatStore.createSession();
+    chatStore.setSessionIncognito(s.id, true);
+    expect(chatStore.getSnapshot().sessions.find((x) => x.id === s.id)?.incognito).toBe(true);
+    chatStore.setSessionIncognito(s.id, false);
+    expect(chatStore.getSnapshot().sessions.find((x) => x.id === s.id)?.incognito).toBeUndefined();
+  });
+
+  it("the incognito flag persists with the session (survives a reload)", async () => {
+    const first = await import("./chat-store");
+    const s = first.chatStore.createSession({ incognito: true });
+    first.flushChatPersist();
+    vi.resetModules(); // "reload": a fresh module re-reads localStorage
+    const second = await import("./chat-store");
+    expect(second.chatStore.getSnapshot().sessions.find((x) => x.id === s.id)?.incognito).toBe(true);
+  });
+});

@@ -430,20 +430,34 @@ function SettingRow({
 // Parsed → a clean string[] on every change; re-syncs from `value` on an external change
 // (discard / reset / load).
 // Split a string-list text field into clean items: comma OR newline separated, trimmed,
-// empties dropped — so "a, b", "a\nb", and "a , , b\n" all yield ["a","b"].
+// empties dropped — so "a, b", "a\nb", and "a , , b\n" all yield ["a","b"]. A quoted empty
+// token — `""` — survives as the empty string: some lists use "" as a sentinel (e.g.
+// knowledge.inject_namespaces, where "" means the un-namespaced rows), and blank-between-
+// separators must still be droppable noise, so the sentinel needs an explicit spelling.
 export function parseStringList(text: string): string[] {
-  return text.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+  return text
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => (s === '""' || s === "''" ? "" : s));
+}
+
+// The inverse: render items for the text field, spelling the empty-string entry as `""`
+// so it survives the round-trip (join would otherwise emit a bare separator that the
+// parse drops).
+export function formatStringList(items: string[]): string {
+  return items.map((s) => (s === "" ? '""' : s)).join(", ");
 }
 
 function StringListInput({ id, value, onChange }: { id: string; value: unknown; onChange: (v: unknown) => void }) {
   const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-  const [text, setText] = useState(items.join(", "));
+  const [text, setText] = useState(formatStringList(items));
   const lastParsed = useRef(items);
   useEffect(() => {
     // Adopt the parent value only when it changed to something we didn't just emit
     // (e.g. Discard reverted it) — otherwise leave the user's in-progress text alone.
     if (JSON.stringify(items) !== JSON.stringify(lastParsed.current)) {
-      setText(items.join(", "));
+      setText(formatStringList(items));
       lastParsed.current = items;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -454,7 +468,7 @@ function StringListInput({ id, value, onChange }: { id: string; value: unknown; 
       className="setting-input setting-textarea"
       rows={2}
       value={text}
-      placeholder="comma-separated (e.g. owner/repo, owner/repo2)"
+      placeholder={'comma-separated (e.g. owner/repo, owner/repo2 — "" for an empty entry)'}
       onChange={(e) => {
         setText(e.target.value);
         const parsed = parseStringList(e.target.value);
