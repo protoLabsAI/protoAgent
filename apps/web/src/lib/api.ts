@@ -1170,6 +1170,25 @@ export const api = {
     );
   },
 
+  // Compact a chat session server-side (#1527): archive the raw history into
+  // searchable memory, summarize it, and rewrite the LangGraph checkpoint to
+  // [summary, recent tail] so the agent keeps context at lower token cost. The
+  // checkpoint is the agent's REAL context, so this must be server-side — a
+  // client-only trim would leave the agent's context untouched. `refused` (never
+  // lossy: nothing could be archived) means the server left the thread intact.
+  compactChatSession(sessionId: string) {
+    return request<{
+      summary: string;
+      archived_chunks: number;
+      kept: number;
+      removed: number;
+      archived: boolean;
+      refused: boolean;
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST", body: {} });
+  },
+
   async streamChat(
     message: string,
     sessionId: string,

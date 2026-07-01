@@ -27,7 +27,7 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
-from server.chat import chat
+from server.chat import chat, compact_session
 
 
 class ChatRequest(BaseModel):
@@ -74,6 +74,19 @@ def register_chat_routes(app, ui: str) -> None:
             except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
                 log.warning("[chat] attachment cleanup failed for %s: %s", session_id, exc)
         return {"deleted": True, "harvested": chunk_id is not None}
+
+    @app.post("/api/chat/sessions/{session_id}/compact")
+    async def _api_compact_session(session_id: str):
+        """Compact a chat session's live context (#1527): archive the raw history
+        into searchable memory, summarize it, and rewrite the LangGraph checkpoint
+        to ``[summary, recent tail]`` so the agent keeps context at lower token
+        cost. Runs SERVER-SIDE — the checkpoint is the agent's real context, so a
+        client-only compaction would do nothing.
+
+        Never-lossy: if there's no store or the archive write yields nothing, the
+        checkpoint is left untouched and ``refused`` is true (the console then
+        keeps the full thread rather than dropping anything)."""
+        return await compact_session(session_id)
 
     @app.post("/api/chat/sessions/{session_id}/steer")
     async def _api_steer(session_id: str, body: dict | None = None):
