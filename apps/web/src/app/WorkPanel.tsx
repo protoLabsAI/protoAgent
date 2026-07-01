@@ -1,5 +1,5 @@
-import { useState, type ComponentProps, type ReactNode } from "react";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Tabs } from "@protolabsai/ui/navigation";
 import { Boxes, CalendarClock, ChevronRight, Eye, LayoutDashboard, Target } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -9,7 +9,8 @@ import { GoalsPanel } from "./GoalsPanel";
 import { WatchesPanel } from "./WatchesPanel";
 import { TasksPanel } from "./TasksPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
-import { tasksQuery, goalsQuery, schedulesQuery } from "../lib/queries";
+import { onServerEvent } from "../lib/events";
+import { tasksQuery, goalsQuery, schedulesQuery, queryKeys } from "../lib/queries";
 import type { Task, GoalState, ScheduledJob } from "../lib/types";
 
 import "./work.css";
@@ -63,7 +64,31 @@ const normStatus = (s: string | undefined) => (s ?? "").toLowerCase().replace(/[
 function WorkOverview({ onJump }: { onJump: (t: WorkTab) => void }) {
   const goals = useSuspenseQuery(goalsQuery()).data.goals;
   const issues = useSuspenseQuery(tasksQuery()).data.issues;
-  const jobs = useSuspenseQuery(schedulesQuery()).data.jobs;
+  // The scheduler bus only emits `scheduler.fired` (a dispatch) — there is NO push when the
+  // AGENT adds/cancels a job mid-turn (schedule_task/cancel_schedule mutate the store directly).
+  // A gentle per-use poll (NOT on the shared schedulesQuery() factory — that would regress
+  // SchedulePanel and other `schedules`-key consumers) self-heals that one change-class (#1537).
+  const jobs = useSuspenseQuery({ ...schedulesQuery(), refetchInterval: 15_000 }).data.jobs;
+  const queryClient = useQueryClient();
+
+  // Live roll-up: the Overview is a different tab than the Goals/Tasks/Schedule panels, so
+  // while it's showing those panels are unmounted and their own bus subscriptions are gone.
+  // Subscribe here too so agent-driven changes mid-turn refresh the counts without a remount
+  // (#1537) — the same push pattern as the panels (invalidate the matching query key on the
+  // relevant ADR 0039 topic, no polling): `goal.changed`/`goal.iteration` (set/advance/clear/
+  // terminal), `task.changed` (filed/closed/updated), `scheduler.fired` (a job dispatched, so
+  // its next_fire moved).
+  useEffect(() => {
+    const refresh = (key: readonly unknown[]) => () =>
+      void queryClient.invalidateQueries({ queryKey: key });
+    const offs = [
+      onServerEvent("goal.changed", refresh(queryKeys.goals)),
+      onServerEvent("goal.iteration", refresh(queryKeys.goals)),
+      onServerEvent("task.changed", refresh(queryKeys.tasks)),
+      onServerEvent("scheduler.fired", refresh(queryKeys.schedules)),
+    ];
+    return () => offs.forEach((off) => off());
+  }, [queryClient]);
 
   const activeGoals = goals.filter(
     (g) => g.status !== "achieved" && g.status !== "failed" && !g.finished_at,
