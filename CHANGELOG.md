@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **One-command install** — `curl -fsSL .../scripts/install.sh | sh` takes a fresh
+  machine from zero to a running, configured protoAgent. It checks prerequisites
+  (Docker + curl), pulls `ghcr.io/protolabsai/protoagent:latest`, runs it
+  (loopback-published, named volume, `restart:unless-stopped`, `PROTOAGENT_UI=console`),
+  then drives a **CLI config wizard over the same `/api/config/*` endpoints as the
+  browser setup wizard** (gateway URL, silent API-key entry, live model probe +
+  validation, agent name). Idempotent (re-run updates the image, keeps data, offers
+  to re-run the wizard), works over a plain SSH session (no-TTY → start + finish in
+  the browser), and POSIX-sh (`| sh`). On non-amd64 hosts (Apple Silicon) it targets
+  the amd64 image under emulation with a clear notice. Versioned at
+  [`scripts/install.sh`](scripts/install.sh); see
+  [Deploy with Docker → one-command install](docs/guides/deploy-docker.md#one-command-install).
 - **Agent archetypes are a data-driven registry** (ADR 0042). The new-agent picker + setup
   wizard now read their built-in starter types from `config/archetype-catalog.json`
   (served by `GET /api/archetypes`) instead of a hardcoded list — so archetypes can be added

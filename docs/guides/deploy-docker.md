@@ -11,6 +11,57 @@ export OPENAI_API_KEY=sk-... A2A_AUTH_TOKEN=$(openssl rand -hex 24)
 docker compose up -d --build
 ```
 
+## One-command install
+
+For a fresh machine you just SSH'd into — no clone, no Python, no hand-written
+`docker run`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts/install.sh | sh
+```
+
+[`scripts/install.sh`](https://github.com/protoLabsAI/protoAgent/blob/main/scripts/install.sh)
+is versioned in the repo (so it tracks the agent) and:
+
+1. **Checks prerequisites** — Docker (+ a running daemon) and curl.
+2. **Pulls** `ghcr.io/protolabsai/protoagent:latest`.
+3. **Runs** it — published to **loopback** (`127.0.0.1:7870`), a named data
+   volume (`protoagent-sandbox`), `--restart unless-stopped`, and `PROTOAGENT_UI=console`
+   so the console serves at `/app`.
+4. **Runs a CLI wizard** that drives the **same `/api/config/*` endpoints as the
+   browser setup wizard** — provider gateway URL, API key (silent), model
+   (fetched + validated live), and agent name — so it stays in parity for free.
+5. **Prints** where the agent is running.
+
+It's **idempotent**: re-running pulls the latest image, keeps the data volume,
+and offers to re-run the wizard. Over a **plain SSH session with no TTY** it
+starts the container and points you at `/app` to finish setup in a browser.
+
+**Serving the vanity URL.** The one-liner above uses the GitHub-raw URL, which
+works today. To serve it from `https://agent.protolabs.studio/install.sh`
+instead, point that path at the raw file (a CDN/redirect or a one-line reverse
+proxy) — the script content is identical.
+
+**Overrides** (all optional env vars):
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `PROTOAGENT_PORT` | `7870` | Host port |
+| `PROTOAGENT_BIND` | `127.0.0.1` | Host bind address (widen only with `A2A_AUTH_TOKEN`) |
+| `PROTOAGENT_VOLUME` | `protoagent-sandbox` | Data volume name |
+| `PROTOAGENT_IMAGE` | `ghcr.io/protolabsai/protoagent:latest` | Image ref |
+| `PROTOAGENT_INSTALL_URL` | — | Configure an **already-running** instance (skips Docker) |
+| `PROTOAGENT_INSTALL_NONINTERACTIVE` | — | `1` = start only, never prompt |
+| `A2A_AUTH_TOKEN` | — | Bearer required to widen the bind past loopback |
+
+> **Architecture note.** The published image is currently **linux/amd64**. On
+> Apple Silicon / arm64 the installer targets amd64 explicitly so Docker Desktop
+> runs it under emulation (a slower first boot); native-ARM performance needs a
+> multi-arch image or a local build. On amd64 hosts it runs natively.
+
+For a **pre-configured, config-as-code** deploy (bake settings into your own
+image, no wizard) use the seed pattern below instead.
+
 ## The one trap to avoid
 
 The image declares `VOLUME /opt/protoagent/config`. That's deliberate — it persists wizard/console edits — but it means a config **volume** holds the live `langgraph-config.yaml`. So if you bake your config **as the live file** (`COPY my-config.yaml /opt/protoagent/config/langgraph-config.yaml`), the volume freezes your first-boot copy and **silently shadows every later image update**: enabling a plugin in a new image just… does nothing. Don't bake the live file.
