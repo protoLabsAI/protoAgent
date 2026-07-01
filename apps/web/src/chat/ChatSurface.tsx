@@ -28,6 +28,7 @@ import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
+import { inputHistory, pushInputHistory } from "./inputHistory";
 import { addComponent, addToolRef, appendReasoning, appendText } from "./parts";
 
 function messageId() {
@@ -289,6 +290,11 @@ function ChatSessionSlot({
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Terminal-style ↑/↓ history nav (#1496): position in the shared submitted-message ring
+  // (null = not navigating), and the live draft stashed when nav began (restored on ↓ past
+  // the newest). Refs, not state — they change alongside a setDraft, no separate re-render.
+  const histIndexRef = useRef<number | null>(null);
+  const histStashRef = useRef<string>("");
   // Autofocus the composer when this becomes the active session AND the chat surface is
   // the active rail surface — so clicking the Chat rail item (or switching tabs) lands
   // focus in the composer without a click. (`visible` alone is the active tab, which
@@ -483,6 +489,53 @@ function ChatSessionSlot({
         return;
       }
     }
+    // Terminal-style input history (#1496): ↑ recalls the previous submitted message when the
+    // caret is on the FIRST line; ↓ walks back toward the live draft when on the LAST line — so
+    // multi-line editing keeps normal caret movement and history only triggers at the edges.
+    // (Bare arrows only — a modifier means a tab-jump / caret combo, not history.)
+    if (
+      (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+      !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    ) {
+      const ta = textareaRef.current;
+      const hist = inputHistory();
+      if (ta && hist.length) {
+        const caret = ta.selectionStart ?? 0;
+        const onFirstLine = draft.slice(0, caret).indexOf("\n") === -1;
+        const onLastLine = draft.slice(ta.selectionEnd ?? caret).indexOf("\n") === -1;
+        const recall = (val: string) => {
+          setDraft(val);
+          // caret to end so the next keystroke edits the recalled text (readline behaviour)
+          requestAnimationFrame(() => {
+            const t = textareaRef.current;
+            if (t) t.selectionStart = t.selectionEnd = val.length;
+          });
+        };
+        if (event.key === "ArrowUp" && onFirstLine) {
+          event.preventDefault();
+          if (histIndexRef.current === null) {
+            histStashRef.current = draft; // remember the in-progress draft
+            histIndexRef.current = hist.length - 1;
+          } else if (histIndexRef.current > 0) {
+            histIndexRef.current -= 1;
+          }
+          recall(hist[histIndexRef.current]);
+          return;
+        }
+        if (event.key === "ArrowDown" && histIndexRef.current !== null && onLastLine) {
+          event.preventDefault();
+          histIndexRef.current += 1;
+          if (histIndexRef.current > hist.length - 1) {
+            histIndexRef.current = null; // walked past the newest → restore the stashed draft
+            recall(histStashRef.current);
+            histStashRef.current = "";
+          } else {
+            recall(hist[histIndexRef.current]);
+          }
+          return;
+        }
+      }
+    }
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       // ⌘/Ctrl+Enter → newline at the caret (the textarea wouldn't on its own).
       event.preventDefault();
@@ -579,6 +632,9 @@ function ChatSessionSlot({
   async function send() {
     if (!session || !canSend) return;
     const text = draft.trim();
+    pushInputHistory(text); // record for ↑/↓ recall, then reset nav to the newest
+    histIndexRef.current = null;
+    histStashRef.current = "";
     setDraft("");
     // Deterministic client-side slash commands (ADR 0057) — handled locally, not sent.
     if (text.startsWith("/") && runClientSlash(text.slice(1).trim())) return;
@@ -606,6 +662,9 @@ function ChatSessionSlot({
   async function queueSteer() {
     const text = draft.trim();
     if (!session || !text) return;
+    pushInputHistory(text); // steered messages join the same recall ring
+    histIndexRef.current = null;
+    histStashRef.current = "";
     const id = messageId();
     setDraft("");
     setSteerQueue([...steerQueueRef.current, { id, text }]);
@@ -1201,6 +1260,7 @@ function ChatSessionSlot({
           onChange={(v) => {
             setDraft(v);
             setSlashDismissed(false); // re-open the menu when the input changes
+            histIndexRef.current = null; // typing detaches from history nav (readline)
           }}
           // Idle → send. While a turn streams (`busy`), the field stays live: Enter
           // queues a steer into the running turn (onQueue) without stopping it, and
@@ -1212,7 +1272,7 @@ function ChatSessionSlot({
           placeholder={
             status === "streaming"
               ? "Steer the agent — your message folds into its work at the next step (Enter to queue)"
-              : "Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
+              : "Message protoAgent  (/ for commands · Enter to send · ↑ history · ⌘/Ctrl+Enter for newline)"
           }
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
