@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
 #
-# Factory-reset the DEFAULT ("prod") protoAgent instance: wipe its data + local
-# config back to a clean slate so the next boot runs the setup wizard. For local
-# testing of the fresh-user flow. (Reset ONLY the dev sandbox instead with
-# scripts/dev-reset.sh; there is intentionally NO in-app factory reset — #1159.)
+# Factory-reset the DEFAULT protoAgent instance: wipe its single subtree —
+# box_root/default/ (its config/ AND every data store) — back to a clean slate so
+# the next boot runs the setup wizard. For local testing of the fresh-user flow.
+# (Reset ONLY the dev sandbox instead with scripts/dev-reset.sh; there is
+# intentionally NO in-app factory reset — #1159.)
 #
-# SAFE ON A MULTI-INSTANCE MACHINE — it preserves EVERY OTHER instance:
-#   * any  ~/.protoagent/<name>  that carries an instance marker (.instance-uid /
-#     checkpoints.db) is left untouched (the dev sandbox, fleet members, forks);
-#   * inside a shared store dir (knowledge/, memory/, tasks/, …) every
-#     <store>/<instance> leaf (a SUBDIRECTORY) is preserved — only prod's own
-#     unscoped top-level DBs and the direct files in those store dirs are removed.
-# Shipped/tracked files in config/ are RESTORED to pristine (git checkout); only
-# gitignored local config is deleted.
+# Two-tier layout (ADR 0065): one instance is ONE subtree, so a reset is a wipe of
+# box_root/default. This is SAFE on a multi-instance / shared machine — it preserves
+#   * every BOX-shared item (machine-wide): host-config.yaml (the gateway/Host
+#     config), commons/, .instances/, .data-version, cache/; and
+#   * every OTHER instance subtree (box_root/<name>, name != default) — the dev
+#     sandbox, fleet members, forks. --include-dev ALSO wipes box_root/dev.
+# Live config now lives under box_root/default/config, never in the repo tree, so
+# the old "restore tracked config/ via git checkout" step is gone.
 #
 #   scripts/reset.sh --dry-run       # print exactly what would change; delete nothing
-#   scripts/reset.sh                 # confirm, then reset prod (keeps every other instance)
+#   scripts/reset.sh                 # confirm, then reset default (keeps every other instance)
 #   scripts/reset.sh --yes           # skip the typed confirmation
-#   scripts/reset.sh --backup        # timestamped tar.gz of data + config first
-#   scripts/reset.sh --keep-secrets  # keep secrets.yaml + langgraph-config.yaml (no re-auth)
-#   scripts/reset.sh --include-dev   # ALSO wipe the `dev` sandbox (its data + config/dev)
+#   scripts/reset.sh --backup        # timestamped tar.gz of default + host-config first
+#   scripts/reset.sh --keep-secrets  # keep config/{secrets.yaml,langgraph-config.yaml} (no re-auth)
+#   scripts/reset.sh --include-dev   # ALSO wipe the `dev` sandbox subtree
 #   scripts/reset.sh --force         # stop a server still bound to the port first
 #
 # ALWAYS run --dry-run first on a busy machine and read the plan.
 set -euo pipefail
-cd "$(dirname "$0")/.."
-REPO="$(pwd)"
 
 # ── flags ─────────────────────────────────────────────────────────────────────
 DRY_RUN=false; ASSUME_YES=false; DO_BACKUP=false
@@ -38,30 +37,34 @@ for arg in "$@"; do
     --keep-secrets) KEEP_SECRETS=true ;;
     --include-dev) INCLUDE_DEV=true ;;
     --force) FORCE=true ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo/{/^set -euo/!p;}' "$0"; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-# Mirror infra.paths.data_home(): /sandbox in a container, else ~/.protoagent.
-if [ -d /sandbox ]; then DATA="/sandbox"; else DATA="${HOME}/.protoagent"; fi
-CONFIG="${PROTOAGENT_CONFIG_DIR:-${REPO}/config}"
+# Mirror infra.paths box_root: PROTOAGENT_BOX_ROOT override, else /sandbox in a
+# container, else ~/.protoagent. box_root is the machine-shared base; the default
+# instance is the subtree box_root/default (config + every store live under it).
+if [ -n "${PROTOAGENT_BOX_ROOT:-}" ]; then BOX="${PROTOAGENT_BOX_ROOT}"
+elif [ -d /sandbox ]; then BOX="/sandbox"
+else BOX="${HOME}/.protoagent"; fi
+DEFAULT="${BOX}/default"
 PORT="${PORT:-7870}"
 
-# Gitignored local config to DELETE (the prod instance's machine-local state).
-CONFIG_IGNORED=(langgraph-config.yaml secrets.yaml .setup-complete plugins)
-# Shipped/tracked config to RESTORE to pristine (git checkout, never delete).
-CONFIG_TRACKED=(config/SOUL.md config/skills config/plugin-catalog.json
-                config/mcp-catalog.json config/soul-presets config/langgraph-config.example.yaml
-                plugins.lock)
+# Box-tier shared items — machine-wide, NEVER wiped by a single-instance reset.
+BOX_SHARED=(host-config.yaml commons .instances .data-version cache)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 say()  { printf '%s\n' "$*"; }
 plan() { printf '  %s\n' "$*"; }
-run() { if $DRY_RUN; then printf '  [dry-run] %s\n' "$*"; else "$@"; fi; }
+run()  { if $DRY_RUN; then printf '  [dry-run] %s\n' "$*"; else "$@"; fi; }
 
-is_instance_root() { [ -e "$1/.instance-uid" ] || [ -e "$1/checkpoints.db" ]; }
+is_box_shared() {
+  local n="$1" s
+  for s in "${BOX_SHARED[@]}"; do [ "$n" = "$s" ] && return 0; done
+  return 1
+}
 
 # A server still bound to PORT holds WAL handles — a wipe is pointless until it exits.
 running_pids() { command -v lsof >/dev/null 2>&1 && lsof -ti "tcp:${PORT}" -sTCP:LISTEN 2>/dev/null || true; }
@@ -85,49 +88,40 @@ if [ -n "$PIDS" ]; then
   fi
 fi
 
-# ── 1. the plan ───────────────────────────────────────────────────────────────
-KEEP="dev"; $INCLUDE_DEV && KEEP=""
-say ""
-say "Factory reset — DEFAULT (prod) instance"
-say "  data:   ${DATA}"
-say "  config: ${CONFIG}"
-$DRY_RUN && say "  mode:   DRY RUN (nothing will be deleted)"
-say ""
-
-if [ -d "$DATA" ]; then
-  say "Data home (${DATA}):"
-  PRESERVED=()
+# ── 1. classify what lives under the box root ─────────────────────────────────
+SHARED=(); OTHERS=()
+if [ -d "$BOX" ]; then
   while IFS= read -r entry; do
     name="$(basename "$entry")"
-    if [ -d "$entry" ] && is_instance_root "$entry"; then
-      if [ -n "$KEEP" ] || [ "$name" != "dev" ]; then PRESERVED+=("$name"); continue; fi
-    fi
-    if [ -f "$entry" ] || [ -L "$entry" ]; then
-      plan "delete prod file:  ${name}"
-    elif [ -d "$entry" ]; then
-      # A store dir: prod's content is its DIRECT FILES; every subdir is a
-      # <store>/<instance> leaf and is preserved (unless --include-dev → drop dev/).
-      files=$(find "$entry" -mindepth 1 -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
-      leaves=$(find "$entry" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-      plan "store dir ${name}/: drop ${files} prod file(s); keep ${leaves} instance leaf(s)$( $INCLUDE_DEV && [ -d "$entry/dev" ] && echo ' (minus dev/)')"
-    fi
-  done < <(find "$DATA" -mindepth 1 -maxdepth 1 | sort)
-  [ ${#PRESERVED[@]} -gt 0 ] && plan "PRESERVE other instances: ${PRESERVED[*]}"
-else
-  plan "(no data home at ${DATA})"
+    [ "$name" = "default" ] && continue                 # the wipe target
+    $INCLUDE_DEV && [ "$name" = "dev" ] && continue     # also wiped (listed below)
+    if is_box_shared "$name"; then SHARED+=("$name"); else OTHERS+=("$name"); fi
+  done < <(find "$BOX" -mindepth 1 -maxdepth 1 | sort)
 fi
 
+# ── 2. the plan ───────────────────────────────────────────────────────────────
 say ""
-say "Config (${CONFIG}):"
-for f in "${CONFIG_IGNORED[@]}"; do
-  if $KEEP_SECRETS && { [ "$f" = "secrets.yaml" ] || [ "$f" = "langgraph-config.yaml" ]; }; then
-    [ -e "${CONFIG}/${f}" ] && plan "keep (--keep-secrets): ${f}"
-    continue
-  fi
-  [ -e "${CONFIG}/${f}" ] && plan "delete local:  ${f}"
-done
-$INCLUDE_DEV && [ -e "${CONFIG}/dev" ] && plan "delete dev config:  dev/"
-for p in "${CONFIG_TRACKED[@]}"; do plan "restore tracked: ${p}"; done
+say "Factory reset — DEFAULT instance"
+say "  box:      ${BOX}"
+say "  instance: ${DEFAULT}"
+$DRY_RUN && say "  mode:     DRY RUN (nothing will be deleted)"
+say ""
+
+say "Wipe (config + every data store in the subtree):"
+if [ -d "$DEFAULT" ]; then plan "delete instance: ${DEFAULT}"; else plan "(no default instance at ${DEFAULT})"; fi
+$INCLUDE_DEV && [ -d "${BOX}/dev" ] && plan "delete instance: ${BOX}/dev  (--include-dev)"
+if $KEEP_SECRETS; then
+  for f in secrets.yaml langgraph-config.yaml; do
+    [ -f "${DEFAULT}/config/${f}" ] && plan "keep (--keep-secrets): config/${f}"
+  done
+fi
+say ""
+
+say "Preserve (box-shared, machine-wide):"
+if [ ${#SHARED[@]} -gt 0 ]; then for s in "${SHARED[@]}"; do plan "$s"; done; else plan "(none present)"; fi
+say ""
+say "Preserve (other instances):"
+if [ ${#OTHERS[@]} -gt 0 ]; then for o in "${OTHERS[@]}"; do plan "$o"; done; else plan "(none)"; fi
 
 if $DRY_RUN; then
   say ""
@@ -135,57 +129,50 @@ if $DRY_RUN; then
   exit 0
 fi
 
-# ── 2. confirm ────────────────────────────────────────────────────────────────
+# ── 3. confirm ────────────────────────────────────────────────────────────────
 if ! $ASSUME_YES; then
   say ""
-  printf "Type 'reset' to wipe the prod instance (other instances are preserved): "
+  printf "Type 'reset' to wipe the default instance (other instances + box-shared config are preserved): "
   read -r reply
   [ "$reply" = "reset" ] || { say "aborted."; exit 1; }
 fi
 
-# ── 3. backup ─────────────────────────────────────────────────────────────────
+# ── 4. backup ─────────────────────────────────────────────────────────────────
 if $DO_BACKUP; then
   TS="$(date +%Y%m%d-%H%M%S)"
   BK="${HOME}/protoagent-backup-${TS}.tar.gz"
-  say "▶ backing up data + config → ${BK}"
-  tar czf "$BK" -C "$HOME" "$(realpath --relative-to="$HOME" "$DATA" 2>/dev/null || echo .protoagent)" \
-      -C "$REPO" config 2>/dev/null || say "  (backup best-effort; some paths skipped)"
+  say "▶ backing up default instance + host-config → ${BK}"
+  BK_ITEMS=()
+  [ -d "$DEFAULT" ] && BK_ITEMS+=("default")
+  [ -e "${BOX}/host-config.yaml" ] && BK_ITEMS+=("host-config.yaml")
+  if [ ${#BK_ITEMS[@]} -gt 0 ]; then
+    tar czf "$BK" -C "$BOX" "${BK_ITEMS[@]}" 2>/dev/null || say "  (backup best-effort; some paths skipped)"
+  else
+    say "  (nothing to back up)"
+  fi
 fi
 
-# ── 4. wipe prod data (preserving every other instance) ───────────────────────
-if [ -d "$DATA" ]; then
-  while IFS= read -r entry; do
-    name="$(basename "$entry")"
-    if [ -d "$entry" ] && is_instance_root "$entry"; then
-      if [ -n "$KEEP" ] || [ "$name" != "dev" ]; then continue; fi
-    fi
-    if [ -f "$entry" ] || [ -L "$entry" ]; then
-      run rm -f "$entry"
-    elif [ -d "$entry" ]; then
-      # delete prod's direct files; preserve every <store>/<instance> subdir
-      while IFS= read -r f; do run rm -f "$f"; done < <(find "$entry" -mindepth 1 -maxdepth 1 -type f)
-      if $INCLUDE_DEV && [ -d "$entry/dev" ]; then run rm -rf "$entry/dev"; fi
-      rmdir "$entry" 2>/dev/null || true  # remove if now empty (held no instance leaf)
-    fi
-  done < <(find "$DATA" -mindepth 1 -maxdepth 1 | sort)
+# ── 5. wipe the default instance (whole subtree), optionally keeping creds ─────
+if [ -d "$DEFAULT" ]; then
+  if $KEEP_SECRETS; then
+    # Stash the two cred files (same fs, preserving 0600), wipe, restore into a
+    # fresh empty config/ — no .setup-complete, so next boot still runs the wizard.
+    STASH="$(mktemp -d "${BOX}/.reset-keep.XXXXXX")"
+    for f in secrets.yaml langgraph-config.yaml; do
+      [ -f "${DEFAULT}/config/${f}" ] && cp -p "${DEFAULT}/config/${f}" "${STASH}/${f}"
+    done
+    run rm -rf "${DEFAULT:?}"
+    mkdir -p "${DEFAULT}/config"
+    for f in secrets.yaml langgraph-config.yaml; do
+      [ -f "${STASH}/${f}" ] && mv "${STASH}/${f}" "${DEFAULT}/config/${f}"
+    done
+    rmdir "$STASH" 2>/dev/null || true
+  else
+    run rm -rf "${DEFAULT:?}"
+  fi
 fi
-# --include-dev: also drop the dev instance root + its scoped data leaves.
-if $INCLUDE_DEV; then
-  run rm -rf "${DATA:?}/dev"
-  while IFS= read -r leaf; do run rm -rf "$leaf"; done \
-    < <(find "$DATA" -mindepth 2 -maxdepth 2 -type d -name dev 2>/dev/null)
-fi
-
-# ── 5. config: delete gitignored local state, restore tracked to pristine ─────
-for f in "${CONFIG_IGNORED[@]}"; do
-  if $KEEP_SECRETS && { [ "$f" = "secrets.yaml" ] || [ "$f" = "langgraph-config.yaml" ]; }; then continue; fi
-  [ -e "${CONFIG}/${f}" ] && run rm -rf "${CONFIG:?}/${f}"
-done
-$INCLUDE_DEV && [ -e "${CONFIG}/dev" ] && run rm -rf "${CONFIG:?}/dev"
-# Restore the shipped/tracked files only if they're tracked in this repo.
-for p in "${CONFIG_TRACKED[@]}"; do
-  git -C "$REPO" ls-files --error-unmatch "$p" >/dev/null 2>&1 && run git -C "$REPO" checkout -- "$p"
-done
+# --include-dev: also drop the dev sandbox subtree (box-shared items still kept).
+if $INCLUDE_DEV && [ -d "${BOX}/dev" ]; then run rm -rf "${BOX:?}/dev"; fi
 
 say ""
-say "✓ prod instance reset. Next boot (python -m server) runs the setup wizard."
+say "✓ default instance reset. Next boot (python -m server) runs the setup wizard."
