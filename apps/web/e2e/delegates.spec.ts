@@ -13,8 +13,10 @@ async function openIntegrations(page) {
 
 test("lists configured delegates with type + secret badges", async ({ page }) => {
   await openIntegrations(page);
+  // The panel title now renders in the shared SettingsSubPanel header (#1545) as a DS
+  // PanelHeader heading (outside .delegates-section); the rows stay inside it.
+  await expect(page.getByRole("heading", { name: "Delegates" })).toBeVisible();
   const panel = page.locator(".delegates-section");
-  await expect(panel.getByText("Delegates", { exact: true })).toBeVisible();
   const row = panel.locator(".subagent-row", { hasText: "opus" });
   await expect(row).toBeVisible();
   await expect(row.getByText("openai", { exact: true })).toBeVisible(); // DS Badge (#832)

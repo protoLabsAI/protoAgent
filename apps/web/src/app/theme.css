@@ -2019,6 +2019,36 @@ textarea {
 .fleet-switcher-trigger:hover {
   background: var(--bg-hover);
 }
+
+/* Header brand mark = a compact settings menu trigger (#1544). The logo + a subtle chevron
+   that fades in on hover/focus/open; the whole mark is a button (pointer cursor, hover tint).
+   The dropdown itself is the DS Menu (.pl-menu), portaled to <body>. */
+.brand-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: var(--radius);
+  color: inherit;
+  line-height: 0;
+  cursor: pointer;
+}
+.brand-menu-trigger:hover {
+  background: var(--bg-hover);
+}
+.brand-menu-chevron {
+  color: var(--fg-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.brand-menu-trigger:hover .brand-menu-chevron,
+.brand-menu-trigger:focus-visible .brand-menu-chevron,
+.brand-menu-trigger[data-state="open"] .brand-menu-chevron {
+  opacity: 1;
+}
 .fleet-switcher-name {
   display: inline-flex;
   align-items: center;
