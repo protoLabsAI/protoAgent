@@ -674,6 +674,12 @@ def _main():
 
     register_fleet_routes(fastapi_app)
 
+    # Developer flags (ADR 0068) — /api/flags serves the resolved flag states the
+    # console Developer panel renders + toggles.
+    from operator_api.flags_routes import register_flags_routes
+
+    register_flags_routes(fastapi_app)
+
     # Per-agent theme (ADR 0042) — each agent saves its own look; the console repaints
     # to the focused agent's theme (proxied via /agents/<slug>/api/theme, slug routing).
     from operator_api.theme_routes import register_theme_routes
