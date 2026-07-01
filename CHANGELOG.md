@@ -73,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer auto-merge and freeze the Pages deploy.
 
 ### Fixed
+- **Chat code blocks: no empty header gap, a distinct lighter well, and no panel-stretch.**
+  A fenced block with no language no longer renders an empty ~32px header band (the copy
+  action now floats over the code's top-right); the code well is lifted onto the lighter
+  `--pl-color-bg-raised` token so it reads distinctly from system-message/report cards and
+  select inputs (which use the darkest `--pl-color-bg-inset`); and the block + assistant
+  markdown column are hard-capped to the message width so a long unwrapped line scrolls
+  inside the block instead of widening the chat panel.
 - **Chat session-identity hygiene** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md) D4).
   Omitting `session_id` on `POST /api/chat` now mints a unique per-call id instead of
   pooling every caller into one shared `api-default` thread; an empty session id skips
