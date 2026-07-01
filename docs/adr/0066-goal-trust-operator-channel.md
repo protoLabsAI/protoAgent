@@ -100,3 +100,7 @@ operational step.
 - **PR2** — a `protomaker`/CLI `goal set` command (thin client of `POST /api/goals`).
 - **PR3** — the console Goals set-form (DRAFT, local-test gate) — the set-path UI deferred from
   the goal.iteration work.
+
+**Operational follow-ups (the federation token itself)** — management UI, peer rotation + an
+optional `require_federation_token` enforce flag, fleet-member tokens, and `trust_tier`
+observability — are tracked in #1504.
