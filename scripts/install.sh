@@ -39,7 +39,12 @@ BIND=${PROTOAGENT_BIND:-127.0.0.1}
 DEFAULT_API_BASE=${PROTOAGENT_DEFAULT_API_BASE:-https://api.proto-labs.ai/v1}
 DEFAULT_MODEL=${PROTOAGENT_DEFAULT_MODEL:-protolabs/reasoning}
 TARGET_URL=${PROTOAGENT_INSTALL_URL:-}
-BASE_URL="http://127.0.0.1:${PORT}"
+# Health check + printed URLs must target the address the port is actually
+# published on ($BIND), not a hardcoded loopback — a specific-IP bind isn't
+# reachable via 127.0.0.1. A 0.0.0.0 bind IS reachable via loopback.
+HOST=$BIND
+[ "$BIND" = "0.0.0.0" ] && HOST=127.0.0.1
+BASE_URL="http://${HOST}:${PORT}"
 
 # The published image is currently linux/amd64. On a non-amd64 host (Apple
 # Silicon, arm64 servers) a bare `docker pull` errors on the missing native
@@ -90,10 +95,15 @@ ask() {
 # ask_secret VAR "Prompt"  — no echo.
 ask_secret() {
   printf '%s: ' "$2" > "$TTY"
+  # Restore echo (and exit) if the user Ctrl-C's mid-entry — otherwise the
+  # terminal is left echo-off until `reset`.
+  trap 'stty echo < "$TTY" 2>/dev/null; exit 130' INT TERM
   stty -echo < "$TTY" 2>/dev/null || true
   IFS= read -r _sec < "$TTY" || _sec=
   stty echo < "$TTY" 2>/dev/null || true
+  trap - INT TERM
   printf '\n' > "$TTY"
+  _sec=$(printf '%s' "$_sec" | tr -d '\r')  # drop a stray CR from a CRLF paste
   eval "$1=\$_sec"
 }
 
@@ -140,7 +150,7 @@ run_container() {
   info "Pulling ${IMAGE} (this can take a minute) …"
   # shellcheck disable=SC2086  # PLAT_ARG must word-split into two args (or none)
   docker pull $PLAT_ARG "$IMAGE" >/dev/null || die "docker pull failed for ${IMAGE}"
-  if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+  if docker ps -a --format '{{.Names}}' | grep -Fqx "$CONTAINER"; then
     info "Replacing existing '${CONTAINER}' container — the '${VOLUME}' data volume is kept."
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   fi
@@ -214,6 +224,7 @@ wizard() {
     printf '%s\n' "$MODELS" | awk '{ printf "  %2d) %s\n", NR, $0 }' > "$TTY"
     _count=$(printf '%s\n' "$MODELS" | wc -l | tr -d ' ')
     ask _PICK "Choose a number, or type a model name" "1"
+    _PICK=$(printf '%s' "$_PICK" | tr -d '[:space:]')  # so " 2" still reads as choice 2
     if printf '%s' "$_PICK" | grep -q '^[0-9][0-9]*$' && \
        [ "$_PICK" -ge 1 ] && [ "$_PICK" -le "$_count" ]; then
       MODEL=$(printf '%s\n' "$MODELS" | sed -n "${_PICK}p")
@@ -285,8 +296,14 @@ main() {
   else
     need docker "Install Docker — https://docs.docker.com/get-docker/ — and re-run."
     docker info >/dev/null 2>&1 || die "Docker is installed but its daemon isn't running. Start Docker and re-run."
+    # ALLOW_OPEN=1 is only safe when the loopback publish is the fence. Any other
+    # bind exposes the agent on the network, so require a bearer token there —
+    # otherwise it's open + unauthenticated.
+    case "$BIND" in
+      127.0.0.1|localhost) : ;;
+      *) [ -n "${A2A_AUTH_TOKEN:-}" ] || die "PROTOAGENT_BIND=${BIND} publishes the agent on the network. Set A2A_AUTH_TOKEN (e.g. A2A_AUTH_TOKEN=\$(openssl rand -hex 24)) and re-run, or keep the default loopback bind." ;;
+    esac
     run_container
-    BASE_URL="http://127.0.0.1:${PORT}"
     wait_ready
   fi
   wizard
