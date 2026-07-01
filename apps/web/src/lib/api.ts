@@ -1088,7 +1088,14 @@ export const api = {
   archetypes() {
     return request<{ archetypes: Archetype[] }>("/api/archetypes");
   },
-  createAgent(body: { name: string; bundle?: string | null; port?: number; start?: boolean; shared_skills?: boolean }) {
+  createAgent(body: {
+    name: string;
+    bundle?: string | null;
+    soul?: string;
+    port?: number;
+    start?: boolean;
+    shared_skills?: boolean;
+  }) {
     return request<{ ok: boolean; agent: FleetAgent; installed: string[] }>("/api/fleet", {
       method: "POST",
       body,

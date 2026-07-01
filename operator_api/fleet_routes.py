@@ -134,14 +134,19 @@ def register_fleet_routes(app) -> None:
     async def _create_agent(body: dict = Body(...)):
         """Create an agent (optionally from a bundle archetype) and start it.
 
-        Body: ``{name, bundle?: <git-url>, port?: int, start?: bool=true,
-        shared_skills?: bool, inherit_config?: bool=true}``. A blank ``bundle`` is the built-in
+        Body: ``{name, bundle?: <git-url>, soul?: str, port?: int, start?: bool=true,
+        shared_skills?: bool, inherit_config?: bool=true}``. ``soul`` is the archetype's base
+        SOUL.md (persona), written into the workspace so a bundle agent gets its persona too.
+        A blank ``bundle`` is the built-in
         **Basic** archetype. By default a new agent is a **blank agent with the host's model
         config + secrets popped over** (the gateway only — NOT the host's plugins/skills), so it
         boots ready-to-chat. Set ``inherit_config: false`` for a fully blank agent you'll set up.
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
+        # The archetype's base SOUL.md (the persona picked in the new-agent picker), written
+        # into the workspace so a bundle agent arrives WITH its persona, not just its tools.
+        soul = (str(body.get("soul") or "").strip()) or None
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
@@ -157,7 +162,13 @@ def register_fleet_routes(app) -> None:
         try:
             # create() may overlay the host model + install a bundle (subprocess) — off the loop.
             ws = await asyncio.to_thread(
-                manager.create, name, bundle=bundle, port=port, shared_skills=shared, inherit_model=inherit_model
+                manager.create,
+                name,
+                bundle=bundle,
+                port=port,
+                shared_skills=shared,
+                inherit_model=inherit_model,
+                soul=soul,
             )
             agent = (
                 (await asyncio.to_thread(supervisor.start, name))
@@ -221,66 +232,130 @@ def register_fleet_routes(app) -> None:
         return {"archetypes": _archetypes()}
 
 
-def _archetypes() -> list[dict]:
-    """Built-in Basic + installed-bundle archetypes (cached in plugins.lock).
+def _norm_url(u: str | None) -> str:
+    """Canonicalize a git URL for dedupe (drop trailing ``.git`` / ``/``, lowercase) —
+    the same normalization the plugin catalog uses to match install state by URL."""
+    import re
 
-    Each archetype carries an optional ``soul`` — a base SOUL.md the setup
-    wizard seeds when the operator picks it (ADR 0042). Built-ins read it from
-    a ``config/soul-presets`` file; bundle archetypes declare it inline in
-    their ``archetype:`` manifest block.
+    return re.sub(r"\.git$", "", (u or "").strip().rstrip("/")).lower()
+
+
+# Last-resort archetypes if ``archetype-catalog.json`` is missing or unreadable — the two
+# code-free personas, so the picker + wizard always work even on a broken/forked config.
+_FALLBACK_ARCHETYPES = [
+    {
+        "id": "basic",
+        "label": "Basic",
+        "icon": "Sparkles",
+        "bundle": None,
+        "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
+        "soul_preset": "base",
+    },
+    {
+        "id": "custom",
+        "label": "Custom",
+        "icon": "PenLine",
+        "bundle": None,
+        "blurb": "Write your own — start from a SOUL template and fill it in.",
+        "soul_preset": "blank",
+    },
+]
+
+
+def _load_archetype_catalog() -> list[dict]:
+    """Built-in archetype entries from ``archetype-catalog.json`` — the live config dir
+    overrides the bundled seed (a fork adds/removes archetypes with NO code change), same
+    lookup order as the plugin/MCP catalogs. Falls back to Basic + Custom if the file is
+    absent or malformed, so the new-agent picker + wizard never come up empty-handed."""
+    import json
+
+    from infra.paths import instance_paths
+
+    ip = instance_paths()
+    for base in (ip.config_dir, ip.bundle_dir):
+        f = base / "archetype-catalog.json"
+        if f.exists():
+            try:
+                entries = (json.loads(f.read_text()) or {}).get("archetypes")
+                if isinstance(entries, list) and entries:
+                    return entries
+            except (json.JSONDecodeError, OSError):
+                log.warning("[fleet] archetype-catalog.json unreadable at %s", f)
+            break  # live dir wins even if broken — don't silently fall through to the seed
+    return _FALLBACK_ARCHETYPES
+
+
+def _archetypes() -> list[dict]:
+    """Starter agent types for the new-agent picker + setup wizard (ADR 0042).
+
+    Data-driven: the built-in set comes from ``archetype-catalog.json`` (see
+    ``_load_archetype_catalog``), merged with every installed bundle's ``archetype:``
+    manifest metadata (cached in ``plugins.lock``). Each archetype carries an optional
+    ``soul`` — a base SOUL.md the persona step seeds when the operator picks it: the catalog
+    names a ``soul_preset`` file under ``config/soul-presets/`` (resolved here) or an inline
+    ``soul``; a bundle declares it inline in its manifest. The whole list is deduped by id +
+    bundle URL (a catalog entry for a stack never doubles up with the same installed bundle),
+    and ``custom`` is kept LAST.
     """
     from graph.config_io import read_soul_preset
 
-    out = [
-        {
-            "id": "basic",
-            "label": "Basic",
-            "icon": "Sparkles",
-            "bundle": None,
-            "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
-            "soul": read_soul_preset("base"),
-        },
-        {
-            # Built-in PM archetype — installed FRESH from the git URL on each create (no pin),
-            # so a new PM agent always gets the latest pm-stack.
-            "id": "pm-stack",
-            "label": "Project Manager",
-            "icon": "LayoutGrid",
-            "bundle": "https://github.com/protoLabsAI/pm-stack",
-            "blurb": "Project-management tools + board — clones the latest pm-stack on create.",
-            "soul": read_soul_preset("project-manager"),
-        },
-    ]
+    out: list[dict] = []
+    custom: dict | None = None
+    seen_ids: set[str] = set()
+    seen_urls: set[str] = set()
+
+    for entry in _load_archetype_catalog():
+        aid = str(entry.get("id") or "").strip()
+        if not aid or aid in seen_ids:
+            continue
+        soul = entry.get("soul") or (read_soul_preset(str(entry["soul_preset"])) if entry.get("soul_preset") else "")
+        bundle = entry.get("bundle") or None
+        rec = {
+            "id": aid,
+            "label": entry.get("label", aid),
+            "icon": entry.get("icon", "Package"),
+            "bundle": bundle,
+            "blurb": entry.get("blurb", ""),
+            "soul": soul,
+        }
+        seen_ids.add(aid)
+        if bundle:
+            seen_urls.add(_norm_url(bundle))
+        if aid == "custom":
+            custom = rec  # hold it back so it stays last after bundle archetypes append
+        else:
+            out.append(rec)
+
+    # Installed bundles that declare `archetype:` metadata self-register as starter types —
+    # appended after the catalog, deduped by id + normalized bundle URL so a catalog entry
+    # for the same stack (or a bundle listed twice) never produces a duplicate RadioCard.
     try:
         from graph.plugins.installer import _read_lock
 
         for b in _read_lock().get("bundles") or []:
             arch = b.get("archetype") or {}
-            if arch.get("label"):
-                out.append(
-                    {
-                        "id": b.get("id"),
-                        "label": arch.get("label"),
-                        "icon": arch.get("icon", "Package"),
-                        "blurb": arch.get("blurb", ""),
-                        "bundle": b.get("source_url"),
-                        "soul": arch.get("soul", ""),
-                    }
-                )
+            bid = str(b.get("id") or "").strip()
+            url = b.get("source_url") or ""
+            if not arch.get("label") or not bid:
+                continue
+            if bid in seen_ids or (url and _norm_url(url) in seen_urls):
+                continue
+            seen_ids.add(bid)
+            if url:
+                seen_urls.add(_norm_url(url))
+            out.append(
+                {
+                    "id": bid,
+                    "label": arch.get("label"),
+                    "icon": arch.get("icon", "Package"),
+                    "blurb": arch.get("blurb", ""),
+                    "bundle": url or None,
+                    "soul": arch.get("soul", ""),
+                }
+            )
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort
         log.warning("[fleet] archetype discovery failed", exc_info=True)
-    # "Custom" is the catch-all, kept LAST as more archetypes land above it — a
-    # blank-slate persona the operator writes themselves. Like Basic it carries no
-    # bundle, but it seeds the editor with the fill-in-the-blanks SOUL scaffold
-    # rather than a ready-to-use base prompt.
-    out.append(
-        {
-            "id": "custom",
-            "label": "Custom",
-            "icon": "PenLine",
-            "bundle": None,
-            "blurb": "Write your own — start from a SOUL template and fill it in.",
-            "soul": read_soul_preset("blank"),
-        }
-    )
+
+    if custom is not None:
+        out.append(custom)  # the catch-all write-your-own persona, always LAST
     return out

@@ -39,15 +39,60 @@ def test_archetypes_include_basic(client):
 
 
 def test_archetypes_carry_base_soul(client):
-    # Each archetype seeds the wizard's persona step with a base SOUL (ADR 0042) —
-    # the built-in Basic + PM read theirs from config/soul-presets/.
+    # Each archetype seeds the wizard's persona step with a base SOUL (ADR 0042) — the
+    # catalog names a soul_preset file under config/soul-presets/, resolved server-side.
     arr = client.get("/api/archetypes").json()["archetypes"]
     by_id = {a["id"]: a for a in arr}
     assert "soul" in by_id["basic"] and by_id["basic"]["soul"].strip()
-    assert by_id["pm-stack"]["soul"].strip()
     # "Custom" is the catch-all write-your-own archetype, kept last with the
     # fill-in template SOUL.
     assert arr[-1]["id"] == "custom" and by_id["custom"]["soul"].strip()
+
+
+def test_archetypes_fall_back_when_catalog_missing(client, monkeypatch):
+    # A missing/unreadable archetype-catalog.json must still yield the two code-free
+    # personas (Basic + Custom) so the picker never comes up empty (ADR 0042).
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(fleet_routes, "_load_archetype_catalog", lambda: fleet_routes._FALLBACK_ARCHETYPES)
+    arr = client.get("/api/archetypes").json()["archetypes"]
+    ids = [a["id"] for a in arr]
+    assert ids[0] == "basic" and ids[-1] == "custom"
+    assert all(a["soul"].strip() for a in arr)  # soul_preset resolved to real content
+
+
+def test_archetypes_dedupe_installed_bundle_against_catalog(client, monkeypatch):
+    # An installed bundle whose id/URL already appears in the catalog must NOT produce a
+    # duplicate RadioCard (duplicate React key + ambiguous radio value). Catalog wins.
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(
+        fleet_routes,
+        "_load_archetype_catalog",
+        lambda: [
+            {"id": "basic", "label": "Basic", "bundle": None, "soul_preset": "base"},
+            {"id": "acme", "label": "Acme", "bundle": "https://github.com/acme/stack.git", "soul": "x"},
+            {"id": "custom", "label": "Custom", "bundle": None, "soul_preset": "blank"},
+        ],
+    )
+
+    def fake_lock():
+        return {
+            "bundles": [
+                # same id as a catalog entry
+                {"id": "acme", "source_url": "https://other/url", "archetype": {"label": "Dup id"}},
+                # same URL (differing suffix) as the catalog's acme entry
+                {"id": "acme2", "source_url": "https://github.com/acme/stack", "archetype": {"label": "Dup url"}},
+                # genuinely new → appended
+                {"id": "fresh", "source_url": "https://github.com/x/y", "archetype": {"label": "Fresh"}},
+            ]
+        }
+
+    monkeypatch.setattr("graph.plugins.installer._read_lock", fake_lock)
+    ids = [a["id"] for a in client.get("/api/archetypes").json()["archetypes"]]
+    assert ids.count("acme") == 1 and "acme2" not in ids  # both duplicates dropped
+    assert "fresh" in ids
+    assert ids[-1] == "custom"  # custom stays last even after bundle archetypes append
 
 
 def test_create_list_start_stop_remove(client):
@@ -65,6 +110,30 @@ def test_create_list_start_stop_remove(client):
     assert client.delete("/api/fleet/alpha").json()["ok"]
     # The host (this instance) always self-registers, so only the peers are gone.
     assert not [a for a in client.get("/api/fleet").json()["agents"] if not a.get("host")]
+
+
+def test_create_writes_archetype_soul(client):
+    # The picked archetype's persona is written into the workspace SOUL.md (ADR 0042),
+    # so a created agent arrives WITH its persona, not just its tools.
+    from pathlib import Path
+
+    from graph.workspaces import manager
+
+    r = client.post("/api/fleet", json={"name": "persona", "start": False, "soul": "# Persona\nBe bold."})
+    assert r.status_code == 200
+    ws = next(w for w in manager.list_workspaces() if w["name"] == "persona")
+    assert (Path(ws["path"]) / "config" / "SOUL.md").read_text().startswith("# Persona")
+
+
+def test_create_without_soul_leaves_default(client):
+    # No/blank soul → no SOUL.md written, so the agent stays on the default persona.
+    from pathlib import Path
+
+    from graph.workspaces import manager
+
+    client.post("/api/fleet", json={"name": "plain", "start": False})
+    ws = next(w for w in manager.list_workspaces() if w["name"] == "plain")
+    assert not (Path(ws["path"]) / "config" / "SOUL.md").exists()
 
 
 def test_create_bad_name_is_400(client):

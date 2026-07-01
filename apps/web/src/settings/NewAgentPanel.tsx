@@ -31,7 +31,11 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
   const nameOk = NAME_RE.test(name);
 
   const create = useMutation({
-    mutationFn: () => api.createAgent({ name: name.trim(), bundle: archetype?.bundle ?? null }),
+    // Carry the archetype's base SOUL so a bundle agent arrives WITH its persona, not just
+    // its tools (ADR 0042). Blank soul (bundle with no inline persona) → server leaves the
+    // agent on the default SOUL.
+    mutationFn: () =>
+      api.createAgent({ name: name.trim(), bundle: archetype?.bundle ?? null, soul: archetype?.soul || undefined }),
     onError: (e: Error) => toast({ tone: "error", title: "Couldn't create agent", message: e.message }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });

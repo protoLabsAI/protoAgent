@@ -111,7 +111,7 @@ export const FLEET = {
 
 export const ARCHETYPES = [
   { id: "basic", label: "Basic", icon: "Sparkles", blurb: "A plain agent — add tools later.", bundle: null, soul: "# Identity\n\nI am a general-purpose agent." },
-  { id: "pm-stack", label: "Project Manager", icon: "LayoutGrid", blurb: "PM tools + board.", bundle: "https://github.com/protoLabsAI/pm-stack", soul: "# Identity\n\nI am a project-management agent." },
+  { id: "product-stack", label: "Product Manager", icon: "Compass", blurb: "Research, strategy, and specs — rendered inline.", bundle: "https://github.com/protoLabsAI/product-stack", soul: "# Identity\n\nI am a product-management agent." },
   { id: "custom", label: "Custom", icon: "PenLine", blurb: "Write your own — fill in a template.", bundle: null, soul: "# Identity\n\n_Describe your agent in one paragraph._" },
 ];
 

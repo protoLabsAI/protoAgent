@@ -9,7 +9,7 @@ primitives:
 |---|---|---|
 | **Workspace** | a named agent — its own config, secrets, plugins, scoped data, port | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Bundle** | a curated, pinned set of plugins installed as one | [0040](../adr/0040-plugin-bundles.md) |
-| **Archetype** | a bundle presented as a starter *agent type* (or the built-in **Basic**) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| **Archetype** | a starter *agent type* in the new-agent picker — the built-in **Basic**/**Custom** (from a data-driven catalog) plus any installed bundle that declares one | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
@@ -17,8 +17,8 @@ primitives:
 ## Quick start
 
 ```bash
-# an agent from the "Project Manager" archetype (the pm-stack bundle)
-python -m server workspace new pm --bundle https://github.com/protoLabsAI/pm-stack
+# an agent from a bundle archetype (the product-stack bundle: PM toolkit + generative UI)
+python -m server workspace new pm --bundle https://github.com/protoLabsAI/product-stack
 
 # a blank-slate agent (the built-in Basic archetype — core loop + tools, no plugins)
 python -m server workspace new scratch
@@ -26,7 +26,7 @@ python -m server workspace new scratch
 # run the whole fleet in the background, then look at it
 python -m server fleet up
 python -m server fleet ls
-#   ● pm        :7871  pid 12345  [pm-stack]
+#   ● pm        :7871  pid 12345  [product-stack]
 #   ● scratch   :7872  pid 12346
 ```
 
@@ -57,7 +57,7 @@ suggested enable list + config. Install one into a workspace and you skip the
 plugin-by-plugin setup:
 
 ```bash
-python -m server plugin install https://github.com/protoLabsAI/pm-stack   # fans out + pins each member
+python -m server plugin install https://github.com/protoLabsAI/product-stack   # fans out + pins each member
 ```
 
 A bundle that carries an **`archetype:`** block becomes a **starter agent type** the
@@ -65,22 +65,30 @@ new-agent picker offers — additive metadata, no change to the bundle shape:
 
 ```yaml
 # protoagent.bundle.yaml
-id: pm-stack
+id: product-stack
 plugins: [ … ]
 enabled: [ … ]
 archetype:
-  label: Project Manager
-  icon: LayoutGrid
-  blurb: Board-driven shipping agent — decomposes an idea and ships it via coding agents.
+  label: Product Manager
+  icon: Compass
+  blurb: Researches, strategizes, and specs products from evidence — renders roadmaps and personas inline.
 ```
 
-Two starter types exist today:
+The picker draws from **two** sources:
 
-- **Basic** — built-in, ships with protoAgent: the bare agent loop + built-in tools, **no
-  plugins**. It's just `workspace new <name>` with no `--bundle` (the "start from scratch").
-- **Project Manager** — the [pm-stack](https://github.com/protoLabsAI/pm-stack) bundle.
+- **The archetype catalog** — `config/archetype-catalog.json`, served by `GET /api/archetypes`.
+  It ships the two code-free personas — **Basic** (the bare loop + tools, no plugins) and
+  **Custom** (write-your-own SOUL) — and is **data-driven**: add or remove archetypes by
+  editing the JSON, no code change. A fork or instance overrides it by dropping its own
+  `archetype-catalog.json` in the live config dir (same rule as `plugin-catalog.json`). Each
+  entry names a `soul_preset` (a file under `config/soul-presets/`) or an inline `soul` for the
+  base persona.
+- **Installed bundles** — any bundle whose manifest carries an `archetype:` block
+  **self-registers** on top of the catalog (deduped by id + bundle URL). Install the bundle
+  and its starter type appears in the picker for free — no catalog edit needed.
 
-Every future bundle that adds an `archetype:` block becomes a starter type for free. See
+Picking an archetype seeds the new agent's **persona** (its `SOUL.md`) from that base, and — if
+it carries a bundle — installs the bundle's plugins into the new agent. See
 [Install & publish plugins](./plugin-registry.md).
 
 ## Tiered stores — private by default, share what should be shared
