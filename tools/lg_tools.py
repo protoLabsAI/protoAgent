@@ -837,10 +837,15 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
 
     @tool
     async def forget_memory(chunk_id: int, reason: str = "") -> str:
-        """Delete ONE long-term-memory chunk by id (the `#<id>` shown by
+        """HARD-delete ONE long-term-memory chunk by id (the `#<id>` shown by
         memory_list). The consolidation/forgetting half of a `/dream` pass: use
         it to remove a fact that is stale, superseded, or a duplicate — ideally
         after `memory_ingest`-ing the corrected/merged version first.
+
+        This is a real delete, not a supersede: automatic fact consolidation
+        marks replaced rows `invalidated_at` and keeps them for audit (ADR
+        0069 D9), but an explicit forget is operator intent and removes the
+        row outright — history-keeping does not override it.
 
         Targeted and deliberate by design: it deletes exactly the one id you
         pass (no bulk/wildcard delete), so review with memory_list and forget
