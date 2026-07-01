@@ -54,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **option cards** — a field with `oneOf: [{const, title, description}]` renders as selectable
   cards (single-select; `type: "array"` for multi-select), alongside the existing
   text/number/boolean/enum fields. See [Starter tools](/reference/starter-tools).
+- **The agent can ingest documents & media into its knowledge base** (#1479, #1485) — a new
+  `knowledge_ingest(source, …)` tool pulls a URL (a web article or a **YouTube** link), a PDF, or a
+  local audio/video/image file through the full ingestion pipeline (transcripts, gateway STT,
+  extraction) and chunks + embeds it for recall — so handing the agent a link or a recording
+  actually processes it instead of falling back to a web search. Anything that fetches over the
+  network or transcribes media runs in the **background** (ADR 0050) so a long video never blocks the
+  chat; a small local text file ingests inline. See [Ingest documents & media](/guides/ingestion).
 
 ### Changed
 - **Two-tier instance paths (box / instance) — one resolution rule, no more double-scoping**
@@ -115,6 +122,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to badge it a plain "box default", hiding the override. It now shows an **"overridden by
   agent config"** warning with Reset-to-inherited (which removes the agent override so the box
   default applies), and config load logs a warning naming each shadowed key.
+- **The ⌘K command-palette chat survives being closed mid-turn** (#1487) — closing the palette used
+  to abort the turn and lose it; it now pins the server task id and, on reopen, reconnects to the
+  still-running turn (or shows its finished result) via the same durable `tasks/get` self-heal the
+  main chat uses.
+
+### Docs
+- **Knowledge: fleet/commons sharing + the reusable background-job primitive** (#1477, #1488) —
+  documented sharing a knowledge store across a fleet (the private/commons tiering + the console
+  Share/Unshare gesture), corrected the stale `knowledge.top_k` default (5 → 10), and added a
+  "Background jobs" guide covering `task(run_in_background=true)` and the
+  `BackgroundManager.spawn_work` primitive for detaching deterministic long work.
 
 ## [0.76.0] - 2026-06-30
 
