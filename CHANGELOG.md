@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained a `soul` field), so a bundle agent arrives with its persona wired in.
 
 ### Fixed
+- **A stale untracked plugin copy no longer shadows a newer bundled one.** The loader let the
+  live/installed plugins dir override the bundled tree *unconditionally*, so a plugin that was
+  once git-installed and later bundled in-tree (e.g. the artifact plugin @ 0.11.3 vs the bundled
+  0.14.0) stayed stuck on the old installed copy forever — it never updated with the app. Now an
+  **untracked** live copy only wins when it's **not older** than the bundle; an intentional
+  install/override (tracked in `plugins.lock`) still wins at any version.
+- **Plugin install `git clone --no-hardlinks`** — cloning a plugin from a local path hardlinked
+  source objects and intermittently failed with `fatal: hardlink different from source` (a known
+  local-clone race that also silently ignores `--depth`); a no-op for the normal remote/network
+  clone. Fixes recurring CI flakiness in the installer tests.
 - **Console dev server no longer defaults to the prod backend.** `apps/web/vite.config.ts` proxied
   `npm run dev` / `npm run preview` backend calls to `:7870` (the default/prod instance the desktop
   app runs) by default — so browser-based console development silently read and **wrote your real
