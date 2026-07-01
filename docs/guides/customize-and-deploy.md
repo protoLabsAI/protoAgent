@@ -60,12 +60,30 @@ gh variable set RELEASE_ENABLED --body true   # in your fork's repo
 
 `prepare-release.yml` and `release.yml` gate on `if: vars.RELEASE_ENABLED == 'true'`.
 
+The image-publishing workflows are guarded the same way (#1534) — they only run on
+the canonical repo by default (a fork can't push to protoLabs' GHCR), so on a fork
+they're skipped, never failed. To publish your fork's own image, set two variables:
+
+```bash
+gh variable set DOCKER_PUBLISH_ENABLED --body true          # enable docker-publish.yml
+gh variable set IMAGE_NAME --body 'yourorg/youragent'       # your GHCR path (also used by release.yml)
+```
+
+`IMAGE_NAME` defaults to `protolabsai/protoagent` when unset. The **marketing** and
+**GitHub Pages docs deploy** workflows are canonical-only (protoLabs Cloudflare/Pages
+targets); the **desktop build** is manual — a fork can `workflow_dispatch` it to get
+unsigned test artifacts.
+
 ## 3b. Stay conformant with the fleet workspace-config standard
 
 Every fleet-watched repo carries a shared baseline enforced by
 [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools)
-`verify-workspace-config`, and **`checks.yml` runs it on every PR** — so a
-non-conformant fork goes red in CI. The rules that bite most often:
+`verify-workspace-config`. **`checks.yml` runs it on every PR within the protoLabs
+fleet** (any `protoLabsAI/*` repo) — so a non-conformant fleet repo goes red in CI.
+**External forks are exempt** (the step is skipped, the job still passes), so you're
+free to adopt or diverge from this standard. To enforce it in your own fork anyway,
+run the check locally (below) or drop the `startsWith(github.repository, 'protoLabsAI/')`
+guard on that step. The rules that bite most often:
 
 - **Owned runners.** Every workflow `runs-on:` must be
   `namespace-profile-protolabs-linux`, never a GitHub-hosted label

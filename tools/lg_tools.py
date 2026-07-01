@@ -544,10 +544,17 @@ def _memory_citation(
     source: str | None = None,
     created_at: str | None = None,
     namespace: str | None = None,
+    source_type: str | None = ...,
 ) -> str:
     """Compact provenance suffix for a memory row (ADR 0069 D5), e.g.
-    ``" (src: a2a:chat-42, 2026-07-01, ns: proj-x)"``. Empty when there's
-    nothing to cite; ``created_at`` is trimmed to date precision."""
+    ``" (src: a2a:chat-42, 2026-07-01, ns: proj-x, trust: agent)"``. Empty when
+    there's nothing to cite; ``created_at`` is trimmed to date precision.
+
+    ``source_type`` (ADR 0069 D8) appends the row's trust-tier label —
+    operator / agent / external — so recall output always shows how much the
+    content should be trusted. Pass the row's value (``None`` included: an
+    unstamped row is labeled ``external`` by design); omit the kwarg entirely
+    (the ``...`` sentinel) to skip the trust part."""
     parts: list[str] = []
     if source:
         parts.append(f"src: {source}")
@@ -555,6 +562,10 @@ def _memory_citation(
         parts.append(str(created_at)[:10])
     if namespace:
         parts.append(f"ns: {namespace}")
+    if source_type is not ...:
+        from knowledge.trust import trust_label
+
+        parts.append(f"trust: {trust_label(source_type)}")
     return f" ({', '.join(parts)})" if parts else ""
 
 
@@ -593,10 +604,30 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
+        # Hot-memory confirm gate (ADR 0069 D8): domain="hot" chunks are
+        # injected in front of the model EVERY turn, so when the operator has
+        # turned the gate on, this (the agent's own write path) refuses hot
+        # writes with instructions to ask — only operator surfaces (console
+        # knowledge/memory routes) may promote content to always-on.
+        if (domain or "").strip().lower() == "hot" and getattr(graph_config, "knowledge_hot_write_confirm", False):
+            return (
+                "Error: hot-memory writes need operator confirmation on this instance "
+                "(knowledge.hot_write_confirm is on). Ask the operator to add it via the "
+                "console (Knowledge → Store or the Memory inspector), or store it in a "
+                "regular domain instead."
+            )
         # add_chunk embeds over HTTP on hybrid stores — keep it off the loop.
+        # source_type="conversation" ranks the row in the agent-derived trust
+        # tier (ADR 0069 D8) — this write path is model-driven, not operator-.
         import asyncio
 
-        chunk_id = await asyncio.to_thread(knowledge_store.add_chunk, content, domain=domain, heading=heading)
+        def _write():
+            try:
+                return knowledge_store.add_chunk(content, domain=domain, heading=heading, source_type="conversation")
+            except TypeError:  # plugin backend predating the source_type kwarg
+                return knowledge_store.add_chunk(content, domain=domain, heading=heading)
+
+        chunk_id = await asyncio.to_thread(_write)
         if chunk_id is None:
             return "Error: failed to store chunk (knowledge store unavailable)."
         return f"Stored chunk {chunk_id} in {domain!r}."
@@ -758,7 +789,12 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             return "No matches."
         lines = [
             f"[{r.get('domain', '?')}] {r['preview']}"
-            + _memory_citation(source=r.get("source"), created_at=r.get("created_at"), namespace=r.get("namespace"))
+            + _memory_citation(
+                source=r.get("source"),
+                created_at=r.get("created_at"),
+                namespace=r.get("namespace"),
+                source_type=r.get("source_type"),
+            )
             for r in results
         ]
         return "\n".join(lines)
@@ -817,8 +853,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             preview = (c.content or "")[:200]
             # Lead with the chunk id so a caller (e.g. the `dream` consolidation
             # pass) can target a stale/superseded fact with `forget_memory`.
-            # created_at already leads the line, so the citation adds src/ns only.
-            cite = _memory_citation(source=c.source, namespace=c.namespace)
+            # created_at already leads the line, so the citation adds
+            # src/ns/trust only.
+            cite = _memory_citation(source=c.source, namespace=c.namespace, source_type=c.source_type)
             lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}")
         return "\n".join(lines)
 
@@ -837,10 +874,15 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
 
     @tool
     async def forget_memory(chunk_id: int, reason: str = "") -> str:
-        """Delete ONE long-term-memory chunk by id (the `#<id>` shown by
+        """HARD-delete ONE long-term-memory chunk by id (the `#<id>` shown by
         memory_list). The consolidation/forgetting half of a `/dream` pass: use
         it to remove a fact that is stale, superseded, or a duplicate — ideally
         after `memory_ingest`-ing the corrected/merged version first.
+
+        This is a real delete, not a supersede: automatic fact consolidation
+        marks replaced rows `invalidated_at` and keeps them for audit (ADR
+        0069 D9), but an explicit forget is operator intent and removes the
+        row outright — history-keeping does not override it.
 
         Targeted and deliberate by design: it deletes exactly the one id you
         pass (no bulk/wildcard delete), so review with memory_list and forget

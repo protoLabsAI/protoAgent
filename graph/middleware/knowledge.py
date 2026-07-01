@@ -79,10 +79,19 @@ class KnowledgeMiddleware(AgentMiddleware):
         skills_index: "SkillsIndex | None" = None,
         skills_top_k: int = 5,
         inject_namespaces: list[str] | None = None,
+        inject_min_trust: int = 1,
     ):
         super().__init__()
         self._store = knowledge_store
         self._top_k = top_k
+        # Trust floor for the auto-inject RAG hits (ADR 0069 D8,
+        # `knowledge.inject_min_trust`). 1 (the default) excludes nothing —
+        # low-trust hits are only DOWN-WEIGHTED (ranked below higher tiers);
+        # 2 drops ingested/web/external content from auto-injection entirely;
+        # 3 auto-injects operator-authored rows only. Tool-driven recall
+        # (memory_recall) is never gated — excluded content stays reachable
+        # on demand, with the tier visible in the tool output.
+        self._inject_min_trust = max(1, int(inject_min_trust))
         self._skills_index = skills_index
         # Max skills listed in the always-on <available_skills> index (the rest
         # are reachable via list_skills). The model loads any one's full body on
@@ -246,11 +255,23 @@ class KnowledgeMiddleware(AgentMiddleware):
                     break
 
             if last_human and self._store is not None:
-                results = self._search_scoped(last_human)
+                results = self._rank_by_trust(self._search_scoped(last_human))
                 if results:
+                    # Each hit carries its stored date (ADR 0069 D9) — a
+                    # deterministic recency signal in-context, so the model can
+                    # weigh freshness itself instead of any LLM freshness judge —
+                    # and its trust tier (ADR 0069 D8): operator-authored vs
+                    # agent-derived vs external/ingested content.
+                    from knowledge.trust import trust_label
+
                     context_parts = ["[Relevant knowledge from previous sessions:]"]
                     for r in results:
-                        context_parts.append(f"- [{r['table']}] {r['preview']}")
+                        line = f"- [{r['table']}] {r['preview']}"
+                        stored = str(r.get("created_at") or "")[:10]
+                        meta = [f"stored {stored}"] if stored else []
+                        meta.append(f"trust: {trust_label(r.get('source_type'))}")
+                        line += f" ({'; '.join(meta)})"
+                        context_parts.append(line)
                         if r.get("id") is not None:
                             rag_ids.append(r["id"])
                     memory_parts.append("\n".join(context_parts))
@@ -271,15 +292,37 @@ class KnowledgeMiddleware(AgentMiddleware):
         """The auto-inject RAG search, namespace-scoped when configured (ADR
         0069 D3a). A backend whose ``search`` predates the ``namespace`` kwarg
         gets the unfiltered call and a post-filter on each hit's ``namespace``
-        field, so the configured scope holds either way."""
+        field, so the configured scope holds either way.
+
+        When a trust floor is active (``inject_min_trust`` > 1, ADR 0069 D8)
+        the candidate pool is over-fetched (3×) so hits the floor will drop
+        don't leave the injection thin when trusted matches ranked just below
+        them — ``_rank_by_trust`` filters then trims back to ``top_k``."""
+        k = self._top_k if self._inject_min_trust <= 1 else self._top_k * 3
         if not self._inject_namespaces:
-            return self._store.search(query, k=self._top_k)
+            return self._store.search(query, k=k)
         try:
-            return self._store.search(query, k=self._top_k, namespace=self._inject_namespaces)
+            return self._store.search(query, k=k, namespace=self._inject_namespaces)
         except TypeError:
             allowed = set(self._inject_namespaces)
-            results = self._store.search(query, k=self._top_k)
+            results = self._store.search(query, k=k)
             return [r for r in results if (r.get("namespace") or "") in allowed]
+
+    def _rank_by_trust(self, results: list[dict]) -> list[dict]:
+        """Apply the trust policy to the RAG candidates (ADR 0069 D8).
+
+        Deterministic, post-score: hits below ``inject_min_trust`` are dropped
+        (default floor 1 = nothing dropped), then the survivors are STABLE-sorted
+        by tier descending — a low-trust hit never outranks a higher-trust one,
+        while relevance order is preserved within a tier. Runs after retrieval
+        (never re-scores it), so it behaves identically across the plain FTS5,
+        hybrid-RRF, and layered backends. Trimmed to ``top_k`` (the pool is
+        over-fetched when a floor is active — see ``_search_scoped``)."""
+        from knowledge.trust import trust_tier
+
+        kept = [r for r in results if trust_tier(r.get("source_type")) >= self._inject_min_trust]
+        kept.sort(key=lambda r: -trust_tier(r.get("source_type")))  # stable — keeps in-tier relevance order
+        return kept[: self._top_k]
 
     def _record_injection(
         self,

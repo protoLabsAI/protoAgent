@@ -53,13 +53,15 @@ class LayeredKnowledgeStore:
         *,
         domain: str | None = None,
         namespace: str | list[str] | None = None,
+        include_invalidated: bool = False,
     ) -> list[dict]:
         """Top-k across BOTH tiers, fused by RRF over each tier's rank, tier-tagged.
         A chunk promoted into the commons (same content as its private original) is
         de-duped — the private record wins (it's editable) but keeps the summed score.
-        ``namespace`` (ADR 0069 D3a) is passed through to both tiers."""
-        priv = self._private.search(query, k, domain=domain, namespace=namespace)
-        comm = self._commons.search(query, k, domain=domain, namespace=namespace)
+        ``namespace`` (ADR 0069 D3a) and ``include_invalidated`` (ADR 0069 D9 —
+        superseded rows are excluded by default) are passed through to both tiers."""
+        priv = self._private.search(query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated)
+        comm = self._commons.search(query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated)
 
         fused: dict[str, dict] = {}
         scores: dict[str, float] = {}

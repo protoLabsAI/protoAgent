@@ -24,11 +24,16 @@ permissions:
 env:
   REGISTRY: ghcr.io
   # Normalise the image name — GHCR paths are case-sensitive and Docker refuses
-  # uppercase; github.repository would otherwise yield a mixed-case value.
-  IMAGE_NAME: protolabsai/protoagent
+  # uppercase; github.repository would otherwise yield a mixed-case value. A fork
+  # that opts in (see the job guard) sets its own `IMAGE_NAME` repo variable.
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'protolabsai/protoagent' }}
 
 jobs:
   build-and-push:
+    # Fork-friendly (#1534): the hardcoded default pushes to protoLabs' GHCR, which
+    # forks can't write to. Only the canonical repo runs by default; a fork opts in
+    # by setting the `DOCKER_PUBLISH_ENABLED` repo variable (+ its own `IMAGE_NAME`).
+    if: github.repository == 'protoLabsAI/protoAgent' || vars.DOCKER_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 30
 

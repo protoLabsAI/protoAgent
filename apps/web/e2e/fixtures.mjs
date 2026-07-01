@@ -687,6 +687,18 @@ export const KNOWLEDGE_CHUNKS = [
     created_at: "2026-06-02T09:00:00+00:00",
     tier: "private",   // private to this agent → eligible for Share (promote)
   },
+  // A multi-chunk ingested source (#1575) → renders as one collapsible section
+  // ("… · 3 chunks"). ids 11/12 above stay flat (single/no source), so the
+  // list + promote/unshare specs are unaffected.
+  { id: 13, heading: "", content: "Switchbacks keep the grade walkable.", preview: "Switchbacks keep the grade walkable.",
+    domain: "media", source: "Hiking with Kevin — Christina Mariani", source_type: "youtube", finding_type: null,
+    created_at: "2026-06-04T10:00:00+00:00", tier: null },
+  { id: 14, heading: "", content: "Bring more water than you think.", preview: "Bring more water than you think.",
+    domain: "media", source: "Hiking with Kevin — Christina Mariani", source_type: "youtube", finding_type: null,
+    created_at: "2026-06-04T10:01:00+00:00", tier: null },
+  { id: 15, heading: "", content: "The summit view pays off the climb.", preview: "The summit view pays off the climb.",
+    domain: "media", source: "Hiking with Kevin — Christina Mariani", source_type: "youtube", finding_type: null,
+    created_at: "2026-06-04T10:02:00+00:00", tier: null },
 ];
 
 // Delegate registry (ADR 0025) — types schema + a sample roster for the panel.

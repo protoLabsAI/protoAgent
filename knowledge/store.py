@@ -87,6 +87,7 @@ class Chunk:
     created_at: str
     updated_at: str
     namespace: str | None = None
+    invalidated_at: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +101,7 @@ class Chunk:
             "namespace": self.namespace,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "invalidated_at": self.invalidated_at,
         }
 
 
@@ -136,6 +138,39 @@ def _resolve_path(db_path: str | Path | None, *, scoped: bool = True) -> Path:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# Preview length in the hot-write event payload — enough for a console toast /
+# Activity line to be meaningful, small enough to never bloat the bus.
+_HOT_EVENT_PREVIEW_CHARS = 160
+
+
+def _publish_hot_write(chunk_id: int, source: str | None, source_type: str | None, content: str) -> None:
+    """Emit ``memory.hot_written`` on the plugin event bus (ADR 0069 D8).
+
+    ``domain="hot"`` chunks are injected in front of the model EVERY turn, so a
+    write to that domain must be visible, not silent — this is how the console
+    notification path (and any ADR 0039 subscriber) learns one landed, whoever
+    wrote it (agent tool, operator route, plugin SDK). Best-effort via the
+    late-bound ``HOST.publish`` seam (same pattern as ``tasks/store.py``): a
+    missing bus (unit tests, standalone use) or a bus hiccup must never break
+    a store write. The lazy import keeps ``knowledge`` free of a hard ``graph``
+    dependency."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(
+                "memory.hot_written",
+                {
+                    "chunk_id": chunk_id,
+                    "source": source or "",
+                    "source_type": source_type or "",
+                    "preview": (content or "")[:_HOT_EVENT_PREVIEW_CHARS],
+                },
+            )
+    except Exception:  # noqa: BLE001 — visibility must never break a write
+        log.debug("[knowledge] hot-write event publish failed", exc_info=True)
 
 
 # LIKE escaping — sqlite treats ``%`` and ``_`` as wildcards in LIKE
@@ -211,7 +246,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     finding_type  TEXT,
     namespace     TEXT,
     created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    invalidated_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
@@ -319,6 +355,16 @@ class KnowledgeStore:
                 db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_namespace ON chunks(namespace)")
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] namespace migration skipped: %s", exc)
+            # Migration: add the invalidated_at column (ADR 0069 D9 — supersede,
+            # don't delete). Same additive+nullable pattern as namespace; NULL =
+            # the row is valid, an ISO timestamp = superseded by a newer row.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "invalidated_at" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN invalidated_at TEXT")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_invalidated_at ON chunks(invalidated_at)")
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] invalidated_at migration skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -417,7 +463,13 @@ class KnowledgeStore:
                 (content, domain, heading, source, source_type, finding_type, namespace, now, now),
             )
             db.commit()
-            return int(cur.lastrowid)
+            chunk_id = int(cur.lastrowid)
+            # Hot-memory write visibility (ADR 0069 D8): every write funnels
+            # through here, so this one hook covers every writer of the
+            # always-on domain — agent tool, operator routes, plugin SDK.
+            if domain == "hot":
+                _publish_hot_write(chunk_id, source, source_type, content)
+            return chunk_id
         except sqlite3.DatabaseError:
             log.exception("[knowledge] add_chunk failed")
             return None
@@ -573,6 +625,7 @@ class KnowledgeStore:
         *,
         domain: str | None = None,
         namespace: str | list[str] | None = None,
+        include_invalidated: bool = False,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
@@ -583,6 +636,10 @@ class KnowledgeStore:
         ``namespace`` (ADR 0069 D3a) optionally restricts hits to the given
         namespace value(s) — see :func:`_namespace_clause` for the ``""``
         (un-namespaced rows) convention. ``None`` = unfiltered.
+
+        Superseded rows (``invalidated_at`` set — ADR 0069 D9) are excluded
+        by default; ``include_invalidated=True`` is the escape hatch for
+        audit tooling that needs the full history.
         """
         if not query or not query.strip():
             return []
@@ -591,9 +648,9 @@ class KnowledgeStore:
             return []
         try:
             rows = (
-                self._search_fts(db, query, k, domain, namespace)
+                self._search_fts(db, query, k, domain, namespace, include_invalidated)
                 if self._fts_available
-                else self._search_like(db, query, k, domain, namespace)
+                else self._search_like(db, query, k, domain, namespace, include_invalidated)
             )
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] search failed: %s", exc)
@@ -620,6 +677,7 @@ class KnowledgeStore:
         k: int,
         domain: str | None,
         namespace: str | list[str] | None = None,
+        include_invalidated: bool = False,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -633,6 +691,8 @@ class KnowledgeStore:
         match = " OR ".join(_fts_quote(t) for t in tokens)
         where = ["chunks_fts MATCH ?"]
         params: list[Any] = [match]
+        if not include_invalidated:
+            where.append("c.invalidated_at IS NULL")
         if domain:
             where.append("c.domain = ?")
             params.append(domain)
@@ -656,6 +716,7 @@ class KnowledgeStore:
         k: int,
         domain: str | None,
         namespace: str | list[str] | None = None,
+        include_invalidated: bool = False,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
@@ -672,6 +733,8 @@ class KnowledgeStore:
             needle = f"%{_escape_like(t)}%"
             params.extend([needle, _LIKE_ESCAPE, needle, _LIKE_ESCAPE])
         sql = f"SELECT *, ({like_clauses}) AS score FROM chunks WHERE score > 0"
+        if not include_invalidated:
+            sql += " AND invalidated_at IS NULL"
         if domain:
             sql += " AND domain = ?"
             params.append(domain)
@@ -689,15 +752,22 @@ class KnowledgeStore:
         limit: int = 50,
         *,
         namespace: str | None = None,
+        include_invalidated: bool = False,
     ) -> list[Chunk]:
         """Most-recent-first chunk listing. Used by ``memory_list`` and the
         fact consolidator. ``namespace`` (ADR 0021) optionally scopes to one
-        per-project/owner bucket."""
+        per-project/owner bucket.
+
+        Superseded rows (ADR 0069 D9) are excluded by default — so hot-memory
+        injection, ``memory_list``, and the fact consolidator only see valid
+        rows. ``include_invalidated=True`` is the audit escape hatch."""
         db = self._get_db()
         if db is None:
             return []
         clauses: list[str] = []
         params: list[Any] = []
+        if not include_invalidated:
+            clauses.append("invalidated_at IS NULL")
         if domain:
             clauses.append("domain = ?")
             params.append(domain)
@@ -716,8 +786,11 @@ class KnowledgeStore:
         return [Chunk(**dict(r)) for r in rows]
 
     def delete_by_id(self, chunk_id: int) -> bool:
-        """Delete one chunk by id. Used by the fact consolidator to replace a
-        superseded fact (ADR 0021). Returns True if a row was removed."""
+        """HARD-delete one chunk by id. This is the operator-intent path
+        (``forget_memory``, the inspector's DELETE routes) — an explicit
+        delete removes the row outright, history-keeping notwithstanding.
+        Automatic supersession uses :meth:`invalidate_chunk` instead
+        (ADR 0069 D9). Returns True if a row was removed."""
         db = self._get_db()
         if db is None:
             return False
@@ -731,14 +804,40 @@ class KnowledgeStore:
         finally:
             db.close()
 
+    def invalidate_chunk(self, chunk_id: int) -> bool:
+        """Mark one chunk superseded (ADR 0069 D9): set ``invalidated_at`` to
+        now, keeping the row for audit/history. Invalidated rows drop out of
+        ``search``/``list_chunks``/hot memory by default but stay reachable via
+        the ``include_invalidated`` escape hatch. Idempotent-safe: returns True
+        only when a VALID row was invalidated (already-invalidated or unknown
+        ids return False)."""
+        db = self._get_db()
+        if db is None:
+            return False
+        try:
+            now = _now_iso()
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = ?, updated_at = ? WHERE id = ? AND invalidated_at IS NULL",
+                (now, now, int(chunk_id)),
+            )
+            db.commit()
+            return cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[knowledge] invalidate_chunk failed")
+            return False
+        finally:
+            db.close()
+
     def get_hot_memory_entries(self, max_chars: int = 6000) -> list[tuple[int, str]]:
         """The ``(chunk_id, formatted piece)`` pairs behind :meth:`get_hot_memory`.
 
         Id-attributed so the per-turn injection record (ADR 0069 D6) can name
         exactly which hot chunks entered a model call. Same selection/budget
         semantics as ``get_hot_memory`` (one source of truth — it joins this).
+        Superseded chunks never inject: ``list_chunks`` excludes
+        ``invalidated_at`` rows by default (ADR 0069 D9).
         """
-        chunks = self.list_chunks(domain="hot", limit=100)  # newest-first
+        chunks = self.list_chunks(domain="hot", limit=100)  # newest-first, valid-only
         entries: list[tuple[int, str]] = []
         total = 0
         for c in chunks:  # newest-first → oldest trimmed when over budget

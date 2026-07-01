@@ -25,6 +25,12 @@ jobs:
         with:
           node-version: "20"
       - name: Verify workspace config (.beads / .automaker / owned runners)
+        # Fork-friendly (#1534): the .beads/.automaker/owned-runner baseline is the
+        # protoLabs *fleet* standard, so it runs across the fleet (protoLabsAI/*) —
+        # keeping gina/protoTrader/roxy conformant — but is skipped on external forks,
+        # which are free to diverge. The job stays green either way (the server.py
+        # guard below still runs everywhere).
+        if: startsWith(github.repository, 'protoLabsAI/')
         # The npm package is still 1.0.0 (predates verify-workspace-config),
         # so run the script directly. It's zero-dependency (node builtins
         # only), so no `npm install` is needed. Switch to

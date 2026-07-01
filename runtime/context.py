@@ -75,11 +75,15 @@ def _format_skills(summaries: list[dict], total: int) -> str:
 
 
 def _format_knowledge(results) -> str:
-    # Mirrors KnowledgeMiddleware's block ({table, preview}) so an external brain sees
-    # exactly what the native loop would inject.
+    # Mirrors KnowledgeMiddleware's block ({table, preview} + stored date, ADR 0069
+    # D9) so an external brain sees exactly what the native loop would inject.
     lines = ["[Relevant knowledge from previous sessions:]"]
     for r in results:
-        lines.append(f"- [{r.get('table', '')}] {r.get('preview', '')}")
+        line = f"- [{r.get('table', '')}] {r.get('preview', '')}"
+        stored = str(r.get("created_at") or "")[:10]
+        if stored:
+            line += f" (stored {stored})"
+        lines.append(line)
     return "\n".join(lines)
 
 
