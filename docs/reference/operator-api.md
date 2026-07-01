@@ -69,6 +69,20 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | POST · PUT · DELETE | `/api/playbooks[/{id}]` | Create / edit / delete a skill |
 | POST | `/api/playbooks/{id}/promote` | Promote a private skill into the commons |
 
+## Memory inspector
+
+The audit surface for the memory delivery layer
+([ADR 0069](../adr/0069-memory-delivery-layer.md) D7): the persisted session
+summaries behind the `<prior_sessions>` digest, and the hot-memory chunks
+injected every turn.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/memory/sessions` | List session summaries (digest fields: id, timestamp, surface, topic, message count, size) |
+| GET · DELETE | `/api/memory/sessions/{session_id}` | Full rendered summary (what `recall_session` returns) / delete one |
+| GET | `/api/memory/hot` | List hot-memory chunks (`domain="hot"`) |
+| PUT · DELETE | `/api/memory/hot/{chunk_id}` | Edit (revision stays `hot`) / delete a hot chunk |
+
 ## Activity, inbox & events
 
 | Method | Path | Purpose |
