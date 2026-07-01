@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Console dev server no longer defaults to the prod backend.** `apps/web/vite.config.ts` proxied
+  `npm run dev` / `npm run preview` backend calls to `:7870` (the default/prod instance the desktop
+  app runs) by default — so browser-based console development silently read and **wrote your real
+  `~/.protoagent` data**. It now defaults to the **isolated dev instance `:7871`** (`scripts/dev.sh`),
+  which is fail-safe (a clean "can't connect" when no dev backend is up, never a silent prod hit),
+  and prints a **loud red guard** if `PROTOAGENT_API_BASE` is ever pointed at `:7870`.
+
 ## [0.78.0] - 2026-07-01
 
 ### Added
