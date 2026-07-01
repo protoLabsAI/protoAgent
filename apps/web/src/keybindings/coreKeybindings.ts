@@ -11,6 +11,7 @@
 // remap to non-reserved combos in Settings ▸ Keyboard.
 import { api } from "../lib/api";
 import { chatStore } from "../chat/chat-store";
+import { toggleLatestToolBlock } from "../chat/toolCollapse";
 import { useUI } from "../state/uiStore";
 import { registerKeybinding } from "../ext/keybindingRegistry";
 import { useKbIntents } from "./intents";
@@ -107,6 +108,20 @@ for (let n = 1; n <= 9; n++) {
     run: () => switchToIndex(n - 1),
   });
 }
+// Toggle the LATEST tool-call block in the current agent output (#1526): expand it, press
+// again to collapse it, press again to walk UPWARD to the previous block (newest → oldest).
+// `allowInInput` so it fires while typing in the composer (the common case — reviewing tool
+// output as the agent works). The host preventDefaults, so it also swallows the browser's
+// native ⌘O / Ctrl+O (open file) while focus is in the chat panel.
+registerKeybinding({
+  id: "chat.tool.toggle",
+  label: "Toggle latest tool block",
+  group: "Chat",
+  defaultKeys: "mod+o",
+  scope: "chat",
+  allowInInput: true,
+  run: () => toggleLatestToolBlock(),
+});
 
 // ── Panels (global toggles) ──────────────────────────────────────────────────────────
 // VS Code-style: ⌘B left rail, ⌘⌥B right panel, ⌘J bottom dock. Same desktop-vs-browser
