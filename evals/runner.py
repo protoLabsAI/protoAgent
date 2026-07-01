@@ -290,21 +290,15 @@ async def _run_prompt_case(
             if not passed:
                 problems.append(detail)
 
-        # Text pattern assertions (case-insensitive substrings).
-        text_lower = result.text.lower()
-        for pattern in case.get("expected_patterns") or []:
-            if pattern.lower() not in text_lower:
-                problems.append(f"missing pattern {pattern!r}")
+        # Text pattern assertions (expected present, forbidden absent).
+        problems += _pattern_problems(
+            result.text,
+            case.get("expected_patterns"),
+            case.get("forbidden_patterns"),
+        )
 
-        # KB side-effect assertions.
-        vk = case.get("verify_kb") or {}
-        if "find_chunk_containing" in vk:
-            chunk = verify.find_chunk_containing(
-                vk["find_chunk_containing"],
-                domain=vk.get("domain"),
-            )
-            if not chunk:
-                problems.append(f"no chunk containing {vk['find_chunk_containing']!r}")
+        # KB side-effect assertions (chunk present / bounded chunk count).
+        problems += _kb_problems(case)
 
         # LLM-judge rubric (for quality substring/audit can't judge).
         problems += _check_rubric(case, result.text)
@@ -421,6 +415,51 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
             pass
 
 
+def _pattern_problems(
+    text: str,
+    expected: list[str] | None,
+    forbidden: list[str] | None = None,
+) -> list[str]:
+    """Case-insensitive substring assertions on a reply.
+
+    Every ``expected`` pattern must appear; every ``forbidden`` pattern must be
+    absent. ``forbidden_patterns`` is the load-bearing half of the
+    knowledge-update and poisoning-replay evals (ADR 0069 D10): assert the
+    *stale* fact is not restated, and the poisoning payload's marker phrase is
+    not obeyed. Pure — unit-tested directly."""
+    low = text.lower()
+    problems: list[str] = []
+    for p in expected or []:
+        if p.lower() not in low:
+            problems.append(f"missing pattern {p!r}")
+    for p in forbidden or []:
+        if p.lower() in low:
+            problems.append(f"forbidden pattern present {p!r}")
+    return problems
+
+
+def _kb_problems(case: dict) -> list[str]:
+    """KB side-effect assertions from a case's ``verify_kb`` block.
+
+    - ``find_chunk_containing`` (+ optional ``domain``): a chunk must exist.
+    - ``max_chunks_containing`` ``{contains, max, domain?}``: at most ``max``
+      chunks may contain the marker — the store-level poisoning assertion
+      (ADR 0069 D10). ``max`` defaults to 0 (marker must be absent entirely)."""
+    vk = case.get("verify_kb") or {}
+    problems: list[str] = []
+    if "find_chunk_containing" in vk:
+        chunk = verify.find_chunk_containing(vk["find_chunk_containing"], domain=vk.get("domain"))
+        if not chunk:
+            problems.append(f"no chunk containing {vk['find_chunk_containing']!r}")
+    if "max_chunks_containing" in vk:
+        spec = vk["max_chunks_containing"]
+        limit = int(spec.get("max", 0))
+        n = verify.count_chunks_containing(spec["contains"], domain=spec.get("domain"))
+        if n > limit:
+            problems.append(f"{n} chunk(s) contain {spec['contains']!r} (max {limit})")
+    return problems
+
+
 def _check_rubric(case: dict, text: str) -> list[str]:
     """Run a case's ``verify_rubric`` (if any) through the LLM judge; return a
     list of problems (empty when it passes or no rubric is configured)."""
@@ -473,10 +512,7 @@ async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
         return CaseResult(cid, cat, name, False, "empty workflow output", duration_ms=duration_ms)
 
     problems: list[str] = []
-    text_lower = text.lower()
-    for pattern in case.get("expected_patterns") or []:
-        if pattern.lower() not in text_lower:
-            problems.append(f"missing pattern {pattern!r}")
+    problems += _pattern_problems(text, case.get("expected_patterns"), case.get("forbidden_patterns"))
     problems += _check_rubric(case, text)
 
     # Tool-firing assertions over the audit log — same shape as the ask path, so

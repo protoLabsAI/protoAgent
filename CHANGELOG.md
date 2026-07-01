@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Memory-regression evals** (`memory-regression` category,
+  [ADR 0069](docs/adr/0069-memory-delivery-layer.md) D10) — three ADR 0012
+  harness probes for the memory delivery layer: a **knowledge-update** case
+  (seed a fact, seed its supersede, assert the newer value wins and the stale
+  one is not restated), an **abstention** case (ask about an adjacent-but-absent
+  fact, rubric-judge that it declines rather than fabricates), and an OWASP
+  ASI06 **poisoning replay** (ingest a doc with an embedded instruction payload,
+  then a later benign turn — assert both that the payload token never appears in
+  the reply *and*, store-side, that the "save a memory that …" payload never
+  persisted). Adds two reusable, unit-tested assertions: `forbidden_patterns`
+  (substrings that must be absent from the reply) and
+  `verify_kb.max_chunks_containing` (`{contains, max, domain?}` — bound a
+  marker's chunk count). They run under the same live-gateway +
+  `PROTOAGENT_INSTANCE` scoping as the existing `memory_ingest` cases; see
+  [the evals guide](docs/guides/evals.md).
 - **Namespace-scoped auto-injection** (`knowledge.inject_namespaces`,
   [ADR 0069](docs/adr/0069-memory-delivery-layer.md) D3a). When set, the per-turn
   auto-injected RAG recall only considers chunks in the listed namespaces (`""`
