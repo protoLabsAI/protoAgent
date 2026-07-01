@@ -391,3 +391,89 @@ describe("cross-tab persistence", () => {
     expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(before);
   });
 });
+
+// Soft-close + reopen (`/close` + Cmd/Ctrl+Shift+T, #1525). Unlike delete-forever, close
+// keeps the server checkpoint: it stashes a full ChatSession snapshot on an in-memory LIFO
+// stack and tombstones the id so the read-merge-write / cross-tab merge hides it. Reopen pops
+// the stack, re-inserts the SAME session (same a2a:<id> thread), switches to it, and CRITICALLY
+// lifts the tombstone so the restored tab isn't dropped again on the next persist.
+
+function onDiskIds(): string[] {
+  return JSON.parse(window.localStorage.getItem("protoagent.chat.sessions")!).sessions.map(
+    (s: { id: string }) => s.id,
+  );
+}
+
+describe("closeSession / reopenLastClosed", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.resetModules(); // fresh module-level closedSessions stack + tombstone set per test
+  });
+
+  it("stashes + hides the tab (state and persisted storage), then reopen restores it", async () => {
+    const { chatStore } = await import("./chat-store");
+    const a = chatStore.getSnapshot().currentSessionId!;
+    const b = chatStore.createSession();
+    chatStore.renameSession(b.id, "keep me");
+
+    chatStore.closeSession(b.id);
+    // Hidden from the live view (currentSessionId falls back to the surviving tab)…
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual([a]);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(a);
+    // …and tombstoned out of what we persist, so a reload / sibling tab won't show it.
+    expect(onDiskIds()).toEqual([a]);
+
+    // Reopen brings back the SAME session snapshot (same id → same a2a thread, full context).
+    chatStore.reopenLastClosed();
+    const snap = chatStore.getSnapshot();
+    const restored = snap.sessions.find((s) => s.id === b.id);
+    expect(restored?.title).toBe("keep me");
+    expect(snap.currentSessionId).toBe(b.id); // switched to it
+  });
+
+  it("reopen lifts the tombstone so the restored tab is persisted again (not re-dropped)", async () => {
+    const { chatStore } = await import("./chat-store");
+    const b = chatStore.createSession();
+    chatStore.closeSession(b.id);
+    expect(onDiskIds()).not.toContain(b.id); // tombstoned while stashed
+
+    chatStore.reopenLastClosed();
+    expect(onDiskIds()).toContain(b.id); // reopen's own flush keeps it (tombstone lifted)
+
+    // A later structural write must STILL keep it — proves the tombstone is truly gone, not
+    // that this one flush happened to include it.
+    chatStore.createSession();
+    expect(onDiskIds()).toContain(b.id);
+  });
+
+  it("is LIFO — reopen restores the most recently closed tab first", async () => {
+    const { chatStore } = await import("./chat-store");
+    const b = chatStore.createSession();
+    const c = chatStore.createSession();
+    chatStore.closeSession(b.id); // closed first
+    chatStore.closeSession(c.id); // closed last → reopened first
+
+    chatStore.reopenLastClosed();
+    expect(chatStore.getSnapshot().currentSessionId).toBe(c.id);
+    chatStore.reopenLastClosed();
+    expect(chatStore.getSnapshot().currentSessionId).toBe(b.id);
+  });
+
+  it("reopenLastClosed is a no-op on an empty stack", async () => {
+    const { chatStore } = await import("./chat-store");
+    const before = chatStore.getSnapshot();
+    chatStore.reopenLastClosed();
+    const after = chatStore.getSnapshot();
+    expect(after.sessions.map((s) => s.id)).toEqual(before.sessions.map((s) => s.id));
+    expect(after.currentSessionId).toBe(before.currentSessionId);
+  });
+
+  it("closeSession is a no-op for an unknown id (nothing stashed to reopen)", async () => {
+    const { chatStore } = await import("./chat-store");
+    const before = chatStore.getSnapshot().sessions.map((s) => s.id);
+    chatStore.closeSession("does-not-exist");
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(before);
+    chatStore.reopenLastClosed(); // stack is empty → still a no-op
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(before);
+  });
+});

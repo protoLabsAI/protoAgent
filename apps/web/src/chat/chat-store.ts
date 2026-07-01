@@ -4,6 +4,9 @@ import type { ChatMessage } from "../lib/types";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
+// How many soft-closed tabs to keep on the reopen stack (Cmd/Ctrl+Shift+T). Bounded so the
+// stashed snapshots can't grow without limit; the oldest closed tab falls off when exceeded.
+export const MAX_CLOSED_SESSIONS = 10;
 
 export type ChatSession = {
   id: string;
@@ -63,8 +66,15 @@ const STORAGE_KEY = (() => {
 })();
 
 // Sessions this tab deleted — a lightweight per-tab tombstone so the cross-tab merge
-// never resurrects a chat we just removed from another tab's stale on-disk copy.
+// never resurrects a chat we just removed from another tab's stale on-disk copy. A
+// SOFT close (`/close`) tombstones too, so the read-merge-write / cross-tab merge hides
+// the stashed tab; reopenLastClosed lifts the tombstone so it persists again.
 const locallyDeletedIds = new Set<string>();
+
+// LIFO stack of soft-closed tabs (`/close`) — full ChatSession snapshots kept IN MEMORY so
+// reopenLastClosed re-inserts one and the SAME a2a:<id> thread reconnects with full agent
+// context. Distinct from delete-forever, which purges the server checkpoint via the API.
+const closedSessions: ChatSession[] = [];
 
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -285,6 +295,34 @@ export function ensureActiveSessions(state: ChatState, sessionId: string | null)
   return next;
 }
 
+/** Remove a session from `current` and fix up currentSessionId / activeSessions /
+ *  sessionStatusMap. Shared by deleteSession (hard, purges the server checkpoint) and
+ *  closeSession (soft, stashes for reopen) — the only difference is the API call + the
+ *  reopen stash, NOT the local list fix-up. */
+function removeSession(current: ChatState, sessionId: string): ChatState {
+  const sessions = current.sessions.filter((session) => session.id !== sessionId);
+  const currentSessionId =
+    current.currentSessionId === sessionId ? sessions[0]?.id || null : current.currentSessionId;
+  const sessionStatusMap = { ...current.sessionStatusMap };
+  delete sessionStatusMap[sessionId];
+  return {
+    ...current,
+    sessions,
+    currentSessionId,
+    activeSessions: ensureActiveSessions(
+      {
+        ...current,
+        sessions,
+        currentSessionId,
+        activeSessions: current.activeSessions.filter((id) => id !== sessionId),
+        sessionStatusMap,
+      },
+      currentSessionId,
+    ),
+    sessionStatusMap,
+  };
+}
+
 let initial = loadPersisted();
 let state: ChatState = {
   ...initial,
@@ -371,27 +409,45 @@ export const chatStore = {
 
   deleteSession(sessionId: string) {
     locallyDeletedIds.add(sessionId); // tombstone: the cross-tab merge won't resurrect it
+    setState((current) => removeSession(current, sessionId));
+  },
+
+  /** Soft-close a tab (`/close`): stash a full snapshot on the reopen stack and drop it from
+   *  view WITHOUT purging the server checkpoint — so reopenLastClosed reconnects the same
+   *  a2a:<id> thread with full agent context. Tombstoned like a delete so the read-merge-write
+   *  / cross-tab merge won't resurrect the hidden tab; reopen lifts the tombstone. No-op for
+   *  an unknown id. */
+  closeSession(sessionId: string) {
+    const snapshot = state.sessions.find((session) => session.id === sessionId);
+    if (!snapshot) return; // unknown id → nothing to close
+    closedSessions.push(snapshot); // LIFO — reopen pops the most recently closed
+    if (closedSessions.length > MAX_CLOSED_SESSIONS) closedSessions.shift(); // drop the oldest
+    locallyDeletedIds.add(sessionId); // hide it from persist/merge until reopened
+    setState((current) => removeSession(current, sessionId));
+  },
+
+  /** Reopen the most recently soft-closed tab (Cmd/Ctrl+Shift+T). Pops the LIFO stack,
+   *  re-inserts the snapshot (respecting MAX_SESSIONS), and switches to it. CRITICAL: lift the
+   *  tombstone so the next persist / cross-tab merge keeps the restored tab (else it's dropped
+   *  again on the very next write). No-op when the stack is empty. */
+  reopenLastClosed() {
+    const restored = closedSessions.pop();
+    if (!restored) return; // empty stack → no-op
+    locallyDeletedIds.delete(restored.id); // un-tombstone so it persists again
     setState((current) => {
-      const sessions = current.sessions.filter((session) => session.id !== sessionId);
-      const currentSessionId =
-        current.currentSessionId === sessionId ? sessions[0]?.id || null : current.currentSessionId;
-      const sessionStatusMap = { ...current.sessionStatusMap };
-      delete sessionStatusMap[sessionId];
+      // Guard against a duplicate (e.g. a cross-tab merge resurrected it while stashed):
+      // drop any existing copy, then append the snapshot on the RIGHT like a new tab.
+      const sessions = [...current.sessions.filter((s) => s.id !== restored.id), restored].slice(
+        -MAX_SESSIONS,
+      );
       return {
         ...current,
         sessions,
-        currentSessionId,
+        currentSessionId: restored.id,
         activeSessions: ensureActiveSessions(
-          {
-            ...current,
-            sessions,
-            currentSessionId,
-            activeSessions: current.activeSessions.filter((id) => id !== sessionId),
-            sessionStatusMap,
-          },
-          currentSessionId,
+          { ...current, sessions, currentSessionId: restored.id },
+          restored.id,
         ),
-        sessionStatusMap,
       };
     });
   },
@@ -506,4 +562,12 @@ const _anyStreaming = () =>
   Object.values(chatStore.getSnapshot().sessionStatusMap).some((s) => s === "streaming");
 export function useAnyChatStreaming(): boolean {
   return useSyncExternalStore(chatStore.subscribe, _anyStreaming, () => false);
+}
+
+// How many soft-closed tabs are stashed on the reopen stack. Returns a primitive so a
+// "reopen closed tab" affordance re-renders only when the count changes. close/reopen both
+// notify via setState, so this stays in sync without threading the stack through ChatState.
+const _closedCount = () => closedSessions.length;
+export function useClosedSessionsCount(): number {
+  return useSyncExternalStore(chatStore.subscribe, _closedCount, () => 0);
 }

@@ -79,6 +79,18 @@ registerKeybinding({
     chatStore.updateMessages(currentSessionId, []);
   },
 });
+// Reopen the most recently soft-closed tab (the `/close` companion) — the browser's own
+// "reopen closed tab". ⌘⇧T / Ctrl+⇧T is browser-reserved (like ⌘T above): it works in the
+// Tauri desktop app but a plain browser tab swallows it; rebindable in Settings ▸ Keyboard.
+registerKeybinding({
+  id: "chat.reopen",
+  label: "Reopen closed chat",
+  group: "Chat",
+  defaultKeys: "mod+shift+t",
+  scope: "chat",
+  allowInInput: true,
+  run: () => chatStore.reopenLastClosed(),
+});
 registerKeybinding({
   id: "chat.tab.next",
   label: "Next chat tab",

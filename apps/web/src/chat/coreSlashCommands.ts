@@ -2,8 +2,8 @@
 // uses (`registerSlashCommand`), so the registry is the only path, never a special case
 // (the way the backend's `register_chat_command` has no core bypass). Imported for its
 // side effects by ChatSurface. `/new` opens a tab, `/clear` wipes this tab's history,
-// `/effort` sets this tab's reasoning effort. Behaviour ported verbatim from the old
-// hardcoded `runClientSlash` switch.
+// `/close` soft-closes this tab (reopen with Cmd/Ctrl+Shift+T), `/effort` sets this tab's
+// reasoning effort. Behaviour ported verbatim from the old hardcoded `runClientSlash` switch.
 
 import { registerSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
@@ -26,6 +26,19 @@ registerSlashCommand({
     if (!ctx.sessionId) return false; // no session → not handled (falls through)
     void api.deleteChatSession(ctx.sessionId, false).catch(() => {});
     chatStore.updateMessages(ctx.sessionId, []);
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "close",
+  description: "Close this tab (reopen with Cmd/Ctrl+Shift+T)",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → not handled (falls through)
+    // Soft close: keep the server checkpoint so reopen reconnects the same agent thread.
+    // (Delete-forever is the ✕ / shift-click / context-menu path.)
+    chatStore.closeSession(ctx.sessionId);
     ctx.focusComposer();
     return true;
   },
