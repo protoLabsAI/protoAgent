@@ -26,6 +26,9 @@ concurrency:
 jobs:
   deploy:
     name: Build & deploy to Cloudflare Pages
+    # Fork-friendly (#1534): deploys to protoLabs' Cloudflare Pages project and needs
+    # CLOUDFLARE_* secrets no fork has — so only the canonical repo runs it.
+    if: github.repository == 'protoLabsAI/protoAgent'
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     steps:
       - uses: actions/checkout@v5
