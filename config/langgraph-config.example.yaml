@@ -95,6 +95,13 @@ knowledge:
   # consolidate them into the store. Rides the harvest pass (ADR 0021).
   facts: true
   top_k: 5
+  # Namespace scope for the per-turn AUTO-INJECTED recall (ADR 0069 D3a). Unset =
+  # no filter (every chunk is eligible — box-commons sharing keeps working). When
+  # set, only chunks whose `namespace` matches a listed value auto-inject; include
+  # "" to also match un-namespaced chunks. memory_recall stays unscoped.
+  # inject_namespaces:
+  #   - "projects/alpha"
+  #   - ""
   # Document chunking on ingest (ADR 0021) — large bodies (conversation
   # summaries, pasted docs) are split into overlapping passages BEFORE
   # embedding, so each passage gets its own vector instead of one diluted

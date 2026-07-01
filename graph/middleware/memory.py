@@ -74,6 +74,12 @@ def _persist_session(state: dict, trace_id: str) -> None:
     if _PERSISTENCE_DISABLED:
         return
 
+    # Incognito thread (ADR 0069 D3b): the operator asked for NO session-memory
+    # trail — nothing written, so nothing can be injected into later sessions.
+    if state.get("incognito"):
+        log.info("[memory] incognito session — skipping session persistence")
+        return
+
     # ``session_id`` is not a declared graph-state field, so LangGraph drops the
     # key the chat path passes into ``ainvoke`` — ``state.get`` returns "" and
     # every session would collapse into a single ``unknown.json`` (pooling and
@@ -320,10 +326,21 @@ def load_prior_sessions(
     approximation). ``memory_dir`` defaults to the writer's resolved
     ``memory_path()``. Never raises.
     """
+    return load_prior_sessions_digest(memory_dir, max_sessions, max_tokens)[0]
+
+
+def load_prior_sessions_digest(
+    memory_dir: str | None = None,
+    max_sessions: int = 10,
+    max_tokens: int = 2000,
+) -> tuple[str, list[str]]:
+    """:func:`load_prior_sessions` plus the session ids the digest ended up
+    carrying (post token-trim), in digest order — the attribution the per-turn
+    injection record needs (ADR 0069 D6) without re-parsing the block."""
     if memory_dir is None:
         memory_dir = memory_path()
     if not os.path.isdir(memory_dir):
-        return ""
+        return "", []
     try:
         entries: list[tuple[float, str]] = []
         for fname in os.listdir(memory_dir):
@@ -336,9 +353,9 @@ def load_prior_sessions(
                 continue
         entries.sort(reverse=True)  # newest first
     except OSError:
-        return ""
+        return "", []
     if not entries:
-        return "<prior_sessions/>"
+        return "<prior_sessions/>", []
 
     summaries: list[dict] = []
     for _, fpath in entries[:max_sessions]:
@@ -348,16 +365,18 @@ def load_prior_sessions(
         except (OSError, json.JSONDecodeError, ValueError):
             continue
     if not summaries:
-        return "<prior_sessions/>"
+        return "<prior_sessions/>", []
 
-    formatted = [_digest_line(s) for s in summaries]
-    while formatted:
-        if max(1, len("\n".join([_DIGEST_HEADER, *formatted])) // 4) <= max_tokens:
+    # (session_id, line) pairs so the ids stay parallel through the token trim.
+    lines = [(str(s.get("session_id") or "unknown"), _digest_line(s)) for s in summaries]
+    while lines:
+        if max(1, len("\n".join([_DIGEST_HEADER, *(line for _, line in lines)])) // 4) <= max_tokens:
             break
-        formatted.pop()  # drop oldest (newest-first ordering)
-    if not formatted:
-        return "<prior_sessions/>"
-    return "<prior_sessions>\n" + "\n".join([_DIGEST_HEADER, *formatted]) + "\n</prior_sessions>"
+        lines.pop()  # drop oldest (newest-first ordering)
+    if not lines:
+        return "<prior_sessions/>", []
+    block = "<prior_sessions>\n" + "\n".join([_DIGEST_HEADER, *(line for _, line in lines)]) + "\n</prior_sessions>"
+    return block, [sid for sid, _ in lines]
 
 
 # ---------------------------------------------------------------------------

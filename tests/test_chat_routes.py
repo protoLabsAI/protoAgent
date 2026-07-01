@@ -11,7 +11,7 @@ def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_chat(message, session_id, *, model=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False):
         suffix = f"@{model}" if model else ""
         return chat_reply or [{"role": "assistant", "content": f"echo:{message}{suffix}"}]
 
@@ -39,7 +39,7 @@ def test_api_chat_mints_unique_session_id_when_omitted(monkeypatch):
 
     seen: list[str] = []
 
-    async def _fake_chat(message, session_id, *, model=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False):
         seen.append(session_id)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -65,6 +65,25 @@ def test_api_chat_threads_per_tab_model(monkeypatch):
     c = _client(monkeypatch)
     body = c.post("/api/chat", json={"message": "hi", "model": "protolabs/fast"}).json()
     assert body["response"] == "echo:hi@protolabs/fast"  # model reached chat()
+
+
+def test_api_chat_passes_incognito_flag(monkeypatch):
+    # ADR 0069 D3b: `incognito` rides the request body into chat() (default
+    # False — existing callers unaffected).
+    import operator_api.chat_routes as cr
+
+    seen: list[bool] = []
+
+    async def _fake_chat(message, session_id, *, model=None, incognito=False):
+        seen.append(incognito)
+        return [{"role": "assistant", "content": "ok"}]
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(cr, "chat", _fake_chat)
+
+    c.post("/api/chat", json={"message": "hi"})
+    c.post("/api/chat", json={"message": "hi", "incognito": True})
+    assert seen == [False, True]
 
 
 def test_openai_completion_honors_model_override(monkeypatch):

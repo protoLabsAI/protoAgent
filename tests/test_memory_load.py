@@ -350,6 +350,7 @@ async def test_abefore_model_runs_search_off_event_loop():
 
     store = MagicMock()
     store.get_hot_memory.return_value = ""
+    store.get_hot_memory_entries.return_value = []
 
     def _slow_search(query, k=5):
         seen_threads.append(threading.current_thread())
@@ -492,6 +493,7 @@ def test_envelope_wraps_memory_parts_not_skills(tmp_path):
 
     store = MagicMock()
     store.get_hot_memory.return_value = "coffee is a Gibraltar"
+    store.get_hot_memory_entries.return_value = [(1, "coffee is a Gibraltar")]
     store.search.return_value = [{"table": "chunks", "preview": "rag hit"}]
     mw = KnowledgeMiddleware(store, top_k=5, skills_index=_skills_index_mock())
     import time
@@ -520,6 +522,7 @@ def test_no_envelope_without_memory_parts():
 
     store = MagicMock()
     store.get_hot_memory.return_value = ""
+    store.get_hot_memory_entries.return_value = []
     store.search.return_value = []
     mw = KnowledgeMiddleware(store, top_k=5, skills_index=_skills_index_mock())
     import time

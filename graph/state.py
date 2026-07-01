@@ -26,6 +26,13 @@ class ProtoAgentState(AgentState):
     # Session tracking (A2A / chat session ID)
     session_id: NotRequired[str]
 
+    # Incognito thread (ADR 0069 D3b): no session-memory persistence, no memory
+    # injection for this thread. Set per turn by the chat entry paths (A2A
+    # message metadata / POST /api/chat); read by SessionSummaryMiddleware and
+    # KnowledgeMiddleware from state (current_session_id() is empty in tool
+    # bodies — state is the reliable carrier).
+    incognito: NotRequired[bool]
+
     # Per-turn model override (per chat tab) — read by ModelOverrideMiddleware to
     # swap the lead model for this turn; unset → the configured default.
     model: NotRequired[str]

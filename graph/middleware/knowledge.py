@@ -78,6 +78,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         top_k: int = 5,
         skills_index: "SkillsIndex | None" = None,
         skills_top_k: int = 5,
+        inject_namespaces: list[str] | None = None,
     ):
         super().__init__()
         self._store = knowledge_store
@@ -88,10 +89,17 @@ class KnowledgeMiddleware(AgentMiddleware):
         # demand via load_skill — so this caps the per-turn "table of contents",
         # not what's usable.
         self._skills_top_k = skills_top_k
+        # Namespace scope for the auto-inject RAG search (ADR 0069 D3a,
+        # `knowledge.inject_namespaces`). Empty/None = unfiltered (today's
+        # behavior — box-commons sharing keeps working); "" in the list matches
+        # un-namespaced chunks. Tool-driven recall (memory_recall) is NOT
+        # scoped by this — it only gates what enters the prompt unasked.
+        self._inject_namespaces = list(inject_namespaces or [])
         # Lazily loaded on first before_model call; None = not yet loaded.
         # Refreshed after _PRIOR_SESSIONS_TTL_S so sessions persisted after boot
         # become visible (the cache is otherwise frozen for the process life).
         self._prior_sessions_cache: str | None = None
+        self._prior_sessions_ids: list[str] = []
         self._prior_sessions_loaded_at: float = 0.0
 
     # ---------------------------------------------------------------------------
@@ -107,16 +115,21 @@ class KnowledgeMiddleware(AgentMiddleware):
         """Format the most-recent persisted sessions as a ``<prior_sessions>``
         block for injection.
 
-        Delegates to the shared :func:`graph.middleware.memory.load_prior_sessions`
+        Delegates to the shared :func:`graph.middleware.memory.load_prior_sessions_digest`
         (ADR 0021) — one source of truth, with read-time reasoning stripping —
         so this and ``SessionSummaryMiddleware`` can't drift. ``memory_path`` defaults
         to the writer's resolved ``memory_path()`` (no duplicate path literal,
-        same can't-drift reasoning). Never raises.
+        same can't-drift reasoning). Also stashes the digest's session ids on
+        ``self._prior_sessions_ids`` so the per-turn injection record (ADR 0069
+        D6) can attribute what was injected. Never raises.
         """
-        from graph.middleware.memory import load_prior_sessions
+        from graph.middleware.memory import load_prior_sessions_digest
         from graph.middleware.memory import memory_path as _memory_path
 
-        return load_prior_sessions(memory_path or _memory_path(), max_sessions, max_tokens)
+        block, self._prior_sessions_ids = load_prior_sessions_digest(
+            memory_path or _memory_path(), max_sessions, max_tokens
+        )
+        return block
 
     # ---------------------------------------------------------------------------
     # Skill index (progressive disclosure — ADR 0060)
@@ -176,8 +189,18 @@ class KnowledgeMiddleware(AgentMiddleware):
         hits — in that order) is wrapped in one <injected_memory> envelope
         with untrusted-reference framing (ADR 0069 D2). The skill index is
         not memory and stays outside the envelope.
+
+        Incognito threads (ADR 0069 D3b, ``state["incognito"]``) get NO memory
+        injection at all — no digest, no hot memory, no RAG — while the skill
+        index (capability, not memory) still injects. Whatever memory IS
+        injected is recorded, id-attributed, in the per-instance injection log
+        (ADR 0069 D6) so "what entered this turn?" stays answerable.
         """
         memory_parts: list[str] = []
+        digest_ids: list[str] = []
+        hot_ids: list[int] = []
+        rag_ids: list[int] = []
+        incognito = bool(state.get("incognito"))
 
         # Load prior sessions with a TTL cache (lazy + periodic refresh).
         # Suppressed on goal-driven turns: unrelated cross-session history
@@ -188,14 +211,20 @@ class KnowledgeMiddleware(AgentMiddleware):
         if self._prior_sessions_cache is None or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
             self._prior_sessions_cache = self.load_memory()
             self._prior_sessions_loaded_at = now
-        if self._prior_sessions_cache and not _in_goal_turn():
+        if self._prior_sessions_cache and not incognito and not _in_goal_turn():
             memory_parts.append(self._prior_sessions_cache)
+            digest_ids = list(self._prior_sessions_ids)
 
         # Hot memory — always-on operator facts (domain="hot"). Loaded per turn
         # (not cached) so a freshly-added hot fact is seen immediately.
-        if self._store is not None and hasattr(self._store, "get_hot_memory"):
+        if not incognito and self._store is not None and hasattr(self._store, "get_hot_memory"):
             try:
-                hot = self._store.get_hot_memory()
+                if hasattr(self._store, "get_hot_memory_entries"):
+                    entries = self._store.get_hot_memory_entries()
+                    hot_ids = [cid for cid, _ in entries]
+                    hot = "\n".join(piece for _, piece in entries)
+                else:  # custom backend without the id-attributed reader
+                    hot = self._store.get_hot_memory()
                 if hot:
                     memory_parts.append(f"[Always-on facts (hot memory):]\n{hot}")
             except Exception as exc:  # noqa: BLE001 - never break the loop on memory
@@ -208,7 +237,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         # conversation. The model pulls a full procedure on demand via load_skill.
         skill_block = self._skill_index_block()
 
-        if messages:
+        if messages and not incognito:
             # Find the last human message
             last_human: str | None = None
             for msg in reversed(messages):
@@ -217,16 +246,19 @@ class KnowledgeMiddleware(AgentMiddleware):
                     break
 
             if last_human and self._store is not None:
-                results = self._store.search(last_human, k=self._top_k)
+                results = self._search_scoped(last_human)
                 if results:
                     context_parts = ["[Relevant knowledge from previous sessions:]"]
                     for r in results:
                         context_parts.append(f"- [{r['table']}] {r['preview']}")
+                        if r.get("id") is not None:
+                            rag_ids.append(r["id"])
                     memory_parts.append("\n".join(context_parts))
 
         parts: list[str] = []
         if memory_parts:
             parts.append(_wrap_injected_memory(memory_parts))
+            self._record_injection(state, memory_parts, digest_ids, hot_ids, rag_ids)
         if skill_block:
             parts.append(skill_block)
 
@@ -234,6 +266,43 @@ class KnowledgeMiddleware(AgentMiddleware):
             return None
 
         return {"context": "\n\n".join(parts)}
+
+    def _search_scoped(self, query: str) -> list[dict]:
+        """The auto-inject RAG search, namespace-scoped when configured (ADR
+        0069 D3a). A backend whose ``search`` predates the ``namespace`` kwarg
+        gets the unfiltered call and a post-filter on each hit's ``namespace``
+        field, so the configured scope holds either way."""
+        if not self._inject_namespaces:
+            return self._store.search(query, k=self._top_k)
+        try:
+            return self._store.search(query, k=self._top_k, namespace=self._inject_namespaces)
+        except TypeError:
+            allowed = set(self._inject_namespaces)
+            results = self._store.search(query, k=self._top_k)
+            return [r for r in results if (r.get("namespace") or "") in allowed]
+
+    def _record_injection(
+        self,
+        state,
+        memory_parts: list[str],
+        digest_ids: list[str],
+        hot_ids: list[int],
+        rag_ids: list[int],
+    ) -> None:
+        """Append this model call's injected-memory row to the per-instance
+        injection log (ADR 0069 D6). Best-effort — never breaks a turn."""
+        try:
+            from observability.injection_log import injection_log
+
+            injection_log().record(
+                session_id=state.get("session_id", "") or "",
+                digest_session_ids=digest_ids,
+                hot_chunk_ids=hot_ids,
+                rag_chunk_ids=rag_ids,
+                approx_tokens=max(1, len("\n\n".join(memory_parts)) // 4),
+            )
+        except Exception as exc:  # noqa: BLE001 — forensics must never break the loop
+            log.debug("[knowledge] injection record failed: %s", exc)
 
     async def abefore_model(self, state, runtime) -> dict | None:
         """Async version — same logic, off the event loop.

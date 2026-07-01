@@ -64,6 +64,66 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 `GET /api/runtime/status` reports the store status; `GET /api/knowledge/search`
 backs the console browser.
 
+## Memory delivery controls (ADR 0069)
+
+What the store *holds* and what gets *pushed into the prompt each turn* are separate
+surfaces ([ADR 0069](/adr/0069-memory-delivery-layer)). Three controls gate and audit
+the delivery side:
+
+### Scope the auto-inject to namespaces
+
+Every chunk carries an optional `namespace` (session attachments use
+`attach:<session_id>`; forks/plugins set their own). By default the per-turn
+auto-inject searches **everything**. To restrict what can enter the prompt unasked:
+
+```yaml
+knowledge:
+  inject_namespaces: []       # default: empty = no filter (everything eligible)
+  # inject_namespaces:        # when set: only these namespaces auto-inject
+  #   - "projects/alpha"
+  #   - ""                    # the empty string matches UN-namespaced chunks
+```
+
+This gates **only the automatic injection** (`KnowledgeMiddleware`) — tool-driven
+recall (`memory_recall`) is deliberately unscoped, so out-of-scope knowledge stays
+reachable on demand with the model's intent visible as a tool call. Hybrid stores
+filter both the keyword and vector rankings, so a fused hit can never come from
+outside the scope.
+
+### Incognito threads
+
+A turn flagged **incognito** leaves no memory trail and reads none in: the
+session-summary write is skipped (nothing to show up in later threads'
+`<prior_sessions>` digest), the digest / hot-memory / RAG injection is skipped
+for that turn (the skill index still injects — it's capability, not memory), and
+the retire-time conversation harvest skips the thread (its transcript is never
+summarized into the knowledge store).
+
+- **`POST /api/chat`** — pass `"incognito": true` in the request body (additive;
+  default `false`).
+- **A2A / console streaming path** — set `incognito: true` in the message
+  **metadata** (alongside `model` / `reasoning_effort`).
+
+The flag is per-message and stamped explicitly on every turn, so a thread is only
+as incognito as its latest message — send the flag on each turn of a thread you
+want kept out of memory. (A console thread toggle rides a later UI lane.)
+
+### The per-turn injection record
+
+Every model call that had memory injected appends one row to an instance-scoped
+log (`<instance_root>/memory-injections.db`) recording **which** digest sessions,
+hot-memory chunk ids, and RAG chunk ids entered the prompt, and roughly how many
+tokens they cost. This is the forensics half of the poisoning story: store row →
+source session → the turns it was injected into.
+
+```
+GET /api/memory/injections?session_id=<id>&limit=50
+```
+
+returns `{"injections": [...]}` newest-first — omit `session_id` for all sessions.
+Each row: `ts`, `session_id`, `digest_session_ids`, `hot_chunk_ids`,
+`rag_chunk_ids`, `approx_tokens`.
+
 ## Sharing knowledge across a fleet (the commons)
 
 By default each agent's knowledge store is **private** (`scope: scoped`) — what one

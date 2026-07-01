@@ -242,6 +242,17 @@ FIELDS: list[Field] = [
     ),
     # ── Knowledge / memory ───────────────────────────────────────────────────
     Field("knowledge.top_k", "knowledge_top_k", "Knowledge recall top-k", "number", "Knowledge", minimum=1),
+    # Scope filter for the auto-inject RAG search (ADR 0069 D3a).
+    Field(
+        "knowledge.inject_namespaces",
+        "knowledge_inject_namespaces",
+        "Auto-inject namespaces",
+        "string_list",
+        "Knowledge",
+        "Restrict per-turn auto-injected knowledge (RAG) to chunks in these namespaces — one "
+        "per line; an empty line matches un-namespaced chunks. Empty = no filter (everything "
+        "is eligible, today's behavior). Tool-driven recall (memory_recall) is not affected.",
+    ),
     # Tier (ADR 0041 / bd-2wu) — mirrors `skills.scope`; the commons lives at `commons.path`.
     Field(
         "knowledge.scope",
@@ -705,6 +716,7 @@ FIELDS: list[Field] = [
 _KNOWLEDGE_SUBSECTION = {
     # Recall — what the agent retrieves into context, and how.
     "knowledge.top_k": "Recall",
+    "knowledge.inject_namespaces": "Recall",
     "knowledge.scope": "Recall",
     "knowledge.embeddings": "Recall",
     "knowledge.embed_model": "Recall",

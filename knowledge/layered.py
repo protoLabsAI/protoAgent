@@ -46,12 +46,20 @@ class LayeredKnowledgeStore:
         return getattr(self._private, name)
 
     # ── read: commons ∪ private, fused with RRF over rank ─────────────────────
-    def search(self, query: str, k: int = 5, *, domain: str | None = None) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        k: int = 5,
+        *,
+        domain: str | None = None,
+        namespace: str | list[str] | None = None,
+    ) -> list[dict]:
         """Top-k across BOTH tiers, fused by RRF over each tier's rank, tier-tagged.
         A chunk promoted into the commons (same content as its private original) is
-        de-duped — the private record wins (it's editable) but keeps the summed score."""
-        priv = self._private.search(query, k, domain=domain)
-        comm = self._commons.search(query, k, domain=domain)
+        de-duped — the private record wins (it's editable) but keeps the summed score.
+        ``namespace`` (ADR 0069 D3a) is passed through to both tiers."""
+        priv = self._private.search(query, k, domain=domain, namespace=namespace)
+        comm = self._commons.search(query, k, domain=domain, namespace=namespace)
 
         fused: dict[str, dict] = {}
         scores: dict[str, float] = {}

@@ -698,6 +698,12 @@ def _main():
     # operator_api/telemetry_routes.py (ADR 0023 phase 3).
     register_telemetry_routes(fastapi_app)
 
+    # Memory-injection record (ADR 0069 D6) — which memory items entered which
+    # turn. Read-only forensics surface over observability/injection_log.py.
+    from operator_api.injection_routes import register_injection_routes
+
+    register_injection_routes(fastapi_app)
+
     # Live config / SOUL editing, model probe/test, setup wizard, and
     # schema-driven settings. Extracted to operator_api/config_routes.py
     # (ADR 0023 phase 3).

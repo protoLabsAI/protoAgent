@@ -98,6 +98,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
                 top_k=config.knowledge_top_k,
                 skills_index=_skills_index,
                 skills_top_k=config.skills_top_k,
+                inject_namespaces=config.knowledge_inject_namespaces,
             )
         )
 

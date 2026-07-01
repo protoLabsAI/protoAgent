@@ -30,7 +30,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-from knowledge.store import KnowledgeStore
+from knowledge.store import KnowledgeStore, _namespace_clause
 
 log = logging.getLogger(__name__)
 
@@ -257,20 +257,34 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().delete_by_namespace(namespace)
 
-    def _vector_search(self, query_vec: list[float], k: int, domain: str | None) -> list[int]:
+    def _vector_search(
+        self,
+        query_vec: list[float],
+        k: int,
+        domain: str | None,
+        namespace: str | list[str] | None = None,
+    ) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
         db = self._get_db()
         if db is None:
             return []
+        where: list[str] = []
+        params: list = []
+        if domain:
+            where.append("c.domain = ?")
+            params.append(domain)
+        ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
+        if ns_sql:
+            where.append(ns_sql)
+            params.extend(ns_params)
+        sql = (
+            "SELECT v.chunk_id, v.vec FROM chunk_vectors v "
+            "JOIN chunks c ON c.id = v.chunk_id WHERE " + " AND ".join(where)
+            if where
+            else "SELECT chunk_id, vec FROM chunk_vectors"
+        )
         try:
-            if domain:
-                rows = db.execute(
-                    "SELECT v.chunk_id, v.vec FROM chunk_vectors v "
-                    "JOIN chunks c ON c.id = v.chunk_id WHERE c.domain = ?",
-                    (domain,),
-                ).fetchall()
-            else:
-                rows = db.execute("SELECT chunk_id, vec FROM chunk_vectors").fetchall()
+            rows = db.execute(sql, params).fetchall()
         except sqlite3.DatabaseError:
             return []
         finally:
@@ -293,21 +307,30 @@ class HybridKnowledgeStore(KnowledgeStore):
 
     # ── hybrid search ────────────────────────────────────────────────────────────
 
-    def search(self, query, k: int = 5, *, domain: str | None = None) -> list[dict]:
+    def search(
+        self,
+        query,
+        k: int = 5,
+        *,
+        domain: str | None = None,
+        namespace: str | list[str] | None = None,
+    ) -> list[dict]:
         """RRF-fuse the FTS5 ranking with a vector ranking.
 
         Falls back to pure FTS5 when embeddings are unavailable (no embed_fn,
         circuit open, or the query fails to embed) — same shape, never raises.
+        ``namespace`` (ADR 0069 D3a) filters BOTH rankings, so a fused hit can
+        never come from outside the requested scope.
         """
         if not query or not query.strip():
             return []
 
-        base = super().search(query, k=self._vector_k, domain=domain)
+        base = super().search(query, k=self._vector_k, domain=domain, namespace=namespace)
         query_vec = self._embed(query)
         if query_vec is None:
             return base[:k]
 
-        vec_ids = self._vector_search(query_vec, self._vector_k, domain)
+        vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace)
         if not vec_ids:
             return base[:k]
 

@@ -168,6 +168,38 @@ def test_harvest_noop_on_unknown_thread(tmp_path):
     assert out is None and kb.chunks == []
 
 
+def test_harvest_skips_incognito_thread(tmp_path):
+    """ADR 0069 D3b: incognito means NO memory trail — the retire sweep
+    (harvest_enabled defaults ON) must not summarize the thread into the
+    knowledge store, where RAG would re-inject it into later prompts."""
+    from graph.state import ProtoAgentState
+
+    db = str(tmp_path / "c.db")
+    g = StateGraph(ProtoAgentState)
+    g.add_node("n", lambda s: {"messages": [AIMessage(content="noted")]})
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+
+    async def main():
+        app = g.compile(checkpointer=build_sqlite_checkpointer(db))
+        await app.ainvoke(
+            {"messages": [HumanMessage(content="my secret color is teal")], "incognito": True},
+            {"configurable": {"thread_id": "a2a:incog"}},
+        )
+
+    asyncio.run(main())
+    saver = build_sqlite_checkpointer(db)
+    kb = _FakeKnowledge()
+
+    async def _boom(transcript, config):
+        raise AssertionError("incognito thread must not be summarized")
+
+    out = asyncio.run(
+        harvest_thread("a2a:incog", checkpointer=saver, knowledge_store=kb, config=object(), summarizer=_boom)
+    )
+    assert out is None and kb.chunks == []
+
+
 def test_find_aged_threads_and_delete(tmp_path):
     import sqlite3
 
