@@ -237,7 +237,6 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _build_telemetry_store,
     _checkpoint_prune_loop,
     _init_langgraph_agent,
-    _monitor_goals_loop,
     _watch_loop,
     _mount_plugin_routers,
     _plugin_agent_invoke,
@@ -525,7 +524,6 @@ def _main():
         if STATE.graph_config is not None and getattr(STATE.graph_config, "goal_enabled", True):
             import asyncio
 
-            STATE.monitor_goals_task = asyncio.create_task(_monitor_goals_loop())
             STATE.watch_task = asyncio.create_task(_watch_loop())
 
         # (The inbound Discord gateway now starts as the discord plugin's surface,
@@ -643,8 +641,6 @@ def _main():
                 log.exception("[cache-warmer] shutdown failed")
         if STATE.checkpoint_prune_task is not None:
             STATE.checkpoint_prune_task.cancel()
-        if STATE.monitor_goals_task is not None:
-            STATE.monitor_goals_task.cancel()
         if STATE.watch_task is not None:
             STATE.watch_task.cancel()
         # Close the long-lived A2A push-notification client (created below in

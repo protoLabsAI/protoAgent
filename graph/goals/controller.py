@@ -75,7 +75,7 @@ class GoalController:
             return "Goal cleared." if existed else "No active goal to clear."
 
         # /goal {json}  or  /goal <free text>  → set
-        spec, condition, max_iters, no_progress, mode, fresh_context, deadline, stall_after = self._parse_set(rest)
+        spec, condition, max_iters, no_progress, fresh_context = self._parse_set(rest)
         if condition is None:
             return (
                 "Could not parse goal. Use `/goal <text>` or "
@@ -99,12 +99,9 @@ class GoalController:
             session_id=session_id,
             condition=condition,
             verifier=spec,
-            mode=mode,  # "drive" (default) | "monitor" (ADR 0030)
             fresh_context=fresh_context,
             max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
-            no_progress_limit=no_progress,  # per-goal patience (ADR 0030 D4); None → config
-            deadline=deadline,  # monitor deadline → expired (ADR 0030 D5)
-            stall_after=stall_after,  # monitor stall signal → on_stalled (ADR 0030 D5)
+            no_progress_limit=no_progress,  # per-goal patience; None → config
         )
         self._store.set(state)
         return f"Goal set. {state.status_line()}"
@@ -135,9 +132,6 @@ class GoalController:
         verifier: dict,
         max_iterations: int | None = None,
         no_progress_limit: int | None = None,
-        mode: str = "drive",
-        deadline: float | None = None,
-        stall_after: int | None = None,
     ) -> tuple[bool, str]:
         """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
         Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
@@ -158,11 +152,8 @@ class GoalController:
             session_id=session_id,
             condition=condition,
             verifier=verifier,
-            mode=("monitor" if mode == "monitor" else "drive"),  # ADR 0030 (still plugin-gated)
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
-            no_progress_limit=no_progress_limit,  # per-goal patience (ADR 0030 D4)
-            deadline=deadline,  # monitor deadline → expired (ADR 0030 D5)
-            stall_after=stall_after,  # monitor stall signal → on_stalled (ADR 0030 D5)
+            no_progress_limit=no_progress_limit,
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -174,9 +165,6 @@ class GoalController:
         verifier: dict,
         max_iterations: int | None = None,
         no_progress_limit: int | None = None,
-        mode: str = "drive",
-        deadline: float | None = None,
-        stall_after: int | None = None,
     ) -> tuple[bool, str]:
         """Set a goal from the TRUSTED OPERATOR surface — ``POST /api/goals``, gated to
         operator-tier by the ADR 0066 ``/api`` path ceiling. Unlike ``set_goal_safe``
@@ -196,11 +184,8 @@ class GoalController:
             session_id=session_id,
             condition=condition,
             verifier=verifier,
-            mode=("monitor" if mode == "monitor" else "drive"),
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress_limit,
-            deadline=deadline,
-            stall_after=stall_after,
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -240,65 +225,22 @@ class GoalController:
 
     def _parse_set(self, rest: str):
         """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None,
-        mode, fresh_context, deadline|None, stall_after|None)."""
+        fresh_context)."""
         if rest.lstrip().startswith("{"):
             try:
                 data = json.loads(rest)
             except json.JSONDecodeError:
-                return ({}, None, None, None, "drive", False, None, None)
+                return ({}, None, None, None, False)
             condition = data.get("condition")
             if not condition:
-                return ({}, None, None, None, "drive", False, None, None)
+                return ({}, None, None, None, False)
             verifier = data.get("verifier") or {"type": "llm"}
             if "type" not in verifier:
                 verifier["type"] = "llm"
-            mode = "monitor" if data.get("mode") == "monitor" else "drive"
             fresh_context = bool(data.get("fresh_context", False))
-            # Monitor termination + stall (ADR 0030 D5); plain data (not verifiers), so the
-            # Phase 1 trust-gate is unaffected.
-            deadline = self._parse_deadline(data.get("deadline"))
-            stall_after = self._parse_stall_after(data.get("stall_after"))
-            return (
-                verifier,
-                condition,
-                data.get("max_iterations"),
-                data.get("no_progress_limit"),
-                mode,
-                fresh_context,
-                deadline,
-                stall_after,
-            )
+            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), fresh_context)
         # plain text → fuzzy goal judged by the llm verifier
-        return ({"type": "llm"}, rest, None, None, "drive", False, None, None)
-
-    @staticmethod
-    def _parse_deadline(value) -> float | None:
-        """A monitor-goal deadline: a number = epoch seconds, or an ISO-8601 string
-        (``datetime.fromisoformat``) → epoch seconds. Unparseable → None (no deadline)."""
-        if value is None:
-            return None
-        if isinstance(value, bool):  # bool is an int subclass — reject it explicitly
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            from datetime import datetime
-
-            try:
-                return datetime.fromisoformat(value.strip()).timestamp()
-            except ValueError:
-                return None
-        return None
-
-    @staticmethod
-    def _parse_stall_after(value) -> int | None:
-        """A monitor-goal stall threshold: a positive int (checks) or None."""
-        if value is None or isinstance(value, bool):
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
+        return ({"type": "llm"}, rest, None, None, False)
 
     # --- evaluation --------------------------------------------------------
 
@@ -321,61 +263,6 @@ class GoalController:
 
         if result.met:
             return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
-
-        # Monitor goals (ADR 0030): an external process drives the metric, not the
-        # agent's turns — so on not-met there's nothing for the agent to do. Record
-        # the check and wait for the next one; no continuation, no iteration/no-
-        # progress bookkeeping, no exhaustion. It ends only on achieved / cleared /
-        # a deadline (→ expired), with an optional stall signal. This is what closes
-        # ADR-0028 D6 (and the ADR 0030 D5 slice).
-        if state.mode == "monitor":
-            from time import time
-
-            from graph.goals.hooks import fire_stall_hook
-
-            # (a) Deadline (ADR 0030 D5): a monitor goal that hasn't been met by its
-            # deadline finishes `expired` — a NON-achieved terminal, so it fires on_failed
-            # + the goal.failed bus event like exhausted/unachievable.
-            if state.deadline is not None and time() >= state.deadline:
-                return await self._finish(
-                    state, "expired", "deadline passed before the goal was met", evidence=result.evidence
-                )
-
-            # (b) Stall signal (ADR 0030 D5): after `stall_after` consecutive checks whose
-            # verifier reason+evidence didn't change, fire the on_stalled hook ONCE per stall
-            # episode — WITHOUT ending the goal (the external engine stopped moving, but the
-            # objective lives). Re-arm when the evidence changes.
-            unchanged = result.reason == state.last_reason and result.evidence == state.last_evidence
-            state.stall_streak = (state.stall_streak + 1) if unchanged else 0
-            if not unchanged:
-                state.stalled_notified = False
-            if state.stall_after and state.stall_streak >= state.stall_after and not state.stalled_notified:
-                state.stalled_notified = True
-                await fire_stall_hook(state)
-                # Best-effort bus signal (mirrors the goal.iteration publish below) so a
-                # console/plugin can react to a stalled monitor goal without a hook.
-                try:
-                    from graph.plugins.host import HOST
-
-                    if HOST.publish:
-                        HOST.publish(
-                            "goal.stalled",
-                            {
-                                "session_id": getattr(state, "session_id", "") or "",
-                                "condition": getattr(state, "condition", "") or "",
-                                "stall_streak": state.stall_streak,
-                                "reason": result.reason,
-                            },
-                        )
-                except Exception:  # noqa: BLE001 — a bus hiccup must never break the goal loop
-                    pass
-
-            # (c) Record the check and wait for the next one.
-            state.last_reason = result.reason
-            state.last_evidence = result.evidence
-            state.last_checked = time()
-            self._store.set(state)
-            return None
 
         # 2. Verifier not met — honour an explicit give-up. The agent records it
         # DURING its turn via the `abandon_goal` tool (persisted to the goal state); we
@@ -432,51 +319,6 @@ class GoalController:
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
 
-    async def evaluate_now(self, session_id: str) -> Decision | None:
-        """Run the active goal's verifier immediately — no agent turn, no drive
-        bookkeeping (ADR 0030 D2.2). A plugin calls this from its own state-change
-        path (e.g. right after a sale clears) so achievement is caught promptly
-        instead of at the next monitor tick. Met → finish (hooks fire); not-met →
-        record evidence + return None (iteration/no-progress untouched)."""
-        state = self.active_goal(session_id)
-        if state is None:
-            return None
-        ctx = VerifyContext(
-            config=self._config,
-            condition=state.condition,
-            last_text="",
-            tool_summary="",
-            cwd=os.getcwd(),
-        )
-        result = await run_verifier(state.verifier, ctx)
-        if result.met:
-            return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
-        from time import time
-
-        state.last_reason = result.reason
-        state.last_evidence = result.evidence
-        state.last_checked = time()
-        self._store.set(state)
-        return None
-
-    async def tick_monitor_goals(self) -> int:
-        """Evaluate every active monitor goal out-of-band — verifier-only, no agent
-        turn (ADR 0030 D2.1). The server runs this on a cadence so a met goal
-        doesn't sit ``active`` until the next session turn. Returns how many reached
-        a terminal state this tick."""
-        finished = 0
-        for state in list(self._store.all()):
-            if not (state.active and state.mode == "monitor"):
-                continue
-            try:
-                decision = await self.evaluate(state.session_id, last_text="")
-            except Exception:  # noqa: BLE001 — one bad goal must not stop the tick
-                log.exception("[goal] monitor tick failed for %s", state.session_id)
-                continue
-            if decision is not None and decision.action == "done":
-                finished += 1
-        return finished
-
     async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
         from time import time
         from graph.goals.hooks import fire_goal_hooks
@@ -504,7 +346,6 @@ class GoalController:
                         "status": status,
                         "reason": reason,
                         "evidence": evidence or state.last_evidence or "",
-                        "mode": state.mode,
                     },
                 )
         except Exception:  # noqa: BLE001

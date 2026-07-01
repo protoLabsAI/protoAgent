@@ -1,6 +1,8 @@
 # 0030 — Monitor goals: cadence-evaluated, hook-reactive objectives (+ per-goal no-progress limit)
 
-Status: **Accepted** (sliced — see Slices)
+Status: **Superseded by [ADR 0067](0067-standalone-watch-primitive.md)** — the `monitor`
+disposition became the standalone `watch` primitive (many-per-agent, out-of-band, verifier +
+reaction); goals are now drive-only. (Was: Accepted, sliced.)
 
 > **Pulled upstream from the protoTrader-in-space fork**, where an autonomous agent
 > grows a treasury via a background engine. Authored there as ADR 0029; renumbered to

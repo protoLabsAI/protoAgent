@@ -176,8 +176,6 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   **non-blocking one-shot agent turn** in a session (that session's memory + full tools).
   The primitive behind "when a goal fires, prompt the agent" — call it from a
   `register_goal_hook` reaction. See [Goal mode ▸ Reacting to a goal](/guides/goal-mode#reacting-to-a-goal).
-- `start_goal_loop(...)` / `stop_goal_loop(...)` — declare/tear down a goal-driven recurring
-  loop (a goal + a scheduler tick) in one call.
 - `create_watch(*, condition, verifier, run_prompt=…, …)` — register a **watch** (ADR 0067):
   poll `condition` on a cadence, and on met run `run_prompt` as a follow-up turn
   (`run_in_session`) + fire `on_met` hooks. Plugin-verifier only; hold **many** at once (unlike

@@ -219,24 +219,20 @@ class PluginRegistry:
         key = name if ":" in name else f"{self.plugin_id}:{name}"
         self.goal_verifiers[key] = fn
 
-    def register_goal_hook(self, *, on_achieved=None, on_failed=None, on_stalled=None) -> None:
-        """React when a goal reaches a terminal state (ADR 0028 D4) — or stalls (ADR 0030 D5).
-        ``on_achieved`` / ``on_failed`` take the terminal ``GoalState``; ``on_stalled`` (monitor
-        goals only) fires when the verifier evidence hasn't moved for ``stall_after`` checks —
-        WITHOUT ending the goal, once per stall episode. Each takes the ``GoalState`` (sync or
-        async) — push a notification, record a finding, or set the next goal. Provide ANY of the
-        three. A raising hook is logged + swallowed."""
-        if not (callable(on_achieved) or callable(on_failed) or callable(on_stalled)):
-            log.warning(
-                "[plugins] %s: register_goal_hook needs on_achieved, on_failed, and/or on_stalled", self.plugin_id
-            )
+    def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
+        """React when a goal reaches a terminal state (ADR 0028 D4). ``on_achieved`` /
+        ``on_failed`` take the terminal ``GoalState`` (sync or async) — push a notification,
+        record a finding, or set the next goal. Provide either/both. A raising hook is logged +
+        swallowed. (A metric to *watch* over time is a watch — see ``register_watch_hook`` with
+        on_met/on_expired/on_stalled, ADR 0067.)"""
+        if not (callable(on_achieved) or callable(on_failed)):
+            log.warning("[plugins] %s: register_goal_hook needs on_achieved and/or on_failed", self.plugin_id)
             return
         self.goal_hooks.append(
             {
                 "plugin_id": self.plugin_id,
                 "on_achieved": on_achieved if callable(on_achieved) else None,
                 "on_failed": on_failed if callable(on_failed) else None,
-                "on_stalled": on_stalled if callable(on_stalled) else None,
             }
         )
 
