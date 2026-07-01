@@ -44,12 +44,15 @@ function GoalsList() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals }),
   });
 
-  // Live: the agent set/advanced/cleared a goal mid-turn — refresh off the `goal.changed`
-  // bus push instead of polling every 5s (#1310), the same pattern as the inbox panel.
-  useEffect(
-    () => onServerEvent("goal.changed", () => void queryClient.invalidateQueries({ queryKey: queryKeys.goals })),
-    [queryClient],
-  );
+  // Live: refresh off the goal bus instead of polling every 5s (#1310), the same pattern as
+  // the inbox panel. `goal.changed` fires when the agent set/advanced/cleared a goal mid-turn;
+  // `goal.iteration` fires on each drive-goal continuation (ADR 0051 Slice 3) so the row's
+  // `iter N/max` + last-reason updates live while the loop runs.
+  useEffect(() => {
+    const refresh = () => void queryClient.invalidateQueries({ queryKey: queryKeys.goals });
+    const offs = [onServerEvent("goal.changed", refresh), onServerEvent("goal.iteration", refresh)];
+    return () => offs.forEach((off) => off());
+  }, [queryClient]);
 
   if (!goals.length) {
     return (
