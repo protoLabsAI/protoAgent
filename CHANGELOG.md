@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Console set-goal form** (#1510) and **live `goal.iteration` progress** in the Goals panel (#1498).
 
 ### Changed
+- **Knowledge panel: Upload / Add now open in a dialog** (#1502) instead of expanding inline in the
+  narrow sidebar. The source-ingest and add-entry forms get room to breathe and the knowledge list
+  stays in view behind the modal; per-row edit stays inline where it belongs.
 - **Goal mode is now drive-only; the `monitor` disposition is retired** (#1511, ADR 0030 superseded by
   ADR 0067) — watching a metric an external process moves is a **watch**, not a goal. **BREAKING:**
   `sdk.start_goal_loop` / `stop_goal_loop` are removed (use `sdk.create_watch`), `register_goal_hook` no

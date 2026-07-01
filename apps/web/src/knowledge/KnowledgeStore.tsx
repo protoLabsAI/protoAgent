@@ -1,6 +1,6 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Alert } from "@protolabsai/ui/data";
-import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownFromLine, ArrowUpToLine, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
@@ -338,23 +338,40 @@ export function KnowledgeStore() {
           <Alert status="error">Couldn't search the knowledge base — {errMsg(error)}</Alert>
         ) : null}
 
+        {/* Upload + Add open in a centered dialog (not inline) so the source/entry form has
+            room and the knowledge list underneath stays in view (#1502). Per-row EDIT below
+            stays inline — it belongs next to the chunk it edits. */}
         {ingesting ? (
-          <IngestForm
-            onDone={invalidate}
-            onError={onError}
+          <Dialog
+            open
             onClose={() => setIngesting(false)}
-          />
+            title={<><FileUp size={16} /> Add a source</>}
+            width="min(680px, 94vw)"
+          >
+            <IngestForm
+              onDone={invalidate}
+              onError={onError}
+              onClose={() => setIngesting(false)}
+            />
+          </Dialog>
         ) : null}
 
         {adding ? (
-          <ChunkForm
-            draft={draft}
-            setDraft={setDraft}
-            onSave={() => save.mutate()}
-            onCancel={() => { setAdding(false); setDraft(EMPTY_DRAFT); }}
-            saving={save.isPending}
-            saveLabel="Add entry"
-          />
+          <Dialog
+            open
+            onClose={() => { setAdding(false); setDraft(EMPTY_DRAFT); }}
+            title={<><Plus size={16} /> Add a knowledge entry</>}
+            width="min(680px, 94vw)"
+          >
+            <ChunkForm
+              draft={draft}
+              setDraft={setDraft}
+              onSave={() => save.mutate()}
+              onCancel={() => { setAdding(false); setDraft(EMPTY_DRAFT); }}
+              saving={save.isPending}
+              saveLabel="Add entry"
+            />
+          </Dialog>
         ) : null}
 
         {!enabled ? (
