@@ -1,6 +1,7 @@
 """Chat / goal / health / OpenAI-compat routes (ADR 0023 phase 3 extraction)."""
 
 import json
+import re
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,6 +28,36 @@ def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None):
 def test_api_chat_joins_assistant_parts(monkeypatch):
     c = _client(monkeypatch)
     body = c.post("/api/chat", json={"message": "hi"}).json()
+    assert body["response"] == "echo:hi"
+
+
+def test_api_chat_mints_unique_session_id_when_omitted(monkeypatch):
+    # ADR 0069 D4: an omitted/blank session_id must NOT pool callers into a
+    # shared "api-default" thread + memory file — each call mints a unique id
+    # and the response echoes it so the caller can continue the session.
+    import operator_api.chat_routes as cr
+
+    seen: list[str] = []
+
+    async def _fake_chat(message, session_id, *, model=None):
+        seen.append(session_id)
+        return [{"role": "assistant", "content": "ok"}]
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(cr, "chat", _fake_chat)
+
+    b1 = c.post("/api/chat", json={"message": "hi"}).json()
+    b2 = c.post("/api/chat", json={"message": "hi", "session_id": "  "}).json()
+    for body in (b1, b2):
+        assert re.fullmatch(r"api-\d{13,}-[a-z0-9]{6}", body["session_id"])
+    assert b1["session_id"] != b2["session_id"]
+    assert seen == [b1["session_id"], b2["session_id"]]  # minted id reached chat()
+
+
+def test_api_chat_echoes_explicit_session_id(monkeypatch):
+    c = _client(monkeypatch)
+    body = c.post("/api/chat", json={"message": "hi", "session_id": "tab-1"}).json()
+    assert body["session_id"] == "tab-1"
     assert body["response"] == "echo:hi"
 
 

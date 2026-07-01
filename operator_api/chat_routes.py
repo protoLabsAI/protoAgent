@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -31,9 +32,22 @@ from server.chat import chat, compact_session, rewind_session
 
 
 class ChatRequest(BaseModel):
+    # Omitted/blank session_id → a unique per-call id is minted (ADR 0069 D4).
+    # The old literal "api-default" pooled every anonymous caller into ONE
+    # checkpointer thread and ONE session-memory file.
     message: str
-    session_id: str = "api-default"
+    session_id: str = ""
     model: str | None = None  # per-tab model override; None → configured default
+
+
+_B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def _mint_session_id() -> str:
+    """Unique per-call session id — ``api-<epoch-ms>-<6 base36>``, mirroring the
+    console's ``chat-<ts>-<rand>`` shape (apps/web chat-store ``id()``)."""
+    rand = "".join(secrets.choice(_B36) for _ in range(6))
+    return f"api-{int(time.time() * 1000)}-{rand}"
 
 
 def register_chat_routes(app, ui: str) -> None:
@@ -46,9 +60,12 @@ def register_chat_routes(app, ui: str) -> None:
     # --- Chat API -----------------------------------------------------------
     @app.post("/api/chat")
     async def _api_chat(req: ChatRequest):
-        result = await chat(req.message, req.session_id, model=req.model)
+        # Echo the (possibly minted) session_id so callers can continue the
+        # session — additive key, existing consumers unaffected.
+        session_id = req.session_id.strip() or _mint_session_id()
+        result = await chat(req.message, session_id, model=req.model)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
-        return {"response": "\n\n".join(parts), "messages": result}
+        return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
     @app.delete("/api/chat/sessions/{session_id}")
     async def _api_delete_session(session_id: str, harvest: bool = False):
@@ -61,8 +78,10 @@ def register_chat_routes(app, ui: str) -> None:
         operator may be deleting it precisely to get rid of it. The TTL prune
         sweep keeps its own config-driven default (``checkpoint_harvest_enabled``).
 
-        Both ``a2a:{session_id}`` and ``chat:{session_id}`` threads are retired
-        with cascade so goal-mode ``:goal-iter-N`` sub-threads are not orphaned."""
+        Both ``a2a:{session_id}`` and the legacy ``chat:{session_id}`` threads are
+        retired (non-streaming turns keyed ``chat:`` before ADR 0069 unified the
+        prefix) with cascade so goal-mode ``:goal-iter-N`` sub-threads are not
+        orphaned."""
         chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
         await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
         # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a

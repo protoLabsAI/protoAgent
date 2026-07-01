@@ -99,11 +99,11 @@ def _goal_continuation_config(config: dict, goal_state) -> dict:
     Same-session goals reuse ``config`` (the checkpointer keeps the transcript so the model
     sees prior iterations). Fresh-context goals (Ralph loop) get a scoped, per-iteration
     ``thread_id`` so the checkpointer starts clean each turn — derived from the CURRENT
-    ``config`` thread_id so the streaming (``a2a:…``) and non-streaming (``chat:…``) drive
-    loops build it identically instead of each hand-rolling it. (They had drifted: the two
-    paths re-derived the base thread_id differently and only the streaming one set
-    ``recursion_limit`` — this unifies both.) Durable state lives in the goal's plan
-    artifact on disk, not the thread.
+    ``config`` thread_id so the streaming and non-streaming drive loops (both ``a2a:…``
+    since ADR 0069 unified the prefix) build it identically instead of each hand-rolling
+    it. (They had drifted: the two paths re-derived the base thread_id differently and
+    only the streaming one set ``recursion_limit`` — this unifies both.) Durable state
+    lives in the goal's plan artifact on disk, not the thread.
     """
     if not (goal_state and getattr(goal_state, "fresh_context", False)):
         return config
@@ -1315,11 +1315,12 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
             if parsed_skill is not None:
                 message = _skill_directive(*parsed_skill)
 
-            # `chat:` namespaces non-streaming sessions in the shared checkpointer,
-            # apart from the A2A `a2a:` ones (was `gradio:` — renamed when the Gradio
-            # UI was removed; non-streaming chat is short-lived so the one-time
-            # re-key on upgrade is harmless).
-            config = {"configurable": {"thread_id": f"chat:{session_id}"}}
+            # Same thread-id resolution as the streaming path (ADR 0069 D4): the
+            # non-streaming turns used to key `chat:{session_id}` apart from the
+            # streaming `a2a:{session_id}` ones, so the SAME session reached via
+            # both APIs split into two histories. Old `chat:*` checkpoints orphan
+            # once on upgrade — non-streaming chat is short-lived, so harmless.
+            config = {"configurable": {"thread_id": _resolve_thread_id(None, session_id)}}
 
             def _last_ai(result) -> str:
                 for msg in reversed(result.get("messages", [])):
