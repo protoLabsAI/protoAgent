@@ -502,21 +502,10 @@ export function App() {
   }
 
   // Right-click the EMPTY rail background (not an icon) → the "Hidden views" restore menu
-  // (ADR 0035/0036). The DS AppShell only fires onRailContextMenu on icons, so we catch the
-  // rail-container right-click here via event delegation (the DS classnames are the contract)
-  // and hand the resolved hidden-surface labels to the `rail-background` menu. An icon click
-  // is handled by its own `rail-surface` menu, so bail when the target is a rail button.
-  const onShellContextMenu = (e: ReactMouseEvent) => {
-    const t = e.target as HTMLElement;
-    if (t.closest(".pl-rail__btn")) return; // an icon — its own menu handles it
-    const railEl = t.closest(".pl-rail") as HTMLElement | null;
-    if (!railEl) return; // not the rail — leave the default menu
-    // Which rail was right-clicked → restore a hidden view to THIS dock (not its default).
-    const side: "left" | "right" | "bottom" = railEl.classList.contains("pl-rail--right")
-      ? "right"
-      : railEl.classList.contains("pl-rail--bottom")
-        ? "bottom"
-        : "left";
+  // (ADR 0035/0036). The DS AppShell's `onRailBackgroundContextMenu` (@protolabsai/ui@0.53.0)
+  // fires on empty rail space with the resolved side — no more DOM/classname delegation.
+  // Icon right-clicks go to `onRailContextMenu` (the `rail-surface` menu) instead.
+  const onRailBackgroundContextMenu = (side: "left" | "right" | "bottom", e: ReactMouseEvent) => {
     const hidden = (railOrder.hidden ?? []).map((id) => ({ id, label: metaFor(id)?.label ?? id }));
     openContextMenu("rail-background", e, { side, hidden });
   };
@@ -708,7 +697,7 @@ export function App() {
     {/* Command palette (⌘K, ADR 0057) — portals over the shell; the same component
         backs the desktop quick-command (step 4). */}
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
-    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`} onContextMenu={onShellContextMenu}>
+    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       {/* protoLabs.studio brand bumper — DS Splash (@protolabsai/ui/splash). Holds
           2.5s then hands off via the View Transitions API cross-fade (the
           protoAgent path); shows once per tab session (sessionStorage
@@ -888,6 +877,7 @@ export function App() {
             else { setBottomPanel(id); setBottomCollapsed(false); }
           }
         }}
+        onRailBackgroundContextMenu={onRailBackgroundContextMenu}
         onRailContextMenu={(side, e, id) => {
           // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
           // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).

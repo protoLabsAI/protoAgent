@@ -155,25 +155,26 @@ export function ChatSurface({
     closeSession(session.id, false); // false = no knowledge harvest
   }
 
-  // Right-click a chat tab → context menu (ADR 0036). The DS TabBar exposes no per-tab
-  // context-menu hook, so we delegate from the tab-bar wrapper and map the clicked tab to its
-  // session by sibling index (DOM order tracks the `items` = sessions order). Close reuses the
-  // confirm dialog; Rename fires the TabBar's inline editor via a synthetic dblclick on the tab.
-  function onTabBarContextMenu(e: ReactMouseEvent) {
+  // Right-click a chat tab → context menu (ADR 0036). The DS TabBar's `onTabContextMenu`
+  // (@protolabsai/ui@0.53.0) hands us the session id directly — no sibling-index DOM sniffing.
+  // Rename opens the TabBar's inline editor via a synthetic dblclick on the tab element (the DS
+  // exposes no start-rename API); we grab that element off the event, not to recover WHICH tab
+  // (the hook gives us the id) but only to fire the editor.
+  function onTabContextMenu(id: string, e: ReactMouseEvent) {
     const tabEl = (e.target as HTMLElement).closest(".pl-tabbar__tab") as HTMLElement | null;
-    if (!tabEl) {
-      openContextMenu("chat-tab", e, { onNew: () => chatStore.createSession() });
-      return;
-    }
-    const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll(".pl-tabbar__tab"));
-    const session = chat.sessions[tabs.indexOf(tabEl)];
-    if (!session) return;
     openContextMenu("chat-tab", e, {
-      sessionId: session.id,
+      sessionId: id,
       onNew: () => chatStore.createSession(),
-      onRename: () => tabEl.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
-      onClose: () => setPendingClose(session.id),
+      onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+      onClose: () => setPendingClose(id),
     });
+  }
+
+  // Right-click EMPTY tab-bar space (not a tab) → just the "New chat" affordance. onTabContextMenu
+  // owns per-tab; this catches the background only, and bails on tab hits so the two never both fire.
+  function onTabBarBackgroundContextMenu(e: ReactMouseEvent) {
+    if ((e.target as HTMLElement).closest(".pl-tabbar__tab")) return; // a tab — onTabContextMenu owns it
+    openContextMenu("chat-tab", e, { onNew: () => chatStore.createSession() });
   }
 
   return (
@@ -185,7 +186,7 @@ export function ChatSurface({
           the collapsed <option> can't host markup, matching the old behavior. */}
       <div
         className={`chat-tabbar-wrap${shiftDel ? " chat-tabbar-wrap--del" : ""}`}
-        onContextMenu={onTabBarContextMenu}
+        onContextMenu={onTabBarBackgroundContextMenu}
         onClickCapture={onTabBarClickCapture}
       >
         <TabBar
@@ -205,6 +206,7 @@ export function ChatSurface({
           onRename={(id, label) => chatStore.renameSession(id, label)}
           onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
           onAdd={() => chatStore.createSession()}
+          onTabContextMenu={onTabContextMenu}
           addLabel="New chat"
         />
       </div>

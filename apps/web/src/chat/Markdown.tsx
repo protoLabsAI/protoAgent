@@ -11,17 +11,11 @@ import { Markdown as DSMarkdown } from "@protolabsai/ui/markdown";
  * `className="markdown"` rides the same element the DS scopes as `.pl-markdown`, so existing
  * `.markdown` selectors (e2e + message-layout) keep matching.
  *
- * `lineNumbers={false}`: streamdown defaults line numbers ON, but renders them purely via
- * `before:` Tailwind utilities with NO `data-streamdown` hook — so the DS's attribute-selector
- * theming can't reach them and the console (which purges streamdown's inert Tailwind by design)
- * leaves a broken, unstyled gutter that pushes code sideways. Code reads clean without them.
- * (DS gap — the DS `<Markdown>` should default this off since it can't theme the gutter;
- * file on protoContent.)
+ * Code-block line numbers default OFF in the DS `<Markdown>` as of `@protolabsai/ui@0.52.1`
+ * (protoContent#376) — the DS themes the gutter for Tailwind-purging consumers and no longer
+ * needs the console to force `lineNumbers={false}`. Pass an explicit `lineNumbers` prop to opt
+ * a numbered code well back in.
  */
 export function Markdown({ children }: { children: string }) {
-  return (
-    <DSMarkdown className="markdown" lineNumbers={false}>
-      {children}
-    </DSMarkdown>
-  );
+  return <DSMarkdown className="markdown">{children}</DSMarkdown>;
 }
