@@ -280,6 +280,9 @@ function ChatSessionSlot({
   const abortRef = useRef<AbortController | null>(null);
   // Transient "copied ✓" feedback on a message's copy action.
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // The message a "Rewind to here" is pending confirmation on (null = dialog closed).
+  // Rewind is destructive (discards everything below), so it goes through a confirm.
+  const [pendingRewind, setPendingRewind] = useState<ChatMessage | null>(null);
   // Mid-turn steering: user messages queued WHILE a turn streams (optimistic),
   // reconciled at turn-end. The ref mirrors the state so the post-stream reconcile
   // (a stale render closure) reads the live queue.
@@ -887,6 +890,48 @@ function ChatSessionSlot({
     chatStore.renameSession(created.id, `${baseTitle} (fork)`);
   }
 
+  // Rewind the conversation to a message IN PLACE (vs fork's new tab): discard
+  // everything below it. Destructive + irreversible, so it's gated behind a confirm
+  // (pendingRewind opens the dialog); confirmRewind does the work. The server rewrite
+  // is the point — the LangGraph checkpoint is the agent's real context, so a
+  // client-only trim would leave the agent still "remembering" the discarded turns.
+  function rewindAtMessage(message: ChatMessage) {
+    if (!session || status === "streaming") return;
+    setPendingRewind(message);
+  }
+
+  async function confirmRewind(message: ChatMessage) {
+    if (!session) return;
+    const i = session.messages.findIndex((m) => m.id === message.id);
+    if (i < 0) return;
+    // WHICH occurrence of this exact text the clicked bubble is — client message ids never
+    // appear in the checkpoint, so the server resolves by content; identical replies can
+    // repeat, and this makes it pick the SAME one we clicked (not a later duplicate).
+    const want = (message.content || "").trim();
+    const occurrence = session.messages.slice(0, i).filter((m) => (m.content || "").trim() === want).length;
+    let found: boolean;
+    try {
+      // Roll the agent's live context back on the server FIRST (the checkpoint is
+      // the real memory); the client truncate below just mirrors the result.
+      found = (await api.rewindChatSession(session.id, message.id ?? "", message.content, occurrence)).found;
+    } catch (e) {
+      onError(`Couldn't rewind: ${errMsg(e)}`);
+      return;
+    }
+    // The server couldn't locate the message in the live checkpoint — leave the
+    // client thread intact rather than diverge (the agent would still "remember"
+    // turns the UI had dropped).
+    if (!found) {
+      onError("Couldn't rewind — that message is no longer in the agent's live context.");
+      return;
+    }
+    // Keep the prefix through the selected message; drop everything after it.
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    const base = snap?.messages ?? session.messages;
+    const at = base.findIndex((m) => m.id === message.id);
+    chatStore.updateMessages(session.id, base.slice(0, (at < 0 ? i : at) + 1));
+  }
+
   // Resume a paused (input-required) turn: submitting the HITL form/question
   // sends the response as a follow-up on the same session — the server feeds it
   // to the agent via Command(resume=…). A form response is serialized to JSON.
@@ -1254,6 +1299,7 @@ function ChatSessionSlot({
                 copiedId,
                 onCopy: copyMessage,
                 onFork: forkAtMessage,
+                onRewind: rewindAtMessage,
                 onRegenerate: regenerate,
                 lastAssistantId,
                 regenDisabled: status === "streaming",
@@ -1444,6 +1490,22 @@ function ChatSessionSlot({
           }}
         />
       </div>
+
+      <ConfirmDialog
+        open={pendingRewind !== null}
+        title="Rewind to here?"
+        confirmLabel="Rewind"
+        destructive
+        onConfirm={() => {
+          if (pendingRewind) void confirmRewind(pendingRewind);
+          setPendingRewind(null);
+        }}
+        onClose={() => setPendingRewind(null)}
+      >
+        <p style={{ margin: 0 }}>
+          This will discard everything below this message — cannot be undone.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

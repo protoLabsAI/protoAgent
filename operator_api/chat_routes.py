@@ -27,7 +27,7 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
-from server.chat import chat, compact_session
+from server.chat import chat, compact_session, rewind_session
 
 
 class ChatRequest(BaseModel):
@@ -87,6 +87,29 @@ def register_chat_routes(app, ui: str) -> None:
         checkpoint is left untouched and ``refused`` is true (the console then
         keeps the full thread rather than dropping anything)."""
         return await compact_session(session_id)
+
+    @app.post("/api/chat/sessions/{session_id}/rewind")
+    async def _api_rewind_session(session_id: str, body: dict | None = None):
+        """Rewind a chat session to a target message (#1535): discard everything
+        AFTER it and rewrite the LangGraph checkpoint IN PLACE. Runs SERVER-SIDE —
+        the checkpoint is the agent's real context, so a client-only truncate would
+        leave the agent's memory intact.
+
+        The body carries the target: ``message_id`` and/or ``content`` (the console
+        sends the visible bubble's text, since its client-side message ids never
+        appear in the checkpoint), or an explicit ``index``. Intentionally
+        DESTRUCTIVE (no archive) but never corrupting — the kept prefix is trimmed
+        to a safe tool-call boundary so no orphaned tool_call is left behind."""
+        body = body or {}
+        idx = body.get("index")
+        occ = body.get("occurrence")
+        return await rewind_session(
+            session_id,
+            message_id=body.get("message_id"),
+            index=int(idx) if idx is not None else None,
+            content=body.get("content"),
+            occurrence=int(occ) if occ is not None else None,
+        )
 
     @app.post("/api/chat/sessions/{session_id}/steer")
     async def _api_steer(session_id: str, body: dict | None = None):
