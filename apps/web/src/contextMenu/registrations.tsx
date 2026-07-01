@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, Puzzle, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -10,6 +10,12 @@ import type { MenuEntry } from "./types";
 // rails (without disabling the plugin). Chat is movable across all three docks like any other
 // surface; plugin views carry their owning plugin's id/name in `ctx` (resolved by the App-side
 // trigger) so Configure can open that plugin's settings dialog.
+//
+// Plugin lifecycle (#1521 / #1522): the App-side trigger also resolves the plugin's installed
+// version, whether the freshness poll says it's behind (`pluginUpdatable`), and whether it lives
+// in the writable plugins dir (`pluginRemovable`). So the menu shows the version, an "Update
+// available" action when behind, and a destructive "Uninstall…" — both gated so an in-tree
+// built-in (which the server refuses to update/uninstall) never offers them.
 registerContextMenu({
   type: "rail-surface",
   items: (ctx: {
@@ -17,6 +23,10 @@ registerContextMenu({
     side: "left" | "right" | "bottom";
     pluginId?: string;
     pluginName?: string;
+    pluginVersion?: string;
+    pluginBuiltin?: boolean;
+    pluginRemovable?: boolean;
+    pluginUpdatable?: boolean;
   }): MenuEntry[] => {
     if (!ctx) return [];
     const ui = useUI.getState();
@@ -41,16 +51,33 @@ registerContextMenu({
     // is always present; Configure (plugin views only) opens the owning plugin's settings dialog;
     // Hide moves the surface to railOrder.hidden (restore from ⌘K or "Move to …"). Chat is never
     // hidden — it mounts unconditionally on its dock, so a hidden chat would render with no rail icon.
+    // Built-in / uninstall / update, all gated on the plugin's origin, cluster under Configure.
     const manage: MenuEntry[] = [];
     if (ctx.pluginId) {
       const pid = ctx.pluginId;
       const pname = ctx.pluginName ?? ctx.pluginId;
+      // Installed version — informational (a disabled, non-clickable header), so the menu
+      // answers "which version am I on?" without opening the manager.
+      if (ctx.pluginVersion) {
+        manage.push({ id: "plugin-version", label: `Version v${ctx.pluginVersion}`, disabled: true, run: () => {} });
+      }
       manage.push({
         id: "configure",
         label: "Configure…",
         icon: <SlidersHorizontal size={14} />,
         run: () => useUI.getState().openPluginConfig(pid, pname),
       });
+      // Update — only when the freshness poll says this plugin is behind its ref AND it's
+      // not an in-tree built-in (the server refuses to update those). Fires via the store;
+      // a root PluginRailManage runs the mutation + toast (up-to-date/pinned → no item).
+      if (ctx.pluginUpdatable && !ctx.pluginBuiltin) {
+        manage.push({
+          id: "update",
+          label: "Update available",
+          icon: <RefreshCw size={14} />,
+          run: () => useUI.getState().requestPluginUpdate(pid, pname),
+        });
+      }
     }
     // A rail-wide escape hatch on every icon: the all-plugins counterpart to the per-plugin
     // "Configure…" above — opens Settings ▸ Integrations.
@@ -66,6 +93,22 @@ registerContextMenu({
         label: "Hide",
         icon: <EyeOff size={14} />,
         run: () => useUI.getState().hideSurface(ctx.id),
+      });
+    }
+    // Uninstall — a destructive action set off by its own divider, offered only for a
+    // writable-dir plugin (git-installed / local copy) that isn't an in-tree built-in
+    // (the server refuses those, so they only get Disable in the manager). The store
+    // trigger opens a "This cannot be undone." confirm rendered by PluginRailManage.
+    if (ctx.pluginId && ctx.pluginRemovable && !ctx.pluginBuiltin) {
+      const pid = ctx.pluginId;
+      const pname = ctx.pluginName ?? ctx.pluginId;
+      manage.push({ id: "uninstall-div", divider: true });
+      manage.push({
+        id: "uninstall",
+        label: "Uninstall…",
+        icon: <Trash2 size={14} />,
+        danger: true,
+        run: () => useUI.getState().requestPluginUninstall(pid, pname),
       });
     }
     // Any surface — core, plugin, or chat — reorders within its dock and moves across, including
