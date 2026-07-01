@@ -143,6 +143,8 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
         "runtime",
         "operator",
         "agent_runtime",
+        # Developer channel (ADR 0068) — the pre-release feature tier this instance exposes.
+        "developer",
         "checkpoint",
         "compaction",
         "goal",
