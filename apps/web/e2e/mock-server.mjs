@@ -256,6 +256,15 @@ function handleApiGet(pathname, fleet = FLEET) {
           commons: knowledgeChunks.filter((c) => c.tier === "commons").length,
         },
       };
+    case "/api/flags":
+      // Developer flags (ADR 0068). channel "dev" so the Developer panel is visible in e2e.
+      return {
+        channel: "dev",
+        flags: [
+          { id: "chat.new_dashboard", description: "Preview of the redesigned dashboard.", tier: "beta", owner: "kj", remove_by: "v1.0", enabled: true, source: "channel" },
+          { id: "chat.experimental_widget", description: "An in-progress widget.", tier: "dev", owner: "kj", remove_by: "", enabled: true, source: "channel" },
+        ],
+      };
     default:
       return null;
   }

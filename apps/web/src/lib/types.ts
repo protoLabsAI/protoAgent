@@ -776,3 +776,17 @@ export type Archetype = {
   bundle: string | null; // null = Basic; else the bundle git URL
   soul: string; // base SOUL.md the wizard seeds when this archetype is picked ("" = none)
 };
+
+// Developer flags (ADR 0068) — the /api/flags payload the Developer panel renders.
+export type FlagTier = "off" | "dev" | "beta" | "on";
+export type FlagChannel = "prod" | "beta" | "dev";
+export type FlagInfo = {
+  id: string;
+  description: string;
+  tier: FlagTier;
+  owner: string;
+  remove_by: string;
+  enabled: boolean; // channel-resolved (before any device-local override)
+  source: "channel" | "env";
+};
+export type FlagsPayload = { channel: FlagChannel; flags: FlagInfo[] };

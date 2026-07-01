@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Developer panel — view & toggle developer flags** (#1506, ADR 0068). A new **Settings ▸ Developer**
+  section (surfaced only off prod — a dev build, a non-prod `developer.channel`, or a `?dev` reveal —
+  so production operators never see it) lists every registered flag with its tier + resolved state and
+  lets you flip it **per-device** (device-local overrides, *Reset* to clear). Backed by `GET /api/flags`;
+  `useFlag(id)` gates console UI, and `?flag:<id>=on|off` gives a shareable per-load override.
 - **Developer flags — backend foundation** (#1506, ADR 0068, slice 1). A small local/static
   feature-flag system to gate pre-release functionality: `runtime/flags.py` with a `Flag` registry
   (`off`·`dev`·`beta`·`on` tiers) and `flag_enabled(id)` / `resolved_flags()`. Enablement resolves

@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Gauge, Keyboard, KeyRound, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -17,6 +17,8 @@ import { DelegatesSection } from "./DelegatesSection";
 import { FleetSurface } from "./FleetSurface";
 import { KeybindingsPanel } from "./KeybindingsPanel";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
+import { DeveloperPanel } from "./DeveloperPanel";
+import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
@@ -111,11 +113,18 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     if (initialSection) setSection(initialSection);
   }, [initialSection, setSection]);
 
+  // The Developer panel (ADR 0068) joins "This console" only off prod — a dev build, a
+  // non-prod channel, or an explicit ?dev/?flag: reveal — so production operators never see it.
+  const channel = useDeveloperChannel();
+  const consoleSections: Section[] = developerPanelVisible(channel)
+    ? [...CONSOLE_SECTIONS, { id: "developer", label: "Developer", icon: FlaskConical, render: () => <DeveloperPanel /> }]
+    : CONSOLE_SECTIONS;
+
   const sections = [
     ...AGENT_SECTIONS,
     ...CAPABILITY_SECTIONS,
     ...(onHost ? BOX_SECTIONS : []),
-    ...CONSOLE_SECTIONS,
+    ...consoleSections,
   ];
   const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
   const toItem = (s: Section) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> });
@@ -123,7 +132,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     { label: "Agent", items: AGENT_SECTIONS.map(toItem) },
     { label: "Capabilities", items: CAPABILITY_SECTIONS.map(toItem) },
     ...(onHost ? [{ label: "Box", items: BOX_SECTIONS.map(toItem) }] : []),
-    { label: "This console", items: CONSOLE_SECTIONS.map(toItem) },
+    { label: "This console", items: consoleSections.map(toItem) },
   ];
 
   return (
