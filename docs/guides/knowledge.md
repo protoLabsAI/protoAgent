@@ -67,7 +67,7 @@ backs the console browser.
 ## Memory delivery controls (ADR 0069)
 
 What the store *holds* and what gets *pushed into the prompt each turn* are separate
-surfaces ([ADR 0069](/adr/0069-memory-delivery-layer)). Three controls gate and audit
+surfaces ([ADR 0069](/adr/0069-memory-delivery-layer)). Four controls gate and audit
 the delivery side:
 
 ### Scope the auto-inject to namespaces
@@ -103,10 +103,16 @@ summarized into the knowledge store).
   default `false`).
 - **A2A / console streaming path** — set `incognito: true` in the message
   **metadata** (alongside `model` / `reasoning_effort`).
+- **Console** — toggle a chat tab incognito with the `/incognito` slash command
+  or the tab's right-click menu ("Turn incognito on/off"; "New incognito chat"
+  starts a thread private). While ON the tab shows an eye-off glyph and the
+  composer an `incognito` chip (click it to turn off), and the console stamps
+  the metadata flag onto **every** message it sends from that tab.
 
 The flag is per-message and stamped explicitly on every turn, so a thread is only
-as incognito as its latest message — send the flag on each turn of a thread you
-want kept out of memory. (A console thread toggle rides a later UI lane.)
+as incognito as its latest message — a raw API caller must send the flag on each
+turn of a thread it wants kept out of memory (the console toggle does exactly
+that for you).
 
 ### The per-turn injection record
 
@@ -123,6 +129,21 @@ GET /api/memory/injections?session_id=<id>&limit=50
 returns `{"injections": [...]}` newest-first — omit `session_id` for all sessions.
 Each row: `ts`, `session_id`, `digest_session_ids`, `hot_chunk_ids`,
 `rag_chunk_ids`, `approx_tokens`.
+
+### The Memory inspector (console)
+
+The **Memory** rail view is the operator half of all of the above — a security
+control first (SpAIware-class memory poisoning gets *detected* here), UX second:
+
+- **Sessions** — the persisted summaries behind the `<prior_sessions>` digest,
+  one row per session (id · surface · topic · message count). Click a row to
+  read the full summary (exactly what `recall_session` returns) in the document
+  viewer; delete a row to forget that session.
+- **Hot memory** — the always-on `domain="hot"` chunks injected into every turn,
+  with their provenance (`source` = the session that wrote them); edit or delete
+  per row. Deleting stops the injection immediately.
+- **Injections** — the per-turn record above, filterable by session id; a
+  session row's syringe button jumps straight to its filtered record.
 
 ## Sharing knowledge across a fleet (the commons)
 

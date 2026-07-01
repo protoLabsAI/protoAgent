@@ -77,6 +77,7 @@ import { InboxWidget } from "../inbox/InboxWidget";
 import { ChatSlot } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
+import { MemorySurface } from "../memory/MemorySurface";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { PluginRailManage } from "../plugins/PluginRailManage";
@@ -593,6 +594,10 @@ export function App() {
       // Settings ▸ Workspace ▸ Memory (ADR 0048 S-C).
       case "knowledge":
         return <KnowledgeStore />;
+      // Memory inspector (ADR 0069 D7) — the delivery-layer audit surface: session
+      // digests, hot memory, per-turn injection record.
+      case "memory":
+        return <MemorySurface />;
       // Settings is no longer a rail surface (2026-06 consolidation) — it's a utility-bar
       // pill opening the settings dialog (SettingsOverlay). Notes is the first-party `notes`
       // plugin (ADR 0034 S4) — rendered via the default

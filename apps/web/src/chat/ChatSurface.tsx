@@ -3,7 +3,7 @@ import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Switch } from "@protolabsai/ui/forms";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
-import { Check, TerminalSquare } from "lucide-react";
+import { Check, EyeOff, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -162,9 +162,13 @@ export function ChatSurface({
   // (the hook gives us the id) but only to fire the editor.
   function onTabContextMenu(id: string, e: ReactMouseEvent) {
     const tabEl = (e.target as HTMLElement).closest(".pl-tabbar__tab") as HTMLElement | null;
+    const target = chat.sessions.find((s) => s.id === id);
     openContextMenu("chat-tab", e, {
       sessionId: id,
+      incognito: !!target?.incognito,
       onNew: () => chatStore.createSession(),
+      onNewIncognito: () => chatStore.createSession({ incognito: true }),
+      onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onClose: () => setPendingClose(id),
     });
@@ -174,7 +178,10 @@ export function ChatSurface({
   // owns per-tab; this catches the background only, and bails on tab hits so the two never both fire.
   function onTabBarBackgroundContextMenu(e: ReactMouseEvent) {
     if ((e.target as HTMLElement).closest(".pl-tabbar__tab")) return; // a tab — onTabContextMenu owns it
-    openContextMenu("chat-tab", e, { onNew: () => chatStore.createSession() });
+    openContextMenu("chat-tab", e, {
+      onNew: () => chatStore.createSession(),
+      onNewIncognito: () => chatStore.createSession({ incognito: true }),
+    });
   }
 
   return (
@@ -198,7 +205,16 @@ export function ChatSurface({
             return {
               id: session.id,
               label: session.title,
-              icon: <span className={`session-dot ${status}`} title={status} />,
+              // Incognito rides the icon slot next to the status dot — the tab-level
+              // "this thread leaves no memory" indicator (ADR 0069 D3b).
+              icon: session.incognito ? (
+                <span className="session-tab-icons">
+                  <span className={`session-dot ${status}`} title={status} />
+                  <EyeOff size={12} className="session-incognito-icon" aria-label="incognito" />
+                </span>
+              ) : (
+                <span className={`session-dot ${status}`} title={status} />
+              ),
             };
           })}
           onSelect={(id) => chatStore.switchSession(id)}
@@ -1237,6 +1253,10 @@ function ChatSessionSlot({
         // Read live (not the render-closure session) so an "Approve & don't ask again" that
         // flips bypass on right before this resume turn is carried by it.
         bypassPermissions: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.bypassPermissions,
+        // Incognito (ADR 0069 D3b) — per-MESSAGE server-side, so read live and stamp
+        // EVERY send while the tab's toggle is on (a mixed thread would leak earlier
+        // incognito content into a later non-incognito turn's summary).
+        incognito: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.incognito,
       });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
@@ -1430,6 +1450,18 @@ function ChatSessionSlot({
                 </Button>
               ))}
               <ComposerModelSelect />
+              {session?.incognito ? (
+                <button
+                  type="button"
+                  className="composer-incognito-toggle"
+                  title="Incognito is ON for this tab — turns leave no memory (no session summary, no harvest) and inject none. Click to turn it off."
+                  onClick={() => chatStore.setSessionIncognito(session.id, false)}
+                >
+                  <Badge status="neutral">
+                    <EyeOff size={12} /> incognito
+                  </Badge>
+                </button>
+              ) : null}
               {session?.bypassPermissions ? (
                 <button
                   type="button"

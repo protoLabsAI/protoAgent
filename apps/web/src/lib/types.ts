@@ -717,6 +717,33 @@ export type KnowledgeChunk = {
   tier?: "private" | "commons" | null;
 };
 
+// Memory inspector (ADR 0069 D7) — the delivery-layer audit surface.
+// One session-summary digest row (GET /api/memory/sessions) — the same
+// derivation the <prior_sessions> digest injects, so the list can't drift
+// from what the agent is actually told.
+export type MemorySessionDigest = {
+  session_id: string;
+  timestamp: string;
+  surface: string; // chat | background | a2a | …
+  topic: string;
+  message_count: number;
+  size_bytes?: number;
+  // Detail-only fields (GET /api/memory/sessions/{id}):
+  trace_id?: string | null;
+  rendered?: string; // the full render recall_session returns
+};
+
+// One per-model-call injection record (GET /api/memory/injections, ADR 0069 D6):
+// which memory items entered which turn — the poisoning-forensics trail.
+export type MemoryInjectionRow = {
+  ts: string;
+  session_id: string;
+  digest_session_ids: string[];
+  hot_chunk_ids: number[];
+  rag_chunk_ids: number[];
+  approx_tokens: number;
+};
+
 // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.
 export type DelegateFieldSpec = {
   key: string;

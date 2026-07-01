@@ -154,8 +154,10 @@
 }
 
 /* Bypass-permissions indicator in the composer toolbar — a DS warning Badge (outline tone) in a
-   bare button so clicking it turns bypass off (same as `/bypass off`). The Badge owns the styling. */
-.composer-bypass-toggle {
+   bare button so clicking it turns bypass off (same as `/bypass off`). The Badge owns the styling.
+   The incognito chip (ADR 0069 D3b) mirrors it: clicking turns incognito off. */
+.composer-bypass-toggle,
+.composer-incognito-toggle {
   display: inline-flex;
   align-items: center;
   padding: 0;
@@ -174,6 +176,17 @@
   background-color: currentColor;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13h10l1-13H6z'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13h10l1-13H6z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Incognito tab indicator (ADR 0069 D3b): the EyeOff glyph rides the icon slot
+   beside the status dot while the thread's toggle is on. */
+.session-tab-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.session-incognito-icon {
+  opacity: 0.75;
 }
 
 .chat-session-slot {

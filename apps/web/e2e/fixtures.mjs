@@ -689,6 +689,69 @@ export const KNOWLEDGE_CHUNKS = [
   },
 ];
 
+// Memory inspector (ADR 0069 D7) — session-summary digest rows, hot-memory chunks,
+// and the per-turn injection record the Memory surface renders.
+export const MEMORY_SESSIONS = [
+  {
+    session_id: "chat-1750000000000-abc123",
+    timestamp: "2026-06-30T18:00:00+00:00",
+    surface: "chat",
+    topic: "plan the memory hardening rollout",
+    message_count: 12,
+    size_bytes: 2048,
+  },
+  {
+    session_id: "sched-hourly-report",
+    timestamp: "2026-06-30T17:00:00+00:00",
+    surface: "background",
+    topic: "compile the hourly ops report",
+    message_count: 4,
+    size_bytes: 512,
+  },
+];
+
+export const MEMORY_SESSION_RENDERED =
+  '<session id="chat-1750000000000-abc123" timestamp="2026-06-30T18:00:00+00:00">\n' +
+  "  <messages>\n" +
+  "    <user>plan the memory hardening rollout</user>\n" +
+  "    <assistant>Here is the phased plan…</assistant>\n" +
+  "  </messages>\n" +
+  "</session>";
+
+export const MEMORY_HOT = [
+  {
+    id: 31, heading: "Operator timezone", content: "The operator works in US/Pacific.",
+    preview: "The operator works in US/Pacific.",
+    domain: "hot", source: "chat-1750000000000-abc123", source_type: "extracted", finding_type: null,
+    created_at: "2026-06-29T10:00:00+00:00",
+  },
+  {
+    id: 32, heading: "", content: "Weekly report goes out Fridays at 9am.",
+    preview: "Weekly report goes out Fridays at 9am.",
+    domain: "hot", source: "console", source_type: "operator", finding_type: null,
+    created_at: "2026-06-28T09:00:00+00:00",
+  },
+];
+
+export const MEMORY_INJECTIONS = [
+  {
+    ts: "2026-06-30T18:05:00+00:00",
+    session_id: "chat-1750000000000-abc123",
+    digest_session_ids: ["sched-hourly-report"],
+    hot_chunk_ids: [31, 32],
+    rag_chunk_ids: [11],
+    approx_tokens: 420,
+  },
+  {
+    ts: "2026-06-30T17:01:00+00:00",
+    session_id: "sched-hourly-report",
+    digest_session_ids: [],
+    hot_chunk_ids: [31],
+    rag_chunk_ids: [],
+    approx_tokens: 120,
+  },
+];
+
 // Delegate registry (ADR 0025) — types schema + a sample roster for the panel.
 export const DELEGATE_TYPES = {
   types: [

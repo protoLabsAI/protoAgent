@@ -25,6 +25,8 @@ import type {
   PluginInstallSummary,
   PluginUpdate,
   KnowledgeChunk,
+  MemoryInjectionRow,
+  MemorySessionDigest,
   RuntimeStatus,
   ScheduledJob,
   SetupStatus,
@@ -771,6 +773,45 @@ export const api = {
     }>("/api/knowledge/ingest", form);
   },
 
+  // --- Memory inspector (ADR 0069 D7) — the delivery-layer audit surface -----
+  // Session summaries: the files behind the <prior_sessions> digest.
+  memorySessions() {
+    return request<{ sessions: MemorySessionDigest[] }>("/api/memory/sessions");
+  },
+  memorySession(sessionId: string) {
+    return request<{ session: MemorySessionDigest }>(
+      `/api/memory/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  },
+  deleteMemorySession(sessionId: string) {
+    return request<{ deleted: boolean; session_id: string }>(
+      `/api/memory/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    );
+  },
+  // Hot memory: the domain="hot" chunks injected every turn.
+  memoryHot() {
+    return request<{ enabled: boolean; chunks: KnowledgeChunk[] }>("/api/memory/hot");
+  },
+  updateMemoryHot(chunkId: number, body: { content: string; heading?: string }) {
+    return request<{ enabled: boolean; id: number | null; replaced: boolean }>(
+      `/api/memory/hot/${chunkId}`,
+      { method: "PUT", body },
+    );
+  },
+  deleteMemoryHot(chunkId: number) {
+    return request<{ enabled: boolean; deleted: boolean }>(`/api/memory/hot/${chunkId}`, {
+      method: "DELETE",
+    });
+  },
+  // Injection record (ADR 0069 D6): which memory entered which turn.
+  memoryInjections(sessionId = "", limit = 50) {
+    const q = new URLSearchParams();
+    if (sessionId) q.set("session_id", sessionId);
+    q.set("limit", String(limit));
+    return request<{ injections: MemoryInjectionRow[] }>(`/api/memory/injections?${q}`);
+  },
+
   // Chat attachment — extract + TIER a dropped file (FormData: `file` + `session_id`).
   // Returns a ready-to-prepend `context` block (full text for small docs, a lede +
   // retrieval note for large docs indexed under the session) so a big doc never
@@ -1244,6 +1285,10 @@ export const api = {
       model?: string;
       reasoningEffort?: string;
       bypassPermissions?: boolean;
+      // Incognito thread (ADR 0069 D3b): the flag is PER MESSAGE server-side, so the
+      // console stamps it on EVERY send while the thread's toggle is on — a mixed
+      // thread would leak earlier incognito content into a later turn's summary.
+      incognito?: boolean;
     } = {},
   ) {
     // One A2A SendStreamingMessage body + one frame dispatcher, shared by the desktop
@@ -1263,13 +1308,15 @@ export const api = {
           messageId: rpcId,
           contextId: sessionId,
           // Per-turn overrides ride the A2A message metadata (server/chat.py reads them):
-          // the tab's chosen model + the /effort reasoning level.
-          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions)
+          // the tab's chosen model + the /effort reasoning level + incognito (ADR 0069 D3b —
+          // per-message server-side, stamped on every send while the thread toggle is on).
+          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions || opts.incognito)
             ? {
                 metadata: {
                   ...(opts.model ? { model: opts.model } : {}),
                   ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
                   ...(opts.bypassPermissions ? { bypass_permissions: true } : {}),
+                  ...(opts.incognito ? { incognito: true } : {}),
                 },
               }
             : {}),
@@ -1356,7 +1403,14 @@ export const api = {
           method: "POST",
           headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
           signal: handlers.signal,
-          body: JSON.stringify({ message, session_id: sessionId, ...(opts.model ? { model: opts.model } : {}) }),
+          body: JSON.stringify({
+            message,
+            session_id: sessionId,
+            ...(opts.model ? { model: opts.model } : {}),
+            // The non-streaming fallback must carry incognito too — dropping it here
+            // would silently persist a thread the operator marked private.
+            ...(opts.incognito ? { incognito: true } : {}),
+          }),
         });
         if (!res.ok) {
           let detail = `${res.status} ${res.statusText}`;
