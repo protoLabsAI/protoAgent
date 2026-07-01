@@ -1162,6 +1162,62 @@ async def _chat_langgraph_stream(
             tracing.flush()
 
 
+def _compaction_message(result: dict) -> str:
+    """Human-readable status line for a compaction result — surfaced as the
+    system-note in the chat thread (and returned to non-UI callers)."""
+    reason = result.get("reason") or ""
+    if reason == "too_short":
+        return f"Nothing to compact — this conversation is already short ({result.get('kept', 0)} messages)."
+    if reason == "no_store":
+        return (
+            "Compaction skipped — no searchable knowledge store is configured, so the raw history "
+            "couldn't be archived. Nothing was changed (your full context is intact)."
+        )
+    if reason in ("empty", "empty_archive", "archive_error"):
+        return "Compaction skipped — the conversation couldn't be archived, so nothing was changed."
+    if reason in ("no_summary", "summary_error"):
+        return (
+            f"Archived {result.get('archived_chunks', 0)} chunk(s) to searchable memory, but the summary "
+            "couldn't be generated — kept your full context rather than compacting it."
+        )
+    if reason == "no_checkpointer":
+        return "Compaction unavailable — no conversation checkpoint to compact."
+    removed, kept = result.get("removed", 0), result.get("kept", 0)
+    return (
+        f"Compacted this conversation — archived {removed} older message(s) to searchable memory and kept the "
+        f"last {kept}. The agent now carries a summary of the earlier messages plus the recent ones, at a "
+        f"fraction of the token cost; the full raw history stays searchable via memory recall."
+    )
+
+
+async def compact_session(session_id: str, *, request_metadata: dict | None = None) -> dict:
+    """Compact a chat session's live context (the ``/compact`` gesture, #1527).
+
+    Resolves the session's checkpointer ``thread_id`` (the A2A ``a2a:<session_id>``
+    thread — the one the live streaming turns write to) and runs
+    ``compact_thread`` under the per-thread lock, so a compaction can never race a
+    live streaming turn on the same thread (mirrors the turn driver). Returns the
+    ``compact_thread`` result dict plus a human-readable ``message``.
+    """
+    base = {"summary": "", "archived_chunks": 0, "kept": 0, "removed": 0, "archived": False, "refused": True}
+    if STATE.graph is None:
+        return {**base, "reason": "setup", "message": "Setup required — finish the setup wizard first."}
+
+    from graph.compaction_op import compact_thread
+
+    tid = _resolve_thread_id(request_metadata, session_id)
+    async with _thread_lock(tid):
+        result = await compact_thread(
+            STATE.graph,
+            STATE.checkpointer,
+            STATE.knowledge_store,
+            STATE.graph_config,
+            tid,
+            session_id,
+        )
+    return {**result, "message": _compaction_message(result)}
+
+
 async def _chat_langgraph(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing

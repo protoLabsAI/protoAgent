@@ -24,12 +24,14 @@ log = logging.getLogger(__name__)
 _MAX_TRANSCRIPT_CHARS = 16000
 
 
-def render_transcript(messages: list) -> str:
+def render_transcript(messages: list, *, max_chars: int | None = _MAX_TRANSCRIPT_CHARS) -> str:
     """Render a User/Assistant transcript from checkpoint messages.
 
     Assistant turns are run through ``extract_output`` (drop scratch_pad/think);
-    tool and system messages are skipped. Returns the most-recent
-    ``_MAX_TRANSCRIPT_CHARS`` when long.
+    tool and system messages are skipped. Truncated to the most-recent
+    ``max_chars`` when long; pass ``max_chars=None`` for the full transcript (the
+    compaction path archives the *whole* conversation losslessly before it
+    rewrites the live context — a capped render would silently drop the head).
     """
     lines: list[str] = []
     for m in messages:
@@ -43,8 +45,8 @@ def render_transcript(messages: list) -> str:
             if clean:
                 lines.append(f"Assistant: {clean}")
     transcript = "\n".join(lines)
-    if len(transcript) > _MAX_TRANSCRIPT_CHARS:
-        transcript = "…\n" + transcript[-_MAX_TRANSCRIPT_CHARS:]
+    if max_chars is not None and len(transcript) > max_chars:
+        transcript = "…\n" + transcript[-max_chars:]
     return transcript
 
 

@@ -79,6 +79,34 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     ]
 
 
+def test_compact_session_route(monkeypatch):
+    # The route is a thin pass-through to server.chat.compact_session — forwards the
+    # path session_id and returns the compaction result dict verbatim.
+    import operator_api.chat_routes as cr
+
+    seen: list[str] = []
+
+    async def _fake_compact(session_id):
+        seen.append(session_id)
+        return {
+            "summary": "s",
+            "archived_chunks": 2,
+            "kept": 4,
+            "removed": 9,
+            "archived": True,
+            "refused": False,
+            "reason": "",
+            "message": "Compacted this conversation",
+        }
+
+    monkeypatch.setattr(cr, "compact_session", _fake_compact)
+    c = _client(monkeypatch)
+    body = c.post("/api/chat/sessions/s1/compact").json()
+    assert seen == ["s1"]
+    assert body["removed"] == 9 and body["kept"] == 4 and body["archived"] is True
+    assert body["message"] == "Compacted this conversation"
+
+
 def test_delete_session_cleans_ephemeral_attachments(monkeypatch):
     """Deleting a chat drops its session-scoped attachment chunks."""
     import operator_api.chat_routes as cr
