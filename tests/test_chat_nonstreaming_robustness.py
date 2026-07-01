@@ -107,4 +107,4 @@ async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     )
     out = await chat("wait a bit then resume", "sessC")
     content = out[0]["content"]
-    assert content and "Yielding" in content  # not a blank reply
+    assert content and "Wait scheduled" in content  # not a blank reply
