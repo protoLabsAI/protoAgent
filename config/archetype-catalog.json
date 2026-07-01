@@ -1,0 +1,21 @@
+{
+  "_comment": "Curated archetype directory for the new-agent picker + setup wizard (ADR 0042), served by GET /api/archetypes. Data-driven so archetypes can be added or removed WITHOUT a code change — a fork or instance overrides this file by dropping its own archetype-catalog.json in the live config dir (same override rule as plugin-catalog.json / mcp-catalog.json). Fields: id (also the RadioCard value + React key — keep unique), label, icon (a lucide-react name), blurb, bundle (a git URL installed into the agent on create, or null for a code-free persona), and the base SOUL.md the persona step seeds — either soul_preset (a file STEM under config/soul-presets/, resolved server-side) or an inline soul string. Installed plugin bundles that declare an `archetype:` manifest block self-register on top of these and don't need an entry here (deduped by id + bundle URL). Keep `custom` LAST — it's the catch-all write-your-own persona.",
+  "archetypes": [
+    {
+      "id": "basic",
+      "label": "Basic",
+      "icon": "Sparkles",
+      "bundle": null,
+      "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
+      "soul_preset": "base"
+    },
+    {
+      "id": "custom",
+      "label": "Custom",
+      "icon": "PenLine",
+      "bundle": null,
+      "blurb": "Write your own — start from a SOUL template and fill it in.",
+      "soul_preset": "blank"
+    }
+  ]
+}

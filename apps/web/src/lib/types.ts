@@ -769,7 +769,7 @@ export type FleetStatus = { agents: FleetAgent[] };
 export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
 
 export type Archetype = {
-  id: string; // "basic", or a bundle id e.g. "pm-stack"
+  id: string; // "basic"/"custom", or a bundle id e.g. "product-stack"
   label: string;
   icon: string; // lucide-react icon name
   blurb: string;

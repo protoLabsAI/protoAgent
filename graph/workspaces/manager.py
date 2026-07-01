@@ -218,6 +218,7 @@ def create(
     bundle: str | None = None,
     port: int | None = None,
     shared_skills: bool = False,
+    soul: str | None = None,
 ) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
     an installed plugin bundle. Does not start it.
@@ -228,6 +229,10 @@ def create(
         secrets popped over (the gateway), so it boots ready-to-chat WITHOUT inheriting its
         plugins/skills. This is the fleet's default "new agent" (a blank agent, model carried).
       * neither — the plain blank template.
+
+    ``soul`` (the picked archetype's base SOUL.md, ADR 0042) is written into the workspace's
+    ``config/SOUL.md`` — the member's live persona — so an agent created from an archetype
+    arrives with its persona, not just its tools. Blank leaves the agent on the default SOUL.
     """
     name = _safe(name)
     if name.lower() in _RESERVED_NAMES:
@@ -264,6 +269,12 @@ def create(
             _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
         if shared_skills:
             _stamp_identity(cfg, name, True, instance_id=wid)
+
+    # The archetype persona (ADR 0042) — the member reads its SOUL at <ws>/config/SOUL.md
+    # (instance_root=<ws>), so scaffold it there. Only when non-empty: a blank archetype
+    # (or none) leaves the agent on the default SOUL rather than writing an empty persona.
+    if soul and soul.strip():
+        (cfg_dir / "SOUL.md").write_text(soul, encoding="utf-8")
 
     import yaml
 

@@ -153,9 +153,9 @@ export function SetupWizard({
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
-  // Starter archetypes (Basic + Project Manager + installed bundles) — the same
-  // source the fleet new-agent picker uses. Each carries a base SOUL the persona
-  // step seeds when picked (ADR 0042).
+  // Starter archetypes (the archetype-catalog: Basic + Custom, plus any installed bundle
+  // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
+  // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
   const archetypes = useQuery(archetypesQuery());
   const acpAgentList = useQuery(acpAgentsQuery()).data?.agents ?? [];
   const [models, setModels] = useState<string[]>([]);
@@ -292,7 +292,7 @@ export function SetupWizard({
   }, [loaded, archetypeList, state.soul, state.archetype]);
 
   // The picked archetype drives the finish summary AND (Plan C) the bundle install:
-  // an archetype with a bundle (e.g. Project Manager → pm-stack) installs its plugins
+  // an archetype with a bundle (e.g. Product Manager → product-stack) installs its plugins
   // into this host on finish, so the persona arrives WITH its tools.
   const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
   const personaLabel = pickedArchetype?.label ?? state.archetype;
@@ -376,8 +376,8 @@ export function SetupWizard({
       if (state.initTasks) {
         await api.initTasks();
       }
-      // Plan C: if the chosen archetype carries a plugin bundle (e.g. Project
-      // Manager → pm-stack), install it into THIS host on finish — so the new user
+      // Plan C: if the chosen archetype carries a plugin bundle (e.g. Product
+      // Manager → product-stack), install it into THIS host on finish — so the new user
       // gets the persona AND its tools/board in one shot, not just the prose.
       // installPlugin auto-enables + hot-reloads the bundle's plugins (no restart).
       // A failure is non-fatal: setup is already written, so we finish anyway and

@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Agent archetypes are a data-driven registry** (ADR 0042). The new-agent picker + setup
+  wizard now read their built-in starter types from `config/archetype-catalog.json`
+  (served by `GET /api/archetypes`) instead of a hardcoded list — so archetypes can be added
+  or removed **without a code change**, and a fork/instance overrides the set by dropping its
+  own `archetype-catalog.json` in the live config dir (same override rule as
+  `plugin-catalog.json`/`mcp-catalog.json`). Ships **Basic** + **Custom**; installed bundles
+  that declare an `archetype:` block still self-register on top, now **deduped** by id + bundle
+  URL so a card can't appear twice.
+
+### Changed
+- **Fleet "New agent" now applies the archetype's persona**, not just its tools. Creating an
+  agent from an archetype writes its base `SOUL.md` into the new workspace (`POST /api/fleet`
+  gained a `soul` field), so a bundle agent arrives with its persona wired in.
+
 ### Fixed
 - **Console dev server no longer defaults to the prod backend.** `apps/web/vite.config.ts` proxied
   `npm run dev` / `npm run preview` backend calls to `:7870` (the default/prod instance the desktop
@@ -18,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.protoagent` data**. It now defaults to the **isolated dev instance `:7871`** (`scripts/dev.sh`),
   which is fail-safe (a clean "can't connect" when no dev backend is up, never a silent prod hit),
   and prints a **loud red guard** if `PROTOAGENT_API_BASE` is ever pointed at `:7870`.
+- **Removed the broken built-in "Project Manager" archetype.** It pointed at
+  `protoLabsAI/pm-stack`, which was split/renamed (→ `product-stack`, `leadEngineer`,
+  `portfolio-manager-stack`); the stale URL no longer installed what the card promised. Those
+  stacks self-register as archetypes when installed, and the URL is now a data edit rather than
+  a code constant.
 
 ## [0.78.0] - 2026-07-01
 
