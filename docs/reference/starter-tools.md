@@ -155,7 +155,7 @@ Returns `"No matches."` when nothing scores above the keyword threshold.
 async def recall_session(session_id: str) -> str
 ```
 
-Expands one entry from the auto-injected `<prior_sessions>` digest into the full persisted session summary — messages and final output, reasoning-stripped, capped at ~6 000 chars (ADR 0069<!-- TODO(#1577): restore the /adr/0069-memory-delivery-layer link once the ADR doc merges -->). The digest itself carries only one attributed line per prior session (id · timestamp · surface · topic · message count), so this tool is the on-demand path to a prior session's content. Errors cleanly on an unknown or malformed id.
+Expands one entry from the auto-injected `<prior_sessions>` digest into the full persisted session summary — messages and final output, reasoning-stripped, capped at ~6 000 chars ([ADR 0069](/adr/0069-memory-delivery-layer)). The digest itself carries only one attributed line per prior session (id · timestamp · surface · topic · message count), so this tool is the on-demand path to a prior session's content. Errors cleanly on an unknown or malformed id.
 
 ## `memory_list`
 
