@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from dataclasses import dataclass
 
 from graph.goals.store import GoalStore
@@ -29,9 +28,6 @@ from graph.goals.verifiers import VerifyContext, run_verifier
 log = logging.getLogger(__name__)
 
 CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
-
-_GOAL_PLAN_RE = re.compile(r"<goal_plan>(.*?)</goal_plan>", re.IGNORECASE | re.DOTALL)
-_GIVEUP_RE = re.compile(r"<goal_unachievable(?:\s+reason=\"([^\"]*)\")?\s*/?>", re.IGNORECASE)
 
 
 @dataclass
@@ -135,6 +131,39 @@ class GoalController:
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
 
+    # --- agent goal-loop tools (retired the <goal_plan>/<goal_unachievable> XML) ---
+
+    def record_plan(self, session_id: str, plan: str) -> tuple[bool, str]:
+        """Persist the agent's running plan for its active goal — called by the
+        ``update_goal_plan`` tool DURING a turn (replaces the old ``<goal_plan>`` tag).
+        Fresh-context goals write the durable plan artifact; same-session goals carry it
+        on the goal state. The next continuation prompt feeds it back. Returns (ok, msg)."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return (False, "no active goal for this session.")
+        plan = (plan or "").strip()
+        if not plan:
+            return (False, "a plan is required.")
+        if state.fresh_context:
+            self._store.write_plan(state.session_id, plan)
+        else:
+            state.checklist = plan
+            self._store.set(state)
+        return (True, "plan recorded.")
+
+    def request_abandon(self, session_id: str, reason: str) -> tuple[bool, str]:
+        """Flag the active goal as unachievable at the agent's request — called by the
+        ``abandon_goal`` tool DURING a turn (replaces the old ``<goal_unachievable/>``
+        tag). Recorded on the goal state; the post-turn ``evaluate`` honours it AFTER the
+        verifier, so a goal the world already satisfies still finishes ``achieved``.
+        Returns (ok, msg)."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return (False, "no active goal for this session.")
+        state.abandon_reason = (reason or "").strip() or "agent flagged the goal unachievable"
+        self._store.set(state)
+        return (True, "goal will stop after this turn (flagged unachievable).")
+
     def _parse_set(self, rest: str):
         """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None, mode, fresh_context)."""
         if rest.lstrip().startswith("{"):
@@ -163,7 +192,7 @@ class GoalController:
 
         # 1. Run the verifier first — ground truth overrides the model's
         # self-assessment. If the external world already satisfies the goal,
-        # a same-turn <goal_unachievable> give-up must not mask that.
+        # a same-turn abandon_goal give-up must not mask that.
         ctx = VerifyContext(
             config=self._config,
             condition=state.condition,
@@ -190,21 +219,15 @@ class GoalController:
             self._store.set(state)
             return None
 
-        # 2. Verifier not met — honour an explicit give-up from the agent.
-        giveup = _GIVEUP_RE.search(last_text or "")
-        if giveup:
-            reason = (giveup.group(1) or "agent flagged the goal unachievable").strip()
-            return await self._finish(state, "unachievable", reason)
+        # 2. Verifier not met — honour an explicit give-up. The agent records it
+        # DURING its turn via the `abandon_goal` tool (persisted to the goal state); we
+        # read it here, AFTER the verifier, so ground truth still wins over give-up.
+        if state.abandon_reason:
+            return await self._finish(state, "unachievable", state.abandon_reason)
 
-        # 3. Not met — refresh checklist, track progress, decide continue vs stop.
-        plan = _GOAL_PLAN_RE.search(last_text or "")
-        if plan:
-            plan_text = plan.group(1).strip()
-            if state.fresh_context:
-                self._store.write_plan(state.session_id, plan_text)
-            else:
-                state.checklist = plan_text
-
+        # 3. Not met — track progress, decide continue vs stop. The running plan is
+        # maintained by the agent's `update_goal_plan` tool (already persisted to the goal
+        # state / plan artifact), so there is nothing to extract from the text here.
         signature_unchanged = result.reason == state.last_reason and result.evidence == state.last_evidence
         state.no_progress_streak = (state.no_progress_streak + 1) if signature_unchanged else 0
         state.last_reason = result.reason
@@ -344,10 +367,10 @@ class GoalController:
                 + (evidence_block + "\n" if evidence_block else "\n")
                 + f"Plan from last iteration:\n{plan}\n\n"
                 f"Take ONE concrete step toward the goal. Read the plan — it records what's "
-                f"been tried, what's next, and what failed. Update your running checklist "
-                f"inside <goal_plan>...</goal_plan> at the end of your turn (it will be "
-                f"persisted for the next iteration). If you determine the goal is impossible "
-                f'or out of scope, emit <goal_unachievable reason="..."/> and stop.'
+                f"been tried, what's next, and what failed. Record your updated running plan "
+                f"by calling the `update_goal_plan` tool (it is persisted for the next "
+                f"iteration). If you determine the goal is impossible or out of scope, call "
+                f"the `abandon_goal` tool with a reason and stop."
             )
         evidence = (result.evidence or "").strip()
         evidence_block = f"\nEvidence:\n{evidence}\n" if evidence else "\n"
@@ -360,8 +383,8 @@ class GoalController:
             f"{evidence_block}\n"
             f"Current plan:\n{plan_block}\n\n"
             f'Keep working toward the goal: "{state.condition}".\n'
-            f"Maintain a running checklist inside a <goal_plan>...</goal_plan> block "
-            f"(update it every turn). If you determine the goal is impossible or out "
-            f'of scope, emit <goal_unachievable reason="..."/> and stop. '
-            f"Otherwise take the next concrete step now."
+            f"Record your running plan by calling the `update_goal_plan` tool (update it "
+            f"each turn — it is fed back to you here). If you determine the goal is "
+            f"impossible or out of scope, call the `abandon_goal` tool with a reason and "
+            f"stop. Otherwise take the next concrete step now."
         )

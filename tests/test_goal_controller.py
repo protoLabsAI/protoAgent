@@ -115,10 +115,12 @@ async def test_evaluate_no_progress_flags_unachievable(tmp_path):
 
 @pytest.mark.asyncio
 async def test_model_giveup_flags_unachievable(tmp_path):
-    # Verifier fails (exit 1), so the agent's give-up is honoured.
+    # Verifier fails (exit 1), so the agent's give-up (recorded mid-turn via the
+    # abandon_goal tool → request_abandon) is honoured.
     c = _ctrl(tmp_path)
     await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 1"}}', "s")
-    decision = await c.evaluate("s", last_text='cannot do this <goal_unachievable reason="needs prod access"/>')
+    c.request_abandon("s", "needs prod access")
+    decision = await c.evaluate("s", last_text="cannot do this")
     assert decision.action == "done"
     assert decision.state.status == "unachievable"
     assert "prod access" in decision.state.last_reason
@@ -126,19 +128,23 @@ async def test_model_giveup_flags_unachievable(tmp_path):
 
 @pytest.mark.asyncio
 async def test_verifier_overrides_giveup(tmp_path):
-    # Ground truth wins: when the verifier passes, a same-turn give-up tag
+    # Ground truth wins: when the verifier passes, a same-turn give-up (abandon_goal)
     # must NOT mask the achievement.
     c = _ctrl(tmp_path)
     await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 0"}}', "s")
-    decision = await c.evaluate("s", last_text='giving up <goal_unachievable reason="cannot proceed"/>')
+    c.request_abandon("s", "cannot proceed")
+    decision = await c.evaluate("s", last_text="giving up")
     assert decision.action == "done"
     assert decision.state.status == "achieved"
 
 
 @pytest.mark.asyncio
-async def test_checklist_extracted_and_carried(tmp_path):
+async def test_checklist_recorded_and_carried(tmp_path):
+    # The plan is recorded mid-turn via the update_goal_plan tool (→ record_plan),
+    # persisted, and fed back into the next continuation prompt.
     c = _ctrl(tmp_path)
     await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 1"}}', "s")
-    decision = await c.evaluate("s", last_text="progress <goal_plan>1. do A\n2. do B</goal_plan> more")
+    c.record_plan("s", "1. do A\n2. do B")
+    decision = await c.evaluate("s", last_text="progress")
     assert "do A" in c.active_goal("s").checklist
     assert "do A" in decision.message

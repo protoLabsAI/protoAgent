@@ -41,8 +41,8 @@ class GoalState:
     ``verifier`` is a free-form spec dict whose ``type`` selects an entry in
     ``graph/goals/verifiers.VERIFIERS`` and whose other keys are that verifier's
     parameters (e.g. ``{"type": "command", "command": "pytest -q"}``).
-    ``checklist`` holds the model-authored ``<goal_plan>`` text, carried forward
-    across iterations so the agent keeps a running plan.
+    ``checklist`` holds the running plan the agent records with the
+    ``update_goal_plan`` tool, carried forward across iterations.
     """
 
     session_id: str
@@ -60,6 +60,9 @@ class GoalState:
     fresh_context: bool = False
     last_checked: float | None = None  # last out-of-band verifier check (monitor)
     checklist: str = ""
+    # Set by the agent's ``abandon_goal`` tool mid-turn; ``evaluate`` finishes the goal
+    # ``unachievable`` after the verifier runs (retired the ``<goal_unachievable/>`` tag).
+    abandon_reason: str = ""
     iteration: int = 0
     max_iterations: int = 8
     # Per-goal patience (ADR 0030 D4); None → the config goal_no_progress_limit.

@@ -108,7 +108,7 @@ def test_fresh_context_continuation_seeds_from_durable_plan(tmp_path):
     assert "make it green" in prompt  # the goal condition
     assert "2 tests still failing" in prompt  # the last verifier reason
     assert "ONE concrete step" in prompt
-    assert "<goal_plan>" in prompt
+    assert "update_goal_plan" in prompt
 
 
 def test_default_continuation_stays_same_session(tmp_path):

@@ -1092,6 +1092,66 @@ def _build_set_goal_tool():
     return set_goal
 
 
+def _build_goal_plan_tool():
+    """The agent records its running plan for the active goal (goal loop). Replaces the
+    retired ``<goal_plan>`` continuation tag — the plan is persisted to the goal state /
+    plan artifact and fed back into the next continuation prompt."""
+
+    @tool
+    def update_goal_plan(
+        plan: str,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Record/refresh your running plan for THIS session's active goal.
+
+        Call this during a goal continuation turn to carry a coherent plan across
+        iterations (what's done, what's next, what failed) — it is persisted and fed
+        back to you in the next continuation. Returns a message; it's a harmless no-op
+        when goal mode is off or no goal is active.
+        """
+        from runtime.state import STATE
+
+        if STATE.goal_controller is None:
+            return "Goal mode is not enabled."
+        session_id = _session_id_from(state)  # injected graph state, not the contextvar
+        if not session_id:
+            return "No active session — update_goal_plan can only run during a turn."
+        _ok, msg = STATE.goal_controller.record_plan(session_id, plan)
+        return msg
+
+    return update_goal_plan
+
+
+def _build_abandon_goal_tool():
+    """The agent explicitly gives up on the active goal (goal loop). Replaces the retired
+    ``<goal_unachievable/>`` tag — recorded on the goal state and honoured AFTER the
+    verifier runs, so a goal the world already satisfies still finishes ``achieved``."""
+
+    @tool
+    def abandon_goal(
+        reason: str,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Flag THIS session's active goal as unachievable and stop the goal loop.
+
+        Call this only when you determine the goal is impossible or out of scope, with a
+        one-line `reason`. The goal is finished ``unachievable`` after your turn — unless
+        the verifier finds it already met, which wins. Returns a message; it's a harmless
+        no-op when goal mode is off or no goal is active.
+        """
+        from runtime.state import STATE
+
+        if STATE.goal_controller is None:
+            return "Goal mode is not enabled."
+        session_id = _session_id_from(state)  # injected graph state, not the contextvar
+        if not session_id:
+            return "No active session — abandon_goal can only run during a turn."
+        _ok, msg = STATE.goal_controller.request_abandon(session_id, reason)
+        return msg
+
+    return abandon_goal
+
+
 @tool
 def load_skill(name: str) -> str:
     """Load the full step-by-step procedure for a skill.
@@ -1353,6 +1413,8 @@ def get_all_tools(
         tools.extend(_build_task_tools(tasks_store))
     if goal_enabled:
         tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
+        tools.append(_build_goal_plan_tool())  # goal loop — record running plan (retired <goal_plan>)
+        tools.append(_build_abandon_goal_tool())  # goal loop — explicit give-up (retired <goal_unachievable>)
     # ADR 0054 — curation tools for the dream/distill subagents (read-only activity
     # + skill inventory + additive-only skill creation). Self-gate on STATE at call
     # time; present in the full set so the subagent allowlists can pick them up.

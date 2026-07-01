@@ -16,8 +16,8 @@ It's modelled on protocli's goal system but deliberately more rigorous for a lon
 | | protocli | protoAgent goal mode |
 |---|---|---|
 | Completion check | small-LLM judgment | **pluggable verifier** (command / test / CI / data), LLM only as fallback |
-| Drive-to-done | continuation prompt | continuation prompt **+ persisted `<goal_plan>` checklist** |
-| Give-up path | user sets "stop after N" in the text | **iteration budget + no-progress streak + model `<goal_unachievable>`** |
+| Drive-to-done | continuation prompt | continuation prompt **+ a persisted plan** (the `update_goal_plan` tool) |
+| Give-up path | user sets "stop after N" in the text | **iteration budget + no-progress streak + the `abandon_goal` tool** |
 | State | in-memory, per session | **disk-persisted** per session (survives restart/reload) |
 
 ## How it works
@@ -25,8 +25,8 @@ It's modelled on protocli's goal system but deliberately more rigorous for a lon
 1. You set a goal for a session (`/goal …`). Nothing else changes — the next message runs normally.
 2. When the agent produces a final answer (no more tool calls), the controller runs the goal's **verifier**.
 3. **Met** → the goal is marked `achieved` and the run ends.
-4. **Not met** → the controller extracts/refreshes the agent's `<goal_plan>` checklist, then re-invokes the agent on the same thread (history preserved) with a continuation prompt that includes the verifier's reason + evidence and the current plan.
-5. This repeats until met, the **iteration budget** (`goal.max_iterations`) is spent (`exhausted`), the verifier returns the **same evidence too many times** (`goal.no_progress_limit` → `unachievable`), or the agent itself emits `<goal_unachievable reason="…"/>` (`unachievable`).
+4. **Not met** → the agent records its running plan with the `update_goal_plan` tool, then the controller re-invokes it on the same thread (history preserved) with a continuation prompt that includes the verifier's reason + evidence and the current plan.
+5. This repeats until met, the **iteration budget** (`goal.max_iterations`) is spent (`exhausted`), the verifier returns the **same evidence too many times** (`goal.no_progress_limit` → `unachievable`), or the agent itself calls the `abandon_goal` tool with a reason (`unachievable`).
 
 The loop wraps graph invocation in `server/chat.py` (both the A2A streaming path and the non-streaming chat path); the graph itself is unchanged.
 
@@ -109,9 +109,9 @@ Examples:
 {"type": "data", "path": "/sandbox/state.json", "expr": "data['open_tickets'] == 0"}
 ```
 
-## The `<goal_plan>` checklist
+## The running plan (`update_goal_plan`)
 
-Continuation prompts ask the agent to keep a running plan inside a `<goal_plan>…</goal_plan>` block and update it each turn. The controller extracts that block, persists it with the goal state, and feeds it back into the next continuation — so the agent maintains a coherent plan across iterations instead of re-planning from scratch.
+Continuation prompts ask the agent to keep a running plan and record it each turn by calling the **`update_goal_plan`** tool. The controller persists that plan with the goal state (fresh-context goals write it to a durable plan artifact) and feeds it back into the next continuation — so the agent maintains a coherent plan across iterations instead of re-planning from scratch. To stop early when the goal is impossible or out of scope, the agent calls **`abandon_goal`** with a reason (honoured only after the verifier runs, so a goal the world already satisfies still finishes `achieved`). Both tools are bound whenever goal mode is on and are harmless no-ops outside a goal.
 
 ## Configuration
 
