@@ -629,6 +629,10 @@
           "title": "ADR 0069 — Memory delivery layer: attributed digest, provenance, trust tiers"
         },
         {
+          "path": "adr/0070-agent-reach-acquisition-plugin.md",
+          "title": "0070 — Agent Reach as an acquisition-layer plugin (multi-platform source connectors)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
