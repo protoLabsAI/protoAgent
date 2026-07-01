@@ -570,6 +570,11 @@ class LangGraphConfig:
     # LangGraph loop (default). "acp:<agent>" (e.g. "acp:codex", "acp:claude") = an
     # external coding agent drives the turn over ACP, mounting the operator MCP bus.
     agent_runtime: str = "native"
+    # Developer channel (ADR 0068) — which pre-release feature tier this instance exposes:
+    # "prod" (released only) | "beta" (opt-in previews) | "dev" (everything, incl. in-progress).
+    # The dev sandbox instance defaults to "dev"; env fallback PROTOAGENT_CHANNEL. Read by
+    # ``runtime.flags`` to resolve developer flags.
+    developer_channel: str = "prod"
     # ACP launch overrides (ADR 0033) — per-agent ``{command, args}`` from the YAML
     # ``acp.agents`` block, e.g. ``acp: {agents: {claude: {command: claude-agent-acp}}}``.
     # ``runtime.acp_runtime.adapter_for`` reads this to override the built-in default
@@ -938,6 +943,7 @@ class LangGraphConfig:
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
             agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
+            developer_channel=str((data.get("developer", {}) or {}).get("channel", cls.developer_channel) or "prod"),
             acp_agents=dict(acp.get("agents", {}) or {}),
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),

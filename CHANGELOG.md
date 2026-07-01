@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Developer flags — backend foundation** (#1506, ADR 0068, slice 1). A small local/static
+  feature-flag system to gate pre-release functionality: `runtime/flags.py` with a `Flag` registry
+  (`off`·`dev`·`beta`·`on` tiers) and `flag_enabled(id)` / `resolved_flags()`. Enablement resolves
+  a flag's tier against a runtime **channel** (`prod ⊂ beta ⊂ dev`) — derived from the dev sandbox
+  instance, a `PROTOAGENT_CHANNEL` env, or the new **`developer.channel`** setting — with a
+  `PROTOAGENT_FLAG_<ID>` env override on top. No flags ship yet; the `/api/flags` route and the
+  Developer panel are later slices.
 - **Chat composer: terminal-style input history** (#1496). Press **↑** to recall previously-sent
   messages into the composer (newest first), **↓** to walk back toward your in-progress draft — just
   like a shell. Recalled messages are editable before resending; history only triggers at the top/bottom
