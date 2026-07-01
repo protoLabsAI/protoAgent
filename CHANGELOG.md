@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator surface** (plugin install, config rewrite, subagent runs, goal/watch set-paths) with `403`.
   Opt-in — unset ⇒ single-token mode, unchanged.
 - **Console set-goal form** (#1510) and **live `goal.iteration` progress** in the Goals panel (#1498).
+- **Chat: slash commands trigger mid-input + render as command bubbles** (#1530, #1528, #1529). Type
+  `/` at **any** caret position (not only the first character) to open the command popover; arrow-key
+  navigation auto-scrolls the focused item into view; an issued command renders as a distinct user
+  bubble (subtle tint + monospace + `/` badge) so it stays legible in the transcript.
+- **Header brand menu — one-click nav to settings** (#1544). Click (or right-click) the agent brand
+  mark in the header for a compact menu: **Agent settings**, **Fleet settings**, **Theme** — each
+  deep-links the settings overlay. Keyboard-accessible (Enter/Space to open, arrows, Esc).
+- **Chat: `Cmd/Ctrl+O` toggles the latest tool-call block** (#1526, ADR 0063). Expands the newest tool
+  call, then collapses it and walks upward through older ones on repeat; a reasoning-only turn is a
+  no-op. Rebindable in **Settings ▸ Keyboard**.
 
 ### Changed
 - **Knowledge panel: Upload / Add now open in a dialog** (#1502) instead of expanding inline in the
@@ -67,6 +77,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had to emit is retired for the `update_goal_plan` / `abandon_goal` tools.
 - The A2A-streaming and non-streaming **goal drive loops are unified** (#1497), fixing a fresh-context
   thread-id drift.
+- **Settings sub-panels share one container** (#1545) — the Keyboard and Delegates panels now render
+  through the same `SettingsSubPanel` chrome (DS `PanelHeader` + scrolling body) as the schema-driven
+  and other bespoke panels, so header/padding/scroll can't drift per panel.
+- **`wait` tool output is conversational** (#1536) — the tool returns a concise summary (e.g. "Wait
+  scheduled: 5 minutes. Will resume to: …") instead of the raw "Yielding for 300s — you'll be
+  re-invoked at <ISO>…", and its docstring tells the agent to paraphrase rather than echo it verbatim.
+- **Desktop app builds are on-demand** (#1547) — `desktop-build.yml` now runs on manual dispatch only,
+  not on every version tag (the macOS/Windows matrix was the dominant CI cost). Cut a desktop release
+  with `gh workflow run desktop-build.yml -f tag=vX.Y.Z` (attaches binaries + `latest.json`, promotes
+  to Latest); tag pushes still publish the Docker image + a non-Latest GitHub Release.
 
 ### Security
 - **RCE-via-chat closed** (#1492) — a `/goal` chat message can no longer arm a `command` / `test` / `ci`
@@ -82,6 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Docs
 - New **ADR 0066** (federation token + operator channel) and **ADR 0067** (watch primitive); **ADR 0030**
   marked superseded. New **Watches** guide; the goal-mode + plugins guides updated for the drive-only model.
+- **PROTO.md § Run it**: agent-launched throwaway test servers should be **fully isolated** (own
+  `PROTOAGENT_BOX_ROOT`, not just an instance id) to avoid clobbering / the desktop co-residence warning
+  (#1553, #1552); the releasing + desktop docs updated for the manual desktop-build flow (#1547).
 
 ## [0.77.0] - 2026-07-01
 
