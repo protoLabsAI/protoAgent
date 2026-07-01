@@ -473,6 +473,25 @@ def test_ask_bridge_is_wired(monkeypatch, tmp_path):
     assert "e.source!==$frame.contentWindow" in html
 
 
+def test_graphic_kinds_get_a_panzoom_viewport(monkeypatch, tmp_path):
+    """svg + mermaid render into a transform-driven pan/zoom viewport (#1495): scroll-wheel
+    zoom (cursor-anchored), click-drag pan, and a Reset-to-fit control. Both kinds share the
+    one `viewport(...)` wrapper; mermaid re-fits after its async render via window.__artFit."""
+    html = _load(monkeypatch, tmp_path)._SHELL_HTML
+    # the viewport scaffold + controls exist.
+    assert 'id="__vp"' in html and 'id="__cv"' in html
+    assert 'id="__zi"' in html and 'id="__zo"' in html and 'id="__zr"' in html  # zoom in/out/reset
+    # wheel-to-zoom (cursor-anchored) + drag-to-pan wiring.
+    assert 'addEventListener("wheel"' in html and "{passive:false}" in html
+    assert 'addEventListener("pointerdown"' in html and 'addEventListener("pointermove"' in html
+    assert "transform-origin:0 0" in html  # transform applied to #__cv
+    # both graphic kinds route through the shared wrapper; the old bare-centering is gone.
+    assert "function viewport(inner)" in html
+    assert "place-items:center" not in html  # svg no longer just centers a static graphic
+    # mermaid's async render re-fits the freshly-drawn <svg>.
+    assert "window.__artFit" in html
+
+
 def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     """react/mermaid load from the same-origin vendor route — NO cdnjs (so artifacts
     work offline), every lib still SRI-pinned (sha512 of the vendored bytes)."""

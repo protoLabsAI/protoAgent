@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Artifact panel: pan & zoom for diagrams** (#1495, artifact plugin v0.14.0). Mermaid **and** SVG
+  artifacts now render into a transform-driven viewport — scroll-wheel / pinch to zoom (cursor-anchored),
+  click-drag to pan, and a **Reset** control that re-fits the diagram. Large flowcharts and architecture
+  views are finally explorable; mermaid re-fits automatically after its async render.
 - **Watch primitive — supervise many external conditions at once** (#1505, #1507, #1508, ADR 0067). A
   *watch* polls a condition on a cadence and, when it trips, runs a follow-up agent turn (via
   `run_in_session`) and/or fires hooks — the passive counterpart to a goal (which the agent *drives*).

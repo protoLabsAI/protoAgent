@@ -905,12 +905,63 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     + '#md blockquote{margin:1em 0;padding-left:1em;border-left:3px solid var(--pl-color-border,rgba(255,255,255,.2));color:var(--pl-color-fg-muted,#9aa0aa)}'
     + '#md img{max-width:100%}#md .mermaid{background:none;border:0;padding:0}';
 
+  // Pan/zoom viewport for the GRAPHIC kinds (svg + mermaid — #1495). Both render an <svg>
+  // into the sandboxed frame; wrap it in a transform-driven viewport so large diagrams can be
+  // explored: scroll-wheel / pinch to zoom (cursor-anchored), click-drag to pan, Reset to re-fit.
+  // Self-contained (needs no DS stylesheet) — styled off the base() token carry.
+  var VP_CSS = '<style>html,body{margin:0;height:100%;overflow:hidden}'
+    + '#__vp{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none}'
+    + '#__vp.__drag{cursor:grabbing}'
+    + '#__cv{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}'
+    + '#__zb{position:fixed;top:8px;right:8px;display:flex;gap:4px;z-index:2147483646;opacity:.4;transition:opacity .12s}'
+    + '#__zb:hover{opacity:1}'
+    + '#__zb button{height:26px;min-width:26px;padding:0 7px;font:13px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;'
+    + 'color:var(--pl-color-fg,#ededed);background:var(--pl-color-bg,#18181b);'
+    + 'border:1px solid var(--pl-color-border,rgba(255,255,255,.16));border-radius:6px}'
+    + '#__zb button:hover{border-color:var(--pl-color-accent,#9b87f2)}</style>';
+  var ZBAR = '<div id="__zb"><button id="__zi" title="Zoom in" aria-label="Zoom in">+</button>'
+    + '<button id="__zo" title="Zoom out" aria-label="Zoom out">−</button>'
+    + '<button id="__zr" title="Reset view" aria-label="Reset view">Reset</button></div>';
+  // Transforms #__cv; exposes window.__artFit so an ASYNC renderer (mermaid) can re-fit once its
+  // <svg> exists. Cursor-anchored zoom keeps the point under the pointer fixed; fit() re-centers.
+  var PANZOOM = '<script>(function(){'
+    + 'var vp=document.getElementById("__vp"),cv=document.getElementById("__cv");if(!vp||!cv)return;'
+    + 'var k=1,x=0,y=0,MIN=0.05,MAX=40;'
+    + 'function apply(){cv.style.transform="translate("+x+"px,"+y+"px) scale("+k+")";}'
+    + 'function clamp(v){return v<MIN?MIN:(v>MAX?MAX:v);}'
+    + 'function fit(){cv.style.transform="none";'
+    + 'var r=cv.getBoundingClientRect(),cw=r.width,ch=r.height,vw=vp.clientWidth,vh=vp.clientHeight;'
+    + 'if(!cw||!ch){k=1;x=0;y=0;return apply();}'
+    + 'var s=Math.min((vw-24)/cw,(vh-24)/ch);if(!(s>0)||s>1)s=1;'
+    + 'k=s;x=(vw-cw*s)/2;y=(vh-ch*s)/2;apply();}'
+    + 'function zoomAt(px,py,f){var nk=clamp(k*f);f=nk/k;x=px-f*(px-x);y=py-f*(py-y);k=nk;apply();}'
+    + 'vp.addEventListener("wheel",function(e){e.preventDefault();var rc=vp.getBoundingClientRect();'
+    + 'zoomAt(e.clientX-rc.left,e.clientY-rc.top,Math.exp(-e.deltaY*0.0015));},{passive:false});'
+    + 'var dn=false,lx=0,ly=0;'
+    + 'vp.addEventListener("pointerdown",function(e){if(e.button!==0)return;dn=true;lx=e.clientX;ly=e.clientY;'
+    + 'vp.classList.add("__drag");try{vp.setPointerCapture(e.pointerId);}catch(_){}});'
+    + 'vp.addEventListener("pointermove",function(e){if(!dn)return;x+=e.clientX-lx;y+=e.clientY-ly;lx=e.clientX;ly=e.clientY;apply();});'
+    + 'function up(){dn=false;vp.classList.remove("__drag");}'
+    + 'vp.addEventListener("pointerup",up);vp.addEventListener("pointercancel",up);'
+    + 'function cz(f){var rc=vp.getBoundingClientRect();zoomAt(rc.width/2,rc.height/2,f);}'
+    + 'var zi=document.getElementById("__zi"),zo=document.getElementById("__zo"),zr=document.getElementById("__zr");'
+    + 'if(zi)zi.addEventListener("click",function(){cz(1.25);});'
+    + 'if(zo)zo.addEventListener("click",function(){cz(0.8);});'
+    + 'if(zr)zr.addEventListener("click",fit);'
+    + 'window.__artFit=fit;window.addEventListener("resize",fit);requestAnimationFrame(fit);'
+    + '})();<\/script>';
+  // Wrap graphic content in the viewport + controls (svg + mermaid share this).
+  function viewport(inner){ return VP_CSS + '<body><div id="__vp"><div id="__cv">' + inner + '</div></div>' + ZBAR + PANZOOM; }
+
   function srcdoc(kind, code) {
     if (kind === "html") return dsLink() + base(kind) + code;
-    if (kind === "svg") return '<!doctype html>' + base(kind) + '<body style="display:grid;place-items:center;min-height:100vh">' + code + '</body>';
-    if (kind === "mermaid") return '<!doctype html>' + base(kind) + '<body><pre class="mermaid">' + esc(code) + '</pre>' +
+    if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + '</body>';
+    if (kind === "mermaid") return '<!doctype html>' + base(kind) + viewport('<pre class="mermaid">' + esc(code) + '</pre>') +
       cdn("mermaid") +
-      '<script>mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run();<\/script></body>';
+      '<script>mermaid.initialize({startOnLoad:false,theme:"dark"});'
+      + 'try{var __p=mermaid.run();if(__p&&__p.then)__p.then(function(){if(window.__artFit)window.__artFit();});}catch(_){}'
+      + 'setTimeout(function(){if(window.__artFit)window.__artFit();},80);'
+      + 'setTimeout(function(){if(window.__artFit)window.__artFit();},400);<\/script></body>';
     if (kind === "markdown") return mdDoc(code);
     // `react`: import map + UMD react/react-dom/babel, compiled as a MODULE so `import` works
     // (no-import artifacts still run — they use the UMD React/ReactDOM globals as before).
