@@ -617,6 +617,10 @@
           "title": "0067 — Standalone `watch` primitive (many concurrent watches)"
         },
         {
+          "path": "adr/0068-developer-flags-and-panel.md",
+          "title": "0068 — Developer flags & the Developer panel (gating pre-release functionality)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
