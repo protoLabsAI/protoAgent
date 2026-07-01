@@ -684,6 +684,17 @@ FIELDS: list[Field] = [
         minimum=0,
         scope="host",
     ),
+    Field(
+        "developer.channel",
+        "developer_channel",
+        "Developer channel",
+        "select",
+        "Developer",
+        "Which pre-release features this instance exposes (ADR 0068). `prod` = released "
+        "features only; `beta` = opt-in previews; `dev` = everything, incl. in-progress "
+        "work. The dev sandbox instance defaults to `dev`. Env fallback: PROTOAGENT_CHANNEL.",
+        options=["prod", "beta", "dev"],
+    ),
 ]
 
 # Knowledge domain sub-sections (console grouping). The Knowledge fields are declared with
@@ -807,6 +818,9 @@ _SECTION_CATEGORY = {
     "Network": "Box",
     "Discovery": "Box",
     "Keep-warm": "Box",
+    # Developer — pre-release feature gating (ADR 0068). The channel this instance runs on;
+    # the flags themselves live in a device-local Developer panel, not the schema.
+    "Developer": "Behavior",
     # Discord / Google / GitHub / other plugin sections → "Plugins" (the default), the
     # Integrations surface.
 }

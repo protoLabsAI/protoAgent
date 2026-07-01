@@ -52,6 +52,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "a2a_skills": [],
     "acp_agents": {},
     "agent_runtime": "native",
+    "developer_channel": "prod",
     "api_base": "http://gateway:4000/v1",
     "audit_middleware": True,
     "autostart_on_boot": False,
@@ -189,6 +190,7 @@ _GOLDEN_EXEMPT = {"api_key", "auth_token", "federation_token", "plugin_config"}
 # prompt_cache / routing / telemetry appeared; no pre-existing value changed.
 CONFIG_TO_DICT_GOLDEN = {
     "agent_runtime": "native",
+    "developer": {"channel": "prod"},
     "auth": {
         "token": "",
     },
