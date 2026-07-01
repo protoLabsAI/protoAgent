@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.77.0",
+    "date": "2026-07-01",
+    "changes": [
+      "Cross-machine fleet hardening — A2A federation is fault-transparent",
+      "Remote fleet members surface their health immediately",
+      "Discovery auto-sweeps on hub boot",
+      "config explain diagnostic",
+      "Real multi-instance fleet test harness",
+      "Artifact is now a bundled core plugin, on by default",
+      "Artifact render errors feed back to the agent",
+      "Multi-step wizard + choice-card HITL forms",
+      "The agent can ingest documents & media into its knowledge base",
+      "Two-tier instance paths (box / instance) — one resolution rule, no more double-scoping",
+      "React artifacts are more forgiving + the render loop is proactive",
+      "Docs reader: in-content cross-reference links route in-app instead of breaking the iframe",
+      "A crashed co-located fleet member is now detected and restartable",
+      "Autonomous turns no longer deadlock on a human-input pause",
+      "HITL tools are hard-denied to subagents",
+      "Settings surfaces when the agent config shadows a host-scoped field",
+      "The ⌘K command-palette chat survives being closed mid-turn",
+      "Knowledge: fleet/commons sharing + the reusable background-job primitive"
+    ]
+  },
+  {
     "version": "v0.76.0",
     "date": "2026-06-30",
     "changes": [

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-07-01
+
 ### Added
 - **Cross-machine fleet hardening — A2A federation is fault-transparent** (#1468, #1476) — a peer
   delegate (`delegate_to` over A2A) no longer cuts off a long-running task at a fixed 30s: the poll
