@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`recall_session(session_id)` starter tool** — expands one entry from the
+  prior-sessions digest into that session's full persisted summary (reasoning-
+  stripped, capped), with a path-traversal-safe id guard. The on-demand
+  counterpart to the new digest below.
+  ([ADR 0069](docs/adr/0069-memory-delivery-layer.md))
 - **One-command install** — `curl -fsSL .../scripts/install.sh | sh` takes a fresh
   machine from zero to a running, configured protoAgent. It checks prerequisites
   (Docker + curl), pulls `ghcr.io/protolabsai/protoagent:latest`, runs it
@@ -37,8 +42,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fleet "New agent" now applies the archetype's persona**, not just its tools. Creating an
   agent from an archetype writes its base `SOUL.md` into the new workspace (`POST /api/fleet`
   gained a `soul` field), so a bundle agent arrives with its persona wired in.
+- **Cross-session memory injection is now an attributed digest inside an
+  untrusted-reference envelope** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md)
+  phase 1). `<prior_sessions>` lists one line per recent session — id · timestamp ·
+  surface · topic (from the user's first message) · message count — instead of
+  verbatim message text, under a header stating these are *other, separate*
+  sessions; expand one on demand with `recall_session`. All auto-injected memory
+  (the digest, hot-memory facts, knowledge-retrieval hits) is wrapped in a single
+  `<injected_memory>` envelope marking it as possibly-stale reference data, never
+  instructions. Fixes a fresh thread confidently narrating other threads' history
+  as "the conversation so far", shrinks per-turn injection from ~2 000 tokens of
+  raw chatter to a ~10-line digest, and removes untrusted ingested content from
+  the prompt's trusted voice (OWASP ASI06 memory-poisoning posture).
+- **Memory rows carry provenance.** Harvested conversation summaries and extracted
+  facts now store their source session id in the `source` column, and
+  `memory_recall` / `memory_list` cite `(src: <session>, <date>, ns: <namespace>)`
+  per hit — the substrate for the ADR 0069 injection-record and trust-tier phases.
+- **The docs build now gates every PR.** The `Deploy docs to GitHub Pages` `build`
+  job (vitepress parse + dead-link check) runs on all PRs (~30 s, path filter
+  removed) and is a **required status check** on `main` — a dead docs link can no
+  longer auto-merge and freeze the Pages deploy.
 
 ### Fixed
+- **Chat session-identity hygiene** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md) D4).
+  Omitting `session_id` on `POST /api/chat` now mints a unique per-call id instead of
+  pooling every caller into one shared `api-default` thread; an empty session id skips
+  session-memory persistence instead of pooling into `unknown.json`; the streaming and
+  non-streaming chat paths share one `a2a:` thread-id prefix (previously the same
+  session split into two histories; existing `chat:*` REST threads orphan once); and
+  the non-streaming turn now holds the per-thread lock, closing a checkpointer
+  lost-update race with concurrent streaming/compact/rewind on the same session.
 - **Artifact plugin (0.15.0) — pointer lock now works in games/canvas/3D artifacts.**
   `requestPointerLock()` from generated code threw *"Pointer lock requires the window to have
   focus"*: pointer-lock is a Permissions-Policy feature that must be delegated via `allow=` at
