@@ -27,6 +27,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained a `soul` field), so a bundle agent arrives with its persona wired in.
 
 ### Fixed
+- **Artifact plugin (0.15.0) — pointer lock now works in games/canvas/3D artifacts.**
+  `requestPointerLock()` from generated code threw *"Pointer lock requires the window to have
+  focus"*: pointer-lock is a Permissions-Policy feature that must be delegated via `allow=` at
+  **every** iframe nesting level, and the policy was missing even though the `allow-pointer-lock`
+  sandbox token was present. The console plugin-view iframe now sends `allow="… ; pointer-lock"`
+  and the nested artifact iframe carries `allow="pointer-lock"` too.
+- **Artifact plugin (0.15.0) — SVG / Mermaid now render crisply instead of pixelating on zoom.**
+  The graphic viewport CSS-transform-scaled a `will-change` raster layer, so WKWebView (the desktop
+  app's Safari engine) rasterized the SVG at 1× then GPU-scaled the bitmap → blurry on zoom-in. It's
+  replaced by a **crisp fit-to-window**: the `<svg>` scales as a vector to fit the frame (no transform,
+  no raster layer). Pan/zoom + the zoom buttons are intentionally dropped in favor of a sharp fit.
+- **Artifact plugin (0.15.0) — the selected artifact + version now survive a tab switch.** Switching
+  console tabs unmounts/remounts the plugin-view iframe, reloading the shell fresh; it used to snap
+  back to the latest artifact. The selection (`{selId, selVer, followNewest}`) is now persisted to
+  `localStorage`, with a fallback to auto-follow-newest if the pinned artifact was deleted.
 - **A stale untracked plugin copy no longer shadows a newer bundled one.** The loader let the
   live/installed plugins dir override the bundled tree *unconditionally*, so a plugin that was
   once git-installed and later bundled in-tree (e.g. the artifact plugin @ 0.11.3 vs the bundled
