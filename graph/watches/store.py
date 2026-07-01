@@ -31,26 +31,28 @@ def _publish(topic: str, data: dict) -> None:
 
 
 def _resolve_base() -> Path:
-    # Per-instance scoping (ADR 0004), mirroring GoalStore.
-    from infra.paths import scope_leaf
+    # Per-instance (ADR 0004/0065), mirroring GoalStore: the default sits at
+    # ``instance_root/watches`` so two agents on one machine don't share a watch dir.
+    # ``WATCH_PATH`` env overrides verbatim.
+    from infra.paths import instance_paths
 
-    candidates: list[Path] = []
+    candidates = []
     env = os.environ.get("WATCH_PATH", "").strip()
     if env:
-        candidates.append(Path(env))
-    candidates.append(Path("/sandbox/watches"))
-    candidates.append(Path.home() / ".protoagent" / "watches")
-    for raw in candidates:
-        path = scope_leaf(raw)
+        candidates.append(Path(env).expanduser())
+    candidates.append(instance_paths().store("watches"))
+    for path in candidates:
         try:
             path.mkdir(parents=True, exist_ok=True)
+            # confirm writable
             probe = path / ".write_probe"
             probe.touch()
             probe.unlink()
             return path
         except OSError:
             continue
-    fallback = scope_leaf(Path(tempfile.gettempdir()) / "protoagent_watches")
+    # Last resort: a temp dir (keeps the server alive even if nothing is writable).
+    fallback = Path(tempfile.gettempdir()) / "protoagent_watches"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 

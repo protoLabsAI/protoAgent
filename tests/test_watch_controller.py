@@ -172,3 +172,12 @@ def test_clear(tmp_path):
     _ok, _m, w = c.create(condition="c", verifier={"type": "plugin", "check": "p:v"})
     assert c.clear(w.id) is True
     assert c.clear(w.id) is False
+
+
+def test_store_resolves_base_without_args(tmp_path, monkeypatch):
+    # Exercises the REAL _resolve_base (the infra.paths API) — the path a base_dir-injecting
+    # test skips, and that live-smoke caught (a stale scope_leaf import). WATCH_PATH keeps it
+    # off the shared instance dir.
+    monkeypatch.setenv("WATCH_PATH", str(tmp_path / "w"))
+    s = WatchStore()
+    assert s._base == (tmp_path / "w")
