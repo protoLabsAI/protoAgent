@@ -94,8 +94,10 @@ outside the scope.
 
 A turn flagged **incognito** leaves no memory trail and reads none in: the
 session-summary write is skipped (nothing to show up in later threads'
-`<prior_sessions>` digest), and the digest / hot-memory / RAG injection is skipped
-for that turn (the skill index still injects — it's capability, not memory).
+`<prior_sessions>` digest), the digest / hot-memory / RAG injection is skipped
+for that turn (the skill index still injects — it's capability, not memory), and
+the retire-time conversation harvest skips the thread (its transcript is never
+summarized into the knowledge store).
 
 - **`POST /api/chat`** — pass `"incognito": true` in the request body (additive;
   default `false`).

@@ -21,10 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [the knowledge guide](docs/guides/knowledge.md#memory-delivery-controls-adr-0069).
 - **Incognito threads** (ADR 0069 D3b) — a per-message `incognito` flag
   (`POST /api/chat` body field, or A2A message metadata on the streaming path)
-  that skips BOTH session-summary persistence and memory injection (prior-session
-  digest, hot memory, RAG) for that turn; the skill index still injects. Carried
-  through graph state (`ProtoAgentState.incognito`), stamped explicitly each turn.
-  Backend only — the console thread toggle rides a later lane.
+  that skips session-summary persistence, memory injection (prior-session
+  digest, hot memory, RAG) for that turn, and the retire-time conversation
+  harvest (the transcript never enters the knowledge store); the skill index
+  still injects. Carried through graph state (`ProtoAgentState.incognito`),
+  stamped explicitly each turn. Backend only — the console thread toggle rides
+  a later lane.
 - **Per-turn memory-injection record** (ADR 0069 D6) — every model call that had
   memory auto-injected appends an id-attributed row (digest session ids, hot-memory
   chunk ids, RAG chunk ids, approx tokens) to an instance-scoped SQLite log

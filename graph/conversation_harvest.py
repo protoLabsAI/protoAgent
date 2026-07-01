@@ -87,8 +87,9 @@ async def harvest_thread(
     Both carry ``namespace`` for later per-project scoping.
 
     Returns the summary chunk id, or None when there's nothing to harvest (no
-    store, no checkpoint, empty transcript, or a summarizer failure). Never
-    raises — harvesting is best-effort and must not block retirement.
+    store, no checkpoint, incognito thread — ADR 0069 D3b, empty transcript,
+    or a summarizer failure). Never raises — harvesting is best-effort and
+    must not block retirement.
     """
     if knowledge_store is None:
         return None
@@ -96,7 +97,17 @@ async def harvest_thread(
         tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
         if tup is None:
             return None
-        messages = (tup.checkpoint or {}).get("channel_values", {}).get("messages", [])
+        channel_values = (tup.checkpoint or {}).get("channel_values", {})
+        # Incognito thread (ADR 0069 D3b): "no memory trail" must hold at
+        # retirement too — without this gate the retire sweep (harvest_enabled
+        # defaults ON) would summarize the transcript into the knowledge store,
+        # where RAG re-injects it into later prompts. Same per-message
+        # semantics as _persist_session: the channel holds the last stamped
+        # value, so a thread is as incognito as its latest turn.
+        if channel_values.get("incognito"):
+            log.info("[harvest] thread %s is incognito — skipping harvest", thread_id)
+            return None
+        messages = channel_values.get("messages", [])
         transcript = render_transcript(messages)
         if not transcript.strip():
             return None
