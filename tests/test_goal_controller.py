@@ -142,3 +142,62 @@ async def test_checklist_extracted_and_carried(tmp_path):
     decision = await c.evaluate("s", last_text="progress <goal_plan>1. do A\n2. do B</goal_plan> more")
     assert "do A" in c.active_goal("s").checklist
     assert "do A" in decision.message
+
+
+# --- Phase 1 chat trust-gate (#1407) ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_untrusted_chat_refuses_shell_and_eval_verifiers(tmp_path):
+    # command/test/ci shell out; data+expr is a restricted-eval sink — all refused from a
+    # chat message (trusted=False), and NOTHING is set.
+    c = _ctrl(tmp_path)
+    dangerous = [
+        '/goal {"condition": "x", "verifier": {"type": "command", "command": "rm -rf /"}}',
+        '/goal {"condition": "x", "verifier": {"type": "test", "command": "pytest"}}',
+        '/goal {"condition": "x", "verifier": {"type": "ci", "pr": 1}}',
+        '/goal {"condition": "x", "verifier": {"type": "data", "path": "/x", "expr": "1"}}',
+    ]
+    for msg in dangerous:
+        reply = await c.parse_control(msg, "s", trusted=False)
+        assert "can't be" in reply.lower(), msg
+        assert c.active_goal("s") is None, msg
+
+
+@pytest.mark.asyncio
+async def test_untrusted_chat_allows_declarative_verifiers(tmp_path):
+    c = _ctrl(tmp_path)
+    ok = [
+        "/goal make the build green",  # fuzzy → llm
+        '/goal {"condition": "x", "verifier": {"type": "plugin", "check": "p:v"}}',
+        '/goal {"condition": "x", "verifier": {"type": "data", "path": "/x", "contains": "ok"}}',
+    ]
+    for msg in ok:
+        reply = await c.parse_control(msg, "s", trusted=False)
+        assert "Goal set" in reply, msg
+        c._store.clear("s")
+
+
+@pytest.mark.asyncio
+async def test_trusted_default_keeps_full_verifier_access(tmp_path):
+    # The operator/programmatic path (trusted=True, the default) is unchanged — Phase 2
+    # threads a real trust signal into the chat call sites.
+    c = _ctrl(tmp_path)
+    reply = await c.parse_control(
+        '/goal {"condition": "x", "verifier": {"type": "command", "command": "exit 0"}}', "s"
+    )
+    assert "Goal set" in reply
+    assert c.active_goal("s").verifier["type"] == "command"
+
+
+def test_chat_verifier_allow_list():
+    allowed = GoalController._chat_verifier_allowed
+    assert allowed({"type": "plugin", "check": "p:v"})
+    assert allowed({"type": "llm"})
+    assert allowed({})  # no type → defaults to llm
+    assert allowed({"type": "data", "contains": "ok"})
+    assert not allowed({"type": "data", "expr": "1"})
+    assert not allowed({"type": "data", "contains": "ok", "expr": "1"})  # expr present → refused
+    assert not allowed({"type": "command", "command": "x"})
+    assert not allowed({"type": "test"})
+    assert not allowed({"type": "ci"})

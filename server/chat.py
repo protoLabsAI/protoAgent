@@ -998,7 +998,7 @@ async def _chat_langgraph_stream(
             # Goal control messages (/goal ...) short-circuit the turn: set /
             # status / clear a goal and return the reply without running the graph.
             if STATE.goal_controller is not None:
-                reply = await STATE.goal_controller.parse_control(message, session_id)
+                reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
                 if reply is not None:
                     yield ("done", reply)
                     return
@@ -1167,7 +1167,7 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
         try:
             # Goal control messages short-circuit (set / status / clear).
             if STATE.goal_controller is not None:
-                reply = await STATE.goal_controller.parse_control(message, session_id)
+                reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
                 if reply is not None:
                     return [{"role": "assistant", "content": reply}]
 

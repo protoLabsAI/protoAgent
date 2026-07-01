@@ -57,7 +57,10 @@ class GoalController:
 
     # --- control messages --------------------------------------------------
 
-    async def parse_control(self, message: str, session_id: str) -> str | None:
+    async def parse_control(self, message: str, session_id: str, *, trusted: bool = True) -> str | None:
+        # `trusted` gates which verifier types a SET may use (Phase 1 trust-gate, #1407).
+        # The server's chat entry points MUST pass trusted=False; the default stays True
+        # for the operator/programmatic path (and backward-compat) that Phase 2 re-enables.
         if not isinstance(message, str):
             return None
         stripped = message.strip()
@@ -83,6 +86,19 @@ class GoalController:
                 '`/goal {"condition": "...", "verifier": {"type": "command", '
                 '"command": "pytest -q"}}`.'
             )
+        # Phase 1 trust-gate (#1407): a /goal CHAT message is untrusted — both server call
+        # sites pass trusted=False, because a federation peer / API client shares the
+        # operator bearer today, so we can't tell them apart. Refuse the code-exec verifiers
+        # from chat for EVERYONE: command/test/ci shell out on the host, and a `data` `expr`
+        # is a restricted-eval sink + arbitrary file read (ADR 0028 D3). Only the declarative
+        # types pass — `plugin`, `llm` (fuzzy), and `data` with a plain `contains`.
+        if not trusted and not self._chat_verifier_allowed(spec):
+            return (
+                "For safety, a `command`, `test`, `ci`, or `data`+`expr` verifier can't be "
+                "set from a chat message. Use a fuzzy goal (`/goal <text>`), a `plugin` "
+                "verifier, or a `data` verifier with `contains`. (Shell/eval verifiers are "
+                "operator-only.)"
+            )
         state = GoalState(
             session_id=session_id,
             condition=condition,
@@ -94,6 +110,20 @@ class GoalController:
         )
         self._store.set(state)
         return f"Goal set. {state.status_line()}"
+
+    @staticmethod
+    def _chat_verifier_allowed(verifier: dict) -> bool:
+        """Allow-list for a verifier set from an (untrusted) /goal CHAT message (Phase 1,
+        #1407). Gate by the complement (R2): allow only the declarative, no-code-exec
+        types — `plugin`, `llm`, and `data` restricted to a plain `contains` substring.
+        Everything else (command/test/ci, and `data` carrying an `expr`) shells out or hits
+        a restricted-eval sink and stays operator-only."""
+        vtype = (verifier or {}).get("type", "llm")
+        if vtype in ("plugin", "llm"):
+            return True
+        if vtype == "data":
+            return "expr" not in verifier and "contains" in verifier
+        return False
 
     # Verifier types safe to set PROGRAMMATICALLY (agent / plugin / REST). Only
     # `plugin` qualifies (ADR 0028 D3): command/test/ci shell out, and `data`

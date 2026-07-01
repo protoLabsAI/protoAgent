@@ -38,10 +38,16 @@ Send a control message through any channel (A2A, the React console chat, OpenAI-
   ```
   /goal the README documents every config block
   ```
-- **Testable goal** (JSON spec):
+- **Testable goal** (JSON spec) — from a chat message you can use the *declarative*
+  verifiers (`plugin`, or `data` with a `contains` substring):
   ```
-  /goal {"condition": "unit tests pass", "verifier": {"type": "test", "command": "python -m pytest -q"}}
+  /goal {"condition": "migration recorded", "verifier": {"type": "data", "path": "/sandbox/state.json", "contains": "migration complete"}}
   ```
+
+  > **Shell/eval verifiers are operator-only.** `command`, `test`, `ci`, and `data`+`expr`
+  > execute on the host or hit a restricted-eval sink, so they are **refused from a `/goal`
+  > chat message** (a federation peer / API client shares the operator bearer today, #1407).
+  > A dedicated operator set-channel is the Phase 2 plan.
 - **Monitor goal** (ADR 0030) — for a metric driven by an *external* process (a
   background engine, a training run, a deployment), not the agent's turns. Add
   `"mode": "monitor"`: the agent **isn't** re-invoked, the goal **never exhausts**,
