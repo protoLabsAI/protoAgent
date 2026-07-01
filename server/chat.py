@@ -1333,11 +1333,17 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
             goal_active = (
                 STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
             )
-            with goal_turn(goal_active):
-                result = await STATE.graph.ainvoke(
-                    {"messages": [HumanMessage(content=message)], "session_id": session_id, **_model_extra},
-                    config=config,
-                )
+            # Sharing the streaming thread means sharing its serialization contract:
+            # every other writer to `a2a:{sid}` (the streaming turn driver,
+            # compact_session, rewind_session) holds the per-thread lock — an
+            # unlocked graph turn here could lost-update a concurrent one (e.g. the
+            # desktop /api/chat fallback racing a console /compact on the same tab).
+            async with _thread_lock(config["configurable"]["thread_id"]):
+                with goal_turn(goal_active):
+                    result = await STATE.graph.ainvoke(
+                        {"messages": [HumanMessage(content=message)], "session_id": session_id, **_model_extra},
+                        config=config,
+                    )
             raw = _last_ai(result)
             response = extract_output(raw)
 
@@ -1378,15 +1384,20 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     # reuse `config`. Same shared helper as the streaming path (no drift).
                     cont_config = _goal_continuation_config(config, decision.state)
 
-                    with goal_turn():
-                        result = await STATE.graph.ainvoke(
-                            {
-                                "messages": [HumanMessage(content=decision.message)],
-                                "session_id": session_id,
-                                **_model_extra,
-                            },
-                            config=cont_config,
-                        )
+                    # Lock the BASE thread (mirrors the streaming driver, which holds it
+                    # across the whole goal loop): same-session iterations write `config`'s
+                    # thread directly; fresh-context ones still exclude compact/rewind/
+                    # streaming turns keyed on the base id.
+                    async with _thread_lock(config["configurable"]["thread_id"]):
+                        with goal_turn():
+                            result = await STATE.graph.ainvoke(
+                                {
+                                    "messages": [HumanMessage(content=decision.message)],
+                                    "session_id": session_id,
+                                    **_model_extra,
+                                },
+                                config=cont_config,
+                            )
                     nxt = extract_output(_last_ai(result))
                     if nxt:
                         response = nxt
