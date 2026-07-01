@@ -51,3 +51,51 @@ test("layered knowledge shows tier badges and shares / unshares the commons", as
   await dialog.getByRole("button", { name: "Unshare", exact: true }).click();
   await expect(surface.getByLabel("unshare entry 11", { exact: true })).toHaveCount(0);
 });
+
+test("Shift+click deletes a chunk immediately, plain click still confirms (#1582)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByRole("button", { name: "Knowledge" }).click();
+  const surface = page.getByTestId("knowledge-store");
+  await expect(surface).toBeVisible();
+
+  const del12 = surface.getByLabel("delete entry 12", { exact: true });
+  await expect(del12).toBeVisible();
+
+  // Plain click → the confirmation dialog (safe path preserved). Back out; chunk stays.
+  await del12.click();
+  const confirm = page.getByRole("dialog", { name: "Delete this knowledge entry?" });
+  await expect(confirm).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirm).toHaveCount(0);
+  await expect(del12).toBeVisible();
+
+  // Shift+click → no dialog, chunk removed immediately (chat-tab quick-delete parity).
+  await del12.click({ modifiers: ["Shift"] });
+  await expect(page.getByRole("dialog", { name: "Delete this knowledge entry?" })).toHaveCount(0);
+  await expect(surface.getByLabel("delete entry 12", { exact: true })).toHaveCount(0);
+});
+
+test("groups a multi-chunk source into a collapsible section (#1575)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByRole("button", { name: "Knowledge" }).click();
+  const surface = page.getByTestId("knowledge-store");
+  await expect(surface).toBeVisible();
+
+  // The 3-chunk YouTube source collapses under one header (title + count), closed by default.
+  const header = surface.getByRole("button", { name: /Hiking with Kevin/ });
+  await expect(header).toBeVisible();
+  await expect(header).toContainText("3 chunks");
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(surface.getByText("Switchbacks keep the grade walkable.")).toHaveCount(0); // hidden while collapsed
+
+  // Loose chunks (single/no source) still render flat — no regression.
+  await expect(surface.getByText("Releases are cut manually via workflow_dispatch.")).toBeVisible();
+
+  // Clicking the header expands it → the chunks render; clicking again collapses.
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(surface.getByText("Switchbacks keep the grade walkable.")).toBeVisible();
+  await expect(surface.getByText("The summit view pays off the climb.")).toBeVisible();
+  await header.click();
+  await expect(surface.getByText("Switchbacks keep the grade walkable.")).toHaveCount(0);
+});
