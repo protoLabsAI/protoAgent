@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it warns only when another live process shares *this* instance's data root (a genuine
   clobber, e.g. the same instance run twice), and stays silent for box-only co-residents with
   distinct `PROTOAGENT_INSTANCE` ids.
+- **Setup wizard: the archetype bundle-install result is no longer swallowed.** Finishing setup
+  unmounts the wizard, so the "tools are ready" / "couldn't auto-enable — turn them on in
+  Settings ▸ Plugins" outcome now shows as a **toast** (survives the unmount) instead of an
+  in-wizard message the user never saw.
+- **Setup wizard: picking a persona-less archetype no longer blanks the editor.** A bundle
+  archetype whose manifest declares no inline `soul:` now seeds the persona step with the base
+  SOUL as a fallback, rather than clearing the SOUL textarea.
 
 ## [0.78.0] - 2026-07-01
 
