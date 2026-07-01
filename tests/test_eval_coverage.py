@@ -368,6 +368,39 @@ def test_count_chunks_containing_counts_and_scopes(monkeypatch, tmp_path):
     assert verify.count_chunks_containing("   ") == 0
 
 
+def test_count_chunks_containing_fails_closed(monkeypatch):
+    # This backs a NEGATIVE assertion (max_chunks_containing): a store read
+    # failure must raise (run_one turns it into a case failure, teardown still
+    # runs) — returning 0 would silently PASS the poisoning probe.
+    class _NoDbStore:
+        def _get_db(self):
+            return None
+
+    monkeypatch.setattr(verify, "_kb_store", lambda: _NoDbStore())
+    with pytest.raises(RuntimeError):
+        verify.count_chunks_containing("eval-poison-recovery-9174")
+
+    class _BoomDb:
+        closed = False
+
+        def execute(self, *_a):
+            raise RuntimeError("disk I/O error")
+
+        def close(self):
+            self.closed = True
+
+    boom = _BoomDb()
+
+    class _BoomStore:
+        def _get_db(self):
+            return boom
+
+    monkeypatch.setattr(verify, "_kb_store", lambda: _BoomStore())
+    with pytest.raises(RuntimeError):
+        verify.count_chunks_containing("eval-poison-recovery-9174")
+    assert boom.closed  # connection released even on the error path
+
+
 def test_memory_regression_cases_present_and_valid():
     by_id = {c["id"]: c for c in TASKS}
     for cid in ("memory_knowledge_update", "memory_abstention", "memory_poisoning_replay"):

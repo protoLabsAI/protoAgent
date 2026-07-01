@@ -164,13 +164,18 @@ def count_chunks_containing(text: str, *, domain: str | None = None) -> int:
     Empty / whitespace-only ``text`` returns 0 rather than building a
     match-everything ``LIKE '%%'`` predicate. Reuses the store's LIKE escaping
     so ``%``/``_`` in a marker stay literal, mirroring ``find_chunk_containing``.
+
+    Fails CLOSED: this backs a *negative* assertion (``max_chunks_containing``),
+    so an unreadable store must fail the case rather than count 0 and silently
+    pass a poisoning probe. A raise here becomes a case failure with the reason
+    (``run_one`` catches it) and the case's teardown still runs.
     """
     if not text or not text.strip():
         return 0
     store = _kb_store()
     db = store._get_db()
     if db is None:
-        return 0
+        raise RuntimeError("count_chunks_containing: knowledge store unavailable")
     try:
         from knowledge.store import _LIKE_ESCAPE, _escape_like
 
@@ -182,9 +187,6 @@ def count_chunks_containing(text: str, *, domain: str | None = None) -> int:
             params.append(domain)
         row = db.execute(sql, params).fetchone()
         return int(row[0]) if row else 0
-    except Exception as exc:  # noqa: BLE001 — a read failure must never crash a run
-        log.warning("[verify] count_chunks_containing failed: %s", exc)
-        return 0
     finally:
         db.close()
 

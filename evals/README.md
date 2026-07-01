@@ -64,7 +64,7 @@ python -m evals.compare results/run-OLD.json results/run-NEW.json
 | `goal` | Goal mode: set a goal, trigger the loop, assert the resulting goal state + footer |
 | `subagent` | Lead delegates open-ended work (`expected_any_tools`: `task` / `run_workflow`) |
 | `workflow` | A recipe runs end-to-end via `/api/workflows/{name}/run`; assert on its output **and** (optionally) on tool-firing — `expected_tools` / `expected_any_tools` check the audit log, so a case can require a step to have actually called a tool (e.g. a quant step that backtests, not one that only describes a backtest) |
-| `memory-regression` | Memory delivery-layer probes ([ADR 0069](../adr/0069-memory-delivery-layer.md) D10): a knowledge-update case (seed a fact, seed its supersede, assert the newer value wins and the stale one is not restated — `forbidden_patterns`), an abstention case (ask about an adjacent-but-absent fact, judge that it declines rather than fabricates — `verify_rubric`), and a poisoning replay (ingest a doc with an embedded instruction payload, then a later benign turn; assert both the behavioral condition — the payload token never appears — and the store-level one — `verify_kb.max_chunks_containing` bounds the marker's row count so the "save a memory that …" payload never persists) |
+| `memory-regression` | Memory delivery-layer probes ([ADR 0069](../docs/adr/0069-memory-delivery-layer.md) D10): a knowledge-update case (seed a fact, seed its supersede, assert the newer value wins and the stale one is not restated — `forbidden_patterns`), an abstention case (ask about an adjacent-but-absent fact, judge that it declines rather than fabricates — `verify_rubric`), and a poisoning replay (ingest a doc with an embedded instruction payload, then a later benign turn; assert both the behavioral condition — the payload token never appears — and the store-level one — `verify_kb.max_chunks_containing` bounds the marker's row count so the "save a memory that …" payload never persists) |
 
 ## File layout
 
@@ -77,7 +77,7 @@ evals/
   sweep.py      Boot one agent per model + run the suite → model × category matrix
   report.py     Aggregate all reports → leaderboard + per-model trend over time
   compare.py    Diff two reports (pass-rate delta, per-category, flips)
-  tasks.json    Cases — 15 covering the starter tools end-to-end
+  tasks.json    Cases — the suite, one entry per case (see the category table above)
   results/      Per-run reports (gitignored)
 ```
 
