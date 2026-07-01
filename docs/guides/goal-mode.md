@@ -57,6 +57,22 @@ Send a control message through any channel (A2A, the React console chat, OpenAI-
   /goal {"condition": "treasury ≥ 1,000,000", "mode": "monitor", "verifier": {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1000000}}}
   ```
   (Default is `"mode": "drive"` — the agent *is* the work, the bounded loop above.)
+  A monitor goal otherwise ends only on **achieved** or **cleared**; two optional
+  fields (ADR 0030 D5) bound it and surface trouble:
+  - `"deadline"` — an **ISO-8601 timestamp** (`"2026-07-01T00:00:00"`) or a raw
+    **epoch-seconds** number. If the goal isn't met by the deadline, the next
+    out-of-band check finishes it with terminal status **`expired`** — a
+    *non-achieved* terminal, so it fires `on_failed` + the `goal.failed` bus event
+    just like `exhausted`/`unachievable`.
+  - `"stall_after"` — an integer **N**. After N consecutive checks with **unchanged**
+    verifier evidence, a **`on_stalled`** hook fires (register it with
+    `register_goal_hook(on_stalled=…)`) — a signal that the external engine stopped
+    moving. It does **not** end the goal (the objective stays alive), fires **once per
+    stall episode**, and re-arms when the evidence changes. It also publishes a
+    best-effort `goal.stalled` bus event (`{session_id, condition, stall_streak, reason}`).
+  ```
+  /goal {"condition": "treasury ≥ 1,000,000", "mode": "monitor", "deadline": "2026-07-01T00:00:00", "stall_after": 5, "verifier": {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1000000}}}
+  ```
 - **Per-goal patience:** add `"no_progress_limit": N` to widen/narrow one goal's
   no-progress tolerance without changing the global default.
 - **Status:** `/goal`

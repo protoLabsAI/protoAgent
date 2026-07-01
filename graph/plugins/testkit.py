@@ -220,8 +220,8 @@ class FakeRegistry:
     def register_goal_verifier(self, name: str, fn) -> None:
         self.verifiers[name] = fn
 
-    def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
-        self.goal_hooks.append((on_achieved, on_failed))
+    def register_goal_hook(self, *, on_achieved=None, on_failed=None, on_stalled=None) -> None:
+        self.goal_hooks.append((on_achieved, on_failed, on_stalled))
 
     def register_knowledge_store(self, name: str, factory) -> None:
         self.knowledge_stores[name] = factory

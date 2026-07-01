@@ -75,7 +75,7 @@ class GoalController:
             return "Goal cleared." if existed else "No active goal to clear."
 
         # /goal {json}  or  /goal <free text>  → set
-        spec, condition, max_iters, no_progress, mode, fresh_context = self._parse_set(rest)
+        spec, condition, max_iters, no_progress, mode, fresh_context, deadline, stall_after = self._parse_set(rest)
         if condition is None:
             return (
                 "Could not parse goal. Use `/goal <text>` or "
@@ -103,6 +103,8 @@ class GoalController:
             fresh_context=fresh_context,
             max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress,  # per-goal patience (ADR 0030 D4); None → config
+            deadline=deadline,  # monitor deadline → expired (ADR 0030 D5)
+            stall_after=stall_after,  # monitor stall signal → on_stalled (ADR 0030 D5)
         )
         self._store.set(state)
         return f"Goal set. {state.status_line()}"
@@ -134,6 +136,8 @@ class GoalController:
         max_iterations: int | None = None,
         no_progress_limit: int | None = None,
         mode: str = "drive",
+        deadline: float | None = None,
+        stall_after: int | None = None,
     ) -> tuple[bool, str]:
         """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
         Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
@@ -157,6 +161,8 @@ class GoalController:
             mode=("monitor" if mode == "monitor" else "drive"),  # ADR 0030 (still plugin-gated)
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress_limit,  # per-goal patience (ADR 0030 D4)
+            deadline=deadline,  # monitor deadline → expired (ADR 0030 D5)
+            stall_after=stall_after,  # monitor stall signal → on_stalled (ADR 0030 D5)
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -195,23 +201,66 @@ class GoalController:
         return (True, "goal will stop after this turn (flagged unachievable).")
 
     def _parse_set(self, rest: str):
-        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None, mode, fresh_context)."""
+        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None,
+        mode, fresh_context, deadline|None, stall_after|None)."""
         if rest.lstrip().startswith("{"):
             try:
                 data = json.loads(rest)
             except json.JSONDecodeError:
-                return ({}, None, None, None, "drive", False)
+                return ({}, None, None, None, "drive", False, None, None)
             condition = data.get("condition")
             if not condition:
-                return ({}, None, None, None, "drive", False)
+                return ({}, None, None, None, "drive", False, None, None)
             verifier = data.get("verifier") or {"type": "llm"}
             if "type" not in verifier:
                 verifier["type"] = "llm"
             mode = "monitor" if data.get("mode") == "monitor" else "drive"
             fresh_context = bool(data.get("fresh_context", False))
-            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), mode, fresh_context)
+            # Monitor termination + stall (ADR 0030 D5); plain data (not verifiers), so the
+            # Phase 1 trust-gate is unaffected.
+            deadline = self._parse_deadline(data.get("deadline"))
+            stall_after = self._parse_stall_after(data.get("stall_after"))
+            return (
+                verifier,
+                condition,
+                data.get("max_iterations"),
+                data.get("no_progress_limit"),
+                mode,
+                fresh_context,
+                deadline,
+                stall_after,
+            )
         # plain text → fuzzy goal judged by the llm verifier
-        return ({"type": "llm"}, rest, None, None, "drive", False)
+        return ({"type": "llm"}, rest, None, None, "drive", False, None, None)
+
+    @staticmethod
+    def _parse_deadline(value) -> float | None:
+        """A monitor-goal deadline: a number = epoch seconds, or an ISO-8601 string
+        (``datetime.fromisoformat``) → epoch seconds. Unparseable → None (no deadline)."""
+        if value is None:
+            return None
+        if isinstance(value, bool):  # bool is an int subclass — reject it explicitly
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            from datetime import datetime
+
+            try:
+                return datetime.fromisoformat(value.strip()).timestamp()
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _parse_stall_after(value) -> int | None:
+        """A monitor-goal stall threshold: a positive int (checks) or None."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     # --- evaluation --------------------------------------------------------
 
@@ -238,11 +287,52 @@ class GoalController:
         # Monitor goals (ADR 0030): an external process drives the metric, not the
         # agent's turns — so on not-met there's nothing for the agent to do. Record
         # the check and wait for the next one; no continuation, no iteration/no-
-        # progress bookkeeping, no exhaustion. It ends only on achieved / cleared
-        # (/ a future deadline). This is what closes ADR-0028 D6.
+        # progress bookkeeping, no exhaustion. It ends only on achieved / cleared /
+        # a deadline (→ expired), with an optional stall signal. This is what closes
+        # ADR-0028 D6 (and the ADR 0030 D5 slice).
         if state.mode == "monitor":
             from time import time
 
+            from graph.goals.hooks import fire_stall_hook
+
+            # (a) Deadline (ADR 0030 D5): a monitor goal that hasn't been met by its
+            # deadline finishes `expired` — a NON-achieved terminal, so it fires on_failed
+            # + the goal.failed bus event like exhausted/unachievable.
+            if state.deadline is not None and time() >= state.deadline:
+                return await self._finish(
+                    state, "expired", "deadline passed before the goal was met", evidence=result.evidence
+                )
+
+            # (b) Stall signal (ADR 0030 D5): after `stall_after` consecutive checks whose
+            # verifier reason+evidence didn't change, fire the on_stalled hook ONCE per stall
+            # episode — WITHOUT ending the goal (the external engine stopped moving, but the
+            # objective lives). Re-arm when the evidence changes.
+            unchanged = result.reason == state.last_reason and result.evidence == state.last_evidence
+            state.stall_streak = (state.stall_streak + 1) if unchanged else 0
+            if not unchanged:
+                state.stalled_notified = False
+            if state.stall_after and state.stall_streak >= state.stall_after and not state.stalled_notified:
+                state.stalled_notified = True
+                await fire_stall_hook(state)
+                # Best-effort bus signal (mirrors the goal.iteration publish below) so a
+                # console/plugin can react to a stalled monitor goal without a hook.
+                try:
+                    from graph.plugins.host import HOST
+
+                    if HOST.publish:
+                        HOST.publish(
+                            "goal.stalled",
+                            {
+                                "session_id": getattr(state, "session_id", "") or "",
+                                "condition": getattr(state, "condition", "") or "",
+                                "stall_streak": state.stall_streak,
+                                "reason": result.reason,
+                            },
+                        )
+                except Exception:  # noqa: BLE001 — a bus hiccup must never break the goal loop
+                    pass
+
+            # (c) Record the check and wait for the next one.
             state.last_reason = result.reason
             state.last_evidence = result.evidence
             state.last_checked = time()
@@ -381,7 +471,7 @@ class GoalController:
                 )
         except Exception:  # noqa: BLE001
             log.debug("[goals] goal.* bus emit failed", exc_info=True)
-        glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗"}.get(status, "•")
+        glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗", "expired": "⌛"}.get(status, "•")
         return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 
     def _continuation(self, state: GoalState, result) -> str:

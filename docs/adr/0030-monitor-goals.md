@@ -107,12 +107,24 @@ Make it per-goal too (`GoalState.no_progress_limit`, defaulting to the config), 
 `drive` goal can widen its own patience without changing the global default. Tiny, additive,
 useful regardless of D1–D3.
 
-### D5 — stall signal (optional)
+### D5 — deadline + stall signal (BUILT)
 
-A monitor goal may set an optional `stall_after` (N checks with unchanged evidence) that
-fires an **`on_stalled`** hook — *without* ending the goal. This surfaces "the background
-engine stopped earning" as an actionable signal (notify, record a finding, set a remediation
-goal) while keeping the objective alive. Strictly optional; omit in the first slice.
+A monitor goal may set two optional plain-data fields:
+
+- **`deadline`** (ISO-8601 string or epoch seconds) — a hard stop. When an out-of-band
+  check finds the goal still unmet at/after the deadline, it finishes **`expired`** — a
+  *non-achieved* terminal, so it fires `on_failed` + the `goal.failed` bus event like
+  `exhausted`/`unachievable`.
+- **`stall_after`** (N checks with unchanged verifier evidence) — fires a new
+  **`on_stalled`** hook *without* ending the goal, surfacing "the background engine stopped
+  earning" as an actionable signal (notify, record a finding, set a remediation goal) while
+  keeping the objective alive. Fires **once per stall episode** (re-armed when the evidence
+  changes) and also publishes a best-effort `goal.stalled` bus event.
+
+Both live on `GoalState` (`deadline`, `stall_after`, plus the `stall_streak` /
+`stalled_notified` bookkeeping) and are handled in `controller.evaluate`'s monitor branch.
+Since they're data (not verifiers), the ADR-0028 D3 safe-programmatic-set gate and the
+Phase 1 chat trust-gate are unaffected.
 
 ## Consequences
 
@@ -152,7 +164,12 @@ goal) while keeping the objective alive. Strictly optional; omit in the first sl
 - **PR2** — the `monitor` disposition + the scheduler evaluate tick (D1, D2.1, D3). The core:
   makes long-horizon objectives work end-to-end via ADR-0028 hooks.
 - **PR3** — `controller.evaluate_now(session_id)` for prompt event-driven detection (D2.2).
-- **Future** — `on_stalled` / `deadline → expired` (D5).
+- **PR4 — BUILT** — the D5 slice: monitor-goal `deadline → expired` (a non-achieved
+  terminal firing `on_failed` + `goal.failed`) and `stall_after` → a new `on_stalled`
+  hook (fired once per stall episode without ending the goal; re-armed when the
+  verifier evidence changes; also emits a best-effort `goal.stalled` bus event).
+  Both are plain data fields on the goal spec (`deadline` ISO-8601/epoch, `stall_after`
+  int) — not verifiers, so the Phase 1 chat trust-gate is unaffected.
 
 ## Reference implementation
 

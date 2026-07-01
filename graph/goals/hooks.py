@@ -17,7 +17,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# Each entry: {"plugin_id", "on_achieved": fn|None, "on_failed": fn|None}.
+# Each entry: {"plugin_id", "on_achieved": fn|None, "on_failed": fn|None, "on_stalled": fn|None}.
 _GOAL_HOOKS: list[dict] = []
 
 
@@ -40,3 +40,22 @@ async def fire_goal_hooks(status: str, state) -> None:
                 await result
         except Exception:  # noqa: BLE001 — a bad hook must not break the goal loop
             log.exception("[goal] %s hook (plugin %s) failed", key, hook.get("plugin_id"))
+
+
+async def fire_stall_hook(state) -> None:
+    """Fire the ``on_stalled`` hook for a monitor goal that stopped moving (ADR 0030 D5).
+
+    Unlike :func:`fire_goal_hooks`, this does **not** end the goal — it's a signal that the
+    external engine stopped earning (the verifier evidence hasn't changed for ``stall_after``
+    checks), fired once per stall episode so a plugin can notify / record a finding / set a
+    remediation goal while the objective stays alive. A hook that raises is logged and swallowed."""
+    for hook in _GOAL_HOOKS:
+        fn = hook.get("on_stalled")
+        if fn is None:
+            continue
+        try:
+            result = fn(state)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — a bad hook must not break the goal loop
+            log.exception("[goal] on_stalled hook (plugin %s) failed", hook.get("plugin_id"))

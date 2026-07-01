@@ -66,7 +66,7 @@ class PluginRegistry:
         self.mcp_servers: list = []  # factories: config -> entry dict | None
         self.thread_id_resolver = None  # (request_metadata, session_id) -> str (#571)
         self.goal_verifiers: dict = {}  # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
-        self.goal_hooks: list = []  # {on_achieved, on_failed} terminal reactions (ADR 0028)
+        self.goal_hooks: list = []  # {on_achieved, on_failed, on_stalled} reactions (ADR 0028 + 0030 D5)
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
         self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
@@ -218,19 +218,24 @@ class PluginRegistry:
         key = name if ":" in name else f"{self.plugin_id}:{name}"
         self.goal_verifiers[key] = fn
 
-    def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
-        """React when a goal reaches a terminal state (ADR 0028 D4). ``on_achieved``
-        / ``on_failed`` take the terminal ``GoalState`` (sync or async) — push a
-        notification, record a finding, or set the next goal. A raising hook is
-        logged + swallowed."""
-        if not (callable(on_achieved) or callable(on_failed)):
-            log.warning("[plugins] %s: register_goal_hook needs on_achieved and/or on_failed", self.plugin_id)
+    def register_goal_hook(self, *, on_achieved=None, on_failed=None, on_stalled=None) -> None:
+        """React when a goal reaches a terminal state (ADR 0028 D4) — or stalls (ADR 0030 D5).
+        ``on_achieved`` / ``on_failed`` take the terminal ``GoalState``; ``on_stalled`` (monitor
+        goals only) fires when the verifier evidence hasn't moved for ``stall_after`` checks —
+        WITHOUT ending the goal, once per stall episode. Each takes the ``GoalState`` (sync or
+        async) — push a notification, record a finding, or set the next goal. Provide ANY of the
+        three. A raising hook is logged + swallowed."""
+        if not (callable(on_achieved) or callable(on_failed) or callable(on_stalled)):
+            log.warning(
+                "[plugins] %s: register_goal_hook needs on_achieved, on_failed, and/or on_stalled", self.plugin_id
+            )
             return
         self.goal_hooks.append(
             {
                 "plugin_id": self.plugin_id,
                 "on_achieved": on_achieved if callable(on_achieved) else None,
                 "on_failed": on_failed if callable(on_failed) else None,
+                "on_stalled": on_stalled if callable(on_stalled) else None,
             }
         )
 
