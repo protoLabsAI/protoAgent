@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stripped, capped), with a path-traversal-safe id guard. The on-demand
   counterpart to the new digest below.
   ([ADR 0069](docs/adr/0069-memory-delivery-layer.md))
+- **Knowledge Base view — collapsible source grouping + Shift+click quick-delete.** Chunks
+  from the same ingested source (a YouTube transcript, a multi-page doc) now collapse under
+  one section header showing the source title, type, and chunk count — with a Collapse/Expand-all
+  toolbar toggle. Only sources with ≥2 loaded chunks group; single/sourceless chunks stay flat
+  (no regression). Open state persists per source; an active search force-expands so matches stay
+  visible. And **Shift+click** a chunk's delete button now removes it immediately (no confirm),
+  matching the chat-tab quick-delete — the plain click still confirms. (#1575, #1582)
 - **One-command install** — `curl -fsSL .../scripts/install.sh | sh` takes a fresh
   machine from zero to a running, configured protoAgent. It checks prerequisites
   (Docker + curl), pulls `ghcr.io/protolabsai/protoagent:latest`, runs it

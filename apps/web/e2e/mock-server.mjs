@@ -486,6 +486,14 @@ const server = createServer(async (req, res) => {
       knowledgeChunks.splice(i, 1); // removed from the commons
       return sendJson(res, { enabled: true, forgotten: true });
     }
+    if (req.method === "DELETE" && /^\/api\/knowledge\/chunks\/\d+$/.test(pathname)) {
+      // Actually drop the chunk so the list re-render reflects the delete (the
+      // quick-delete spec asserts it disappears). Reset via /api/__test__/knowledge/reset.
+      const id = Number(pathname.split("/").at(-1));
+      const i = knowledgeChunks.findIndex((x) => x.id === id);
+      if (i >= 0) knowledgeChunks.splice(i, 1);
+      return sendJson(res, { enabled: true, deleted: i >= 0 });
+    }
     if (pathname === "/api/settings") {
       // ADR 0047: a layer-aware save — "agent" (per-agent leaf, default) or "host"
       // (box-shared host-config.yaml). The mock just echoes which layer it wrote.

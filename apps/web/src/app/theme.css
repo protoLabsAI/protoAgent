@@ -1811,6 +1811,24 @@ textarea {
 .knowledge-chunk-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
 .knowledge-chunk-actions { display: flex; gap: 2px; }
+/* Shift held → the delete button arms red (chat-tab quick-delete parity, #1582). */
+.knowledge-del-armed, .knowledge-del-armed svg { color: var(--pl-color-danger, #e5484d); }
+
+/* Collapsible source groups in the Knowledge Base (#1575). A group is a plain
+   list item holding a full-width header button + (when open) a nested card list. */
+.kb-group { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.kb-group-header {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-raised); color: var(--fg); cursor: pointer; text-align: left;
+}
+.kb-group-header:hover { border-color: var(--border-strong); }
+.kb-group-caret { flex: none; color: var(--fg-muted); transition: transform 0.12s ease; }
+.kb-group-title {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-group-body { margin-left: 14px; }
 
 /* New/Edit skill dialog (PlaybooksSurface) — a little more space between fields than
    the knowledge inline form it grew out of. (Body padding is the app-wide
