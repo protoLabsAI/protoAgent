@@ -81,8 +81,8 @@ def test_same_session_goal_reuses_config():
 
 
 def test_fresh_context_scopes_thread_from_current_config():
-    # Streaming (a2a:) and non-streaming (chat:) bases both derive the SAME shape — the
-    # per-iteration sub-thread comes from the CURRENT thread_id (no drift), recursion_limit
+    # Any base (a2a: or a legacy chat:) derives the SAME shape — the per-iteration
+    # sub-thread comes from the CURRENT thread_id (no drift), recursion_limit
     # normalized on both.
     a2a = _goal_continuation_config({"configurable": {"thread_id": "a2a:s1"}, "recursion_limit": 200}, _goal(True, 4))
     assert a2a == {"configurable": {"thread_id": "a2a:s1:goal-iter-4"}, "recursion_limit": 200}
@@ -93,3 +93,30 @@ def test_fresh_context_scopes_thread_from_current_config():
 def test_fresh_context_missing_thread_id_falls_back():
     out = _goal_continuation_config({}, _goal(True, 2))
     assert out["configurable"]["thread_id"] == "goal:goal-iter-2"
+
+
+# --- unified thread-id prefix (ADR 0069 D4) --------------------------------------------
+
+
+async def test_nonstreaming_chat_keys_the_streaming_thread(monkeypatch):
+    """The non-streaming path (console /api/chat + OpenAI-compat) must key the SAME
+    checkpointer thread as the streaming A2A path for the same session — it used to
+    use ``chat:<sid>`` vs ``a2a:<sid>``, splitting one session into two histories."""
+    from langchain_core.messages import AIMessage
+
+    from server.chat import chat
+
+    class _Graph:
+        seen_config = None
+
+        async def ainvoke(self, payload, config=None):
+            self.seen_config = config
+            return {"messages": [AIMessage(content="ok")]}
+
+    g = _Graph()
+    monkeypatch.setattr(STATE, "graph", g, raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(STATE, "thread_id_resolver", None, raising=False)
+
+    await chat("hello", "s1")
+    assert g.seen_config["configurable"]["thread_id"] == _resolve_thread_id(None, "s1") == "a2a:s1"

@@ -84,6 +84,12 @@ def _persist_session(state: dict, trace_id: str) -> None:
         from observability import tracing
 
         session_id = tracing.current_session_id() or ""
+    if not session_id:
+        # ADR 0069 D4: no identity anywhere → skip. The old ``unknown.json``
+        # fallback pooled unrelated sessions into one file that then got
+        # injected everywhere via <prior_sessions>.
+        log.warning("[memory] no session_id resolved — skipping session persistence")
+        return
     messages_raw: list = state.get("messages", []) or []
 
     # --- Extract user-visible messages ---
@@ -160,7 +166,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
         return
 
     # --- Atomic write ---
-    filename = f"{session_id or 'unknown'}.json"
+    filename = f"{session_id}.json"
     dest = os.path.join(base, filename)
     tmp_fd = None
     tmp_path = None

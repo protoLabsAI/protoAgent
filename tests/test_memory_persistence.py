@@ -433,16 +433,18 @@ def test_persist_session_falls_back_to_contextvar_session_id(tmp_path):
     assert data["session_id"] == "ctx-sid-42"
 
 
-def test_persist_session_unknown_only_when_no_session_id_anywhere(tmp_path):
-    """With neither a state session_id nor a contextvar value, fall back to
-    the historical unknown.json so persistence still happens."""
+def test_persist_session_skips_when_no_session_id_anywhere(tmp_path):
+    """With neither a state session_id nor a contextvar value, persistence is
+    SKIPPED (ADR 0069 D4) — the old unknown.json fallback pooled unrelated
+    sessions into one file that <prior_sessions> then injected everywhere."""
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     state = {"session_id": "", "messages": [], "context": "", "captured_messages": []}
     with patch("observability.tracing.current_session_id", return_value=""):
         mod._persist_session(state, "t-none")
 
-    assert (tmp_path / "unknown.json").exists()
+    assert not (tmp_path / "unknown.json").exists()
+    assert not list(tmp_path.glob("*.json")), "no session file should be written without an id"
 
 
 # ---------------------------------------------------------------------------
