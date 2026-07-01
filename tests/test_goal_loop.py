@@ -10,8 +10,9 @@ from __future__ import annotations
 import pytest
 
 from graph import sdk
-from graph.sdk import _to_cron, start_goal_loop, stop_goal_loop
+from graph.sdk import _to_cron, run_in_session, start_goal_loop, stop_goal_loop
 from runtime.state import STATE
+from scheduler.interface import is_cron
 
 
 # ── _to_cron ─────────────────────────────────────────────────────────────────────────
@@ -168,3 +169,35 @@ def test_stop_goal_loop_without_job_id_just_clears(wired):
 
 def test_sdk_module_exposes_the_helpers():
     assert callable(sdk.start_goal_loop) and callable(sdk.stop_goal_loop)
+
+
+# ── run_in_session (goal fires → run a prompt as an agent turn) ───────────────────────
+def test_run_in_session_enqueues_a_one_shot_into_the_session(wired):
+    _ctrl, sched = wired
+    res = run_in_session("sess-9", "Summarize what just happened and open the next PR.")
+    assert res["ok"] and res["job_id"] == "job-1"
+    add = sched.added[0]
+    assert add["context_id"] == "sess-9"  # fires into the goal's OWN session
+    assert add["prompt"].startswith("Summarize")
+    assert not is_cron(add["schedule"])  # a one-shot ISO fire time, not a recurring cron
+
+
+def test_run_in_session_requires_scheduler_and_inputs(monkeypatch):
+    monkeypatch.setattr(STATE, "scheduler", None)
+    assert not run_in_session("s", "p")["ok"]  # no scheduler
+    sched = _Scheduler()
+    monkeypatch.setattr(STATE, "scheduler", sched)
+    assert not run_in_session("", "p")["ok"]  # empty session
+    assert not run_in_session("s", "  ")["ok"]  # empty prompt
+    assert sched.added == []  # nothing enqueued on bad input
+
+
+def test_run_in_session_job_id_replaces_the_pending_one_shot(wired):
+    _ctrl, sched = wired
+    run_in_session("s", "p", job_id="reaction-1")
+    assert sched.cancelled == ["reaction-1"]  # idempotent: drop any existing before re-adding
+    assert sched.added[0]["job_id"] == "reaction-1"
+
+
+def test_sdk_module_exposes_run_in_session():
+    assert callable(sdk.run_in_session)

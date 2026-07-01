@@ -251,3 +251,67 @@ def stop_goal_loop(*, session_id: str, job_id: str | None = None) -> dict:
     if job_id and STATE.scheduler is not None:
         cancelled = STATE.scheduler.cancel_job(job_id)
     return {"ok": True, "goal_cleared": cleared, "job_cancelled": cancelled}
+
+
+def run_in_session(
+    session_id: str,
+    prompt: str,
+    *,
+    delay_seconds: float = 0.0,
+    job_id: str | None = None,
+) -> dict:
+    """Enqueue ``prompt`` as a one-shot agent turn in ``session_id`` — non-blocking.
+
+    This is the primitive behind "when a goal fires, prompt the agent." Call it from a
+    goal ``on_achieved`` / ``on_failed`` hook (``registry.register_goal_hook(...)``) — or
+    any plugin event handler — with a prompt built from the terminal ``GoalState`` (its
+    ``condition`` / ``last_reason`` / ``last_evidence``), and the agent runs a follow-up
+    turn (with that session's memory and full tool set) reacting to what just happened::
+
+        async def on_achieved(goal):
+            sdk.run_in_session(
+                goal.session_id,
+                f"The goal '{goal.condition}' just completed. Evidence: {goal.last_evidence}. "
+                f"Write up a summary and open the follow-up PR.",
+            )
+        registry.register_goal_hook(on_achieved=on_achieved)
+
+    Mechanics: it schedules a **one-shot** job (an ISO fire time, not a cron) into the
+    session's context via the scheduler, so the turn runs on the normal fire path (the
+    same loopback A2A call cron ticks use) and the caller returns immediately. It NEVER
+    runs the turn inline, so it is safe to call from a goal hook / monitor tick without
+    blocking it.
+
+    Args:
+        session_id: the A2A contextId to run the turn in (e.g. ``goal.session_id``).
+        prompt: the message the agent processes as a turn.
+        delay_seconds: fire at now + this delay (default 0 → the next poll tick, ~1s).
+        job_id: a stable id so a re-call REPLACES the pending one-shot (idempotent).
+
+    Returns ``{"ok", "job_id", "fires_at", "message"}``; ``ok=False`` with a readable
+    message when the scheduler is unavailable or the inputs are bad.
+    """
+    scheduler = STATE.scheduler
+    if scheduler is None:
+        return {"ok": False, "message": "scheduler unavailable — cannot enqueue a turn"}
+    if not (session_id or "").strip():
+        return {"ok": False, "message": "session_id is required"}
+    if not (prompt or "").strip():
+        return {"ok": False, "message": "prompt is required"}
+    from datetime import UTC, datetime, timedelta
+
+    fires_at = (datetime.now(UTC) + timedelta(seconds=max(0.0, delay_seconds))).isoformat()
+    # Idempotent replace: add_job RAISES on a duplicate id (it never overwrites), so drop
+    # any pending one-shot with this id first — a re-call re-arms rather than colliding.
+    if job_id:
+        scheduler.cancel_job(job_id)
+    try:
+        job = scheduler.add_job(prompt, fires_at, job_id=job_id, context_id=session_id)
+    except ValueError as e:
+        return {"ok": False, "message": f"could not enqueue turn: {e}"}
+    return {
+        "ok": True,
+        "job_id": job.id,
+        "fires_at": fires_at,
+        "message": f"turn enqueued in session {session_id!r} (fires {'now' if delay_seconds <= 0 else f'+{delay_seconds:g}s'})",
+    }

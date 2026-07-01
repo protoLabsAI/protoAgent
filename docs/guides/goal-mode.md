@@ -92,7 +92,26 @@ A terminal goal is a **trigger**, not just a checkbox. Every finish publishes on
 Two ways to react:
 
 - **No code (any plugin / the console).** Subscribe to the topic — `registry.on("goal.achieved", …)` in a plugin, or `protoagent:subscribe` from a sandboxed view. The built-in console toast is exactly this. Because it's the bus, **nobody imports the goal system** to listen.
-- **Plugin code (richer).** `register_goal_hook(on_achieved=…, on_failed=…)` hands your plugin the terminal `GoalState` to run arbitrary logic — set the next goal (phase progression), kick a follow-up agent turn via `host.invoke`, stop a background engine, alert. This is how a fork drives an autonomous loop: *set a monitor goal → external engine runs → the cadence tick verifies → the hook advances.*
+- **Plugin code (richer).** `register_goal_hook(on_achieved=…, on_failed=…)` hands your plugin the terminal `GoalState` to run arbitrary logic — set the next goal (phase progression), **prompt the agent with a follow-up turn** (`sdk.run_in_session`, below), stop a background engine, alert. This is how a fork drives an autonomous loop: *set a monitor goal → external engine runs → the cadence tick verifies → the hook advances.*
+
+### Goal fires → run a follow-up agent turn
+
+To have the agent *act* when a goal fires — not just record a status — call `sdk.run_in_session(session_id, prompt)` from a hook. It enqueues the prompt as a **one-shot agent turn in the goal's own session** (that session's memory + full tools), runs it on the normal scheduler fire path, and returns immediately — so it's safe to call from a hook or the monitor tick without blocking:
+
+```python
+from graph import sdk
+
+def register(registry):
+    async def on_achieved(goal):                # terminal GoalState
+        sdk.run_in_session(
+            goal.session_id,
+            f"The goal '{goal.condition}' just completed. Evidence: {goal.last_evidence}. "
+            f"Summarize the outcome and start the follow-up work.",
+        )
+    registry.register_goal_hook(on_achieved=on_achieved)
+```
+
+Pass `job_id=` to make the re-arm idempotent, or `delay_seconds=` to defer the turn. This is the *reaction* half of the self-improving loop: `sdk.start_goal_loop` **drives** a goal; a hook + `run_in_session` **reacts** when it lands.
 
 ## Verifier types
 
