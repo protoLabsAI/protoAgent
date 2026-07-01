@@ -31,6 +31,10 @@ import {
   SLASH_COMMANDS,
   PLAYBOOKS,
   KNOWLEDGE_CHUNKS,
+  MEMORY_HOT,
+  MEMORY_INJECTIONS,
+  MEMORY_SESSIONS,
+  MEMORY_SESSION_RENDERED,
   SUBAGENTS,
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
@@ -94,6 +98,15 @@ let playbooks = clonePlaybooks();
 // knowledge test resets via POST /api/__test__/knowledge/reset.
 const cloneKnowledge = () => JSON.parse(JSON.stringify(KNOWLEDGE_CHUNKS));
 let knowledgeChunks = cloneKnowledge();
+
+// Memory inspector (ADR 0069 D7) — sessions + hot chunks are MUTATED by the delete
+// specs, so serve working copies each memory test resets via
+// POST /api/__test__/memory/reset.
+const cloneMemory = () => ({
+  sessions: JSON.parse(JSON.stringify(MEMORY_SESSIONS)),
+  hot: JSON.parse(JSON.stringify(MEMORY_HOT)),
+});
+let memory = cloneMemory();
 
 // Fleet state is the one slice of the mock backend the specs MUTATE (create /
 // stop / rename / add-remote). Isolate it PER SPEC so parallel files and serial-
@@ -410,6 +423,26 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET") {
       // Mid-turn steering: turn-end reconcile reads the still-queued items.
       if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname)) return sendJson(res, { pending: [] });
+      // Memory inspector (ADR 0069 D7) — needs the query string (injections filter),
+      // so it's handled here rather than in the pathname-only handleApiGet switch.
+      if (pathname === "/api/memory/sessions") return sendJson(res, { sessions: memory.sessions });
+      {
+        const m = pathname.match(/^\/api\/memory\/sessions\/([^/]+)$/);
+        if (m) {
+          const sid = decodeURIComponent(m[1]);
+          const s = memory.sessions.find((x) => x.session_id === sid);
+          if (!s) return sendJson(res, { detail: "no session summary with that id" }, 404);
+          return sendJson(res, { session: { ...s, trace_id: null, rendered: MEMORY_SESSION_RENDERED } });
+        }
+      }
+      if (pathname === "/api/memory/hot") return sendJson(res, { enabled: true, chunks: memory.hot });
+      if (pathname === "/api/memory/injections") {
+        const sid = url.searchParams.get("session_id") || "";
+        const rows = sid
+          ? MEMORY_INJECTIONS.filter((r) => r.session_id === sid)
+          : MEMORY_INJECTIONS;
+        return sendJson(res, { injections: rows });
+      }
       const payload = handleApiGet(pathname, fleetFor(req));
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
@@ -472,6 +505,38 @@ const server = createServer(async (req, res) => {
     if (pathname === "/api/__test__/knowledge/reset" && req.method === "POST") {
       knowledgeChunks = cloneKnowledge();
       return sendJson(res, { ok: true });
+    }
+    if (pathname === "/api/__test__/memory/reset" && req.method === "POST") {
+      memory = cloneMemory();
+      return sendJson(res, { ok: true });
+    }
+    // Memory inspector writes (ADR 0069 D7): delete a session summary / edit + delete
+    // a hot chunk — mutate the working copy so the panels visibly update.
+    {
+      const m = pathname.match(/^\/api\/memory\/sessions\/([^/]+)$/);
+      if (m && req.method === "DELETE") {
+        const sid = decodeURIComponent(m[1]);
+        const i = memory.sessions.findIndex((x) => x.session_id === sid);
+        if (i < 0) return sendJson(res, { detail: "no session summary with that id" }, 404);
+        memory.sessions.splice(i, 1);
+        return sendJson(res, { deleted: true, session_id: sid });
+      }
+      const h = pathname.match(/^\/api\/memory\/hot\/(\d+)$/);
+      if (h && req.method === "DELETE") {
+        const id = Number(h[1]);
+        const i = memory.hot.findIndex((x) => x.id === id);
+        if (i < 0) return sendJson(res, { detail: "no hot-memory chunk with that id" }, 404);
+        memory.hot.splice(i, 1);
+        return sendJson(res, { enabled: true, deleted: true });
+      }
+      if (h && req.method === "PUT") {
+        const id = Number(h[1]);
+        const c = memory.hot.find((x) => x.id === id);
+        if (!c) return sendJson(res, { detail: "no hot-memory chunk with that id" }, 404);
+        c.content = String(body.content || "");
+        c.preview = c.content;
+        return sendJson(res, { enabled: true, id: id + 100, replaced: true });
+      }
     }
     if (req.method === "POST" && /^\/api\/knowledge\/\d+\/promote$/.test(pathname)) {
       const id = Number(pathname.split("/").at(-2));

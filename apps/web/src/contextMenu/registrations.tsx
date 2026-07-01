@@ -203,24 +203,41 @@ registerContextMenu({
   },
 });
 
-// Right-click a chat session tab → New chat / Rename / Close (ADR 0036). ChatSurface owns the
-// behavior and passes it in `ctx` as closures: Close reuses its confirm-dialog flow, Rename
-// triggers the DS TabBar's inline editor (a synthetic dblclick on the tab). Right-clicking empty
-// tab-bar space carries only `onNew`. (The DS TabBar exposes no per-tab context-menu hook — a
-// DS gap noted for contribute-back; ChatSurface delegates from the tab-bar wrapper meanwhile.)
+// Right-click a chat session tab → New chat / New incognito chat / Rename / Incognito toggle /
+// Close (ADR 0036). ChatSurface owns the behavior and passes it in `ctx` as closures: Close
+// reuses its confirm-dialog flow, Rename triggers the DS TabBar's inline editor (a synthetic
+// dblclick on the tab), the incognito entries flip the per-thread flag (ADR 0069 D3b — every
+// send while ON carries metadata.incognito). Right-clicking empty tab-bar space carries only
+// the `onNew*` closures. (The DS TabBar exposes no per-tab context-menu hook — a DS gap noted
+// for contribute-back; ChatSurface delegates from the tab-bar wrapper meanwhile.)
 registerContextMenu({
   type: "chat-tab",
   items: (ctx: {
     sessionId?: string;
+    incognito?: boolean;
     onNew?: () => void;
+    onNewIncognito?: () => void;
+    onToggleIncognito?: () => void;
     onRename?: () => void;
     onClose?: () => void;
   }): MenuEntry[] => {
     const out: MenuEntry[] = [
       { id: "new", label: "New chat", icon: <Plus size={14} />, run: () => ctx?.onNew?.() },
+      {
+        id: "new-incognito",
+        label: "New incognito chat",
+        icon: <EyeOff size={14} />,
+        run: () => ctx?.onNewIncognito?.(),
+      },
     ];
     if (ctx?.sessionId) {
       out.push({ id: "rename", label: "Rename", icon: <Pencil size={14} />, run: () => ctx.onRename?.() });
+      out.push({
+        id: "incognito",
+        label: ctx.incognito ? "Turn incognito off" : "Turn incognito on",
+        icon: ctx.incognito ? <Eye size={14} /> : <EyeOff size={14} />,
+        run: () => ctx.onToggleIncognito?.(),
+      });
       out.push({ id: "tab-div", divider: true });
       out.push({ id: "close", label: "Close chat", icon: <X size={14} />, danger: true, run: () => ctx.onClose?.() });
     }

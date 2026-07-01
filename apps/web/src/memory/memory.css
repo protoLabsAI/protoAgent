@@ -1,0 +1,120 @@
+/* Memory inspector (ADR 0069 D7). Reuses the playbook-list/card shell for rows;
+   these are only the inspector-specific bits. Comments here must never glue a
+   star to a slash mid-comment — the minifier trap (#888). */
+
+.memory-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.memory-panel-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+.memory-list {
+  margin-top: 0.5rem;
+}
+
+.memory-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* The clickable session row body — a button styled as content, not chrome. */
+.memory-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.memory-row-static {
+  cursor: default;
+}
+
+.memory-row-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.memory-row-title code {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-row-topic {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-row-meta {
+  font-size: 0.75rem;
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+.memory-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.memory-edit-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* The full-summary reader body: verbatim <session> record, never markdown. */
+.memory-session-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+/* Injection-record table — a forensics readout, clarity over polish. */
+.memory-injections {
+  width: 100%;
+  margin-top: 0.6rem;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.memory-injections th,
+.memory-injections td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--pl-color-border, rgba(128, 128, 128, 0.25));
+}
+
+.memory-injections th {
+  font-weight: 600;
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+.memory-injections code {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-none {
+  color: var(--pl-color-text-muted, #8a8f98);
+}

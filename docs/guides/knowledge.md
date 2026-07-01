@@ -103,10 +103,16 @@ summarized into the knowledge store).
   default `false`).
 - **A2A / console streaming path** — set `incognito: true` in the message
   **metadata** (alongside `model` / `reasoning_effort`).
+- **Console** — toggle a chat tab incognito with the `/incognito` slash command
+  or the tab's right-click menu ("Turn incognito on/off"; "New incognito chat"
+  starts a thread private). While ON the tab shows an eye-off glyph and the
+  composer an `incognito` chip (click it to turn off), and the console stamps
+  the metadata flag onto **every** message it sends from that tab.
 
 The flag is per-message and stamped explicitly on every turn, so a thread is only
-as incognito as its latest message — send the flag on each turn of a thread you
-want kept out of memory. (A console thread toggle rides a later UI lane.)
+as incognito as its latest message — a raw API caller must send the flag on each
+turn of a thread it wants kept out of memory (the console toggle does exactly
+that for you).
 
 ### The per-turn injection record
 
@@ -206,6 +212,21 @@ D9) instead of judging it with a model at write time:
 - **Operator deletes stay hard deletes.** `forget_memory` and the memory
   inspector's DELETE routes remove rows outright — explicit operator intent
   beats history-keeping. Supersession is only for the *automatic* write paths.
+
+### The Memory inspector (console)
+
+The **Memory** rail view is the operator half of all of the above — a security
+control first (SpAIware-class memory poisoning gets *detected* here), UX second:
+
+- **Sessions** — the persisted summaries behind the `<prior_sessions>` digest,
+  one row per session (id · surface · topic · message count). Click a row to
+  read the full summary (exactly what `recall_session` returns) in the document
+  viewer; delete a row to forget that session.
+- **Hot memory** — the always-on `domain="hot"` chunks injected into every turn,
+  with their provenance (`source` = the session that wrote them); edit or delete
+  per row. Deleting stops the injection immediately.
+- **Injections** — the per-turn record above, filterable by session id; a
+  session row's syringe button jumps straight to its filtered record.
 
 ## Sharing knowledge across a fleet (the commons)
 

@@ -131,6 +131,28 @@ registerSlashCommand({
 });
 
 registerSlashCommand({
+  name: "incognito",
+  description: "Incognito for this tab: turns leave no memory and inject none",
+  usage: "/incognito on|off",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false;
+    const arg = ctx.rest.trim().toLowerCase();
+    const session = chatStore.getSnapshot().sessions.find((s) => s.id === ctx.sessionId);
+    const cur = !!session?.incognito;
+    const next = arg === "on" ? true : arg === "off" ? false : !cur; // bare /incognito toggles
+    chatStore.setSessionIncognito(ctx.sessionId, next);
+    ctx.noteToThread(
+      next
+        ? "**Incognito ON** for this tab — every message now carries `incognito`: no session summary, no memory harvest, no memory injection, until you turn it off with `/incognito off`. Messages already sent before this were NOT incognito."
+        : "Incognito **off** — turns persist to memory and receive memory again.",
+      { tone: "info" },
+    );
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
   name: "bypass",
   description: "DANGER: auto-approve tool permissions (run_command) for this tab",
   usage: "/bypass on|off",

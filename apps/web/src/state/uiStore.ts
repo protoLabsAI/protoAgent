@@ -148,7 +148,7 @@ type UIState = {
 // persisted `railOrder` is missing it (see the action). Keep ids in sync with
 // CORE_SURFACES (apps/web/src/app/coreSurfaces.tsx).
 const DEFAULT_RAIL_ORDER: { left: string[]; right: string[]; bottom: string[]; hidden: string[] } = {
-  left: ["chat", "knowledge"],
+  left: ["chat", "knowledge", "memory"],
   right: ["work"],
   bottom: [],
   hidden: [],

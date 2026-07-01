@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Memory inspector console surface** — a new core "Memory" rail view
+  ([ADR 0069](docs/adr/0069-memory-delivery-layer.md) D7, console half) over the
+  `/api/memory/*` REST surface: **Sessions** (the summaries behind the
+  `<prior_sessions>` digest — row click opens the full `recall_session` render in
+  the document viewer; per-row delete with confirm + toast), **Hot memory** (the
+  always-on `domain="hot"` chunks — edit/delete per row), and **Injections** (the
+  per-turn D6 record: which digest sessions / hot chunks / RAG chunks entered
+  which model call, filterable by session — the poisoning-forensics readout; a
+  session row jumps straight to its filtered injections).
+- **Incognito thread toggle in the console** (ADR 0069 D3b, console half) — a
+  per-chat-tab incognito mode that stamps `incognito` into the A2A message
+  metadata on **every** send while ON (the backend flag is per-message; a mixed
+  thread would leak earlier incognito content into a later turn's summary — the
+  desktop non-streaming `/api/chat` fallback carries it too). Toggle via the
+  `/incognito` slash command or the chat-tab context menu ("Turn incognito
+  on/off"); start a thread private via "New incognito chat"; while ON the tab
+  shows an eye-off glyph and the composer a clickable "incognito" chip (click to
+  turn off). Persisted with the session.
 - **Trust-tiered injection** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md)
   D8). Every knowledge chunk now ranks into a deterministic trust tier by its
   `source_type` (`knowledge/trust.py`): 3 = operator-authored (console
@@ -151,6 +169,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer auto-merge and freeze the Pages deploy.
 
 ### Fixed
+- **Settings `string_list` fields can now carry an empty-string entry** — a
+  literal `""` (or `''`) token in the comma-separated editor parses to the empty
+  string and round-trips back as `""`. Needed for
+  `knowledge.inject_namespaces`, where the `""` sentinel means "the
+  un-namespaced rows" (ADR 0069 D3a); previously the editor silently dropped it.
 - **Chat code blocks: no empty header gap, a distinct lighter well, and no panel-stretch.**
   A fenced block with no language no longer renders an empty ~32px header band (the copy
   action now floats over the code's top-right); the code well is lifted onto the lighter
