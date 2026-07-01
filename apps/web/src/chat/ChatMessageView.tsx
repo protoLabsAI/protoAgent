@@ -5,6 +5,7 @@ import { Spinner } from "@protolabsai/ui/data";
 import { ArrowDownToLine, Check, Clock, Coins, Copy, GitBranch, Gauge, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
+import { slashCommandName } from "../ext/slashRegistry";
 import { api } from "../lib/api";
 import { useUI } from "../state/uiStore";
 import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
@@ -43,6 +44,24 @@ export function ChatMessageView({
   const streaming = message.status === "streaming";
   // Per-turn token/cost footer is an opt-out display pref (Settings ▸ Chat, #1372).
   const showChatUsage = useUI((s) => s.showChatUsage);
+  // An issued slash command (/goal …) renders as a distinct user bubble (subtle tint /
+  // monospace / "/" badge) so it reads as a command in history, to operator and agent (#1529).
+  const userSlashCmd = message.role === "user" ? slashCommandName(message.content) : null;
+  // Literal user text — a monospace "/command" chip when it's a slash command, else plain
+  // whitespace-preserving text. Shared by the ordered-parts and history render paths.
+  const renderUserText = (text: string, key?: string) =>
+    slashCommandName(text) ? (
+      <span className="chat-user-text chat-slash-cmd" key={key}>
+        <span className="chat-slash-badge" aria-hidden>
+          /
+        </span>
+        <span className="chat-slash-body">{text.replace(/^\s*\//, "")}</span>
+      </span>
+    ) : (
+      <span className="chat-user-text" key={key}>
+        {text}
+      </span>
+    );
   return (
     <Message
       role={message.role}
@@ -54,7 +73,10 @@ export function ChatMessageView({
             // tone modifier is appended only when set, so neutral notes still get the styling.
             message.role === "system"
             ? `chat-note${message.noteTone ? ` chat-note--${message.noteTone}` : ""}`
-            : undefined
+            : // An issued slash command → distinct .chat-slash-msg user bubble (#1529).
+              userSlashCmd
+              ? "chat-slash-msg"
+              : undefined
       }
     >
       {message.reasoning && !(message.parts && message.parts.length) ? (
@@ -78,7 +100,7 @@ export function ChatMessageView({
           const { fold, workParts, answerParts } = foldPlan(parts, streaming);
           const renderText = (part: ChatPart, key: string) =>
             part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
-              <span className="chat-user-text" key={key}>{part.text}</span>
+              renderUserText(part.text, key)
             ) : (
               <Markdown key={key}>{part.text}</Markdown>
             );
@@ -117,7 +139,7 @@ export function ChatMessageView({
           ) : null}
           {message.content ? (
             message.role === "user" ? (
-              <span className="chat-user-text">{message.content}</span>
+              renderUserText(message.content)
             ) : (
               <Markdown>{message.content}</Markdown>
             )

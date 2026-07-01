@@ -193,6 +193,41 @@
   word-break: break-word;
 }
 
+/* An issued slash command rendered as a distinct USER bubble (#1529): a subtle accent
+   tint + monospace body + a small "/" badge, so a command sent to the agent reads as a
+   command in history — to operator and agent — not as prose. `.chat-slash-msg` sits ON
+   .pl-message--user (anchored under .chat-session-slot), so it outranks the DS base
+   user-bubble rule regardless of import order. */
+.chat-session-slot .pl-message--user.chat-slash-msg .pl-message__content {
+  background: color-mix(in srgb, var(--brand-violet) 12%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--brand-violet) 40%, var(--border-strong));
+}
+.chat-user-text.chat-slash-cmd {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.chat-slash-badge {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2em;
+  height: 1.2em;
+  border-radius: 4px;
+  background: var(--brand-violet);
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+}
+.chat-slash-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Our only `role:"system"` chat messages are background-agent completion
    notifications (ADR 0050) — full markdown reports (a lede + tables/lists), not
    a one-line notice. The DS styles system messages as a terse CENTERED 100px
