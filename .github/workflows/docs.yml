@@ -7,8 +7,11 @@ on:
   # PR-level gate (#976): vitepress fails the build on parse errors AND dead links,
   # so running docs:build here catches doc breakage at review time instead of letting
   # it merge green and only go red on the main-only deploy. Build-only — no deploy.
+  # Unfiltered on purpose: `build` is a REQUIRED check in the main ruleset, and a
+  # path-filtered required check never reports on non-matching PRs, blocking them
+  # forever. Running everywhere (~30s) is the price of making red docs unmergeable
+  # (a dead link once automerged and froze the Pages deploy on every main push).
   pull_request:
-    paths: ['docs/**', 'package.json', 'package-lock.json', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:
