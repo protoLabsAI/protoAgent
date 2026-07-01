@@ -505,13 +505,48 @@ def _build_inbox_tools(inbox_store) -> list:
     return [check_inbox]
 
 
-def _build_memory_tools(knowledge_store, graph_config=None) -> list:
+class _KnowledgeIngestError(Exception):
+    """An expected, user-legible ``knowledge_ingest`` failure (missing dependency,
+    unsupported type, no text, no such file). Its message is safe to show verbatim —
+    the inline path returns it; a background work job settles ``failed`` with it."""
+
+
+# A small local text/Markdown file ingests inline (instant); everything else — any URL
+# fetch, PDF, or audio/video transcription — goes to a background job (ADR 0050) so it
+# never blocks the chat turn.
+_INLINE_INGEST_EXTS = frozenset(
+    {".txt", ".text", ".log", ".md", ".markdown", ".mdown", ".mkd", ".mdx", ".rst", ".csv", ".tsv"}
+)
+_INLINE_INGEST_MAX_BYTES = 64 * 1024
+
+
+def _ingest_should_inline(src: str, is_url: bool) -> bool:
+    """True when a source is cheap enough to ingest on the turn (a small local text/
+    Markdown file); False for URLs and anything that fetches / transcribes / parses."""
+    if is_url:
+        return False
+    from pathlib import Path
+
+    try:
+        p = Path(src).expanduser()
+        if not p.is_file():
+            return True  # let the inline path return the clean "no such file" error at once
+        return p.suffix.lower() in _INLINE_INGEST_EXTS and p.stat().st_size <= _INLINE_INGEST_MAX_BYTES
+    except OSError:
+        return True
+
+
+def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list.
 
-    ``graph_config`` (the ``LangGraphConfig``) is threaded only so
-    ``knowledge_ingest`` can build the gateway speech-to-text / vision functions
-    for audio/video/image sources. It's optional — without it those media paths
-    report "not configured" and the text/URL/PDF paths work unchanged.
+    ``graph_config`` (the ``LangGraphConfig``) is threaded so ``knowledge_ingest``
+    can build the gateway speech-to-text / vision functions for audio/video/image
+    sources. It's optional — without it those media paths report "not configured"
+    and the text/URL/PDF paths work unchanged.
+
+    ``background_mgr`` (ADR 0050) lets ``knowledge_ingest`` run a slow source (any URL
+    fetch or media transcription) as a detached background job instead of blocking the
+    turn. Optional — without it the tool ingests inline (blocking, but correct).
     """
 
     @tool
@@ -544,35 +579,10 @@ def _build_memory_tools(knowledge_store, graph_config=None) -> list:
             return "Error: failed to store chunk (knowledge store unavailable)."
         return f"Stored chunk {chunk_id} in {domain!r}."
 
-    @tool
-    async def knowledge_ingest(source: str, domain: str = "general", title: str | None = None) -> str:
-        """Fetch, extract, and store a URL or local file into long-term knowledge.
-
-        Unlike ``memory_ingest`` (which stores text you already have), this runs
-        the full ingestion pipeline: it pulls the SOURCE, turns it into text, and
-        chunks + embeds it for recall. Reach for this the moment the operator
-        hands you a link or a file to "remember", "read", "ingest", "add to the
-        knowledge base", or "summarize and keep". Do NOT try to web_search or
-        fetch_url a YouTube/media link yourself — this is the only path that gets
-        a transcript or decodes a file.
-
-        Handles:
-          - URLs — web articles (HTML) and YouTube links (transcript)
-          - documents — PDF, plain text, Markdown (by local file path)
-          - media — audio (mp3/wav/m4a…) and video (mp4/mov/mkv…) by local file
-            path, transcribed via the gateway speech-to-text model (slow for long
-            recordings — it runs the whole track through STT)
-          - images — described via the gateway vision model
-
-        Args:
-            source: an ``http(s)`` URL (including YouTube) OR a local file path.
-            domain: knowledge bucket to file it under (default ``"general"``).
-            title: optional heading; otherwise the source's own title is used.
-
-        Returns a one-line summary (title, type, chars, chunk count). If a source
-        needs something that isn't configured (e.g. video needs ``ffmpeg`` plus
-        ``knowledge.transcribe_model``), it says so rather than failing opaquely.
-        """
+    async def _do_ingest(src: str, dom: str, title: str | None, is_url: bool) -> str:
+        """Run the ingestion pipeline for one source and store it; return a one-line
+        summary. Raises ``_KnowledgeIngestError`` (legible message) on an expected
+        failure. Shared by the inline path and the background work job."""
         import asyncio
         from pathlib import Path
 
@@ -584,13 +594,9 @@ def _build_memory_tools(knowledge_store, graph_config=None) -> list:
         )
         from knowledge import add_document
 
-        src = (source or "").strip()
-        if not src:
-            return "Error: provide a URL or a local file path to ingest."
-
-        # Gateway STT/vision for media — None if no model is configured, which
-        # makes audio/video/image raise a clean "not configured" error while
-        # text/URL/PDF/YouTube paths are unaffected.
+        # Gateway STT/vision for media — None if no model is configured, which makes
+        # audio/video/image raise a clean "not configured" error while text/URL/PDF/
+        # YouTube paths are unaffected.
         transcribe = describe = None
         if graph_config is not None:
             try:
@@ -602,40 +608,111 @@ def _build_memory_tools(knowledge_store, graph_config=None) -> list:
                 pass
 
         try:
-            if src.lower().startswith(("http://", "https://")):
+            if is_url:
                 result = await asyncio.to_thread(extract_url, src, transcribe=transcribe)
                 origin = src
             else:
                 path = Path(src).expanduser()
                 if not path.is_file():
-                    return f"Error: no such file: {src} — pass an http(s) URL or an existing local file path."
+                    raise _KnowledgeIngestError(
+                        f"No such file: {src} — pass an http(s) URL or an existing local file path."
+                    )
                 data = await asyncio.to_thread(path.read_bytes)
                 result = await asyncio.to_thread(
                     extract_bytes, path.name, data, None, transcribe=transcribe, describe=describe
                 )
                 origin = str(path)
         except MissingDependency as exc:
-            return f"Can't ingest that source — a required dependency or model isn't available: {exc}"
+            raise _KnowledgeIngestError(
+                f"Can't ingest that source — a required dependency or model isn't available: {exc}"
+            ) from exc
         except UnsupportedSource as exc:
-            return f"Unsupported source type: {exc}"
-        except Exception as exc:  # noqa: BLE001 — surface extraction failure to the model, never crash the turn
-            return f"Extraction failed: {exc}"
+            raise _KnowledgeIngestError(f"Unsupported source type: {exc}") from exc
+        except _KnowledgeIngestError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — surface extraction failure, never crash
+            raise _KnowledgeIngestError(f"Extraction failed: {exc}") from exc
 
         heading = (title or "").strip() or result.title or None
         ids = await asyncio.to_thread(
             lambda: add_document(
                 knowledge_store,
                 result.text,
-                domain=(domain or "general").strip() or "general",
+                domain=dom,
                 heading=heading,
                 source=origin,
                 source_type=result.source_type,
             )
         )
         if not ids:
-            return "Nothing ingested — no text could be extracted from that source."
+            raise _KnowledgeIngestError("Nothing ingested — no text could be extracted from that source.")
         label = heading or origin
-        return f"Ingested {label!r} ({result.source_type}, {len(result.text)} chars) → {len(ids)} chunk(s) in {domain!r}."
+        return f"Ingested {label!r} ({result.source_type}, {len(result.text)} chars) → {len(ids)} chunk(s) in {dom!r}."
+
+    @tool
+    async def knowledge_ingest(
+        source: str,
+        domain: str = "general",
+        title: str | None = None,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Fetch, extract, and store a URL or local file into long-term knowledge.
+
+        Unlike ``memory_ingest`` (which stores text you already have), this runs the
+        full ingestion pipeline: it pulls the SOURCE, turns it into text, and chunks +
+        embeds it for recall. Reach for this the moment the operator hands you a link or
+        a file to "remember", "read", "ingest", "add to the knowledge base", or
+        "summarize and keep". Do NOT web_search / fetch_url a YouTube or media link
+        yourself — this is the only path that gets a transcript or decodes a file.
+
+        Handles URLs (web articles + YouTube transcripts), documents (PDF, text,
+        Markdown), media (audio + video, transcribed via the gateway) and images
+        (described via the gateway vision model).
+
+        **Anything that fetches over the network or transcribes media runs in the
+        BACKGROUND** (ADR 0050): the call returns immediately with a job id and you're
+        notified when it finishes indexing, so a long video never blocks the
+        conversation. Only a small local text/Markdown file ingests inline (instant).
+        Tell the operator it's underway — do not wait or poll for it.
+
+        Args:
+            source: an ``http(s)`` URL (including YouTube) OR a local file path.
+            domain: knowledge bucket to file it under (default ``"general"``).
+            title: optional heading; otherwise the source's own title is used.
+
+        Returns a one-line summary when it ran inline, or a "started in the background"
+        acknowledgement (with the job id) when the work was detached.
+        """
+        from pathlib import Path
+
+        src = (source or "").strip()
+        if not src:
+            return "Error: provide a URL or a local file path to ingest."
+        dom = (domain or "general").strip() or "general"
+        is_url = src.lower().startswith(("http://", "https://"))
+
+        # Fast local text ingests inline; a network fetch / media transcription (which
+        # can take minutes) becomes a background job so it never blocks the turn. With no
+        # background manager wired, fall back to inline (blocking, but correct).
+        if background_mgr is None or _ingest_should_inline(src, is_url):
+            try:
+                return await _do_ingest(src, dom, title, is_url)
+            except _KnowledgeIngestError as exc:
+                return str(exc)
+
+        label = (title or "").strip() or (src if is_url else Path(src).expanduser().name)
+        job_id = await background_mgr.spawn_work(
+            origin_session=_session_id_from(state) or "",
+            kind="ingest",
+            description=f"Ingest {label}",
+            detail=src,
+            work=lambda: _do_ingest(src, dom, title, is_url),
+        )
+        return (
+            f"Ingesting {label!r} into knowledge (domain {dom!r}) in the background — job {job_id}. "
+            "It runs on its own and I'll report the result back to this conversation when it's "
+            "indexed; no need to wait or poll."
+        )
 
     @tool
     async def memory_recall(query: str, k: int = 5) -> str:
@@ -1219,7 +1296,13 @@ HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
 
 
 def get_all_tools(
-    knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False, graph_config=None
+    knowledge_store=None,
+    scheduler=None,
+    inbox_store=None,
+    tasks_store=None,
+    goal_enabled=False,
+    graph_config=None,
+    background_mgr=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
 
@@ -1233,6 +1316,9 @@ def get_all_tools(
     - ``graph_config`` (the ``LangGraphConfig``) lets ``knowledge_ingest``
       build the gateway STT/vision functions for audio/video/image sources.
       Optional — without it, only the text/URL/PDF/YouTube ingest paths work.
+    - ``background_mgr`` (ADR 0050) lets ``knowledge_ingest`` run a slow
+      source (URL fetch / media transcription) as a detached background job
+      instead of blocking the turn. Optional — without it it ingests inline.
 
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
@@ -1258,7 +1344,7 @@ def get_all_tools(
     # 0018/0019) — an installed comms plugin registers its tools when a token is set;
     # nothing to wire here.
     if knowledge_store is not None:
-        tools.extend(_build_memory_tools(knowledge_store, graph_config))
+        tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
     if scheduler is not None:
         tools.extend(_build_scheduler_tools(scheduler))
     if inbox_store is not None:

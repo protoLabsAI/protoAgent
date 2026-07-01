@@ -921,6 +921,19 @@ def _build_background_manager(config):
         publish = _event_bus.publish
     except Exception:  # noqa: BLE001
         publish = None
+
+    def _on_work_terminal(job) -> None:
+        """Give a deterministic ``spawn_work`` job the SAME idle-wake the A2A terminal
+        hook gives a subagent-turn job (ADR 0050 Phase 2). Lazy import keeps the
+        manager off ``server`` and avoids a server.a2a ↔ agent_init cycle."""
+        try:
+            from server.a2a import _background_wake_enabled, _spawn_background_wake
+
+            if _background_wake_enabled():
+                _spawn_background_wake(job)
+        except Exception:  # noqa: BLE001 — the wake is best-effort
+            log.exception("[background] work-job terminal hook failed for %s", getattr(job, "id", "?"))
+
     try:
         return BackgroundManager(
             agent_name=name,
@@ -929,6 +942,7 @@ def _build_background_manager(config):
             api_key=api_key,
             bearer_token=bearer,
             event_publish=publish,
+            on_terminal=_on_work_terminal,
         )
     except Exception:
         log.exception("[background] manager init failed; background disabled")

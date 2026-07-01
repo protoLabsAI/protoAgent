@@ -811,6 +811,8 @@ def create_agent_graph(
         goal_enabled=config.goal_enabled,
         # Lets knowledge_ingest build the gateway STT/vision fns for audio/video/image.
         graph_config=config,
+        # Lets knowledge_ingest detach a slow URL/media ingest as a background job (ADR 0050).
+        background_mgr=background_mgr,
     )
 
     if extra_tools:
