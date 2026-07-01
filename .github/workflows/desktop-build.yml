@@ -58,8 +58,9 @@ jobs:
     name: ${{ matrix.target }}
     # Manual dispatch only (see the `on:` block) — the tag-push trigger was retired
     # because the macOS/Windows matrix on every release was the repo's dominant CI cost.
-    # The repo guard keeps forks from running the matrix.
-    if: github.repository == 'protoLabsAI/protoAgent'
+    # Fork-friendly (#1534): a fork can dispatch its own (unsigned) build; the repo
+    # clause keeps forks from auto-building should a tag trigger ever return.
+    if: github.repository == 'protoLabsAI/protoAgent' || github.event_name == 'workflow_dispatch'
     # Per-leg runner, overridable by repo variable so the expensive macOS/Windows
     # legs can move off GitHub-hosted runners (10×/2× billing multipliers) onto
     # Namespace profiles WITHOUT editing this file — the moment the org provisions

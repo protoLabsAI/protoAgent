@@ -70,6 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   URL so a card can't appear twice.
 
 ### Changed
+- **CI workflows are fork-friendly** (#1534). Org-specific / expensive workflows no longer
+  auto-run or fail on forks: `docker-publish` (opt in with `DOCKER_PUBLISH_ENABLED` + your own
+  `IMAGE_NAME`), `marketing-deploy` and the GitHub Pages **docs deploy** (canonical-repo only —
+  the docs *build* still runs on fork PRs), and the `desktop-build` (a fork can `workflow_dispatch`
+  its own unsigned build). The `checks.yml` `workspace-config` step now runs fleet-wide
+  (`protoLabsAI/*`) and is skipped on external forks, so a fresh fork gets green CI out of the box;
+  the `server.py` guard still runs everywhere. `release.yml`/`docker-publish.yml` `IMAGE_NAME` is
+  now an overridable repo variable. Lint, tests, fleet-integration, live-smoke, web-e2e, issue-gate,
+  and secret-scan are unchanged (they're already fork-safe). See
+  [Customize & deploy → un-freeze the release pipeline](docs/guides/customize-and-deploy.md#3-un-freeze-the-release-pipeline).
 - **Fleet "New agent" now applies the archetype's persona**, not just its tools. Creating an
   agent from an archetype writes its base `SOUL.md` into the new workspace (`POST /api/fleet`
   gained a `soul` field), so a bundle agent arrives with its persona wired in.

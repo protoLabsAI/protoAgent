@@ -44,8 +44,11 @@ jobs:
 
   deploy:
     needs: build
-    # Never deploy from a PR — PRs only validate the build above.
-    if: github.event_name != 'pull_request'
+    # Never deploy from a PR — PRs only validate the build above. Fork-friendly
+    # (#1534): deploys to protoLabs' GitHub Pages, so only the canonical repo runs
+    # it — a fork without Pages configured would otherwise get a deploy error. The
+    # `build` job above is unguarded on purpose: forks want it (catches VitePress breakage).
+    if: github.event_name != 'pull_request' && github.repository == 'protoLabsAI/protoAgent'
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     environment:
       name: github-pages
