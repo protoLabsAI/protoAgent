@@ -18,7 +18,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: protolabsai/protoagent
+  # Overridable (#1534): a fork that opts into RELEASE_ENABLED sets its own
+  # `IMAGE_NAME` repo variable to push to its GHCR instead of protoLabs'.
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'protolabsai/protoagent' }}
 
 jobs:
   release:

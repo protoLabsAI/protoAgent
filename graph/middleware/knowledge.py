@@ -248,9 +248,16 @@ class KnowledgeMiddleware(AgentMiddleware):
             if last_human and self._store is not None:
                 results = self._search_scoped(last_human)
                 if results:
+                    # Each hit carries its stored date (ADR 0069 D9) — a
+                    # deterministic recency signal in-context, so the model can
+                    # weigh freshness itself instead of any LLM freshness judge.
                     context_parts = ["[Relevant knowledge from previous sessions:]"]
                     for r in results:
-                        context_parts.append(f"- [{r['table']}] {r['preview']}")
+                        line = f"- [{r['table']}] {r['preview']}"
+                        stored = str(r.get("created_at") or "")[:10]
+                        if stored:
+                            line += f" (stored {stored})"
+                        context_parts.append(line)
                         if r.get("id") is not None:
                             rag_ids.append(r["id"])
                     memory_parts.append("\n".join(context_parts))

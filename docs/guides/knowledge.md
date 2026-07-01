@@ -59,7 +59,7 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 | `memory_recall(query, k=5)` | search long-term memory (hybrid, or FTS5 if the breaker is open) |
 | `memory_list(domain?, limit=10)` | browse recent chunks (used by `/dream` consolidation) |
 | `memory_stats()` | per-domain chunk counts |
-| `forget_memory(chunk_id, reason?)` | delete one chunk by id (targeted) |
+| `forget_memory(chunk_id, reason?)` | **hard-delete** one chunk by id (targeted; see [staleness](#staleness-supersede-dont-delete) — explicit deletes are real deletes) |
 
 `GET /api/runtime/status` reports the store status; `GET /api/knowledge/search`
 backs the console browser.
@@ -67,7 +67,7 @@ backs the console browser.
 ## Memory delivery controls (ADR 0069)
 
 What the store *holds* and what gets *pushed into the prompt each turn* are separate
-surfaces ([ADR 0069](/adr/0069-memory-delivery-layer)). Four controls gate and audit
+surfaces ([ADR 0069](/adr/0069-memory-delivery-layer)). These controls gate and audit
 the delivery side:
 
 ### Scope the auto-inject to namespaces
@@ -129,6 +129,28 @@ GET /api/memory/injections?session_id=<id>&limit=50
 returns `{"injections": [...]}` newest-first — omit `session_id` for all sessions.
 Each row: `ts`, `session_id`, `digest_session_ids`, `hot_chunk_ids`,
 `rag_chunk_ids`, `approx_tokens`.
+
+### Staleness: supersede, don't delete
+
+LLMs demonstrably can't self-adjudicate freshness, so protoAgent handles
+staleness **deterministically at retrieval time** ([ADR 0069](/adr/0069-memory-delivery-layer)
+D9) instead of judging it with a model at write time:
+
+- **Facts are superseded, never silently replaced.** When the session-end fact
+  pass extracts a fact that *revises* one already stored (same subject, changed
+  details — detected by a deterministic token-overlap band, no LLM involved),
+  the old row is stamped `invalidated_at` and the new row inserted. History is
+  kept for audit; nothing is updated in place or deleted.
+- **Retrieval excludes invalidated rows by default.** `search`/`list_chunks`
+  on all three stores (plain, hybrid — both rankings — and layered), hot-memory
+  injection, and `memory_recall` only surface valid rows. Audit tooling can
+  pass `include_invalidated=True` (store API) to see the full history.
+- **Recency is surfaced in-context.** Each auto-injected RAG line ends with the
+  chunk's stored date — `(stored 2026-07-01)` — and `memory_recall` cites dates
+  per hit, so the model weighs freshness from explicit timestamps.
+- **Operator deletes stay hard deletes.** `forget_memory` and the memory
+  inspector's DELETE routes remove rows outright — explicit operator intent
+  beats history-keeping. Supersession is only for the *automatic* write paths.
 
 ### The Memory inspector (console)
 

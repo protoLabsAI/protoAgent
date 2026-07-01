@@ -3,7 +3,7 @@ import { Alert } from "@protolabsai/ui/data";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownFromLine, ArrowUpToLine, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, ChevronRight, ChevronsDownUp, ChevronsUpDown, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -281,6 +281,23 @@ export function KnowledgeStore() {
     onError: (e) => onError(errMsg(e)),
   });
 
+  // Shift+click a delete button → hard-delete with NO confirm dialog — the same
+  // quick-delete the chat tabs use (#1582). While Shift is held the delete buttons
+  // arm (turn red) to signal the fast path. Mirrors ChatSurface's shiftDel.
+  const [shiftDel, setShiftDel] = useState(false);
+  useEffect(() => {
+    const sync = (e: KeyboardEvent) => setShiftDel(e.shiftKey);
+    const clear = () => setShiftDel(false);
+    window.addEventListener("keydown", sync);
+    window.addEventListener("keyup", sync);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", sync);
+      window.removeEventListener("keyup", sync);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
+
   function startEdit(c: KnowledgeChunk) {
     setAdding(false);
     setEditingId(c.id);
@@ -288,6 +305,133 @@ export function KnowledgeStore() {
   }
 
   const total = stats.chunks ?? stats.total ?? 0;
+
+  // Collapsible source grouping (#1575): chunks from the same ingested source
+  // collapse under one section header. Only a source with ≥2 loaded chunks becomes
+  // a section — sourceless + single-chunk sources stay flat (no regression). Open
+  // state persists per source; an active search force-expands so matches stay visible.
+  const GROUPS_LS_KEY = "protoagent.kb.openGroups";
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem(GROUPS_LS_KEY) || "{}") as Record<string, boolean>; }
+    catch { return {}; }
+  });
+  const persistGroups = (next: Record<string, boolean>) => {
+    setOpenGroups(next);
+    try { localStorage.setItem(GROUPS_LS_KEY, JSON.stringify(next)); } catch { /* private mode — ignore */ }
+  };
+  const searching = debouncedQuery.trim().length > 0;
+  const isGroupOpen = (src: string) => searching || (openGroups[src] ?? false);
+  const toggleGroup = (src: string) => persistGroups({ ...openGroups, [src]: !(openGroups[src] ?? false) });
+
+  const sourceCounts = new Map<string, number>();
+  for (const c of results) if (c.source) sourceCounts.set(c.source, (sourceCounts.get(c.source) ?? 0) + 1);
+  const groupSources = [...sourceCounts.entries()].filter(([, n]) => n >= 2).map(([s]) => s);
+  const isGrouped = (c: KnowledgeChunk) => !!c.source && (sourceCounts.get(c.source) ?? 0) >= 2;
+  const allGroupsOpen = groupSources.length > 0 && groupSources.every((s) => openGroups[s]);
+  const toggleAllGroups = () => {
+    const next = { ...openGroups };
+    for (const s of groupSources) next[s] = !allGroupsOpen;
+    persistGroups(next);
+  };
+
+  const renderCard = (c: KnowledgeChunk) => (
+    <li key={c.id} className="playbook-card">
+      {editingId === c.id ? (
+        <ChunkForm
+          draft={draft}
+          setDraft={setDraft}
+          onSave={() => save.mutate()}
+          onCancel={() => { setEditingId(null); setDraft(EMPTY_DRAFT); }}
+          saving={save.isPending}
+          saveLabel="Save changes"
+        />
+      ) : (
+        <>
+          <div className="playbook-main">
+            <div className="playbook-title">
+              <span title={`domain: ${c.domain}`}>
+                <Badge status="success">
+                  <Database size={12} /> {c.domain}
+                </Badge>
+              </span>
+              {c.finding_type ? (
+                <span title="finding type">
+                  <Badge status="neutral">{c.finding_type}</Badge>
+                </span>
+              ) : null}
+              {c.tier === "commons" ? (
+                <span title="Shared commons — readable by every agent on this box">
+                  <Badge status="neutral">
+                    <Library size={12} /> commons
+                  </Badge>
+                </span>
+              ) : c.tier === "private" ? (
+                <span title="Private to this agent — share to make it readable by the fleet">
+                  <Badge status="neutral">private</Badge>
+                </span>
+              ) : null}
+              {c.heading ? <strong>{c.heading}</strong> : null}
+            </div>
+            <p className="playbook-desc">{c.content || c.preview}</p>
+            {c.source ? (
+              <div className="playbook-tools">
+                <code>{c.source}</code>
+              </div>
+            ) : null}
+          </div>
+          <div className="playbook-meta">
+            <span title="added">{ago(c.created_at)}</span>
+            <span className="knowledge-chunk-actions">
+              {c.tier === "private" ? (
+                <Button
+                  icon
+                  variant="ghost"
+                  type="button"
+                  title="Share to the commons (every agent on this box can then recall it)"
+                  onClick={() => promote.mutate(c)}
+                  loading={promotingId === c.id}
+                  aria-label={`share entry ${c.id}`}
+                >
+                  <ArrowUpToLine size={14} />
+                </Button>
+              ) : null}
+              {c.tier === "commons" ? (
+                // Commons chunks are read-only here (edit/delete target the PRIVATE
+                // tier) — manage them with Unshare, the inverse of Share.
+                <Button
+                  icon
+                  variant="ghost"
+                  type="button"
+                  title="Unshare — remove from the commons (no other agent will recall it)"
+                  onClick={() => setForgetPending(c)}
+                  aria-label={`unshare entry ${c.id}`}
+                >
+                  <ArrowDownFromLine size={14} />
+                </Button>
+              ) : (
+                <>
+                  <Button icon variant="ghost" type="button" title="Edit entry" onClick={() => startEdit(c)} aria-label={`edit entry ${c.id}`}>
+                    <Pencil size={14} />
+                  </Button>
+                  <Button
+                    icon
+                    variant="ghost"
+                    type="button"
+                    className={shiftDel ? "knowledge-del-armed" : undefined}
+                    title={shiftDel ? "Delete now — Shift skips the confirmation" : "Delete entry (Shift+click to skip confirm)"}
+                    onClick={(e) => { if (e.shiftKey) del.mutate(c.id); else setPendingDelete(c); }}
+                    aria-label={`delete entry ${c.id}`}
+                  >
+                    <Trash2 size={14} />
+                  </Button>
+                </>
+              )}
+            </span>
+          </div>
+        </>
+      )}
+    </li>
+  );
 
   return (
     <section className="panel stage-panel" data-testid="knowledge-store">
@@ -300,6 +444,18 @@ export function KnowledgeStore() {
             <QuickSetting keys={["knowledge.top_k", "knowledge.embeddings"]} title="Recall" label="Knowledge recall settings" />
             {enabled ? (
               <>
+                {groupSources.length > 0 ? (
+                  <Button
+                    icon
+                    variant="ghost"
+                    type="button"
+                    onClick={toggleAllGroups}
+                    title={allGroupsOpen ? "Collapse all sources" : "Expand all sources"}
+                    aria-label={allGroupsOpen ? "collapse all sources" : "expand all sources"}
+                  >
+                    {allGroupsOpen ? <ChevronsDownUp size={16} /> : <ChevronsUpDown size={16} />}
+                  </Button>
+                ) : null}
                 <Button
                   icon
                   variant="ghost"
@@ -389,96 +545,42 @@ export function KnowledgeStore() {
           )
         ) : (
           <ul className="playbook-list">
-            {results.map((c) => (
-              <li key={c.id} className="playbook-card">
-                {editingId === c.id ? (
-                  <ChunkForm
-                    draft={draft}
-                    setDraft={setDraft}
-                    onSave={() => save.mutate()}
-                    onCancel={() => { setEditingId(null); setDraft(EMPTY_DRAFT); }}
-                    saving={save.isPending}
-                    saveLabel="Save changes"
-                  />
-                ) : (
-                  <>
-                    <div className="playbook-main">
-                      <div className="playbook-title">
-                        <span title={`domain: ${c.domain}`}>
-                          <Badge status="success">
-                            <Database size={12} /> {c.domain}
-                          </Badge>
-                        </span>
-                        {c.finding_type ? (
-                          <span title="finding type">
-                            <Badge status="neutral">{c.finding_type}</Badge>
-                          </span>
-                        ) : null}
-                        {c.tier === "commons" ? (
-                          <span title="Shared commons — readable by every agent on this box">
-                            <Badge status="neutral">
-                              <Library size={12} /> commons
-                            </Badge>
-                          </span>
-                        ) : c.tier === "private" ? (
-                          <span title="Private to this agent — share to make it readable by the fleet">
-                            <Badge status="neutral">private</Badge>
-                          </span>
-                        ) : null}
-                        {c.heading ? <strong>{c.heading}</strong> : null}
-                      </div>
-                      <p className="playbook-desc">{c.content || c.preview}</p>
-                      {c.source ? (
-                        <div className="playbook-tools">
-                          <code>{c.source}</code>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="playbook-meta">
-                      <span title="added">{ago(c.created_at)}</span>
-                      <span className="knowledge-chunk-actions">
-                        {c.tier === "private" ? (
-                          <Button
-                            icon
-                            variant="ghost"
-                            type="button"
-                            title="Share to the commons (every agent on this box can then recall it)"
-                            onClick={() => promote.mutate(c)}
-                            loading={promotingId === c.id}
-                            aria-label={`share entry ${c.id}`}
-                          >
-                            <ArrowUpToLine size={14} />
-                          </Button>
-                        ) : null}
-                        {c.tier === "commons" ? (
-                          // Commons chunks are read-only here (edit/delete target the PRIVATE
-                          // tier) — manage them with Unshare, the inverse of Share.
-                          <Button
-                            icon
-                            variant="ghost"
-                            type="button"
-                            title="Unshare — remove from the commons (no other agent will recall it)"
-                            onClick={() => setForgetPending(c)}
-                            aria-label={`unshare entry ${c.id}`}
-                          >
-                            <ArrowDownFromLine size={14} />
-                          </Button>
-                        ) : (
-                          <>
-                            <Button icon variant="ghost" type="button" title="Edit entry" onClick={() => startEdit(c)} aria-label={`edit entry ${c.id}`}>
-                              <Pencil size={14} />
-                            </Button>
-                            <Button icon variant="ghost" type="button" title="Delete entry" onClick={() => setPendingDelete(c)} aria-label={`delete entry ${c.id}`}>
-                              <Trash2 size={14} />
-                            </Button>
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  </>
-                )}
-              </li>
-            ))}
+            {(() => {
+              // Emit a source's section once (at its first chunk) so grouped sources
+              // appear in first-seen order, interleaved with loose (flat) chunks.
+              const emitted = new Set<string>();
+              return results.map((c) => {
+                if (!isGrouped(c)) return renderCard(c);
+                const src = c.source as string;
+                if (emitted.has(src)) return null;
+                emitted.add(src);
+                const members = results.filter((x) => x.source === src);
+                const open = isGroupOpen(src);
+                const st = members.find((m) => m.source_type)?.source_type;
+                return (
+                  <li key={`grp:${src}`} className="kb-group">
+                    <button
+                      type="button"
+                      className="kb-group-header"
+                      aria-expanded={open}
+                      onClick={() => toggleGroup(src)}
+                    >
+                      <ChevronRight
+                        size={14}
+                        className="kb-group-caret"
+                        style={{ transform: open ? "rotate(90deg)" : undefined }}
+                      />
+                      <span className="kb-group-title" title={src}>{src}</span>
+                      {st ? <Badge status="neutral">{st}</Badge> : null}
+                      <Badge status="neutral">{members.length} chunks</Badge>
+                    </button>
+                    {open ? (
+                      <ul className="playbook-list kb-group-body">{members.map(renderCard)}</ul>
+                    ) : null}
+                  </li>
+                );
+              });
+            })()}
           </ul>
         )}
       </div>

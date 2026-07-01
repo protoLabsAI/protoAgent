@@ -12,8 +12,13 @@ Two rules from the ADR:
   pleasantries are dropped; a chatty turn with nothing durable yields ``[]``.
 - **Consolidate.** Before inserting, near-identical facts already in the store
   (scoped to the same ``namespace``) are skipped, so memory doesn't accrete
-  duplicates. (Superseding an *outdated* fact with a newer one is an LLM-judged
-  refinement left for a follow-up; v1 dedups conservatively.)
+  duplicates.
+- **Supersede, don't delete** (ADR 0069 D9). A new fact that *revises* an
+  existing one — same subject, changed details, detected by a deterministic
+  token-overlap band, never an LLM freshness judgment (Mem0's 2026 reversal +
+  arXiv 2606.01435) — marks the old row ``invalidated_at=now`` and inserts the
+  new row. History is kept for audit; retrieval excludes invalidated rows by
+  default. Nothing here UPDATEs content in place or DELETEs.
 
 Facts carry a ``namespace`` so per-project/owner scoping (ADR 0007) is a filter
 later, not a migration.
@@ -32,9 +37,15 @@ log = logging.getLogger(__name__)
 _MAX_FACTS = 12
 _MAX_FACT_CHARS = 300
 # ≥ this token-overlap (Jaccard) with an existing fact ⇒ treat as a duplicate and
-# skip. Intentionally conservative for v1 (only near-identical facts are deduped);
-# LLM-judged supersession of *outdated* facts is the follow-up noted in ADR 0021.
+# skip. Intentionally conservative (only near-identical facts are deduped).
 _DEDUP_JACCARD = 0.85
+# Token-overlap band [_SUPERSEDE_JACCARD, _DEDUP_JACCARD) ⇒ the new fact is a
+# *revision* of the existing one (same subject, changed details): the old row is
+# marked invalidated_at=now and the new row inserted (ADR 0069 D9 — supersede,
+# don't delete). The comparison is purely deterministic — token sets plus
+# "the incoming fact is newer by construction" — never an LLM freshness call
+# (Mem0's 2026 reversal + arXiv 2606.01435 are the ADR's basis for that rule).
+_SUPERSEDE_JACCARD = 0.6
 
 _FACTS_PROMPT = (
     "Extract durable, reusable FACTS from this conversation — things worth "
@@ -102,29 +113,53 @@ def consolidate_and_store(
     source: str | None = None,
 ) -> dict:
     """Store ``facts`` as ``finding_type="fact"``, skipping near-duplicates of
-    facts already present in the same ``namespace``. Returns counts.
+    facts already present in the same ``namespace`` and SUPERSEDING revised
+    ones (ADR 0069 D9). Returns counts
+    (``added`` / ``skipped`` / ``superseded``).
+
+    A new fact whose token overlap with an existing valid fact lands in the
+    supersede band (``_SUPERSEDE_JACCARD`` ≤ Jaccard < ``_DEDUP_JACCARD``)
+    replaces it: the old row gets ``invalidated_at=now`` (kept for audit —
+    never UPDATE-in-place, never DELETE) and the new row is inserted. The
+    incoming fact wins purely because it is newer — deterministic
+    timestamps/ids, no LLM freshness judging. ``list_chunks`` excludes
+    invalidated rows by default, so comparisons only ever run against
+    currently-valid facts.
 
     ``source`` is the originating session/thread id (provenance, ADR 0069 D5);
     when the caller has none it falls back to the legacy ``"harvest"`` literal
     rather than an empty source.
 
     Best-effort: a store that lacks ``list_chunks`` (e.g. a minimal test stub)
-    degrades to add-only. Never raises.
+    degrades to add-only, and one without ``invalidate_chunk`` skips the
+    invalidation half of a supersede. Never raises.
     """
-    counts = {"added": 0, "skipped": 0}
+    counts = {"added": 0, "skipped": 0, "superseded": 0}
     if not facts:
         return counts
     try:
         existing = knowledge_store.list_chunks(domain="fact", namespace=namespace, limit=500)
-        existing_tokens = [_tokens(c.content) for c in existing]
+        # (chunk id, token set) per valid fact — ids so a supersede can target
+        # the exact row; id None marks batch-local entries (nothing to invalidate).
+        candidates: list[tuple[int | None, set[str]]] = [(c.id, _tokens(c.content)) for c in existing]
     except Exception:  # noqa: BLE001 — minimal stub or read failure ⇒ add-only
-        existing_tokens = []
+        candidates = []
 
+    invalidate = getattr(knowledge_store, "invalidate_chunk", None)
     for fact in facts:
         ft = _tokens(fact)
-        if any(_jaccard(ft, et) >= _DEDUP_JACCARD for et in existing_tokens):
+        scored = [(_jaccard(ft, toks), i) for i, (_, toks) in enumerate(candidates)]
+        best, best_idx = max(scored, default=(0.0, -1))
+        if best >= _DEDUP_JACCARD:
             counts["skipped"] += 1
             continue
+        if best >= _SUPERSEDE_JACCARD:
+            # Revision of an existing fact: invalidate the single best match,
+            # then insert the new row below (supersede, don't delete).
+            old_id = candidates[best_idx][0]
+            if old_id is not None and callable(invalidate) and invalidate(old_id):
+                counts["superseded"] += 1
+                del candidates[best_idx]  # no longer valid — drop from comparisons
         # Facts live in their own domain (not "finding") so retrieval + the Store
         # view can distinguish semantic facts from other chunk types.
         rid = knowledge_store.add_chunk(
@@ -137,7 +172,7 @@ def consolidate_and_store(
         )
         if rid is not None:
             counts["added"] += 1
-            existing_tokens.append(ft)  # dedup within this batch too
+            candidates.append((rid, ft))  # dedup/supersede within this batch too
     return counts
 
 
@@ -154,15 +189,19 @@ async def extract_and_store_facts(
     store. Never raises — fact capture is best-effort and must not block thread
     retirement."""
     if knowledge_store is None or not transcript.strip():
-        return {"added": 0, "skipped": 0}
+        return {"added": 0, "skipped": 0, "superseded": 0}
     try:
         facts = await extractor(transcript, config)
     except Exception:  # noqa: BLE001
         log.exception("[memory] fact extraction failed")
-        return {"added": 0, "skipped": 0}
+        return {"added": 0, "skipped": 0, "superseded": 0}
     counts = consolidate_and_store(knowledge_store, facts, namespace=namespace, source=source)
     if counts["added"] or counts["skipped"]:
         log.info(
-            "[memory] facts: +%d new, %d dup-skipped (ns=%s)", counts["added"], counts["skipped"], namespace or "-"
+            "[memory] facts: +%d new, %d dup-skipped, %d superseded (ns=%s)",
+            counts["added"],
+            counts["skipped"],
+            counts["superseded"],
+            namespace or "-",
         )
     return counts

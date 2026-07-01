@@ -30,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on/off"); start a thread private via "New incognito chat"; while ON the tab
   shows an eye-off glyph and the composer a clickable "incognito" chip (click to
   turn off). Persisted with the session.
+- **Supersede-don't-delete staleness** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md)
+  D9). The `chunks` table gains a nullable `invalidated_at` column (additive
+  migration, namespace precedent): when the session-end fact pass extracts a
+  fact that *revises* a stored one (same subject, changed details — a
+  deterministic token-overlap band, never an LLM freshness judgment), the old
+  row is stamped `invalidated_at` and the new row inserted — history kept for
+  audit, nothing updated in place or deleted. Default retrieval excludes
+  invalidated rows everywhere (plain/hybrid/layered `search` — both hybrid
+  rankings — `list_chunks`, hot-memory injection, `memory_recall`), with an
+  `include_invalidated=True` escape hatch for audit tooling. Auto-injected RAG
+  lines now end with the chunk's stored date (`(stored 2026-07-01)`) as a
+  deterministic in-context recency signal. Operator deletes (`forget_memory`,
+  the inspector's DELETE routes) stay **hard** deletes — explicit intent beats
+  history-keeping. See [the knowledge guide](docs/guides/knowledge.md#staleness-supersede-dont-delete).
 - **Namespace-scoped auto-injection** (`knowledge.inject_namespaces`,
   [ADR 0069](docs/adr/0069-memory-delivery-layer.md) D3a). When set, the per-turn
   auto-injected RAG recall only considers chunks in the listed namespaces (`""`
@@ -66,6 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stripped, capped), with a path-traversal-safe id guard. The on-demand
   counterpart to the new digest below.
   ([ADR 0069](docs/adr/0069-memory-delivery-layer.md))
+- **Knowledge Base view — collapsible source grouping + Shift+click quick-delete.** Chunks
+  from the same ingested source (a YouTube transcript, a multi-page doc) now collapse under
+  one section header showing the source title, type, and chunk count — with a Collapse/Expand-all
+  toolbar toggle. Only sources with ≥2 loaded chunks group; single/sourceless chunks stay flat
+  (no regression). Open state persists per source; an active search force-expands so matches stay
+  visible. And **Shift+click** a chunk's delete button now removes it immediately (no confirm),
+  matching the chat-tab quick-delete — the plain click still confirms. (#1575, #1582)
 - **One-command install** — `curl -fsSL .../scripts/install.sh | sh` takes a fresh
   machine from zero to a running, configured protoAgent. It checks prerequisites
   (Docker + curl), pulls `ghcr.io/protolabsai/protoagent:latest`, runs it
@@ -88,6 +109,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   URL so a card can't appear twice.
 
 ### Changed
+- **CI workflows are fork-friendly** (#1534). Org-specific / expensive workflows no longer
+  auto-run or fail on forks: `docker-publish` (opt in with `DOCKER_PUBLISH_ENABLED` + your own
+  `IMAGE_NAME`), `marketing-deploy` and the GitHub Pages **docs deploy** (canonical-repo only —
+  the docs *build* still runs on fork PRs), and the `desktop-build` (a fork can `workflow_dispatch`
+  its own unsigned build). The `checks.yml` `workspace-config` step now runs fleet-wide
+  (`protoLabsAI/*`) and is skipped on external forks, so a fresh fork gets green CI out of the box;
+  the `server.py` guard still runs everywhere. `release.yml`/`docker-publish.yml` `IMAGE_NAME` is
+  now an overridable repo variable. Lint, tests, fleet-integration, live-smoke, web-e2e, issue-gate,
+  and secret-scan are unchanged (they're already fork-safe). See
+  [Customize & deploy → un-freeze the release pipeline](docs/guides/customize-and-deploy.md#3-un-freeze-the-release-pipeline).
 - **Fleet "New agent" now applies the archetype's persona**, not just its tools. Creating an
   agent from an archetype writes its base `SOUL.md` into the new workspace (`POST /api/fleet`
   gained a `soul` field), so a bundle agent arrives with its persona wired in.
