@@ -306,6 +306,27 @@ describe("migrateUiState — v14 domain-first settings IA", () => {
   });
 });
 
+// Rail context-menu plugin actions (#1521 / #1522): request/clear the pending Update /
+// Uninstall a right-clicked plugin icon triggers; PluginRailManage reads + consumes them.
+describe("plugin rail actions", () => {
+  beforeEach(() => useUI.setState({ pluginUpdate: undefined, pluginUninstall: undefined }));
+
+  it("records and clears a pending update", () => {
+    useUI.getState().requestPluginUpdate("board", "Board");
+    expect(useUI.getState().pluginUpdate).toEqual({ id: "board", name: "Board" });
+    useUI.getState().clearPluginUpdate();
+    expect(useUI.getState().pluginUpdate).toBeUndefined();
+  });
+
+  it("records and clears a pending uninstall independently of update", () => {
+    useUI.getState().requestPluginUninstall("doom", "Doom");
+    expect(useUI.getState().pluginUninstall).toEqual({ id: "doom", name: "Doom" });
+    expect(useUI.getState().pluginUpdate).toBeUndefined();
+    useUI.getState().clearPluginUninstall();
+    expect(useUI.getState().pluginUninstall).toBeUndefined();
+  });
+});
+
 // The v13 migration adds the `hidden` bucket to a persisted railOrder that predates it, so the
 // shape is complete (actions also fall back to [] defensively).
 describe("migrateUiState — v13 hidden bucket", () => {

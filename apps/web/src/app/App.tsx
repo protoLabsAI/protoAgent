@@ -79,6 +79,7 @@ import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
+import { PluginRailManage } from "../plugins/PluginRailManage";
 import { AppDrawer } from "./AppDrawer";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
@@ -107,7 +108,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { WorkPanel } from "./WorkPanel";
 import { SetupWizard } from "../setup/SetupWizard";
-import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
+import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
@@ -276,6 +277,14 @@ export function App() {
     refetchInterval: (q) => (q.state.data?.graph_loaded ? false : 2500),
   });
   const runtime = runtimeQ.data ?? null;
+
+  // Installed inventory + freshness — feed the rail context-menu plugin actions
+  // (#1521 / #1522) so a plugin icon's menu can show its version and offer Update /
+  // Uninstall. Lightweight + cached (the freshness poll is TTL-cached server-side);
+  // both degrade gracefully (retry:false), so a missing/erroring API just hides the
+  // extra menu items rather than blocking the menu.
+  const installedPluginsQ = useQuery(installedPluginsQuery());
+  const pluginUpdatesQ = useQuery(pluginUpdatesQuery());
 
   // Tenant uid is the HUB's, never the focused agent's (which changes on every fleet
   // swap and would wrongly wipe the chat view). Host-pinned, stable, low-churn.
@@ -884,10 +893,26 @@ export function App() {
           // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
           // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).
           const pluginId = id.startsWith("plugin:") ? id.split(":")[1] : undefined;
-          const pluginName = pluginId
-            ? (runtime?.plugins?.find((p) => p.id === pluginId)?.name ?? pluginId)
-            : undefined;
-          openContextMenu("rail-surface", e, { id, side, pluginId, pluginName });
+          const rec = pluginId ? runtime?.plugins?.find((p) => p.id === pluginId) : undefined;
+          const pluginName = pluginId ? (rec?.name ?? pluginId) : undefined;
+          // Version + lifecycle affordances (#1521 / #1522): removable = tracked in the
+          // writable plugins dir (git-installed / local copy; in-tree built-ins aren't in
+          // this list and are refused server-side); updatable = the freshness poll says
+          // this plugin is behind its ref. Both feed the Update / Uninstall menu gating.
+          const removable = pluginId ? (installedPluginsQ.data?.plugins ?? []).some((pl) => pl.id === pluginId) : false;
+          const updatable = pluginId
+            ? Boolean((pluginUpdatesQ.data?.plugins ?? []).find((u) => u.id === pluginId)?.behind)
+            : false;
+          openContextMenu("rail-surface", e, {
+            id,
+            side,
+            pluginId,
+            pluginName,
+            pluginVersion: rec?.version,
+            pluginBuiltin: rec?.builtin,
+            pluginRemovable: removable,
+            pluginUpdatable: updatable,
+          });
         }}
         onRailReorder={(next) => {
           // Chat can dock anywhere now — left, right, or the bottom dock. Its slot mounts
@@ -1147,6 +1172,9 @@ export function App() {
         onClose={closePluginConfig}
       />
     )}
+    {/* Rail context-menu plugin actions (#1521 / #1522) — fires an Update, or renders the
+        Uninstall confirm, for a plugin right-clicked on its rail icon. One root mount. */}
+    <PluginRailManage />
     </>
   );
 }

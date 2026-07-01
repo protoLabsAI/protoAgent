@@ -73,6 +73,16 @@ type UIState = {
   configurePlugin?: { id: string; name: string };
   openPluginConfig: (id: string, name: string) => void;
   closePluginConfig: () => void;
+  // Rail context-menu plugin actions (#1521 / #1522, ADR 0036). A right-click "Update
+  // available" / "Uninstall…" on a plugin's rail icon records the target here; a root
+  // PluginRailManage mount fires the update mutation or renders the uninstall confirm.
+  // EPHEMERAL — partialized out of persistence so a refresh never re-triggers one.
+  pluginUpdate?: { id: string; name: string };
+  requestPluginUpdate: (id: string, name: string) => void;
+  clearPluginUpdate: () => void;
+  pluginUninstall?: { id: string; name: string };
+  requestPluginUninstall: (id: string, name: string) => void;
+  clearPluginUninstall: () => void;
   rightCollapsed: boolean;
   leftCollapsed: boolean;
   rightWidth: number;
@@ -306,6 +316,12 @@ export const useUI = create<UIState>()(
       configurePlugin: undefined,
       openPluginConfig: (id, name) => set({ configurePlugin: { id, name } }),
       closePluginConfig: () => set({ configurePlugin: undefined }),
+      pluginUpdate: undefined,
+      requestPluginUpdate: (id, name) => set({ pluginUpdate: { id, name } }),
+      clearPluginUpdate: () => set({ pluginUpdate: undefined }),
+      pluginUninstall: undefined,
+      requestPluginUninstall: (id, name) => set({ pluginUninstall: { id, name } }),
+      clearPluginUninstall: () => set({ pluginUninstall: undefined }),
       rightCollapsed: false,
       leftCollapsed: false,
       rightWidth: 360,
@@ -454,8 +470,9 @@ export const useUI = create<UIState>()(
       version: 14, // …v12 Settings→utility pill · v13 railOrder.hidden bucket · v14 drop dead settingsScope (domain-first IA, ADR 0048)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // Ephemeral overlay state — dropped from persistence so a refresh never reopens it
-      // (the Global settings overlay + the per-plugin Configure dialog).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, configurePlugin: _c, ...rest }) => rest,
+      // (the Global settings overlay, the per-plugin Configure dialog, and the pending
+      // rail-menu Update/Uninstall action).
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, ...rest }) => rest,
     },
   ),
 );

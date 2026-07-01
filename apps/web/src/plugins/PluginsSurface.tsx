@@ -17,6 +17,7 @@ import { StatusPill } from "../app/StatusPill";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginSettingsDialog } from "./PluginSettingsDialog";
 import { PluginFreshness } from "./PluginFreshness";
+import { usePluginManage } from "./usePluginManage";
 import { catalogCategories, filterCatalog } from "./catalog";
 import { api } from "../lib/api";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
@@ -166,6 +167,9 @@ function LocalTab() {
   const [installOpen, setInstallOpen] = useState(false);
   const [uninstallPending, setUninstallPending] = useState<Plugin | null>(null);
   const [restartPending, setRestartPending] = useState(false);
+  // Update + uninstall mutations (toast + query-refresh) shared with the rail context
+  // menu (#1521 / #1522), so both entry points behave identically.
+  const { update, remove } = usePluginManage();
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
@@ -197,33 +201,13 @@ function LocalTab() {
   const onToggle = (p: Plugin) => toggle.mutate(p);
   const pendingId = toggle.isPending ? toggle.variables?.id : undefined;
 
-  const update = useMutation({
-    mutationFn: (p: Plugin) => api.updatePlugin(p.id),
-    onSuccess: (res, p) => {
-      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
-      // A new version may declare new/changed config fields — refetch the schema (#1423).
-      qc.invalidateQueries({ queryKey: queryKeys.settings });
-      toast(
-        res.restart_recommended
-          ? { tone: "info", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.` }
-          : { tone: "success", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.` },
-      );
-    },
-    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't update plugin", message: `${p.name}: ${errMsg(err)}` }),
-  });
-  const onUpdate = (p: Plugin) => update.mutate(p);
+  const onUpdate = (p: Plugin) => update.mutate({ id: p.id, name: p.name });
   const updatingId = update.isPending ? update.variables?.id : undefined;
   const updateById = new Map((updates.data?.plugins ?? []).map((u) => [u.id, u]));
 
   // Uninstall (DELETE /api/plugins/{id}) — removes the code + plugins.lock / enabled refs.
   // Refused server-side for in-tree built-ins, so it's only offered for plugins in the
-  // lock-backed inventory.
-  const remove = useMutation({
-    mutationFn: (p: Plugin) => api.uninstallPlugin(p.id),
-    onSuccess: (_res, p) => { refreshAll(); toast({ tone: "success", title: "Plugin uninstalled", message: `${p.name} removed.` }); },
-    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't uninstall plugin", message: `${p.name}: ${errMsg(err)}` }),
-  });
+  // lock-backed inventory. The confirm gates the shared `remove` mutation.
   const onRemove = (p: Plugin) => setUninstallPending(p);
   const removingId = remove.isPending ? remove.variables?.id : undefined;
 
@@ -354,7 +338,7 @@ function LocalTab() {
         title="Uninstall plugin?"
         confirmLabel="Uninstall"
         destructive
-        onConfirm={() => { if (uninstallPending) remove.mutate(uninstallPending); setUninstallPending(null); }}
+        onConfirm={() => { if (uninstallPending) remove.mutate({ id: uninstallPending.id, name: uninstallPending.name }); setUninstallPending(null); }}
         onClose={() => setUninstallPending(null)}
       >
         {uninstallPending
