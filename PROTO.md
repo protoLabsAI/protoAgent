@@ -22,6 +22,18 @@ TypeScript is the console.
   chat/tasks/knowledge. The default instance is `~/.protoagent/default/` on `:7870`,
   untouched. `scripts/dev-reset.sh` wipes just the sandbox. Use this for feature
   testing instead of the default instance.
+- **Spinning up a throwaway test server while the user's real instance(s) run
+  (e.g. an agent booting a PR build for review): FULLY isolate it — own box root
+  too, not just an instance id.** Plain `dev.sh` shares the box root (`~/.protoagent`),
+  which is data-safe but trips the desktop's co-residence warning (#1552) and can
+  collide on box-level resources (mDNS advertise, scheduler owner-lock). Instead:
+  `PROTOAGENT_BOX_ROOT=/tmp/pa-<name> PROTOAGENT_INSTANCE=<name> python -m server
+  --port <free>` — nothing under `~/.protoagent` is shared or touched. Tradeoff: a
+  fresh box root does **not** inherit box config (`host-config.yaml` gateway/model
+  defaults), so seed a gateway in that instance if the test needs model-backed
+  features; pure-console/UI review works as-is. (Serving a worktree's own
+  `apps/web/dist`: `cd <worktree> && … python -m server` — `_bundle_root()` anchors
+  to the loaded `server/` package, so it serves that checkout's build.)
 - **Factory-reset the default instance:** `scripts/reset.sh` wipes the **prod**
   instance back to a clean slate (next boot runs the setup wizard) — for testing the
   fresh-user flow via CLI (there is no in-app reset). **Always `--dry-run` first** to
