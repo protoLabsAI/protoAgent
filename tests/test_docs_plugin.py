@@ -61,6 +61,40 @@ def test_index_seeds_and_ranks(tmp_path) -> None:
     assert idx.search("") == []
 
 
+def test_concurrent_search_is_thread_safe(tmp_path) -> None:
+    """`docs_search` runs `search` on `asyncio.to_thread` workers, so two back-to-back
+    searches hit the one shared in-memory sqlite connection from different threads. That
+    race used to corrupt cursor state → a NULL bm25 score → `float(None)` TypeError (and
+    InterfaceError/IndexError). Hammer it: every search must return cleanly, never raise."""
+    import threading
+
+    docs = _load_docs()
+    _corpus(tmp_path)
+    idx = docs.DocsIndex(root=tmp_path)
+    idx.seed()
+
+    errors: list[str] = []
+
+    def worker(q: str) -> None:
+        for _ in range(200):
+            try:
+                idx.search(q)
+            except Exception as exc:  # noqa: BLE001 — a raised search is the regression
+                errors.append(f"{type(exc).__name__}: {exc}")
+
+    queries = ["skills tools", "configuration schema", "langgraph option", "agent"]
+    threads = [threading.Thread(target=worker, args=(queries[i % len(queries)],)) for i in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent search raised: {errors[:3]}"
+    # Still returns real, correctly-typed results after the pounding.
+    hits = idx.search("skills tools")
+    assert hits and hits[0].path == "guides/skills.md" and isinstance(hits[0].score, float)
+
+
 def test_dev_dir_is_excluded(tmp_path) -> None:
     docs = _load_docs()
     _corpus(tmp_path)

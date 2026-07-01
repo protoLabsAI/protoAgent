@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import NamedTuple
 
@@ -44,6 +45,14 @@ class DocsIndex:
         self._paths: set[str] = set()
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # One shared connection, but `docs_search` dispatches `search` onto thread-pool
+        # workers via `asyncio.to_thread` — and a single sqlite connection is NOT safe for
+        # concurrent use across threads (`check_same_thread=False` only silences the guard,
+        # it doesn't add locking). Two back-to-back searches racing on the connection
+        # corrupt cursor state → a NULL bm25 score → `float(None)`. Serialize every DB touch
+        # on this lock; the corpus is tiny + in-memory so contention is negligible. (A
+        # `:memory:` DB can't be shared via per-thread connections — each opens its own.)
+        self._lock = threading.Lock()
         try:
             self._conn.execute(
                 "CREATE VIRTUAL TABLE docs_fts USING fts5(path, title, section, content, preview UNINDEXED)"
@@ -62,11 +71,12 @@ class DocsIndex:
             rows.append((rel, doc_title(abs_path), rel.split("/", 1)[0], content, doc_preview(content)))
             self._paths.add(rel)
         if rows:
-            self._conn.executemany(
-                "INSERT INTO docs_fts (path, title, section, content, preview) VALUES (?, ?, ?, ?, ?)",
-                rows,
-            )
-            self._conn.commit()
+            with self._lock:
+                self._conn.executemany(
+                    "INSERT INTO docs_fts (path, title, section, content, preview) VALUES (?, ?, ?, ?, ?)",
+                    rows,
+                )
+                self._conn.commit()
         return len(rows)
 
     def search(self, query: str, k: int = 5) -> list[DocRecord]:
@@ -75,16 +85,20 @@ class DocsIndex:
         if not mq:
             return []
         try:
-            cur = self._conn.execute(
-                "SELECT path, title, section, preview, bm25(docs_fts) AS score "
-                "FROM docs_fts WHERE docs_fts MATCH ? ORDER BY score LIMIT ?",
-                (mq, max(1, int(k))),
-            )
+            with self._lock:
+                cur = self._conn.execute(
+                    "SELECT path, title, section, preview, bm25(docs_fts) AS score "
+                    "FROM docs_fts WHERE docs_fts MATCH ? ORDER BY score LIMIT ?",
+                    (mq, max(1, int(k))),
+                )
+                rows = cur.fetchall()
+            # `float(score or 0.0)`: defense in depth against a NULL bm25 (belt-and-braces
+            # with the lock above) so a stray None can never raise TypeError out of search.
             return [
-                DocRecord(r["path"], r["title"], r["section"], r["preview"] or "", float(r["score"]))
-                for r in cur.fetchall()
+                DocRecord(r["path"], r["title"], r["section"], r["preview"] or "", float(r["score"] or 0.0))
+                for r in rows
             ]
-        except sqlite3.OperationalError as exc:  # empty table / odd query
+        except Exception as exc:  # noqa: BLE001 — empty table / odd query / any sqlite hiccup: degrade to no-results, never raise into the tool
             log.debug("[docs] search error (returning empty): %s", exc)
             return []
 

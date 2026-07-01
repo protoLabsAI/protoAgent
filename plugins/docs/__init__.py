@@ -49,7 +49,14 @@ async def docs_search(query: str, k: int = 5) -> str:
     then call ``docs_read(path)`` on the best one or two.
     """
     k = max(1, min(int(k), 10))
-    results = await asyncio.to_thread(_index().search, query, k)
+    # The index is defensive (serialized + degrades to [] on any DB error), but never let an
+    # unexpected failure surface to the agent as a raw traceback / empty tool result — tell it
+    # the search errored so it can retry or fall back, rather than silently "nothing came back".
+    try:
+        results = await asyncio.to_thread(_index().search, query, k)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[docs] docs_search failed: %s", exc)
+        return f"Docs search failed ({type(exc).__name__}). Try again, or rephrase/narrow the query."
     if not results:
         return "No matching docs."
     return "\n".join(f"[{r.section}] {r.title} — {r.path}" for r in results)
