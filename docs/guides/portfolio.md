@@ -117,6 +117,29 @@ schedule it with `schedule_task` and the PM dispatches each held feature the mom
 dependency lands — no polling, no jumping the gun. See
 [ADR 0055 P3](../adr/0055-multi-team-orchestration-federated-boards.md#phasing).
 
+## Spinning up teams on demand
+
+The Setup above assumes standing team-agents you register as remotes. A PM can also spin
+teams up **ephemerally** — one per project, disposed when its board drains:
+
+```python
+portfolio_spinup_team(name="docs-team", repo="/abs/path/to/repo")  # clone a team config into a
+                                                                   # scoped workspace, boot it,
+                                                                   # register it as a board
+portfolio_dispatch(board="docs-team", title=…, spec=…)             # send it work over A2A
+portfolio_autodispose()                                            # dispose teams whose board is drained
+# also: portfolio_teardown_team(name) to dispose one now, portfolio_teams() to list them
+```
+
+**Gateway inheritance (v0.14+): no creds prep.** A spawned team inherits the PM's own
+resolved model gateway — the PM's `model.api_base` (resolved through the ADR 0047
+App→Host→Agent cascade, so a box-level gateway counts) plus its `OPENAI_API_KEY`, which
+reaches the team via its environment. So `portfolio_spinup_team` runs real turns out of the
+box with **no `team_template`**. Pass `template=`/`portfolio.team_template` only for a team on
+a *different* gateway than the PM's; spinup preflights the assembled config and fails loudly
+(rolling the workspace back) if a team couldn't reach a model, rather than booting a mute one.
+The host needs the `br` (beads) CLI for the team's board.
+
 ## Notes
 
 - A board id **is** the team-agent's fleet name — no separate registry.
