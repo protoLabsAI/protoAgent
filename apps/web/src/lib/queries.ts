@@ -26,6 +26,7 @@ export const queryKeys = {
   archetypes: ["archetypes"] as const,
   playbooks: ["playbooks"] as const,
   knowledge: ["knowledge"] as const,
+  flags: ["flags"] as const,
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll
@@ -35,6 +36,15 @@ export const fleetQuery = () =>
     queryKey: queryKeys.fleet,
     queryFn: () => api.fleet(),
     refetchInterval: 3_000,
+  });
+
+// Developer flags (ADR 0068) — the active channel + resolved flag states. Static per
+// process (channel + registry don't change without a config edit / restart), so no poll.
+export const flagsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.flags,
+    queryFn: () => api.flags(),
+    staleTime: 5 * 60_000,
   });
 
 // Archetypes for the new-agent picker (Basic + installed bundles) — config, not live.
