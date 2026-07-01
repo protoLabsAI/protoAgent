@@ -28,6 +28,33 @@
   min-height: 0;
 }
 
+/* ── Assistant markdown code blocks ─────────────────────────────────────────────
+   Polish for the DS streamdown code block inside chat:
+   1. Overflow — hard-cap the block (and the markdown root) to the message width so a
+      long unwrapped line SCROLLS inside the block (the DS gives the body overflow-x:auto)
+      instead of stretching the whole chat panel past its column.
+   2. Empty header — a fenced block with no language renders an empty ~32px header band
+      (an ugly gap). Hide it and float the copy action over the code's top-right instead
+      of reserving a header row (the block is position:relative, so the action anchors to it).
+   3. Colour — the DS default well is --pl-color-bg-inset (the DARKEST token, shared with
+      system-message/report cards and select inputs). Lift code blocks onto the lighter
+      --pl-color-bg-raised so they read as a distinct "code well". */
+/* Constrain the assistant content column (NOT the user bubble, which keeps its
+   max-width:80%) + the markdown root, so a code block can't push either wide. */
+.chat-session-slot .pl-message:not(.pl-message--user) .pl-message__content { min-width: 0; max-width: 100%; }
+.chat-session-slot .pl-markdown { min-width: 0; max-width: 100%; }
+.chat-session-slot .pl-markdown [data-streamdown="code-block"] {
+  max-width: 100%;
+  background: var(--pl-color-bg-raised);
+}
+.chat-session-slot .pl-markdown [data-streamdown="code-block-header"][data-language=""] { display: none; }
+.chat-session-slot .pl-markdown [data-streamdown="code-block-header"][data-language=""] + div {
+  margin-top: 0;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
 /* The tab-bar wrapper exists only to scope the right-click context menu (ADR 0036) to the
    tab strip — it generates no box, so the DS TabBar stays the flex child it was. */
 .chat-tabbar-wrap {
