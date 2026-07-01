@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-07-01
+
 ### Added
 - **Developer panel — view & toggle developer flags** (#1506, ADR 0068). A new **Settings ▸ Developer**
   section (surfaced only off prod — a dev build, a non-prod `developer.channel`, or a `?dev` reveal —
