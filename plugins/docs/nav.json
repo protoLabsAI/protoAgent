@@ -50,6 +50,10 @@
           "title": "Goal mode"
         },
         {
+          "path": "guides/watches.md",
+          "title": "Watches"
+        },
+        {
           "path": "guides/file-github-issues.md",
           "title": "File GitHub issues (/issue)"
         },

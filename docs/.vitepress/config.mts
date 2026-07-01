@@ -82,6 +82,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Goal mode", link: "/guides/goal-mode" },
+            { text: "Watches", link: "/guides/watches" },
             { text: "File GitHub issues (/issue)", link: "/guides/file-github-issues" },
             { text: "Schedule future work", link: "/guides/scheduler" },
             { text: "Middleware", link: "/guides/middleware" },

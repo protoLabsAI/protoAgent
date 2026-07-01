@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Watch primitive — supervise many external conditions at once** (#1505, #1507, #1508, ADR 0067). A
+  *watch* polls a condition on a cadence and, when it trips, runs a follow-up agent turn (via
+  `run_in_session`) and/or fires hooks — the passive counterpart to a goal (which the agent *drives*).
+  Unlike a goal you can hold **many** at once. Create one from the agent (`create_watch` / `list_watches`
+  / `clear_watch` tools, plugin-verifier only), a plugin (`sdk.create_watch` + `registry.register_watch_hook`),
+  or the operator (`GET` / `POST` / `DELETE /api/watches`). A console **Watches** panel lists them.
+  Supports `deadline` (→ `expired`) and `stall_after` (→ `on_stalled`).
+- **`sdk.run_in_session(session_id, prompt)`** (#1494) — enqueue a **non-blocking one-shot agent turn**
+  into a session (its memory + full tools). The reaction primitive behind "when a goal/watch fires,
+  prompt the agent"; call it from a hook.
+- **Two-credential auth: `auth.federation_token`** (#1503, ADR 0066) — an optional second token for
+  semi-trusted A2A peers, confined to the `/a2a` + `/v1` consumer surfaces and **denied the `/api`
+  operator surface** (plugin install, config rewrite, subagent runs, goal/watch set-paths) with `403`.
+  Opt-in — unset ⇒ single-token mode, unchanged.
+- **Console set-goal form** (#1510) and **live `goal.iteration` progress** in the Goals panel (#1498).
+
+### Changed
+- **Goal mode is now drive-only; the `monitor` disposition is retired** (#1511, ADR 0030 superseded by
+  ADR 0067) — watching a metric an external process moves is a **watch**, not a goal. **BREAKING:**
+  `sdk.start_goal_loop` / `stop_goal_loop` are removed (use `sdk.create_watch`), `register_goal_hook` no
+  longer takes `on_stalled` (watches have it), the `mode` / `deadline` / `stall_after` fields on goals /
+  `/api/goals` / `/goal` are gone, and config `goal.monitor_interval` is removed.
+- **Goal continuation protocol → tools** (#1491) — the `<goal_plan>` / `<goal_unachievable>` XML the model
+  had to emit is retired for the `update_goal_plan` / `abandon_goal` tools.
+- The A2A-streaming and non-streaming **goal drive loops are unified** (#1497), fixing a fresh-context
+  thread-id drift.
+
+### Security
+- **RCE-via-chat closed** (#1492) — a `/goal` chat message can no longer arm a `command` / `test` / `ci`
+  / `data`+`expr` verifier (which shell out or hit a restricted-eval sink); chat accepts only the
+  declarative verifiers (`plugin`, `llm`, `data`+`contains`). Dangerous verifiers move to the operator
+  `POST /api/goals` channel behind the federation-token `/api` ceiling (#1503).
+
+### Fixed
+- **Watch evaluation is serialized per watch id** (#1509) — the cadence tick and an event-driven
+  `evaluate_now` no longer race a read-mutate-write on the same watch; watch-store filenames are
+  hash-disambiguated so distinct ids can't collide on one file.
+
+### Docs
+- New **ADR 0066** (federation token + operator channel) and **ADR 0067** (watch primitive); **ADR 0030**
+  marked superseded. New **Watches** guide; the goal-mode + plugins guides updated for the drive-only model.
+
 ## [0.77.0] - 2026-07-01
 
 ### Added
