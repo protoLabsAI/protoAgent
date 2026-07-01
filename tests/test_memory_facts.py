@@ -83,6 +83,17 @@ def test_namespace_scopes_dedup(tmp_path):
     assert len(store.list_chunks(domain="fact", namespace="proj-b")) == 1
 
 
+def test_facts_carry_source_session(tmp_path):
+    """ADR 0069 D5: a fact row links back to the session it was extracted from;
+    without a session id the legacy "harvest" literal is kept (never empty)."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, ["deploys on Fridays"], namespace="p", source="a2a:chat-42")
+    consolidate_and_store(store, ["releases are manual"], namespace="p")
+    by_content = {c.content: c for c in store.list_chunks(domain="fact", limit=10)}
+    assert by_content["deploys on Fridays"].source == "a2a:chat-42"
+    assert by_content["releases are manual"].source == "harvest"
+
+
 def test_extract_and_store_facts_end_to_end(tmp_path):
     store = KnowledgeStore(tmp_path / "kb.db")
 
@@ -96,6 +107,7 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
             knowledge_store=store,
             config=object(),
             namespace="ns1",
+            source="a2a:chat-7",
             extractor=fake_extractor,
         )
     )
@@ -103,6 +115,8 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
     facts = store.list_chunks(domain="fact", namespace="ns1", limit=10)
     # The store guardrail (ADR 0021 Phase 1) strips scratch_pad even here.
     assert all("scratch_pad" not in f.content.lower() for f in facts)
+    # Provenance threads through the extraction path (ADR 0069 D5).
+    assert all(f.source == "a2a:chat-7" for f in facts)
 
 
 def test_extract_noop_without_store():

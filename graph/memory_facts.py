@@ -94,9 +94,19 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def consolidate_and_store(knowledge_store, facts: list[str], *, namespace: str | None = None) -> dict:
+def consolidate_and_store(
+    knowledge_store,
+    facts: list[str],
+    *,
+    namespace: str | None = None,
+    source: str | None = None,
+) -> dict:
     """Store ``facts`` as ``finding_type="fact"``, skipping near-duplicates of
     facts already present in the same ``namespace``. Returns counts.
+
+    ``source`` is the originating session/thread id (provenance, ADR 0069 D5);
+    when the caller has none it falls back to the legacy ``"harvest"`` literal
+    rather than an empty source.
 
     Best-effort: a store that lacks ``list_chunks`` (e.g. a minimal test stub)
     degrades to add-only. Never raises.
@@ -120,7 +130,7 @@ def consolidate_and_store(knowledge_store, facts: list[str], *, namespace: str |
         rid = knowledge_store.add_chunk(
             fact,
             domain="fact",
-            source="harvest",
+            source=source or "harvest",
             source_type="extracted",
             finding_type="fact",
             namespace=namespace,
@@ -137,6 +147,7 @@ async def extract_and_store_facts(
     knowledge_store,
     config,
     namespace: str | None = None,
+    source: str | None = None,
     extractor=_default_extractor,
 ) -> dict:
     """Extract durable facts from ``transcript`` and consolidate them into the
@@ -149,7 +160,7 @@ async def extract_and_store_facts(
     except Exception:  # noqa: BLE001
         log.exception("[memory] fact extraction failed")
         return {"added": 0, "skipped": 0}
-    counts = consolidate_and_store(knowledge_store, facts, namespace=namespace)
+    counts = consolidate_and_store(knowledge_store, facts, namespace=namespace, source=source)
     if counts["added"] or counts["skipped"]:
         log.info(
             "[memory] facts: +%d new, %d dup-skipped (ns=%s)", counts["added"], counts["skipped"], namespace or "-"
