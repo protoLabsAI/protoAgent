@@ -10,12 +10,34 @@ trigger a backup-and-rebuild cycle per the deviation rules.
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import shutil
 import sqlite3
+import threading
 
 log = logging.getLogger(__name__)
+
+
+def _locked(method):
+    """Serialize a method on the instance's ``self._lock``.
+
+    The index keeps ONE sqlite connection reused across threads
+    (``check_same_thread=False`` only silences the guard — it adds no locking), and it's
+    read on the per-turn hot path (``skill_summaries``/``discoverable_count`` via the
+    knowledge middleware) while the curator writes to it. Concurrent use of a single
+    connection races and corrupts cursor state (→ NULL/garbage cells, ``InterfaceError``,
+    ``float(None)``). Every connection touch goes through this; the lock is a *reentrant*
+    ``RLock`` so methods that call other guarded methods (``replace_disk_skills`` /
+    ``rebuild_index`` → ``add_skill``) don't self-deadlock. Mirrors the docs-index fix."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 # Bump when FTS table columns change — triggers auto-migration
@@ -50,10 +72,14 @@ class SkillsIndex:
     def __init__(self, db_path: str = "/sandbox/skills.db") -> None:
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        # Guards every connection touch (see _locked). Reentrant so guarded methods can
+        # call each other. Created before initialize_db(), which is itself guarded.
+        self._lock = threading.RLock()
         self.initialize_db()
 
     # ── Schema management ─────────────────────────────────────────────────────
 
+    @_locked
     def initialize_db(self) -> None:
         """Create (or verify) the SQLite database and FTS5 virtual table.
 
@@ -160,6 +186,7 @@ class SkillsIndex:
 
     # ── Write path ────────────────────────────────────────────────────────────
 
+    @_locked
     def add_skill(self, artifact: object, source: str = "emitted") -> None:
         """Insert a SkillV1Artifact into the FTS5 index.
 
@@ -224,6 +251,7 @@ class SkillsIndex:
         except sqlite3.Error as exc:
             log.error("[skills] failed to index skill %s: %s", name, exc)
 
+    @_locked
     def replace_disk_skills(self, artifacts: list[object]) -> None:
         """Reset the ``disk`` source to exactly *artifacts*, leaving ``emitted``
         skills intact. Used to (re)seed human-authored SKILL.md skills on boot
@@ -241,6 +269,7 @@ class SkillsIndex:
 
     # ── Read path ─────────────────────────────────────────────────────────────
 
+    @_locked
     def skill_summaries(self, limit: int | None = None) -> list[dict]:
         """The always-on skill INDEX (progressive disclosure, ADR 0060).
 
@@ -267,11 +296,12 @@ class SkillsIndex:
                 {"name": r["name"], "description": r["description"], "slash": r["slash"]}
                 for r in cur.fetchall()
             ]
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:  # noqa: BLE001 — degrade to empty, never raise on the per-turn hot path
             log.debug("[skills] skill_summaries error (returning empty): %s", exc)
             return []
         return rows[:limit] if limit is not None else rows
 
+    @_locked
     def discoverable_count(self) -> int:
         """Count of discoverable (non-user_only) skills — drives the index's
         "+N more" hint. 0 on error."""
@@ -279,9 +309,10 @@ class SkillsIndex:
         try:
             cur = conn.execute("SELECT COUNT(*) AS n FROM skills_fts WHERE user_only = '0'")
             return int(cur.fetchone()["n"])
-        except sqlite3.OperationalError:
+        except Exception:  # noqa: BLE001 — degrade to 0, never raise on the per-turn hot path
             return 0
 
+    @_locked
     def get_skill(self, name: str) -> dict | None:
         """Full record for one skill by exact name — the procedure the model
         loads on demand via ``load_skill``. Returns None when absent. Includes
@@ -300,12 +331,13 @@ class SkillsIndex:
             )
             row = cur.fetchone()
             return self._row_to_dict(row) if row else None
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:  # noqa: BLE001 — degrade to None, never raise
             log.debug("[skills] get_skill error (returning None): %s", exc)
             return None
 
     # ── Curation surface (consumed by graph/skills/curator.py) ─────────────────
 
+    @_locked
     def all_skills(self) -> list[dict]:
         """Return every skill as a dict, including the curator's bookkeeping
         fields (``id`` = rowid, ``confidence``, ``last_used``). Empty on error."""
@@ -319,7 +351,7 @@ class SkillsIndex:
                 """
             )
             return [self._row_to_dict(row) for row in cur.fetchall()]
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:  # noqa: BLE001 — degrade to empty, never raise
             log.debug("[skills] all_skills error (returning empty): %s", exc)
             return []
 
@@ -343,6 +375,7 @@ class SkillsIndex:
             "user_only": (row["user_only"] if "user_only" in keys else "0") == "1",
         }
 
+    @_locked
     def user_facing_skills(self) -> list[dict]:
         """Return only the skills flagged ``user_facing`` (ADR 0052), each as a
         dict (same shape as ``all_skills``). These back the `/<slash>` chat
@@ -358,10 +391,11 @@ class SkillsIndex:
                 """
             )
             return [self._row_to_dict(row) for row in cur.fetchall()]
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:  # noqa: BLE001 — degrade to empty, never raise
             log.debug("[skills] user_facing_skills error (returning empty): %s", exc)
             return []
 
+    @_locked
     def update_confidence(self, skill_id: int, confidence: float) -> None:
         """Set a skill's confidence (used by the curator's decay pass)."""
         conn = self._open_conn()
@@ -374,6 +408,7 @@ class SkillsIndex:
         except sqlite3.Error as exc:
             log.error("[skills] update_confidence failed for %s: %s", skill_id, exc)
 
+    @_locked
     def delete_skill(self, skill_id: int) -> None:
         """Remove a skill by rowid (used by the curator's dedup/prune passes)."""
         conn = self._open_conn()
@@ -383,6 +418,7 @@ class SkillsIndex:
         except sqlite3.Error as exc:
             log.error("[skills] delete_skill failed for %s: %s", skill_id, exc)
 
+    @_locked
     def rebuild_index(self, artifacts: list[object]) -> None:
         """Drop all rows and re-index from *artifacts*.
 
@@ -401,6 +437,7 @@ class SkillsIndex:
 
         log.info("[skills] rebuilt index with %d artifacts", len(artifacts))
 
+    @_locked
     def close(self) -> None:
         """Close the database connection."""
         if self._conn is not None:
