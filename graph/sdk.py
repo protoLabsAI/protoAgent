@@ -315,3 +315,39 @@ def run_in_session(
         "fires_at": fires_at,
         "message": f"turn enqueued in session {session_id!r} (fires {'now' if delay_seconds <= 0 else f'+{delay_seconds:g}s'})",
     }
+
+
+def create_watch(
+    *,
+    condition: str,
+    verifier: str,
+    verifier_args: dict | None = None,
+    watch_id: str | None = None,
+    interval_s: float | None = None,
+    deadline: float | None = None,
+    stall_after: int | None = None,
+    run_prompt: str = "",
+    run_session: str = "",
+) -> dict:
+    """Register a WATCH from a plugin (ADR 0067): poll ``condition`` — ground-truthed by the
+    plugin verifier named ``verifier`` (``"<plugin-id>:<name>"``) — on a cadence, and when it
+    trips run ``run_prompt`` as a follow-up turn in ``run_session`` (via :func:`run_in_session`)
+    and fire ``on_met`` hooks. Plugin-verifier only (like a set_goal-tool goal); hold as MANY as
+    you like (unlike a monitor goal, which is one-per-session). Returns ``{"ok", "watch_id",
+    "message"}`` — ok=False with a readable message if the subsystem is off or the verifier is
+    rejected."""
+    controller = STATE.watch_controller
+    if controller is None:
+        return {"ok": False, "watch_id": None, "message": "watch system unavailable (no watch_controller)"}
+    ok, msg, watch = controller.create(
+        condition=condition,
+        verifier={"type": "plugin", "check": verifier, "args": verifier_args or {}},
+        watch_id=watch_id,
+        interval_s=interval_s,
+        deadline=deadline,
+        stall_after=stall_after,
+        run_prompt=run_prompt,
+        run_session=run_session,
+        trusted=False,
+    )
+    return {"ok": ok, "watch_id": watch.id if watch else None, "message": msg}

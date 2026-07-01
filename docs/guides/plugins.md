@@ -178,6 +178,10 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   `register_goal_hook` reaction. See [Goal mode ▸ Reacting to a goal](/guides/goal-mode#reacting-to-a-goal).
 - `start_goal_loop(...)` / `stop_goal_loop(...)` — declare/tear down a goal-driven recurring
   loop (a goal + a scheduler tick) in one call.
+- `create_watch(*, condition, verifier, run_prompt=…, …)` — register a **watch** (ADR 0067):
+  poll `condition` on a cadence, and on met run `run_prompt` as a follow-up turn
+  (`run_in_session`) + fire `on_met` hooks. Plugin-verifier only; hold **many** at once (unlike
+  a monitor goal). Pair with `registry.register_watch_hook(on_met/on_expired/on_stalled=…)`.
 
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap

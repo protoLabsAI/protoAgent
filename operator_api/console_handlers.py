@@ -379,6 +379,47 @@ async def _operator_goals_set(body: dict) -> dict:
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
 
+async def _operator_watches_list() -> dict:
+    import asyncio
+
+    if STATE.watch_controller is None:
+        return {"watches": [], "enabled": False}
+    watches = await asyncio.to_thread(STATE.watch_controller.list_watches)
+    return {"watches": [w.to_dict() for w in watches], "enabled": True}
+
+
+async def _operator_watches_clear(watch_id: str) -> dict:
+    import asyncio
+
+    if STATE.watch_controller is None:
+        return {"cleared": False, "enabled": False}
+    cleared = await asyncio.to_thread(STATE.watch_controller.clear, watch_id)
+    return {"cleared": bool(cleared)}
+
+
+async def _operator_watches_set(body: dict) -> dict:
+    """Operator watch-create (ADR 0067) — the trusted operator channel on the ``/api`` surface
+    (operator-tier by the ADR 0066 ceiling), so it accepts ANY verifier type (command/test/ci/
+    data), unlike the plugin-only agent/SDK path. Maps ok=False → 400."""
+    if STATE.watch_controller is None:
+        return {"ok": False, "error": "watch mode is not available"}
+    body = body or {}
+    from graph.goals.controller import GoalController
+
+    ok, msg, _w = STATE.watch_controller.create(
+        condition=body.get("condition"),
+        verifier=body.get("verifier") or {},
+        watch_id=body.get("watch_id"),
+        interval_s=body.get("interval_s"),
+        deadline=GoalController._parse_deadline(body.get("deadline")),
+        stall_after=GoalController._parse_stall_after(body.get("stall_after")),
+        run_prompt=body.get("run_prompt") or "",
+        run_session=body.get("run_session") or "",
+        trusted=True,
+    )
+    return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
+
+
 async def _operator_activity_list() -> dict:
     """Return the Activity provenance feed (ADR 0022) — newest-first entries
     with origin/trigger/priority — plus the thread's message history from the

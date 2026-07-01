@@ -205,9 +205,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # (re)load so a config change refreshes the available `plugin` verifiers.
     from graph.goals import hooks as _goal_hooks
     from graph.goals import verifiers as _goal_verifiers
+    from graph.watches import hooks as _watch_hooks
 
     _goal_verifiers.set_plugin_verifiers(_plugins.goal_verifiers)
     _goal_hooks.set_goal_hooks(_plugins.goal_hooks)
+    _watch_hooks.set_watch_hooks(_plugins.watch_hooks)  # ADR 0067
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph
