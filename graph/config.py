@@ -424,6 +424,12 @@ class LangGraphConfig:
     # How many recalled chunks are injected per turn. Bumped 5 → 10 (RAG bake-off:
     # more candidates in-context lifted answer quality at sub-million-chunk scale).
     knowledge_top_k: int = 10
+    # Namespace scope for the AUTO-INJECT RAG search (ADR 0069 D3a). Empty (the
+    # default) = unfiltered — today's behavior, so box-commons sharing keeps
+    # working. When set, only chunks whose `namespace` matches a listed value
+    # are auto-injected; include "" to also match un-namespaced chunks. Gates
+    # only what enters the prompt unasked — memory_recall stays unscoped.
+    knowledge_inject_namespaces: list[str] = field(default_factory=list)
     # Hybrid-retrieval tuning (HybridKnowledgeStore knobs, ADR 0021) — surfaced so
     # they're tunable without editing the store / via the retrieval eval:
     #   vector_k  — FTS5 + vector candidates fused per query (the RRF pool).
@@ -912,6 +918,7 @@ class LangGraphConfig:
             image_describe_model=knowledge.get("image_describe_model", cls.image_describe_model),
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
+            knowledge_inject_namespaces=list(knowledge.get("inject_namespaces", []) or []),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

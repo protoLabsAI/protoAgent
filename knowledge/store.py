@@ -155,6 +155,30 @@ def _escape_like(text: str) -> str:
     )
 
 
+def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace") -> tuple[str, list[str]]:
+    """SQL predicate + params for a namespace filter (ADR 0069 D3a).
+
+    Accepts one value or a list. The empty string ``""`` in the filter matches
+    rows with NO namespace (NULL or ''), so scoped auto-inject can still include
+    un-namespaced chunks — most rows written before namespaces were filtered.
+    ``None`` / empty list → no predicate (unfiltered, today's behavior).
+    """
+    if namespace is None:
+        return "", []
+    values = [namespace] if isinstance(namespace, str) else [str(v) for v in namespace]
+    if not values:
+        return "", []
+    named = [v for v in values if v != ""]
+    arms: list[str] = []
+    params: list[str] = []
+    if named:
+        arms.append(f"{col} IN ({','.join('?' for _ in named)})")
+        params.extend(named)
+    if len(named) != len(values):  # "" requested → match un-namespaced rows
+        arms.append(f"({col} IS NULL OR {col} = '')")
+    return "(" + " OR ".join(arms) + ")", params
+
+
 def _fts_quote(token: str) -> str:
     """Quote a token for FTS5 MATCH so it's treated as a literal phrase.
 
@@ -548,6 +572,7 @@ class KnowledgeStore:
         k: int = 5,
         *,
         domain: str | None = None,
+        namespace: str | list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
@@ -555,6 +580,9 @@ class KnowledgeStore:
 
         Uses FTS5 when available, else a tokenized LIKE fallback. Returns
         an empty list on no matches or DB failure (never raises).
+        ``namespace`` (ADR 0069 D3a) optionally restricts hits to the given
+        namespace value(s) — see :func:`_namespace_clause` for the ``""``
+        (un-namespaced rows) convention. ``None`` = unfiltered.
         """
         if not query or not query.strip():
             return []
@@ -563,9 +591,9 @@ class KnowledgeStore:
             return []
         try:
             rows = (
-                self._search_fts(db, query, k, domain)
+                self._search_fts(db, query, k, domain, namespace)
                 if self._fts_available
-                else self._search_like(db, query, k, domain)
+                else self._search_like(db, query, k, domain, namespace)
             )
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] search failed: %s", exc)
@@ -591,6 +619,7 @@ class KnowledgeStore:
         query: str,
         k: int,
         domain: str | None,
+        namespace: str | list[str] | None = None,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -602,20 +631,22 @@ class KnowledgeStore:
         if not tokens:
             return []
         match = " OR ".join(_fts_quote(t) for t in tokens)
+        where = ["chunks_fts MATCH ?"]
+        params: list[Any] = [match]
         if domain:
-            return db.execute(
-                "SELECT c.* FROM chunks_fts f "
-                "JOIN chunks c ON c.id = f.rowid "
-                "WHERE chunks_fts MATCH ? AND c.domain = ? "
-                "ORDER BY rank LIMIT ?",
-                (match, domain, k),
-            ).fetchall()
+            where.append("c.domain = ?")
+            params.append(domain)
+        ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
+        if ns_sql:
+            where.append(ns_sql)
+            params.extend(ns_params)
+        params.append(k)
         return db.execute(
             "SELECT c.* FROM chunks_fts f "
             "JOIN chunks c ON c.id = f.rowid "
-            "WHERE chunks_fts MATCH ? "
+            f"WHERE {' AND '.join(where)} "
             "ORDER BY rank LIMIT ?",
-            (match, k),
+            params,
         ).fetchall()
 
     def _search_like(
@@ -624,6 +655,7 @@ class KnowledgeStore:
         query: str,
         k: int,
         domain: str | None,
+        namespace: str | list[str] | None = None,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
@@ -643,6 +675,10 @@ class KnowledgeStore:
         if domain:
             sql += " AND domain = ?"
             params.append(domain)
+        ns_sql, ns_params = _namespace_clause(namespace)
+        if ns_sql:
+            sql += f" AND {ns_sql}"
+            params.extend(ns_params)
         sql += " ORDER BY score DESC, id DESC LIMIT ?"
         params.append(k)
         return db.execute(sql, params).fetchall()
@@ -695,6 +731,24 @@ class KnowledgeStore:
         finally:
             db.close()
 
+    def get_hot_memory_entries(self, max_chars: int = 6000) -> list[tuple[int, str]]:
+        """The ``(chunk_id, formatted piece)`` pairs behind :meth:`get_hot_memory`.
+
+        Id-attributed so the per-turn injection record (ADR 0069 D6) can name
+        exactly which hot chunks entered a model call. Same selection/budget
+        semantics as ``get_hot_memory`` (one source of truth — it joins this).
+        """
+        chunks = self.list_chunks(domain="hot", limit=100)  # newest-first
+        entries: list[tuple[int, str]] = []
+        total = 0
+        for c in chunks:  # newest-first → oldest trimmed when over budget
+            piece = (f"[{c.heading}] " if c.heading else "") + c.content
+            if total + len(piece) > max_chars:
+                break
+            entries.append((c.id, piece))
+            total += len(piece)
+        return entries
+
     def get_hot_memory(self, max_chars: int = 6000) -> str:
         """Concatenate every ``domain="hot"`` chunk for always-on injection.
 
@@ -703,16 +757,7 @@ class KnowledgeStore:
         this each turn so a newly-added hot fact is seen immediately. Returns
         "" when there are none; trims oldest-first if over ``max_chars``.
         """
-        chunks = self.list_chunks(domain="hot", limit=100)  # newest-first
-        formatted: list[str] = []
-        total = 0
-        for c in chunks:  # newest-first → oldest trimmed when over budget
-            piece = (f"[{c.heading}] " if c.heading else "") + c.content
-            if total + len(piece) > max_chars:
-                break
-            formatted.append(piece)
-            total += len(piece)
-        return "\n".join(formatted)
+        return "\n".join(piece for _, piece in self.get_hot_memory_entries(max_chars))
 
     def stats(self) -> dict[str, int]:
         """Return per-domain chunk counts plus a ``total`` key."""

@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Namespace-scoped auto-injection** (`knowledge.inject_namespaces`,
+  [ADR 0069](docs/adr/0069-memory-delivery-layer.md) D3a). When set, the per-turn
+  auto-injected RAG recall only considers chunks in the listed namespaces (`""`
+  matches un-namespaced chunks); default unset = unfiltered, so box-commons
+  sharing keeps working. Filters both the keyword and vector rankings on hybrid
+  stores; tool-driven `memory_recall` is deliberately unscoped. See
+  [the knowledge guide](docs/guides/knowledge.md#memory-delivery-controls-adr-0069).
+- **Incognito threads** (ADR 0069 D3b) — a per-message `incognito` flag
+  (`POST /api/chat` body field, or A2A message metadata on the streaming path)
+  that skips BOTH session-summary persistence and memory injection (prior-session
+  digest, hot memory, RAG) for that turn; the skill index still injects. Carried
+  through graph state (`ProtoAgentState.incognito`), stamped explicitly each turn.
+  Backend only — the console thread toggle rides a later lane.
+- **Per-turn memory-injection record** (ADR 0069 D6) — every model call that had
+  memory auto-injected appends an id-attributed row (digest session ids, hot-memory
+  chunk ids, RAG chunk ids, approx tokens) to an instance-scoped SQLite log
+  (`observability/injection_log.py`, `<instance_root>/memory-injections.db`),
+  readable via `GET /api/memory/injections?session_id=&limit=` (newest-first).
+  Makes "why did it say that?" answerable and gives memory-poisoning forensics a
+  paper trail: store row → source session → the turns it entered.
 - **`recall_session(session_id)` starter tool** — expands one entry from the
   prior-sessions digest into that session's full persisted summary (reasoning-
   stripped, capped), with a path-traversal-safe id guard. The on-demand

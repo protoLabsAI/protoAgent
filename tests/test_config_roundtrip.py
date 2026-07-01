@@ -116,6 +116,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_embedder": "",
     "knowledge_embeddings": True,
     "knowledge_facts": True,
+    "knowledge_inject_namespaces": [],
     "knowledge_middleware": True,
     "knowledge_top_k": 5,
     "knowledge_vector_k": 20,

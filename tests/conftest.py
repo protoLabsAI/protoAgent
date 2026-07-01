@@ -31,6 +31,22 @@ def _reset_instance_paths():
     reset_instance_paths()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_injection_log(tmp_path, monkeypatch):
+    """Point the per-turn injection log (ADR 0069 D6) at a per-test temp DB.
+
+    ``KnowledgeMiddleware.before_model`` appends an injection row whenever it
+    injects memory — which many unrelated tests drive — so without this every
+    local/CI test run would write rows into the developer's REAL instance
+    store. Lazy: only tests that actually trigger a record create the DB."""
+    from observability.injection_log import reset_injection_log
+
+    monkeypatch.setenv("PROTOAGENT_INJECTION_LOG", str(tmp_path / "injection-log.db"))
+    reset_injection_log()
+    yield
+    reset_injection_log()
+
+
 def pytest_configure(config):  # noqa: ARG001
     """Prepend site-packages to sys.path before any test imports occur."""
     site_dirs = site.getsitepackages()

@@ -281,7 +281,9 @@ def _setup_required_message() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-async def chat(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
+async def chat(
+    message: str, session_id: str, *, model: str | None = None, incognito: bool = False
+) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
 
@@ -289,11 +291,13 @@ async def chat(message: str, session_id: str, *, model: str | None = None) -> li
     endpoint. The A2A handler uses ``_chat_langgraph_stream`` instead to
     capture tool events and emit the cost-v1 DataPart on the terminal
     artifact. ``model`` overrides the lead model for this turn (per-tab / per
-    OpenAI request); unset → the configured default.
+    OpenAI request); unset → the configured default. ``incognito`` (ADR 0069
+    D3b) marks the turn as leaving no memory trail: no session-summary
+    persistence, no memory injection.
     """
     if STATE.graph is None:
         return _setup_required_message()
-    return await _chat_langgraph(message, session_id, model=model)
+    return await _chat_langgraph(message, session_id, model=model, incognito=incognito)
 
 
 # Cap tool input/output previews so a single frame stays small on the wire.
@@ -400,7 +404,15 @@ def _last_tool_text(result) -> str:
 
 
 async def _run_turn_stream(
-    message: str, session_id: str, config: dict, *, resume_value=None, images=None, model=None, reasoning_effort=None
+    message: str,
+    session_id: str,
+    config: dict,
+    *,
+    resume_value=None,
+    images=None,
+    model=None,
+    reasoning_effort=None,
+    incognito=False,
 ):
     """Run one graph turn over ``astream_events``.
 
@@ -437,6 +449,10 @@ async def _run_turn_stream(
         else {
             "messages": _drain_background_messages(session_id) + [human],
             "session_id": session_id,
+            # Incognito (ADR 0069 D3b): always stamped explicitly — the channel
+            # persists in the checkpointer, so an omitted key would silently
+            # inherit a previous turn's value instead of the caller's intent.
+            "incognito": bool(incognito),
             # Per-tab model + reasoning-effort override (ModelOverrideMiddleware reads
             # both); omit each key when unset so the configured default applies.
             **({"model": model} if model else {}),
@@ -837,6 +853,9 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # runs — initial, kicker, goal continuation. Unset → the configured default.
     _model = ((request_metadata or {}).get("model") or "").strip() or None
     _effort = ((request_metadata or {}).get("reasoning_effort") or "").strip() or None
+    # Incognito thread (ADR 0069 D3b): the console/A2A caller sets metadata
+    # `incognito: true` per message — no session persistence, no memory injection.
+    _incognito = bool((request_metadata or {}).get("incognito"))
     # When a goal is already active, the whole turn is goal-driven (suppress cross-session
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     goal_active = STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
@@ -864,6 +883,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                 images=images,
                 model=_model,
                 reasoning_effort=_effort,
+                incognito=_incognito,
             ):
                 if kind == "__raw__":
                     accumulated_raw = payload
@@ -931,7 +951,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
             cont_raw = ""
             with goal_turn():
                 async for kind, payload in _run_turn_stream(
-                    decision.message, session_id, cont_config, model=_model, reasoning_effort=_effort
+                    decision.message, session_id, cont_config, model=_model, reasoning_effort=_effort, incognito=_incognito
                 ):
                     if kind == "__raw__":
                         cont_raw = payload
@@ -1272,7 +1292,9 @@ async def rewind_session(
     return {**result, "message": _rewind_message(result)}
 
 
-async def _chat_langgraph(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
+async def _chat_langgraph(
+    message: str, session_id: str, *, model: str | None = None, incognito: bool = False
+) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
     from langchain_core.messages import HumanMessage, AIMessage
@@ -1280,7 +1302,10 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
     from graph.goals.goal_turn import goal_turn
 
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
-    _model_extra = {"model": model} if (model or "").strip() else {}
+    # Incognito is stamped explicitly every turn (the channel persists in the
+    # checkpointer — an omitted key would inherit the previous turn's value).
+    _state_extra = {"model": model} if (model or "").strip() else {}
+    _state_extra["incognito"] = bool(incognito)
 
     async with tracing.trace_session(
         session_id=session_id,
@@ -1341,7 +1366,7 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
             async with _thread_lock(config["configurable"]["thread_id"]):
                 with goal_turn(goal_active):
                     result = await STATE.graph.ainvoke(
-                        {"messages": [HumanMessage(content=message)], "session_id": session_id, **_model_extra},
+                        {"messages": [HumanMessage(content=message)], "session_id": session_id, **_state_extra},
                         config=config,
                     )
             raw = _last_ai(result)
@@ -1394,7 +1419,7 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                                 {
                                     "messages": [HumanMessage(content=decision.message)],
                                     "session_id": session_id,
-                                    **_model_extra,
+                                    **_state_extra,
                                 },
                                 config=cont_config,
                             )

@@ -38,6 +38,10 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = ""
     model: str | None = None  # per-tab model override; None → configured default
+    # Incognito thread (ADR 0069 D3b): no session-memory persistence and no
+    # memory injection for this turn. Additive, default False — existing
+    # callers are unaffected.
+    incognito: bool = False
 
 
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -63,7 +67,7 @@ def register_chat_routes(app, ui: str) -> None:
         # Echo the (possibly minted) session_id so callers can continue the
         # session — additive key, existing consumers unaffected.
         session_id = req.session_id.strip() or _mint_session_id()
-        result = await chat(req.message, session_id, model=req.model)
+        result = await chat(req.message, session_id, model=req.model, incognito=req.incognito)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
