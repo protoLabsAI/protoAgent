@@ -16,6 +16,8 @@ export { registerChatComponent, registeredChatComponents } from "./componentRegi
 export type { ChatComponentRenderer } from "./componentRegistry";
 export { registerPaletteCommand, registeredPaletteCommands } from "./paletteRegistry";
 export type { PaletteCommand, PaletteCommandContext } from "./paletteRegistry";
+export { registerKeybinding, registeredKeybindings } from "./keybindingRegistry";
+export type { Keybinding } from "./keybindingRegistry";
 export { createUISlice, registeredUISlices } from "./uiStateRegistry";
 export { registerContextMenu, openContextMenu } from "../contextMenu";
 export type { MenuItem, MenuEntry, ContextType } from "../contextMenu";

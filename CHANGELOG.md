@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifacts now render into a transform-driven viewport — scroll-wheel / pinch to zoom (cursor-anchored),
   click-drag to pan, and a **Reset** control that re-fits the diagram. Large flowcharts and architecture
   views are finally explorable; mermaid re-fits automatically after its async render.
+- **`registerKeybinding` on the fork extension seam** (#1457, ADR 0063) — the keybinding registry is
+  now re-exported from `src/ext/index.ts` alongside `registerSlashCommand` / `registerComposerAction` /
+  `registerPaletteCommand`, so a fork binds its own default shortcut through the same seam core uses.
+  Registered binds already appear in **Settings ▸ Keyboard** (rebindable, with conflict detection) and
+  fire through the global host — this just completes the discoverable public surface, with a README example.
 - **Watch primitive — supervise many external conditions at once** (#1505, #1507, #1508, ADR 0067). A
   *watch* polls a condition on a cadence and, when it trips, runs a follow-up agent turn (via
   `run_in_session`) and/or fires hooks — the passive counterpart to a goal (which the agent *drives*).

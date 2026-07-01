@@ -30,3 +30,25 @@ registerContextMenu({
 ```
 
 That's it — rebuild and your surface appears in the rail. No core files touched.
+
+## Example — add a keybinding (ADR 0063)
+
+`registerKeybinding` is a peer of the registries above: a fork/plugin binds its own default
+shortcut through the same seam core uses. Every registered binding automatically appears in
+**Settings ▸ Keyboard** (rebindable, with conflict detection) and fires through the global host.
+
+```tsx
+import { registerKeybinding } from "./index";
+
+registerKeybinding({
+  id: "my-dashboard.toggle",     // stable id — the key for user overrides + dedup
+  label: "Toggle Dashboard",
+  group: "My fork",              // its own section in Settings ▸ Keyboard
+  defaultKeys: "mod+shift+d",    // normalized combo (mod = ⌘ on mac, ctrl elsewhere)
+  scope: "my-dashboard",         // optional: fire only within a `data-kb-scope` panel
+  run: () => { /* … open/focus the surface … */ },
+});
+```
+
+A user can rebind it in Settings; if the combo collides with another binding in an overlapping
+scope, the rebind UI blocks it and names the conflict.
