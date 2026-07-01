@@ -67,16 +67,68 @@ export function PaletteChat({ agentName }: { agentName: string }) {
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const contextRef = useRef(boot.contextId); // stable A2A contextId (= thread_id server-side)
+  const messagesRef = useRef(messages); // latest, for the unmount flush + self-heal
+  messagesRef.current = messages;
 
   // Focus the composer on open AND after each turn settles (streaming → false).
   useEffect(() => {
     if (!streaming) inputRef.current?.focus();
   }, [streaming]);
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // On close (unmount) the palette abandons the live stream, but the backend turn keeps
+  // running (durable A2A task). Flush the transcript IMMEDIATELY so the in-flight
+  // assistant message + its taskId are on disk before the debounce would fire — the
+  // self-heal below reconnects to it on reopen. Abort last (it can't race the flush).
+  useEffect(
+    () => () => {
+      savePaletteThread({ contextId: contextRef.current, messages: messagesRef.current }, true);
+      abortRef.current?.abort();
+    },
+    [],
+  );
   // Preserve the thread (debounced) — survives close/reopen and reload.
   useEffect(() => {
     savePaletteThread({ contextId: contextRef.current, messages });
   }, [messages]);
+
+  // Reconnect an interrupted turn (ADR 0057 durability). Runs once per open: if the last
+  // assistant message is stuck "streaming" with a durable taskId — the palette was closed
+  // mid-turn — reconcile it against the server's A2A task (tasks/get), finalizing when
+  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSurface's
+  // self-heal so a reopened palette shows the turn still running, or its finished result.
+  useEffect(() => {
+    if (abortRef.current) return; // a live turn in this session owns the stream
+    const last = messagesRef.current[messagesRef.current.length - 1];
+    if (!last || last.role !== "assistant" || last.status !== "streaming" || !last.taskId) return;
+    const taskId = last.taskId;
+    const TERMINAL = /completed|failed|canceled|cancelled/i;
+    let cancelled = false;
+    let polls = 0;
+    const MAX_POLLS = 40; // ~2 min at 3s, then unlock and let the next open re-poll
+    setStreaming(true); // lock the composer like a live turn while we reconcile
+    async function tick() {
+      if (cancelled) return;
+      let res: { state: string; text: string };
+      try {
+        res = await api.getTask(taskId);
+      } catch {
+        return; // best-effort — leave it for the next open to retry
+      }
+      if (cancelled) return;
+      if (!res.state || TERMINAL.test(res.state)) {
+        const failed = /fail|cancel/i.test(res.state);
+        update((m) => ({ ...finalize(m), content: res.text || m.content, status: failed ? "error" : "done" }));
+        setStreaming(false);
+        return;
+      }
+      if (++polls < MAX_POLLS) setTimeout(tick, 3000);
+      else setStreaming(false);
+    }
+    void tick();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const update = (fn: (m: ChatMessage) => ChatMessage) =>
     setMessages((ms) => {
@@ -121,6 +173,10 @@ export function PaletteChat({ agentName }: { agentName: string }) {
         contextRef.current,
         {
           signal: controller.signal,
+          // Pin the server task id to the streaming message so a palette closed mid-turn
+          // can reconnect to it on reopen (the self-heal above). Persisted via the messages
+          // effect + the unmount flush.
+          onTaskId: (id) => update((m) => ({ ...m, taskId: id })),
           onText: (t, append) =>
             update((m) => ({ ...m, content: append ? m.content + t : t, parts: appendText(m.parts, t, append) })),
           onReasoning: (d) =>
