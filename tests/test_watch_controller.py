@@ -181,3 +181,48 @@ def test_store_resolves_base_without_args(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCH_PATH", str(tmp_path / "w"))
     s = WatchStore()
     assert s._base == (tmp_path / "w")
+
+
+def test_safe_name_no_collision_across_sanitized_ids():
+    # CodeRabbit #1505: distinct raw ids that sanitize to the same string used to collide on
+    # one file. Now they get distinct filenames; an already-safe id stays human-readable.
+    from graph.watches.store import _safe_name
+
+    assert _safe_name("abc/def") != _safe_name("abc_def")
+    assert _safe_name("a/b") != _safe_name("a\\b")
+    assert _safe_name("deploy-1a2b3c") == "deploy-1a2b3c"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_evaluate_finishes_once(tmp_path, monkeypatch):
+    # CodeRabbit #1505: the per-watch lock serializes tick_all vs evaluate_now on the SAME
+    # watch, so a met watch finishes (and fires its run_in_session reaction) exactly once.
+    import asyncio
+
+    from runtime.state import STATE
+
+    calls: list[str] = []
+
+    class _Sched:
+        def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
+            calls.append(job_id)
+
+            class _J:
+                id = job_id or "j"
+
+            return _J()
+
+        def cancel_job(self, job_id):
+            return True
+
+    monkeypatch.setattr(STATE, "scheduler", _Sched())
+    c = _ctrl(tmp_path)
+    _ok, _m, w = c.create(
+        condition="done",
+        verifier={"type": "command", "command": "exit 0"},
+        run_prompt="go",
+        run_session="s",
+        trusted=True,
+    )
+    await asyncio.gather(c.evaluate(w.id), c.evaluate(w.id))
+    assert calls.count(f"watch-{w.id}") == 1  # not 2 — the lock prevented a double-finish

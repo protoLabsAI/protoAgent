@@ -58,7 +58,14 @@ def _resolve_base() -> Path:
 
 
 def _safe_name(watch_id: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in watch_id) or "watch"
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in watch_id) or "watch"
+    # Distinct ids that sanitize to the same string (e.g. "a/b" vs "a_b") must not share a
+    # file — disambiguate with a short hash of the RAW id whenever sanitization changed it.
+    if safe != watch_id:
+        import hashlib
+
+        safe = f"{safe[:48]}-{hashlib.sha1(watch_id.encode()).hexdigest()[:8]}"
+    return safe
 
 
 class WatchStore:
