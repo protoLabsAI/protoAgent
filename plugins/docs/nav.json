@@ -171,6 +171,10 @@
           "title": "Command palette (⌘K)"
         },
         {
+          "path": "guides/developer-flags.md",
+          "title": "Developer flags (gate pre-release features)"
+        },
+        {
           "path": "guides/phone-access.md",
           "title": "Access from your phone (LAN / Tailscale)"
         },
