@@ -107,6 +107,38 @@ jobs:
           . .venv/bin/activate
           python -m pytest tests/ -q
 
+  fleet-integration:
+    name: Fleet integration (multi-instance)
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    # These tests boot real `python -m server` hub+member processes (against the
+    # local scripts/fake_openai_server.py) on free loopback ports + tmp roots, so
+    # they're much slower than the unit suite — allow ~10 min. Kept a SEPARATE job
+    # from `tests` so its real-boot slowness never gates the fast unit run.
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # Mirror the `tests` job: full requirements.txt in a venv so
+        # tests/conftest.py's site.getsitepackages() reorder resolves (#175).
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Boot real multi-instance fleet (hub + members) and exercise it
+        # PA_RUN_INTEGRATION=1 flips on the real-subprocess harness the default
+        # `pytest tests/` skips. Covers instance isolation, hub→member proxy
+        # round-trip, cross-instance A2A delegation, and member crash→detect→restart
+        # (POSIX zombie-reap — works on Linux). No network egress beyond loopback:
+        # the fake gateway is local; mDNS advertise binds loopback only.
+        run: |
+          . .venv/bin/activate
+          PA_RUN_INTEGRATION=1 python -m pytest tests/integration -q
+
   live-smoke:
     name: A2A live smoke (lean tier)
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
