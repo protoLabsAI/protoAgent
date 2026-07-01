@@ -189,17 +189,23 @@ def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
 
 
 def _clone(url: str, ref: str | None, dest: Path) -> str:
-    """Clone ``url`` at ``ref`` into ``dest``; return the resolved commit SHA."""
+    """Clone ``url`` at ``ref`` into ``dest``; return the resolved commit SHA.
+
+    ``--no-hardlinks``: when ``url`` is a LOCAL path, ``git clone`` hardlinks the
+    source's object files by default, which intermittently fails with
+    ``fatal: hardlink different from source`` (a known local-clone race — it also
+    silently ignores ``--depth``). It's a no-op for the normal remote/network case,
+    so this only makes local-path installs (and the test fixtures) robust."""
     if ref and _SHA_RE.match(ref):
         # A specific commit: full clone (shallow can't reliably check out an
         # arbitrary SHA), then check it out.
-        _git("clone", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
+        _git("clone", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
         _git("checkout", ref, cwd=dest)
     elif ref:
         # A tag or branch: shallow clone of just that ref.
-        _git("clone", "--depth", "1", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S)
+        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S)
     else:
-        _git("clone", "--depth", "1", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
+        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
