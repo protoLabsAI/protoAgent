@@ -629,6 +629,10 @@
           "title": "ADR 0069 — Memory delivery layer: attributed digest, provenance, trust tiers"
         },
         {
+          "path": "adr/0070-background-results-push-resume.md",
+          "title": "ADR 0070 — Background results: push-resume, indexed reports, disposable workers"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
