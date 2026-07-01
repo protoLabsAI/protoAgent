@@ -41,21 +41,26 @@ def test_requires_condition_and_check(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rest_handler_gates_non_plugin(tmp_path, monkeypatch):
+async def test_rest_handler_is_the_operator_channel(tmp_path, monkeypatch):
+    # ADR 0066: POST /api/goals is the OPERATOR channel — gated to operator-tier by the
+    # /api auth path ceiling, not by the handler — so it accepts ANY verifier type
+    # (command/test/ci/data included), unlike the plugin-only agent/SDK path (set_goal_safe).
     from operator_api import console_handlers
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "goal_controller", _ctrl(tmp_path))
 
-    good = await console_handlers._operator_goals_set(
+    plugin_goal = await console_handlers._operator_goals_set(
         {"session_id": "s", "condition": "c", "verifier": {"type": "plugin", "check": "x:y"}}
     )
-    assert good["ok"] is True
+    assert plugin_goal["ok"] is True
 
-    bad = await console_handlers._operator_goals_set(
-        {"session_id": "s", "condition": "c", "verifier": {"type": "command", "command": "x"}}
+    # A command verifier now SUCCEEDS via the operator channel (was rejected pre-0066) —
+    # the security control is the /api operator-tier ceiling, not this handler.
+    command_goal = await console_handlers._operator_goals_set(
+        {"session_id": "s2", "condition": "c", "verifier": {"type": "command", "command": "true"}}
     )
-    assert bad["ok"] is False and "error" in bad
+    assert command_goal["ok"] is True
 
     nosession = await console_handlers._operator_goals_set(
         {"condition": "c", "verifier": {"type": "plugin", "check": "x:y"}}

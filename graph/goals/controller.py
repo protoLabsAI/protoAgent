@@ -167,6 +167,44 @@ class GoalController:
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
 
+    def set_goal_operator(
+        self,
+        session_id: str,
+        condition: str,
+        verifier: dict,
+        max_iterations: int | None = None,
+        no_progress_limit: int | None = None,
+        mode: str = "drive",
+        deadline: float | None = None,
+        stall_after: int | None = None,
+    ) -> tuple[bool, str]:
+        """Set a goal from the TRUSTED OPERATOR surface — ``POST /api/goals``, gated to
+        operator-tier by the ADR 0066 ``/api`` path ceiling. Unlike ``set_goal_safe``
+        (agent/plugin/programmatic → ``plugin``-verifier only), this accepts ANY verifier
+        type (command/test/ci/data included) because the caller is the authenticated
+        operator — the same power the operator ``/goal`` chat path had before Phase 1.
+        Returns (ok, message)."""
+        from graph.goals.verifiers import VERIFIERS
+
+        if not condition:
+            return (False, "a goal condition is required.")
+        verifier = verifier or {"type": "llm"}
+        vtype = verifier.get("type", "llm")
+        if vtype not in VERIFIERS:
+            return (False, f"unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}.")
+        state = GoalState(
+            session_id=session_id,
+            condition=condition,
+            verifier=verifier,
+            mode=("monitor" if mode == "monitor" else "drive"),
+            max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
+            no_progress_limit=no_progress_limit,
+            deadline=deadline,
+            stall_after=stall_after,
+        )
+        self._store.set(state)
+        return (True, f"Goal set. {state.status_line()}")
+
     # --- agent goal-loop tools (retired the <goal_plan>/<goal_unachievable> XML) ---
 
     def record_plan(self, session_id: str, plan: str) -> tuple[bool, str]:

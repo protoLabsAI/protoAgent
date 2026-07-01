@@ -180,7 +180,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
 }
 
 # Fields handled by their own dedicated assertions, not the golden map.
-_GOLDEN_EXEMPT = {"api_key", "auth_token", "plugin_config"}
+_GOLDEN_EXEMPT = {"api_key", "auth_token", "federation_token", "plugin_config"}
 
 # config_to_dict(from_yaml(example)) exact output — freezes the now-FIELDS-
 # complete emitted surface (B1 PR-3) so a later change shows up as a reviewable
@@ -486,6 +486,7 @@ def test_from_yaml_example_golden():
     # Redacted / unpinned fields get dedicated assertions.
     assert cfg.api_key == ""
     assert cfg.auth_token == ""
+    assert cfg.federation_token == ""  # ADR 0066 secret — redacted, no example value
     assert isinstance(cfg.plugin_config, dict)
 
     # Every other dataclass field must match the captured golden exactly.

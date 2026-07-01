@@ -207,3 +207,27 @@ def test_chat_verifier_allow_list():
     assert not allowed({"type": "command", "command": "x"})
     assert not allowed({"type": "test"})
     assert not allowed({"type": "ci"})
+
+
+# --- operator goal channel (ADR 0066 — POST /api/goals, operator-tier gated) -----------
+
+
+def test_set_goal_operator_accepts_dangerous_verifiers(tmp_path):
+    # The operator /api channel accepts command/test/ci/data — unlike set_goal_safe
+    # (plugin-only) — because it's reachable only under the /api operator-tier ceiling.
+    c = _ctrl(tmp_path)
+    ok, msg = c.set_goal_operator("s", "tests pass", {"type": "command", "command": "pytest -q"})
+    assert ok and "Goal set" in msg
+    assert c.active_goal("s").verifier["type"] == "command"
+
+
+def test_set_goal_operator_rejects_unknown_verifier(tmp_path):
+    c = _ctrl(tmp_path)
+    ok, msg = c.set_goal_operator("s", "x", {"type": "bogus"})
+    assert not ok and "unknown verifier type" in msg
+
+
+def test_set_goal_operator_requires_condition(tmp_path):
+    c = _ctrl(tmp_path)
+    ok, msg = c.set_goal_operator("s", "", {"type": "command", "command": "true"})
+    assert not ok and "condition is required" in msg
