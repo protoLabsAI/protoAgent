@@ -4,7 +4,7 @@ import { Switch } from "@protolabsai/ui/forms";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import { Check, TerminalSquare } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -23,7 +23,7 @@ import {
   effectiveReasoningEffort,
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
-import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
+import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
@@ -382,20 +382,48 @@ function ChatSessionSlot({
   }
 
   // Slash-command autocomplete. Commands the server handles (e.g. /goal) are
-  // fetched once; the dropdown is active while typing "/name" (before a space).
+  // fetched once; the dropdown is active while typing a "/name" token (before a space).
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // The "/name" token the caret currently sits in ({query, start}), or null. Recomputed
+  // from the LIVE textarea caret (not just the draft) so the popover triggers MID-INPUT —
+  // typing "/" at any cursor position opens it, not only when "/" is char 0 (#1530).
+  const [slashCtx, setSlashCtx] = useState<{ query: string; start: number; end: number } | null>(null);
+  // Keeps the keyboard-selected item scrolled into view during ↑/↓ nav (#1528).
+  const activeSlashRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
   }, []);
 
-  const slashQuery = useMemo(() => {
-    if (slashDismissed || !draft.startsWith("/")) return null;
-    const after = draft.slice(1);
-    return after.includes(" ") ? null : after; // closes once a space is typed
-  }, [draft, slashDismissed]);
+  // Re-parse the slash token from the textarea's current value + caret. Called on input,
+  // on caret moves (native keyup/click/select/focus listeners below), and after any
+  // programmatic caret change — so the popover state tracks the caret wherever it is.
+  const refreshSlash = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    setSlashCtx(slashTokenAt(ta.value, ta.selectionStart ?? ta.value.length));
+  }, []);
+
+  // Caret moves that don't fire onChange (arrow keys, clicks, selection, focus) still need
+  // to re-evaluate the popover so "/" mid-input opens/closes as the caret enters/leaves a token.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.addEventListener("keyup", refreshSlash);
+    ta.addEventListener("click", refreshSlash);
+    ta.addEventListener("select", refreshSlash);
+    ta.addEventListener("focus", refreshSlash);
+    return () => {
+      ta.removeEventListener("keyup", refreshSlash);
+      ta.removeEventListener("click", refreshSlash);
+      ta.removeEventListener("select", refreshSlash);
+      ta.removeEventListener("focus", refreshSlash);
+    };
+  }, [refreshSlash]);
+
+  const slashQuery = slashDismissed ? null : slashCtx?.query ?? null;
 
   const slashMatches = useMemo(() => {
     if (slashQuery === null) return [];
@@ -414,6 +442,12 @@ function ChatSessionSlot({
 
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
+
+  // Auto-scroll the keyboard-selected item into view during ↑/↓ nav so it never hides
+  // below the popover's scroll edge (standard listbox behavior, #1528).
+  useEffect(() => {
+    if (slashActive) activeSlashRef.current?.scrollIntoView({ block: "nearest" });
+  }, [slashSel, slashActive]);
 
   // Post a local SYSTEM NOTE to the thread (e.g. a /effort confirmation, a status line, a
   // warning) — never sent to the agent, just shown so the operator sees a local action took
@@ -450,17 +484,38 @@ function ChatSessionSlot({
   }
 
   function completeCommand(cmd: SlashCommand) {
-    // A client command runs on pick; a server skill fills the draft to edit + send.
+    // Replace ONLY the "/name" token the caret is in — surrounding text is preserved so a
+    // command can be completed at the start, middle, or end of the draft (#1530). Fall back
+    // to the whole draft if the token is somehow unknown (defensive).
+    const token = slashCtx;
+    const start = token ? token.start : 0;
+    const end = token ? token.end : draft.length;
+    // Place the caret + re-sync the popover after React commits the new value.
+    const settleCaret = (pos: number) => {
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        ta.focus();
+        ta.selectionStart = ta.selectionEnd = pos;
+        refreshSlash();
+      });
+    };
+    // A client command runs on pick — drop just its token from the draft (keeping any
+    // surrounding text); a server skill inserts "/name " to edit + send.
     if (runClientSlash(cmd.name)) {
-      setDraft("");
+      setDraft(draft.slice(0, start) + draft.slice(end));
       setSlashIndex(0);
       setSlashDismissed(true);
+      setSlashCtx(null);
+      settleCaret(start);
       return;
     }
-    setDraft(`/${cmd.name} `);
+    const insert = `/${cmd.name} `;
+    setDraft(draft.slice(0, start) + insert + draft.slice(end));
     setSlashIndex(0);
     setSlashDismissed(true); // a space follows, so it would close anyway
-    textareaRef.current?.focus();
+    setSlashCtx(null);
+    settleCaret(start + insert.length);
   }
 
   // Runs BEFORE the DS PromptInput's Enter-to-submit (via its onKeyDown seam):
@@ -508,7 +563,10 @@ function ChatSessionSlot({
           // caret to end so the next keystroke edits the recalled text (readline behaviour)
           requestAnimationFrame(() => {
             const t = textareaRef.current;
-            if (t) t.selectionStart = t.selectionEnd = val.length;
+            if (t) {
+              t.selectionStart = t.selectionEnd = val.length;
+              refreshSlash(); // keep the slash popover in sync with the moved caret
+            }
           });
         };
         if (event.key === "ArrowUp" && onFirstLine) {
@@ -546,6 +604,7 @@ function ChatSessionSlot({
         setDraft(`${draft.slice(0, start)}\n${draft.slice(end)}`);
         requestAnimationFrame(() => {
           ta.selectionStart = ta.selectionEnd = start + 1;
+          refreshSlash(); // keep the slash popover in sync with the moved caret
         });
       }
     }
@@ -1261,6 +1320,7 @@ function ChatSessionSlot({
             setDraft(v);
             setSlashDismissed(false); // re-open the menu when the input changes
             histIndexRef.current = null; // typing detaches from history nav (readline)
+            refreshSlash(); // re-parse the "/name" token at the (post-input) caret (#1530)
           }}
           // Idle → send. While a turn streams (`busy`), the field stays live: Enter
           // queues a steer into the running turn (onQueue) without stopping it, and
@@ -1351,6 +1411,7 @@ function ChatSessionSlot({
                 <button
                   type="button"
                   key={cmd.name}
+                  ref={index === slashSel ? activeSlashRef : undefined}
                   role="option"
                   aria-selected={index === slashSel}
                   className={`slash-item${index === slashSel ? " active" : ""}`}
