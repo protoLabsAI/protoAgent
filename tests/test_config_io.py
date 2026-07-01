@@ -19,6 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from graph.settings_schema import FIELDS
+
 import httpx
 import pytest
 
@@ -129,35 +131,12 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # too). discord/google are NOT here — they're plugin sections, present only
     # when their plugin is enabled (surfaced via plugin_config), and a default
     # LangGraphConfig() carries no plugin_config.
-    assert set(d.keys()) == {
-        "model",
-        "subagents",
-        "middleware",
-        "knowledge",
-        "skills",
-        "commons",
-        "mcp",
-        "plugins",
-        "identity",
-        "auth",
-        "runtime",
-        "operator",
-        "agent_runtime",
-        # Developer channel (ADR 0068) — the pre-release feature tier this instance exposes.
-        "developer",
-        "checkpoint",
-        "compaction",
-        "goal",
-        "operator_mcp",
-        "prompt_cache",
-        "routing",
-        "telemetry",
-        # Box runtime (Host layer, ADR 0047 D8).
-        "network",
-        "fleet",
-        # Egress allowlist (ADR 0008) — surfaced in Settings ▸ Box ▸ Network.
-        "egress",
-    }
+    # config_to_dict is FIELDS-driven, so the top-level sections it emits are exactly the
+    # schema's top-level keys, plus two legacy sections config_io §B emits that have no
+    # FIELDS entry (subagents.researcher and the plugins.* knobs). Deriving from FIELDS
+    # means a new field doesn't require re-typing the section list here.
+    _LEGACY_SECTIONS = {"subagents", "plugins"}
+    assert set(d.keys()) == {f.key.split(".", 1)[0] for f in FIELDS} | _LEGACY_SECTIONS
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
     # Secrets are redacted out of the UI-facing dict.
