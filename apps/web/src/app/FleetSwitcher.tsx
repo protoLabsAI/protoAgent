@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ExternalLink, Plus } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Plus, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
@@ -15,19 +15,28 @@ const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : a.id);
 
 // Topbar agent switcher (ADR 0042 slug routing). The focused agent lives in the URL
 // (/app/agent/<slug>/), so picking one NAVIGATES there — each window is its own agent, a reload
-// can't desync, and you can open a second agent in a new window. Single-agent (just the host) →
-// plain name, no dropdown. The dropdown is the DS Menu (#1078): open/close, outside-click, focus
-// trap, and the trailing per-row "open in a new window" action all come from @protolabsai/ui.
-export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: ReactNode; onNewAgent?: () => void }) {
-  // Poll so the topbar reflects the fleet live (a newly-added agent makes the switcher appear).
+// can't desync, and you can open a second agent in a new window. The dropdown ALWAYS shows (so
+// New agent + Fleet settings are reachable even with a single agent); only a hard fleet-API error
+// falls back to the plain name. The dropdown is the DS Menu (#1078): open/close, outside-click,
+// focus trap, and the trailing per-row "open in a new window" action all come from @protolabsai/ui.
+export function FleetSwitcher({
+  fallbackName,
+  onNewAgent,
+  onManageFleet,
+}: {
+  fallbackName: ReactNode;
+  onNewAgent?: () => void;
+  onManageFleet?: () => void;
+}) {
+  // Poll so the topbar reflects the fleet live (a newly-added agent shows up in the list).
   const fleet = useQuery({ queryKey: queryKeys.fleet, queryFn: () => api.fleet(), retry: false, refetchInterval: 3_000 });
 
   const agents = fleet.data?.agents ?? [];
   const slug = currentSlug(); // the agent THIS window is on
   const current = agents.find((a) => slugOf(a) === slug);
 
-  // Solo (just the host) or no hub → plain name, no switcher.
-  if (fleet.isError || agents.length <= 1) return <>{fallbackName}</>;
+  // Only a hard fleet-API error hides the switcher; otherwise it's always available.
+  if (fleet.isError) return <>{fallbackName}</>;
 
   return (
     <Menu
@@ -67,9 +76,12 @@ export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: Reac
           </MenuItem>
         );
       })}
-      <MenuSeparator />
+      {agents.length > 0 ? <MenuSeparator /> : null}
       <MenuItem icon={<Plus size={14} />} onSelect={() => onNewAgent?.()}>
         New agent
+      </MenuItem>
+      <MenuItem icon={<Settings size={14} />} onSelect={() => onManageFleet?.()}>
+        Fleet settings
       </MenuItem>
     </Menu>
   );

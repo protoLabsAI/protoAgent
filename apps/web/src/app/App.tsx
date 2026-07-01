@@ -82,7 +82,6 @@ import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { AppDrawer } from "./AppDrawer";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
-import { BrandMenu } from "./BrandMenu";
 import {
   useUI,
   type RightPanel,
@@ -813,9 +812,7 @@ export function App() {
       <div className="app-topbar">
       <Header
         dragRegion
-        // The brand mark is a compact settings menu (#1544): click/right-click → Agent · Fleet ·
-        // Theme deep-links. The DS Header has no brand-slot onClick, so we wrap the logo ourselves.
-        logo={<BrandMenu logo={<ProtoLabsIcon variant="outline" tone="accent" size={22} decorative />} />}
+        logo={<ProtoLabsIcon variant="outline" tone="accent" size={22} decorative />}
         name={
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
@@ -825,6 +822,8 @@ export function App() {
               setFleetStartNew(true);
               openGlobalSettings("fleet");
             }}
+            // "Fleet settings" → the fleet management dialog (no new-agent picker).
+            onManageFleet={() => openGlobalSettings("fleet")}
           />
         }
         org={runtime?.identity?.org || "protoLabs.studio"}
