@@ -24,7 +24,17 @@ from graph.config_io import (
     save_yaml_doc,
 )
 
+from graph.settings_schema import FIELDS
+
 EXAMPLE_PATH = "config/langgraph-config.example.yaml"
+
+# config_to_dict is FIELDS-driven (graph/config_io.py §A) plus a small set of explicit
+# non-FIELDS "legacy" keys (§B). So the SHAPE it emits derives from the schema — only the
+# legacy extras and per-field VALUES are worth hand-maintaining. Deriving the shape means
+# adding a LangGraphConfig field only touches ONE golden below (FROM_YAML_EXAMPLE_FIELDS,
+# the value gate), not four parallel hand-kept lists.
+_FIELDS_ATTRS = {f.attr for f in FIELDS}
+_FIELDS_SECTIONS = {f.key.split(".", 1)[0] for f in FIELDS}
 
 
 @pytest.fixture(autouse=True)
@@ -182,289 +192,6 @@ FROM_YAML_EXAMPLE_FIELDS = {
 # Fields handled by their own dedicated assertions, not the golden map.
 _GOLDEN_EXEMPT = {"api_key", "auth_token", "federation_token", "plugin_config"}
 
-# config_to_dict(from_yaml(example)) exact output — freezes the now-FIELDS-
-# complete emitted surface (B1 PR-3) so a later change shows up as a reviewable
-# diff. The diff vs the old (partial, 11-section) golden is purely ADDITIVE:
-# the new sections agent_runtime / checkpoint / compaction / execute_code / goal
-# / knowledge.embeddings+facts / middleware.enforcement / operator_mcp /
-# prompt_cache / routing / telemetry appeared; no pre-existing value changed.
-CONFIG_TO_DICT_GOLDEN = {
-    "agent_runtime": "native",
-    "developer": {"channel": "prod"},
-    "auth": {
-        "token": "",
-    },
-    "checkpoint": {
-        "background_keep": 1,
-        "db_path": "/sandbox/checkpoints.db",
-        "harvest_enabled": True,
-        "keep_per_thread": 5,
-        "max_age_days": 30,
-        "prune_interval_hours": 6,
-        "vacuum": True,
-    },
-    "commons": {
-        "path": "",
-    },
-    "compaction": {
-        "enabled": True,
-        "keep_messages": 20,
-        "model": "",
-        "trigger": "fraction:0.8",
-    },
-    "egress": {
-        "allowed_hosts": [],
-    },
-    "fleet": {
-        "port_base": 7870,
-        "discovery": {
-            "port_min": 7860,
-            "port_max": 7910,
-            "mdns": True,
-        },
-        "warm": {
-            "max": 0,
-            "grace_seconds": 0,
-        },
-    },
-    "goal": {
-        "enabled": True,
-        "eval_model": "",
-        "max_iterations": 8,
-    },
-    "identity": {
-        "name": "protoagent",
-        "operator": "",
-        "org": "",
-    },
-    "knowledge": {
-        "attach_inline_budget": 8000,
-        "chunk_max_chars": 1200,
-        "chunk_min_chars": 200,
-        "chunk_overlap_chars": 150,
-        "context_max_doc_chars": 12000,
-        "contextual_enrichment": False,
-        "db_path": "/sandbox/knowledge/agent.db",
-        "embed_breaker_cooldown_s": 300.0,
-        "embed_breaker_threshold": 2,
-        "embed_model": "qwen3-embedding",
-        "embeddings": True,
-        "facts": True,
-        "min_score": 0.0,
-        "recall_preview_chars": 1000,
-        "rrf_k": 60,
-        "image_describe_model": "",
-        "scope": "",
-        "top_k": 5,
-        "transcribe_model": "whisper-1",
-        "vector_k": 20,
-    },
-    "mcp": {
-        "denylist": [],
-        "enabled": False,
-        "scope": "",
-        "servers": [],
-        "timeout_seconds": 20.0,
-    },
-    "middleware": {
-        "audit": True,
-        "enforcement": False,
-        "knowledge": True,
-        "memory": True,
-        "scheduler": True,
-    },
-    "model": {
-        "api_base": "http://gateway:4000/v1",
-        "api_key": "",
-        "max_iterations": 50,
-        "max_tokens": 32768,
-        "name": "protolabs/reasoning",
-        "provider": "openai",
-        "reasoning_effort": None,
-        "temperature": 0.2,
-        "thinking": "",
-        "vision": False,
-    },
-    "network": {
-        "bind": "127.0.0.1",
-    },
-    "operator": {
-        "allowed_dirs": [],
-        "project_dir": "",
-    },
-    "operator_mcp": {
-        "tools": [],
-    },
-    "plugins": {
-        "dir": "",
-        "disabled": [],
-        "enabled": [],
-        "sources": {
-            "allow": [],
-        },
-    },
-    "prompt_cache": {
-        "enabled": True,
-        "ttl": "5m",
-        "warm": {
-            "enabled": False,
-            "interval_seconds": 3300,
-        },
-    },
-    "routing": {
-        "aux_model": "",
-        "fallback_models": [],
-    },
-    "runtime": {
-        "autostart_on_boot": False,
-    },
-    "skills": {
-        "db_path": "/sandbox/skills.db",
-        "dir": "",
-        "enabled": True,
-        "scope": "",
-        "top_k": 5,
-    },
-    "subagents": {
-        "researcher": {
-            "enabled": True,
-            "max_turns": 40,
-            "model": "",
-            "tools": [
-                "current_time",
-                "web_search",
-                "fetch_url",
-                "memory_recall",
-                "memory_list",
-            ],
-        },
-    },
-    "telemetry": {
-        "enabled": True,
-        "retention_days": 90,
-    },
-}
-
-# The dataclass attrs config_to_dict ACTUALLY emits, derived from the
-# section/key structure of the golden dict. (a) maps each emitted golden
-# leaf to the dataclass attr it feeds, (b) excludes attrs config_to_dict
-# does NOT emit. The round-trip test asserts equality over exactly this set.
-#
-# plugin sections (when any plugin claims one) round-trip via plugin_config,
-# checked separately. identity.org has no dataclass attr (getattr default).
-EMITTED_ATTRS = {
-    # model.*
-    "model_provider",
-    "model_name",
-    "api_base",
-    "api_key",  # redacted -> resolves to ""
-    "temperature",
-    "max_tokens",
-    "model_vision",
-    "max_iterations",
-    "thinking",
-    "reasoning_effort",
-    # subagents.researcher
-    "researcher",
-    # middleware.*
-    "knowledge_middleware",
-    "audit_middleware",
-    "memory_middleware",
-    "scheduler_enabled",
-    # knowledge.*
-    "knowledge_db_path",
-    "embed_model",
-    "transcribe_model",
-    "image_describe_model",
-    "knowledge_top_k",
-    "knowledge_vector_k",
-    "knowledge_rrf_k",
-    "knowledge_min_score",
-    "knowledge_recall_preview_chars",
-    "knowledge_embed_breaker_threshold",
-    "knowledge_embed_breaker_cooldown_s",
-    "knowledge_chunk_max_chars",
-    "knowledge_chunk_overlap_chars",
-    "knowledge_chunk_min_chars",
-    "knowledge_contextual_enrichment",
-    "knowledge_context_max_doc_chars",
-    "knowledge_attach_inline_budget",
-    # skills.*
-    "skills_enabled",
-    "skills_db_path",
-    "skills_top_k",
-    "skills_dir",
-    # mcp.*
-    "mcp_enabled",
-    "mcp_servers",
-    "mcp_timeout_seconds",
-    "mcp_denylist",
-    "mcp_scope",
-    # plugins.* (disabled + sources.allow added by the 2026-06-10 N6 fix —
-    # config_to_dict used to emit only enabled/dir, so any complete-dict
-    # consumer lost them)
-    "plugins_enabled",
-    "plugins_disabled",
-    "plugins_dir",
-    "plugins_sources_allow",
-    # identity.*
-    "identity_name",
-    "identity_operator",
-    # auth.token
-    "auth_token",  # redacted -> resolves to ""
-    # runtime.*
-    "autostart_on_boot",
-    # operator.*
-    "operator_allowed_dirs",
-    "operator_project_dir",
-    # --- B1 PR-3: config_to_dict is now FIELDS-complete, so these 27
-    # newly-emitted keys (derived key->attr from FIELDS) must also round-trip. ---
-    # agent_runtime
-    "agent_runtime",
-    # operator_mcp.tools
-    "operator_mcp_tools",
-    # routing.*
-    "aux_model",
-    "routing_fallback_models",
-    # compaction.*
-    "compaction_enabled",
-    "compaction_trigger",
-    "compaction_keep_messages",
-    "compaction_model",
-    # goal.*
-    "goal_enabled",
-    "goal_max_iterations",
-    "goal_eval_model",
-    # prompt_cache.* (incl. prompt_cache.warm.*)
-    "prompt_cache_enabled",
-    "prompt_cache_ttl",
-    "cache_warming_enabled",
-    "cache_warming_interval_seconds",
-    # knowledge.embeddings / knowledge.facts
-    "knowledge_embeddings",
-    "knowledge_facts",
-    # checkpoint.*
-    "checkpoint_background_keep",
-    "checkpoint_db_path",
-    "checkpoint_keep_per_thread",
-    "checkpoint_max_age_days",
-    "checkpoint_prune_interval_hours",
-    "checkpoint_harvest_enabled",
-    # middleware.enforcement
-    "enforcement_enabled",
-    # telemetry.*
-    "telemetry_enabled",
-    "telemetry_retention_days",
-    # network.bind / fleet.* (box runtime, ADR 0047 D8)
-    "bind_host",
-    "fleet_port_base",
-    "discovery_port_min",
-    "discovery_port_max",
-    "discovery_mdns",
-    "fleet_max_warm",
-    "fleet_warm_grace_seconds",
-}
-
 
 def _write_yaml(dir_path: Path, body: str, *, secrets: str | None = None) -> str:
     """Write a langgraph-config.yaml (and optional sibling secrets.yaml) and
@@ -506,18 +233,61 @@ def test_from_yaml_example_golden():
 
 
 # ---------------------------------------------------------------------------
-# (b) config_to_dict golden (frozen partial output)
+# (b) config_to_dict shape + redaction (shape derived from FIELDS, values gated by (a))
 # ---------------------------------------------------------------------------
 
 
-def test_config_to_dict_golden():
+def test_config_to_dict_shape_and_redaction():
+    """config_to_dict's SHAPE derives from FIELDS (graph/config_io.py §A), so we assert the
+    top-level sections against the schema + a few representative nested values + secret
+    redaction — NOT a frozen copy of the whole nested dict (which drifted on every field
+    add). The exhaustive value coverage lives in FROM_YAML_EXAMPLE_FIELDS (the flat view of
+    the same cfg) and test_round_trip_preserves_emitted_fields below."""
     cfg = LangGraphConfig.from_yaml(EXAMPLE_PATH)
-    assert config_to_dict(cfg) == CONFIG_TO_DICT_GOLDEN
+    d = config_to_dict(cfg)
+    # every FIELDS top-level section is emitted (§B legacy keys only add sub-keys under
+    # existing sections, never a new top-level one).
+    assert _FIELDS_SECTIONS <= set(d.keys())
+    # secrets redacted (blank-means-unchanged).
+    assert d["model"]["api_key"] == "" and d["auth"]["token"] == ""
+    # representative nested values round-trip from the cfg.
+    assert d["model"]["name"] == cfg.model_name
+    assert d["model"]["temperature"] == cfg.temperature
+    assert d["developer"]["channel"] == cfg.developer_channel
 
 
 # ---------------------------------------------------------------------------
 # (c) Round-trip over exactly the attrs config_to_dict emits
 # ---------------------------------------------------------------------------
+
+
+# The non-FIELDS attrs config_to_dict still emits (graph/config_io.py §B) — hand-listed
+# because they're not in the schema. Everything else derives from _FIELDS_ATTRS, so a
+# newly-added field is round-trip-checked automatically. (This set previously drifted
+# silently — developer_channel, checkpoint_vacuum, commons_path, egress_allowed_hosts,
+# identity_org, knowledge_scope and skills_scope were all missing from round-trip coverage.)
+_LEGACY_EMITTED_ATTRS = {
+    "researcher",  # subagents.researcher (a SubagentDef)
+    "checkpoint_background_keep",
+    "knowledge_db_path",
+    "knowledge_embed_breaker_threshold",
+    "knowledge_embed_breaker_cooldown_s",
+    "knowledge_chunk_min_chars",
+    "knowledge_context_max_doc_chars",
+    "mcp_enabled",
+    "mcp_servers",
+    "mcp_timeout_seconds",
+    "mcp_denylist",
+    "skills_enabled",
+    "skills_db_path",
+    "skills_dir",
+    "plugins_enabled",
+    "plugins_disabled",
+    "plugins_dir",
+    "plugins_sources_allow",
+}
+# Redacted secrets (api_key / auth_token / federation_token) resolve to "" on both sides.
+EMITTED_ATTRS = _FIELDS_ATTRS | _LEGACY_EMITTED_ATTRS
 
 
 def test_round_trip_preserves_emitted_fields(tmp_path):
