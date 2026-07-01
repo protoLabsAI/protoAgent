@@ -120,3 +120,27 @@ async def test_nonstreaming_chat_keys_the_streaming_thread(monkeypatch):
 
     await chat("hello", "s1")
     assert g.seen_config["configurable"]["thread_id"] == _resolve_thread_id(None, "s1") == "a2a:s1"
+
+
+async def test_nonstreaming_chat_holds_the_thread_lock(monkeypatch):
+    """Sharing the streaming thread means sharing its serialization contract: the
+    non-streaming graph turn must run under ``_thread_lock(a2a:<sid>)`` — every other
+    writer (streaming driver, compact_session, rewind_session) holds it, so an
+    unlocked turn here could lost-update a concurrent one."""
+    from langchain_core.messages import AIMessage
+
+    from server.chat import _thread_lock, chat
+
+    locked_during_invoke: list[bool] = []
+
+    class _Graph:
+        async def ainvoke(self, payload, config=None):
+            locked_during_invoke.append(_thread_lock(config["configurable"]["thread_id"]).locked())
+            return {"messages": [AIMessage(content="ok")]}
+
+    monkeypatch.setattr(STATE, "graph", _Graph(), raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(STATE, "thread_id_resolver", None, raising=False)
+
+    await chat("hello", "s-lock")
+    assert locked_during_invoke == [True]
