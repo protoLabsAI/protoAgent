@@ -51,6 +51,14 @@ TypeScript is the console.
   the source of truth; `uv.lock` is tracked). `uv sync` to install.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is
   `@protoagent/web`).
+- **Console dev loop (frontend):** `npm run dev` (HMR) / `npm run preview` (built dist) serve
+  the console on `:5173` and **proxy all backend calls (`/api`, `/a2a`, events, `/agents`,
+  `/plugins`, `/_ds`) to `PROTOAGENT_API_BASE`, default `http://127.0.0.1:7871`** — the
+  ISOLATED dev instance from `scripts/dev.sh`, **not** the default/prod `:7870` the desktop app
+  runs. So the correct loop is *`scripts/dev.sh` (backend, :7871) + `npm run dev` (frontend)* —
+  both isolated, so dev testing never touches your `~/.protoagent` data. Vite prints a loud red
+  guard if you ever point `PROTOAGENT_API_BASE` at `:7870`. (Historically it defaulted to
+  `:7870`, which silently crossed dev traffic into the prod/desktop instance.)
 
 ## Must pass before opening a PR
 
