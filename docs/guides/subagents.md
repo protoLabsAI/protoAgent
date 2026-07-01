@@ -162,6 +162,40 @@ They're separate agents on purpose: no agent should grade its own homework.
 They're ordinary `SubagentConfig`s in the registry — reuse, retune, or drop them
 like any other; the `deep-research` recipe just wires them into a DAG.
 
+## Background jobs (run detached)
+
+A delegation can run **detached** so it never blocks the turn: `task(run_in_background=true)`
+(or `task_batch`) fires the subagent, returns a `bg-…` job id immediately, and the result is
+drained back into the conversation when it finishes — with a live card on the console's
+background-jobs surface and an autonomous idle-wake
+([ADR 0050](/adr/0050-background-subagents-reactive-notifications)). Durable (survives restart),
+concurrency-capped (`BACKGROUND_MAX_CONCURRENCY`), and cancellable.
+
+**Reuse it from your own code — `BackgroundManager.spawn_work(...)`.** Not every long job is an
+LLM turn. A *deterministic* pipeline — media transcription, a bulk import, a crawl — shouldn't
+spend a model turn on itself. `spawn_work` runs a plain coroutine through the **same** durable
+registry + concurrency cap + `background.*` event stream + drain-on-next-turn + idle-wake as a
+background subagent, with no LLM turn:
+
+```python
+from runtime.state import STATE
+
+mgr = STATE.background_mgr  # None when the background subsystem is disabled → run inline instead
+if mgr is not None:
+    job_id = await mgr.spawn_work(
+        origin_session=session_id,
+        kind="ingest",                     # short label — shows on the job card
+        description="Ingest that video",
+        detail=source,                     # recorded on the job row
+        work=lambda: do_the_work(source),  # an async () -> result-string callable
+    )
+```
+
+The `knowledge_ingest` tool is the first consumer — it detaches any slow URL/media ingest this
+way so a 20-minute transcription never freezes the chat. Reach for `spawn_work` whenever a tool
+or plugin has a long **deterministic** operation that shouldn't block the turn (vs.
+`run_in_background`, which is for detaching an *LLM subagent* turn).
+
 ## What you get for free
 
 Every subagent call:
