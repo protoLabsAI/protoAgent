@@ -25,19 +25,12 @@ body:
     validations:
       required: true
   - type: textarea
-    id: expected-actual
-    attributes:
-      label: Expected vs. actual
-      description: What you expected to happen, and what actually happened.
-    validations:
-      required: true
-  - type: textarea
     id: acceptance
     attributes:
       label: Acceptance
       description: How we'll know it's fixed — verifiable criteria.
     validations:
-      required: true
+      required: false
   - type: input
     id: env
     attributes:
