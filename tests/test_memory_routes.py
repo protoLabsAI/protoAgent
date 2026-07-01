@@ -190,6 +190,24 @@ def test_hot_delete_only_resolves_hot_ids(tmp_path, monkeypatch):
     assert ks.deleted == [3]
 
 
+def test_hot_excludes_commons_tier(tmp_path, monkeypatch):
+    # On a LayeredKnowledgeStore, list_chunks unions private+commons with
+    # PER-BACKEND ids while get_hot_memory/add_chunk/delete_by_id delegate to
+    # private only. A commons hot row must not appear in the list (it never
+    # injects) and — critically — its id must not pass the mutation gates:
+    # delete_by_id would hit whatever PRIVATE row shares the numeric id.
+    ks = _HotKS()
+    ks.rows = [
+        {**ks.rows[0], "tier": "private"},
+        {"id": 7, "content": "shared fact", "domain": "hot", "created_at": "2026-07-01", "source": "commons", "tier": "commons"},
+    ]
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert [r["id"] for r in c.get("/api/memory/hot").json()["chunks"]] == [3]
+    assert c.delete("/api/memory/hot/7").status_code == 404
+    assert c.put("/api/memory/hot/7", json={"content": "x"}).status_code == 404
+    assert ks.deleted == [] and ks.added == []  # private row 7 untouched
+
+
 def test_hot_disabled_without_store(tmp_path, monkeypatch):
     c = _client(monkeypatch, tmp_path)
     assert c.get("/api/memory/hot").json() == {"enabled": False, "chunks": []}

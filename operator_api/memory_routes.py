@@ -48,9 +48,21 @@ def _session_path(session_id: str) -> str | None:
 
 def _hot_chunks(store) -> list[dict]:
     """Hot-memory rows in the console's chunk shape. list_chunks yields Chunk
-    objects (plain store) or tier-tagged dicts (LayeredKnowledgeStore)."""
+    objects (plain store) or tier-tagged dicts (LayeredKnowledgeStore).
+
+    Commons-tier rows are EXCLUDED: on a layered store ``get_hot_memory`` (the
+    actual per-turn injection) and ``add_chunk``/``delete_by_id`` all delegate
+    to the PRIVATE store, and ids are per-backend — a commons hot chunk never
+    injects, and letting its id pass the mutation gates would make
+    ``delete_by_id`` hit whatever PRIVATE row shares that numeric id (an
+    arbitrary KB chunk). Commons curation stays with promote/forget on the
+    knowledge surface."""
     rows = store.list_chunks(domain="hot", limit=_HOT_LIST_LIMIT)
-    return [_knowledge_row(c if isinstance(c, dict) else c.as_dict()) for c in rows]
+    return [
+        _knowledge_row(c)
+        for c in (c if isinstance(c, dict) else c.as_dict() for c in rows)
+        if c.get("tier") != "commons"
+    ]
 
 
 def register_memory_routes(app) -> None:
