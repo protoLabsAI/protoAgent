@@ -136,6 +136,7 @@ export default defineConfig({
           items: [
             { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
             { text: "Command palette (⌘K)", link: "/guides/command-palette" },
+            { text: "Developer flags (gate pre-release features)", link: "/guides/developer-flags" },
             { text: "Access from your phone (LAN / Tailscale)", link: "/guides/phone-access" },
             { text: "Run headless (API + A2A)", link: "/guides/headless" },
           ],
