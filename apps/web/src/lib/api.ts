@@ -974,6 +974,17 @@ export const api = {
     });
   },
 
+  // Operator goal-set (ADR 0066) — the trusted operator channel. `/api` is operator-tier by
+  // the ADR 0066 path ceiling, so this accepts ANY verifier type (unlike the plugin-only SDK
+  // path). A rejected verifier / disabled goal mode comes back as HTTP 400 (request() throws,
+  // so the caller's onError surfaces the reason); the happy path returns {ok:true, message}.
+  setGoal(body: { session_id: string; condition: string; verifier: unknown }) {
+    return request<{ ok: boolean; message?: string; error?: string }>("/api/goals", {
+      method: "POST",
+      body,
+    });
+  },
+
   // Watches (ADR 0067) — passive verifier-only objectives, many at once, keyed by id. The
   // panel invalidates this on the `watch.*` bus pushes (created/checked/met/expired/stalled)
   // instead of polling — same pattern as goals.
