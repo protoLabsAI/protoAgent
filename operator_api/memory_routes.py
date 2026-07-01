@@ -179,6 +179,9 @@ def register_memory_routes(app) -> None:
 
     @app.delete("/api/memory/hot/{chunk_id}")
     async def _api_memory_hot_delete(chunk_id: int):
+        # Deliberately a HARD delete (ADR 0069 D9): automatic supersession keeps
+        # invalidated rows for audit, but an operator delete is explicit intent
+        # and removes the row outright.
         store = STATE.knowledge_store
         if store is None:
             return {"enabled": False, "deleted": False}

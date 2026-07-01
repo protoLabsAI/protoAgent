@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Supersede-don't-delete staleness** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md)
+  D9). The `chunks` table gains a nullable `invalidated_at` column (additive
+  migration, namespace precedent): when the session-end fact pass extracts a
+  fact that *revises* a stored one (same subject, changed details — a
+  deterministic token-overlap band, never an LLM freshness judgment), the old
+  row is stamped `invalidated_at` and the new row inserted — history kept for
+  audit, nothing updated in place or deleted. Default retrieval excludes
+  invalidated rows everywhere (plain/hybrid/layered `search` — both hybrid
+  rankings — `list_chunks`, hot-memory injection, `memory_recall`), with an
+  `include_invalidated=True` escape hatch for audit tooling. Auto-injected RAG
+  lines now end with the chunk's stored date (`(stored 2026-07-01)`) as a
+  deterministic in-context recency signal. Operator deletes (`forget_memory`,
+  the inspector's DELETE routes) stay **hard** deletes — explicit intent beats
+  history-keeping. See [the knowledge guide](docs/guides/knowledge.md#staleness-supersede-dont-delete).
 - **Namespace-scoped auto-injection** (`knowledge.inject_namespaces`,
   [ADR 0069](docs/adr/0069-memory-delivery-layer.md) D3a). When set, the per-turn
   auto-injected RAG recall only considers chunks in the listed namespaces (`""`

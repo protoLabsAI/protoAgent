@@ -263,6 +263,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         k: int,
         domain: str | None,
         namespace: str | list[str] | None = None,
+        include_invalidated: bool = False,
     ) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
         db = self._get_db()
@@ -270,6 +271,8 @@ class HybridKnowledgeStore(KnowledgeStore):
             return []
         where: list[str] = []
         params: list = []
+        if not include_invalidated:
+            where.append("c.invalidated_at IS NULL")
         if domain:
             where.append("c.domain = ?")
             params.append(domain)
@@ -314,23 +317,29 @@ class HybridKnowledgeStore(KnowledgeStore):
         *,
         domain: str | None = None,
         namespace: str | list[str] | None = None,
+        include_invalidated: bool = False,
     ) -> list[dict]:
         """RRF-fuse the FTS5 ranking with a vector ranking.
 
         Falls back to pure FTS5 when embeddings are unavailable (no embed_fn,
         circuit open, or the query fails to embed) — same shape, never raises.
         ``namespace`` (ADR 0069 D3a) filters BOTH rankings, so a fused hit can
-        never come from outside the requested scope.
+        never come from outside the requested scope. Superseded rows
+        (``invalidated_at``, ADR 0069 D9) are likewise excluded from BOTH
+        rankings by default; ``include_invalidated=True`` is the audit escape
+        hatch.
         """
         if not query or not query.strip():
             return []
 
-        base = super().search(query, k=self._vector_k, domain=domain, namespace=namespace)
+        base = super().search(
+            query, k=self._vector_k, domain=domain, namespace=namespace, include_invalidated=include_invalidated
+        )
         query_vec = self._embed(query)
         if query_vec is None:
             return base[:k]
 
-        vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace)
+        vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace, include_invalidated)
         if not vec_ids:
             return base[:k]
 
