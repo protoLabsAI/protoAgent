@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-07-01
+
 ### Added
 - **Memory-regression evals** (`memory-regression` category,
   [ADR 0069](docs/adr/0069-memory-delivery-layer.md) D10) — three ADR 0012
