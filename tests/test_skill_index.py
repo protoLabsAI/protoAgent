@@ -510,3 +510,52 @@ def test_user_only_skill_is_withheld_from_agent_index_but_still_a_slash(index):
     assert "Deploy now" in ufs
     assert ufs["Deploy now"]["slash"] == "deploy"
     assert ufs["Deploy now"]["user_only"] is True
+
+
+# ── Concurrency ───────────────────────────────────────────────────────────────
+
+
+def test_concurrent_access_is_thread_safe(populated_index) -> None:
+    """The index keeps ONE sqlite connection reused across threads. The knowledge
+    middleware reads it on the per-turn hot path (``skill_summaries``/``discoverable_count``)
+    while the curator writes to it — concurrent use of a single connection races and
+    corrupts cursor state (→ NULL/garbage cells → ``float(None)``, ``InterfaceError``,
+    ``IndexError``). Every method touch must be serialized: hammer reads AND writes from
+    many threads; nothing may raise, and reads must stay well-formed."""
+    import threading
+
+    index = populated_index
+    errors: list[str] = []
+
+    def reader() -> None:
+        for _ in range(150):
+            try:
+                summaries = index.skill_summaries()
+                assert all(isinstance(s, dict) and "name" in s for s in summaries)
+                index.discoverable_count()
+                index.get_skill("web-research")
+                index.all_skills()
+                index.user_facing_skills()
+            except Exception as exc:  # noqa: BLE001 — a raised call is the regression
+                errors.append(f"{type(exc).__name__}: {exc}")
+
+    def writer() -> None:
+        for i in range(150):
+            try:
+                # rowid 1 = web-research; churn its confidence to drive concurrent writes.
+                index.update_confidence(1, 0.5 + (i % 5) / 10)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=reader) for _ in range(10)]
+    threads += [threading.Thread(target=writer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent access raised: {errors[:3]}"
+    # Index is still coherent + correctly typed after the pounding.
+    assert index.discoverable_count() == 3
+    ws = index.get_skill("web-research")
+    assert ws is not None and isinstance(ws["confidence"], float)
