@@ -187,3 +187,51 @@ def test_compact_rewrites_real_sqlite_checkpoint(tmp_path):
     assert len(final) == 3
     assert "SUMMARY" in final[0].content and final[0].additional_kwargs.get("lc_source") == "compaction"
     assert final[1].content == "q2" and final[2].content == "answer2"
+
+
+def test_compact_archive_is_searchable_in_a_real_store(tmp_path):
+    """End-to-end 'searchable full-text save': the FULL raw transcript — including
+    the head that compaction REMOVES from live context — is archived into a REAL
+    KnowledgeStore (FTS5, no gateway) and retrievable by search. Only the
+    summarizer is stubbed; the checkpoint rewrite + archive are real."""
+    from knowledge.store import KnowledgeStore
+
+    g = StateGraph(MessagesState)
+    g.add_node("n", lambda s: {"messages": []})
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+    saver = build_sqlite_checkpointer(str(tmp_path / "c.db"))
+    app = g.compile(checkpointer=saver)
+    cfg = {"configurable": {"thread_id": "a2a:s1"}}
+    seed = [
+        HumanMessage(content="my favorite bread is pumpernickel"),
+        AIMessage(content="noted, pumpernickel"),
+        HumanMessage(content="old filler two"),
+        AIMessage(content="ok two"),
+        HumanMessage(content="what is the capital of France"),
+        AIMessage(content="Paris"),
+    ]
+    store = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+
+    async def run():
+        await app.ainvoke({"messages": seed}, cfg)
+        res = await compact_thread(app, saver, store, _cfg(2), "a2a:s1", "s1", summarizer=_summ)
+        snap = await app.aget_state(cfg)
+        return res, snap.values["messages"]
+
+    res, final = asyncio.run(run())
+
+    # (1) Actually compacted: archived a chunk, removed the head, kept the tail.
+    assert res["archived"] is True and res["refused"] is False
+    assert res["archived_chunks"] >= 1 and res["removed"] == 4 and res["kept"] == 2
+    assert res["summary"]
+
+    # (2) Live context collapsed to [summary, capital-of-France, Paris] — head GONE.
+    assert len(final) == 3
+    assert all("pumpernickel" not in (m.content or "") for m in final)
+
+    # (3) …but the removed head is preserved AND SEARCHABLE in the real store.
+    hits = store.search("pumpernickel", domain="conversation")
+    assert hits, "archived transcript is NOT searchable"
+    blob = " ".join(str(h.get("content") or h.get("preview") or "") for h in hits)
+    assert "pumpernickel" in blob
