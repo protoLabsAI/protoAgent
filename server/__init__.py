@@ -660,6 +660,12 @@ def _main():
     # Knowledge store + Playbooks (ADR 0020). Extracted to
     # operator_api/knowledge_routes.py (ADR 0023 phase 3).
     register_knowledge_routes(fastapi_app)
+
+    # Memory inspector (ADR 0069 D7) — /api/memory/*: the session summaries
+    # behind the <prior_sessions> digest + always-injected hot memory.
+    from operator_api.memory_routes import register_memory_routes
+
+    register_memory_routes(fastapi_app)
     register_plugin_routes(fastapi_app)
 
     # Operator server controls — POST /api/restart (graceful self-restart). Gated by

@@ -438,10 +438,6 @@ def _extract_text_from_html(content: bytes) -> str:
 _MEMORY_RECALL_MAX_K = 20
 _MEMORY_LIST_MAX_LIMIT = 200
 _RECALL_SESSION_MAX_CHARS = 6000
-# Session ids become filenames under memory_path() — restrict to the characters
-# real ids use (``:`` included — e.g. ``background:job``) so a crafted id can't
-# path-traverse out of the memory dir.
-_SESSION_ID_SAFE_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-")
 
 # Fork tool denylist — names dropped from ``get_all_tools``. Set once from config
 # (``tools.disabled``) by ``set_disabled_tools`` at config load/reload, so a fork
@@ -781,12 +777,13 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         import json
         import os
 
+        from graph.middleware.memory import format_session_summary, is_safe_session_id, memory_path
+
         sid = (session_id or "").strip()
         # Filename guard: ids map to {memory_path()}/{sid}.json, so anything
         # outside the safe charset (path separators, "..", NUL) is rejected.
-        if not sid or not set(sid) <= _SESSION_ID_SAFE_CHARS:
+        if not is_safe_session_id(sid):
             return f"Error: invalid session_id {session_id!r} — pass an id from <prior_sessions>."
-        from graph.middleware.memory import format_session_summary, memory_path
 
         fpath = os.path.join(memory_path(), f"{sid}.json")
         try:
