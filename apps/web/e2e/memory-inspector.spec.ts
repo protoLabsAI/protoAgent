@@ -63,6 +63,23 @@ test("Hot memory panel lists always-on chunks; delete confirms and toasts", asyn
   await expect(surface.getByText("Weekly report goes out Fridays at 9am.")).toHaveCount(0);
 });
 
+test("editing a hot-memory entry saves via PUT, toasts, and shows the revision", async ({ page }) => {
+  const surface = page.getByTestId("memory-surface");
+  await surface.getByRole("tab", { name: "Hot memory" }).click();
+
+  await surface.getByLabel("edit hot entry 31").click();
+  const field = surface.getByLabel("hot entry 31 content");
+  await expect(field).toHaveValue("The operator works in US/Pacific.");
+  await field.fill("The operator works in US/Eastern.");
+  await surface.getByRole("button", { name: "Save", exact: true }).click();
+
+  await expect(page.locator(".pl-toast", { hasText: "Hot-memory entry updated." })).toBeVisible();
+  // The list refetches and shows the new revision (the backend re-adds + deletes,
+  // pinning domain="hot" — the row content is what must survive).
+  await expect(surface.getByText("The operator works in US/Eastern.")).toBeVisible();
+  await expect(surface.getByText("The operator works in US/Pacific.")).toHaveCount(0);
+});
+
 test("Injections panel shows the per-turn record and filters by session id", async ({ page }) => {
   const surface = page.getByTestId("memory-surface");
   await surface.getByRole("tab", { name: "Injections" }).click();
