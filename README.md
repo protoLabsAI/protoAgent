@@ -79,6 +79,21 @@ through every wizard step with screenshots.
 Once you're happy and want to ship it as your own image in your
 own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
 
+## One-command install (Docker)
+
+No clone, no Python — for a fresh box you just SSH'd into. Pulls the published
+image, runs it, and walks a CLI wizard (the same `/api/config/*` endpoints the
+browser wizard uses) to configure a provider, model, and agent name:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts/install.sh | sh
+```
+
+Re-running updates the image (the data volume is preserved) and offers to
+re-run the wizard. Works over a plain SSH session — with no TTY it starts the
+container and points you at the console to finish. See
+[Deploy with Docker → one-command install](./docs/guides/deploy-docker.md#one-command-install).
+
 ## Run headless
 
 The web console is optional — protoAgent is an **API-first agent server**. Run it
