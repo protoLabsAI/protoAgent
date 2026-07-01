@@ -64,7 +64,7 @@ export function Launcher() {
       icon: pluginIcon(),
       theme: consoleTheme(),
       token: authToken(),
-      sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox",
+      sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock",
     }));
 
   // Inline quick-chat with the focused agent (host, since the launcher loads /app/).

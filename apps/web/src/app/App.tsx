@@ -525,7 +525,7 @@ export function App() {
       icon: pluginViewIcon(v.icon),
       theme: consoleTheme(),
       token: authToken(),
-      sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox",
+      sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock",
     }));
   // Inline chat with the focused agent (ADR 0057) — ⌘K → a quick chat that streams via
   // api.streamChat (ephemeral context per open). Memoized so the transport (+ its
