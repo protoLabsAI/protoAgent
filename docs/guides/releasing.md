@@ -22,21 +22,37 @@ you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──▶  Release 
 `latest` Docker tag is pushed on every `main` merge by `docker-publish.yml` —
 independent of releases.
 
-**Every** semver tag push (patch included) also triggers `desktop-build.yml`, which
-builds the desktop app on a three-platform matrix and attaches the artifacts to the
-same GitHub Release: the macOS `.dmg` (signed + notarized — requires the full Apple
-secret set, the leg fails otherwise), the Linux `.AppImage` + `.deb`, and the Windows
-NSIS `-setup.exe` (both unsigned). See `apps/desktop/README.md` § Platforms & CI.
+### Desktop
 
-> **Patches ship desktop binaries too** (changed 2026-06-19). They used to skip the
-> desktop build to save CI minutes, but this repo is public so GitHub-hosted runners
-> (incl. the 10×/2× macOS/Windows legs) are free + unlimited — so every release, patch
-> or minor, publishes fresh desktop binaries and refreshes `latest.json`. (The old
-> skip also meant a patch's desktop fix never reached users — binaries weren't attached
-> and the in-app updater stayed on the last minor.)
-When the org updater signing key is present, the legs also attach signed updater
-bundles and a fan-in job uploads `latest.json` — the manifest the desktop app's
-in-app updater polls. See `apps/desktop/README.md` § Updates.
+Desktop builds are **manual** — `desktop-build.yml` runs on `workflow_dispatch` only,
+**not** on tag pushes. The macOS (10×) and Windows (2×) legs are the repo's only paid
+CI, and building the full matrix on every tag (dozens/month) was the dominant cost, so
+desktop drops are on-demand. A normal `git push` of a tag still ships the Docker image
+and a GitHub Release (via `release.yml`); only the desktop binaries wait for a dispatch.
+
+To cut a desktop release, dispatch `desktop-build.yml` with the **tag** input set to the
+release tag (`vX.Y.Z`):
+
+```sh
+gh workflow run desktop-build.yml -f tag=vX.Y.Z
+```
+
+That builds the three-platform matrix and attaches the artifacts to that GitHub Release:
+the macOS `.dmg` (signed + notarized — requires the full Apple secret set, the leg fails
+otherwise), the Linux `.AppImage` + `.deb`, and the Windows NSIS `-setup.exe` (both
+unsigned). When the org updater signing key is present, the legs also attach signed
+updater bundles and a fan-in job uploads `latest.json` (the manifest the in-app updater
+polls) and promotes the release to **Latest**. See `apps/desktop/README.md` §§ Platforms
+& CI / Updates.
+
+> **Dispatching without a tag** (from a branch) is a **test build**: bundles upload as
+> workflow artifacts only — no release, no `latest.json`, no `Latest` change.
+
+> **`Latest` tracks the last desktop release, not the newest tag.** `release.yml` creates
+> every release `--latest=false`; a release is promoted to `Latest` only when its desktop
+> build's fan-in has uploaded `latest.json`, so the in-app updater never 404s on a release
+> that has no manifest. Tags you never build desktop for stay non-Latest (their Docker
+> image and notes are still published).
 
 > **Runner cost.** Every other workflow runs on Namespace; the desktop matrix is
 > the only GitHub-hosted usage (macOS bills at 10×, Windows 2×). To move a leg onto
