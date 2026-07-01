@@ -79,6 +79,12 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   bypass). Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)
+- **`registerKeybinding`** (`apps/web/src/ext/keybindingRegistry.ts`, ADR 0063) — binds a
+  default keyboard shortcut (optionally focus-scoped to a `data-kb-scope` panel). Every
+  registered binding auto-appears in **Settings ▸ Keyboard** (user-rebindable, with conflict
+  detection) and fires through the one global keydown host. **Dogfooded:** core's own shortcuts
+  (`keybindings/coreKeybindings.ts`) register through this same seam. Re-exported from
+  `src/ext/index.ts` alongside the seams above (#1457) so a fork reaches it the same way.
 
 ### UI-state slices (shipped, `createUISlice`)
 
