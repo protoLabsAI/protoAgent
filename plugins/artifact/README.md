@@ -40,7 +40,9 @@ console view.
 - **View** "Artifact" (right rail) — a sandboxed renderer with an **artifact picker**, **version
   navigation** (step back/forward through edits), an **in-panel code editor** (edit the source and
   *Run & save* → a new `user` version, never overwriting the agent's), **download** (this version),
-  and **delete**.
+  and **delete**. Diagram kinds (**`svg`** / **`mermaid`**) render into a **pan/zoom viewport** —
+  scroll-wheel / pinch to zoom (cursor-anchored), click-drag to pan, and *Reset* to re-fit — so large
+  flowcharts and architecture diagrams stay explorable.
 - **Events** `artifact.created` / `artifact.updated` / `artifact.deleted` (ADR 0039) — broadcast on
   the bus so the console lights the Artifact rail icon even when the panel is closed.
 - **Skill** `rendering-artifacts` — teaches render-don't-write-files and the edit-don't-recreate
