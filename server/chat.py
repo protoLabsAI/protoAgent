@@ -93,6 +93,27 @@ def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
     return f"a2a:{session_id}"
 
 
+def _goal_continuation_config(config: dict, goal_state) -> dict:
+    """The LangGraph config for one goal *continuation* turn.
+
+    Same-session goals reuse ``config`` (the checkpointer keeps the transcript so the model
+    sees prior iterations). Fresh-context goals (Ralph loop) get a scoped, per-iteration
+    ``thread_id`` so the checkpointer starts clean each turn — derived from the CURRENT
+    ``config`` thread_id so the streaming (``a2a:…``) and non-streaming (``chat:…``) drive
+    loops build it identically instead of each hand-rolling it. (They had drifted: the two
+    paths re-derived the base thread_id differently and only the streaming one set
+    ``recursion_limit`` — this unifies both.) Durable state lives in the goal's plan
+    artifact on disk, not the thread.
+    """
+    if not (goal_state and getattr(goal_state, "fresh_context", False)):
+        return config
+    base_tid = (config.get("configurable") or {}).get("thread_id") or "goal"
+    return {
+        "configurable": {"thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"},
+        "recursion_limit": 200,
+    }
+
+
 # One ACP runtime per thread (the ACP session is stateful — the coding agent holds
 # history, so we reuse it across turns; ADR 0033 slice 4).
 _ACP_RUNTIMES: dict[str, Any] = {}
@@ -903,17 +924,9 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
             yield ("tool_start", f"🎯 {decision.note}")
             if decision.action == "done":
                 break
-            # For fresh-context goals, create a scoped thread so the checkpointer starts
-            # clean — no accumulated transcript from prior iterations.
-            goal_state = decision.state
-            if goal_state and goal_state.fresh_context:
-                base_tid = _resolve_thread_id(request_metadata, session_id)
-                cont_config = {
-                    "configurable": {"thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"},
-                    "recursion_limit": 200,
-                }
-            else:
-                cont_config = config  # same-session (existing behavior)
+            # Fresh-context goals get a scoped per-iteration thread; same-session reuse
+            # `config`. Shared helper keeps the streaming + non-streaming loops in lockstep.
+            cont_config = _goal_continuation_config(config, decision.state)
 
             cont_raw = ""
             with goal_turn():
@@ -1250,15 +1263,9 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     note = decision.note
                     if decision.action == "done":
                         break
-                    # For fresh-context goals, create a scoped thread so the checkpointer
-                    # starts clean — no accumulated transcript from prior iterations.
-                    goal_state = decision.state
-                    if goal_state and goal_state.fresh_context:
-                        cont_config = {
-                            "configurable": {"thread_id": f"chat:{session_id}:goal-iter-{goal_state.iteration}"},
-                        }
-                    else:
-                        cont_config = config
+                    # Fresh-context goals get a scoped per-iteration thread; same-session
+                    # reuse `config`. Same shared helper as the streaming path (no drift).
+                    cont_config = _goal_continuation_config(config, decision.state)
 
                     with goal_turn():
                         result = await STATE.graph.ainvoke(
