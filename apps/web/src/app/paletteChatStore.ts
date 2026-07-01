@@ -23,7 +23,10 @@ function newContextId(): string {
 }
 
 // A corrupt persisted message must not white-screen the chat (cf. chat-store #872) —
-// keep only well-formed ones, and never leave a message stuck "streaming" on reload.
+// keep only well-formed ones. A message stuck "streaming" is settled to "done" UNLESS it
+// carries a durable `taskId`: that one was interrupted mid-turn (palette closed), and
+// PaletteChat's self-heal reconnects it to the server task on reopen — so keep it
+// streaming for the reconnect to reconcile (mirrors the main chat, ChatSurface).
 function sanitize(messages: unknown): ChatMessage[] {
   if (!Array.isArray(messages)) return [];
   return messages
@@ -34,7 +37,7 @@ function sanitize(messages: unknown): ChatMessage[] {
         (x.role === "user" || x.role === "assistant" || x.role === "system") && typeof x.content === "string"
       );
     })
-    .map((m) => (m.status === "streaming" ? { ...m, status: "done" as const } : m));
+    .map((m) => (m.status === "streaming" && !m.taskId ? { ...m, status: "done" as const } : m));
 }
 
 export function loadPaletteThread(): PaletteThread {
