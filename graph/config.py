@@ -430,6 +430,22 @@ class LangGraphConfig:
     # are auto-injected; include "" to also match un-namespaced chunks. Gates
     # only what enters the prompt unasked — memory_recall stays unscoped.
     knowledge_inject_namespaces: list[str] = field(default_factory=list)
+    # Trust floor for the AUTO-INJECT RAG hits (ADR 0069 D8). Rows rank into
+    # deterministic trust tiers by source_type (knowledge/trust.py): 3 =
+    # operator-authored, 2 = agent-derived (extracted facts, harvest,
+    # memory_ingest), 1 = ingested/external (web, YouTube, PDF, media) and
+    # unknown. 1 (default) excludes nothing — low tiers are only down-weighted
+    # (ranked below higher tiers); 2 drops external/ingested content from
+    # auto-injection; 3 auto-injects operator-authored rows only. memory_recall
+    # is never gated — excluded content stays reachable on demand.
+    knowledge_inject_min_trust: int = 1
+    # Hot-memory write confirm gate (ADR 0069 D8). When True, the agent's own
+    # write path (memory_ingest) refuses domain="hot" writes with an error
+    # telling it to ask the operator — only operator surfaces (console
+    # knowledge/memory routes) put facts in front of the model every turn.
+    # Default False: single-operator boxes keep the frictionless flow; every
+    # hot write emits a `memory.hot_written` bus event either way.
+    knowledge_hot_write_confirm: bool = False
     # Hybrid-retrieval tuning (HybridKnowledgeStore knobs, ADR 0021) — surfaced so
     # they're tunable without editing the store / via the retrieval eval:
     #   vector_k  — FTS5 + vector candidates fused per query (the RRF pool).
@@ -919,6 +935,8 @@ class LangGraphConfig:
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             knowledge_inject_namespaces=list(knowledge.get("inject_namespaces", []) or []),
+            knowledge_inject_min_trust=knowledge.get("inject_min_trust", cls.knowledge_inject_min_trust),
+            knowledge_hot_write_confirm=knowledge.get("hot_write_confirm", cls.knowledge_hot_write_confirm),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

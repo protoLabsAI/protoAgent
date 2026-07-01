@@ -241,7 +241,9 @@ def test_injected_rag_lines_carry_stored_date(tmp_path):
     km._prior_sessions_cache = ""  # skip session loading
     result = km.before_model({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
     assert result is not None
-    assert f"(stored {stored_date})" in result["context"]
+    # The stored date leads the hit's metadata suffix; the trust tier label
+    # rides the same parens (ADR 0069 D8).
+    assert f"(stored {stored_date};" in result["context"]
 
 
 def test_injection_skips_invalidated_chunks(tmp_path):

@@ -102,6 +102,18 @@ knowledge:
   # inject_namespaces:
   #   - "projects/alpha"
   #   - ""
+  # Trust floor for the per-turn AUTO-INJECTED recall (ADR 0069 D8). Chunks rank
+  # into deterministic trust tiers by source_type: 3 = operator-authored, 2 =
+  # agent-derived (extracted facts, harvest, memory_ingest), 1 = ingested/external
+  # (web, YouTube, PDFs, media) and unknown. 1 (default) excludes nothing — low
+  # tiers are only ranked below higher ones; 2 drops external content from
+  # auto-injection; 3 = operator rows only. memory_recall is never gated.
+  # inject_min_trust: 1
+  # Hot-memory write confirm gate (ADR 0069 D8). When true, the agent's
+  # memory_ingest refuses domain="hot" writes (it must ask the operator);
+  # operator surfaces are unaffected. Every hot write emits a
+  # `memory.hot_written` bus event either way.
+  # hot_write_confirm: false
   # Document chunking on ingest (ADR 0021) — large bodies (conversation
   # summaries, pasted docs) are split into overlapping passages BEFORE
   # embedding, so each passage gets its own vector instead of one diluted

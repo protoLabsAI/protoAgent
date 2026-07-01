@@ -124,7 +124,8 @@ async def harvest_thread(
 
         # source=<thread_id> is the machine-readable provenance link (ADR 0069
         # D5) — the heading carries it for humans, but recall/audit key on the
-        # row's source column.
+        # row's source column. source_type="harvest" ranks the rows in the
+        # agent-derived trust tier (ADR 0069 D8).
         chunk_ids = await asyncio.to_thread(
             add_document,
             knowledge_store,
@@ -132,6 +133,7 @@ async def harvest_thread(
             domain="conversation",
             heading=f"Conversation summary ({thread_id})",
             source=thread_id,
+            source_type="harvest",
             namespace=namespace,
         )
         chunk_id = chunk_ids[0] if chunk_ids else None
