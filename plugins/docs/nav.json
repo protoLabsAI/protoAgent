@@ -605,6 +605,10 @@
           "title": "0065 — Two-tier instance paths (box / instance) + single resolution rule"
         },
         {
+          "path": "adr/0066-goal-trust-operator-channel.md",
+          "title": "0066 — Goal trust-gate Phase 2: federation token + operator `/api` channel"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
