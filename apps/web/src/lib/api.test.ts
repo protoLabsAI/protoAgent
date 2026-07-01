@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { ApiError, apiUrl, drainSseBuffer, frameIsForeign, isColdStart, textFromParts, hitlFromParts } from "./api";
+import {
+  ApiError,
+  apiUrl,
+  drainSseBuffer,
+  frameIsForeign,
+  isColdStart,
+  isAgentNotRunning,
+  textFromParts,
+  hitlFromParts,
+} from "./api";
 
 describe("cold-start detection (ApiError / isColdStart)", () => {
   it("ApiError carries the HTTP status", () => {
@@ -24,6 +33,17 @@ describe("cold-start detection (ApiError / isColdStart)", () => {
     // than flashing "Load failed" in the tasks/notes panels.
     expect(isColdStart(new TypeError("Load failed"))).toBe(true);
     expect(isColdStart(new Error("Failed to fetch"))).toBe(true);
+  });
+});
+
+describe("focused-agent-down detection (isAgentNotRunning)", () => {
+  it("true ONLY for a 409 (the fleet proxy's 'agent not running')", () => {
+    expect(isAgentNotRunning(new ApiError(409, "agent 'x' is not running"))).toBe(true);
+    // 502 is a proxy/boot hiccup, not a definitively-down agent — stays a cold-start retry, not recovery.
+    expect(isAgentNotRunning(new ApiError(502, "not reachable"))).toBe(false);
+    expect(isAgentNotRunning(new ApiError(404, "nope"))).toBe(false);
+    expect(isAgentNotRunning(new TypeError("Load failed"))).toBe(false);
+    expect(isAgentNotRunning(undefined)).toBe(false);
   });
 });
 
