@@ -12,6 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Trust-tiered injection** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md)
+  D8). Every knowledge chunk now ranks into a deterministic trust tier by its
+  `source_type` (`knowledge/trust.py`): 3 = operator-authored (console
+  routes), 2 = agent-derived (extracted facts, harvest summaries,
+  `memory_ingest`, compaction archives — the agent write paths now stamp
+  themselves), 1 = ingested/external (web, YouTube, PDF, media) **and
+  unknown/unstamped**. The per-turn auto-injected RAG recall down-weights low
+  tiers (stable post-score sort — a low-trust hit never outranks a
+  higher-trust one, in-tier relevance preserved), and a new
+  `knowledge.inject_min_trust` key (default `1` = nothing excluded) can
+  exclude tiers from auto-injection entirely (`2` drops ingested/external
+  content, `3` = operator rows only). The tier is visible everywhere: injected
+  lines and `memory_recall`/`memory_list` citations carry a
+  `trust: operator|agent|external` label, and tool-driven recall is never
+  gated — excluded content stays reachable on demand. See
+  [the knowledge guide](docs/guides/knowledge.md#trust-tiers-adr-0069-d8).
+- **Hot-memory write visibility** (ADR 0069 D8). Every write that creates a
+  `domain="hot"` chunk (injected in front of the model *every* turn) now
+  emits a `memory.hot_written` event on the plugin event bus (ADR 0039) with
+  `{chunk_id, source, source_type, preview}` — agent tool, operator route, or
+  plugin SDK alike — so the console notification path and any bus subscriber
+  can surface it. An optional confirm gate, `knowledge.hot_write_confirm`
+  (default `false`), makes the agent's own `memory_ingest` refuse hot writes
+  with instructions to ask the operator; operator console surfaces are
+  unaffected.
 - **Supersede-don't-delete staleness** ([ADR 0069](docs/adr/0069-memory-delivery-layer.md)
   D9). The `chunks` table gains a nullable `invalidated_at` column (additive
   migration, namespace precedent): when the session-end fact pass extracts a

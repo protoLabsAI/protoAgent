@@ -253,6 +253,33 @@ FIELDS: list[Field] = [
         "per line; an empty line matches un-namespaced chunks. Empty = no filter (everything "
         "is eligible, today's behavior). Tool-driven recall (memory_recall) is not affected.",
     ),
+    # Trust floor for the auto-inject RAG hits (ADR 0069 D8).
+    Field(
+        "knowledge.inject_min_trust",
+        "knowledge_inject_min_trust",
+        "Auto-inject trust floor",
+        "number",
+        "Knowledge",
+        "Minimum trust tier a knowledge chunk needs to be auto-injected into the prompt. "
+        "1 = everything (low-trust hits are only ranked below higher tiers); 2 = exclude "
+        "ingested/external content (web, YouTube, PDFs, media); 3 = operator-authored rows "
+        "only. Tool-driven recall (memory_recall) is never gated — excluded content stays "
+        "reachable on demand, tier visible.",
+        minimum=1,
+        maximum=3,
+    ),
+    # Hot-memory write confirm gate (ADR 0069 D8).
+    Field(
+        "knowledge.hot_write_confirm",
+        "knowledge_hot_write_confirm",
+        "Confirm agent hot-memory writes",
+        "bool",
+        "Knowledge",
+        "When on, the agent's memory_ingest tool refuses to write always-on hot memory "
+        "(domain \"hot\") and instructs the model to ask you instead — only operator "
+        "surfaces (the knowledge browser / memory inspector) can put facts in front of the "
+        "model every turn. Every hot write emits a memory.hot_written event either way.",
+    ),
     # Tier (ADR 0041 / bd-2wu) — mirrors `skills.scope`; the commons lives at `commons.path`.
     Field(
         "knowledge.scope",
@@ -717,6 +744,8 @@ _KNOWLEDGE_SUBSECTION = {
     # Recall — what the agent retrieves into context, and how.
     "knowledge.top_k": "Recall",
     "knowledge.inject_namespaces": "Recall",
+    "knowledge.inject_min_trust": "Recall",
+    "knowledge.hot_write_confirm": "Recall",
     "knowledge.scope": "Recall",
     "knowledge.embeddings": "Recall",
     "knowledge.embed_model": "Recall",

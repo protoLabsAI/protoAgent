@@ -160,6 +160,9 @@ async def compact_thread(
             full_transcript,
             domain="conversation",
             heading=f"Conversation archive ({session_id})",
+            # Agent-derived trust tier (ADR 0069 D8) — the archive is the
+            # operator's own conversation, not ingested third-party content.
+            source_type="conversation",
             namespace=f"chat-archive:{session_id}",
         )
     except Exception:
