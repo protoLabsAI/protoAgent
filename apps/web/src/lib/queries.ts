@@ -7,6 +7,7 @@ import { api } from "./api";
 // stable and hierarchical so a mutation can invalidate a whole subtree.
 export const queryKeys = {
   goals: ["goals"] as const,
+  watches: ["watches"] as const,
   tasks: ["tasks", "issues"] as const,
   workflows: ["workflows"] as const,
   subagents: ["subagents"] as const,
@@ -50,6 +51,15 @@ export const goalsQuery = () =>
   queryOptions({
     queryKey: queryKeys.goals,
     queryFn: () => api.goals(),
+  });
+
+// Passive watches (ADR 0067) — verifier-only objectives polled out-of-band. Lives in the
+// Work hub; the panel invalidates this on the `watch.*` bus pushes (created/checked/met/
+// expired/stalled) instead of a poll — same pattern as goals.
+export const watchesQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.watches,
+    queryFn: () => api.watches(),
   });
 
 // The agent's task board (in-process tasks store — always available). The panel

@@ -421,7 +421,16 @@ export function App() {
         title: "Goal failed",
         message: `${String(d.condition || "the goal")}${d.reason ? ` — ${String(d.reason)}` : ""}`,
       }));
-    return () => { offDone(); offFail(); };
+    // Watch transitions (ADR 0067) surface the same way — watch.met / watch.expired on the bus.
+    const offMet = onServerEvent("watch.met", (d) =>
+      toast({ tone: "success", title: "Watch met", message: String(d.condition || "the watch") }));
+    const offExpired = onServerEvent("watch.expired", (d) =>
+      toast({
+        tone: "error",
+        title: "Watch expired",
+        message: `${String(d.condition || "the watch")}${d.reason ? ` — ${String(d.reason)}` : ""}`,
+      }));
+    return () => { offDone(); offFail(); offMet(); offExpired(); };
   }, [toast]);
 
   // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +

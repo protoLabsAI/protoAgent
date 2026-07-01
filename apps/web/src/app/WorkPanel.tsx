@@ -1,11 +1,12 @@
 import { useState, type ComponentProps, type ReactNode } from "react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Tabs } from "@protolabsai/ui/navigation";
-import { Boxes, CalendarClock, ChevronRight, LayoutDashboard, Target } from "lucide-react";
+import { Boxes, CalendarClock, ChevronRight, Eye, LayoutDashboard, Target } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { StagePanel } from "./ErrorBoundary";
 import { GoalsPanel } from "./GoalsPanel";
+import { WatchesPanel } from "./WatchesPanel";
 import { TasksPanel } from "./TasksPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
 import { tasksQuery, goalsQuery, schedulesQuery } from "../lib/queries";
@@ -13,12 +14,13 @@ import type { Task, GoalState, ScheduledJob } from "../lib/types";
 
 import "./work.css";
 
-type WorkTab = "overview" | "goals" | "tasks" | "schedule";
+type WorkTab = "overview" | "goals" | "watches" | "tasks" | "schedule";
 type Confirm = ComponentProps<typeof TasksPanel>["confirm"];
 
 const TABS: { id: WorkTab; label: string; icon: LucideIcon }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "goals", label: "Goals", icon: Target },
+  { id: "watches", label: "Watches", icon: Eye },
   { id: "tasks", label: "Tasks", icon: Boxes },
   { id: "schedule", label: "Schedule", icon: CalendarClock },
 ];
@@ -45,6 +47,8 @@ export function WorkPanel({ confirm }: { confirm: Confirm }) {
         </StagePanel>
       ) : tab === "goals" ? (
         <GoalsPanel />
+      ) : tab === "watches" ? (
+        <WatchesPanel />
       ) : tab === "tasks" ? (
         <TasksPanel confirm={confirm} />
       ) : (

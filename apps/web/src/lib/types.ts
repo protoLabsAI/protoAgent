@@ -342,6 +342,25 @@ export type GoalState = {
   finished_at?: number | null;
 };
 
+// A passive watch (ADR 0067) — a verifier-only objective polled out-of-band. Unlike a goal
+// (driven via a bounded continuation loop, one per session), you can hold MANY watches at
+// once, keyed by their own `id`. Mirrors the backend `Watch` (graph/watches/types.py).
+export type WatchState = {
+  id: string;
+  condition: string;
+  status: string; // active | met | expired | cleared
+  verifier?: { type?: string } & Record<string, unknown>;
+  interval_s?: number | null; // per-watch cadence override; null → config watch_interval
+  deadline?: number | null; // epoch seconds; past → expired
+  stall_after?: number | null; // N unchanged checks → on_stalled
+  run_prompt?: string; // on met, enqueued as a one-shot turn in run_session
+  run_session?: string;
+  last_reason?: string;
+  last_evidence?: string;
+  last_checked?: number | null; // last out-of-band verifier check (epoch seconds)
+  created_at?: number;
+};
+
 export type ScheduledJob = {
   id: string;
   prompt: string;

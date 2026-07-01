@@ -1,0 +1,49 @@
+/* Watches side-panel (ADR 0067 passive-supervision layer) — mirrors goals.css. */
+.watches-list {
+  display: grid;
+  align-content: start;
+  height: 100%;
+}
+
+.watch-row {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 10px 34px 10px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.watch-row:last-child {
+  border-bottom: 0;
+}
+
+.watch-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.watch-row-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.watch-row-meta {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.watch-row-clear {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+}

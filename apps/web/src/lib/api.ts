@@ -37,6 +37,7 @@ import type {
   TelemetryTurn,
   ToolEvent,
   TurnUsage,
+  WatchState,
   WorkflowRunResult,
   WorkflowSummary,
 } from "./types";
@@ -969,6 +970,19 @@ export const api = {
 
   clearGoal(sessionId: string) {
     return request<{ cleared: boolean }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Watches (ADR 0067) — passive verifier-only objectives, many at once, keyed by id. The
+  // panel invalidates this on the `watch.*` bus pushes (created/checked/met/expired/stalled)
+  // instead of polling — same pattern as goals.
+  watches() {
+    return request<{ watches: WatchState[]; enabled: boolean }>("/api/watches");
+  },
+
+  clearWatch(id: string) {
+    return request<{ cleared: boolean }>(`/api/watches/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
   },
