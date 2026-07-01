@@ -1,6 +1,8 @@
 import "../goals/goals.css";
 
+import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Button, Empty } from "@protolabsai/ui/primitives";
+import { useToast } from "@protolabsai/ui/overlays";
 import {
 
   QueryErrorResetBoundary,
@@ -9,10 +11,10 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
 
 import { api } from "../lib/api";
-import { ago } from "../lib/format";
+import { ago, errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { goalsQuery, queryKeys } from "../lib/queries";
@@ -100,6 +102,93 @@ function GoalsList() {
   );
 }
 
+// Compact operator "set a goal" form, above the list. Collapsed by default (a <details>
+// disclosure) so it stays out of the way — the primary surface is still the goal list. POSTs
+// to the operator `/api/goals` (ADR 0066), which accepts any verifier type; the verifier is a
+// small JSON textarea (default `{"type":"llm"}`) parsed on submit — invalid JSON shows an
+// inline error and doesn't submit. Result is surfaced via the shared DS toast, and the goals
+// query is invalidated so the list picks up the new goal.
+function NewGoalForm() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [sessionId, setSessionId] = useState("operator");
+  const [condition, setCondition] = useState("");
+  const [verifier, setVerifier] = useState('{"type":"llm"}');
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const set = useMutation({
+    mutationFn: (body: { session_id: string; condition: string; verifier: unknown }) =>
+      api.setGoal(body),
+    onSuccess: (res) => {
+      setCondition("");
+      toast({ tone: "success", title: "Goal set", message: res.message || "The agent has a new goal." });
+    },
+    // A rejected verifier / disabled goal mode comes back as HTTP 400 → request() throws here.
+    onError: (e) => toast({ tone: "error", title: "Couldn't set goal", message: errMsg(e) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals }),
+  });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const cond = condition.trim();
+    if (!cond) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(verifier.trim() || "{}");
+    } catch {
+      setJsonError("Verifier must be valid JSON");
+      return;
+    }
+    setJsonError(null);
+    set.mutate({ session_id: sessionId.trim() || "operator", condition: cond, verifier: parsed });
+  };
+
+  return (
+    <details className="goal-new">
+      <summary>New goal</summary>
+      <form className="goal-new-form" onSubmit={submit}>
+        <label className="field">
+          <span>Session</span>
+          <Input value={sessionId} onChange={(e) => setSessionId(e.target.value)} placeholder="operator" />
+        </label>
+        <label className="field">
+          <span>Condition</span>
+          <Input
+            value={condition}
+            onChange={(e) => setCondition(e.target.value)}
+            placeholder="What the agent should achieve"
+            required
+          />
+        </label>
+        <label className="field">
+          <span>Verifier (JSON)</span>
+          <Textarea
+            value={verifier}
+            rows={2}
+            spellCheck={false}
+            aria-invalid={jsonError ? true : undefined}
+            onChange={(e) => {
+              setVerifier(e.target.value);
+              if (jsonError) setJsonError(null);
+            }}
+          />
+        </label>
+        {jsonError ? (
+          <p className="goal-new-error field-warn" role="alert">{jsonError}</p>
+        ) : null}
+        <Button
+          type="submit"
+          variant="primary"
+          loading={set.isPending}
+          disabled={!condition.trim() || set.isPending}
+        >
+          Set goal
+        </Button>
+      </form>
+    </details>
+  );
+}
+
 export function GoalsPanel() {
   return (
     <section className="panel side-panel goals-panel">
@@ -108,6 +197,7 @@ export function GoalsPanel() {
         title="Goals"
         kicker={<>the agent's standing goals · set with <code>/goal</code> in chat</>}
       />
+      <NewGoalForm />
       <ScrollArea className="goals-list" role="region" aria-label="Goals" tabIndex={0}>
         <QueryErrorResetBoundary>
           {({ reset }: { reset: () => void }) => (
