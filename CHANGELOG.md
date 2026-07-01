@@ -57,12 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/` at **any** caret position (not only the first character) to open the command popover; arrow-key
   navigation auto-scrolls the focused item into view; an issued command renders as a distinct user
   bubble (subtle tint + monospace + `/` badge) so it stays legible in the transcript.
-- **Header brand menu — one-click nav to settings** (#1544). Click (or right-click) the agent brand
-  mark in the header for a compact menu: **Agent settings**, **Fleet settings**, **Theme** — each
-  deep-links the settings overlay. Keyboard-accessible (Enter/Space to open, arrows, Esc).
+- **Agent switcher: always available, with a Fleet-settings shortcut** (#1544, #1556). The agent-name
+  dropdown in the header now shows even for a single agent (not only in a multi-agent fleet), so **New
+  agent** and a new **Fleet settings** link (→ the fleet management dialog) are always one click away.
+  The brand logo stays a plain mark.
 - **Chat: `Cmd/Ctrl+O` toggles the latest tool-call block** (#1526, ADR 0063). Expands the newest tool
   call, then collapses it and walks upward through older ones on repeat; a reasoning-only turn is a
   no-op. Rebindable in **Settings ▸ Keyboard**.
+- **Chat: `/compact` — summarize + archive a long thread** (#1527). Compresses the current conversation
+  into a summary and rewrites the live context to *[summary + recent messages]* so the agent keeps
+  context at a fraction of the token cost, while the **full raw transcript is archived to searchable
+  memory** (recallable via `memory_recall`). Never-lossy: it refuses rather than drop history it
+  couldn't archive, and keeps tool-call/response pairs intact across the cut.
 
 ### Changed
 - **Knowledge panel: Upload / Add now open in a dialog** (#1502) instead of expanding inline in the
