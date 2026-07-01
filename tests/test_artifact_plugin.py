@@ -555,8 +555,9 @@ def test_harness_guards_against_silent_blank(monkeypatch, tmp_path):
     assert 'addEventListener("error"' in html
     assert 'addEventListener("unhandledrejection"' in html
     assert '"__arterr"' in html  # the overlay element id
-    # React no-mount guard: actionable message instead of a blank #root.
-    assert "must MOUNT itself" in html
+    # React no-mount guard: actionable message instead of a blank #root (now points at the
+    # `App` auto-mount convention, since defining `App` is enough).
+    assert "name your top-level component" in html
     assert "Nothing rendered into #root" in html
 
 
@@ -694,3 +695,32 @@ def test_history_poll_marks_a_renderer_live(monkeypatch, tmp_path):
     assert art._renderer_live() is False
     _client(art).get("/api/plugins/artifact/history")
     assert art._renderer_live() is True
+
+
+# ── react auto-mount + proactive verify (forgiving renderer) ────────────────────
+
+
+def test_react_srcdoc_auto_mounts_app(monkeypatch, tmp_path):
+    """The react harness auto-mounts a top-level `App` when the artifact defined it but never
+    called render() — the #1 first-try failure. Fires only if #root is still empty (an explicit
+    render wins), and routes any throw through __artErr."""
+    html = _load(monkeypatch, tmp_path)._SHELL_HTML
+    assert 'typeof App!=="undefined"' in html
+    assert "React.createElement(App)" in html
+    assert "if(r.firstChild)return;" in html  # never double-mounts a self-mounting artifact
+    # the no-mount guard now points at the App convention
+    assert "name your top-level component `App` (it auto-mounts)" in html
+
+
+def test_check_artifact_waits_for_a_live_render(monkeypatch, tmp_path):
+    """check_artifact returns a stored verdict regardless of live-ness, and (when nothing is
+    recorded yet) waits via _await_render only if a renderer is live."""
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "react", "code": "x"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    # stored verdict is read even when no renderer is live
+    store = art._read_store()
+    store["artifacts"][0]["versions"][0]["render"] = {"ok": True, "error": "", "ts": art._now()}
+    art._write_store(store)
+    art._LAST_POLL_TS = 0
+    assert "rendered cleanly" in art.check_artifact.invoke({"artifact_id": aid})

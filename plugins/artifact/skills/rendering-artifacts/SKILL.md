@@ -26,8 +26,10 @@ the user files to wire up themselves — not what they asked for when they want 
 - `html` — a full or partial HTML document (with inline `<style>`/`<script>` as needed).
 - `svg` — inline SVG markup (icons, simple charts).
 - `react` — a self-contained component script that renders into `#root`; React, ReactDOM, and
-  Babel are provided. Write the component **and** the `ReactDOM.createRoot(...).render(...)` call.
-  React artifacts can also `import` from a curated **offline** set (see below).
+  Babel are provided. Easiest: **name your top-level component `App`** and it **auto-mounts** — you
+  don't have to write the mount call. (You still can: `ReactDOM.createRoot(...).render(...)`; an
+  explicit render always wins.) React artifacts can also `import` from a curated **offline** set
+  (see below).
 
 ## Richer React: charts, icons, and design-system components
 
@@ -85,19 +87,20 @@ Each edit is a **version** the user can step back through in the panel, so itera
 never destroying the previous version. Both default to the most-recent artifact; pass
 `artifact_id` to target another.
 
-## Did it render? (closing the loop)
+## Did it render? ALWAYS verify (closing the loop)
 
-A React artifact that throws at render time (a bad import, an undefined component, or defining a
-component but never calling `render()`) used to fail **silently** — you'd get "Created" and no hint
-it broke. Now the sandbox reports its render result back:
+A React artifact can throw at render time (a bad import, an undefined component, an export
+mismatch) even when the code looks right. **Verifying the render is a standard step, not an
+optional one** — confirm it worked before you tell the user it's done:
 
 - When the panel is open, `show_artifact` / `update_artifact` / `rewrite_artifact` wait briefly and
   **append the render verdict to their reply** — e.g. *"⚠ But it FAILED to render: Icon is not
-  defined"*. When that happens, **fix it** with `update_artifact` / `rewrite_artifact`; the artifact
-  still exists, so iterate on it (don't start over). A clean render says so too.
-- **`check_artifact(artifact_id?)`** — ask for the latest render verdict yourself (rendered cleanly
-  / failed with the error / no result yet). Useful when the create reply came back before the
-  render finished, or the panel was closed (open it to render).
+  defined"* or *"It rendered cleanly."* Read it.
+- If the reply didn't carry a clean verdict (it came back before the render finished, or said "no
+  result yet"), **call `check_artifact` to confirm** — it waits briefly for the verdict. Make this
+  your default after creating or editing an artifact.
+- On a failure, **fix it** with `update_artifact` / `rewrite_artifact` — the artifact still exists,
+  so iterate on it (don't start over), then verify again. Loop until it renders cleanly.
 
 Treat a render error as the signal to iterate — that's the code→render→fix loop. Don't apologise and
 guess; read the error and make the targeted edit.

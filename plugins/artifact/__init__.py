@@ -336,11 +336,15 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
     ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
     "mermaid" (a Mermaid diagram definition), "markdown" (a Markdown document — rendered with
     design-system prose styling; ```mermaid fences become live diagrams), or "react" (a
-    self-contained React component script that renders into ``#root``; React, ReactDOM and Babel
-    are provided, and it can ``import`` from a curated offline set — ``d3``, ``chart.js``,
-    ``lucide``, and ``@pl/ui`` design-system components like ``Button``/``Card``/``Stat``/
-    ``Icon``). ``code`` is the source; ``title`` is an optional label. Runs sandboxed — it can't
-    access the console.
+    self-contained React component script; name your top-level component ``App`` and it
+    AUTO-MOUNTS into ``#root`` (no manual ``createRoot(...).render`` needed — though an explicit
+    render still works). React, ReactDOM and Babel are provided, and it can ``import`` from a
+    curated offline set — ``d3``, ``chart.js``, ``lucide``, and ``@pl/ui`` design-system
+    components like ``Button``/``Card``/``Stat``/``Icon``). ``code`` is the source; ``title`` is
+    an optional label. Runs sandboxed — it can't access the console.
+
+    After creating it, CHECK IT RENDERED: this reply carries the render verdict when the panel is
+    open; otherwise call ``check_artifact``. Fix any reported error before moving on.
 
     To EDIT what you just made, use ``update_artifact`` (a small targeted change) or
     ``rewrite_artifact`` (a full replacement) — they iterate the SAME artifact as a new
@@ -482,13 +486,18 @@ def check_artifact(artifact_id: str = "") -> str:
     Returns the render verdict: rendered cleanly, FAILED with the captured error message, or
     "no result yet" (the panel is closed / not showing this version — open the Artifact panel).
     Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
-    another. Read-only."""
+    another. Read-only.
+
+    Safe to call right after creating/editing: if a result isn't in yet but the panel is live,
+    it waits briefly for the verdict rather than returning "no result yet"."""
     store = _read_store()
     art = _find(store, artifact_id or store["current"])
     if art is None:
         return "No artifact to check. Use list_artifacts to see the ids, or show_artifact to create one."
     v = len(art["versions"])
-    r = _version_render(art, v)
+    # An already-recorded verdict reads instantly; otherwise wait briefly IFF a renderer is live
+    # (so an immediate post-render check returns the real result, not a premature "no result yet").
+    r = _version_render(art, v) or _await_render(art["id"], v)
     if r is None:
         return (
             f"Artifact {art['id']} v{v}: no render result yet — the Artifact panel may be "
@@ -905,18 +914,28 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     if (kind === "markdown") return mdDoc(code);
     // `react`: import map + UMD react/react-dom/babel, compiled as a MODULE so `import` works
     // (no-import artifacts still run — they use the UMD React/ReactDOM globals as before).
+    // The artifact module + a forgiving AUTO-MOUNT epilogue (appended INSIDE the same babel
+    // module so it can see module-scoped `App`): the #1 first-try mistake is defining `App` but
+    // never calling render(). If #root is still empty a tick after the module runs and an `App`
+    // is in scope, mount <App/> for them. An explicit render() still wins — this fires ONLY when
+    // nothing mounted, so it never double-renders a self-mounting artifact.
     if (kind === "react") return '<!doctype html>' + dsLink() + base(kind) + '<body><div id="root"></div>' +
       '<script type="importmap">' + IMPORTMAP + '<\/script>' +
       cdn("react") + cdn("reactDom") + cdn("babel") +
-      '<script type="text/babel" data-type="module" data-presets="react">' + code + '<\/script>' +
-      // No-mount guard: a babel module that defines a component but never calls render() leaves
-      // #root empty with NO thrown error — the silent blank that reads as "stuck". Poll briefly;
-      // mount → report a clean render (#1458); if #root never gets a child and nothing else
-      // errored, surface an actionable message (which also reports the failure up).
+      '<script type="text/babel" data-type="module" data-presets="react">' + code
+      + '\n;(function(){var r=document.getElementById("root");if(!r)return;setTimeout(function(){'
+      + 'if(r.firstChild)return;'  // the artifact mounted itself — leave it alone
+      + 'try{if(typeof App!=="undefined"&&App){var R=window.ReactDOM;'
+      + 'if(R&&R.createRoot){R.createRoot(r).render(React.createElement(App));}'
+      + 'else if(R&&R.render){R.render(React.createElement(App),r);}}}'
+      + 'catch(e){if(window.__artErr)window.__artErr(String((e&&e.message)||e));}'
+      + '},0);})();<\/script>' +
+      // No-mount guard: if #root is STILL empty (no `App` to auto-mount, or it threw) after a few
+      // seconds and nothing else errored, surface an actionable message (also reported up, #1458).
       '<script>(function(){var n=0,t=setInterval(function(){var r=document.getElementById("root");'
       + 'if(r&&r.firstChild){clearInterval(t);if(window.__artOk)window.__artOk();return;}'
       + 'if(++n>=30){clearInterval(t);if(window.__artErr&&!document.getElementById("__arterr"))'
-      + 'window.__artErr("Nothing rendered into #root — a React artifact must MOUNT itself, e.g. createRoot(document.getElementById(\'root\')).render(<App/>). Defining a component is not enough; you must call render().");'
+      + 'window.__artErr("Nothing rendered into #root — name your top-level component `App` (it auto-mounts) or call createRoot(document.getElementById(\'root\')).render(<App/>) yourself.");'
       + '}},100);})();<\/script></body>';
     return '<!doctype html>' + base(kind) + '<body style="font-family:sans-serif;padding:16px">unsupported artifact kind</body>';
   }

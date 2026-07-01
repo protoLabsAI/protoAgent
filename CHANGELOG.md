@@ -73,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (one machine-wide `host-config.yaml`, the layer's intent); shared commons stay shared; and the
   legacy `scope_leaf` scoping knob is removed. (ADR 0065; supersedes the path mechanics of ADR
   0004/0041 and re-amends the host-file location in ADR 0047.)
+- **React artifacts are more forgiving + the render loop is proactive** (artifact plugin 0.13.0) —
+  the most common first-try mistake (defining a component but never calling `render()`) now just
+  works: name your top-level component `App` and the harness **auto-mounts** `<App/>` when nothing
+  mounted itself (an explicit `render()` still wins; it never double-mounts). `check_artifact` now
+  waits briefly for the verdict when the panel is live (so an immediate post-render check returns
+  the real result), and the skill instructs the agent to **verify the render after every create/
+  edit** and iterate until it's clean.
 
 ### Fixed
 - **Docs reader: in-content cross-reference links route in-app instead of breaking the iframe**

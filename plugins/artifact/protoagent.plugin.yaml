@@ -1,6 +1,6 @@
 id: artifact
 name: Artifact
-version: 0.12.0
+version: 0.13.0
 # Needs the host to serve the DS plugin-kit at /_ds/ (protoAgent #893, v0.34.0) —
 # the shell page links it for theming + the authed handshake, and artifacts inject it
 # so `.pl-*` design-system classes work inside the sandbox.
