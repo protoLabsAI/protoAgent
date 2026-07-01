@@ -28,8 +28,10 @@ class _FakeKnowledge:
     def __init__(self):
         self.chunks = []
 
-    def add_chunk(self, content, domain=None, heading=None, *, namespace=None, **kw):
-        self.chunks.append({"content": content, "domain": domain, "heading": heading, "namespace": namespace})
+    def add_chunk(self, content, domain=None, heading=None, *, source=None, namespace=None, **kw):
+        self.chunks.append(
+            {"content": content, "domain": domain, "heading": heading, "source": source, "namespace": namespace}
+        )
         return f"chunk-{len(self.chunks)}"
 
 
@@ -70,6 +72,8 @@ def test_harvest_thread_summarizes_into_knowledge(tmp_path):
     assert cid == "chunk-1"
     assert kb.chunks[0]["domain"] == "conversation"
     assert "teal" in kb.chunks[0]["content"]
+    # Provenance (ADR 0069 D5): the row links back to the retired thread.
+    assert kb.chunks[0]["source"] == "a2a:chat-1"
 
 
 def test_harvest_extracts_facts_when_enabled(tmp_path):
@@ -104,9 +108,13 @@ def test_harvest_extracts_facts_when_enabled(tmp_path):
     )
     assert cid is not None
     # Episodic summary (conversation) + semantic fact (fact), both namespaced.
-    assert len(store.list_chunks(domain="conversation", namespace="proj-x")) == 1
+    summaries = store.list_chunks(domain="conversation", namespace="proj-x")
+    assert len(summaries) == 1
     facts = store.list_chunks(domain="fact", namespace="proj-x")
     assert len(facts) == 1 and "teal" in facts[0].content
+    # Provenance (ADR 0069 D5): both rows carry the originating thread id.
+    assert summaries[0].source == "a2a:chat-1"
+    assert facts[0].source == "a2a:chat-1"
 
 
 def test_harvest_skips_facts_when_disabled(tmp_path):

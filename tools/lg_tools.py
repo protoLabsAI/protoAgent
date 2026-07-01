@@ -536,6 +536,25 @@ def _ingest_should_inline(src: str, is_url: bool) -> bool:
         return True
 
 
+def _memory_citation(
+    *,
+    source: str | None = None,
+    created_at: str | None = None,
+    namespace: str | None = None,
+) -> str:
+    """Compact provenance suffix for a memory row (ADR 0069 D5), e.g.
+    ``" (src: a2a:chat-42, 2026-07-01, ns: proj-x)"``. Empty when there's
+    nothing to cite; ``created_at`` is trimmed to date precision."""
+    parts: list[str] = []
+    if source:
+        parts.append(f"src: {source}")
+    if created_at:
+        parts.append(str(created_at)[:10])
+    if namespace:
+        parts.append(f"ns: {namespace}")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list.
 
@@ -718,8 +737,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
     async def memory_recall(query: str, k: int = 5) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
-        Returns the top-k matches, one per line. Pull this when the
-        operator asks something where stored context is more reliable
+        Returns the top-k matches, one per line, each citing its provenance
+        when known — source session, stored date, namespace. Pull this when
+        the operator asks something where stored context is more reliable
         than the model's own training data ("what's my coffee order?",
         "remind me what we decided about the auth migration").
 
@@ -733,7 +753,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         results = await asyncio.to_thread(knowledge_store.search, query, k=clamped_k)
         if not results:
             return "No matches."
-        lines = [f"[{r.get('domain', '?')}] {r['preview']}" for r in results]
+        lines = [
+            f"[{r.get('domain', '?')}] {r['preview']}"
+            + _memory_citation(source=r.get("source"), created_at=r.get("created_at"), namespace=r.get("namespace"))
+            for r in results
+        ]
         return "\n".join(lines)
 
     @tool
@@ -755,7 +779,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             preview = (c.content or "")[:200]
             # Lead with the chunk id so a caller (e.g. the `dream` consolidation
             # pass) can target a stale/superseded fact with `forget_memory`.
-            lines.append(f"#{c.id} {c.created_at} {head} {preview}")
+            # created_at already leads the line, so the citation adds src/ns only.
+            cite = _memory_citation(source=c.source, namespace=c.namespace)
+            lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}")
         return "\n".join(lines)
 
     @tool

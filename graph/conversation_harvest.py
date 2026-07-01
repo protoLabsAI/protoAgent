@@ -111,12 +111,16 @@ async def harvest_thread(
 
         from knowledge import add_document
 
+        # source=<thread_id> is the machine-readable provenance link (ADR 0069
+        # D5) — the heading carries it for humans, but recall/audit key on the
+        # row's source column.
         chunk_ids = await asyncio.to_thread(
             add_document,
             knowledge_store,
             summary,
             domain="conversation",
             heading=f"Conversation summary ({thread_id})",
+            source=thread_id,
             namespace=namespace,
         )
         chunk_id = chunk_ids[0] if chunk_ids else None
@@ -131,7 +135,12 @@ async def harvest_thread(
         if getattr(config, "knowledge_facts", False):
             from graph.memory_facts import extract_and_store_facts
 
-            kwargs = {"knowledge_store": knowledge_store, "config": config, "namespace": namespace}
+            kwargs = {
+                "knowledge_store": knowledge_store,
+                "config": config,
+                "namespace": namespace,
+                "source": thread_id,
+            }
             if fact_extractor is not None:
                 kwargs["extractor"] = fact_extractor
             await extract_and_store_facts(transcript, **kwargs)
