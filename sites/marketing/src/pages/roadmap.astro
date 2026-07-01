@@ -1,0 +1,104 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import roadmap from '../../data/roadmap.json';
+
+const repo = 'https://github.com/protoLabsAI/protoAgent';
+const issues = `${repo}/issues`;
+const releases = `${repo}/releases`;
+
+type Accent = { ring: string; fill: string; dot: string; text: string };
+
+// Per-status accent — brand lavender for active work, green for shipped, muted for the rest.
+const accents: Record<string, Accent> = {
+  'In progress': {
+    ring: 'color-mix(in srgb, var(--pl-color-brand-lavender) 50%, transparent)',
+    fill: 'color-mix(in srgb, var(--pl-color-brand-lavender) 15%, transparent)',
+    dot: 'var(--pl-color-brand-lavender)',
+    text: 'var(--pl-color-brand-lavender)',
+  },
+  Shipped: {
+    ring: 'color-mix(in srgb, #4ade80 45%, transparent)',
+    fill: 'color-mix(in srgb, #4ade80 12%, transparent)',
+    dot: '#4ade80',
+    text: '#4ade80',
+  },
+  Planned: {
+    ring: 'var(--pl-color-border)',
+    fill: 'var(--pl-color-bg-raised)',
+    dot: '#52525b',
+    text: 'var(--pl-color-fg-muted)',
+  },
+};
+const fallback = accents['Planned'];
+
+const refHref = (ref: string) =>
+  ref.startsWith('#') ? `${issues}/${ref.slice(1)}` : `${releases}/tag/${ref}`;
+---
+
+<BaseLayout
+  title="Roadmap — protoAgent"
+  description="What's planned, in progress, and recently shipped for protoAgent — the LangGraph + A2A agent template."
+>
+  <div class="max-w-2xl mx-auto px-6 py-24">
+    <h1 class="text-4xl font-bold mb-2">Roadmap</h1>
+    <p class="text-zinc-400 mb-16 text-lg">Where protoAgent is headed — kept honest and light.</p>
+
+    <div class="space-y-16">
+      {roadmap.map(({ status, items }) => {
+        const a = accents[status] ?? fallback;
+        return (
+          <section>
+            <div class="flex items-center gap-3 mb-6">
+              <span
+                class="w-2.5 h-2.5 rounded-full shrink-0"
+                style={`background: ${a.dot}`}
+              ></span>
+              <h2 class="text-xl font-semibold" style={`color: ${a.text}`}>{status}</h2>
+              <span
+                class="px-1.5 py-0.5 rounded text-xs font-mono border"
+                style={`background: ${a.fill}; border-color: ${a.ring}; color: ${a.text};`}
+              >
+                {items.length}
+              </span>
+            </div>
+
+            <ul class="space-y-4 border-l pl-6 ml-1" style="border-color: var(--pl-color-border)">
+              {items.map(({ title, detail, refs }) => (
+                <li class="relative">
+                  <span
+                    class="absolute -left-[1.6875rem] top-1.5 w-2 h-2 rounded-full border"
+                    style={`background: var(--pl-color-bg); border-color: ${a.ring};`}
+                  ></span>
+                  <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span class="font-medium text-zinc-100">{title}</span>
+                    {refs.map((ref) => (
+                      <a
+                        href={refHref(ref)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="px-1.5 py-0.5 rounded font-mono text-xs border transition-colors hover:brightness-125"
+                        style={`background: ${a.fill}; border-color: ${a.ring}; color: ${a.text};`}
+                      >
+                        {ref}
+                      </a>
+                    ))}
+                  </div>
+                  {detail && <p class="text-sm text-zinc-400 mt-1">{detail}</p>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
+
+    <div class="mt-16 pt-8 border-t border-white/5">
+      <p class="text-zinc-500 text-sm">
+        Plans shift — this tracks{' '}
+        <a href="https://github.com/protoLabsAI/protoAgent/issues" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">open issues</a>.
+        Shipped work lands in the{' '}
+        <a href="/changelog" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">changelog</a>.
+      </p>
+    </div>
+  </div>
+</BaseLayout>

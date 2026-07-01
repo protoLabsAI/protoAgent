@@ -1,0 +1,94 @@
+[
+  {
+    "status": "Planned",
+    "items": [
+      {
+        "title": "One-command install",
+        "detail": "a curl | sh bootstrap with an interactive CLI config wizard.",
+        "refs": [
+          "#1520"
+        ]
+      },
+      {
+        "title": "Migrate from Hermes",
+        "detail": "a script that imports an existing Hermes agent into protoAgent.",
+        "refs": [
+          "#1515"
+        ]
+      },
+      {
+        "title": "Migrate from OpenClaw",
+        "detail": "a script that imports an existing OpenClaw agent into protoAgent.",
+        "refs": [
+          "#1514"
+        ]
+      },
+      {
+        "title": "Federation token follow-ups",
+        "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
+        "refs": [
+          "#1504"
+        ]
+      },
+      {
+        "title": "Rewind a chat thread",
+        "detail": "jump a conversation back to an earlier message and branch from there.",
+        "refs": [
+          "#1535"
+        ]
+      }
+    ]
+  },
+  {
+    "status": "In progress",
+    "items": [
+      {
+        "title": "Plugin management from the rail",
+        "detail": "uninstall a plugin from the rail context menu and a plugin-management settings panel.",
+        "refs": [
+          "#1522"
+        ]
+      },
+      {
+        "title": "Plugin version + update",
+        "detail": "show the installed version inline with an \"update if available\" action.",
+        "refs": [
+          "#1521"
+        ]
+      },
+      {
+        "title": "Live Work panel",
+        "detail": "reflect goal, task, and schedule changes as they happen, without a manual refresh.",
+        "refs": [
+          "#1537"
+        ]
+      }
+    ]
+  },
+  {
+    "status": "Shipped",
+    "items": [
+      {
+        "title": "/compact",
+        "detail": "summarize and archive a long chat thread in a single command.",
+        "refs": [
+          "v0.78.0"
+        ]
+      },
+      {
+        "title": "Developer flags",
+        "detail": "gate pre-release work behind local feature flags, with a Settings ▸ Developer panel.",
+        "refs": [
+          "v0.78.0"
+        ]
+      },
+      {
+        "title": "Watches",
+        "detail": "supervise many external conditions at once as a first-class primitive.",
+        "refs": [
+          "v0.78.0"
+        ]
+      }
+    ]
+  }
+]
