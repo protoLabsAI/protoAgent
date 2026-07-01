@@ -70,9 +70,16 @@ model:
   api_key: sk-...
 auth:
   token: bearer-...
+  federation_token: fed-...   # optional (ADR 0066) — semi-trusted peers get THIS, not `token`
 ```
 
 `LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free. The `/api/config` endpoint redacts both fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value.
+
+### Federation token — operator vs peer (ADR 0066)
+
+A deployment that hands its `/a2a` endpoint to **semi-trusted A2A peers** (a fleet hub, a partner agent) can issue them a **second** credential instead of the operator bearer: set `auth.federation_token` (secret; env fallback `A2A_FEDERATION_TOKEN`). A request authenticated with the federation token reaches only the **`/a2a` + `/v1` consumer surfaces** — it is **denied the whole `/api` operator surface** (plugin install/enable = host code-exec, config/SOUL rewrite, subagent runs, the operator goal set-path) with a `403`. The operator bearer keeps full access. Leaving `federation_token` blank is **single-token mode** (unchanged behavior): every bearer holder is the operator. Rotate existing peers onto the federation token — until they do, they still hold the operator credential.
+
+This is the R1 path ceiling behind the goal trust-gate: the dangerous goal verifiers (`command`/`test`/`ci`, `data`+`expr`) are refused from a `/goal` **chat** message for everyone (Phase 1), and the operator sets them through the operator-tier **`POST /api/goals`** endpoint — safe precisely because the `/api` ceiling confines that endpoint to the operator.
 
 ## `subagents`
 

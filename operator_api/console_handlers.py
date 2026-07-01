@@ -354,18 +354,27 @@ async def _operator_goals_clear(session_id: str) -> dict:
 
 
 async def _operator_goals_set(body: dict) -> dict:
-    """Programmatic goal-set (ADR 0028 D3) — plugin-verifier goals only; the route
-    maps ok=False to 400."""
+    """Operator goal-set (ADR 0066) — the trusted operator channel. This route lives on the
+    ``/api`` operator surface, which the auth path ceiling restricts to the operator
+    credential, so it accepts ANY verifier type (command/test/ci/data included) — unlike the
+    plugin-only programmatic ``set_goal_safe``. The route maps ok=False to 400."""
     if STATE.goal_controller is None:
         return {"ok": False, "error": "goal mode is not enabled"}
-    sid = str((body or {}).get("session_id") or "").strip()
+    body = body or {}
+    sid = str(body.get("session_id") or "").strip()
     if not sid:
         return {"ok": False, "error": "session_id is required"}
-    ok, msg = STATE.goal_controller.set_goal_safe(
+    from graph.goals.controller import GoalController
+
+    ok, msg = STATE.goal_controller.set_goal_operator(
         sid,
-        (body or {}).get("condition"),
-        (body or {}).get("verifier") or {},
-        (body or {}).get("max_iterations"),
+        body.get("condition"),
+        body.get("verifier") or {},
+        max_iterations=body.get("max_iterations"),
+        no_progress_limit=body.get("no_progress_limit"),
+        mode="monitor" if body.get("mode") == "monitor" else "drive",
+        deadline=GoalController._parse_deadline(body.get("deadline")),
+        stall_after=GoalController._parse_stall_after(body.get("stall_after")),
     )
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 

@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 # Live-updatable bearer token (None = open mode for bearer).
 _BEARER: list[str | None] = [None]
+# Optional federation token (ADR 0066) — a second credential confined to the /a2a + /v1
+# consumer surfaces and DENIED the /api operator surface. None = no federation tier.
+_FEDERATION: list[str | None] = [None]
 # X-API-Key (env-seeded at install; constant for the process).
 _API_KEY: list[str] = [""]
 # Allowed origins: None = verification disabled; list = allowlist.
@@ -133,12 +136,31 @@ def _is_public(path: str) -> bool:
     return False
 
 
+def _requires_operator(path: str) -> bool:
+    """Paths that require the OPERATOR credential (ADR 0066 R1 ceiling).
+
+    The ``/api`` operator/console surface — plugin install+enable (host code-exec),
+    config/SOUL rewrite, subagent runs, the operator goal set-path — is operator-only; a
+    configured federation token is denied it (403). ``/a2a`` + ``/v1`` are the
+    federation/consumer surfaces and are NOT operator-only. Public + SSE-token paths never
+    reach the ceiling (handled earlier in dispatch). The substring form also catches the
+    fleet-proxy variants (``/active/<slug>/api/…``, ``/agents/<slug>/api/…``)."""
+    return "/api/" in path or path == "/api" or path.endswith("/api")
+
+
 def set_bearer_token(token: str | None) -> None:
     """Update the active bearer token at runtime (wizard/drawer reload)."""
     _BEARER[0] = (token or "").strip() or None
 
 
-def configure(*, bearer_token: str | None, api_key: str, allowed_origins_raw: str) -> None:
+def set_federation_token(token: str | None) -> None:
+    """Update the federation token at runtime (wizard/drawer reload). None = no federation tier."""
+    _FEDERATION[0] = (token or "").strip() or None
+
+
+def configure(
+    *, bearer_token: str | None, api_key: str, allowed_origins_raw: str, federation_token: str | None = None
+) -> None:
     """Seed the guard at route-registration time.
 
     Args:
@@ -157,6 +179,14 @@ def configure(*, bearer_token: str | None, api_key: str, allowed_origins_raw: st
     _BEARER[0] = seed or None
     if _BEARER[0] is None:
         logger.warning("[a2a] A2A auth token not configured — endpoint is open")
+
+    # Federation token (ADR 0066) — same authoritative-vs-env-fallback rule as the bearer.
+    raw_fed = federation_token if federation_token is not None else os.environ.get("A2A_FEDERATION_TOKEN", "")
+    _FEDERATION[0] = (raw_fed or "").strip() or None
+    if _FEDERATION[0] is not None and _BEARER[0] is None:
+        logger.warning("[a2a] federation_token set but no operator bearer — federation tier is inert (open mode)")
+    if _FEDERATION[0] is not None and _FEDERATION[0] == _BEARER[0]:
+        logger.warning("[a2a] federation_token equals the operator token — federation tier collapses to operator")
 
     _API_KEY[0] = api_key or ""
 
@@ -251,14 +281,36 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if api_key and not hmac.compare_digest(request.headers.get("x-api-key", "") or "", api_key):
             return _unauthorized("Unauthorized")
 
-        # Bearer — enforced only when configured.
+        # Bearer — enforced only when configured. Classify which credential matched
+        # (ADR 0066): the operator token → full access; a configured federation token →
+        # the /a2a + /v1 consumer surfaces only (the /api ceiling below denies it the
+        # operator surface). Open mode + single-token mode resolve to operator (R3
+        # backward-compat: unset federation_token ⇒ this is the old single-token check).
         active = _BEARER[0]
+        fed = _FEDERATION[0]
+        tier = "operator"
         if active:
             header = request.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
                 return _unauthorized("Unauthorized: expected 'Authorization: Bearer <token>'")
-            if not hmac.compare_digest(header[len("Bearer ") :], active):
+            token = header[len("Bearer ") :]
+            # Constant-time compare against each configured secret; classify by which
+            # matched. Trust = the matched secret, never the path/Origin/loopback (R5).
+            is_operator = hmac.compare_digest(token, active)
+            is_federation = fed is not None and hmac.compare_digest(token, fed)
+            if is_operator:
+                tier = "operator"
+            elif is_federation:
+                tier = "federation"
+            else:
                 return _unauthorized("Unauthorized: invalid bearer token")
+
+        # R1 path ceiling (ADR 0066): a federation credential is denied the /api operator
+        # surface — otherwise the token split is cosmetic (it has RCE via
+        # /api/plugins/install anyway). /a2a + /v1 stay open to either tier.
+        if tier == "federation" and _requires_operator(path):
+            return JSONResponse({"detail": "Forbidden: operator credential required"}, status_code=403)
+        request.state.trust_tier = tier
 
         # Origin — enforced only when an allowlist is set AND an Origin is
         # present. Origin is a browser-only header; server-to-server callers
@@ -273,12 +325,15 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def install(app, *, bearer_token: str | None, api_key: str, allowed_origins_raw: str) -> None:
+def install(
+    app, *, bearer_token: str | None, api_key: str, allowed_origins_raw: str, federation_token: str | None = None
+) -> None:
     """Configure the guard and add the middleware to ``app``."""
     configure(
         bearer_token=bearer_token,
         api_key=api_key,
         allowed_origins_raw=allowed_origins_raw,
+        federation_token=federation_token,
     )
     app.add_middleware(A2AAuthMiddleware)
 

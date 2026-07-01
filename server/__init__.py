@@ -733,6 +733,7 @@ def _main():
         bearer_token=((STATE.graph_config.auth_token if STATE.graph_config else "") or None),
         api_key=os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", ""),
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
+        federation_token=((STATE.graph_config.federation_token if STATE.graph_config else "") or None),
     )
 
     # Short-lived SSE token endpoint (Part 3 of auth inversion): the React

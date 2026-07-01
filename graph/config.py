@@ -637,6 +637,14 @@ class LangGraphConfig:
     # Kept in YAML rather than env so the drawer can manage it.
     auth_token: str = ""
 
+    # Optional federation token (ADR 0066) — a SECOND credential handed to
+    # semi-trusted A2A peers. It reaches only the /a2a + /v1 consumer surfaces;
+    # the /api operator surface (plugin install, config rewrite, subagent runs,
+    # the operator goal set-path) is denied it. Blank = no federation tier
+    # (single-token mode; every bearer holder is the operator). Env fallback:
+    # A2A_FEDERATION_TOKEN.
+    federation_token: str = ""
+
     # OS-level autostart — ``True`` means the server launches on user
     # login (macOS LaunchAgent today; Linux/Windows TBD). Managed by
     # ``autostart.py``; the field here is the source of truth for
@@ -817,6 +825,7 @@ class LangGraphConfig:
         # value still lets create_llm / set_a2a_token fall back to env.
         secret_api_key = secrets.get("model", {}).get("api_key")
         secret_auth_token = secrets.get("auth", {}).get("token")
+        secret_federation_token = secrets.get("auth", {}).get("federation_token")
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -944,6 +953,7 @@ class LangGraphConfig:
             a2a_require_routable_url=bool(a2a.get("require_routable_url", False)),
             instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
+            federation_token=secret_federation_token or auth.get("federation_token", cls.federation_token),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
             # fallback only fires when the merged dict omits the key (zero-migration).

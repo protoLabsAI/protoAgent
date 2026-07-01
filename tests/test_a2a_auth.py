@@ -24,10 +24,12 @@ from a2a_impl import auth
 def _reset_guard():
     """Each test seeds the guard itself; reset module state around it."""
     auth._BEARER[0] = None
+    auth._FEDERATION[0] = None
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
     yield
     auth._BEARER[0] = None
+    auth._FEDERATION[0] = None
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
 
@@ -485,6 +487,87 @@ def test_open_bind_optin_allowed_with_warning():
 
 
 # ── 7. _is_public coverage ───────────────────────────────────────────────────
+
+
+# ── 8. federation token + /api path ceiling (ADR 0066) ───────────────────────
+
+
+def _fed_configured():
+    auth.configure(bearer_token="op-secret", api_key="", allowed_origins_raw="", federation_token="fed-secret")
+
+
+def test_federation_token_denied_api_operator_surface():
+    _fed_configured()
+    c = _client_multi()
+    fed = {"Authorization": "Bearer fed-secret"}
+    # The /api operator surface (+ fleet-proxied variants) is 403 for a federation credential —
+    # even though the token itself is valid (the R1 path ceiling).
+    assert c.post("/api/config", headers=fed).status_code == 403
+    assert c.post("/api/subagents/run", headers=fed).status_code == 403
+    assert c.get("/active/foo/api/config", headers=fed).status_code == 403
+    assert c.get("/agents/slug/api/config", headers=fed).status_code == 403
+
+
+def test_federation_token_allowed_consumer_surface():
+    _fed_configured()
+    c = _client_multi()
+    fed = {"Authorization": "Bearer fed-secret"}
+    # /a2a + /v1 are the federation/consumer surfaces — a federation token passes.
+    assert c.post("/a2a", headers=fed).status_code == 200
+    assert c.post("/v1/chat/completions", headers=fed).status_code == 200
+
+
+def test_operator_token_reaches_everything():
+    _fed_configured()
+    c = _client_multi()
+    op = {"Authorization": "Bearer op-secret"}
+    assert c.post("/api/config", headers=op).status_code == 200
+    assert c.post("/api/subagents/run", headers=op).status_code == 200
+    assert c.post("/a2a", headers=op).status_code == 200
+    assert c.post("/v1/chat/completions", headers=op).status_code == 200
+
+
+def test_federation_invalid_token_still_401():
+    _fed_configured()
+    c = _client_multi()
+    bad = {"Authorization": "Bearer nope"}
+    assert c.post("/api/config", headers=bad).status_code == 401  # neither token → 401, not 403
+    assert c.post("/a2a", headers=bad).status_code == 401
+
+
+def test_single_token_mode_unchanged_no_ceiling():
+    # No federation token → the bearer holder is the operator everywhere (backward-compat).
+    auth.configure(bearer_token="op-secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    op = {"Authorization": "Bearer op-secret"}
+    assert c.post("/api/config", headers=op).status_code == 200
+    assert c.post("/a2a", headers=op).status_code == 200
+    # The would-be federation token is simply invalid in single-token mode.
+    assert c.post("/api/config", headers={"Authorization": "Bearer fed-secret"}).status_code == 401
+
+
+def test_federation_inert_in_open_mode():
+    # federation_token set but no operator bearer → open mode; the tier is inert.
+    auth.configure(bearer_token=None, api_key="", allowed_origins_raw="", federation_token="fed-secret")
+    assert auth._BEARER[0] is None
+    assert _client_multi().post("/api/config").status_code == 200  # open — no 403
+
+
+@pytest.mark.parametrize(
+    "path,operator",
+    [
+        ("/api/config", True),
+        ("/api/goals", True),
+        ("/api/plugins/install", True),
+        ("/active/slug/api/config", True),
+        ("/agents/x/api/events", True),
+        ("/a2a", False),
+        ("/v1/chat/completions", False),
+        ("/healthz", False),
+    ],
+)
+def test_requires_operator_classification(path, operator):
+    assert auth._requires_operator(path) is operator
 
 
 @pytest.mark.parametrize(
