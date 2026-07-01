@@ -107,6 +107,38 @@ def test_compact_session_route(monkeypatch):
     assert body["message"] == "Compacted this conversation"
 
 
+def test_rewind_session_route(monkeypatch):
+    # The route is a thin pass-through to server.chat.rewind_session — forwards the
+    # path session_id + body target (message_id / content / index) and returns the
+    # rewind result dict verbatim.
+    import operator_api.chat_routes as cr
+
+    seen: list[dict] = []
+
+    async def _fake_rewind(session_id, *, message_id=None, index=None, content=None, occurrence=None):
+        seen.append(
+            {
+                "session_id": session_id,
+                "message_id": message_id,
+                "index": index,
+                "content": content,
+                "occurrence": occurrence,
+            }
+        )
+        return {"found": True, "kept": 4, "removed": 2, "reason": "", "message": "Rewound"}
+
+    monkeypatch.setattr(cr, "rewind_session", _fake_rewind)
+    c = _client(monkeypatch)
+    body = c.post(
+        "/api/chat/sessions/s1/rewind", json={"message_id": "m9", "content": "the answer"}
+    ).json()
+    assert seen == [
+        {"session_id": "s1", "message_id": "m9", "index": None, "content": "the answer", "occurrence": None}
+    ]
+    assert body["removed"] == 2 and body["kept"] == 4 and body["found"] is True
+    assert body["message"] == "Rewound"
+
+
 def test_delete_session_cleans_ephemeral_attachments(monkeypatch):
     """Deleting a chat drops its session-scoped attachment chunks."""
     import operator_api.chat_routes as cr

@@ -1218,6 +1218,60 @@ async def compact_session(session_id: str, *, request_metadata: dict | None = No
     return {**result, "message": _compaction_message(result)}
 
 
+def _rewind_message(result: dict) -> str:
+    """Human-readable status line for a rewind result (surfaced to non-UI callers /
+    logs; the console just truncates its own thread on success)."""
+    reason = result.get("reason") or ""
+    if reason == "not_found":
+        return "Couldn't rewind — that message is no longer in the agent's live context."
+    if reason == "no_checkpointer":
+        return "Rewind unavailable — no conversation checkpoint to rewind."
+    if reason == "noop":
+        return "Nothing to rewind — that's already the last message."
+    return f"Rewound the conversation — discarded {result.get('removed', 0)} later message(s)."
+
+
+async def rewind_session(
+    session_id: str,
+    *,
+    message_id: str | None = None,
+    index: int | None = None,
+    content: str | None = None,
+    occurrence: int | None = None,
+    request_metadata: dict | None = None,
+) -> dict:
+    """Rewind a chat session's live context to a target message (the "Rewind to
+    here" gesture, #1535): discard everything after it and rewrite the LangGraph
+    checkpoint in place.
+
+    Resolves the session's checkpointer ``thread_id`` (the A2A ``a2a:<session_id>``
+    thread the live streaming turns write to) and runs ``rewind_thread`` under the
+    per-thread lock, so a rewind can never race a live streaming turn on the same
+    thread (mirrors ``compact_session``). The checkpoint is the agent's REAL
+    context, so a client-only truncate would leave it intact — the rewrite here is
+    what actually rolls the agent's memory back. Returns the ``rewind_thread``
+    result dict plus a human-readable ``message``.
+    """
+    base = {"found": False, "kept": 0, "removed": 0}
+    if STATE.graph is None:
+        return {**base, "reason": "setup", "message": "Setup required — finish the setup wizard first."}
+
+    from graph.rewind_op import rewind_thread
+
+    tid = _resolve_thread_id(request_metadata, session_id)
+    async with _thread_lock(tid):
+        result = await rewind_thread(
+            STATE.graph,
+            STATE.checkpointer,
+            tid,
+            target_index=index,
+            target_id=message_id,
+            target_content=content,
+            occurrence=occurrence,
+        )
+    return {**result, "message": _rewind_message(result)}
+
+
 async def _chat_langgraph(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing

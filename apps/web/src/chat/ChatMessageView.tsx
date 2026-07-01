@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, Check, Clock, Coins, Copy, GitBranch, Gauge, Maximize2, RotateCcw } from "lucide-react";
+import { ArrowDownToLine, Check, Clock, Coins, Copy, GitBranch, Gauge, History, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
 import { slashCommandName } from "../ext/slashRegistry";
@@ -22,6 +22,7 @@ export type ChatMessageActions = {
   copiedId?: string | null;
   onCopy?: (m: ChatMessage) => void;
   onFork?: (m: ChatMessage) => void;
+  onRewind?: (m: ChatMessage) => void;
   onRegenerate?: (id: string) => void;
   lastAssistantId?: string;
   regenDisabled?: boolean;
@@ -199,6 +200,9 @@ export function ChatMessageView({
           ) : null}
           {actions.onFork ? (
             <MessageAction label="Fork from here" icon={<GitBranch size={14} />} onClick={() => actions.onFork!(message)} />
+          ) : null}
+          {actions.onRewind ? (
+            <MessageAction label="Rewind to here" icon={<History size={14} />} onClick={() => actions.onRewind!(message)} />
           ) : null}
           {actions.onRegenerate && message.id === actions.lastAssistantId ? (
             <MessageAction

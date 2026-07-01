@@ -1196,6 +1196,26 @@ export const api = {
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST", body: {} });
   },
 
+  // Rewind a chat session server-side (#1535): discard every message AFTER the
+  // target and rewrite the LangGraph checkpoint in place, rolling the agent's live
+  // context back to that point. The checkpoint is the agent's REAL context, so this
+  // must be server-side — a client-only truncate would leave the agent's memory
+  // intact. Intentionally DESTRUCTIVE (no archive) but never corrupting. `content`
+  // is the visible bubble's text: the console's client-side message ids never appear
+  // in the checkpoint, so the server locates the message by its rendered content.
+  rewindChatSession(sessionId: string, messageId: string, content?: string, occurrence?: number) {
+    return request<{
+      found: boolean;
+      kept: number;
+      removed: number;
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+      method: "POST",
+      body: { message_id: messageId, content, occurrence },
+    });
+  },
+
   async streamChat(
     message: string,
     sessionId: string,
