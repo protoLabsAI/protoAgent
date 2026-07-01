@@ -30,8 +30,37 @@
 
 /* The tab-bar wrapper exists only to scope the right-click context menu (ADR 0036) to the
    tab strip — it generates no box, so the DS TabBar stays the flex child it was. */
+/* A flex row so the Recently-closed menu button (#1525) sits beside the DS TabBar. The
+   TabBar flex-grows (min-width:0 lets it shrink + scroll / go responsive); the trailing
+   button doesn't shrink. With no closed tabs the button renders nothing, so the row looks
+   exactly like the bare TabBar did. */
 .chat-tabbar-wrap {
-  display: contents;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.chat-tabbar-wrap > .pl-tabbar {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-recently-closed {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.chat-recently-closed:hover,
+.chat-recently-closed[data-state="open"] {
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
 /* Background-agent report card (ADR 0050/0062). The DS system message is a de-emphasized

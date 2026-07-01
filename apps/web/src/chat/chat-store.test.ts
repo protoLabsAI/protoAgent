@@ -476,4 +476,39 @@ describe("closeSession / reopenLastClosed", () => {
     chatStore.reopenLastClosed(); // stack is empty → still a no-op
     expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual(before);
   });
+
+  it("returns undefined under the cap, and the evicted oldest when the stack overflows", async () => {
+    const { chatStore, MAX_CLOSED_SESSIONS } = await import("./chat-store");
+    const closedIds: string[] = [];
+    for (let i = 0; i < MAX_CLOSED_SESSIONS; i++) {
+      const s = chatStore.createSession();
+      closedIds.push(s.id);
+      expect(chatStore.closeSession(s.id)).toBeUndefined(); // under the cap → nothing evicted
+    }
+    // One more close overflows → the OLDEST (first-closed) falls off and is returned so the
+    // caller can purge-with-harvest its otherwise-orphaned server checkpoint.
+    const extra = chatStore.createSession();
+    const evicted = chatStore.closeSession(extra.id);
+    expect(evicted?.id).toBe(closedIds[0]);
+    // The evicted tab is no longer reopenable.
+    chatStore.reopenSession(closedIds[0]);
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).not.toContain(closedIds[0]);
+  });
+
+  it("reopenSession restores a SPECIFIC stashed tab, leaving the rest stashed", async () => {
+    const { chatStore } = await import("./chat-store");
+    const b = chatStore.createSession();
+    const c = chatStore.createSession();
+    chatStore.closeSession(b.id); // older
+    chatStore.closeSession(c.id); // newer
+
+    chatStore.reopenSession(b.id); // reopen the OLDER one by id
+    const ids = () => chatStore.getSnapshot().sessions.map((s) => s.id);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(b.id);
+    expect(ids()).toContain(b.id);
+    expect(ids()).not.toContain(c.id); // c is still stashed, not restored
+
+    chatStore.reopenLastClosed(); // c is still reopenable
+    expect(chatStore.getSnapshot().currentSessionId).toBe(c.id);
+  });
 });

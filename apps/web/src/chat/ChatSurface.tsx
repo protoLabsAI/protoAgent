@@ -26,6 +26,7 @@ import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-c
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
+import { RecentlyClosedMenu } from "./RecentlyClosedMenu";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
@@ -209,6 +210,7 @@ export function ChatSurface({
           onTabContextMenu={onTabContextMenu}
           addLabel="New chat"
         />
+        <RecentlyClosedMenu />
       </div>
 
       <div className="chat-session-pool">

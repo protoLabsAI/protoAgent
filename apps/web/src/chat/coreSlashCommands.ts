@@ -38,7 +38,10 @@ registerSlashCommand({
     if (!ctx.sessionId) return false; // no session → not handled (falls through)
     // Soft close: keep the server checkpoint so reopen reconnects the same agent thread.
     // (Delete-forever is the ✕ / shift-click / context-menu path.)
-    chatStore.closeSession(ctx.sessionId);
+    const evicted = chatStore.closeSession(ctx.sessionId);
+    // If the reopen stack overflowed, the evicted tab is no longer reopenable — purge it for
+    // real (harvest=true summarizes it into memory first) so its checkpoint isn't orphaned.
+    if (evicted) void api.deleteChatSession(evicted.id, true).catch(() => {});
     ctx.focusComposer();
     return true;
   },
