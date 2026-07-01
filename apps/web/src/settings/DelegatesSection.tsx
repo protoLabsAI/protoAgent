@@ -17,6 +17,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { acpAgentsQuery, delegatesQuery, delegateTypesQuery, queryKeys } from "../lib/queries";
 import type { DelegateFieldSpec, DelegateProbe, DelegateTypeSpec, DelegateView } from "../lib/types";
+import { SettingsSubPanel } from "./SettingsSubPanel";
 
 // Delegates panel (ADR 0025, PR3) — manage the agents & endpoints the agent can
 // talk to via delegate_to, under Settings → Integrations. Hot-swappable: create/
@@ -92,14 +93,13 @@ export function DelegatesSection() {
   // an error.
   if (list.isError) {
     return (
-      <section className="settings-group">
-        <p className="settings-group-title">Delegates</p>
+      <SettingsSubPanel label="delegates" title="Delegates">
         <p className="setting-desc">
           Couldn't reach the delegate registry for this agent — manage the agents and
           endpoints it can talk to once it's available.{" "}
           <HelpLink href={DELEGATES_GUIDE_URL}>Guide</HelpLink>
         </p>
-      </section>
+      </SettingsSubPanel>
     );
   }
 
@@ -107,76 +107,77 @@ export function DelegatesSection() {
   const typeSpecs = types.data?.types ?? [];
 
   return (
-    <section className="settings-group delegates-section">
-      <p className="settings-group-title">Delegates</p>
-      <p className="setting-desc">
-        Agents &amp; endpoints this agent can reach via <code>delegate_to</code> — changes apply on the next turn.
-      </p>
+    <SettingsSubPanel label="delegates" title="Delegates">
+      <div className="delegates-section">
+        <p className="setting-desc">
+          Agents &amp; endpoints this agent can reach via <code>delegate_to</code> — changes apply on the next turn.
+        </p>
 
-      <div className="subagent-list">
-        {delegates.map((d) => {
-          const p = probes[d.name];
-          return (
-            <div className="subagent-row" key={d.name}>
-              <div>
-                <strong>
-                  {d.health ? (
-                    <span
-                      title={d.health.ok
-                        ? `${d.health.detail || "reachable"}${d.health.latency_ms != null ? ` (${d.health.latency_ms} ms)` : ""}`
-                        : d.health.error || "unreachable"}
-                    >
-                      <StatusDot status={d.health.ok ? "success" : d.health.ok === false ? "error" : "neutral"} />
-                    </span>
-                  ) : null}
-                  {d.name} <Badge status="neutral">{d.type}</Badge>
-                  {!d.configured ? <StatusPill label="unconfigured" tone="warning" /> : null}
-                  {d.has_secret ? <StatusPill label="secret set" tone="muted" /> : null}
-                </strong>
-                <span>{p ? probeLine(p) : d.description || d.error || ""}</span>
+        <div className="subagent-list">
+          {delegates.map((d) => {
+            const p = probes[d.name];
+            return (
+              <div className="subagent-row" key={d.name}>
+                <div>
+                  <strong>
+                    {d.health ? (
+                      <span
+                        title={d.health.ok
+                          ? `${d.health.detail || "reachable"}${d.health.latency_ms != null ? ` (${d.health.latency_ms} ms)` : ""}`
+                          : d.health.error || "unreachable"}
+                      >
+                        <StatusDot status={d.health.ok ? "success" : d.health.ok === false ? "error" : "neutral"} />
+                      </span>
+                    ) : null}
+                    {d.name} <Badge status="neutral">{d.type}</Badge>
+                    {!d.configured ? <StatusPill label="unconfigured" tone="warning" /> : null}
+                    {d.has_secret ? <StatusPill label="secret set" tone="muted" /> : null}
+                  </strong>
+                  <span>{p ? probeLine(p) : d.description || d.error || ""}</span>
+                </div>
+                <div className="issue-actions">
+                  <Button icon variant="ghost" title="Test" onClick={() => testRow.mutate(d)} loading={testRow.isPending && testRow.variables?.name === d.name} disabled={testRow.isPending}>
+                    <ShieldCheck size={15} />
+                  </Button>
+                  <Button icon variant="ghost" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
+                    <Pencil size={15} />
+                  </Button>
+                  <Button icon variant="ghost" title="Delete" onClick={() => remove.mutate(d.name)} disabled={remove.isPending}>
+                    <Trash2 size={15} />
+                  </Button>
+                </div>
               </div>
-              <div className="issue-actions">
-                <Button icon variant="ghost" title="Test" onClick={() => testRow.mutate(d)} loading={testRow.isPending && testRow.variables?.name === d.name} disabled={testRow.isPending}>
-                  <ShieldCheck size={15} />
-                </Button>
-                <Button icon variant="ghost" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
-                  <Pencil size={15} />
-                </Button>
-                <Button icon variant="ghost" title="Delete" onClick={() => remove.mutate(d.name)} disabled={remove.isPending}>
-                  <Trash2 size={15} />
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-        {!delegates.length ? <p className="setting-desc">No delegates yet — add one below.</p> : null}
-      </div>
+            );
+          })}
+          {!delegates.length ? <p className="setting-desc">No delegates yet — add one below.</p> : null}
+        </div>
 
-      <div className="settings-group-actions">
-        <Button type="button" onClick={() => { setEditing(null); setAdding(true); }} disabled={!typeSpecs.length}>
-          <Plus size={15} /> Add delegate
-        </Button>
-      </div>
+        <div className="settings-group-actions">
+          <Button type="button" onClick={() => { setEditing(null); setAdding(true); }} disabled={!typeSpecs.length}>
+            <Plus size={15} /> Add delegate
+          </Button>
+        </div>
 
-      {/* Add / edit happen in a dialog (the form used to render inline and push the
-          panel down). The DS Dialog supplies the header + close, so DelegateForm
-          carries only the fields + actions. */}
-      <Dialog
-        open={adding || editing != null}
-        onClose={closeForm}
-        title={editing ? `Edit ${editing.name}` : "Add a delegate"}
-        width="min(560px, 94vw)"
-        className="delegate-dialog"
-      >
-        <DelegateForm
-          key={editing?.name ?? "_new"}
-          spec={typeSpecs}
-          initial={editing}
+        {/* Add / edit happen in a dialog (the form used to render inline and push the
+            panel down). The DS Dialog supplies the header + close, so DelegateForm
+            carries only the fields + actions. */}
+        <Dialog
+          open={adding || editing != null}
           onClose={closeForm}
-          onSaved={(msg) => { closeForm(); toast({ tone: "success", title: "Delegate saved", message: msg }); void invalidate(); }}
-        />
-      </Dialog>
-    </section>
+          title={editing ? `Edit ${editing.name}` : "Add a delegate"}
+          width="min(560px, 94vw)"
+          className="delegate-dialog"
+        >
+          <DelegateForm
+            key={editing?.name ?? "_new"}
+            spec={typeSpecs}
+            initial={editing}
+            onClose={closeForm}
+            onSaved={(msg) => { closeForm(); toast({ tone: "success", title: "Delegate saved", message: msg }); void invalidate(); }}
+          />
+        </Dialog>
+      </div>
+    </SettingsSubPanel>
   );
 }
 

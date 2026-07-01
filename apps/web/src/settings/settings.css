@@ -113,9 +113,6 @@
   border-radius: 0;
   background: transparent;
 }
-.settings-group {
-  margin-bottom: 40px;
-}
 /* Per-group action row (e.g. the Discord "Test connection" + help link). */
 .settings-group-actions {
   display: flex;
@@ -126,15 +123,6 @@
 .settings-inline-status {
   font-size: 0.8rem;
   color: var(--fg-muted);
-}
-.settings-group-title {
-  margin: 0 0 4px;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--brand-violet-light);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
 }
 .setting-row {
   display: grid;

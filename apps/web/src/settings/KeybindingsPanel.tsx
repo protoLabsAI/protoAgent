@@ -9,6 +9,7 @@ import type { Keybinding } from "../ext/keybindingRegistry";
 import { eventToCombo, formatCombo } from "../keybindings/combo";
 import { useKbIntents } from "../keybindings/intents";
 import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
+import { SettingsSubPanel } from "./SettingsSubPanel";
 
 // Settings ▸ Keyboard (ADR 0063) — view + rebind every registered keybinding. Click a
 // shortcut to record a new combo; conflicts (same combo in an overlapping scope) are
@@ -65,63 +66,69 @@ export function KeybindingsPanel() {
   const overrideCount = Object.keys(overrides).length;
 
   return (
-    <div className="kb-panel">
-      <div className="kb-panel__head">
+    <SettingsSubPanel
+      label="keyboard"
+      title="Keyboard"
+      kicker="rebind any registered shortcut — saved on this device"
+      actions={
+        <Button variant="ghost" size="sm" onClick={resetAll} disabled={overrideCount === 0}>
+          Reset all
+        </Button>
+      }
+    >
+      <div className="kb-panel">
         <p className="muted kb-panel__hint">
           Click a shortcut to rebind it. Note: <Kbd>⌘T</Kbd>, <Kbd>⌘1–9</Kbd> and <Kbd>⌃Tab</Kbd> are
           reserved by the browser — they work in the desktop app; in a browser, rebind to a free combo.
         </p>
-        <Button variant="ghost" size="sm" onClick={resetAll} disabled={overrideCount === 0}>
-          Reset all
-        </Button>
-      </div>
 
-      {groups.map((g) => (
-        <div className="kb-group" key={g}>
-          <div className="kb-group__label">{g}</div>
-          {bindings
-            .filter((b) => (b.group || "Other") === g)
-            .map((b) => {
-              const recording = recordingId === b.id;
-              const overridden = b.id in overrides;
-              return (
-                <div className="kb-row" key={b.id}>
-                  <div className="kb-row__label">
-                    {b.label}
-                    {b.scope ? <span className="kb-row__scope">{b.scope}</span> : null}
-                  </div>
-                  <div className="kb-row__keys">
-                    <button
-                      type="button"
-                      className={`kb-key${recording ? " kb-key--recording" : ""}`}
-                      onClick={() => (recording ? stopRecording() : startRecording(b.id))}
-                      onKeyDown={recording ? (e) => onRecordKey(b, e) : undefined}
-                      onBlur={recording ? stopRecording : undefined}
-                    >
-                      {recording ? "Press keys… (Esc to cancel)" : formatCombo(effectiveCombo(b))}
-                    </button>
-                    {overridden ? (
+        {groups.map((g) => (
+          <div className="kb-group" key={g}>
+            <div className="kb-group__label">{g}</div>
+            {bindings
+              .filter((b) => (b.group || "Other") === g)
+              .map((b) => {
+                const recording = recordingId === b.id;
+                const overridden = b.id in overrides;
+                return (
+                  <div className="kb-row" key={b.id}>
+                    <div className="kb-row__label">
+                      {b.label}
+                      {b.scope ? <span className="kb-row__scope">{b.scope}</span> : null}
+                    </div>
+                    <div className="kb-row__keys">
                       <button
                         type="button"
-                        className="kb-reset"
-                        title="Reset to default"
-                        aria-label={`Reset ${b.label} to default`}
-                        onClick={() => resetBinding(b.id)}
+                        className={`kb-key${recording ? " kb-key--recording" : ""}`}
+                        onClick={() => (recording ? stopRecording() : startRecording(b.id))}
+                        onKeyDown={recording ? (e) => onRecordKey(b, e) : undefined}
+                        onBlur={recording ? stopRecording : undefined}
                       >
-                        ↺
+                        {recording ? "Press keys… (Esc to cancel)" : formatCombo(effectiveCombo(b))}
                       </button>
+                      {overridden ? (
+                        <button
+                          type="button"
+                          className="kb-reset"
+                          title="Reset to default"
+                          aria-label={`Reset ${b.label} to default`}
+                          onClick={() => resetBinding(b.id)}
+                        >
+                          ↺
+                        </button>
+                      ) : null}
+                    </div>
+                    {conflict?.id === b.id ? (
+                      <div className="kb-row__conflict" role="alert">
+                        Already bound to “{conflict.with}” — pick another.
+                      </div>
                     ) : null}
                   </div>
-                  {conflict?.id === b.id ? (
-                    <div className="kb-row__conflict" role="alert">
-                      Already bound to “{conflict.with}” — pick another.
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-        </div>
-      ))}
-    </div>
+                );
+              })}
+          </div>
+        ))}
+      </div>
+    </SettingsSubPanel>
   );
 }

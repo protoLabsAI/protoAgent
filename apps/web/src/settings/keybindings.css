@@ -4,12 +4,6 @@
   flex-direction: column;
   gap: 18px;
 }
-.kb-panel__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
 .kb-panel__hint {
   margin: 0;
   font-size: 12px;
