@@ -1152,6 +1152,72 @@ def _build_abandon_goal_tool():
     return abandon_goal
 
 
+def _build_watch_tools():
+    """Watch primitive (ADR 0067) — the agent supervises MANY external conditions at once.
+    Each watch is polled out-of-band; on met it can run a follow-up prompt back in this
+    session. Plugin-verifier only (like set_goal): the agent can't open a shell/eval watch."""
+
+    @tool
+    def create_watch(
+        condition: str,
+        check: str,
+        check_args: dict | None = None,
+        run_prompt: str = "",
+        watch_id: str | None = None,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Create a WATCH: poll `condition` on a cadence (ground-truthed by the plugin verifier
+        `check`), and when it's met run `run_prompt` (if given) as a follow-up turn in THIS
+        session. Use watches to supervise many things at once (a deploy, CI, a metric) — each a
+        separate watch, all polled in parallel. Only plugin verifiers are allowed; shell/test/
+        data watches are operator-only. `watch_id` defaults to a slug of the condition (pass one
+        to hold two watches on the same condition). Returns the watch status, or an error.
+        """
+        from runtime.state import STATE
+
+        if STATE.watch_controller is None:
+            return "Watch mode is not available."
+        session_id = _session_id_from(state)  # injected graph state, not the contextvar
+        from graph.goals.verifiers import plugin_verifier_names
+
+        known = plugin_verifier_names()
+        if check not in known:
+            avail = ", ".join(known) if known else "(none registered — enable a plugin that contributes a verifier)"
+            return f"Error: unknown plugin verifier {check!r}. Available verifiers: {avail}."
+        ok, msg, _w = STATE.watch_controller.create(
+            condition=condition,
+            verifier={"type": "plugin", "check": check, "args": check_args or {}},
+            watch_id=watch_id,
+            run_prompt=run_prompt or "",
+            run_session=session_id or "",
+            trusted=False,
+        )
+        return msg
+
+    @tool
+    def list_watches() -> str:
+        """List every watch for this agent (id · status · condition · verifier). Returns a
+        human-readable summary, or a note when there are none."""
+        from runtime.state import STATE
+
+        if STATE.watch_controller is None:
+            return "Watch mode is not available."
+        watches = STATE.watch_controller.list_watches()
+        return "\n".join(w.status_line() for w in watches) if watches else "No watches."
+
+    @tool
+    def clear_watch(watch_id: str) -> str:
+        """Remove a watch by its id (from list_watches). Returns whether it existed."""
+        from runtime.state import STATE
+
+        if STATE.watch_controller is None:
+            return "Watch mode is not available."
+        cleared = STATE.watch_controller.clear(watch_id)
+        return f"Watch {watch_id!r} cleared." if cleared else f"No watch {watch_id!r} to clear."
+
+    return [create_watch, list_watches, clear_watch]
+
+
 @tool
 def load_skill(name: str) -> str:
     """Load the full step-by-step procedure for a skill.
@@ -1415,6 +1481,7 @@ def get_all_tools(
         tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
         tools.append(_build_goal_plan_tool())  # goal loop — record running plan (retired <goal_plan>)
         tools.append(_build_abandon_goal_tool())  # goal loop — explicit give-up (retired <goal_unachievable>)
+        tools.extend(_build_watch_tools())  # ADR 0067 — many concurrent supervised watches
     # ADR 0054 — curation tools for the dream/distill subagents (read-only activity
     # + skill inventory + additive-only skill creation). Self-gate on STATE at call
     # time; present in the full set so the subagent allowlists can pick them up.

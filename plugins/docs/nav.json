@@ -609,6 +609,10 @@
           "title": "0066 — Goal trust-gate Phase 2: federation token + operator `/api` channel"
         },
         {
+          "path": "adr/0067-standalone-watch-primitive.md",
+          "title": "0067 — Standalone `watch` primitive (many concurrent watches)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

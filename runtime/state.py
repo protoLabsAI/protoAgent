@@ -23,6 +23,7 @@ class AppState:
     checkpoint_path: Any = None
     checkpoint_prune_task: Any = None
     monitor_goals_task: Any = None  # ADR 0030 monitor-goal cadence loop
+    watch_task: Any = None  # ADR 0067 watch cadence loop
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
     skills_index: Any = None
@@ -68,6 +69,7 @@ class AppState:
     background_mgr: Any = None  # ADR 0050 — detached background subagent jobs
     cache_warmer: Any = None
     goal_controller: Any = None
+    watch_controller: Any = None  # ADR 0067 — standalone watch primitive
     main_loop: Any = None
     # The port this process actually bound to (populated by _main).
     active_port: int = 7870

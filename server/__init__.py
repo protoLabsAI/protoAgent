@@ -238,6 +238,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _checkpoint_prune_loop,
     _init_langgraph_agent,
     _monitor_goals_loop,
+    _watch_loop,
     _mount_plugin_routers,
     _plugin_agent_invoke,
     _populate_plugin_host,
@@ -522,6 +523,7 @@ def _main():
             import asyncio
 
             STATE.monitor_goals_task = asyncio.create_task(_monitor_goals_loop())
+            STATE.watch_task = asyncio.create_task(_watch_loop())
 
         # (The inbound Discord gateway now starts as the discord plugin's surface,
         # below — ADR 0018/0019.)
@@ -640,6 +642,8 @@ def _main():
             STATE.checkpoint_prune_task.cancel()
         if STATE.monitor_goals_task is not None:
             STATE.monitor_goals_task.cancel()
+        if STATE.watch_task is not None:
+            STATE.watch_task.cancel()
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters
         # in the desktop-sidecar restart loop. Best-effort; NameError if boot

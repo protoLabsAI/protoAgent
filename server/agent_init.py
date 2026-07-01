@@ -282,6 +282,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
         STATE.goal_controller = GoalController(STATE.graph_config, GoalStore())
     else:
         STATE.goal_controller = None
+    # Watch primitive (ADR 0067) — many concurrent, out-of-band watches. Machinery only; no
+    # watch runs until one is created, so it's always on (cheap when idle).
+    from graph.watches import WatchController, WatchStore
+
+    STATE.watch_controller = WatchController(STATE.graph_config, WatchStore())
     log.info(
         "LangGraph agent initialized (model: %s, knowledge_db: %s, scheduler: %s)",
         STATE.graph_config.model_name,
@@ -816,6 +821,25 @@ async def _monitor_goals_loop() -> None:
                     log.info("[goal-monitor] %d monitor goal(s) reached a terminal state", n)
             except Exception:
                 log.exception("[goal-monitor] tick failed")
+        await asyncio.sleep(max(5, interval))
+
+
+async def _watch_loop() -> None:
+    """Out-of-band cadence for watches (ADR 0067): periodically run each active watch's
+    verifier — no agent turn — so a met watch reacts (run_in_session + hooks) without waiting
+    for a session turn. Many watches tick together; verifier-only."""
+    await asyncio.sleep(15)  # let boot settle before the first tick
+    while True:
+        ctrl = STATE.watch_controller
+        cfg = STATE.graph_config
+        interval = getattr(cfg, "watch_interval", 30) if cfg else 30
+        if ctrl is not None:
+            try:
+                n = await ctrl.tick_all()
+                if n:
+                    log.info("[watch] %d watch(es) reached a terminal state", n)
+            except Exception:
+                log.exception("[watch] tick failed")
         await asyncio.sleep(max(5, interval))
 
 
