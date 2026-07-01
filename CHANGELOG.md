@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Chat composer: terminal-style input history** (#1496). Press **↑** to recall previously-sent
+  messages into the composer (newest first), **↓** to walk back toward your in-progress draft — just
+  like a shell. Recalled messages are editable before resending; history only triggers at the top/bottom
+  line so multi-line editing keeps normal caret movement. The last 100 messages persist across reloads
+  (localStorage), shared across chat slots.
 - **Artifact panel: pan & zoom for diagrams** (#1495, artifact plugin v0.14.0). Mermaid **and** SVG
   artifacts now render into a transform-driven viewport — scroll-wheel / pinch to zoom (cursor-anchored),
   click-drag to pan, and a **Reset** control that re-fits the diagram. Large flowcharts and architecture
