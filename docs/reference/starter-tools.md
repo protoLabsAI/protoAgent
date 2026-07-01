@@ -5,7 +5,7 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
 - Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a multi-step Back/Next form **wizard** with text/number/choice fields, incl. AskUserQuestion-style option cards) — pause the turn (A2A `input-required`) for the operator and resume with their answer. Lead-agent only (hard-denied to subagents); on autonomous turns they don't block — the runtime auto-answers so the turn can't deadlock.
 - The **render tool** `show_component(component, props, title?)` — render structured data inline in chat as a `table`, `keyvalue`, or `timeline` widget instead of a markdown blob ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)). Data-only and safe (no code execution); the console renders it via an **extensible component registry** plugins can add to. For free-form generated HTML/React, use an artifact instead.
-- Four **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
+- Five **memory tools** — `memory_ingest`, `memory_recall`, `recall_session`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
 - Four **tasks tools** — `task_create`, `task_list`, `task_update`, `task_close` — the agent's in-process planning board, bridged to the console Tasks panel. Bound when a tasks store is present (default in `server/agent_init.py`).
 - One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
@@ -147,6 +147,15 @@ Top-k keyword search over the store via FTS5 (LIKE fallback). Returns one match 
 ```
 
 Returns `"No matches."` when nothing scores above the keyword threshold.
+
+## `recall_session`
+
+```python
+@tool
+async def recall_session(session_id: str) -> str
+```
+
+Expands one entry from the auto-injected `<prior_sessions>` digest into the full persisted session summary — messages and final output, reasoning-stripped, capped at ~6 000 chars ([ADR 0069](/adr/0069-memory-delivery-layer)). The digest itself carries only one attributed line per prior session (id · timestamp · surface · topic · message count), so this tool is the on-demand path to a prior session's content. Errors cleanly on an unknown or malformed id.
 
 ## `memory_list`
 

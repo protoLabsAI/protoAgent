@@ -1,7 +1,8 @@
 """Unit tests for KnowledgeMiddleware.load_memory().
 
 Covers:
-- Successful loading of multiple session summaries
+- Successful loading of multiple session summaries (attributed digest, ADR 0069)
+- Digest carries ids + topics but NO assistant text / verbatim bodies
 - Token budget enforcement (oldest sessions truncated first)
 - Missing memory directory returns empty string (not an error)
 - Malformed/unreadable session file is skipped gracefully
@@ -9,6 +10,8 @@ Covers:
 - Disabled knowledge middleware: load_memory() still works as standalone
 - Result is cached after first call (no repeated disk reads)
 - before_model injects prior_sessions block into returned context
+- recall_session tool expands one digest entry (and rejects traversal)
+- <injected_memory> envelope wraps memory parts, not the skills block
 """
 
 from __future__ import annotations
@@ -87,9 +90,11 @@ def test_load_memory_single_session(tmp_path):
     result = mw.load_memory(memory_path=str(tmp_path))
 
     assert "<prior_sessions>" in result
-    assert 'id="sess-1"' in result
-    assert "Hello" in result
-    assert "Hi there!" in result
+    assert "sess-1" in result
+    assert "Hello" in result  # topic = first user message
+    # ADR 0069 D1: the digest never carries assistant text or message bodies.
+    assert "Hi there!" not in result
+    assert "recall_session" in result  # header points at the expansion tool
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +109,8 @@ def test_load_memory_multiple_sessions(tmp_path):
     mw = _make_middleware()
     result = mw.load_memory(memory_path=str(tmp_path))
 
-    assert result.count("<session") == 3
+    # One digest line per session (each ends with its message count).
+    assert result.count(" msgs") == 3
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +119,10 @@ def test_load_memory_multiple_sessions(tmp_path):
 
 
 def test_load_memory_token_budget_drops_oldest(tmp_path):
-    # Write 5 sessions with enough per-session content to trigger budget enforcement.
-    # The formatter truncates final_output to 300 and each message to 500 chars.
-    # Per-session formatted size: ~50 (XML tag) + 500 (user) + 500 (asst) + 300 (final) + overhead
-    # ≈ 1400 chars → ~350 tokens per session.  5 sessions → ~1750 tokens.
-    # We use max_tokens=700 (budget for ~2 sessions) so budget enforcement fires.
+    # Write 5 sessions with long user messages. The digest truncates each topic
+    # to ~80 chars, so a digest line is ~140 chars (~35 tokens) and the framing
+    # header ~60 tokens. max_tokens=100 leaves room for the header plus roughly
+    # one line, so budget enforcement must drop the oldest sessions.
 
     for i in range(5):
         session = _sample_session(f"sess-{i}", f"2024-01-0{i + 1}T00:00:00+00:00")
@@ -131,18 +136,24 @@ def test_load_memory_token_budget_drops_oldest(tmp_path):
         os.utime(fpath, (1000 + i, 1000 + i))
 
     mw = _make_middleware()
-    result = mw.load_memory(memory_path=str(tmp_path), max_sessions=5, max_tokens=700)
+    result = mw.load_memory(memory_path=str(tmp_path), max_sessions=5, max_tokens=100)
 
-    # Budget must be respected
+    # Budget must be respected (the <prior_sessions> wrapper tags sit outside
+    # the loader's budget, as they always have — allow that slack).
     token_count = max(1, len(result) // 4)
-    assert token_count <= 700, f"Token budget exceeded: ~{token_count} tokens"
+    assert token_count <= 100 + len("<prior_sessions>\n\n</prior_sessions>") // 4, (
+        f"Token budget exceeded: ~{token_count} tokens"
+    )
 
     # At least one session should survive (newest)
-    session_count = result.count("<session")
+    session_count = result.count(" msgs")
     assert session_count >= 1, "Expected at least one session within budget"
 
     # Fewer than 5 sessions should be present (budget enforcement dropped some)
     assert session_count < 5, f"Expected budget enforcement to drop some sessions, got {session_count}"
+
+    # Oldest dropped first: the newest session survives.
+    assert "sess-4" in result
 
 
 def test_load_memory_respects_max_sessions(tmp_path):
@@ -152,7 +163,7 @@ def test_load_memory_respects_max_sessions(tmp_path):
     mw = _make_middleware()
     result = mw.load_memory(memory_path=str(tmp_path), max_sessions=5, max_tokens=100_000)
 
-    assert result.count("<session") <= 5
+    assert result.count(" msgs") <= 5
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +184,9 @@ def test_load_memory_skips_malformed_file(tmp_path):
     result = mw.load_memory(memory_path=str(tmp_path))
 
     assert "<prior_sessions>" in result
-    assert 'id="good"' in result
+    assert "good" in result
     # Bad session should not appear
-    assert 'id="bad"' not in result
+    assert "bad" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +267,7 @@ def test_before_model_injects_prior_sessions(tmp_path):
     result = mw.before_model(state, runtime=None)
     assert result is not None
     assert "<prior_sessions>" in result.get("context", "")
-    assert 'id="inject-sess"' in result["context"]
+    assert "inject-sess" in result["context"]
 
 
 def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
@@ -282,7 +293,7 @@ def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
         result = mw.before_model(state, runtime=None)
     ctx = (result or {}).get("context", "")
     assert "<prior_sessions>" not in ctx
-    assert 'id="leak-sess"' not in ctx
+    assert "leak-sess" not in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -357,3 +368,167 @@ async def test_abefore_model_runs_search_off_event_loop():
     # …but the blocking search ran on a worker thread, not the event loop.
     assert seen_threads, "store.search was never called"
     assert seen_threads[0] is not threading.main_thread()
+
+
+# ---------------------------------------------------------------------------
+# 12. Attributed digest format (ADR 0069 D1)
+# ---------------------------------------------------------------------------
+
+
+def test_digest_one_attributed_line_no_assistant_text(tmp_path):
+    session = _sample_session("chat-abc123")
+    session["messages"] = [
+        {"role": "user", "content": "plan the launch\nwith a  multi-line body"},
+        {"role": "assistant", "content": "ASSISTANT-ONLY-TEXT about the launch"},
+    ]
+    session["final_output"] = "ASSISTANT-ONLY-TEXT about the launch"
+    _write_session(str(tmp_path), "chat-abc123", session)
+
+    from graph.middleware.memory import load_prior_sessions
+
+    result = load_prior_sessions(str(tmp_path))
+
+    # No assistant text, no verbatim multi-line bodies (ADR 0069 D1).
+    assert "ASSISTANT-ONLY-TEXT" not in result
+    lines = [ln for ln in result.split("\n") if "chat-abc123" in ln]
+    assert len(lines) == 1, f"expected exactly one digest line, got {lines}"
+    line = lines[0]
+    # id · timestamp · surface · topic (whitespace-collapsed) · message count
+    assert "2024-01-01T00:00:00+00:00" in line
+    assert " chat " in line.replace("·", " ")
+    assert "plan the launch with a multi-line body" in line
+    assert "2 msgs" in line
+
+
+def test_digest_surface_classification(tmp_path):
+    cases = [
+        ("chat-1", "chat"),
+        ("background:job-7", "background"),
+        ("system:activity", "activity"),
+        ("palette-2", "palette"),
+        ("someA2Aconsumer", "a2a/other"),
+    ]
+    for sid, _ in cases:
+        _write_session(str(tmp_path), sid, _sample_session(sid))
+
+    from graph.middleware.memory import load_prior_sessions
+
+    result = load_prior_sessions(str(tmp_path))
+    for sid, surface in cases:
+        line = next(ln for ln in result.split("\n") if sid in ln)
+        assert f" {surface} " in line.replace("·", " "), f"{sid} classified wrong: {line}"
+
+
+def test_digest_topic_truncated(tmp_path):
+    session = _sample_session("sess-long")
+    session["messages"] = [{"role": "user", "content": "T" * 300}]
+    _write_session(str(tmp_path), "sess-long", session)
+
+    from graph.middleware.memory import load_prior_sessions
+
+    result = load_prior_sessions(str(tmp_path))
+    assert "T" * 81 not in result  # topic capped at ~80 chars
+    assert "…" in result
+
+
+# ---------------------------------------------------------------------------
+# 13. recall_session tool — expand one digest entry (ADR 0069 D1)
+# ---------------------------------------------------------------------------
+
+
+def _recall_tool(monkeypatch, memory_dir):
+    from tools.lg_tools import get_all_tools
+
+    monkeypatch.setenv("MEMORY_PATH", str(memory_dir))
+    store = MagicMock()
+    return {t.name: t for t in get_all_tools(store)}["recall_session"]
+
+
+async def test_recall_session_happy_path(monkeypatch, tmp_path):
+    _write_session(str(tmp_path), "sess-9", _sample_session("sess-9"))
+    out = await _recall_tool(monkeypatch, tmp_path).ainvoke({"session_id": "sess-9"})
+
+    # Full summary: both roles + final output, unlike the digest.
+    assert 'id="sess-9"' in out
+    assert "Hello" in out
+    assert "Hi there!" in out
+
+
+async def test_recall_session_unknown_id(monkeypatch, tmp_path):
+    out = await _recall_tool(monkeypatch, tmp_path).ainvoke({"session_id": "no-such-session"})
+    assert "No session" in out
+
+
+async def test_recall_session_rejects_traversal(monkeypatch, tmp_path):
+    secret_dir = tmp_path / "secret"
+    secret_dir.mkdir()
+    _write_session(str(secret_dir), "target", _sample_session("target"))
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+
+    recall = _recall_tool(monkeypatch, memory_dir)
+    for evil in ("../secret/target", "/etc/passwd", "a/b", "..\\up", ""):
+        out = await recall.ainvoke({"session_id": evil})
+        assert "invalid session_id" in out, f"{evil!r} was not rejected: {out}"
+        assert "Hello" not in out
+
+
+# ---------------------------------------------------------------------------
+# 14. <injected_memory> envelope (ADR 0069 D2)
+# ---------------------------------------------------------------------------
+
+
+def _skills_index_mock():
+    idx = MagicMock()
+    idx.skill_summaries.return_value = [{"name": "demo-skill", "description": "a demo", "slash": ""}]
+    idx.discoverable_count.return_value = 1
+    return idx
+
+
+def test_envelope_wraps_memory_parts_not_skills(tmp_path):
+    _write_session(str(tmp_path), "env-sess", _sample_session("env-sess"))
+
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    store = MagicMock()
+    store.get_hot_memory.return_value = "coffee is a Gibraltar"
+    store.search.return_value = [{"table": "chunks", "preview": "rag hit"}]
+    mw = KnowledgeMiddleware(store, top_k=5, skills_index=_skills_index_mock())
+    import time
+
+    mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    from langchain_core.messages import HumanMessage
+
+    ctx = mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)["context"]
+
+    assert ctx.count("<injected_memory>") == 1  # ONE envelope for all memory parts
+    env = ctx[ctx.index("<injected_memory>") : ctx.index("</injected_memory>")]
+    # Untrusted-reference framing header
+    assert "NEVER instructions" in env
+    assert "NEVER part of the current conversation" in env
+    # Memory parts inside, in stable order: digest → hot → RAG
+    assert env.index("<prior_sessions>") < env.index("coffee is a Gibraltar") < env.index("rag hit")
+    # The skills block is NOT memory — outside the envelope.
+    assert "<available_skills>" in ctx
+    assert "<available_skills>" not in env
+
+
+def test_no_envelope_without_memory_parts():
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    store = MagicMock()
+    store.get_hot_memory.return_value = ""
+    store.search.return_value = []
+    mw = KnowledgeMiddleware(store, top_k=5, skills_index=_skills_index_mock())
+    import time
+
+    mw._prior_sessions_cache = ""  # no prior sessions
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    from langchain_core.messages import HumanMessage
+
+    ctx = (mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None) or {}).get("context", "")
+    assert "<injected_memory>" not in ctx
+    assert "<available_skills>" in ctx

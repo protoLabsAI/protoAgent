@@ -4,14 +4,15 @@ reasoning stripping.
 The loader is the single source of truth for both SessionSummaryMiddleware and
 KnowledgeMiddleware (previously two copy-pasted copies). It strips reasoning at
 read so a session file written by an older build can't inject <scratch_pad> into
-the prompt.
+the prompt — both in the digest topic (ADR 0069) and in the full-session render
+used by ``recall_session``.
 """
 
 from __future__ import annotations
 
 import json
 
-from graph.middleware.memory import load_prior_sessions
+from graph.middleware.memory import format_session_summary, load_prior_sessions
 
 
 def _write(d, sid, messages, final_output=""):
@@ -27,19 +28,33 @@ def _write(d, sid, messages, final_output=""):
     )
 
 
-def test_loader_strips_reasoning_from_dirty_old_files(tmp_path):
+def test_digest_topic_strips_reasoning_from_dirty_old_files(tmp_path):
     # Simulate a file written before the persist-time strip existed.
     _write(
         tmp_path,
         "s1",
-        [{"role": "assistant", "content": "<scratch_pad>secret plan</scratch_pad>The answer is 42."}],
-        final_output="<scratch_pad>noise</scratch_pad>Done.",
+        [{"role": "user", "content": "<scratch_pad>secret plan</scratch_pad>what is the answer?"}],
     )
     block = load_prior_sessions(str(tmp_path))
     assert "scratch_pad" not in block
     assert "secret plan" not in block
-    assert "The answer is 42." in block
-    assert "Done." in block
+    assert "what is the answer?" in block
+
+
+def test_full_render_strips_reasoning_from_dirty_old_files():
+    # format_session_summary (the recall_session renderer) applies the same
+    # read-time strip the old injection path did.
+    summary = {
+        "session_id": "s1",
+        "timestamp": "2026-06-05T00:00:00Z",
+        "messages": [{"role": "assistant", "content": "<scratch_pad>secret plan</scratch_pad>The answer is 42."}],
+        "final_output": "<scratch_pad>noise</scratch_pad>Done.",
+    }
+    rendered = format_session_summary(summary)
+    assert "scratch_pad" not in rendered
+    assert "secret plan" not in rendered
+    assert "The answer is 42." in rendered
+    assert "Done." in rendered
 
 
 def test_loader_empty_and_missing_dir(tmp_path):

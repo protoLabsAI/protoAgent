@@ -131,6 +131,7 @@ _TOOL_CATEGORY = {
     "memory_ingest": "Memory",
     "knowledge_ingest": "Memory",
     "memory_recall": "Memory",
+    "recall_session": "Memory",
     "memory_list": "Memory",
     "memory_stats": "Memory",
     "forget_memory": "Memory",
