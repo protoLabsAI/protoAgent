@@ -126,3 +126,23 @@ def test_real_registry_is_well_formed():
     for f in flags.FLAGS:
         assert f.tier in ("off", "dev", "beta", "on"), f"{f.id}: invalid tier {f.tier!r}"
         assert f.id and f.description, "every flag needs an id + description"
+
+
+def test_no_flag_is_past_its_remove_by():
+    """The cleanup contract (ADR 0068 D6): a flag whose ISO-date `remove_by` has passed is
+    overdue debt — graduate it to `on` and delete the flag + the old code path. This guard
+    fails CI so a stale gate is visible instead of accreting. `remove_by` values that aren't
+    ISO dates (e.g. a version like "v2.0") can't be auto-compared, so they're skipped."""
+    import datetime
+
+    today = datetime.date.today().isoformat()
+    overdue = []
+    for f in flags.FLAGS:
+        rb = (f.remove_by or "").strip()
+        try:
+            datetime.date.fromisoformat(rb)  # only date-form remove_by is auto-checked
+        except ValueError:
+            continue
+        if rb < today:  # ISO dates sort chronologically as strings
+            overdue.append(f"{f.id} (remove_by {rb}, owner {f.owner or '?'})")
+    assert not overdue, "overdue developer flags — graduate to `on` and delete: " + ", ".join(overdue)
