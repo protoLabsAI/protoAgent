@@ -625,6 +625,10 @@
           "title": "0068 — Developer flags & the Developer panel (gating pre-release functionality)"
         },
         {
+          "path": "adr/0069-memory-delivery-layer.md",
+          "title": "ADR 0069 — Memory delivery layer: attributed digest, provenance, trust tiers"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
