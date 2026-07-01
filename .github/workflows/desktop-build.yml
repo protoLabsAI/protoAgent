@@ -19,26 +19,35 @@ name: Desktop Build
 # updater bundles, and the updater-manifest fan-in job composes latest.json
 # (the manifest the in-app updater polls) onto the release — uploaded last.
 #
-# Fires on EVERY semver tag push (patch included) alongside release.yml's Docker build,
-# and on manual dispatch. Patches used to be skipped to save CI minutes, but this repo is
-# public so GitHub-hosted runners (incl. the 10×/2× macOS/Windows legs) are free +
-# unlimited — so every release, patch or minor, ships fresh desktop binaries and an
-# updated latest.json (no more hand-attaching a patch's binaries). macOS builds are signed
-# only when the full Apple secret set is present; Linux/Windows are always unsigned. See
-# ADR 0010 (UI tiers / desktop).
+# Runs on MANUAL DISPATCH ONLY (workflow_dispatch) — deliberately NOT on tag pushes.
+# The macOS (10×) and Windows (2×) legs are this repo's only paid CI, and building the
+# full matrix on EVERY semver tag (dozens/month at current release cadence) was the
+# dominant cost — so desktop drops are now on-demand instead of per-release. Tag pushes
+# still ship the Docker image + a (non-Latest) GitHub Release via release.yml; only the
+# desktop binaries wait for a dispatch.
+#
+# Two dispatch modes, keyed off the `tag` input:
+#   • WITH a `tag` (a vX.Y.Z) → a real desktop RELEASE: binaries attach to that GitHub
+#     Release, the fan-in composes latest.json, and the release is promoted to 'Latest'
+#     (release.yml creates releases --latest=false; the promotion happens here). This is
+#     how a desktop update reaches users' in-app updater.
+#   • WITHOUT a tag (dispatched from a branch) → a TEST build: bundles upload as workflow
+#     artifacts only; no release, no latest.json, no 'Latest' change.
+#
+# macOS builds are signed only when the full Apple secret set is present; Linux/Windows
+# are always unsigned. The repo guard keeps forks from running the matrix. See ADR 0010
+# (UI tiers / desktop) and docs/guides/releasing.md § Desktop.
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/ref to build against (blank = current ref)'
+        description: 'Tag to publish a desktop release for (vX.Y.Z). Blank = test build (artifacts only, no release).'
         required: false
 
 concurrency:
-  group: desktop-build-${{ github.ref }}
+  # Keyed on the dispatched tag (or ref) so two release dispatches don't collide.
+  group: desktop-build-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -47,11 +56,9 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.target }}
-    # Build on every semver tag push (patch included) + any manual dispatch. The old
-    # patch-skip was a CI-cost guard; it's unnecessary on a public repo where GH-hosted
-    # runners are free, and it meant patch desktop fixes never reached users (their
-    # binaries weren't attached and latest.json kept pointing at the last minor). The
-    # repo guard keeps forks from running the matrix.
+    # Manual dispatch only (see the `on:` block) — the tag-push trigger was retired
+    # because the macOS/Windows matrix on every release was the repo's dominant CI cost.
+    # The repo guard keeps forks from running the matrix.
     if: github.repository == 'protoLabsAI/protoAgent'
     # Per-leg runner, overridable by repo variable so the expensive macOS/Windows
     # legs can move off GitHub-hosted runners (10×/2× billing multipliers) onto
@@ -199,8 +206,8 @@ jobs:
           SIGNED="unsigned (dev)"
           if [ "${RUNNER_OS}" = "macOS" ]; then
             # tauri-bundler signs as soon as *any* Apple secret is set, then fails
-            # if the set is incomplete. Require the full set; otherwise unset all so
-            # a dispatch build falls back cleanly to unsigned.
+            # if the set is incomplete. Require the full set for a tagged (publish)
+            # dispatch; a test build (no tag) unsets all and falls back to unsigned.
             if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
                && [ -n "${APPLE_SIGNING_IDENTITY}" ] && [ -n "${APPLE_API_ISSUER}" ] \
                && [ -n "${APPLE_API_KEY}" ] && [ -n "${APPLE_API_KEY_BASE64}" ] \
@@ -210,8 +217,8 @@ jobs:
               python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_API_KEY_BASE64"]))' "$KEYFILE"
               export APPLE_API_KEY_PATH="${KEYFILE}"
               SIGNED="Developer ID (signed + notarized)"
-            elif [ "${{ github.event_name }}" = "push" ]; then
-              echo "::error::Semver-tag desktop releases require the full Apple signing secret set."
+            elif [ -n "${{ inputs.tag }}" ]; then
+              echo "::error::A tagged desktop release (tag=${{ inputs.tag }}) requires the full Apple signing secret set."
               exit 2
             else
               unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
@@ -335,15 +342,17 @@ jobs:
           if [ "${{ steps.build.outputs.signed }}" = "true" ]; then FLAG="--require-signed"; fi
           scripts/verify-macos-desktop.sh $FLAG dist-desktop/*.dmg
 
-      - name: Upload dispatch artifact
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload test-build artifact
+        # No tag → a test build: bundles are downloadable workflow artifacts only.
+        if: inputs.tag == ''
         uses: actions/upload-artifact@v6
         with:
           name: protoAgent-${{ steps.version.outputs.version }}-${{ matrix.target }}
           path: dist-desktop/*
 
       - name: Attach to release
-        if: github.event_name == 'push'
+        # A tag → publish: attach binaries to that GitHub Release (fan-in adds latest.json).
+        if: inputs.tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -351,29 +360,27 @@ jobs:
 
   # Fan-in: compose latest.json from every leg's signed updater bundle and
   # upload it LAST, so the manifest never points at assets that don't exist
-  # yet. Runs only on semver tags, and only once ALL legs succeeded (a partial
-  # manifest would skew versions across platforms). If the release carries no
-  # updater bundles (key wasn't present), it skips — in-app updates are simply
-  # disabled for that release.
+  # yet. Runs only for a tagged (publish) dispatch, and only once ALL legs
+  # succeeded (a partial manifest would skew versions across platforms). If the
+  # release carries no updater bundles (key wasn't present), it skips — in-app
+  # updates are simply disabled for that release.
   updater-manifest:
     name: updater manifest (latest.json)
     needs: build
-    # Runs on every tag push (patch included) so the in-app updater's latest.json is
-    # refreshed for every release. Gated to `push` so a manual dispatch (which builds
-    # artifacts, with no release to attach to) doesn't try to compose a manifest;
-    # `needs: build` ties it to a successful matrix.
+    # Only for a publish dispatch (a `tag` was supplied) — a test build (no tag) has no
+    # release to attach a manifest to. `needs: build` ties it to a successful matrix.
     if: >-
-      github.event_name == 'push' && github.repository == 'protoLabsAI/protoAgent'
+      inputs.tag != '' && github.repository == 'protoLabsAI/protoAgent'
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
       # Checkout at the tag so we can read the rolled CHANGELOG.md section for the
-      # in-app updater notes (below). By tag-push time CHANGELOG.md already holds the
+      # in-app updater notes (below). By publish time CHANGELOG.md already holds the
       # dated `## [VERSION]` section — the bump PR (prepare-release.yml) merged before
       # the tag. Without this the job has no working tree (it only `gh release`s).
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.tag }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -386,7 +393,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="${{ github.ref_name }}"
+          TAG="${{ inputs.tag }}"
           VERSION="${TAG#v}"
           mkdir -p updater-dist
           gh release download "$TAG" --repo "${{ github.repository }}" --dir updater-dist \

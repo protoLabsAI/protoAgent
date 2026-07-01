@@ -54,8 +54,13 @@ relaunches — agent data (`PROTOAGENT_CONFIG_DIR`, workspaces) is untouched.
 
 ## Platforms & CI
 
-`.github/workflows/desktop-build.yml` builds all three platforms on semver tags
-(and on manual dispatch, which uploads workflow artifacts instead):
+`.github/workflows/desktop-build.yml` builds all three platforms on **manual dispatch
+only** (`workflow_dispatch`) — the tag-push trigger was retired because the macOS (10×)
+and Windows (2×) legs were the repo's dominant CI cost. Dispatch **with** a `tag` input
+(`gh workflow run desktop-build.yml -f tag=vX.Y.Z`) publishes a real release: binaries
+attach to that GitHub Release, `latest.json` is composed, and the release is promoted to
+`Latest`. Dispatch **without** a tag is a test build (workflow artifacts only). See
+`docs/guides/releasing.md` § Desktop.
 
 | Platform | Artifact | Signing |
 |---|---|---|

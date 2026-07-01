@@ -126,7 +126,9 @@ PyInstaller-freezes the headless server (`binaries/protoagent-server-<triple>`),
 frozen build bundles the `plugins/` tree and `--collect-all`s `tools`/`websockets`/`mcp`
 (plugins load by file path, which PyInstaller's scan misses; a runtime-installed comms
 plugin, ADR 0058, can only import what's bundled). Signed macOS DMG / Linux AppImage+deb /
-Windows NSIS artifacts + an in-app updater ship from the desktop-build CI on release tags.
+Windows NSIS artifacts + an in-app updater ship from the desktop-build CI, dispatched
+manually per release (`gh workflow run desktop-build.yml -f tag=vX.Y.Z`) — see
+`docs/guides/releasing.md` § Desktop.
 
 On macOS, `spawn_sidecar` augments the sidecar's `PATH` with the user's login-shell `PATH`
 (via `$SHELL -ilc`, plus the Homebrew/local fallbacks) before spawning. A Finder/Dock launch

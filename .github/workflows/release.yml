@@ -145,13 +145,14 @@ jobs:
           NOTES: ${{ steps.notes.outputs.notes }}
         run: |
           printf '%s' "$NOTES" > "$RUNNER_TEMP/release-notes.md"
-          # --latest=false: do NOT promote to 'Latest' yet. The in-app updater fetches
+          # --latest=false: do NOT promote to 'Latest'. The in-app updater fetches
           # releases/latest/download/latest.json, so a release must not become 'Latest'
-          # until its latest.json exists — otherwise update checks 404 in the window
-          # before the desktop build's fan-in uploads it. The desktop fan-in flips this
-          # release to 'Latest' once latest.json is up (desktop-build.yml). Patch tags
-          # skip the desktop build entirely, so they stay non-Latest and 'Latest'
-          # correctly remains on the last .0 (the one carrying latest.json).
+          # until its latest.json exists — otherwise update checks 404. Desktop builds
+          # are now MANUAL (desktop-build.yml runs on workflow_dispatch, not on tags), so
+          # every tagged release stays non-Latest here; it's promoted to 'Latest' only
+          # when someone dispatches a desktop build for that tag and its fan-in uploads
+          # latest.json. 'Latest' therefore tracks the last DESKTOP release (the one the
+          # updater can actually use), not the newest tag.
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
