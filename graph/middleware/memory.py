@@ -206,6 +206,18 @@ def _persist_session(state: dict, trace_id: str) -> None:
 
 _DIGEST_TOPIC_MAX_CHARS = 80
 
+# Session ids become filenames under memory_path() — restrict to the characters
+# real ids use (``:`` included — e.g. ``background:job``) so a crafted id can't
+# path-traverse out of the memory dir. Shared by the ``recall_session`` tool and
+# the memory-inspector API (ADR 0069 D7).
+_SESSION_ID_SAFE_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-")
+
+
+def is_safe_session_id(session_id: str) -> bool:
+    """True when *session_id* maps safely onto ``{memory_path()}/{id}.json`` —
+    non-empty and confined to ``[A-Za-z0-9._:-]`` (no path separators, no NUL)."""
+    return bool(session_id) and set(session_id) <= _SESSION_ID_SAFE_CHARS
+
 # The always-present framing header (ADR 0069 D1): the digest lists OTHER
 # sessions, never the current conversation — the old unlabeled verbatim block
 # made fresh threads narrate other threads' history as their own.
@@ -231,8 +243,10 @@ def _surface_for(session_id: str) -> str:
     return "a2a/other"
 
 
-def _digest_line(summary: dict) -> str:
-    """One attributed line: ``session_id · timestamp · surface · topic · N msgs``.
+def digest_entry(summary: dict) -> dict:
+    """Structured digest fields for ONE persisted summary — the derivation
+    behind :func:`_digest_line`, shared with the memory-inspector API
+    (ADR 0069 D7) so list rows can't drift from the injected digest.
 
     ``topic`` is derived from the FIRST USER message only — no assistant text,
     no message bodies (ADR 0069 D1: identity confusion + poisoning surface).
@@ -240,7 +254,6 @@ def _digest_line(summary: dict) -> str:
     from graph.output_format import strip_reasoning
 
     sid = str(summary.get("session_id") or "unknown")
-    ts = str(summary.get("timestamp") or "unknown")
     msgs = summary.get("messages", []) or []
     topic = ""
     for m in msgs:
@@ -249,7 +262,22 @@ def _digest_line(summary: dict) -> str:
             break
     if len(topic) > _DIGEST_TOPIC_MAX_CHARS:
         topic = topic[: _DIGEST_TOPIC_MAX_CHARS - 1] + "…"
-    return f"  {sid} · {ts} · {_surface_for(sid)} · {topic or '(no user message)'} · {len(msgs)} msgs"
+    return {
+        "session_id": sid,
+        "timestamp": str(summary.get("timestamp") or "unknown"),
+        "surface": _surface_for(sid),
+        "topic": topic,
+        "message_count": len(msgs),
+    }
+
+
+def _digest_line(summary: dict) -> str:
+    """One attributed line: ``session_id · timestamp · surface · topic · N msgs``."""
+    e = digest_entry(summary)
+    return (
+        f"  {e['session_id']} · {e['timestamp']} · {e['surface']} · "
+        f"{e['topic'] or '(no user message)'} · {e['message_count']} msgs"
+    )
 
 
 def format_session_summary(summary: dict) -> str:

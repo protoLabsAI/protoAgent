@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readable via `GET /api/memory/injections?session_id=&limit=` (newest-first).
   Makes "why did it say that?" answerable and gives memory-poisoning forensics a
   paper trail: store row → source session → the turns it entered.
+- **Memory-inspector REST surface** (`/api/memory/*`) — the audit surface for the
+  memory delivery layer ([ADR 0069](docs/adr/0069-memory-delivery-layer.md) D7,
+  API half; console UI follows). List/get/delete the persisted **session
+  summaries** behind the `<prior_sessions>` digest (list rows reuse the digest
+  derivation, get returns the same render `recall_session` expands, ids share its
+  path-traversal-safe guard) and list/edit/delete **hot memory** — the
+  `domain="hot"` chunks injected every turn (edits are pinned to `hot`, deletes
+  only resolve hot ids). Bearer-gated like every operator route; documented in
+  [Operator REST API](docs/reference/operator-api.md).
 - **`recall_session(session_id)` starter tool** — expands one entry from the
   prior-sessions digest into that session's full persisted summary (reasoning-
   stripped, capped), with a path-traversal-safe id guard. The on-demand
