@@ -9,6 +9,7 @@ agent turn via ``sdk.run_in_session`` (ADR/#1494) and ``on_met`` hooks fire; a p
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -30,6 +31,13 @@ class WatchController:
     def __init__(self, config, store: WatchStore | None = None):
         self._config = config
         self._store = store or WatchStore()
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, watch_id: str) -> asyncio.Lock:
+        lock = self._locks.get(watch_id)
+        if lock is None:
+            lock = self._locks[watch_id] = asyncio.Lock()
+        return lock
 
     @property
     def store(self) -> WatchStore:
@@ -42,6 +50,7 @@ class WatchController:
         return self._store.all()
 
     def clear(self, watch_id: str) -> bool:
+        self._locks.pop(watch_id, None)
         return self._store.clear(watch_id)
 
     # --- create ------------------------------------------------------------
@@ -107,7 +116,16 @@ class WatchController:
     async def evaluate(self, watch_id: str) -> str | None:
         """Run one watch's verifier out-of-band. Met → finish+react; deadline passed →
         ``expired``; ``stall_after`` unchanged checks → ``on_stalled`` (stays active). Returns
-        the terminal status, or ``None`` while still active."""
+        the terminal status, or ``None`` while still active.
+
+        Serialized per watch id (an ``asyncio.Lock``) so the cadence ``tick_all`` and an
+        event-driven ``evaluate_now`` can't interleave a read-mutate-write on the SAME watch —
+        which would drop a stall increment or re-activate a just-finished watch. Distinct watch
+        ids never block each other."""
+        async with self._lock_for(watch_id):
+            return await self._evaluate_unlocked(watch_id)
+
+    async def _evaluate_unlocked(self, watch_id: str) -> str | None:
         watch = self._store.get(watch_id)
         if watch is None or not watch.active:
             return None
