@@ -364,17 +364,12 @@ async def _operator_goals_set(body: dict) -> dict:
     sid = str(body.get("session_id") or "").strip()
     if not sid:
         return {"ok": False, "error": "session_id is required"}
-    from graph.goals.controller import GoalController
-
     ok, msg = STATE.goal_controller.set_goal_operator(
         sid,
         body.get("condition"),
         body.get("verifier") or {},
         max_iterations=body.get("max_iterations"),
         no_progress_limit=body.get("no_progress_limit"),
-        mode="monitor" if body.get("mode") == "monitor" else "drive",
-        deadline=GoalController._parse_deadline(body.get("deadline")),
-        stall_after=GoalController._parse_stall_after(body.get("stall_after")),
     )
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
@@ -404,15 +399,15 @@ async def _operator_watches_set(body: dict) -> dict:
     if STATE.watch_controller is None:
         return {"ok": False, "error": "watch mode is not available"}
     body = body or {}
-    from graph.goals.controller import GoalController
+    from graph.watches.controller import WatchController
 
     ok, msg, _w = STATE.watch_controller.create(
         condition=body.get("condition"),
         verifier=body.get("verifier") or {},
         watch_id=body.get("watch_id"),
         interval_s=body.get("interval_s"),
-        deadline=GoalController._parse_deadline(body.get("deadline")),
-        stall_after=GoalController._parse_stall_after(body.get("stall_after")),
+        deadline=WatchController._parse_deadline(body.get("deadline")),
+        stall_after=WatchController._parse_stall_after(body.get("stall_after")),
         run_prompt=body.get("run_prompt") or "",
         run_session=body.get("run_session") or "",
         trusted=True,

@@ -22,9 +22,7 @@ from time import time
 #   exhausted     — ran out of iteration budget without meeting the goal
 #   unachievable  — flagged as not reachable (no-progress streak, or the model
 #                   explicitly gave up with a reason)
-#   expired       — a monitor goal hit its deadline before the verifier passed
-#                   (a non-achieved terminal → fires on_failed / goal.failed)
-TERMINAL_STATUSES = ("achieved", "exhausted", "unachievable", "expired")
+TERMINAL_STATUSES = ("achieved", "exhausted", "unachievable")
 
 
 @dataclass
@@ -51,24 +49,11 @@ class GoalState:
     condition: str
     verifier: dict = field(default_factory=lambda: {"type": "llm"})
     status: str = "active"
-    # Disposition (ADR 0030): "drive" = the agent does the work (bounded
-    # continuation loop); "monitor" = an external process drives the metric, the
-    # agent only supervises (verifier-only, out-of-band, no exhaustion).
-    mode: str = "drive"
     # Fresh-context mode (Ralph loop): each continuation turn starts a NEW
     # LangGraph thread so the model sees a clean slate — no accumulated
     # transcript from prior iterations. Durable state (plan artifact) lives
     # on disk. Opt-in only; short goals benefit from transcript continuity.
     fresh_context: bool = False
-    last_checked: float | None = None  # last out-of-band verifier check (monitor)
-    # Monitor-goal termination + stall signal (ADR 0030 D5). A `monitor` goal
-    # otherwise ends only on achieved/cleared: `deadline` (epoch seconds) gives it
-    # a hard stop (→ `expired`), and `stall_after` fires the on_stalled hook after
-    # N consecutive checks with unchanged verifier evidence — WITHOUT ending it.
-    deadline: float | None = None
-    stall_after: int | None = None
-    stall_streak: int = 0
-    stalled_notified: bool = False  # one on_stalled fire per stall episode (re-armed on change)
     checklist: str = ""
     # Set by the agent's ``abandon_goal`` tool mid-turn; ``evaluate`` finishes the goal
     # ``unachievable`` after the verifier runs (retired the ``<goal_unachievable/>`` tag).
@@ -99,14 +84,9 @@ class GoalState:
     def status_line(self) -> str:
         """One-line human summary for /goal status + continuation footers."""
         vt = self.verifier.get("type", "llm")
-        # Monitor goals have no iteration budget — show the disposition instead.
-        progress = "monitor" if self.mode == "monitor" else f"iteration {self.iteration}/{self.max_iterations}"
-        # mode_tag: only shown when it adds info beyond the progress field.
-        # "fresh-context" is always worth noting; "drive" is the default for
-        # non-monitor goals (shown for clarity); monitor mode is redundant with
-        # the progress label so it's omitted.
-        mode_tag = "fresh-context" if self.fresh_context else ("drive" if self.mode == "drive" else "")
-        base = f"goal [{self.status}] via {vt}: {self.condition!r} ({progress}{', ' + mode_tag if mode_tag else ''})"
+        progress = f"iteration {self.iteration}/{self.max_iterations}"
+        tag = ", fresh-context" if self.fresh_context else ""
+        base = f"goal [{self.status}] via {vt}: {self.condition!r} ({progress}{tag})"
         if self.last_reason:
             base += f" — {self.last_reason}"
         return base

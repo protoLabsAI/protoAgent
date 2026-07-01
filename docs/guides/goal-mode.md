@@ -2,10 +2,9 @@
 
 A **goal** is a testable outcome you attach to the agent — a *condition* plus a **verifier** that ground-truths whether it's met (a shell command's exit code, a test run, a CI status, a data assertion, a plugin check, or an LLM judgment as the fallback). Goals turn "please do X" into "keep going / watch until X is provably true."
 
-There are **two kinds**, and the difference is *who moves the needle*:
+A goal is **agent-driven**: *the agent's own turns* do the work. After each turn the verifier runs; if not met, the agent is re-invoked with a continuation prompt until it passes, the iteration budget is spent, or it's flagged unachievable. Use for "make the tests pass," "finish the README."
 
-- **Drive** (default) — *the agent's own turns* do the work. After each turn the verifier runs; if not met, the agent is re-invoked with a continuation prompt until it passes, the iteration budget is spent, or it's flagged unachievable. Use for "make the tests pass," "finish the README."
-- **Monitor** (ADR 0030) — *an external process* moves the needle (a background engine, a training run, a deployment, a market). The agent only starts/supervises; the goal is checked **out-of-band on a cadence** and never re-invokes the agent. Use for "treasury ≥ 1,000,000," "rollout reaches 100%."
+> **Watching a metric someone else moves** (a background engine, a training run, a deploy — "treasury ≥ 1,000,000," "rollout reaches 100%") is a **watch**, not a goal (ADR 0067): it's checked out-of-band on a cadence, never re-invokes the agent, and you can hold **many** at once. Create one with `sdk.create_watch(...)`, `POST /api/watches`, or the agent's `create_watch` tool. (Goals used to carry a `monitor` disposition; ADR 0067 split it into its own primitive.)
 
 When a goal reaches a terminal state it **broadcasts on the event bus** (`goal.achieved` / `goal.failed`, ADR 0039) — so the console, or any plugin, can react without writing code (see [Reacting to a goal](#reacting-to-a-goal)).
 
@@ -48,31 +47,10 @@ Send a control message through any channel (A2A, the React console chat, OpenAI-
   > execute on the host or hit a restricted-eval sink, so they are **refused from a `/goal`
   > chat message** (a federation peer / API client shares the operator bearer today, #1407).
   > A dedicated operator set-channel is the Phase 2 plan.
-- **Monitor goal** (ADR 0030) — for a metric driven by an *external* process (a
-  background engine, a training run, a deployment), not the agent's turns. Add
-  `"mode": "monitor"`: the agent **isn't** re-invoked, the goal **never exhausts**,
-  and it's checked **out-of-band** on a cadence (`goal.monitor_interval`, default 60s),
-  firing the verifier's `on_achieved` hook when it passes.
-  ```
-  /goal {"condition": "treasury ≥ 1,000,000", "mode": "monitor", "verifier": {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1000000}}}
-  ```
-  (Default is `"mode": "drive"` — the agent *is* the work, the bounded loop above.)
-  A monitor goal otherwise ends only on **achieved** or **cleared**; two optional
-  fields (ADR 0030 D5) bound it and surface trouble:
-  - `"deadline"` — an **ISO-8601 timestamp** (`"2026-07-01T00:00:00"`) or a raw
-    **epoch-seconds** number. If the goal isn't met by the deadline, the next
-    out-of-band check finishes it with terminal status **`expired`** — a
-    *non-achieved* terminal, so it fires `on_failed` + the `goal.failed` bus event
-    just like `exhausted`/`unachievable`.
-  - `"stall_after"` — an integer **N**. After N consecutive checks with **unchanged**
-    verifier evidence, a **`on_stalled`** hook fires (register it with
-    `register_goal_hook(on_stalled=…)`) — a signal that the external engine stopped
-    moving. It does **not** end the goal (the objective stays alive), fires **once per
-    stall episode**, and re-arms when the evidence changes. It also publishes a
-    best-effort `goal.stalled` bus event (`{session_id, condition, stall_streak, reason}`).
-  ```
-  /goal {"condition": "treasury ≥ 1,000,000", "mode": "monitor", "deadline": "2026-07-01T00:00:00", "stall_after": 5, "verifier": {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1000000}}}
-  ```
+  (To *watch* a metric an external process moves — "treasury ≥ 1,000,000", "rollout
+  reaches 100%" — use a **watch** (ADR 0067), not a goal: `POST /api/watches` or the
+  `create_watch` tool. Watches poll out-of-band, react via `run_in_session`/hooks, support
+  `deadline`/`stall_after`, and you can hold many at once.)
 - **Per-goal patience:** add `"no_progress_limit": N` to widen/narrow one goal's
   no-progress tolerance without changing the global default.
 - **Status:** `/goal`
@@ -86,7 +64,7 @@ Programmatic status/clear is also available: `GET /api/goal/{session_id}` and `D
 
 ## Manage from the console
 
-The React console's **Goals** surface (right sidebar) lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), a **`monitor` badge** for monitor goals, the verifier type, and either the drive **iteration count** or (for monitor) **when it was last checked** — plus the latest verifier reason. You can **clear** any of them. When a goal finishes, the console shows a **toast** (`goal.achieved` → success, `goal.failed` → error), driven by the bus events below.
+The React console's **Goals** surface (right sidebar) lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), the verifier type, the **iteration count**, and the latest verifier reason. You can **clear** any of them. When a goal finishes, the console shows a **toast** (`goal.achieved` → success, `goal.failed` → error), driven by the bus events below.
 
 Goals are still *set* in chat with `/goal` (setting can run shell/test verifiers, so it stays an explicit operator action); the panel is a read-and-clear view. Backed by:
 
@@ -108,11 +86,11 @@ A terminal goal is a **trigger**, not just a checkbox. Every finish publishes on
 Two ways to react:
 
 - **No code (any plugin / the console).** Subscribe to the topic — `registry.on("goal.achieved", …)` in a plugin, or `protoagent:subscribe` from a sandboxed view. The built-in console toast is exactly this. Because it's the bus, **nobody imports the goal system** to listen.
-- **Plugin code (richer).** `register_goal_hook(on_achieved=…, on_failed=…)` hands your plugin the terminal `GoalState` to run arbitrary logic — set the next goal (phase progression), **prompt the agent with a follow-up turn** (`sdk.run_in_session`, below), stop a background engine, alert. This is how a fork drives an autonomous loop: *set a monitor goal → external engine runs → the cadence tick verifies → the hook advances.*
+- **Plugin code (richer).** `register_goal_hook(on_achieved=…, on_failed=…)` hands your plugin the terminal `GoalState` to run arbitrary logic — set the next goal (phase progression), **prompt the agent with a follow-up turn** (`sdk.run_in_session`, below), stop a background engine, alert. This is how a plugin drives an autonomous loop: *a terminal goal fires the hook → set the next goal, or prompt the agent.* (To watch an external metric on a cadence, use a **watch** instead — ADR 0067.)
 
 ### Goal fires → run a follow-up agent turn
 
-To have the agent *act* when a goal fires — not just record a status — call `sdk.run_in_session(session_id, prompt)` from a hook. It enqueues the prompt as a **one-shot agent turn in the goal's own session** (that session's memory + full tools), runs it on the normal scheduler fire path, and returns immediately — so it's safe to call from a hook or the monitor tick without blocking:
+To have the agent *act* when a goal fires — not just record a status — call `sdk.run_in_session(session_id, prompt)` from a hook. It enqueues the prompt as a **one-shot agent turn in the goal's own session** (that session's memory + full tools), runs it on the normal scheduler fire path, and returns immediately — so it's safe to call from a hook without blocking:
 
 ```python
 from graph import sdk

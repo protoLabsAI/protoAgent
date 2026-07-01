@@ -111,6 +111,33 @@ class WatchController:
         h = hashlib.sha1((condition or "").encode()).hexdigest()[:6]
         return f"{slug or 'watch'}-{h}"
 
+    @staticmethod
+    def _parse_deadline(value) -> float | None:
+        """A watch deadline: a number = epoch seconds, or an ISO-8601 string
+        (``datetime.fromisoformat``) → epoch seconds. Unparseable → None (no deadline)."""
+        if value is None or isinstance(value, bool):  # bool is an int subclass — reject it
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            from datetime import datetime
+
+            try:
+                return datetime.fromisoformat(value.strip()).timestamp()
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _parse_stall_after(value) -> int | None:
+        """A watch stall threshold: a positive int (checks) or None."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     # --- evaluation --------------------------------------------------------
 
     async def evaluate(self, watch_id: str) -> str | None:

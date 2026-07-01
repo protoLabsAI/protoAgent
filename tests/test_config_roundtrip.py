@@ -93,7 +93,6 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_enabled": True,
     "goal_eval_model": "",
     "goal_max_iterations": 8,
-    "goal_monitor_interval": 60,
     "goal_no_progress_limit": 3,
     "goal_verify_timeout": 120.0,
     "identity_name": "protoagent",

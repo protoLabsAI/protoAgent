@@ -78,18 +78,21 @@ This is the parallel-supervision engine: N watches, each with its own trip-actio
 
 ### D5 — Relationship to the monitor-goal disposition
 
-Watches **supersede** ADR 0030's `monitor` mode. Monitor-goal mode keeps working
-(back-compat: `sdk.start_goal_loop(mode="monitor")`, existing forks) but is **deprecated**;
-a follow-up can reimplement `start_goal_loop`'s monitor path over watches and eventually
-drop the `mode` field, leaving `GoalState` drive-only (shedding the union fields). No
-breaking change here.
+Watches **supersede** ADR 0030's `monitor` mode — and the migration is **now done**: goal
+`monitor` mode, the `_monitor_goals_loop` tick, `GoalState`'s union fields
+(`mode`/`deadline`/`stall_after`/`last_checked`/…), the `expired` status, goal `on_stalled`,
+and `sdk.start_goal_loop`/`stop_goal_loop` are all **removed**; goals are drive-only. Watching
+a metric is a watch (`sdk.create_watch` / `POST /api/watches` / the `create_watch` tool). This
+is a **breaking change** for forks that used `start_goal_loop` or a `monitor` goal — they move
+to `create_watch` + `register_watch_hook`.
 
 ## Consequences
 
 - A supervisor agent holds **many** concurrent, independently-reacting watches.
 - `watch` + `run_in_session` compose into event→action supervision without bespoke glue.
-- `GoalState` can shrink to drive-only once monitor mode is retired (follow-up).
-- Additive: goals, `run_goal_loop`, and existing monitor goals are untouched.
+- `GoalState` is now **drive-only** — the monitor union fields are gone.
+- The goal drive loop, `set_goal`, and `run_in_session` are untouched; only the goal
+  `monitor` disposition (and its `start_goal_loop` helper) were removed.
 
 ## Alternatives considered
 
@@ -106,5 +109,6 @@ breaking change here.
   (create/list/clear/evaluate/tick) + hooks + the `_watch_loop` tick + agent tools + tests.
 - **PR2** — operator `/api/watches` + `sdk.create_watch`.
 - **PR3** — console **Watches** panel (list/status/clear; DRAFT, local-test gate).
-- **Follow-up** — migrate `start_goal_loop` monitor path onto watches; deprecate the goal
-  `monitor` mode.
+- **Migration (done)** — removed goal `monitor` mode, `start_goal_loop`/`stop_goal_loop`, the
+  monitor tick, and `GoalState`'s union fields; goals are drive-only. `create_watch` is the
+  replacement.
