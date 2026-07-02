@@ -386,12 +386,15 @@ export type Subagent = {
 };
 
 // A live wired tool (Agent → Tools): its source (core/plugin/mcp) + the subsystem
-// category it's grouped under in the console.
+// category it's grouped under in the console. `enabled: false` = present in the
+// assembled catalog but dropped by the tools.disabled denylist (still listed so the
+// operator can toggle it back on).
 export type ToolInfo = {
   name: string;
   description: string;
   source: "core" | "plugin" | "mcp";
   category?: string;
+  enabled: boolean;
 };
 
 export type ToolCall = {

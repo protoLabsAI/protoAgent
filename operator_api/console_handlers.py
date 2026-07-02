@@ -182,16 +182,24 @@ def _tool_category(
 
 def _operator_tools_list():
     """Live tool inventory for the Tools tab — name, one-line description, source
-    (core/plugin/mcp), and a subsystem category for grouping.
+    (core/plugin/mcp), a subsystem category for grouping, and ``enabled`` (whether
+    the tool is bound vs dropped by the ``tools.disabled`` denylist).
 
     Reads the tools ACTUALLY BOUND to the compiled graph (``graph.bound_tools``,
     stamped by ``create_agent_graph``) so the Tools tab can't drift from what the
     model can really call — it covers task/task_batch, filesystem, execute_code,
     and the deferred search tool, not just the shared ``get_all_tools`` base
-    (bd-2aa / bd-67j). Falls back to re-deriving the base pre-setup, before the
-    graph exists."""
+    (bd-2aa / bd-67j). Denylisted tools (``graph.disabled_tools``) are listed too,
+    ``enabled: false`` — a toggled-off tool must stay visible or the console could
+    never toggle it back on. ``disabled`` echoes the RAW config denylist (it may
+    hold names with no live tool, e.g. from an uninstalled plugin) so the console
+    can add/remove one name without clobbering the rest. Falls back to re-deriving
+    the base pre-setup, before the graph exists."""
     out: list[dict] = []
     seen: set[str] = set()
+    # The raw denylist, verbatim from config — NOT recomputed from the catalog.
+    cfg = STATE.graph_config
+    denylist = [str(n) for n in (getattr(cfg, "tools_disabled", None) or [])]
     # Source is derived by cross-referencing the plugin/mcp tool name sets;
     # everything else bound to the graph is core.
     plugin_names = {getattr(t, "name", None) for t in (getattr(STATE, "plugin_tools", None) or [])}
@@ -202,7 +210,7 @@ def _operator_tools_list():
     # tools by the server that serves them, mirroring the plugin grouping.
     mcp_servers = [m.get("name") for m in (getattr(STATE, "mcp_meta", None) or []) if m.get("name")]
 
-    def add(tool, source=None):
+    def add(tool, source=None, enabled=True):
         name = getattr(tool, "name", None)
         if not name or name in seen:
             return
@@ -215,36 +223,48 @@ def _operator_tools_list():
                 "description": desc,
                 "source": src,
                 "category": _tool_category(name, src, plugin_owner.get(name), mcp_servers),
+                "enabled": enabled,
             }
         )
+
+    def result():
+        # ``count`` stays the WIRED count (what the model can call) — the kicker's
+        # "N wired tools" contract predates the disabled rows.
+        return {"tools": out, "count": sum(1 for t in out if t["enabled"]), "disabled": denylist}
 
     bound = getattr(STATE.graph, "bound_tools", None)
     if bound is not None:
         for t in bound:
             add(t)
-        return {"tools": out, "count": len(out)}
+        for t in getattr(STATE.graph, "disabled_tools", None) or []:
+            add(t, enabled=False)
+        return result()
 
     # Pre-setup fallback (no compiled graph yet): re-derive the shared base.
-    cfg = STATE.graph_config
+    denied = set(denylist)
     try:
         from tools.lg_tools import get_all_tools
 
+        dropped: list = []
         core = get_all_tools(
             STATE.knowledge_store,
             scheduler=STATE.scheduler,
             inbox_store=STATE.inbox_store,
             tasks_store=STATE.tasks_store,
             goal_enabled=bool(getattr(cfg, "goal_enabled", False)) if cfg else False,
+            dropped=dropped,
         )
         for t in core:
             add(t, "core")
+        for t in dropped:
+            add(t, "core", enabled=False)
     except Exception:  # noqa: BLE001
         log.exception("[tools] core enumeration failed")
     for t in getattr(STATE, "plugin_tools", None) or []:
-        add(t, "plugin")
+        add(t, "plugin", enabled=getattr(t, "name", None) not in denied)
     for t in getattr(STATE, "mcp_tools", None) or []:
-        add(t, "mcp")
-    return {"tools": out, "count": len(out)}
+        add(t, "mcp", enabled=getattr(t, "name", None) not in denied)
+    return result()
 
 
 async def _operator_subagent_run(req: dict):
