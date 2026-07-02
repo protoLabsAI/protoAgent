@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Remote fleet members are fully manageable from the console** (ADR 0042 §I).
+  You can now **add a remote by URL** (name + URL + optional token) — the only way
+  to register a token-gated remote, since network discovery can't carry a
+  credential — and **edit a member in place** (its URL, token, or name; the id and
+  slug survive, so open windows don't break), which is how you fix a rotated or
+  wrong token. Adds surface the server's register-time reachability (an offline
+  peer is added with an honest "not reachable yet" toast, not a silent dead row),
+  and an offline remote now reads **"unreachable"** with a warning dot rather than
+  a neutral "stopped" (a remote's `running` *is* its reachability probe). New
+  `PATCH /api/fleet/remotes/{ident}` + `supervisor.update_remote` back it, re-running
+  the same SSRF-egress / collision checks as add and re-probing on save.
+- **A down or mis-tokened fleet agent gives you a way out instead of a boot hang.**
+  A focused member that can't be reached now shows a targeted boot-gate recovery:
+  a **remote whose box is offline** (a 502, which a remote returns instead of the
+  local peer's 409) offers *Return to host* / *Try again*, and a **remote whose
+  stored token is wrong** (a 401) shows *"can't authenticate — update its token in
+  Settings ▸ Agents"* with *Return to host*. Critically, a proxied member's 401 no
+  longer trips the **hub's** global token prompt (which asked for, and would
+  overwrite, the hub's own token) — a member-scoped 401 is recognized as that
+  member's credential problem.
 - **Background results are pushed, indexed, and worker-disposable**
   ([ADR 0070](docs/adr/0070-background-results-push-resume.md), backend). When a
   background job (ADR 0050) reaches a terminal state: **(D1)** the server

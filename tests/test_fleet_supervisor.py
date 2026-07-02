@@ -155,6 +155,42 @@ def test_remote_name_collides_with_workspace(tmp_path, monkeypatch):
         supervisor.add_remote("alpha", "http://h:1")
 
 
+def test_update_remote_edits_url_token_name_in_place(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    rec = supervisor.add_remote("ava", "http://100.64.0.9:7870", token="old")
+    rid = rec["id"]
+
+    # Only-provided-fields change; the id (slug + data scope) is stable.
+    out = supervisor.update_remote(rid, url="http://100.64.0.9:7999", token="new", name="ava2")
+    assert out["id"] == rid and out["name"] == "ava2" and out["url"] == "http://100.64.0.9:7999"
+    assert "token" not in out  # sanitized — the bearer never leaves via the API
+    stored = supervisor.remote_for_slug(rid)  # proxy-side lookup DOES carry it
+    assert stored["token"] == "new" and stored["url"] == "http://100.64.0.9:7999"
+
+    # token=None keeps the stored bearer; token="" clears it.
+    supervisor.update_remote(rid, url="http://100.64.0.9:8001")  # no token kwarg
+    assert supervisor.remote_for_slug(rid)["token"] == "new"
+    supervisor.update_remote(rid, token="")
+    assert supervisor.remote_for_slug(rid)["token"] == ""
+
+
+def test_update_remote_rejects_bad_url_collision_and_unknown(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    a = supervisor.add_remote("ava", "http://100.64.0.9:7870")
+    supervisor.add_remote("bo", "http://100.64.0.10:7870")
+
+    with pytest.raises(supervisor.FleetError):
+        supervisor.update_remote(a["id"], url="ftp://nope")  # not http(s)
+    with pytest.raises(supervisor.FleetError):
+        supervisor.update_remote(a["id"], url="http://169.254.169.254/")  # SSRF egress guard
+    with pytest.raises(supervisor.FleetError):
+        supervisor.update_remote(a["id"], url="http://100.64.0.10:7870")  # bo's url — collision
+    with pytest.raises(supervisor.FleetError):
+        supervisor.update_remote("ghost", token="x")  # no such remote
+    # Editing to its OWN current url is fine (the collision check excludes self).
+    assert supervisor.update_remote(a["id"], url="http://100.64.0.9:7870")["url"] == "http://100.64.0.9:7870"
+
+
 def test_refresh_remote_probes_ttl(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     supervisor._probe_cache.clear()

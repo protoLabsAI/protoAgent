@@ -96,6 +96,11 @@
   background: var(--pl-color-bg-raised, transparent);
 }
 
+.fleet-add-remote-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .fleet-add-remote .field {
   display: flex;
   flex-direction: column;

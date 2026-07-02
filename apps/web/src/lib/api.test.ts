@@ -7,6 +7,7 @@ import {
   frameIsForeign,
   isColdStart,
   isAgentNotRunning,
+  isAgentUnreachable,
   loadBackgroundReport,
   textFromParts,
   hitlFromParts,
@@ -46,6 +47,16 @@ describe("focused-agent-down detection (isAgentNotRunning)", () => {
     expect(isAgentNotRunning(new ApiError(404, "nope"))).toBe(false);
     expect(isAgentNotRunning(new TypeError("Load failed"))).toBe(false);
     expect(isAgentNotRunning(undefined)).toBe(false);
+  });
+});
+
+describe("unreachable-remote detection (isAgentUnreachable)", () => {
+  it("true ONLY for a 502 (the fleet proxy's 'can't reach the member') — a remote never 409s", () => {
+    expect(isAgentUnreachable(new ApiError(502, "agent is not reachable"))).toBe(true);
+    expect(isAgentUnreachable(new ApiError(409, "not running"))).toBe(false); // that's a local peer
+    expect(isAgentUnreachable(new ApiError(401, "unauthorized"))).toBe(false); // that's a bad token
+    expect(isAgentUnreachable(new TypeError("Load failed"))).toBe(false);
+    expect(isAgentUnreachable(undefined)).toBe(false);
   });
 });
 

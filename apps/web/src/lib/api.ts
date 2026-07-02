@@ -329,6 +329,23 @@ export function is401(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
 }
 
+/** The fleet proxy's "can't reach the member" signal (ADR 0042 §I): a 502 from a
+ *  slug-routed call. A REMOTE member never 409s (it isn't a local process the hub can find
+ *  "not running") — it 502s when its box is offline or its URL is wrong. Distinct from
+ *  `isAgentNotRunning` (409) so the boot gate can offer the same return-to-host recovery for a
+ *  dead remote that it does for a down local peer. */
+export function isAgentUnreachable(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 502;
+}
+
+/** A request is MEMBER-scoped when it's slug-routed to the focused agent (not the hub). A 401
+ *  from one is that member's credential problem — a wrong/missing stored token for a REMOTE —
+ *  NOT the hub's, so it must not trip the global AuthGate (which prompts for, and would
+ *  overwrite, the HUB token). `host:true` and the host window are always hub-scoped. */
+function isMemberScoped(path: string, host?: boolean): boolean {
+  return !host && currentSlug() !== "host" && isAgentPath(path);
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { host, ...init } = options;  // `host` is ours (routing), not a fetch RequestInit field
   const headers = applyAuth(new Headers(init.headers));
@@ -357,7 +374,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
     // Wrong/expired/missing bearer on a token-gated deployment — surface the
     // token prompt (#873) instead of leaving per-panel 401 cards as the only signal.
-    if (response.status === 401) notifyAuthRequired();
+    // But a MEMBER-scoped 401 is the focused remote's bad token, not the hub's — don't
+    // hijack the hub AuthGate; the boot gate / fleet panel own that recovery.
+    if (response.status === 401 && !isMemberScoped(path, host)) notifyAuthRequired();
     throw new ApiError(response.status, detail || "request failed");
   }
 
@@ -385,7 +404,7 @@ async function requestForm<T>(path: string, form: FormData, opts: { host?: boole
     } catch {
       detail = raw || detail;
     }
-    if (response.status === 401) notifyAuthRequired();
+    if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired();
     throw new ApiError(response.status, detail || "request failed");
   }
   return (await response.json()) as T;
@@ -1176,6 +1195,15 @@ export const api = {
       body,
     });
   },
+  updateRemoteAgent(ident: string, body: { name?: string; url?: string; token?: string }) {
+    // Edit a remote member in place (ADR 0042 §I) — omitted fields keep their value;
+    // token:"" clears the stored bearer. The id/slug is unchanged, so open windows survive.
+    // The server re-probes and returns fresh {reachable, version}.
+    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string }>(
+      `/api/fleet/remotes/${encodeURIComponent(ident)}`,
+      { method: "PATCH", body },
+    );
+  },
   removeRemoteAgent(ident: string) {
     return request<{ ok: boolean; id: string; name: string }>(`/api/fleet/remotes/${encodeURIComponent(ident)}`, {
       method: "DELETE",
@@ -1462,7 +1490,9 @@ export const api = {
     });
 
     if (!response.ok) {
-      if (response.status === 401) notifyAuthRequired(); // token-gated chat turn (#873)
+      // token-gated chat turn (#873) — but a member-scoped 401 is the focused remote's bad
+      // token, not the hub's, so don't hijack the hub AuthGate (the boot gate owns that).
+      if (response.status === 401 && !isMemberScoped("/a2a")) notifyAuthRequired();
       throw new Error(`${response.status} ${response.statusText}`);
     }
 

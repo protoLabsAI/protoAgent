@@ -248,6 +248,28 @@ def test_add_remote_unreachable_is_registered_not_rejected(client, monkeypatch):
     assert entry["name"] == "ghosty" and entry["running"] is False
 
 
+def test_patch_remote_edits_and_reprobes(client, monkeypatch):
+    """PATCH /api/fleet/remotes/{ident} edits url/token/name in place (id/slug stable) and
+    re-probes so the response carries fresh reachability. A bad url is a 400, not a 500."""
+    import httpx
+    from graph.fleet import supervisor
+
+    supervisor._probe_cache.clear()
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: type("C", (), {"status_code": 200, "json": lambda s: {}})())
+    rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://1.2.3.4:7871"}).json()["agent"]["id"]
+
+    r = client.patch(f"/api/fleet/remotes/{rid}", json={"url": "http://1.2.3.4:7999", "token": "sek"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["agent"]["url"] == "http://1.2.3.4:7999" and body["reachable"] is True
+    assert "token" not in body["agent"]  # the bearer never comes back out
+    entry = next(a for a in client.get("/api/fleet").json()["agents"] if a.get("remote"))
+    assert entry["id"] == rid and entry["url"] == "http://1.2.3.4:7999"  # same id, new url
+
+    assert client.patch(f"/api/fleet/remotes/{rid}", json={"url": "ftp://nope"}).status_code == 400
+    assert client.patch("/api/fleet/remotes/ghost", json={"token": "x"}).status_code == 400
+
+
 def test_discover_endpoint(client, monkeypatch):
     # /api/fleet/discover returns OTHER protoAgents (mock the scan); the route's host self-exclusion
     # + supervisor scan run, discover() internals are unit-tested elsewhere.

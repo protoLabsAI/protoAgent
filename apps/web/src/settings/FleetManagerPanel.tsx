@@ -160,23 +160,51 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     },
   });
 
-  // Manual add — the ONLY way to register a token-gated remote (discovery can't carry a
-  // credential) or a peer discovery didn't surface (a different subnet, mDNS off). A blank
-  // name defaults to the URL's host:port server-side isn't a thing, so require a name.
+  // The add-a-remote-by-URL form doubles as the EDIT form (`editingId` set). Manual add is the
+  // ONLY way to register a token-gated remote (discovery can't carry a credential) or a peer
+  // discovery didn't surface (a different subnet, mDNS off); edit is how you fix a rotated/
+  // wrong token or a changed URL in place (the id/slug — and open windows — survive).
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null); // null = add mode
   const [addName, setAddName] = useState("");
   const [addUrl, setAddUrl] = useState("");
   const [addToken, setAddToken] = useState("");
-  const addManual = useMutation({
-    mutationFn: () => api.addRemoteAgent({ name: addName.trim(), url: addUrl.trim(), token: addToken.trim() }),
-    onSuccess: (res) => {
-      addedToast(addName.trim(), res.reachable);
-      setShowAdd(false);
-      setAddName("");
-      setAddUrl("");
-      setAddToken("");
+  const resetForm = () => {
+    setShowAdd(false);
+    setEditingId(null);
+    setAddName("");
+    setAddUrl("");
+    setAddToken("");
+  };
+  const openAdd = () => {
+    resetForm();
+    setShowAdd(true);
+  };
+  const openEdit = (a: FleetAgent) => {
+    setEditingId(a.id);
+    setAddName(a.name);
+    setAddUrl(a.url ?? "");
+    setAddToken(""); // blank = keep the stored token (write a new one only to rotate it)
+    setShowAdd(true);
+  };
+  const submitRemote = useMutation({
+    mutationFn: () => {
+      const name = addName.trim();
+      const url = addUrl.trim();
+      const token = addToken.trim();
+      // On edit, a blank token means "keep" (omit it); on add, pass it through.
+      return editingId
+        ? api.updateRemoteAgent(editingId, { name, url, ...(token ? { token } : {}) })
+        : api.addRemoteAgent({ name, url, token });
     },
-    onError: (e) => toast({ tone: "error", title: "Couldn't add to fleet", message: errMsg(e) }),
+    onSuccess: (res) => {
+      const name = addName.trim();
+      if (editingId) toast({ tone: "success", title: `Updated ${name}`, message: res.reachable === false ? "Saved — still not reachable." : "Saved." });
+      else addedToast(name, res.reachable);
+      resetForm();
+    },
+    onError: (e) =>
+      toast({ tone: "error", title: editingId ? "Couldn't update member" : "Couldn't add to fleet", message: errMsg(e) }),
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
   const canAdd = canAddRemote(addName, addUrl);
@@ -325,14 +353,22 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         </Button>
                       )
                     ) : null}
-                    {/* A remote member can't be started/stopped/renamed from here — only
-                        unregistered (the remote agent itself is untouched). */}
+                    {/* A remote member can't be started/stopped from here, but its URL/token/
+                        name ARE editable in place (the id/slug survives) — or unregister it
+                        (the remote agent itself is untouched). */}
                     {a.remote ? (
-                      <Button icon variant="ghost" title="Remove from this fleet (the remote agent is untouched)"
-                        disabled={removeMember.isPending}
-                        onClick={() => removeMember.mutate(a)}>
-                        <Trash2 size={14} />
-                      </Button>
+                      <>
+                        <Button icon variant="ghost" title="Edit this member's URL, token or name"
+                          disabled={submitRemote.isPending}
+                          onClick={() => openEdit(a)}>
+                          <Pencil size={14} />
+                        </Button>
+                        <Button icon variant="ghost" title="Remove from this fleet (the remote agent is untouched)"
+                          disabled={removeMember.isPending}
+                          onClick={() => removeMember.mutate(a)}>
+                          <Trash2 size={14} />
+                        </Button>
+                      </>
                     ) : null}
                     {/* The host serves this console — it can't stop or remove itself; its
                         display name is edited in Settings → Identity instead. */}
@@ -376,7 +412,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             </Button>
             {/* Manual add — the only path for a token-gated remote (discovery carries no
                 credential) or one on a subnet the scan can't reach. */}
-            <Button variant="ghost" onClick={() => setShowAdd((v) => !v)} aria-expanded={showAdd}>
+            <Button variant="ghost" onClick={() => (showAdd ? resetForm() : openAdd())} aria-expanded={showAdd}>
               <Link2 size={14} /> Add a remote by URL
             </Button>
           </div>
@@ -385,9 +421,10 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
               className="fleet-add-remote"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (canAdd && !addManual.isPending) addManual.mutate();
+                if (canAdd && !submitRemote.isPending) submitRemote.mutate();
               }}
             >
+              {editingId ? <span className="fleet-add-remote-title">Edit remote member</span> : null}
               <label className="field">
                 <span>Name</span>
                 <Input
@@ -406,19 +443,25 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                 />
               </label>
               <label className="field">
-                <span>Token (optional)</span>
+                <span>Token{editingId ? "" : " (optional)"}</span>
                 <SecretInput
                   value={addToken}
                   onChange={(e) => setAddToken(e.target.value)}
-                  placeholder="the remote's operator token, if it's gated"
+                  placeholder={editingId ? "•••••••• — leave blank to keep the current token" : "the remote's operator token, if it's gated"}
                 />
               </label>
               <div className="fleet-add-remote-actions">
-                <Button type="button" variant="ghost" onClick={() => setShowAdd(false)}>
+                <Button type="button" variant="ghost" onClick={resetForm}>
                   Cancel
                 </Button>
-                <Button type="submit" variant="primary" disabled={!canAdd || addManual.isPending}>
-                  {addManual.isPending ? "Adding…" : "Add to fleet"}
+                <Button type="submit" variant="primary" disabled={!canAdd || submitRemote.isPending}>
+                  {submitRemote.isPending
+                    ? editingId
+                      ? "Saving…"
+                      : "Adding…"
+                    : editingId
+                      ? "Save changes"
+                      : "Add to fleet"}
                 </Button>
               </div>
             </form>
