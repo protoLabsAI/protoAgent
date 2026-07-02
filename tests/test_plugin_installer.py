@@ -74,12 +74,52 @@ def test_install_pins_a_tag(env):
     assert summary["requested_ref"] == "v1" and len(summary["resolved_sha"]) == 40
 
 
-def test_duplicate_requires_force(env):
+def test_reinstall_same_source_same_commit_is_up_to_date(env):
+    """Re-install from the plugin's own origin at the same commit = converge, not
+    conflict — a bundle re-install must not die on already-installed members."""
+    repo = _make_plugin_repo(env)
+    first = installer.install(str(repo))
+    again = installer.install(str(repo))  # no force needed
+    assert again["up_to_date"] is True
+    assert again["resolved_sha"] == first["resolved_sha"]
+    # lock unchanged — one entry, original provenance kept
+    lock = installer._read_lock()
+    assert [e["id"] for e in lock["plugins"]] == ["demo_ext"]
+
+
+def test_reinstall_same_source_new_commit_updates_without_force(env):
+    repo = _make_plugin_repo(env)
+    first = installer.install(str(repo))
+    (repo / "extra.py").write_text("x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "update")
+    updated = installer.install(str(repo))  # a moved ref from the same origin: update
+    assert updated["resolved_sha"] != first["resolved_sha"]
+    assert not updated.get("up_to_date")
+    assert (installer.live_plugins_dir() / "demo_ext" / "extra.py").exists()
+    lock = installer._read_lock()
+    assert [e["resolved_sha"] for e in lock["plugins"] if e["id"] == "demo_ext"] == [updated["resolved_sha"]]
+
+
+def test_same_id_from_different_source_requires_force(env):
     repo = _make_plugin_repo(env)
     installer.install(str(repo))
-    with pytest.raises(installer.InstallError, match="already installed"):
+    other = _make_plugin_repo(env / "elsewhere", pid="demo_ext")  # same id, different origin
+    with pytest.raises(installer.InstallError, match="different source|already installed"):
+        installer.install(str(other))
+    installer.install(str(other), force=True)  # explicit clobber still works
+
+
+def test_untracked_dir_requires_force(env):
+    """A dir the lock doesn't know (working-tree / hand-copied plugin) must not be
+    silently clobbered by a git install of the same id."""
+    repo = _make_plugin_repo(env)
+    tree = installer.live_plugins_dir() / "demo_ext"
+    tree.mkdir(parents=True)
+    (tree / "protoagent.plugin.yaml").write_text("id: demo_ext\nname: local\nversion: 0.0.1\ndescription: wip\n")
+    with pytest.raises(installer.InstallError, match="untracked"):
         installer.install(str(repo))
-    installer.install(str(repo), force=True)  # ok with force
+    installer.install(str(repo), force=True)
 
 
 def test_refuses_to_shadow_a_builtin(env):
@@ -304,6 +344,27 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     assert bundles[0]["enabled"] == ["delegates", "demo_a", "demo_b"]
     # ...and the recommended config defaults too (#1350), for the same consumer.
     assert bundles[0]["config"] == {"demo_a": {"k": "v"}}
+
+
+def test_bundle_reinstall_converges_instead_of_erroring(env):
+    """Re-running a bundle install over an already-provisioned host must converge:
+    unchanged members report up-to-date, a member whose repo moved gets updated —
+    never an 'already installed' abort mid-fan-out."""
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+
+    # advance one member's repo (a moved pin)
+    (a / "extra.py").write_text("x = 1\n")
+    _git(a, "add", "-A")
+    _git(a, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "update")
+
+    summary = installer.install(str(bundle))  # no force
+    by_id = {p["id"]: p for p in summary["installed"]}
+    assert not by_id["demo_a"].get("up_to_date")  # updated to the new commit
+    assert by_id["demo_b"].get("up_to_date") is True  # unchanged — converged
+    assert (installer.live_plugins_dir() / "demo_a" / "extra.py").exists()
 
 
 def test_bundle_config_overlay_fills_only_unset_keys():

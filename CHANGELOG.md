@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Re-installing a plugin from its own origin converges instead of erroring.**
+  `plugin install` of an already-installed plugin from the SAME recorded source is
+  now a no-op at the same commit (`up_to_date` in the summary) and an in-place
+  update when the ref moved — so re-running a bundle install (e.g. after a pin
+  bump) no longer aborts on its first already-installed member with
+  `already installed — use --force`. `--force` remains required for the real
+  conflicts: a same-id install from a different source, or a plugins-dir entry
+  `plugins.lock` doesn't know about (a working-tree plugin).
+
 ## [0.81.0] - 2026-07-02
 
 ### Changed

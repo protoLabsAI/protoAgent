@@ -45,6 +45,7 @@ def lock_path() -> Path:
     (honors ``PROTOAGENT_PLUGINS_LOCK``)."""
     return instance_paths().plugins_lock
 
+
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 # A git ref we'll accept from a caller — branch/tag/sha shapes only. Keeps a ref
 # from being interpolated into the GitHub API URL (path/query injection) or passed
@@ -420,8 +421,22 @@ def install(
 
         target = target_root / pid
         if target.exists():
-            if not force:
-                raise InstallError(f"plugin {pid!r} already installed — use --force to replace.")
+            # Re-install from the plugin's OWN recorded origin is a CONVERGE, not a
+            # conflict: same commit → no-op, moved pin/ref → update — so re-running a
+            # bundle install never dies on its own already-installed members. --force
+            # stays the lever for the real conflicts: an id-colliding install from a
+            # DIFFERENT source, or a dir the lock doesn't know (a working-tree /
+            # hand-copied plugin that a git install must not silently clobber).
+            prior = next((e for e in _read_lock().get("plugins") or [] if e.get("id") == pid), None)
+            same_source = prior is not None and prior.get("source_url") == url
+            if not force and not same_source:
+                origin = f"from {prior.get('source_url')!r}" if prior else "untracked (no plugins.lock entry)"
+                raise InstallError(f"plugin {pid!r} already installed — {origin}; use --force to replace.")
+            if not force and same_source and prior.get("resolved_sha") == sha:
+                log.info("[plugins] %s already at %s from %s — up to date", pid, sha[:10], url)
+                summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
+                summary["up_to_date"] = True
+                return summary
             shutil.rmtree(target)
 
         shutil.rmtree(staging / ".git", ignore_errors=True)  # drop git metadata; lock holds provenance
