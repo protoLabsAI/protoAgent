@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugins can now enumerate and remove watches** (#1638). The consumption SDK
+  (ADR 0043) grows the lifecycle half of the ADR 0067 watch surface:
+  `sdk.list_watches(prefix="")` (each `{id, condition, status, verifier}`,
+  optionally id-prefix-filtered) and `sdk.clear_watch(watch_id) → bool`,
+  mirroring the agent tools' data access. `sdk.create_watch` was write-only, so
+  a plugin arming a watch *suite* under stable ids couldn't reconcile it — a
+  renamed or dropped watch spec left a zombie watch polling its verifier
+  forever (unresolvable after uninstall). An `arm_all()` can now clear the
+  suite ids no longer in its spec set before re-arming the rest.
+
 ### Fixed
 - **Re-installing a plugin from its own origin converges instead of erroring.**
   `plugin install` of an already-installed plugin from the SAME recorded source is

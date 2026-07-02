@@ -80,6 +80,84 @@ def test_sdk_module_exposes_create_watch():
     assert callable(sdk.create_watch)
 
 
+# --- sdk.list_watches / sdk.clear_watch (#1638) -----------------------------
+
+
+def test_sdk_list_watches_returns_id_condition_status_verifier(monkeypatch, tmp_path):
+    from graph import sdk
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="credits over 1M", verifier={"type": "plugin", "check": "st:credits"}, watch_id="st-credits")
+    listed = sdk.list_watches()
+    assert listed == [
+        {
+            "id": "st-credits",
+            "condition": "credits over 1M",
+            "status": "active",
+            "verifier": {"type": "plugin", "check": "st:credits"},
+        }
+    ]
+    # The returned verifier is a COPY — mutating it must not corrupt the stored watch.
+    listed[0]["verifier"]["check"] = "tampered"
+    assert ctrl.store.get("st-credits").verifier["check"] == "st:credits"
+
+
+def test_sdk_list_watches_prefix_filters_to_the_plugins_suite(monkeypatch, tmp_path):
+    from graph import sdk
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="a", verifier={"type": "plugin", "check": "st:v"}, watch_id="st-a")
+    ctrl.create(condition="b", verifier={"type": "plugin", "check": "st:v"}, watch_id="st-b")
+    ctrl.create(condition="c", verifier={"type": "plugin", "check": "other:v"}, watch_id="other-c")
+    assert {w["id"] for w in sdk.list_watches("st-")} == {"st-a", "st-b"}
+    assert len(sdk.list_watches()) == 3  # no prefix → everything
+
+
+def test_sdk_clear_watch_removes_and_reports_existence(monkeypatch, tmp_path):
+    from graph import sdk
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="a", verifier={"type": "plugin", "check": "st:v"}, watch_id="st-a")
+    assert sdk.clear_watch("st-a") is True
+    assert sdk.list_watches() == []  # gone — no longer polled
+    assert sdk.clear_watch("st-a") is False  # already gone
+    assert sdk.clear_watch("never-existed") is False
+
+
+def test_sdk_watch_reconcile_pattern(monkeypatch, tmp_path):
+    """The #1638 payoff: arm_all() as reconcile — clear suite ids not in the current
+    spec set, then create/replace the rest (heals a renamed/dropped spec)."""
+    from graph import sdk
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    # v1 armed two watches; v2 renamed st-opportunity → st-market.
+    ctrl.create(condition="credits", verifier={"type": "plugin", "check": "st:v"}, watch_id="st-credits")
+    ctrl.create(condition="opportunity", verifier={"type": "plugin", "check": "st:v"}, watch_id="st-opportunity")
+    current_spec = {"st-credits", "st-market"}
+    for watch in sdk.list_watches("st-"):
+        if watch["id"] not in current_spec:
+            assert sdk.clear_watch(watch["id"]) is True
+    for wid in current_spec:
+        sdk.create_watch(condition=f"cond {wid}", verifier="st:v", watch_id=wid)
+    assert {w["id"] for w in sdk.list_watches("st-")} == current_spec
+
+
+def test_sdk_list_and_clear_watch_unavailable(monkeypatch):
+    from graph import sdk
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "watch_controller", None)
+    assert sdk.list_watches() == []
+    assert sdk.clear_watch("anything") is False
+
+
+def test_sdk_module_exposes_watch_lifecycle():
+    from graph import sdk
+
+    assert callable(sdk.list_watches)
+    assert callable(sdk.clear_watch)
+
+
 # --- registry / loader register_watch_hook seam ----------------------------
 
 

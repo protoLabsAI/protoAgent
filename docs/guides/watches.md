@@ -26,7 +26,13 @@ effective `interval_s`) so one verifier can keep **per-watch** state — see
 - **Agent tool** — `create_watch(condition, check, run_prompt=…)`; `list_watches` / `clear_watch`
   manage them. Plugin-verifier only (like `set_goal`) — the agent can't open a shell/eval watch.
 - **Plugin (SDK)** — `sdk.create_watch(*, condition, verifier, run_prompt=…)`, and react with
-  `registry.register_watch_hook(on_met=…, on_expired=…, on_stalled=…)`.
+  `registry.register_watch_hook(on_met=…, on_expired=…, on_stalled=…)`. The lifecycle half
+  (#1638): `sdk.list_watches(prefix="")` (each `{id, condition, status, verifier}`,
+  optionally id-prefix-filtered) and `sdk.clear_watch(watch_id) → bool`. A plugin that arms
+  a watch **suite** under stable ids should make its arm step a *reconcile*: clear the
+  `myplugin-*` ids no longer in its spec set, then create/replace the rest — stable-id
+  replace alone only heals specs that still exist, so a renamed or dropped spec would keep
+  polling its verifier forever (worse after uninstall, when that verifier is unresolvable).
 - **Operator (REST)** — `POST /api/watches` accepts **any** verifier type (it's on the `/api`
   operator surface, gated by the [federation-token ceiling](/reference/configuration#secrets));
   plus `GET /api/watches` and `DELETE /api/watches/{id}`.

@@ -235,3 +235,33 @@ def create_watch(
         trusted=False,
     )
     return {"ok": ok, "watch_id": watch.id if watch else None, "message": msg}
+
+
+def list_watches(prefix: str = "") -> list[dict]:
+    """List the registered watches — each ``{"id", "condition", "status", "verifier"}`` —
+    optionally filtered to ids starting with ``prefix``. This is the read half
+    :func:`create_watch` was missing (#1638): a plugin that arms a watch *suite* under
+    stable ids (``st-credits``, ``st-contract`` …) lists its own with
+    ``list_watches("st-")`` to verify the suite or render it on a dashboard, and —
+    paired with :func:`clear_watch` — reconciles on upgrade: clear the ids no longer in
+    its spec set, then create/replace the rest (stable-id replace alone only heals specs
+    that still exist; a renamed/dropped spec would keep polling forever). Returns ``[]``
+    when the watch system is unavailable."""
+    controller = STATE.watch_controller
+    if controller is None:
+        return []
+    return [
+        {"id": w.id, "condition": w.condition, "status": w.status, "verifier": dict(w.verifier)}
+        for w in controller.list_watches()
+        if w.id.startswith(prefix)
+    ]
+
+
+def clear_watch(watch_id: str) -> bool:
+    """Remove the watch ``watch_id`` (it stops being polled; its state is deleted).
+    Returns ``True`` if it existed, ``False`` when it didn't — or when the watch system
+    is unavailable. The remove half of the :func:`list_watches` reconcile pattern."""
+    controller = STATE.watch_controller
+    if controller is None:
+        return False
+    return controller.clear(watch_id)
