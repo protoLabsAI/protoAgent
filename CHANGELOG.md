@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   safe: A2A turns serialize per thread. **(D2)** a substantial completed report
   (> 800 chars) is **indexed into the knowledge store** keyed to the origin
   session (`source_type: background_report`, trust tier 2 — agent-derived;
-  chunked by `add_document`), and the drain notification shrinks (cap 6 000 →
+  chunked by `add_document`; never for incognito-spawned or chained
+  background-origin jobs — a worker identity is never memory), and the drain
+  notification shrinks (cap 6 000 →
   3 000 chars) with a pointer to `memory_recall` + the console report card.
   **(D3)** worker transcripts are **disposable**: `background:*` sessions skip
   session-summary persistence, the `<prior_sessions>` digest filters worker

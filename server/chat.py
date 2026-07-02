@@ -58,10 +58,15 @@ def _drain_background_messages(session_id: str) -> list:
         result = j.result or ""
         if len(result) > _BG_RESULT_CAP:
             # Completed, non-incognito reports this size were indexed at completion
-            # (ADR 0070 D2) — say so; incognito/failed ones only live in the jobs DB.
+            # (ADR 0070 D2) — say so; incognito/failed/chained (background-origin)
+            # ones only live in the jobs DB.
             searchable = (
                 " — the full report is indexed and searchable via memory_recall"
-                if j.status == "completed" and not getattr(j, "origin_incognito", False)
+                if (
+                    j.status == "completed"
+                    and not getattr(j, "origin_incognito", False)
+                    and not (j.origin_session or "").startswith("background:")
+                )
                 else ""
             )
             result = result[:_BG_RESULT_CAP] + (
@@ -841,7 +846,10 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
 # Live operator turns carry an empty origin (they keep parking — a human is watching);
 # inbound `a2a` calls are excluded too, because the remote caller can itself resume the
 # input-required task. For everything here, we auto-answer the interrupt instead of parking.
-_AUTONOMOUS_ORIGINS = frozenset({"scheduler", "inbox", "webhook", "background"})
+# "background-resume" is the ADR 0070 push-resume nudge — server-fired like the rest
+# (the manager discards the A2A response), so a briefing turn that asks a question
+# must auto-answer, not park.
+_AUTONOMOUS_ORIGINS = frozenset({"scheduler", "inbox", "webhook", "background", "background-resume"})
 
 # What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
 # finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps

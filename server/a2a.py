@@ -158,6 +158,14 @@ def _should_index_report(job) -> bool:
         return False
     if getattr(job, "origin_incognito", False):
         return False
+    # A CHAINED job — spawned from another background worker's turn — is never
+    # indexed: its origin is a disposable worker identity (D3 — worker sessions are
+    # never memory), its content flows into the parent worker's own report (which is
+    # indexed, or not, under the REAL origin session's rules), and the worker turn
+    # runs non-incognito so an incognito root's no-memory-trail contract (ADR 0069
+    # D3b) would otherwise leak transitively through the chain.
+    if (job.origin_session or "").startswith("background:"):
+        return False
     if len(job.result or "") <= _BG_INDEX_MIN_CHARS:
         return False
     return STATE.knowledge_store is not None

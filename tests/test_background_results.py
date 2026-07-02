@@ -336,6 +336,59 @@ class TestTerminalHookResume:
         assert woke == [jid]
 
 
+# ── D1: the nudge turn is autonomous (no operator on the wire) ───────────────
+
+
+class _HitlTurnStream:
+    """Stand-in for ``_run_turn_stream`` (mirrors tests/test_hitl_forms.py): yields a
+    HITL interrupt on the first pass, then an answer once resumed."""
+
+    def __init__(self):
+        self.resume_values: list = []
+
+    def __call__(self, message, session_id, config, *, resume_value=None, **_kw):
+        self.resume_values.append(resume_value)
+        first = len(self.resume_values) == 1
+
+        async def _gen():
+            if first:
+                yield ("input_required", {"question": "Should I dig deeper?"})
+            else:
+                yield ("__raw__", "Briefing delivered.")
+
+        return _gen()
+
+
+class TestResumeTurnIsAutonomous:
+    async def test_nudge_turn_auto_answers_hitl_instead_of_parking(self, monkeypatch):
+        """The push-resume nudge is server-fired — the manager discards the A2A
+        response, so nobody can answer a HITL pause. origin="background-resume"
+        must ride the autonomous auto-answer path (like scheduler/background), or a
+        briefing turn that asks a question parks its task in input-required forever."""
+        import importlib
+
+        from runtime.state import STATE
+
+        chat_mod = importlib.import_module("server.chat")
+        monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+        fake = _HitlTurnStream()
+        monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+
+        frames = [
+            frame
+            async for frame in chat_mod._run_native_turn(
+                "[background job bg-abcabcabcabc (dig) finished — brief the operator]",
+                "chat-42",
+                {"configurable": {"thread_id": "a2a:chat-42"}},
+                request_metadata={"origin": "background-resume"},
+            )
+        ]
+        kinds = [k for k, _ in frames]
+        assert "input_required" not in kinds  # never parks
+        assert ("done", "Briefing delivered.") in frames
+        assert chat_mod._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
+
+
 # ── D2: report indexing ──────────────────────────────────────────────────────
 
 
@@ -349,7 +402,7 @@ class _FakeKnowledgeStore:
 
 
 class TestReportIndexing:
-    def _wire(self, tmp_path, monkeypatch, *, incognito=False):
+    def _wire(self, tmp_path, monkeypatch, *, incognito=False, origin="chat-42"):
         import server.a2a as a2a
         from graph.config import LangGraphConfig
         from runtime.state import STATE
@@ -357,7 +410,7 @@ class TestReportIndexing:
         mgr = _manager(tmp_path)
         jid = mgr.store.create(
             agent_name="a",
-            origin_session="chat-42",
+            origin_session=origin,
             subagent_type="researcher",
             description="dig",
             prompt="p",
@@ -401,6 +454,16 @@ class TestReportIndexing:
         await _settle_bg_tasks()
         assert fake.calls == []
 
+    async def test_chained_background_origin_job_not_indexed(self, tmp_path, monkeypatch, hook_env):
+        """A job spawned FROM another background worker's turn is never indexed:
+        its origin is a disposable worker identity (D3), its content flows into the
+        parent's own report, and the worker turn runs non-incognito — indexing here
+        would leak an incognito root's report into the KB transitively."""
+        a2a, jid, fake = self._wire(tmp_path, monkeypatch, origin="background:bg-parentparent")
+        a2a._handle_background_terminal(_outcome(jid, text="x" * 2000))
+        await _settle_bg_tasks()
+        assert fake.calls == []
+
     def test_background_report_is_agent_trust_tier(self):
         from knowledge.trust import trust_label, trust_tier
 
@@ -412,7 +475,9 @@ class TestReportIndexing:
 
 
 class TestDrainPointer:
-    def _drained_body(self, tmp_path, monkeypatch, *, result: str, incognito=False, status="completed") -> str:
+    def _drained_body(
+        self, tmp_path, monkeypatch, *, result: str, incognito=False, status="completed", origin="sess-P"
+    ) -> str:
         from runtime.state import STATE
         from server.chat import _drain_background_messages
 
@@ -420,14 +485,14 @@ class TestDrainPointer:
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
         jid = mgr.store.create(
             agent_name="a",
-            origin_session="sess-P",
+            origin_session=origin,
             subagent_type="researcher",
             description="d",
             prompt="p",
             origin_incognito=incognito,
         )
         mgr.store.mark_complete(jid, status, result)
-        msgs = _drain_background_messages("sess-P")
+        msgs = _drain_background_messages(origin)
         assert len(msgs) == 1
         return msgs[0].content
 
@@ -453,6 +518,17 @@ class TestDrainPointer:
         body = self._drained_body(tmp_path, monkeypatch, result="x" * (_BG_RESULT_CAP + 500), incognito=True)
         assert "memory_recall" not in body
         assert "report card" in body  # jobs.db still has the full text
+
+    def test_chained_job_truncation_does_not_claim_searchability(self, tmp_path, monkeypatch):
+        """A background-origin (chained) job's report is NOT indexed — mirror of the
+        indexing guard, so the notification never points at a hit that doesn't exist."""
+        from server.chat import _BG_RESULT_CAP
+
+        body = self._drained_body(
+            tmp_path, monkeypatch, result="x" * (_BG_RESULT_CAP + 500), origin="background:bg-parentparent"
+        )
+        assert "memory_recall" not in body
+        assert "report card" in body
 
 
 # ── D3: disposable workers ───────────────────────────────────────────────────
