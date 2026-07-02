@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Desktop no longer aborts on launch when a global hotkey is already taken**
+  (#1670). Hotkey registration lived in the global-shortcut plugin's init, so a
+  hotkey another app owns (Discord, PowerToys, AutoHotkey, …) became a
+  `PluginInitialization` panic at the top-level `.expect` — before the window,
+  sidecar, or even logging existed; the app simply "didn't start". Registration
+  now happens fallibly in `setup()` after logging: a taken hotkey logs a warning
+  and the app stays fully usable via the window/tray. The quick-launcher hotkey
+  also moves off `Alt+Space` outside macOS (it's the Windows system-menu
+  accelerator and PowerToys Run's default — a guaranteed conflict) to
+  `Ctrl+Alt+Space`.
 - **Desktop no longer launches into a silently dead window when port 7870 is taken
   or the server dies** (#1668). The launcher pinned the sidecar to a hardcoded 7870
   with no fallback and no failure surface: an orphaned sidecar, a headless dev

@@ -36,6 +36,16 @@ fn choose_port() -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
+/// The quick-launcher hotkey: ⌥Space on macOS (the Raycast-familiar default);
+/// Ctrl+Alt+Space elsewhere — plain Alt+Space is the Windows window system-menu
+/// accelerator (and PowerToys Run's default), a guaranteed conflict (#1670).
+fn launcher_shortcut() -> Shortcut {
+    #[cfg(target_os = "macos")]
+    return Shortcut::new(Some(Modifiers::ALT), Code::Space);
+    #[cfg(not(target_os = "macos"))]
+    return Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+}
+
 /// Holds the running sidecar so it can be killed when the app exits.
 #[derive(Default)]
 struct SidecarProcess(Mutex<Option<CommandChild>>);
@@ -555,25 +565,18 @@ pub fn run() {
         // menu-bar window is hidden.
         .plugin(tauri_plugin_notification::init())
         .plugin(
-            // Two global, system-wide hotkeys (fire even when the app is unfocused or
-            // hidden in the menu bar):
-            //   ⌘⇧P    — toggle the full console window.
-            //   ⌥Space — summon the Raycast-style quick launcher (just the palette).
-            // ⌥Space is Raycast's familiar alt-default; to rebind, change `launcher_hotkey`
-            // here AND the comparison in the handler (e.g. SUPER|SHIFT + Space if you'd
-            // rather keep Option+Space free for the non-breaking space it normally types).
+            // The global-shortcut HANDLER only — registration happens fallibly in
+            // setup(). Registering here (with_shortcuts) turned a hotkey another app
+            // already owns (Discord, PowerToys, AutoHotkey…) into a
+            // PluginInitialization error that panicked the whole launch at the
+            // top-level .expect — before the window, sidecar, or even logging
+            // existed, so the app just "didn't start" (#1670).
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts([
-                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP),
-                    Shortcut::new(Some(Modifiers::ALT), Code::Space),
-                ])
-                .expect("valid global shortcuts")
                 .with_handler(|app, shortcut, event| {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    let launcher_hotkey = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-                    if shortcut == &launcher_hotkey {
+                    if shortcut == &launcher_shortcut() {
                         toggle_launcher(app);
                     } else {
                         toggle_main_window(app);
@@ -593,6 +596,31 @@ pub fn run() {
                     .build(),
             )?;
             app.manage(SidecarProcess::default());
+
+            // Two global, system-wide hotkeys (fire even when the app is unfocused or
+            // hidden in the menu bar):
+            //   ⌘⇧P / Win⇧P — toggle the full console window.
+            //   ⌥Space (macOS) / Ctrl⌥Space (elsewhere) — the quick launcher.
+            // FALLIBLE by design (#1670): a hotkey another app already owns logs a
+            // warning and the app stays fully usable via the window/tray — it must
+            // never abort the launch. Registered here (after logging init) so the
+            // warning lands on disk.
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+                let console_toggle =
+                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP);
+                for (label, hotkey) in
+                    [("console toggle", console_toggle), ("quick launcher", launcher_shortcut())]
+                {
+                    if let Err(e) = app.global_shortcut().register(hotkey) {
+                        log::warn!(
+                            "desktop: {label} hotkey unavailable ({e}) — another app owns it; \
+                             continuing without the global shortcut"
+                        );
+                    }
+                }
+            }
 
             // The sidecar prefers the fixed port the web client falls back to in the
             // Tauri context (apps/web/src/lib/api.ts → http://127.0.0.1:7870) but
@@ -653,9 +681,9 @@ pub fn run() {
 
             // The Raycast-style quick launcher: a second, frameless, always-on-top
             // window hosting ONLY the command palette (the web boots into launcher mode
-            // off `__PROTOAGENT_LAUNCHER__`). Created HIDDEN and reused — the ⌥Space
-            // global shortcut reveals/centers it; it hides on blur (see on_window_event)
-            // or Escape. Same fixed-port API base as the main window.
+            // off `__PROTOAGENT_LAUNCHER__`). Created HIDDEN and reused — the
+            // launcher_shortcut() global hotkey reveals/centers it; it hides on blur
+            // (see on_window_event) or Escape. Same API-base handoff as the main window.
             let launcher_init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\"; \
                  window.__PROTOAGENT_LAUNCHER__ = true;"
