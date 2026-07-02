@@ -237,3 +237,36 @@ def test_core_field_depends_on_passed_through(monkeypatch):
     groups = build_schema(LangGraphConfig())
     entry = next(e for g in groups for e in g["fields"] if e["key"] == "demo.child")
     assert entry["depends_on"] == {"key": "compaction.enabled", "equals": True}
+
+
+def test_filesystem_and_tools_sections_surfaced_under_capabilities():
+    """run_command is fully disableable from Settings (per agent): the filesystem
+    knobs (ADR 0007) + the tools.disabled denylist render under Capabilities, all
+    hot-reload (a save rebuilds the graph), all agent-scoped (leaf overridable)."""
+    groups = build_schema(LangGraphConfig())
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+    section_cat = {g["section"]: g["category"] for g in groups}
+    assert section_cat["Filesystem"] == "Capabilities"
+    assert section_cat["Tools"] == "Capabilities"
+
+    for key in (
+        "filesystem.enabled",
+        "filesystem.allow_run",
+        "filesystem.run_requires_approval",
+        "filesystem.bypass_allowed",
+    ):
+        f = by_key[key]
+        assert f["type"] == "bool" and f["section"] == "Filesystem"
+        assert f["restart"] is False  # a settings save rebuilds the graph
+        assert f["scope"] == "agent"  # per-agent kill switch, not box-wide
+        assert f["default"] is True  # matches the shipped LangGraphConfig defaults
+
+    # The gates cascade in the UI: allow_run hides under enabled, approval under
+    # allow_run, bypass under approval (truthy depends_on, #963).
+    assert by_key["filesystem.allow_run"]["depends_on"] == {"key": "filesystem.enabled"}
+    assert by_key["filesystem.run_requires_approval"]["depends_on"] == {"key": "filesystem.allow_run"}
+    assert by_key["filesystem.bypass_allowed"]["depends_on"] == {"key": "filesystem.run_requires_approval"}
+
+    dis = by_key["tools.disabled"]
+    assert dis["type"] == "string_list" and dis["section"] == "Tools"
+    assert dis["default"] == [] and dis["restart"] is False

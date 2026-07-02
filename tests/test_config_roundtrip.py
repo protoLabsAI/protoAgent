@@ -272,6 +272,7 @@ def test_config_to_dict_shape_and_redaction():
 # identity_org, knowledge_scope and skills_scope were all missing from round-trip coverage.)
 _LEGACY_EMITTED_ATTRS = {
     "researcher",  # subagents.researcher (a SubagentDef)
+    "filesystem_projects",  # filesystem.projects (registry of {name,path,write} dicts)
     "checkpoint_background_keep",
     "knowledge_db_path",
     "knowledge_embed_breaker_threshold",

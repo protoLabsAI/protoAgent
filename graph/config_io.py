@@ -453,6 +453,12 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 # contextual_enrichment is a settings field; its doc cap is config-only.
                 "context_max_doc_chars": config.knowledge_context_max_doc_chars,
             },
+            # The filesystem toggles are settings-schema fields (§A); the projects
+            # REGISTRY (list of {name,path,write} dicts) is config-only, so emit it
+            # here or a consumer treating this dict as the complete config loses it.
+            "filesystem": {
+                "projects": list(config.filesystem_projects),
+            },
             "mcp": {
                 "enabled": config.mcp_enabled,
                 "servers": list(config.mcp_servers),

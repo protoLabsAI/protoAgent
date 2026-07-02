@@ -207,7 +207,7 @@ execute_code:
 
 ```yaml
 tools:
-  disabled: []              # core tool names to DROP (a fork's denylist)
+  disabled: []              # tool names to DROP (the operator's denylist)
   deferred:
     enabled: false          # OFF by default — the full tool set is shown
     keep: []                # always-on tool names; empty = built-in base
@@ -215,7 +215,7 @@ tools:
 
 | Key | Default | What |
 |---|---|---|
-| `disabled` | `[]` | Core tool names to **drop** from the agent without editing `get_all_tools` — a fork keeps what it wants by listing the rest. Live-reloadable. Plugins still ADD tools on top (see [Plugins](/guides/plugins)). ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)) |
+| `disabled` | `[]` | Tool names to **drop** from the agent at graph build — covers the **fully assembled** set: core, plugin, MCP, the delegation tools, and the filesystem tools (so `disabled: [run_command]` removes shell access for this agent). Live-reloadable, editable at **Settings ▸ Capabilities ▸ Tools**. Plugins still ADD tools on top (see [Plugins](/guides/plugins)). ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)) |
 | `deferred.enabled` | `false` | Withhold most tool schemas; expose them via `search_tools`. |
 | `deferred.keep` | `[]` | Tool names always shown. Empty → built-in base (keyless core + `task`/`task_batch`/`run_workflow`/`save_workflow` + `search_tools`). `search_tools` is always kept regardless. |
 
@@ -243,8 +243,9 @@ Fenced multi-project filesystem toolset ([ADR 0007](../adr/0007-directory-aware-
 ```yaml
 filesystem:
   enabled: true                  # ON by default
-  allow_run: true                # run_command available (ON); HITL-gated below
+  allow_run: true                # run_command available (ON); HITL-gated below — false = never built
   run_requires_approval: true    # each run_command pauses for operator approval
+  bypass_allowed: true           # false = /bypass can't skip the approval gate
   projects:
     - { name: orbis, path: /Users/kj/dev/ORBIS, write: false }   # read-only monitor
     - { name: pixelgen, path: /Users/kj/dev/pixelgen, write: true }
@@ -253,9 +254,12 @@ filesystem:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Expose the fs tools (`list_projects`/`read_file`/`list_dir`/`find_files`/`search_files`/`write_file`/`edit_file`). Off → no fs tools. |
-| `allow_run` | `true` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). |
+| `allow_run` | `true` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). **`false` is the per-agent kill switch**: the tool is never built, so the model can't see or call it. |
 | `run_requires_approval` | `true` | Each `run_command` call pauses for HITL operator approval (A2A `input-required`). Drop to `false` to let commands run unattended. |
+| `bypass_allowed` | `true` | Permit the per-tab `/bypass` chat toggle to skip the approval gate. `false` = approvals enforced regardless of caller-supplied metadata. |
 | `projects` | `[]` | Managed workspaces: `{name, path, write}`. **Empty falls back to a default `workspace` dir** (so the tools are usable out of the box). **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; invalid paths are skipped. |
+
+The four toggles are editable per agent in the console at **Settings ▸ Capabilities ▸ Filesystem** (hot-reload — a save rebuilds the graph). `tools.disabled: [run_command]` (above) is an equivalent per-tool route.
 
 **Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4.
 

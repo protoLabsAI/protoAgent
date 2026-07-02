@@ -60,3 +60,56 @@ test("the chat composer model picker overrides the model per-tab (no global save
   await page.waitForTimeout(300);
   expect(settingsWrite).toBe(false);
 });
+
+test("Tools panel: the Shell & filesystem chip disables run_command via /api/settings", async ({ page }) => {
+  // The per-agent run_command kill switch lives on the Tools capability panel as a
+  // QuickSetting chip (ADR 0048 §2.2) — same /api/settings write path as the central home.
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .locator(".settings-overlay .pl-sidenav")
+    .getByRole("tab", { name: "Tools", exact: true })
+    .click();
+
+  await page.getByRole("button", { name: "Shell & filesystem tools" }).click();
+  const dialog = page.getByRole("dialog", { name: "Shell & filesystem tools" });
+  await expect(dialog).toBeVisible();
+  // All four gates render, allow_run being the full kill switch.
+  await expect(dialog.getByText("Allow run_command")).toBeVisible();
+  await expect(dialog.getByText("Require approval per command")).toBeVisible();
+
+  const saved = page.waitForRequest(
+    (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
+  );
+  await dialog.locator('[data-key="filesystem.allow_run"] .pl-switch').click();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  const req = await saved;
+  const body = req.postDataJSON();
+  expect(body.updates["filesystem.allow_run"]).toBe(false);
+  expect(body.layer ?? "agent").toBe("agent"); // per-agent leaf, not box-wide
+  await expect(page.locator(".pl-toast").getByText("Saved")).toBeVisible();
+});
+
+test("Tools panel: the Disabled tools chip edits the tools.disabled denylist", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .locator(".settings-overlay .pl-sidenav")
+    .getByRole("tab", { name: "Tools", exact: true })
+    .click();
+
+  await page.getByRole("button", { name: "Disabled tools" }).click();
+  const dialog = page.getByRole("dialog", { name: "Disabled tools" });
+  await expect(dialog).toBeVisible();
+
+  const saved = page.waitForRequest(
+    (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
+  );
+  // string_list renders as the one-per-line editor.
+  await dialog.locator('[data-key="tools.disabled"] textarea').fill("run_command");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  const req = await saved;
+  expect(req.postDataJSON().updates["tools.disabled"]).toEqual(["run_command"]);
+});

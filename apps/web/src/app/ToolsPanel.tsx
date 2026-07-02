@@ -4,9 +4,12 @@ import { Input } from "@protolabsai/ui/forms";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Ban, TerminalSquare } from "lucide-react";
+
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { Badge } from "@protolabsai/ui/primitives";
 import { toolsQuery } from "../lib/queries";
+import { QuickSetting } from "../settings/QuickSetting";
 import { StagePanel } from "./ErrorBoundary";
 
 // Runtime → Tools: the live tool inventory the lead agent + subagents can call.
@@ -58,6 +61,29 @@ function ToolsBody() {
     <>
       <PanelHeader title="Tools" kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"} · ${groups.size} group${groups.size === 1 ? "" : "s"}`} />
       <div className="stage-body">
+        <div className="tools-config-row">
+          {/* Contextual settings chips (ADR 0048 §2.2) — same /api/settings save path as
+              the central home. Shell & filesystem = the per-agent run_command controls
+              (incl. the full kill switch, filesystem.allow_run); Disabled tools = the
+              tools.disabled denylist over the whole assembled set. Saves hot-rebuild. */}
+          <QuickSetting
+            keys={[
+              "filesystem.enabled",
+              "filesystem.allow_run",
+              "filesystem.run_requires_approval",
+              "filesystem.bypass_allowed",
+            ]}
+            title="Shell & filesystem tools"
+            label="Shell & filesystem tools"
+            icon={<TerminalSquare size={16} />}
+          />
+          <QuickSetting
+            keys={["tools.disabled"]}
+            title="Disabled tools"
+            label="Disabled tools"
+            icon={<Ban size={16} />}
+          />
+        </div>
         <Input
           className="playbook-search"
           type="search"

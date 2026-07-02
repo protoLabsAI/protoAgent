@@ -536,6 +536,63 @@ FIELDS: list[Field] = [
         "secrets on every agent, so share only servers you trust box-wide.",
         options=["scoped", "layered"],
     ),
+    # ── Filesystem (ADR 0007 operator primitives) — the fenced project fs toolset,
+    # incl. the dual-use ``run_command``. Per-agent (leaf scope): an operator can
+    # fully remove run_command for one agent while siblings keep it. Hot-reloads:
+    # a save rebuilds the graph, so binding changes apply without a restart. ──────
+    Field(
+        "filesystem.enabled",
+        "filesystem_enabled",
+        "Filesystem tools",
+        "bool",
+        "Filesystem",
+        "The fenced multi-project filesystem toolset (list/read/search/write/edit + "
+        "run_command). Off = none of them are bound. With no explicit projects "
+        "configured, a default read-write `workspace` project is provided.",
+    ),
+    Field(
+        "filesystem.allow_run",
+        "filesystem_allow_run",
+        "Allow run_command",
+        "bool",
+        "Filesystem",
+        "Bind the run_command shell tool (runs arbitrary commands in a project dir as "
+        "the server user). Off = the tool is never built — the model can't see or call "
+        "it; the read/write file tools stay. The full kill switch for shell access.",
+        depends_on={"key": "filesystem.enabled"},
+    ),
+    Field(
+        "filesystem.run_requires_approval",
+        "filesystem_run_requires_approval",
+        "Require approval per command",
+        "bool",
+        "Filesystem",
+        "Pause every run_command invocation for operator approval (HITL) before it "
+        "executes. Turn off only inside a hardened container or for a trusted "
+        "autonomous deploy.",
+        depends_on={"key": "filesystem.allow_run"},
+    ),
+    Field(
+        "filesystem.bypass_allowed",
+        "filesystem_bypass_allowed",
+        "Allow /bypass",
+        "bool",
+        "Filesystem",
+        "Permit the per-tab /bypass chat toggle to skip the approval gate. Off = "
+        "approvals are enforced regardless of any caller-supplied bypass flag.",
+        depends_on={"key": "filesystem.run_requires_approval"},
+    ),
+    # ── Tools — the operator denylist over the assembled toolset ────────────────
+    Field(
+        "tools.disabled",
+        "tools_disabled",
+        "Disabled tools",
+        "string_list",
+        "Tools",
+        "Tool names removed from this agent's toolset at graph build — one per line. "
+        "Covers every contributor: core, plugin, MCP, filesystem (e.g. run_command), "
+        "and delegation tools. Applies on save (the graph rebuilds).",
+    ),
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
@@ -860,6 +917,8 @@ _SECTION_CATEGORY = {
     # Tools/MCP/Skills/Subagents/Delegates managers are bespoke console panels).
     "Skills": "Capabilities",
     "MCP": "Capabilities",
+    "Filesystem": "Capabilities",
+    "Tools": "Capabilities",
     # Knowledge — recall / RAG config, split into sub-sections (see _KNOWLEDGE_SUBSECTION).
     "Recall": "Knowledge",
     "Ingestion": "Knowledge",
