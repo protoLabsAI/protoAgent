@@ -43,6 +43,16 @@
    max-width:80%) + the markdown root, so a code block can't push either wide. */
 .chat-session-slot .pl-message:not(.pl-message--user) .pl-message__content { min-width: 0; max-width: 100%; }
 .chat-session-slot .pl-markdown { min-width: 0; max-width: 100%; }
+/* The message-column ANCESTORS above .pl-message__content are flex/grid items that default to
+   min-width:auto — so a wide code line's min-content propagates all the way up and pins the
+   whole convo (and the resizable chat panel) to the code's width, killing the panel's ability
+   to slide narrow. The DS sets min-width:0 on .pl-convo and .pl-message__body but MISSES these
+   three, so the floor leaks through. Zero them so the constraint chain reaches .chat-session-slot
+   (the grid that's correctly sized to the panel) and the overflow lands in the code body's
+   overflow-x:auto instead. */
+.chat-session-slot .pl-convo-wrap,
+.chat-session-slot .pl-convo-scroll,
+.chat-session-slot .pl-message { min-width: 0; }
 .chat-session-slot .pl-markdown [data-streamdown="code-block"] {
   max-width: 100%;
   background: var(--pl-color-bg-raised);
