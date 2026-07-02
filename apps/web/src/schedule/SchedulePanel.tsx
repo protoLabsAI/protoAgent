@@ -33,7 +33,9 @@ import {
 
 type Mode = "once" | "repeat" | "cron";
 
-function ScheduleModal({
+// Exported so the Work overview's Schedule-card quick-add reuses it (that host owns its
+// own open-state + add mutation) — one form, two hosts.
+export function ScheduleModal({
   open,
   onClose,
   onAdd,

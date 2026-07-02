@@ -58,8 +58,10 @@ type ConfirmRequest = {
 
 // Create a task from a dialog (opened by the panel's "New task" action) instead of
 // an always-visible inline form — keeps the board the focus, with the full set of
-// fields (title, type, priority, description) only when you're adding.
-function TaskCreateDialog({
+// fields (title, type, priority, description) only when you're adding. Exported so the
+// Work overview's Tasks-card quick-add reuses it (that host owns its own open-state +
+// create mutation) — one form, two hosts.
+export function TaskCreateDialog({
   open,
   onClose,
   onCreate,

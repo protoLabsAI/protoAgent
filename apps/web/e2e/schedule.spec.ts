@@ -6,13 +6,12 @@ import { expect, test } from "@playwright/test";
 
 async function gotoSchedule(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  // Schedule folded into the Work hub (2026-06): the right-rail Work surface, Schedule tab.
-  // Work is the default-active right panel; in the narrow panel the DS responsive Tabs
-  // collapse the role="tab" strip into a native <select.pl-tabs__select>.
+  // Schedule lives in the Work hub (right rail). Card-first navigation (2026-07, no
+  // tabs): the overview's Schedule card clicks through to the panel.
   const workBtn = page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true });
   const cls = (await workBtn.getAttribute("class")) ?? "";
   if (!cls.includes("--active")) await workBtn.click();
-  await page.locator(".pl-tabs__select").first().selectOption("schedule");
+  await page.getByTestId("work-card-schedule").click();
 }
 
 async function openScheduleModal(page) {

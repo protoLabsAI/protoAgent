@@ -1,83 +1,143 @@
-/* Work hub Overview (2026-06) — three roll-up cards (Goals · Tasks · Next runs) that each
-   click through to their tab. The Goals/Tasks/Schedule tabs reuse the standalone panels, so
-   they bring their own styles; this is only the Overview dashboard. */
+/* Work hub Overview (card-first navigation, 2026-07) — four live roll-up cards
+   (Goals · Watches · Tasks · Schedule) that ARE the navigation: the whole card clicks
+   through to its panel (no tab strip). The nested panels bring their own styles; this
+   file owns the overview grid, the raised-card language (the .chat-report-card
+   precedent: lift + popover shadow on hover), and the slim "← Overview" back bar. */
+
+/* Responsive grid — the .plugin-card-grid auto-fill pattern; collapses to a single
+   column in the narrow right rail. */
 .work-overview {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
+  align-content: start;
   padding: 12px;
   overflow-y: auto;
 }
 
+/* The nested-view wrapper only scopes the Escape-to-overview key handler; it must not
+   introduce a box between the shell panel container and the bar/panel pair. */
+.work-view {
+  display: contents;
+}
+
+.work-view-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* One card = one destination: role=button, so it gets the full interactive treatment —
+   pointer, hover lift + shadow + border step-up, and a visible focus ring. */
 .work-card {
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel);
   overflow: hidden;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    border-color 120ms ease;
+}
+.work-card:hover {
+  transform: translateY(-1px);
+  /* Raised-element shadow — same literal fallback as .chat-report-card / .pl-convo__jump. */
+  box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
+  border-color: var(--border-strong);
+}
+.work-card:focus-visible {
+  outline: 1px solid var(--fg);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-card {
+    transition: none;
+  }
+  .work-card:hover {
+    transform: none;
+  }
 }
 
 .work-card-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
-  border: 0;
-  background: none;
-  color: var(--fg);
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
+  padding: 10px 12px 0;
 }
-.work-card-head:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.03));
+.work-card-icon {
+  flex: none;
+  color: var(--fg-muted);
 }
 .work-card-title {
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.work-card-count {
+.work-card-head .pl-badge {
   margin-left: auto;
-  color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
 }
-.work-card-hint {
+
+/* The pulse line — one muted sentence with the card's most useful live fact. */
+.work-card-pulse {
+  margin: 4px 0 0;
+  padding: 0 12px;
   color: var(--fg-muted);
-}
-.work-card-go {
-  color: var(--fg-muted);
-  flex: none;
+  font-size: 12px;
 }
 
 .work-card-body {
   list-style: none;
   margin: 0;
-  padding: 0 12px 10px;
+  padding: 8px 12px 4px;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 .work-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
 }
+.work-row .pl-dot {
+  flex: none;
+}
 .work-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .work-row-meta {
   flex: none;
+  margin-left: auto;
   color: var(--fg-muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-.work-card-empty {
-  margin: 0;
-  padding: 0 12px 10px;
-  color: var(--fg-muted);
-  font-size: 13px;
+/* Corner "+" quick-add (stopPropagation in JSX — adding is not navigating). */
+.work-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 8px 8px;
+  margin-top: auto;
+}
+
+/* Empty card body — the DS Empty scaled down to card size. */
+.work-card-blank {
+  padding: 14px 12px 16px;
+}
+.work-card-blank .pl-empty__desc {
+  font-size: 12px;
 }

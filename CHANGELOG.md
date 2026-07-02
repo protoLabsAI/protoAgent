@@ -63,6 +63,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   card.
 
 ### Changed
+- **The Work surface is card-first — no tabs** (console). The right-rail Work
+  hub drops its Overview/Goals/Watches/Tasks/Schedule tab strip: the landing is
+  always the **Overview**, now four live cards (Goals · **Watches**, previously
+  missing from the roll-up · Tasks · Schedule) in a responsive grid. Each card
+  IS the navigation — whole-card click-through (keyboard-accessible,
+  selection-guarded, raised-card hover like the chat report card) into the
+  unchanged panel under a slim **"← Overview"** back bar (Escape backs out too,
+  when no dialog is open). Cards carry an icon + count Badge header, a muted
+  one-line **pulse** ("2 driving · iteration 3/6", "1 watching · 1 met today",
+  "0 ready · 1 in progress", "next in 25m"), a StatusDot micro-list, and a
+  corner **"+" quick-add** that opens the same creator the panel uses — the
+  Goals inline `<details>` form became a shared `GoalCreateDialog` (one form,
+  two hosts: the panel's new "New goal" header action and the overview
+  quick-add; identical `/api/goals` payload), and `TaskCreateDialog` /
+  `ScheduleModal` are reused directly. Watches has **no** quick-add (watches
+  are agent-created; its empty state says so). Liveness: one surface-level SSE
+  subscription set (`goal.*`, `watch.*`, `task.changed`, `scheduler.fired`)
+  keeps every card fresh whichever view is open, plus a gentle 60s
+  schedule poll while the overview is mounted (the scheduler bus has no push
+  for agent-side add/cancel).
 - **The background report card is a real card**
   ([ADR 0070](docs/adr/0070-background-results-push-resume.md) D4, console).
   A finished background job's report no longer renders as the DS system-message

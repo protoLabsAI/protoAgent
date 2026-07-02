@@ -48,28 +48,12 @@
   right: 6px;
 }
 
-/* Compact operator "New goal" form above the list — collapsed <details> by default. */
-.goal-new {
-  border-bottom: 1px solid var(--border);
-}
-
-.goal-new > summary {
-  cursor: pointer;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--fg-muted);
-  user-select: none;
-}
-
-.goal-new[open] > summary {
-  color: var(--fg);
-}
-
-.goal-new-form {
+/* New-goal dialog (GoalCreateDialog) — a vertical stack of .field rows, one component
+   hosted by both the Goals panel header action and the Work overview quick-add. */
+.goal-create-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 4px 12px 12px;
+  gap: 12px;
 }
 
 .goal-new-error {
