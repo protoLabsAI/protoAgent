@@ -17,9 +17,14 @@ its engine injects ``run_subagent`` as the per-step runner).
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Callable
 from typing import Any
 
+from events import ACTIVITY_CONTEXT
 from runtime.state import STATE
+
+log = logging.getLogger(__name__)
 
 # Re-export the supervised background-task helper as part of the consumption surface, so a
 # plugin writes `from graph.sdk import supervise` for a self-perpetuating, watchdog-backed
@@ -368,3 +373,124 @@ def background_status(task_id: str) -> dict:
     if job.status != "running":
         out["report"] = job.result
     return out
+
+
+# ── reactive rules (ADR 0039 events → one-shot turns) ──────────────────────────────────
+# The canonical reactive composition is ``registry.on(topic, handler)`` →
+# :func:`run_in_session` — and every plugin that wants "when X happens, have the agent
+# react" writes the same glue: guard for a missing host, build the prompt from the event
+# payload, pick an idempotent job_id, debounce bursts so ten events don't enqueue ten
+# turns. ``react_on`` is that glue, once (#1633). Pure composition of
+# ``EventBus.subscribe_handler`` (via the plugin host seam) + ``run_in_session`` —
+# no new persistent state.
+
+
+def react_on(
+    topic: str,
+    *,
+    prompt: Callable[[dict], str | None],
+    job_id: str,
+    session: str = ACTIVITY_CONTEXT,
+    debounce_s: float = 0.0,
+) -> Callable[[], None]:
+    """When a bus event matching ``topic`` fires, enqueue a follow-up agent turn.
+
+    ``prompt`` is called with the full event payload (``{"event", "data", "seq"}``)
+    at delivery time; return the turn's prompt text, or ``None``/empty to **skip**
+    that event (cheap filtering). The turn is enqueued via :func:`run_in_session`
+    with ``job_id``, so a rule re-fires idempotently (a pending turn is REPLACED,
+    never duplicated)::
+
+        unsub = sdk.react_on(
+            "spacetraders.opportunity",
+            prompt=lambda ev: f"A {ev['data']['margin']}% route appeared. Evaluate it.",
+            job_id="spacetraders-opportunity",
+            debounce_s=30,
+        )
+
+    Args:
+        topic: bus topic pattern (``*`` = one segment, ``#`` = tail — any namespace;
+            subscribing is read-only, like ``registry.on``).
+        prompt: ``(payload) -> str | None`` — the prompt builder / filter.
+        job_id: stable id for the enqueued turn (``run_in_session``'s
+            idempotent-replace key). Required — it's what keeps a chatty rule from
+            stacking turns.
+        session: the session the turn runs in; defaults to the durable Activity
+            thread (``ACTIVITY_CONTEXT``).
+        debounce_s: > 0 coalesces a burst into ONE turn — trailing-edge: the timer
+            re-arms on every qualifying event, fires ``debounce_s`` after the LAST
+            one, and that last event's prompt text wins. Skipped events (``prompt``
+            returned ``None``/empty) neither fire nor extend the window. Note a
+            sustained stream arriving faster than ``debounce_s`` keeps deferring
+            the turn (classic debounce). Thread-safe — the bus may deliver from
+            worker threads.
+
+    Returns an **unsubscribe** callable (mirroring ``registry.on``'s seam): it stops
+    delivery and cancels any pending debounce timer. When no host bus is wired
+    (tests, headless), logs a warning and returns a no-op unsubscribe.
+    """
+    import threading
+
+    from graph.plugins.host import HOST
+
+    if not callable(prompt):
+        raise TypeError("react_on: prompt must be a callable (event payload) -> str | None")
+    if not (job_id or "").strip():
+        raise ValueError("react_on: a stable job_id is required (the idempotent-replace key)")
+    subscribe = HOST.on
+    if subscribe is None:
+        log.warning("[sdk] react_on(%r) dropped — no event bus wired (non-server context)", topic)
+        return lambda: None
+
+    # Debounce state — guarded by a lock because the bus publish path is threadsafe
+    # (handlers may be delivered from worker threads, e.g. a sync middleware hook).
+    lock = threading.Lock()
+    pending: dict[str, Any] = {"timer": None, "text": None}
+
+    def _enqueue(text: str) -> None:
+        res = run_in_session(session, text, job_id=job_id)
+        if not res.get("ok"):
+            log.warning("[sdk] react_on(%r): could not enqueue turn — %s", topic, res.get("message"))
+
+    def _fire() -> None:  # timer thread — never let an exception die silently there
+        with lock:
+            text = pending["text"]
+            pending["timer"] = None
+            pending["text"] = None
+        if not text:
+            return
+        try:
+            _enqueue(text)
+        except Exception:  # noqa: BLE001
+            log.exception("[sdk] react_on(%r): debounced enqueue failed", topic)
+
+    def _handler(payload: dict) -> None:
+        text = prompt(payload)
+        if not (text or "").strip():
+            return  # filtered — a skipped event doesn't extend the debounce window
+        if debounce_s <= 0:
+            _enqueue(text)
+            return
+        with lock:
+            pending["text"] = text  # last event in the burst wins
+            timer = pending["timer"]
+            if timer is not None:
+                timer.cancel()
+            timer = threading.Timer(debounce_s, _fire)
+            timer.daemon = True
+            pending["timer"] = timer
+            timer.start()
+
+    unsubscribe = subscribe(topic, _handler)
+
+    def _unsubscribe() -> None:
+        if callable(unsubscribe):
+            unsubscribe()
+        with lock:
+            timer = pending["timer"]
+            pending["timer"] = None
+            pending["text"] = None
+        if timer is not None:
+            timer.cancel()
+
+    return _unsubscribe

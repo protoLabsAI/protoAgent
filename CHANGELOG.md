@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`graph.sdk.react_on` — reactive-rule sugar** (#1633). The canonical reactive
+  composition `registry.on(topic, handler)` → `sdk.run_in_session(session, prompt)` made
+  every plugin write identical glue (missing-host guard, prompt-from-payload, idempotent
+  job id, burst debounce). `react_on(topic, *, prompt, job_id, session=<Activity>,
+  debounce_s=0)` is that glue in one call: `prompt(event)` returning `None`/empty skips
+  the event, `job_id` makes re-fires replace rather than stack (run_in_session
+  semantics), and `debounce_s > 0` coalesces a burst into ONE turn with a thread-safe
+  trailing-edge debounce (the last event's prompt wins; skipped events don't extend the
+  window). Returns an unsubscribe fn mirroring `registry.on`; degrades to a warned no-op
+  without a host bus.
 - **Plugins can now enumerate and remove watches** (#1638). The consumption SDK
   (ADR 0043) grows the lifecycle half of the ADR 0067 watch surface:
   `sdk.list_watches(prefix="")` (each `{id, condition, status, verifier}`,

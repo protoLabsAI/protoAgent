@@ -262,6 +262,13 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
 - `background_status(task_id)` — the status-query companion: `{status, description,
   report?}` for a spawned job (`report` once terminal), so a plugin can render progress
   on its own surface between launch and the completion nudge.
+- `react_on(topic, *, prompt, job_id, session=…, debounce_s=0)` — **reactive-rule sugar**:
+  when a bus event matching `topic` fires, build a prompt from the payload and enqueue a
+  follow-up turn (`run_in_session`). `prompt(event) -> str | None` (`None`/empty skips the
+  event), `job_id` makes re-fires replace rather than stack, `debounce_s` coalesces a burst
+  into ONE turn (trailing-edge; the last event's prompt wins), `session` defaults to the
+  Activity thread. Returns an unsubscribe fn. The one-call form of the canonical
+  `registry.on` → `run_in_session` composition — see [Events](#events-the-plugin-bus-adr-0039).
 
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap
@@ -288,6 +295,9 @@ def register(registry):
   rail icon (a **notification dot**) until the user opens that surface.
 - Fire-and-forget + topic-filtered + exception-isolated: a slow or broken subscriber can't affect the
   publisher or other subscribers. Ephemeral (a ring buffer covers SSE reconnects; no durable log).
+- The most common subscriber is "when X happens, have the **agent** react" — that composition
+  (`on` → prompt-from-payload → `run_in_session`, with an idempotent job id and burst debouncing)
+  ships as one consumption-SDK call: `sdk.react_on(…)` ([above](#tapping-core-deeper-graph-sdk-adr-0043)).
 
 > Cross-process note: under the **ACP runtime**, a tool runs in the operator-MCP process where the
 > bus isn't wired, so `emit` from a tool won't reach the server bus there. Under the default runtime
