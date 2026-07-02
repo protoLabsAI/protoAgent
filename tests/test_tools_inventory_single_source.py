@@ -30,14 +30,14 @@ class _ToolFake(GenericFakeChatModel):
         return self
 
 
-def _graph(goal_enabled=True, **over):
+def _graph(goal_enabled=True, extra_tools=None, **over):
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
 
     fake = _ToolFake(messages=iter([AIMessage(content="x")]))
     cfg = LangGraphConfig(goal_enabled=goal_enabled, **over)
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
-        return create_agent_graph(cfg), cfg
+        return create_agent_graph(cfg, extra_tools=extra_tools), cfg
 
 
 def test_tools_tab_exactly_matches_the_bound_graph(monkeypatch):
@@ -91,6 +91,49 @@ def test_denylisted_tools_stay_listed_toggled_off(monkeypatch):
     # The raw denylist survives verbatim; a stale name has no row to render.
     assert res["disabled"] == ["calculator", "ghost_tool"]
     assert "ghost_tool" not in by_name
+
+
+def test_denylisted_plugin_and_mcp_tools_stay_listed(monkeypatch):
+    """The row toggles cover EVERY seam, not just core: a denylisted plugin/MCP tool
+    (they enter as extra_tools) is dropped from the bound set but stays cataloged —
+    enabled: false, still grouped under its owning plugin / MCP server."""
+    from langchain_core.tools import tool
+
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    @tool
+    def show_artifact() -> str:
+        """Render an artifact."""
+        return "ok"
+
+    @tool
+    def echo__ping() -> str:
+        """Echo ping."""
+        return "pong"
+
+    g, cfg = _graph(
+        goal_enabled=False,
+        extra_tools=[show_artifact, echo__ping],
+        tools_disabled=["show_artifact", "echo__ping"],
+    )
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [show_artifact], raising=False)
+    monkeypatch.setattr(rs.STATE, "mcp_tools", [echo__ping], raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tool_owner", {"show_artifact": "Artifact"}, raising=False)
+    monkeypatch.setattr(rs.STATE, "mcp_meta", [{"name": "echo"}], raising=False)
+
+    bound = {getattr(t, "name", None) for t in g.bound_tools}
+    assert "show_artifact" not in bound and "echo__ping" not in bound
+
+    by_name = {t["name"]: t for t in ch._operator_tools_list()["tools"]}
+    assert by_name["show_artifact"]["enabled"] is False
+    assert by_name["show_artifact"]["source"] == "plugin"
+    assert by_name["show_artifact"]["category"] == "Artifact"  # still groups by owner
+    assert by_name["echo__ping"]["enabled"] is False
+    assert by_name["echo__ping"]["source"] == "mcp"
+    assert by_name["echo__ping"]["category"] == "echo"  # still groups by server
 
 
 def test_tools_tab_omits_set_goal_when_goal_disabled(monkeypatch):
