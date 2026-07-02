@@ -845,6 +845,54 @@ select:disabled {
    `.markdown` rules + the streamdown Tailwind scan are gone (protoContent#297/#298). The
    `.markdown` class still rides the same element as an e2e/selector alias. */
 
+/* ── Container-responsive markdown tables ─────────────────────────────────────
+   The DS (@protolabsai/ui 0.52 `.pl-markdown`) styles GFM tables with a FIXED 0.85em /
+   5px·10px and horizontal-scroll-on-overflow. That reads fine in the wide doc viewer but
+   is cramped in a narrow chat column, where a multi-column table just scrolls. Make the
+   table MOBILE-FIRST and respond to its CONTAINER (the markdown column width) instead of
+   the viewport — so the SAME table is compact in a narrow chat panel and roomy in the doc
+   viewer, automatically, wherever markdown renders (chat, reports, memory, doc viewer).
+
+   Console-side override (the DS still owns the base rules; the `.markdown` alias rides the
+   same element as `.pl-markdown`, and this file loads after the DS styles so it wins by
+   cascade). Fold back into @protolabsai/ui markdown.css when the DS repo is next synced —
+   see the [[ds-contribute-back-loop]]. */
+
+/* Establish an inline-size query context on the table wrapper so the cells query the
+   COLUMN width, not the viewport. The DS wrapper is already full-column-width. */
+.pl-markdown.markdown [data-streamdown="table-wrapper"] {
+  container-type: inline-size;
+  container-name: pl-mdtable;
+}
+
+/* Base = narrow column (mobile-first): compact type + padding. The DS keeps overflow-x:auto
+   on the inner wrapper, so a genuinely wide table still scrolls instead of clipping. */
+.pl-markdown.markdown [data-streamdown="table"] {
+  font-size: 0.8em;
+}
+.pl-markdown.markdown [data-streamdown="table-header-cell"],
+.pl-markdown.markdown [data-streamdown="table-cell"] {
+  padding: 4px 8px;
+  line-height: 1.35;
+}
+
+/* Roomier as the column widens (a wider chat panel, or the doc viewer). */
+@container pl-mdtable (min-width: 30rem) {
+  .pl-markdown.markdown [data-streamdown="table"] {
+    font-size: 0.85em;
+  }
+  .pl-markdown.markdown [data-streamdown="table-header-cell"],
+  .pl-markdown.markdown [data-streamdown="table-cell"] {
+    padding: 5px 10px;
+  }
+}
+@container pl-mdtable (min-width: 48rem) {
+  .pl-markdown.markdown [data-streamdown="table-header-cell"],
+  .pl-markdown.markdown [data-streamdown="table-cell"] {
+    padding: 7px 12px;
+  }
+}
+
 /* Chat composer + slash-command autocomplete — moved to src/chat/chat.css (#832). */
 /* HITL request card — moved to src/chat/hitl.css (#832). */
 
