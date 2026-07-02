@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.81.0] - 2026-07-02
+
 ### Changed
 - **`seccomp-profile.json` moved to `deploy/`.** The Docker hardening profile now
   lives with the other deployment assets instead of at the repo root;
