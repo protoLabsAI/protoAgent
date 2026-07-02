@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.83.0",
+    "date": "2026-07-02",
+    "changes": [
+      "One-line background results render as a compact inline note, not a report card",
+      "Per-subagent tool fences now apply to detached background jobs",
+      "Desktop no longer aborts on launch when a global hotkey is already taken",
+      "Desktop no longer launches into a silently dead window when port 7870 is taken or the server dies",
+      "Release-tag-pinned plugins now see updates."
+    ]
+  },
+  {
     "version": "v0.82.0",
     "date": "2026-07-02",
     "changes": [
