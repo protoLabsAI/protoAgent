@@ -253,6 +253,15 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   (`True` if it existed). Together they make a plugin's arm step a *reconcile* — clear the
   suite ids no longer in your spec set, then create/replace the rest — so a renamed/dropped
   watch spec can't leak a zombie watch. See [Watches](/guides/watches).
+- `spawn_background(prompt, *, subagent_type, origin_session, label=None)` — spawn a
+  **detached background subagent job** ([ADR 0050](/adr/0050-background-subagents-reactive-notifications))
+  that returns a `bg-…` id immediately and rides the full
+  [ADR 0070](/adr/0070-background-results-push-resume) results pipeline (push-resume nudge
+  into `origin_session`, KB-indexed report, console report card). The seam for long
+  campaign work — never reach into `STATE.background_mgr` directly.
+- `background_status(task_id)` — the status-query companion: `{status, description,
+  report?}` for a spawned job (`report` once terminal), so a plugin can render progress
+  on its own surface between launch and the completion nudge.
 
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap

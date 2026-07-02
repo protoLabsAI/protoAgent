@@ -269,3 +269,102 @@ def clear_watch(watch_id: str) -> bool:
     if controller is None:
         return False
     return controller.clear(watch_id)
+
+
+# ── background jobs (ADR 0050 spawn + ADR 0070 results pipeline) ───────────────────────
+# Detached campaign work — "chart the frontier and report back" — is naturally a
+# background subagent job, but the manager only had a tool-path consumer: a plugin had to
+# reach into ``runtime.state.STATE.background_mgr`` and mirror what the ``task`` tool
+# does. This thin pair closes that hole. A job spawned here rides the FULL ADR 0070
+# results pipeline for free: push-resume nudge into ``origin_session`` at completion,
+# KB-indexed report (``source_type="background_report"``), the console report card, and
+# the ``GET /api/background/{id}`` route.
+
+
+async def spawn_background(
+    prompt: str,
+    *,
+    subagent_type: str,
+    origin_session: str,
+    label: str | None = None,
+) -> dict:
+    """Spawn a detached background subagent job (ADR 0050) and return immediately.
+
+    The job runs as its own detached A2A turn under the ``subagent_type`` role; when it
+    finishes, the ADR 0070 pipeline delivers the report — a push-resume nudge into
+    ``origin_session``, the notified-gated ``<task-notification>`` drain, knowledge-store
+    indexing, and the console report card. Poll in between with
+    :func:`background_status` (e.g. to render campaign progress on a plugin dashboard).
+
+    Args:
+        prompt: detailed instructions for the background worker.
+        subagent_type: which subagent role runs the job — one of the registered roster
+            (:func:`subagent_types`), plugin-contributed subagents included.
+        origin_session: the chat session the report drains back into (and gets the
+            completion nudge). Required — a job with no origin has nowhere to report.
+        label: short human description for the job card / report heading. Defaults to
+            the first line of ``prompt`` (clipped).
+
+    Returns ``{"ok", "task_id", "message"}`` — ``task_id`` is the ``bg-…`` job id (the
+    handle for :func:`background_status`, cancel, and the by-id API route); ``ok=False``
+    with a readable message when the background subsystem is off or the inputs are bad.
+    """
+    mgr = STATE.background_mgr
+    if mgr is None:
+        return {"ok": False, "task_id": None, "message": "background subsystem unavailable (no background_mgr)"}
+    if not (prompt or "").strip():
+        return {"ok": False, "task_id": None, "message": "prompt is required"}
+    if not (origin_session or "").strip():
+        return {"ok": False, "task_id": None, "message": "origin_session is required"}
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    if subagent_type not in SUBAGENT_REGISTRY:
+        available = ", ".join(sorted(SUBAGENT_REGISTRY)) or "(none configured)"
+        return {"ok": False, "task_id": None, "message": f"unknown subagent {subagent_type!r} — available: {available}"}
+    description = (label or "").strip() or prompt.strip().splitlines()[0][:80]
+    task_id = await mgr.spawn(
+        origin_session=origin_session,
+        subagent_type=subagent_type,
+        description=description,
+        prompt=prompt,
+    )
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "message": (
+            f"background job {task_id} spawned ({subagent_type}: {description}) — it runs detached; "
+            f"the report is delivered to session {origin_session!r} on completion"
+        ),
+    }
+
+
+def background_status(task_id: str) -> dict:
+    """Look up a background job by its ``bg-…`` id — the status-query companion to
+    :func:`spawn_background`, so a plugin can render campaign progress on its own
+    surface instead of being blind between launch and the ADR 0070 completion nudge.
+
+    Returns ``{"ok", "task_id", "status", "subagent_type", "description", "created_at",
+    "completed_at", "message"}`` plus — only once the job is terminal
+    (completed/failed/canceled) — ``"report"`` with the full result text. An unknown id
+    (or the subsystem being off) returns ``ok=False`` with ``status="unknown"`` and a
+    readable message. Reads the durable jobs store directly (cheap local SQLite).
+    """
+    mgr = STATE.background_mgr
+    if mgr is None:
+        return {"ok": False, "status": "unknown", "message": "background subsystem unavailable (no background_mgr)"}
+    job = mgr.store.get((task_id or "").strip())
+    if job is None:
+        return {"ok": False, "status": "unknown", "message": f"no background job {task_id!r}"}
+    out = {
+        "ok": True,
+        "task_id": job.id,
+        "status": job.status,
+        "subagent_type": job.subagent_type,
+        "description": job.description,
+        "created_at": job.created_at,
+        "completed_at": job.completed_at,
+        "message": f"background job {job.id} is {job.status}",
+    }
+    if job.status != "running":
+        out["report"] = job.result
+    return out

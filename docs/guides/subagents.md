@@ -211,6 +211,13 @@ way so a 20-minute transcription never freezes the chat. Reach for `spawn_work` 
 or plugin has a long **deterministic** operation that shouldn't block the turn (vs.
 `run_in_background`, which is for detaching an *LLM subagent* turn).
 
+**From a plugin, use the consumption SDK instead of `STATE`.** `graph.sdk.spawn_background(prompt,
+*, subagent_type, origin_session, label=None)` spawns a detached *subagent* job through the same
+pipeline — the report card, KB indexing, and the push-resume nudge all land for free — and
+`graph.sdk.background_status(task_id)` reads the job row (`{status, description, report?}`) so a
+plugin dashboard can show progress between launch and the nudge. See
+[Plugins ▸ Tapping core deeper](/guides/plugins#tapping-core-deeper--graphsdk-adr-0043).
+
 ## What you get for free
 
 Every subagent call:

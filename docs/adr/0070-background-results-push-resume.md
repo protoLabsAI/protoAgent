@@ -94,6 +94,10 @@ Cursor:
   the feature; `background.auto_resume: false` restores pull-only.
 - Amends ADR 0050's "surfaced on the next turn" contract to "surfaced by a
   triggered turn"; the drain mechanism and exactly-once guarantee are unchanged.
+- The pipeline is plugin-reachable (#1635): `graph.sdk.spawn_background(…)` spawns a
+  job that rides D1–D4 for free, and `graph.sdk.background_status(task_id)` reads the
+  jobs-store row (`report` once terminal) — no more reaching into
+  `STATE.background_mgr` (ADR 0043 consumption SDK).
 
 ## 5. Alternatives considered
 

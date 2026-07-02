@@ -39,6 +39,13 @@ deliberately as more plugins tap core; this is the seam we lean on going forward
 > to answer a prompt — first consumer: the artifact plugin's interactive
 > `window.protoArtifact.ask()` bridge (artifacts call back to the agent, the
 > `window.claude.complete` analog).
+>
+> `spawn_background(prompt, *, subagent_type, origin_session, label=None)` +
+> `background_status(task_id)` (#1635) — the background channel: spawn a **detached**
+> subagent job (ADR 0050) that rides the full ADR 0070 results pipeline (push-resume
+> nudge, KB-indexed report, report card), and poll its jobs-store row in between. Closes
+> the hole where a plugin with campaign-scale work had to reach into
+> `STATE.background_mgr` directly. First consumer: spacetraders exploration campaigns.
 
 **2. Workflows becomes an opt-in plugin (`plugins/workflows`, `enabled: false`).**
 
