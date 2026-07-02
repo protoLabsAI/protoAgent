@@ -88,7 +88,7 @@ function PluginRow({
               variant="ghost"
               loading={updating}
               onClick={() => onUpdate(p)}
-              title={`Update ${p.name} to the latest commit`}
+              title={update.latest_ref ? `Update ${p.name} to ${update.latest_ref}` : `Update ${p.name} to the latest commit`}
               aria-label={`Update ${p.name}`}
             >
               <RefreshCw size={15} />

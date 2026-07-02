@@ -358,13 +358,16 @@ def register_plugin_routes(app) -> None:
 
     @app.post("/api/plugins/{plugin_id}/update")
     async def _update(plugin_id: str):
-        """Pull the latest code for an installed plugin at its recorded ref, then
-        hot-reload via the SAME path the enable toggle uses so the new code mounts.
+        """Pull the latest code for an installed plugin, then hot-reload via the
+        SAME path the enable toggle uses so the new code mounts.
 
-        Re-installs ``source_url`` at ``requested_ref`` (force) — this rewrites the
-        lock with the new ``resolved_sha``. If the plugin is currently ENABLED we
-        reload (so tools/middleware/MCP rebuild and the router re-mounts, #822); if
-        it's installed-but-disabled we just re-install (nothing to reload yet).
+        The target ref is the update check's ``latest_ref`` when one exists (a
+        release-tag pin moves tag → newer tag; re-installing the RECORDED tag would
+        be a no-op forever — tags are immutable), else the recorded ``requested_ref``
+        (a branch pulls its newest commit). Rewrites the lock with the new ref +
+        ``resolved_sha``. If the plugin is currently ENABLED we reload (so tools/
+        middleware/MCP rebuild and the router re-mounts, #822); if it's
+        installed-but-disabled we just re-install (nothing to reload yet).
         """
         entry = next((e for e in installer.list_installed() if e.get("id") == plugin_id), None)
         if entry is None:
@@ -376,6 +379,15 @@ def register_plugin_routes(app) -> None:
                 detail=f"plugin {plugin_id!r} has no source_url — cannot update",
             )
         ref = entry.get("requested_ref", "") or None
+        if ref and installer.is_release_tag(ref):
+            # A release-tag pin is immutable — the update target is the newest
+            # semver tag (the check's latest_ref), not the recorded one. Branch
+            # refs skip this: re-installing the branch already pulls its head.
+            try:
+                status = await asyncio.to_thread(installer.check_plugin_update, entry)
+                ref = status.get("latest_ref") or ref
+            except Exception:  # noqa: BLE001 — best-effort; fall back to the recorded ref
+                pass
         try:
             summary = await asyncio.to_thread(
                 installer.install, source_url, ref, force=True, by="console", allow=_sources_allowlist()

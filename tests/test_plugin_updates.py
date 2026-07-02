@@ -24,10 +24,12 @@ _LATEST = "b" * 40
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
-    """The ls-remote TTL cache is module-level — wipe it around every test."""
+    """The ls-remote TTL caches are module-level — wipe them around every test."""
     installer._lsremote_cache.clear()
+    installer._lstags_cache.clear()
     yield
     installer._lsremote_cache.clear()
+    installer._lstags_cache.clear()
 
 
 def _lock(monkeypatch, plugins: list[dict], *, bundles: list[dict] | None = None):
@@ -130,9 +132,9 @@ def test_empty_ref_uses_head(monkeypatch):
 
 
 def test_annotated_tag_compares_peeled_commit(monkeypatch):
-    """An ANNOTATED tag's bare refspec resolves to the tag-object SHA — never equal
-    to the lock's commit SHA, so the naive compare reported a permanent false
-    "behind" (ADR 0049). The peeled ``<ref>^{}`` line must win the compare."""
+    """An ANNOTATED tag lists twice in ``ls-remote --tags`` — the bare ref (tag-object
+    SHA, never equal to the lock's commit SHA) and the peeled ``^{}`` line. The peeled
+    commit must win the moved-tag compare (ADR 0049), else a permanent false "behind"."""
     tag_object = "c" * 40
     _lock(
         monkeypatch,
@@ -150,13 +152,14 @@ def test_annotated_tag_compares_peeled_commit(monkeypatch):
     row = installer.check_updates()[0]
     assert row["latest_sha"] == _CUR
     assert row["behind"] is False
-    # both the bare and the peeled refspec are requested in ONE ls-remote call
-    assert seen[0] == ("ls-remote", "https://x/y.git", "v1.2.3", "v1.2.3^{}")
+    # a release-tag pin lists the remote's TAGS (one call) instead of ls-remoting
+    # the immutable tag itself — that's what makes newer releases visible at all
+    assert seen[0] == ("ls-remote", "--tags", "https://x/y.git")
 
 
-def test_lightweight_tag_or_branch_falls_back_to_bare_line(monkeypatch):
-    """A branch / lightweight tag matches only the bare refspec — no peeled line —
-    and the compare keeps working off it."""
+def test_moved_lightweight_tag_still_reads_as_behind(monkeypatch):
+    """No NEWER release, but the SAME tag re-pointed at a different commit (a
+    force-moved lightweight tag) — the moved-tag compare stays in force."""
     _lock(
         monkeypatch,
         [
@@ -167,6 +170,47 @@ def test_lightweight_tag_or_branch_falls_back_to_bare_line(monkeypatch):
     row = installer.check_updates()[0]
     assert row["latest_sha"] == _LATEST
     assert row["behind"] is True
+    assert row["latest_ref"] is None  # same tag, new commit — not a tag move
+
+
+def test_release_tag_pin_reports_newer_semver_tag(monkeypatch):
+    """The pin-lifecycle signal (ADR 0049): a release-tag pin is 'behind' when a NEWER
+    semver tag exists — the immutable tag itself can never show it. Ordering is
+    numeric (v0.14.10 > v0.14.3), peeled SHAs win, prerelease/junk tags are ignored."""
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v0.14.2", "resolved_sha": _CUR},
+        ],
+    )
+    out = "\n".join(
+        [
+            f"{_CUR}\trefs/tags/v0.14.2",
+            f"{'d' * 40}\trefs/tags/v0.14.3",
+            f"{'e' * 40}\trefs/tags/v0.14.10",  # annotated: tag object…
+            f"{_LATEST}\trefs/tags/v0.14.10^{{}}",  # …and the peeled commit, which wins
+            f"{'f' * 40}\trefs/tags/v0.15.0-rc1",  # prerelease — not a release tag
+            f"{'0' * 40}\trefs/tags/nightly",  # non-semver — ignored
+        ]
+    )
+    monkeypatch.setattr(installer, "_git", lambda *a, **k: out)
+    row = installer.check_updates()[0]
+    assert row["behind"] is True
+    assert row["latest_ref"] == "v0.14.10"
+    assert row["latest_sha"] == _LATEST
+
+
+def test_release_tag_pin_with_no_newer_tag_is_up_to_date(monkeypatch):
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v0.14.2", "resolved_sha": _CUR},
+        ],
+    )
+    monkeypatch.setattr(installer, "_git", lambda *a, **k: f"{_CUR}\trefs/tags/v0.14.2")
+    row = installer.check_updates()[0]
+    assert row["behind"] is False
+    assert row["latest_ref"] is None
 
 
 def test_error_when_ls_remote_fails(monkeypatch):
@@ -372,6 +416,71 @@ def test_update_route_reinstalls_and_reloads(monkeypatch):
     assert install_calls == [("https://x/y.git", "main", True)]
     # reloaded via the same _apply_settings_changes path the enable route uses
     assert captured["config"]["plugins"]["enabled"] == ["demo"]
+
+
+def test_update_route_moves_a_release_tag_pin_to_the_newest_tag(monkeypatch):
+    """A tag-pinned plugin (requested_ref vX.Y.Z) must update to the check's
+    ``latest_ref`` — re-installing the RECORDED tag is a no-op forever (immutable)."""
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "demo",
+                "source_url": "https://x/y.git",
+                "requested_ref": "v0.14.2",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: __import__("pathlib").Path("/tmp/none"))
+    _wire_state(monkeypatch, enabled=[], disabled=[], meta=[{"id": "demo", "views": []}])
+    monkeypatch.setattr(
+        installer,
+        "check_plugin_update",
+        lambda e: {"id": "demo", "behind": True, "latest_ref": "v0.14.3", "latest_sha": _LATEST},
+    )
+
+    install_calls: list = []
+
+    def _install(url, ref=None, *, force=False, by="cli", allow=None):
+        install_calls.append((url, ref, force))
+        return {"id": "demo", "version": "0.14.3", "resolved_sha": _LATEST}
+
+    monkeypatch.setattr(installer, "install", _install)
+
+    body = _client().post("/api/plugins/demo/update").json()
+    assert body["ok"] is True and body["version"] == "0.14.3"
+    assert install_calls == [("https://x/y.git", "v0.14.3", True)]
+
+
+def test_update_route_tag_pin_without_newer_tag_reinstalls_recorded(monkeypatch):
+    """No newer release (or the check errored) → fall back to the recorded tag."""
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "demo",
+                "source_url": "https://x/y.git",
+                "requested_ref": "v0.14.2",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: __import__("pathlib").Path("/tmp/none"))
+    _wire_state(monkeypatch, enabled=[], disabled=[], meta=[{"id": "demo", "views": []}])
+    monkeypatch.setattr(installer, "check_plugin_update", lambda e: {"id": "demo", "behind": False, "latest_ref": None})
+
+    install_calls: list = []
+
+    def _install(url, ref=None, *, force=False, by="cli", allow=None):
+        install_calls.append((url, ref, force))
+        return {"id": "demo", "version": "0.14.2", "resolved_sha": _CUR}
+
+    monkeypatch.setattr(installer, "install", _install)
+    assert _client().post("/api/plugins/demo/update").json()["ok"] is True
+    assert install_calls == [("https://x/y.git", "v0.14.2", True)]
 
 
 def test_update_route_disabled_plugin_reinstalls_without_reload(monkeypatch):
