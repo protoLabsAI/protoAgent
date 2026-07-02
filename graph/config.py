@@ -512,6 +512,11 @@ class LangGraphConfig:
     # Background subagent threads (a2a:background:*) get a tighter cap — we only
     # resume-from-latest, never time-travel, so retaining more than 1 is waste.
     checkpoint_background_keep: int = 1
+    # Push-resume (ADR 0070 D1): when a background job finishes, self-submit a nudge
+    # turn into the session that spawned it, so its <task-notification> drains
+    # immediately and the agent briefs the operator — instead of the report waiting
+    # for that session's next manual turn. False restores pull-only delivery.
+    background_auto_resume: bool = True
     checkpoint_max_age_days: int = 30
     checkpoint_prune_interval_hours: int = 6
     # When a session is retired (aged out or deleted), summarize it into the
@@ -919,6 +924,7 @@ class LangGraphConfig:
             checkpoint_background_keep=data.get("checkpoint", {}).get(
                 "background_keep", cls.checkpoint_background_keep
             ),
+            background_auto_resume=data.get("background", {}).get("auto_resume", cls.background_auto_resume),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
                 "prune_interval_hours", cls.checkpoint_prune_interval_hours

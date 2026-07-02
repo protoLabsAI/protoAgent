@@ -52,6 +52,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/background` | Background subagent jobs |
+| GET | `/api/background/{job_id}` | One job's full row by id (full result text; ADR 0070) |
 | POST | `/api/background/{job_id}/cancel` · `/api/background/clear` | Cancel one / clear finished |
 | DELETE | `/api/background/{job_id}` | Remove a job row |
 | GET · POST | `/api/scheduler/jobs` | List / create scheduled jobs |

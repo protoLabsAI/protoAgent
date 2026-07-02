@@ -96,14 +96,21 @@ class BackgroundManager:
         subagent_type: str,
         description: str,
         prompt: str,
+        origin_incognito: bool = False,
     ) -> str:
-        """Register a job and fire it detached. Returns the opaque job id immediately."""
+        """Register a job and fire it detached. Returns the opaque job id immediately.
+
+        ``origin_incognito`` records that the spawning thread was incognito (ADR 0069
+        D3b → ADR 0070): the completion then skips the push-resume nudge and the
+        knowledge-store indexing — no memory trail — while the report still lives in
+        the jobs DB and drains into the origin session normally."""
         job_id = self.store.create(
             agent_name=self.agent_name,
             origin_session=origin_session or "",
             subagent_type=subagent_type,
             description=description,
             prompt=prompt,
+            origin_incognito=origin_incognito,
         )
         fired_prompt = _build_fired_prompt(subagent_type, description, prompt)
         t = asyncio.create_task(self._fire(job_id, fired_prompt), name=f"background.fire.{job_id}")
@@ -124,6 +131,7 @@ class BackgroundManager:
         description: str,
         work,
         detail: str = "",
+        origin_incognito: bool = False,
     ) -> str:
         """Register and run a deterministic background job — a plain coroutine, NOT an
         LLM subagent turn — through the same durable store + concurrency cap + event
@@ -141,6 +149,7 @@ class BackgroundManager:
             subagent_type=kind,
             description=description,
             prompt=detail,
+            origin_incognito=origin_incognito,
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
@@ -250,11 +259,7 @@ class BackgroundManager:
 
         import httpx
 
-        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-        if self._bearer:
-            headers["Authorization"] = f"Bearer {self._bearer}"
-        if self._api_key:
-            headers["X-API-Key"] = self._api_key
+        headers = self._a2a_headers()
         body = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -280,23 +285,26 @@ class BackgroundManager:
         )
         return {"ok": ok, "status": "canceled", "detail": f"Canceled {job_id}."}
 
-    async def _fire(self, job_id: str, prompt: str) -> None:
-        """POST the job to our own /a2a as a turn in a dedicated background context.
+    # ── self-POST mechanics (shared by _fire and resume_origin — ADR 0050/0070) ─
 
-        On any delivery failure (non-2xx / network / timeout), mark the job failed —
-        but only if the terminal hook hasn't already settled it (mark_complete is a
-        no-op on an already-terminal row), so a slow-turn timeout can't clobber a
-        result that actually landed.
-        """
-        import httpx
-
-        # A2A 1.0 wire shape (matches scheduler/local.py:_fire): SendMessage, ROLE_USER,
-        # {text} parts, contextId + metadata on the message, A2A-Version header.
+    def _a2a_headers(self) -> dict:
         headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
         if self._bearer:
             headers["Authorization"] = f"Bearer {self._bearer}"
         if self._api_key:
             headers["X-API-Key"] = self._api_key
+        return headers
+
+    async def _send_a2a_message(self, *, context_id: str, text: str, metadata: dict) -> None:
+        """POST one ``SendMessage`` turn to our own ``/a2a`` and hold the connection
+        open until the turn finishes (the A2A handler runs it synchronously).
+
+        A2A 1.0 wire shape (matches scheduler/local.py:_fire): SendMessage, ROLE_USER,
+        ``{text}`` parts, contextId + metadata on the message, A2A-Version header.
+        Raises on a non-2xx response or any network/timeout error — callers decide
+        what a delivery failure means (a job fire marks the row failed; a push-resume
+        nudge just logs and lets the drain deliver on the next manual turn)."""
+        import httpx
 
         message_id = str(uuid.uuid4())
         body = {
@@ -306,39 +314,90 @@ class BackgroundManager:
             "params": {
                 "message": {
                     "role": "ROLE_USER",
-                    "parts": [{"text": prompt}],
+                    "parts": [{"text": text}],
                     "messageId": message_id,
-                    # Dedicated, isolated context per job — keeps the background turn's
-                    # history out of the originating chat thread; the job id rides in
-                    # the context so the terminal hook can map back without metadata.
-                    "contextId": f"background:{job_id}",
-                    "metadata": {
-                        "origin": "background",
-                        "trigger": job_id,
-                        "background_job_id": job_id,
-                    },
+                    "contextId": context_id,
+                    "metadata": metadata,
                 },
             },
         }
+        async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
+            r = await client.post(f"{self._invoke_url}/a2a", headers=self._a2a_headers(), json=body)
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+
+    async def _fire(self, job_id: str, prompt: str) -> None:
+        """POST the job to our own /a2a as a turn in a dedicated background context.
+
+        On any delivery failure (non-2xx / network / timeout), mark the job failed —
+        but only if the terminal hook hasn't already settled it (mark_complete is a
+        no-op on an already-terminal row), so a slow-turn timeout can't clobber a
+        result that actually landed.
+        """
         # Gate the actual self-POST on the concurrency semaphore so a fan-out can't open more
         # than ``_max_concurrency`` full turns at once. The slot is held for the WHOLE turn —
         # the A2A handler runs the turn synchronously before the POST returns — which is
         # exactly the bound we want (concurrent running turns, not just in-flight requests).
         async with self._sem:
             try:
-                async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
-                    r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
-                if r.status_code >= 400:
-                    log.error(
-                        "[background] fire failed for %s: HTTP %d %s",
-                        job_id,
-                        r.status_code,
-                        r.text[:200],
-                    )
-                    self.store.mark_complete(job_id, "failed", f"Background turn failed to start: HTTP {r.status_code}.")
+                await self._send_a2a_message(
+                    # Dedicated, isolated context per job — keeps the background turn's
+                    # history out of the originating chat thread; the job id rides in
+                    # the context so the terminal hook can map back without metadata.
+                    context_id=f"background:{job_id}",
+                    text=prompt,
+                    metadata={
+                        "origin": "background",
+                        "trigger": job_id,
+                        "background_job_id": job_id,
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
-                log.exception("[background] fire exception for %s", job_id)
+                log.exception("[background] fire failed for %s", job_id)
                 self.store.mark_complete(job_id, "failed", f"Background turn delivery error: {exc}")
+
+    async def resume_origin(self, job) -> bool:
+        """Push-resume (ADR 0070 D1): submit a terse self-A2A nudge INTO the job's
+        origin session, so the origin agent runs a turn NOW — the notified-gated
+        drain (``server/chat.py``) attaches the actual ``<task-notification>`` to
+        that turn, and the agent briefs the operator against the new data.
+
+        Deliberately NOT gated on the concurrency semaphore: this is an
+        origin-session turn, not a background job — queuing the briefing behind
+        the very jobs it reports on would deadlock a full fan-out. A mid-turn
+        origin session is safe: the A2A server serializes turns per thread_id
+        (``server/chat.py:_thread_lock``), so the nudge queues and runs after the
+        in-flight turn. Never raises; returns whether the nudge was delivered.
+        On failure nothing is lost — ``notified`` is untouched, so the report
+        still drains on the session's next manual turn."""
+        verb = "failed" if job.status == "failed" else "finished"
+        text = (
+            f"[background job {job.id} ({job.description}) {verb} — its report notification "
+            "is attached to this turn; review it and brief the operator]"
+        )
+        try:
+            await self._send_a2a_message(
+                context_id=job.origin_session,
+                text=text,
+                metadata={
+                    # NOT "background": the terminal hook routes origin=="background"
+                    # turns back into _handle_background_terminal — the nudge turn is
+                    # an ordinary origin-session turn with its own provenance.
+                    "origin": "background-resume",
+                    "trigger": job.id,
+                    "background_job_id": job.id,
+                },
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 — push-resume is best-effort by contract
+            log.warning(
+                "[background] push-resume for %s into %s failed (%s) — the report will "
+                "drain on that session's next turn",
+                job.id,
+                job.origin_session,
+                exc,
+            )
+            return False
 
 
 def _build_fired_prompt(subagent_type: str, description: str, prompt: str) -> str:

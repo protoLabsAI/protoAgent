@@ -26,7 +26,11 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 
 
-_BG_RESULT_CAP = 6000  # chars of a background result injected into the spawning turn
+# Chars of a background result injected into the spawning turn. Shrunk 6000 → 3000
+# (ADR 0070 D2): a substantial report is now ALSO indexed into the knowledge store at
+# completion, so the notification carries a summary-sized excerpt plus a pointer to
+# the searchable full text instead of a third of the context window.
+_BG_RESULT_CAP = 3000
 
 
 def _drain_background_messages(session_id: str) -> list:
@@ -53,7 +57,17 @@ def _drain_background_messages(session_id: str) -> list:
     for j in jobs:
         result = j.result or ""
         if len(result) > _BG_RESULT_CAP:
-            result = result[:_BG_RESULT_CAP] + f"\n\n…[truncated to {_BG_RESULT_CAP} chars]"
+            # Completed, non-incognito reports this size were indexed at completion
+            # (ADR 0070 D2) — say so; incognito/failed ones only live in the jobs DB.
+            searchable = (
+                " — the full report is indexed and searchable via memory_recall"
+                if j.status == "completed" and not getattr(j, "origin_incognito", False)
+                else ""
+            )
+            result = result[:_BG_RESULT_CAP] + (
+                f"\n\n…[truncated to {_BG_RESULT_CAP} chars{searchable}; the operator can open "
+                f"the full text from the console background report card (job id {j.id})]"
+            )
         body = (
             "<task-notification>\n"
             "A background agent finished a task you delegated earlier:\n"

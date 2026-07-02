@@ -404,13 +404,19 @@ def test_digest_one_attributed_line_no_assistant_text(tmp_path):
 def test_digest_surface_classification(tmp_path):
     cases = [
         ("chat-1", "chat"),
-        ("background:job-7", "background"),
         ("system:activity", "activity"),
         ("palette-2", "palette"),
         ("someA2Aconsumer", "a2a/other"),
     ]
     for sid, _ in cases:
         _write_session(str(tmp_path), sid, _sample_session(sid))
+    # A background WORKER summary never enters the digest (ADR 0070 D3 — the writer
+    # no longer persists them; the loader filters legacy files). digest_entry itself
+    # still classifies the surface (asserted below) for the memory-inspector API.
+    _write_session(str(tmp_path), "background:job-7", _sample_session("background:job-7"))
+    from graph.middleware.memory import digest_entry
+
+    assert digest_entry(_sample_session("background:job-7"))["surface"] == "background"
 
     from graph.middleware.memory import load_prior_sessions
 
@@ -418,6 +424,7 @@ def test_digest_surface_classification(tmp_path):
     for sid, surface in cases:
         line = next(ln for ln in result.split("\n") if sid in ln)
         assert f" {surface} " in line.replace("·", " "), f"{sid} classified wrong: {line}"
+    assert "background:job-7" not in result
 
 
 def test_digest_topic_truncated(tmp_path):

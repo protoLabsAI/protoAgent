@@ -167,9 +167,24 @@ like any other; the `deep-research` recipe just wires them into a DAG.
 A delegation can run **detached** so it never blocks the turn: `task(run_in_background=true)`
 (or `task_batch`) fires the subagent, returns a `bg-…` job id immediately, and the result is
 drained back into the conversation when it finishes — with a live card on the console's
-background-jobs surface and an autonomous idle-wake
-([ADR 0050](/adr/0050-background-subagents-reactive-notifications)). Durable (survives restart),
-concurrency-capped (`BACKGROUND_MAX_CONCURRENCY`), and cancellable.
+background-jobs surface ([ADR 0050](/adr/0050-background-subagents-reactive-notifications)).
+Durable (survives restart), concurrency-capped (`BACKGROUND_MAX_CONCURRENCY`), and cancellable.
+
+**Completion is a push, not mail waiting for pickup**
+([ADR 0070](/adr/0070-background-results-push-resume)). When a job finishes, the server
+**resumes the origin session** with a nudge turn: the pending `<task-notification>` drains into
+that turn and the agent briefs the operator right where the work was requested (config
+`background.auto_resume`, on by default; `false` restores pull-only delivery on the session's
+next manual turn — the ADR 0050 Activity idle-wake then covers autonomous reaction instead).
+A **substantial report** (> ~800 chars) is also **indexed into the knowledge store** at
+completion, keyed to the origin session (`source_type: background_report`, trust tier 2 —
+agent-derived), so only a 3 000-char excerpt rides in-context while the full text stays
+searchable via `memory_recall` and openable from the console report card
+(`GET /api/background/{job_id}`). Worker transcripts are **disposable**: `background:*`
+sessions are excluded from session-summary persistence, the `<prior_sessions>` digest, and
+retirement harvest — the jobs DB is the system of record. Jobs spawned from an **incognito**
+thread inherit the no-memory-trail contract: no auto-resume, no indexing; the report still
+drains normally.
 
 **Reuse it from your own code — `BackgroundManager.spawn_work(...)`.** Not every long job is an
 LLM turn. A *deterministic* pipeline — media transcription, a bulk import, a crawl — shouldn't

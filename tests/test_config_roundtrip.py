@@ -67,6 +67,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "audit_middleware": True,
     "autostart_on_boot": False,
     "aux_model": "",
+    "background_auto_resume": True,
     "bind_host": "127.0.0.1",
     "cache_warming_enabled": False,
     "cache_warming_interval_seconds": 3300,
