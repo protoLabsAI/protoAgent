@@ -41,3 +41,11 @@
   color: var(--fg-muted);
   min-width: 0;
 }
+
+/* Contextual settings chips above the search (mirrors .mcp-browse-row). */
+.tools-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+}

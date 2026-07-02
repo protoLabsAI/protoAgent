@@ -235,6 +235,25 @@ export const SETTINGS_SCHEMA = [
       { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false, scope: "agent", source: "agent" },
     ],
   },
+  // The per-agent run_command controls + the operator tool denylist — edited via the
+  // Tools panel's QuickSetting chips (no generic Capabilities panel renders these).
+  {
+    section: "Filesystem",
+    category: "Capabilities",
+    fields: [
+      { key: "filesystem.enabled", label: "Filesystem tools", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent" },
+      { key: "filesystem.allow_run", label: "Allow run_command", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.enabled" } },
+      { key: "filesystem.run_requires_approval", label: "Require approval per command", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.allow_run" } },
+      { key: "filesystem.bypass_allowed", label: "Allow /bypass", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.run_requires_approval" } },
+    ],
+  },
+  {
+    section: "Tools",
+    category: "Capabilities",
+    fields: [
+      { key: "tools.disabled", label: "Disabled tools", type: "string_list", section: "Tools", restart: false, description: "", options: [], value: [], default: [], scope: "agent", source: "agent" },
+    ],
+  },
   // A plugin-contributed group (ADR 0019/0059) — tagged with plugin_id so the
   // Plugins surface folds it into the "Demo Plugin" Installed row (Configure).
   {

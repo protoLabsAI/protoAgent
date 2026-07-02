@@ -439,17 +439,29 @@ _MEMORY_RECALL_MAX_K = 20
 _MEMORY_LIST_MAX_LIMIT = 200
 _RECALL_SESSION_MAX_CHARS = 6000
 
-# Fork tool denylist — names dropped from ``get_all_tools``. Set once from config
-# (``tools.disabled``) by ``set_disabled_tools`` at config load/reload, so a fork
-# removes core tools via YAML instead of editing ``get_all_tools`` (a core edit
-# that would conflict on every upstream re-sync). Plugins still ADD tools.
+# Operator/fork tool denylist — names dropped from the agent's toolset. Set once from
+# config (``tools.disabled``) by ``set_disabled_tools`` at config load/reload, so an
+# operator removes tools via YAML/Settings instead of editing core (an edit that would
+# conflict on every upstream re-sync). Applied inside ``get_all_tools`` AND — via
+# ``drop_disabled_tools`` — over the fully assembled set in ``graph.agent`` (so it also
+# covers plugin/MCP ``extra_tools``, the delegation tools, the filesystem tools incl.
+# ``run_command``, and late-seam tools). Plugins still ADD tools.
 _disabled_tools: set[str] = set()
 
 
 def set_disabled_tools(names) -> None:
-    """Set the fork tool denylist (config ``tools.disabled``)."""
+    """Set the operator tool denylist (config ``tools.disabled``)."""
     global _disabled_tools
     _disabled_tools = {str(n).strip() for n in (names or []) if str(n).strip()}
+
+
+def drop_disabled_tools(tools: list) -> list:
+    """Filter the denylist (``tools.disabled``) out of ``tools`` — the single filter
+    every assembly point uses, so a disabled name is gone no matter which seam
+    contributed it. Returns ``tools`` unchanged (same list) when the denylist is empty."""
+    if not _disabled_tools:
+        return tools
+    return [t for t in tools if getattr(t, "name", None) not in _disabled_tools]
 
 
 # Stable list of scheduler tool names. Exposed as a module-level
@@ -1622,11 +1634,10 @@ def get_all_tools(
     # + skill inventory + additive-only skill creation). Self-gate on STATE at call
     # time; present in the full set so the subagent allowlists can pick them up.
     tools.extend(_build_curation_tools())
-    # Fork denylist (config ``tools.disabled``): drop named core tools without
-    # editing this function. Applied last so it covers every branch above.
-    if _disabled_tools:
-        tools = [t for t in tools if getattr(t, "name", None) not in _disabled_tools]
-    return tools
+    # Operator denylist (config ``tools.disabled``): drop named core tools without
+    # editing this function. Applied last so it covers every branch above. (graph.agent
+    # re-applies it over the FULL assembled set — extra/fs/late tools — post-assembly.)
+    return drop_disabled_tools(tools)
 
 
 # ── deferred tools (ADR 0005 #3) ──────────────────────────────────────────────

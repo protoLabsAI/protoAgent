@@ -70,6 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same way.
 
 ### Security
+- **`tools.disabled` now actually removes any tool — including `run_command` — and
+  the filesystem knobs are per-agent Settings toggles.** The operator denylist used
+  to be applied only inside `get_all_tools()`, while the filesystem tools (incl. the
+  dual-use `run_command`), plugin/MCP extras, delegation and late-seam tools were
+  appended after it — so `tools.disabled: [run_command]` silently did nothing. The
+  filter now runs over the **fully assembled** toolset in `create_agent_graph` (and
+  the out-of-graph manual-subagent runner), before the deferred `search_tools`
+  index is built, and the graph build syncs the denylist from its own config (eval
+  sweeps / scripts no longer inherit a stale process global). New **Settings ▸
+  Capabilities ▸ Filesystem** exposes `filesystem.enabled` / `allow_run` (the
+  per-agent `run_command` kill switch — the tool is never built when off) /
+  `run_requires_approval` / `bypass_allowed`, and **Settings ▸ Capabilities ▸
+  Tools** exposes the `tools.disabled` list; all hot-reload on save. `filesystem.
+  projects` now round-trips through `config_to_dict` like the other registries.
+
 - **Fleet: the hub no longer lends a remote member's token over an unauthenticated
   WebSocket, and live events now work through a token-gated hub.** Two proxy-auth
   gaps in remote fleet members (ADR 0042 §I), both only reachable on a non-loopback

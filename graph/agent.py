@@ -20,7 +20,7 @@ from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
-from tools.lg_tools import HITL_TOOL_NAMES, _session_id_from, get_all_tools
+from tools.lg_tools import HITL_TOOL_NAMES, _session_id_from, drop_disabled_tools, get_all_tools
 
 
 def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None, extra_middleware=None):
@@ -376,6 +376,10 @@ async def run_manual_subagent(
     )
     if extra_tools:
         all_tools = all_tools + list(extra_tools)
+    # Operator denylist over the extras (get_all_tools filtered the core set) — the
+    # out-of-graph runner must not see tools the lead graph dropped (parity, see
+    # create_agent_graph).
+    all_tools = drop_disabled_tools(all_tools)
     tool_map = {t.name: t for t in all_tools}
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
 
@@ -812,6 +816,13 @@ def create_agent_graph(
     """
     llm = create_llm(config)
 
+    # Sync the operator denylist from THIS config — the server boot/reload path already
+    # set it, but out-of-server builders (eval sweeps, scripts) pass a config directly
+    # and would otherwise silently keep whatever the process global last held.
+    from tools.lg_tools import set_disabled_tools
+
+    set_disabled_tools(getattr(config, "tools_disabled", []))
+
     all_tools = get_all_tools(
         knowledge_store,
         scheduler=scheduler,
@@ -832,6 +843,11 @@ def create_agent_graph(
 
     if extra_tools:
         all_tools.extend(extra_tools)
+    # Operator denylist (config ``tools.disabled``) over the plugin/MCP extras too —
+    # get_all_tools already filtered the core set, but extra_tools bypassed it. Applied
+    # BEFORE the subagent tool_map snapshot below so a disabled tool can't ride into a
+    # subagent via an allowlist either.
+    all_tools = drop_disabled_tools(all_tools)
 
     if include_subagents:
         all_tools.extend(
@@ -865,6 +881,13 @@ def create_agent_graph(
             continue
         if _produced:
             all_tools.extend(_produced if isinstance(_produced, list) else [_produced])
+
+    # Operator denylist, final pass — covers the tools appended since the extra_tools
+    # filter above (task/task_batch, the filesystem tools incl. ``run_command``, late-seam
+    # tools). Sits before the deferred build so search_tools never advertises a dropped
+    # name. This is what makes ``tools.disabled: [run_command]`` actually work (#1527-era
+    # gap: the filter used to live only inside get_all_tools, which fs tools bypass).
+    all_tools = drop_disabled_tools(all_tools)
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
     # search_tools meta-tool is built over the full set (so it can surface any
