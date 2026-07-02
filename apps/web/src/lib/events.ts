@@ -13,9 +13,12 @@ import { api, apiUrl } from "./api";
 // token, passing `?since=<lastSeq>` so the server still replays missed events from its
 // ring buffer. In open mode the token is "" and the server accepts a tokenless stream.
 
-type Listener = (data: Record<string, unknown>, topic: string) => void;
+type Listener = (data: Record<string, unknown>, topic: string, seq?: number) => void;
 
 type Sub = { pattern: string; fn: Listener };
+
+/** A bus frame as retained client-side: topic + payload + the server-assigned seq. */
+export type BusFrame = { topic: string; data: Record<string, unknown>; seq: number };
 
 const subs = new Set<Sub>();
 const connListeners = new Set<(connected: boolean) => void>();
@@ -24,6 +27,14 @@ let connected = false;
 let connecting = false;
 // Highest bus seq we've dispatched — replayed via `?since=` on reconnect.
 let lastSeq: number | null = null;
+// Client-side mirror of the server's ring buffer (events/bus.py retains 128): every seq'd
+// frame this console has received, so the plugin-view bridge can replay "what did I miss?"
+// to an iframe that re-subscribes with `since` (#1640) WITHOUT a second server fetch. Sized
+// past the server's ring so replay from here is never worse than a server-side reconnect
+// for anything observed while this console was open. Best-effort like the server's: a seq
+// from before this console connected (or past the horizon) yields only what's retained.
+const RING_MAX = 256;
+const ring: BusFrame[] = [];
 let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -59,10 +70,24 @@ function dispatch(raw: string): number | null {
   const topic = frame.topic;
   if (!topic) return null;
   const data = (frame.data as Record<string, unknown>) || {};
-  for (const sub of subs) {
-    if (topicMatches(sub.pattern, topic)) sub.fn(data, topic);
+  const seq = typeof frame.seq === "number" ? frame.seq : undefined;
+  // Retain BEFORE fanning out, so anything a listener saw live is also replayable —
+  // the invariant the bridge's replay-then-live dedupe (#1640) rests on.
+  if (seq !== undefined) {
+    ring.push({ topic, data, seq });
+    if (ring.length > RING_MAX) ring.shift();
   }
-  return typeof frame.seq === "number" ? frame.seq : null;
+  for (const sub of subs) {
+    if (topicMatches(sub.pattern, topic)) sub.fn(data, topic, seq);
+  }
+  return seq ?? null;
+}
+
+/** Retained frames newer than `since`, oldest→newest — the client-side counterpart of
+ *  `GET /api/events?since=` (#1640). Best-effort: only what this console has received
+ *  and still retains. */
+export function replaySince(since: number): BusFrame[] {
+  return ring.filter((f) => f.seq > since);
 }
 
 /** Build the EventSource URL, appending `?token=` (auth) and `?since=` (replay)

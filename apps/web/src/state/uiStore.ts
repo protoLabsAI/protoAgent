@@ -137,6 +137,13 @@ type UIState = {
   // bus activity shows a rail dot until opened. Persisted so the dot survives a refresh.
   pluginDots: Record<string, boolean>;
   setPluginDot: (key: string, on: boolean) => void;
+  // Background event delivery (#1640) — surface keys whose iframe subscribed with
+  // `background: true` over the bridge. App keeps these views MOUNTED (hidden) when
+  // another surface is active, so the bridge keeps relaying bus events to them.
+  // EPHEMERAL — partialized out: the page re-requests on every load, and persisting it
+  // would silently keep iframes alive from boot that the operator never opened.
+  pluginBackground: Record<string, boolean>;
+  setPluginBackground: (key: string, on: boolean) => void;
   // Chat display: show the per-turn token/cost + context-window footer under each answer
   // (#1372). On by default; operators who want a cleaner transcript turn it off (this device).
   showChatUsage: boolean;
@@ -461,6 +468,15 @@ export const useUI = create<UIState>()(
           else delete next[key];
           return { pluginDots: next };
         }),
+      pluginBackground: {},
+      setPluginBackground: (key, on) =>
+        set((s) => {
+          if (Boolean(s.pluginBackground[key]) === on) return s; // no-op → no rerender
+          const next = { ...s.pluginBackground };
+          if (on) next[key] = true;
+          else delete next[key];
+          return { pluginBackground: next };
+        }),
       showChatUsage: true,
       setShowChatUsage: (showChatUsage) => set({ showChatUsage }),
     }),
@@ -470,9 +486,10 @@ export const useUI = create<UIState>()(
       version: 14, // …v12 Settings→utility pill · v13 railOrder.hidden bucket · v14 drop dead settingsScope (domain-first IA, ADR 0048)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // Ephemeral overlay state — dropped from persistence so a refresh never reopens it
-      // (the Global settings overlay, the per-plugin Configure dialog, and the pending
-      // rail-menu Update/Uninstall action).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, ...rest }) => rest,
+      // (the Global settings overlay, the per-plugin Configure dialog, the pending
+      // rail-menu Update/Uninstall action, and the per-session background-delivery set
+      // (#1640) — a view's page re-requests it on every load).
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, ...rest }) => rest,
     },
   ),
 );

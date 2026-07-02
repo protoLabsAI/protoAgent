@@ -82,6 +82,10 @@ async function readBody(req) {
 // Git-installed plugins (ADR 0027) — mutable so install/uninstall round-trip in e2e.
 let INSTALLED_PLUGINS = [];
 
+// Bus seq for /api/events frames (#1640) — module-global so it stays monotonic across
+// SSE reconnects, matching the real bus (events/bus.py assigns one counter per process).
+let eventSeq = 0;
+
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
 // `POST /{id}/update` the entry is cleared so the row flips to "up to date".
@@ -413,8 +417,10 @@ const server = createServer(async (req, res) => {
     });
     res.write(": connected\n\n");
     // Frames are unnamed SSE events carrying the topic in the payload (ADR 0039) — the
-    // client routes by topic with wildcard matching.
-    const frame = (topic, data) => res.write(`data: ${JSON.stringify({ topic, data })}\n\n`);
+    // client routes by topic with wildcard matching. Each frame carries the bus `seq`
+    // (globally monotonic across connections, like events/bus.py) so the plugin-bridge
+    // ring-buffer replay + high-water dedupe (#1640) are testable.
+    const frame = (topic, data) => res.write(`data: ${JSON.stringify({ topic, data, seq: ++eventSeq })}\n\n`);
     // Push periodically so the unread badge (off-surface), live append (on-surface), and
     // the plugin notification dot (a `boardy.*` event) are all deterministically testable.
     const t = setInterval(() => {
@@ -757,18 +763,26 @@ const server = createServer(async (req, res) => {
     return sendJson(res, { ok: true });
   }
   // Plugin-served pages (ADR 0026) — a tiny listener page so the e2e can assert
-  // the console's post-load init handshake (token + theme via postMessage).
+  // the console's post-load init handshake (token + theme via postMessage) and the
+  // event bridge (#1640): the page subscribes with `since: 0` (replay everything the
+  // host retains) and records each delivered frame's seq into `data-events`.
   if (pathname.startsWith("/plugins/") && req.method === "GET") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(
-      `<!doctype html><html><body data-bridge="pending">` +
+      `<!doctype html><html><body data-bridge="pending" data-events="">` +
       `<p id="p">${pathname}</p><script>` +
       `window.addEventListener("message",function(e){var m=e.data||{};` +
-      `if(m.type!=="protoagent:init")return;` +
-      `document.body.setAttribute("data-bridge",m.token?"authed":"anon");});` +
+      `if(m.type==="protoagent:init"){` +
+      `document.body.setAttribute("data-bridge",m.token?"authed":"anon");}` +
+      `else if(m.type==="protoagent:event"&&typeof m.seq==="number"){` +
+      `var s=document.body.getAttribute("data-events")||"";` +
+      `document.body.setAttribute("data-events",s?s+","+m.seq:String(m.seq));}});` +
       // Like the real plugin-kit: announce readiness so the console (re-)sends the
       // bearer + theme, closing the race where load-time init beats our listener.
       `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:ready"},"*");}catch(_){}` +
+      // The recommended #1640 pattern: subscribe with a `since` high-water mark so a
+      // freshly (re)mounted page catches up from the host's ring instead of polling.
+      `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:subscribe",patterns:["boardy.#"],since:0},"*");}catch(_){}` +
       `</script></body></html>`,
     );
     return;

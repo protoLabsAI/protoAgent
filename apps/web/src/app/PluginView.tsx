@@ -3,7 +3,9 @@ import { AlertTriangle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
-import { onTopic, topicMatches } from "../lib/events";
+import { onTopic, replaySince } from "../lib/events";
+import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
+import { useUI } from "../state/uiStore";
 import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
 
@@ -51,6 +53,10 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
   const pluginId = useMemo(() => pluginIdFromPath(view.path), [view.path]);
+  // Background delivery (#1640): a `background: true` subscribe from the page asks App
+  // to keep this view mounted (hidden) when another surface is active. Store-reported;
+  // App owns the mount policy.
+  const setPluginBackground = useUI((s) => s.setPluginBackground);
 
   // Post the bearer + theme to the iframe. Idempotent on the kit side (applyTheme just
   // re-sets CSS vars), so it's safe to call repeatedly — which the handshake relies on.
@@ -118,11 +124,16 @@ export function PluginView({ view }: { view: PluginViewType }) {
     };
   }, [src, view.pluginLoaded, view.pluginError]);
 
-  // Event-bus relay across the sandbox (ADR 0039). The page subscribes via
-  // `protoagent:subscribe {patterns}`; the host forwards matching bus events in
-  // (`protoagent:event`) and accepts `protoagent:publish {topic,data}` back, forcing the
-  // topic into this plugin's namespace before POSTing. Only the *visible* plugin's iframe
-  // is mounted, so this relay is naturally scoped to it.
+  // Event-bus relay across the sandbox (ADR 0039, extended #1640). The page subscribes via
+  // `protoagent:subscribe {patterns, since?, background?}`; the host forwards matching bus
+  // events in (`protoagent:event {topic, data, seq}`) and accepts `protoagent:publish
+  // {topic,data}` back, forcing the topic into this plugin's namespace before POSTing.
+  // `since` triggers an immediate replay of retained ring-buffer events newer than that seq
+  // (the console's client-side mirror — lib/events.ts), so a freshly (re)mounted page can
+  // catch up on what it missed instead of polling; `seq` on every relayed frame is the
+  // page's high-water mark for its next `since`. Normally only the *visible* plugin's
+  // iframe is mounted, so the relay is scoped to it; `background: true` asks App (via the
+  // ui store) to keep this view mounted-but-hidden so delivery continues off-screen.
   useEffect(() => {
     const origin = (() => {
       try {
@@ -131,11 +142,13 @@ export function PluginView({ view }: { view: PluginViewType }) {
         return window.location.origin;
       }
     })();
-    let patterns: string[] = [];
-
-    function matches(topic: string): boolean {
-      return patterns.some((p) => topicMatches(p, topic));
-    }
+    // Pattern matching + since-replay + seq dedupe live in the pure relay
+    // (lib/pluginEventRelay.ts) — this effect only wires postMessage to it.
+    const relay = createPluginEventRelay({
+      post: (frame) =>
+        frameRef.current?.contentWindow?.postMessage({ type: "protoagent:event", ...frame }, origin),
+      replaySince,
+    });
 
     const onWindowMessage = (e: MessageEvent) => {
       // Only trust messages from THIS iframe's window.
@@ -149,8 +162,13 @@ export function PluginView({ view }: { view: PluginViewType }) {
         // listening, so it themes immediately. (Older kits don't ping; handleLoad's
         // retry covers those.)
         if (frameRef.current?.contentWindow) postInit(frameRef.current.contentWindow);
-      } else if (m.type === "protoagent:subscribe" && Array.isArray(m.patterns)) {
-        patterns = m.patterns.filter((p: unknown) => typeof p === "string");
+      } else if (m.type === "protoagent:subscribe") {
+        const req = parseSubscribe(m);
+        if (!req) return;
+        // Hidden-delivery opt-in/out (#1640) — only an explicit boolean toggles it, so
+        // pre-#1640 subscribes (no `background` field) never touch the mount policy.
+        if (req.background !== undefined && view.key) setPluginBackground(view.key, req.background);
+        relay.subscribe(req);
       } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
         // Force the plugin's namespace — a page can only publish under its own id.
         const bare = m.topic.replace(/^.*?\./, "");
@@ -167,13 +185,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
     };
     window.addEventListener("message", onWindowMessage);
 
-    const off = onTopic("#", (data, topic) => {
-      if (!matches(topic)) return;
-      frameRef.current?.contentWindow?.postMessage(
-        { type: "protoagent:event", topic, data },
-        origin,
-      );
-    });
+    const off = onTopic("#", (data, topic, seq) => relay.deliver(topic, data, seq));
 
     return () => {
       window.removeEventListener("message", onWindowMessage);
@@ -182,7 +194,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
       initTimers.current.forEach(clearTimeout);
       initTimers.current = [];
     };
-  }, [src, pluginId]);
+  }, [src, pluginId, view.key, setPluginBackground]);
 
   // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
   // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's
