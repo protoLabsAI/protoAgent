@@ -117,6 +117,39 @@ class HybridKnowledgeStore(KnowledgeStore):
         self._record_embed_success()
         return was_open
 
+    def _probe_once(self) -> bool:
+        """One synchronous embedding-route probe: on failure, open the breaker
+        IMMEDIATELY (not after ``breaker_threshold`` in-turn failures) so no chat
+        turn pays for a dead route. Returns True when the route is healthy."""
+        if self._embed_fn is None:
+            return False
+        try:
+            self._embed_fn("ping")
+            self._record_embed_success()
+            return True
+        except Exception as exc:  # noqa: BLE001 — a probe failure must only open the breaker
+            log.warning(
+                "[knowledge] embedding probe failed — semantic recall paused for %.0fs "
+                "(keyword recall continues): %s",
+                self._breaker_cooldown_s,
+                exc,
+            )
+            self._embed_failures = self._breaker_threshold
+            self._breaker_open_until = time.monotonic() + self._breaker_cooldown_s
+            return False
+
+    def warm_probe(self) -> None:
+        """Fire-and-forget ``_probe_once`` on a daemon thread (#1681). Recall runs
+        BEFORE every model call, so without this the FIRST turns of an embedding
+        outage each ate the full transport timeout before the in-turn breaker could
+        trip — the operator experienced a frozen chat. Probing at construction moves
+        that cost off the user's turn entirely."""
+        if self._embed_fn is None:
+            return
+        import threading
+
+        threading.Thread(target=self._probe_once, daemon=True, name="knowledge-embed-probe").start()
+
     def _embed(self, text: str) -> list[float] | None:
         if self._embed_fn is None or self._breaker_open():
             return None

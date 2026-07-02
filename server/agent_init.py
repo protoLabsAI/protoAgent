@@ -357,7 +357,7 @@ def _build_knowledge_store(config):
             if embed_fn is not None and not force_plain:
                 from knowledge.hybrid_store import HybridKnowledgeStore
 
-                return HybridKnowledgeStore(
+                store = HybridKnowledgeStore(
                     db_path=db_path, scoped=scoped, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn,
                     vector_k=config.knowledge_vector_k, rrf_k=config.knowledge_rrf_k,
                     min_score=config.knowledge_min_score,
@@ -368,6 +368,10 @@ def _build_knowledge_store(config):
                     chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
                     chunk_min_chars=config.knowledge_chunk_min_chars, context_fn=context_fn,
                 )
+                # Off-thread route probe (#1681): a dead embedding route opens the
+                # breaker BEFORE the first chat turn instead of freezing it.
+                store.warm_probe()
+                return store
             return KnowledgeStore(
                 db_path=db_path, scoped=scoped,
                 preview_chars=config.knowledge_recall_preview_chars,

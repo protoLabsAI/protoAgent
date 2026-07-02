@@ -9,9 +9,11 @@ content see [Ingest documents & media](/guides/ingestion).
 
 ## Which store you get
 
-- **Default:** `HybridKnowledgeStore` (FTS5 + vectors) when `knowledge.embeddings`
-  is on (the default) and `embed_model` resolves on your gateway.
-- **Keyword-only:** set `embeddings: false` → FTS5 only (no embedding calls).
+- **Default:** keyword-only FTS5 — `knowledge.embeddings` ships **off** (#1681:
+  out of the box the app must not depend on an optional gateway route; a gateway
+  without a working embedding model turned every turn's recall into a stall).
+- **Hybrid:** set `embeddings: true` once your gateway serves `embed_model` →
+  `HybridKnowledgeStore` (FTS5 + vectors, RRF-fused).
 - **Pluggable:** a plugin can register an alternate backend (`knowledge.backend`) or
   embedder (`knowledge.embedder`) — see [ADR 0031](/adr/0031-pluggable-knowledge-backend).
 

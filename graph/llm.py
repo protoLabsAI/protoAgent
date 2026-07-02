@@ -169,6 +169,15 @@ def create_llm(
     return _ReasoningChatOpenAI(**kwargs)
 
 
+# Embedding calls run INSIDE the turn (recall precedes every model call), so they get
+# a short dedicated timeout — never the chat request_timeout, and never the OpenAI
+# SDK defaults (600s + 2 retries), which let one hung gateway route freeze every chat
+# turn for minutes while the knowledge breaker couldn't trip (#1681: a Cloudflare-524
+# embedding outage read as "chat is broken"). No client retries: the gateway owns
+# retries/fallbacks; app-side retries only multiply the hang.
+_EMBED_TIMEOUT_S = 8.0
+
+
 def _build_embeddings(config: LangGraphConfig) -> "OpenAIEmbeddings | None":
     """The shared OpenAIEmbeddings client for ``knowledge.embed_model`` against
     the gateway (ADR 0021), or None when no embed model is configured."""
@@ -181,6 +190,8 @@ def _build_embeddings(config: LangGraphConfig) -> "OpenAIEmbeddings | None":
         api_key=api_key,
         model=model,
         default_headers={"User-Agent": _GATEWAY_UA},
+        request_timeout=_EMBED_TIMEOUT_S,
+        max_retries=0,
         # Send the raw string, not client-side-tokenized int arrays. Langchain's
         # default tokenizes with tiktoken and posts `input` as arrays of token
         # ids, which a LiteLLM/vLLM-style gateway rejects with 422 ("input should

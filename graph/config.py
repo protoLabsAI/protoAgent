@@ -418,9 +418,12 @@ class LangGraphConfig:
     image_describe_model: str = ""
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
-    # with RRF). On by default — semantic recall finds paraphrases keyword search
-    # misses; the circuit breaker falls back to FTS5 on an embedding outage.
-    knowledge_embeddings: bool = True
+    # with RRF). OFF by default (#1681): out of the box the app must not depend
+    # on an optional gateway route — a gateway without a working embedding model
+    # turned recall (which runs pre-model on every turn) into a per-turn stall.
+    # Opt in when your gateway serves `embed_model`; keyword recall works
+    # everywhere, and the circuit breaker still guards runtime outages when on.
+    knowledge_embeddings: bool = False
     # How many recalled chunks are injected per turn. Bumped 5 → 10 (RAG bake-off:
     # more candidates in-context lifted answer quality at sub-million-chunk scale).
     knowledge_top_k: int = 10

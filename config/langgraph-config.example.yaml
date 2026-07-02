@@ -79,11 +79,10 @@ knowledge:
   # shared/layered fleet must share ONE embed_model (the commons is stamped + enforced).
   # scope: scoped
   # Semantic recall: hybrid FTS5 + vector search (RRF-fused) via embed_model.
-  # Off by default (keyword-only) — turn on once your gateway serves an
-  # embedding model. Degrades to keyword search on embedding outage.
-  # Hybrid semantic + keyword recall (RRF). On by default; falls back to
-  # keyword-only via the circuit breaker if the gateway can't embed.
-  embeddings: true
+  # OFF by default (#1681) — keyword recall works against any gateway; turn this
+  # on once yours serves the embedding model below (check GET /v1/models). When
+  # on, a route outage degrades to keyword-only via the circuit breaker.
+  embeddings: false
   # The embedding model your gateway serves (NOT the chat model). Default is the
   # protoLabs gateway's; forks on another gateway set theirs (check GET /v1/models).
   embed_model: qwen3-embedding
