@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Desktop no longer launches into a silently dead window when port 7870 is taken
+  or the server dies** (#1668). The launcher pinned the sidecar to a hardcoded 7870
+  with no fallback and no failure surface: an orphaned sidecar, a headless dev
+  server, or any app holding the port meant the new sidecar died at bind while the
+  console pointed at a dead/foreign server — blank window, zero diagnostics (the
+  free-port picker was dead code). The sidecar now prefers 7870 but falls back to a
+  free port, handing the choice to the page via `?__apiPort=` on the webview URL —
+  the channel the web client already checks first, precisely because the injected
+  global was unreliable across Tauri v2 webview contexts. And every silent failure
+  now talks: sidecar spawn errors and unexpected server exits raise a native dialog
+  with the exit code and the log directory (clean shutdown kills excluded).
 - **Release-tag-pinned plugins now see updates.** The update check ls-remoted the
   SAME tag a plugin was installed at — tags are immutable, so a tag-pinned plugin
   (every pm-stack member) could never report "behind" and the console never offered
