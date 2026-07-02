@@ -22,6 +22,11 @@ const FULL = `# ${TITLE}\n\n${FULL_MARKER}\n\nThe untruncated report body.`;
 const SHORT_JOB_ID = "bg-abcdefabcd99";
 const SHORT_TITLE = "Quick store check";
 const SHORT_PREVIEW = "All 4 stores match the drive.\n\nNothing to fix.";
+// A ONE-LINE success skips the card entirely (#1651): the preview IS the whole result,
+// so it renders as a compact inline note — no card wrapper, no open-report CTA.
+const NOTE_JOB_ID = "bg-oneliner77";
+const NOTE_TITLE = "ingest youtube video";
+const NOTE_RESULT = "Ingested 'YouTube: uD4-uy0GmHE' → 15 chunk(s)";
 
 test("report card: clamped fading excerpt, Open CTA → docviewer, fetched by id", async ({ page }) => {
   // An open chat session whose id matches the job's origin_session — BackgroundWatch
@@ -63,6 +68,16 @@ test("report card: clamped fading excerpt, Open CTA → docviewer, fetched by id
         status: "completed",
         description: SHORT_TITLE,
         result: SHORT_PREVIEW,
+      },
+    },
+    {
+      topic: "background.completed",
+      data: {
+        job_id: NOTE_JOB_ID,
+        origin_session: SESSION,
+        status: "completed",
+        description: NOTE_TITLE,
+        result: NOTE_RESULT,
       },
     },
   ];
@@ -130,6 +145,14 @@ test("report card: clamped fading excerpt, Open CTA → docviewer, fetched by id
       return s.maskImage === "none" ? "" : s.maskImage || s.webkitMaskImage || "";
     }),
   ).not.toContain("linear-gradient");
+
+  // A ONE-LINE success renders as a compact inline note (#1651): the desc + result
+  // in a `.chat-note`, success-tinted, with NO report card and NO open-report CTA.
+  const note = page.locator(".chat-note").filter({ hasText: "15 chunk(s)" });
+  await expect(note).toBeVisible();
+  await expect(note).toContainText(NOTE_TITLE);
+  await expect(note).toHaveClass(/chat-note--success/);
+  await expect(page.locator(".chat-report-card").filter({ hasText: NOTE_TITLE })).toHaveCount(0);
 
   // The CTA opens the document viewer with the FULL report — which only the by-id
   // route serves, so its presence + the recorded hit prove the fetch path.

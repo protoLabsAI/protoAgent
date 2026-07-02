@@ -2,6 +2,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
 import { chatStore } from "../chat/chat-store";
+import { isShortResult } from "./background-jobs";
 import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
@@ -40,8 +41,14 @@ function markNotified(key: string) {
 
 /** Append a display-only system message to a session IF that session is still open in
  *  this window. Returns false when the chat is gone (the model still learns via drain).
- *  `report` (when set) lets the card open the FULL report in the document viewer. */
-function appendSystem(sessionId: string, content: string, report?: ChatMessage["report"]): boolean {
+ *  `report` (when set) renders the message as the report CARD with an open-full-report
+ *  CTA; without it the message renders as a compact inline note (`noteTone` tints it). */
+function appendSystem(
+  sessionId: string,
+  content: string,
+  report?: ChatMessage["report"],
+  noteTone?: ChatMessage["noteTone"],
+): boolean {
   const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (!session) return false;
   const msg: ChatMessage = {
@@ -51,6 +58,7 @@ function appendSystem(sessionId: string, content: string, report?: ChatMessage["
     createdAt: Date.now(),
     status: "done",
     ...(report ? { report } : {}),
+    ...(noteTone ? { noteTone } : {}),
   };
   chatStore.updateMessages(sessionId, [...session.messages, msg]);
   return true;
@@ -87,11 +95,16 @@ export function BackgroundWatch() {
       // ADR 0070 D4) — a finished job injects just the result preview as the card's
       // excerpt so the lede isn't duplicated. Failures keep the explicit failed-lede
       // (the card header alone doesn't convey the outcome); no result → lede only.
-      const injected = appendSystem(
-        session,
-        failed && result ? `${header}\n\n${result}` : result || header,
-        jobId ? { jobId, title: desc } : undefined,
-      );
+      // A short one-line success skips the card entirely (#1651): the preview IS the
+      // full result (untruncated), so the open-report CTA adds nothing but bulk —
+      // render it as a compact inline note instead.
+      const injected = isShortResult(result, failed)
+        ? appendSystem(session, `${desc} — ${result.trim()}`, undefined, "success")
+        : appendSystem(
+            session,
+            failed && result ? `${header}\n\n${result}` : result || header,
+            jobId ? { jobId, title: desc } : undefined,
+          );
       toast({
         tone: failed ? "error" : "success",
         title: failed ? "Background task failed" : "Background task finished",

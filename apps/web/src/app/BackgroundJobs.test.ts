@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyProgress, byRecency, fmtElapsed } from "./background-jobs";
+import { applyProgress, byRecency, fmtElapsed, isShortResult } from "./background-jobs";
 import type { BackgroundJobDTO } from "../lib/types";
 
 function job(p: Partial<BackgroundJobDTO>): BackgroundJobDTO {
@@ -68,5 +68,20 @@ describe("applyProgress", () => {
     // a later frame without output for the same tool keeps the captured value
     p = applyProgress(p, { phase: "tool_end", tool: "web_search", tool_call_id: "tc1" });
     expect(p[0].output).toBe("found 3 results");
+  });
+});
+
+describe("isShortResult", () => {
+  it("one-line untruncated success renders inline", () => {
+    expect(isShortResult("Ingested 'notes.md' → 15 chunk(s)", false)).toBe(true);
+  });
+  it("failures always keep the card", () => {
+    expect(isShortResult("boom", true)).toBe(false);
+  });
+  it("multi-line, long, truncated, and empty results keep the card", () => {
+    expect(isShortResult("line one\nline two", false)).toBe(false);
+    expect(isShortResult("x".repeat(121), false)).toBe(false);
+    expect(isShortResult("short but cut\n\n…_[truncated]_", false)).toBe(false);
+    expect(isShortResult("   ", false)).toBe(false);
   });
 });
