@@ -167,11 +167,28 @@ jobs:
       # scripts/post-release-notes.mjs.
 
       - name: Generate + post release notes
+        id: relnotes
         continue-on-error: true
         uses: protoLabsAI/release-tools@b7c3531dd67accb57ca09242f47d8c0eb1ace8eb # v1.1.0
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.version.outputs.prev_tag }}
+          # Persist the SAME themed notes it posts to Discord (one generation writes the file
+          # AND posts the embed), so the in-app updater can render the identical text — one
+          # changelog, one voice (#1516). Uploaded as a release asset below; the (later,
+          # manual) desktop build prefers it for latest.json.
+          out-file: release-notes.md
         env:
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+
+      # Attach the LLM notes to the release so desktop-build.yml's latest.json fan-in can read
+      # them (it runs on a later manual dispatch, so the asset must live on the release, not a
+      # step output). Best-effort + guarded: a fork with no GATEWAY_API_KEY writes no file, the
+      # upload is skipped, and the updater falls back to the curated CHANGELOG.md section.
+      - name: Persist LLM release notes as an asset
+        if: hashFiles('release-notes.md') != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.version.outputs.tag }}" release-notes.md --clobber
