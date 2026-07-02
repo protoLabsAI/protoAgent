@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.84.0",
+    "date": "2026-07-02",
+    "changes": [
+      "The Windows desktop sidecar no longer self-kills ~2s after boot",
+      "Desktop's system-wide hotkeys are now rebindable, visible, and self-healing"
+    ]
+  },
+  {
     "version": "v0.83.0",
     "date": "2026-07-02",
     "changes": [
