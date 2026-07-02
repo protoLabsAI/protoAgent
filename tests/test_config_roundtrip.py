@@ -115,7 +115,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_db_path": "/sandbox/knowledge/agent.db",
     "knowledge_scope": "",
     "knowledge_embedder": "",
-    "knowledge_embeddings": True,
+    "knowledge_embeddings": False,
     "knowledge_facts": True,
     "knowledge_inject_namespaces": [],
     "knowledge_inject_min_trust": 1,

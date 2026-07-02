@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Semantic recall (embeddings) now ships OFF by default** (#1681). Out of the box
+  the app no longer depends on an optional gateway route: a gateway without a
+  working embedding model turned every turn's pre-model recall into a stall
+  ("chat just spins"). Keyword (FTS5) recall works against any gateway; opt back
+  in with one toggle — Settings ▸ Knowledge ▸ "Semantic recall (embeddings)" (or
+  `knowledge.embeddings: true`) once your gateway serves the embed model.
+  Existing configs that set the key explicitly are unaffected.
+
+### Fixed
+- **A hung gateway embedding route can no longer freeze chat** (#1681). The
+  embeddings client carried the OpenAI SDK defaults — 600s timeout, 2 retries —
+  so one Cloudflare-524-style hang blocked a turn for minutes while the knowledge
+  circuit breaker (which only counts *returned* failures) never got to trip. The
+  client now uses a dedicated 8s timeout with no app-side retries (the gateway
+  owns fallbacks), and each hybrid store fires an off-thread route probe at
+  construction that opens the breaker immediately on failure — so the first chat
+  turn of an outage pays nothing and recall degrades straight to keyword-only.
+
 ## [0.84.0] - 2026-07-02
 
 ### Fixed
