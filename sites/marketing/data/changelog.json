@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.82.0",
+    "date": "2026-07-02",
+    "changes": [
+      "The console now says what each subagent does",
+      "Plugin metric timeseries — sdk.record_metric / metric_history / metric_last",
+      "Typed event contracts — emits: entries can declare payload schemas",
+      "Knowledge lifecycle — sdk.knowledge_purge + epoch scoping",
+      "Plugin-view event bridge: replay-on-subscribe + hidden delivery",
+      "graph.sdk.react_on — reactive-rule sugar",
+      "Plugins own their recurring cadence — and it dies with them",
+      "Plugins can now enumerate and remove watches",
+      "graph.sdk.spawn_background + graph.sdk.background_status",
+      "Parallel approval-gated tool calls no longer crash the resume.",
+      "Re-installing a plugin from its own origin converges instead of erroring.",
+      "Testkit FakeRegistry now mirrors the full PluginRegistry surface"
+    ]
+  },
+  {
     "version": "v0.81.0",
     "date": "2026-07-02",
     "changes": [
