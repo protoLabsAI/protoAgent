@@ -6,7 +6,7 @@ import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
-import { EditableText, Switch } from "@protolabsai/ui/forms";
+import { EditableText, Input, SecretInput, Switch } from "@protolabsai/ui/forms";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
@@ -15,6 +15,13 @@ import { api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import type { DiscoveredAgent, FleetAgent } from "../lib/types";
+
+/** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
+ * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
+ * authoritative validation (charset, SSRF egress, dedupe); this is just the button gate. */
+export function canAddRemote(name: string, url: string): boolean {
+  return name.trim().length > 0 && /^https?:\/\/.+/.test(url.trim());
+}
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
@@ -128,17 +135,51 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // same enable-and-retry path as fleet-row adds.
   const addRemote = (d: DiscoveredAgent) => addDelegate.mutate({ name: d.name, url: `${d.url}/a2a` });
 
+  // A registered member's up-front feedback: the server probes it at register time and
+  // returns `reachable`, so a peer that's offline (or behind a wrong/missing token — the
+  // probe hits its unauthenticated agent-card) is added with an honest "not reachable yet"
+  // warning instead of silently appearing as a dead row.
+  const addedToast = (name: string, reachable?: boolean) =>
+    reachable === false
+      ? toast({
+          tone: "warning",
+          title: `Added ${name}`,
+          message: "Registered, but it isn't reachable yet — it'll connect when it comes online.",
+        })
+      : toast({ tone: "success", title: `Added ${name}`, message: `${name} joined the fleet.` });
+
   // …or join the fleet outright (ADR 0042 §I): the remote becomes a SWITCHABLE member —
-  // a slug window, console + A2A reverse-proxied through this hub. Discovered names can
-  // collide with existing agents (every template fork is "protoagent") — suffix on 400.
+  // a slug window, console + A2A reverse-proxied through this hub.
   const addMember = useMutation({
     mutationFn: (d: DiscoveredAgent) => api.addRemoteAgent({ name: d.name, url: d.url }),
+    onSuccess: (res, d) => addedToast(d.name, res.reachable),
     onError: (e) => toast({ tone: "error", title: "Couldn't add to fleet", message: errMsg(e) }),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
       void scan(); // the new member drops out of the discover list
     },
   });
+
+  // Manual add — the ONLY way to register a token-gated remote (discovery can't carry a
+  // credential) or a peer discovery didn't surface (a different subnet, mDNS off). A blank
+  // name defaults to the URL's host:port server-side isn't a thing, so require a name.
+  const [showAdd, setShowAdd] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addUrl, setAddUrl] = useState("");
+  const [addToken, setAddToken] = useState("");
+  const addManual = useMutation({
+    mutationFn: () => api.addRemoteAgent({ name: addName.trim(), url: addUrl.trim(), token: addToken.trim() }),
+    onSuccess: (res) => {
+      addedToast(addName.trim(), res.reachable);
+      setShowAdd(false);
+      setAddName("");
+      setAddUrl("");
+      setAddToken("");
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't add to fleet", message: errMsg(e) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
+  });
+  const canAdd = canAddRemote(addName, addUrl);
   const removeMember = useMutation({
     mutationFn: (a: FleetAgent) => api.removeRemoteAgent(a.id),
     onError: (e) => toast({ tone: "error", title: "Couldn't remove member", message: errMsg(e) }),
@@ -212,9 +253,20 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
               const isActive = (a.host ? "host" : a.id) === slug; // slug = stable id, not name
               return (
                 <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
-                  <span role="img" title={a.running ? "running" : "stopped"} aria-label={a.running ? "running" : "stopped"}>
-                    <StatusDot status={a.running ? "success" : "neutral"} pulse={a.running} />
-                  </span>
+                  {/* A remote's `running` IS its reachability probe (it has no local process),
+                      so an offline remote is "unreachable", not "stopped" — and its dot reads
+                      warning, not neutral, since it's a fault to act on rather than an idle agent. */}
+                  {(() => {
+                    const label = a.running ? "running" : a.remote ? "unreachable" : "stopped";
+                    return (
+                      <span role="img" title={label} aria-label={label}>
+                        <StatusDot
+                          status={a.running ? "success" : a.remote ? "warning" : "neutral"}
+                          pulse={a.running}
+                        />
+                      </span>
+                    );
+                  })()}
                   <div className="fleet-row-main">
                     <span className="fleet-name">
                       {renaming === a.id ? (
@@ -318,9 +370,59 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         {/* Network discovery — scan the box + LAN for OTHER protoAgents and add one as a remote
             delegate of the focused agent (ADR 0042 §I). */}
         <div className="fleet-discover">
-          <Button variant="ghost" onClick={scan} disabled={scanning}>
-            <Radar size={14} /> {scanning ? "Scanning…" : "Discover agents on the network"}
-          </Button>
+          <div className="fleet-discover-actions">
+            <Button variant="ghost" onClick={scan} disabled={scanning}>
+              <Radar size={14} /> {scanning ? "Scanning…" : "Discover agents on the network"}
+            </Button>
+            {/* Manual add — the only path for a token-gated remote (discovery carries no
+                credential) or one on a subnet the scan can't reach. */}
+            <Button variant="ghost" onClick={() => setShowAdd((v) => !v)} aria-expanded={showAdd}>
+              <Link2 size={14} /> Add a remote by URL
+            </Button>
+          </div>
+          {showAdd ? (
+            <form
+              className="fleet-add-remote"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (canAdd && !addManual.isPending) addManual.mutate();
+              }}
+            >
+              <label className="field">
+                <span>Name</span>
+                <Input
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  placeholder="e.g. ava (letters, digits, - and _)"
+                  autoFocus
+                />
+              </label>
+              <label className="field">
+                <span>URL</span>
+                <Input
+                  value={addUrl}
+                  onChange={(e) => setAddUrl(e.target.value)}
+                  placeholder="http://100.x.y.z:7870"
+                />
+              </label>
+              <label className="field">
+                <span>Token (optional)</span>
+                <SecretInput
+                  value={addToken}
+                  onChange={(e) => setAddToken(e.target.value)}
+                  placeholder="the remote's operator token, if it's gated"
+                />
+              </label>
+              <div className="fleet-add-remote-actions">
+                <Button type="button" variant="ghost" onClick={() => setShowAdd(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="primary" disabled={!canAdd || addManual.isPending}>
+                  {addManual.isPending ? "Adding…" : "Add to fleet"}
+                </Button>
+              </div>
+            </form>
+          ) : null}
           {discovered ? (
             discovered.length === 0 ? (
               <Empty>No other protoAgents found on the network.</Empty>
