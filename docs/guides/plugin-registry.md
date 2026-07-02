@@ -162,6 +162,13 @@ requires_pip: ["httpx>=0.27"]
 min_protoagent_version: "0.20.0"
 ```
 
+`min_protoagent_version` is enforced at load: the plugin is refused when it needs a
+newer host. The host version it's compared against is the same shared resolver the
+A2A agent card advertises (`infra.paths.package_version()` — the repo
+`pyproject.toml` on a source checkout, installed package metadata on wheel/frozen
+installs), so the gate and the card always agree — a dev checkout's stale
+editable-install metadata can no longer refuse a valid plugin (#1644).
+
 ## Get listed in the directory
 
 Anyone can install your plugin from its git URL once it's a public repo. To make it

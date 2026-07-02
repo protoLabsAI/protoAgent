@@ -144,17 +144,32 @@ leaving a bare 404 with no surfaced reason.
 > `build_panel_router` builds `/panel` cleanly, its WASM/WAD assets are intact — yet
 > `/plugins/doom/panel` 404s on the live host. A restart mounts it.
 
-## Cross-cutting B — Version truth is broken off-source
+## Cross-cutting B — Version truth off-source *(fixed: #894, #1644)*
 
-`paths.package_version()` (`paths.py:55-89`) tries `importlib.metadata.version` then
-falls back to reading `pyproject.toml` next to the module / at `_MEIPASS`, else
-`"0.0.0"`. In the **frozen desktop binary** `pyproject.toml` is *not* bundled
-(`apps/desktop/sidecar/build_sidecar.py` `BUNDLED_DATA`) and there's no dist-info →
-**`0.0.0`**. In **Docker** the package is never pip-installed (only `PYTHONPATH`), and
-the `VERSION` build-arg is dead (the Dockerfile never declares `ARG VERSION`). So on
-those artifacts the A2A card, the fleet handshake, the runtime-status version, and
-the plugin compat gate **all read `0.0.0`** — no version-based detection can fire,
-and the `min_protoagent_version` gate wrongly refuses every plugin that sets one.
+`infra.paths.package_version()` is the **one shared resolver** — the A2A card
+(`server/a2a.py`), the plugin `min_protoagent_version` gate
+(`graph/plugins/loader.py`), the runtime status, and the fleet version handshake
+all delegate to it, so those surfaces can never disagree. It resolves
+**pyproject-first, anchored to the package's own location** (never the cwd, never
+an upward search — so a wheel install under someone else's project can't pick up
+*their* `pyproject.toml`): the repo-root `pyproject.toml` on a source checkout /
+`COPY .` image, the `_MEIPASS`-bundled copy in the frozen desktop binary, then
+installed dist-info metadata (wheel installs), else `"0.0.0"`.
+
+Two failure modes shaped that order, both closed:
+
+- **Frozen/Docker read `0.0.0`.** The frozen binary didn't bundle
+  `pyproject.toml` and Docker never pip-installs the package (only `PYTHONPATH`),
+  so every off-source artifact reported `0.0.0` — no version-based detection could
+  fire, and the `min_protoagent_version` gate wrongly refused every plugin that
+  sets one. Fixed by bundling `pyproject.toml` at `_MEIPASS`
+  (`apps/desktop/sidecar/build_sidecar.py` `BUNDLED_DATA`, #894).
+- **Stale editable-install dist-info beat the pyproject.** Editable installs don't
+  rewrite dist-info on a version bump (only the next `uv sync` does), so with the
+  old metadata-first order a dev checkout advertised the stale version and the
+  gate refused valid plugins (`requires protoAgent >= 0.78.0 but this host is
+  0.72.0` — on a 0.80.0 checkout). Fixed by preferring the anchored pyproject
+  (#1644).
 
 ## Desktop ("Tori") projection — every axis gets worse
 

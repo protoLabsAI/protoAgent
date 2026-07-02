@@ -289,11 +289,12 @@ def structured_skill_schema(skill_id: str) -> dict | None:
 
 
 def _package_version() -> str:
-    """Single-source the agent-card version from the package metadata.
+    """Single-source the agent-card version.
 
     Delegates to ``paths.package_version()`` (one source of truth — the
     pyproject ``[project].version`` the release pipeline bumps) so the card,
-    the runtime status, and the fleet version handshake can never disagree.
+    the plugin ``min_protoagent_version`` gate (``graph/plugins/loader.py``),
+    the runtime status, and the fleet version handshake can never disagree (#1644).
     Kept as a name here for its existing importers (``server.__init__`` re-exports it).
     """
     from infra.paths import package_version
