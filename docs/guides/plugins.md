@@ -44,7 +44,9 @@ requires_env: []          # env vars the plugin needs (missing → skipped + log
 capabilities:             # declarative, for transparency (not yet enforced)
   network: []
   filesystem: none
-emits: []                 # event-bus topics this plugin broadcasts (ADR 0039) — its public API
+emits: []                 # event-bus topics this plugin broadcasts (ADR 0039) — its public API.
+                          # An entry is a bare topic name, or {topic, summary?, schema?} to
+                          # declare the payload shape — see "Typed event contracts" below
 subscribes: []            # topics it listens for (declarative — for discoverability)
 ```
 
@@ -311,6 +313,9 @@ def register(registry):
   publish under your own namespace. **Subscribing is read-only** and may match any topic.
 - **Declare your contract** in the manifest (`emits:` / `subscribes:`) — your events are your public
   API, discoverable in `/api/runtime/status`.
+- **Type your contract** (optional) — an `emits:` entry may declare the payload shape so a
+  cross-plugin consumer doesn't reverse-engineer your source. See
+  [Typed event contracts](#typed-event-contracts) below.
 - A console **view** (sandboxed iframe) talks to the bus over the bridge — see
   [Building a plugin view](/guides/building-react-plugin-views). Any event under `<plugin_id>.*` lights your plugin's
   rail icon (a **notification dot**) until the user opens that surface.
@@ -323,6 +328,38 @@ def register(registry):
 > Cross-process note: under the **ACP runtime**, a tool runs in the operator-MCP process where the
 > bus isn't wired, so `emit` from a tool won't reach the server bus there. Under the default runtime
 > (tool runs in-server) it does.
+
+### Typed event contracts
+
+A names-only `emits:` list tells a consumer *that* a topic exists, not what the payload looks
+like — the consumer reverse-engineers the emitter and silently breaks when a field changes. An
+`emits:` entry may therefore declare its **payload shape** (#1636): a mapping with `topic` plus an
+optional `summary` and/or `schema` (JSON Schema — inline, or a `$ref` to a file inside the plugin
+repo, resolved relative to the plugin directory and read at load):
+
+```yaml
+emits:
+  - spacetraders.window_closed              # bare topic name — still fine
+  - topic: spacetraders.trade_executed
+    summary: A hauler completed a buy→sell leg
+    schema:
+      type: object
+      required: [route, profit]
+      properties: { route: {type: string}, profit: {type: integer}, ship: {type: string} }
+  - topic: spacetraders.ship_purchased
+    schema: { $ref: events/ship_purchased.json }   # file in the plugin repo
+```
+
+- **Purely declarative** (like `capabilities`): the declared shapes ride `/api/runtime/status` as a
+  per-plugin `emits_schemas` map (`topic → {summary?, schema?}`), so consumers and the console can
+  discover payload shapes. Nothing validates payloads at publish time. (A dev-channel *warn on
+  mismatch* validator is a possible later step, gated by a developer flag — deliberately not built
+  yet.)
+- **Backward compatible**: bare-string entries keep working unchanged, and `emits` stays the
+  names-only topic list everywhere it's already consumed.
+- **Never load-bearing**: a missing/invalid `$ref`, a ref that escapes the plugin directory, or a
+  malformed `schema` logs a warning and degrades that entry to names-only — it never fails the
+  plugin load.
 
 ## Performance — keep the burden in your plugin
 

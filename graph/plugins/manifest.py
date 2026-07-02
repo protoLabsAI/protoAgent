@@ -80,6 +80,14 @@ class PluginManifest:
     # subscribing to any topic is allowed.
     emits: list[str] = field(default_factory=list)
     subscribes: list[str] = field(default_factory=list)
+    # Typed event contracts (#1636) — topic → {"summary": str, "schema": dict} for
+    # `emits:` entries that declared more than a bare name. `emits` above stays the
+    # names-only topic list (every entry, bare or typed), so existing consumers are
+    # untouched; this map carries the optional payload contract a cross-plugin
+    # consumer can discover instead of reverse-engineering the emitter. Purely
+    # declarative (like `capabilities`) — payloads are NOT validated at publish
+    # time. See `_parse_emits`.
+    emits_schemas: dict[str, dict] = field(default_factory=dict)
     # Distribution (ADR 0027) — for plugins installed from a git URL.
     #   requires_pip: declared pip deps. NOT auto-installed (install ≠ code exec);
     #     the operator installs them explicitly. Missing → clear error on enable.
@@ -192,6 +200,114 @@ def _view_public_paths(views: list[dict]) -> list[str]:
     return out
 
 
+def _load_schema_ref(ref: str, plugin_dir: Path, plugin_id: str, topic: str) -> dict | None:
+    """Read a schema ``$ref`` file from inside the plugin directory → mapping.
+
+    The ref is resolved relative to the plugin dir and must stay inside it (a
+    ``../…`` escape is refused — the manifest must not read arbitrary host files).
+    The file is parsed with ``yaml.safe_load`` (JSON is a YAML subset, so plain
+    ``.json`` schema files work). Every failure — escape, missing file, parse
+    error, non-mapping content — warns and returns ``None`` so the entry keeps its
+    names-only behavior; a bad ref never fails the plugin load.
+    """
+    root = plugin_dir.resolve()
+    try:
+        target = (root / ref).resolve()
+        if not target.is_relative_to(root):
+            log.warning(
+                "[plugins] %s: emits %r schema $ref %r escapes the plugin directory — ignored",
+                plugin_id, topic, ref,
+            )
+            return None
+        loaded = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError, ValueError) as exc:
+        log.warning(
+            "[plugins] %s: emits %r schema $ref %r is unreadable (%s) — keeping the "
+            "topic name only",
+            plugin_id, topic, ref, exc,
+        )
+        return None
+    if not isinstance(loaded, dict):
+        log.warning(
+            "[plugins] %s: emits %r schema $ref %r is not a mapping — keeping the topic name only",
+            plugin_id, topic, ref,
+        )
+        return None
+    return loaded
+
+
+def _resolve_emit_schema(schema, plugin_dir: Path, plugin_id: str, topic: str) -> dict | None:
+    """One entry's ``schema:`` value → JSON-schema mapping (or ``None``, warned).
+
+    Accepted forms: an inline mapping (kept verbatim), a mapping whose ONLY key is
+    ``$ref`` pointing to a file inside the plugin dir, or a bare string as
+    shorthand for that ``$ref``.
+    """
+    if isinstance(schema, str):
+        return _load_schema_ref(schema.strip(), plugin_dir, plugin_id, topic)
+    if isinstance(schema, dict):
+        ref = schema.get("$ref")
+        if set(schema.keys()) == {"$ref"} and isinstance(ref, str):
+            return _load_schema_ref(ref.strip(), plugin_dir, plugin_id, topic)
+        return schema
+    log.warning(
+        "[plugins] %s: emits %r schema must be a mapping or a $ref path, got %s — "
+        "keeping the topic name only",
+        plugin_id, topic, type(schema).__name__,
+    )
+    return None
+
+
+def _parse_emits(entries, plugin_dir: Path, plugin_id: str) -> tuple[list[str], dict[str, dict]]:
+    """Parse ``emits:`` → ``(topic names, topic → declared contract)`` (#1636).
+
+    An entry is either a bare topic string (today's behavior, unchanged) or a
+    mapping with ``topic`` plus an optional ``summary`` and/or ``schema``:
+
+    .. code-block:: yaml
+
+        emits:
+          - spacetraders.window_closed          # bare name — still fine
+          - topic: spacetraders.trade_executed
+            summary: A hauler completed a buy→sell leg
+            schema: {type: object, required: [route, profit], properties: {...}}
+          - topic: spacetraders.ship_purchased
+            schema: {$ref: events/ship_purchased.json}   # file inside the plugin repo
+
+    Both forms contribute the topic NAME to the first return (what ``emits``
+    consumers already read); entries that declare a summary/schema also land in
+    the contract map. Purely declarative — nothing validates payloads at publish
+    time. Malformed entries warn and degrade to names-only (or are skipped when
+    there's no usable topic); they never fail the manifest load.
+    """
+    if not isinstance(entries, (list, tuple)):
+        return [], {}
+    names: list[str] = []
+    schemas: dict[str, dict] = {}
+    for entry in entries:
+        if isinstance(entry, dict):
+            topic = str(entry.get("topic", "") or "").strip()
+            if not topic:
+                log.warning(
+                    "[plugins] %s: emits entry %r has no 'topic' — skipped", plugin_id, entry
+                )
+                continue
+            names.append(topic)
+            contract: dict = {}
+            summary = entry.get("summary")
+            if summary:
+                contract["summary"] = str(summary)
+            if "schema" in entry:
+                schema = _resolve_emit_schema(entry["schema"], plugin_dir, plugin_id, topic)
+                if schema is not None:
+                    contract["schema"] = schema
+            if contract:
+                schemas[topic] = contract
+        else:
+            names.append(str(entry))
+    return names, schemas
+
+
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     """Parse ``<plugin_dir>/protoagent.plugin.yaml`` → ``PluginManifest``.
 
@@ -244,7 +360,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
             ]
         )
     )
-    emits = data.get("emits")
+    emits, emits_schemas = _parse_emits(data.get("emits"), plugin_dir, pid)
     subscribes = data.get("subscribes")
     requires_pip = data.get("requires_pip")
     return PluginManifest(
@@ -266,7 +382,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         guide_url=str(data.get("guide_url", "") or "").strip(),
         views=views,
         public_paths=public_paths,
-        emits=[str(x) for x in emits] if isinstance(emits, (list, tuple)) else [],
+        emits=emits,
+        emits_schemas=emits_schemas,
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],
         requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],
         repository=str(data.get("repository", "")).strip(),
