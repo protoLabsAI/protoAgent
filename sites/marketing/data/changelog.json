@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.85.0",
+    "date": "2026-07-02",
+    "changes": [
+      "Semantic recall (embeddings) now ships OFF by default",
+      "Windows reinstall over kept data no longer fails on a running server",
+      "current_time works on Windows (and database-less hosts)",
+      "A hung gateway embedding route can no longer freeze chat"
+    ]
+  },
+  {
     "version": "v0.84.0",
     "date": "2026-07-02",
     "changes": [
