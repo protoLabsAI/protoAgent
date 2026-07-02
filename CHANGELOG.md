@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.84.0] - 2026-07-02
+
 ### Fixed
 - **The Windows desktop sidecar no longer self-kills ~2s after boot** (#1678). The
   parent-death watchdog probed the launcher with `os.kill(ppid, 0)` — a POSIX
