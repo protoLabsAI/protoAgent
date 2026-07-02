@@ -205,12 +205,14 @@ class PluginRegistry:
         self.workflow_dirs.append(p)
 
     def register_goal_verifier(self, name: str, fn) -> None:
-        """Contribute an in-process goal verifier (ADR 0028) — an async
+        """Contribute an in-process goal/watch verifier (ADR 0028) — an async
         ``(spec, ctx) -> VerifyResult`` referenced by a ``{"type":"plugin",
-        "check":"<name>"}`` goal. Name it ``<plugin-id>:<verifier>`` to avoid
-        collisions; ``args`` in the spec are declarative data your verifier
+        "check":"<name>"}`` goal or watch. Name it ``<plugin-id>:<verifier>`` to
+        avoid collisions; ``args`` in the spec are declarative data your verifier
         validates (no shell, no eval). This is the only verifier type safe to set
-        programmatically (D3)."""
+        programmatically (D3). ``ctx`` is a ``graph.goals.VerifyContext``;
+        ``ctx.invoker`` identifies the polling goal/watch (kind/id/session_id/
+        interval_s, #1641) so a verifier can keep per-invoker state."""
         if not name or not callable(fn):
             log.warning(
                 "[plugins] %s: register_goal_verifier needs a name + callable: %r / %r", self.plugin_id, name, fn

@@ -78,6 +78,7 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 | `register_surface(start, stop=None, name=None, reload=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown, `reload(cfg)` on config save |
 | `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
 | `register_middleware(factory)` | A LangGraph **`AgentMiddleware`** (per-turn before/after-model + tool hooks) — `factory(config) → middleware \| None` | graph build; appended before message-capture (ADR 0032) |
+| `register_goal_verifier(name, fn)` | An in-process **goal/watch verifier** (ADR 0028) — dispatched by a `{"type": "plugin", "check": "<plugin-id>:<name>"}` goal or watch spec | graph build (re-set on reload) |
 | `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
 | `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
 | `register_chat_command(name, handler)` | A **user-only** `/<name>` chat control command that short-circuits the turn (the generalized `/goal`) — token slugified+lowercased; `goal` reserved; see [publish guide](/guides/plugin-registry) | chat dispatch; first plugin to claim a token wins |
@@ -138,6 +139,70 @@ class ScopeBannerMiddleware(AgentMiddleware):
 def register(registry):
     registry.register_middleware(lambda config: ScopeBannerMiddleware())
 ```
+
+### Goal & watch verifiers — `register_goal_verifier` (ADR 0028) {#goal-and-watch-verifiers}
+
+A plugin can **ground-truth its own domain state** as a verifier — an async
+`(spec, ctx) -> VerifyResult` that a `{"type": "plugin", "check": "<plugin-id>:<name>"}`
+[goal](/guides/goal-mode) or [watch](/guides/watches) dispatches to. `args` in the
+spec are declarative data your verifier validates (no shell, no eval — which is why
+`plugin` is the only verifier type an agent/plugin may set programmatically):
+
+```python
+from graph.goals import VerifyContext, VerifyResult
+
+async def verify_credits(spec: dict, ctx: VerifyContext) -> VerifyResult:
+    want = int(spec.get("args", {}).get("min", 0))
+    have = await current_credits()             # in-process; state the plugin owns
+    return VerifyResult(have >= want, f"credits {have:,}/{want:,}", evidence=str(have))
+
+def register(registry):
+    registry.register_goal_verifier("credits", verify_credits)   # → <plugin-id>:credits
+```
+
+**The `ctx` contract** (`graph.goals.VerifyContext`) is stable and grows only
+additively — a verifier that ignores it keeps working:
+
+| Field | Meaning |
+|---|---|
+| `config` | the live `LangGraphConfig` |
+| `condition` | the goal/watch condition text |
+| `last_text` | last assistant message of the turn (goals; `""` for a watch tick) |
+| `tool_summary` | short summary of the turn's tool calls (goals; `""` for a watch tick) |
+| `cwd` | working directory (used by the command/test verifiers) |
+| `invoker` | **who is polling** — a `VerifierInvoker`, or `None` outside the goal/watch loops |
+
+`ctx.invoker` (#1641) identifies the invoking controller, so one verifier can serve
+many goals/watches without resorting to global state:
+
+- `kind` — `"goal"` or `"watch"`.
+- `id` — the invoker's id: a **goal** is keyed by its session (so `id == session_id`);
+  a **watch** by its own watch id.
+- `session_id` — the owning session: the goal's session, or the watch's
+  `run_session` (`""` when the watch targets no session).
+- `interval_s` — the watch's effective polling cadence (its `interval_s` override,
+  else the config `watch_interval`); `None` for goals (they evaluate post-turn).
+
+`VerifierInvoker` is a **frozen, hashable** dataclass — key per-invoker state by it.
+E.g. a drawdown verifier keeping one high-water mark *per watch* instead of one
+global mark:
+
+```python
+from graph.goals import VerifierInvoker, VerifyContext, VerifyResult
+
+_marks: dict[VerifierInvoker | None, float] = {}
+
+async def verify_drawdown(spec: dict, ctx: VerifyContext) -> VerifyResult:
+    equity = await current_equity()
+    mark = _marks[ctx.invoker] = max(_marks.get(ctx.invoker, equity), equity)
+    frac = float(spec.get("args", {}).get("frac", 0.1))
+    tripped = equity <= mark * (1 - frac)
+    return VerifyResult(tripped, f"equity {equity:,.0f} vs mark {mark:,.0f}", evidence=str(equity))
+```
+
+To *react* when a goal/watch finishes, pair with `register_goal_hook` /
+`register_watch_hook` — see [Goal mode ▸ Reacting to a goal](/guides/goal-mode#reacting-to-a-goal)
+and [Watches](/guides/watches).
 
 ## Host services — `registry.host`
 

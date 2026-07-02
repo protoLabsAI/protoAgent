@@ -117,6 +117,7 @@ Set via `verifier.type` in the JSON spec:
 | `test` | same as `command` | exits `0` (the runner's summary line is surfaced in the reason) |
 | `ci` | `pr` **or** `branch` | `gh pr checks <pr>` is all-green, or the latest run on `branch` concluded `success` |
 | `data` | `path` + (`contains` **or** `expr`) | the file contains the substring, or `expr` (evaluated over parsed JSON as `data`) is truthy |
+| `plugin` | `check` (`<plugin-id>:<name>`) + `args?` | the plugin-registered verifier returns met — see [Plugins ▸ Goal & watch verifiers](/guides/plugins#goal-and-watch-verifiers) for `register_goal_verifier` and the `(spec, ctx)` contract (incl. `ctx.invoker`, the polling goal/watch's identity) |
 | `llm` | — (uses `condition`) | a strict evaluator judges the transcript shows the goal demonstrably done (fuzzy fallback) |
 
 `data` `expr` runs in a restricted namespace — the parsed document is `data`, with only read-only builtins (`len`, `any`, `all`, `sum`, …). `__import__`, `open`, `eval`, etc. are unavailable.

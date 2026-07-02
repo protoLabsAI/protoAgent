@@ -231,3 +231,42 @@ def test_set_goal_operator_requires_condition(tmp_path):
     c = _ctrl(tmp_path)
     ok, msg = c.set_goal_operator("s", "", {"type": "command", "command": "true"})
     assert not ok and "condition is required" in msg
+
+
+# --- verifier invoker identity (#1641) --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evaluate_passes_goal_invoker_to_plugin_verifier(tmp_path):
+    # A plugin verifier registered via the normal path (PluginRegistry →
+    # set_plugin_verifiers) can tell WHICH goal is polling it: kind="goal",
+    # id == the owning session (goals are keyed per session), no cadence.
+    from pathlib import Path
+
+    from graph.goals.types import VerifyResult
+    from graph.goals.verifiers import set_plugin_verifiers
+    from graph.plugins.registry import PluginRegistry
+
+    seen = []
+
+    async def probe(spec, ctx):
+        seen.append(ctx)
+        return VerifyResult(True, "met")
+
+    reg = PluginRegistry("demo", Path("."))
+    reg.register_goal_verifier("probe", probe)  # → demo:probe
+    set_plugin_verifiers(reg.goal_verifiers)
+    try:
+        c = _ctrl(tmp_path)
+        ok, _msg = c.set_goal_safe("sess-9", "reach it", {"type": "plugin", "check": "demo:probe"})
+        assert ok
+        decision = await c.evaluate("sess-9", last_text="done")
+        assert decision.state.status == "achieved"
+    finally:
+        set_plugin_verifiers({})
+    (ctx,) = seen
+    assert ctx.invoker.kind == "goal"
+    assert ctx.invoker.id == "sess-9"
+    assert ctx.invoker.session_id == "sess-9"
+    assert ctx.invoker.interval_s is None  # goals evaluate post-turn, not on a cadence
+    assert ctx.condition == "reach it"  # the pre-#1641 ctx fields still flow

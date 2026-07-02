@@ -8,5 +8,6 @@ pluggable completion checks. Wired into the server invocation paths in
 from graph.goals.controller import Decision, GoalController
 from graph.goals.store import GoalStore
 from graph.goals.types import GoalState, VerifyResult
+from graph.goals.verifiers import VerifierInvoker, VerifyContext
 
-__all__ = ["GoalController", "GoalStore", "GoalState", "VerifyResult", "Decision"]
+__all__ = ["GoalController", "GoalStore", "GoalState", "VerifyResult", "Decision", "VerifierInvoker", "VerifyContext"]
