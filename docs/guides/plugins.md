@@ -276,6 +276,20 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   by default; pass `plugin_id=registry.plugin_id`. One-shot turns stay on `run_in_session`.
   With `cancel_scheduled(job_id, *, plugin_id)` and `cancel_plugin_jobs(plugin_id)` — see
   [Scheduler ▸ Plugin-owned recurring jobs](/guides/scheduler#plugin-owned-recurring-jobs).
+- `record_metric(name, value, *, ts=None, plugin_id)` / `metric_history(name, *,
+  since=None, limit=500, plugin_id)` / `metric_last(name, *, plugin_id)` — a plugin
+  **metric timeseries** (#1632): small named numeric series (treasury, net worth, fleet
+  size), namespaced `<plugin_id>:<name>` into one per-instance SQLite store
+  (`metrics.db`), retention-capped per series (90 days / 10k points, trimmed on write —
+  record freely from an engine tick). This is the *history* a live-state watch verifier
+  (ADR 0067) can't get any other way — drawdown vs high-water mark, flatline detection —
+  and the substrate for dashboard sparklines. Timestamps are Unix epoch seconds
+  (`ts=None` → now); `metric_history` returns the newest `limit` points (optionally at/after
+  `since`) **oldest→newest** as `(ts, value)` tuples; `metric_last` returns the latest
+  `(ts, value)` or `None`. Pass `plugin_id=registry.plugin_id` (explicit, like
+  `schedule_recurring` — the SDK has no ambient plugin identity; `':'` is rejected so one
+  plugin can't reach another's namespace). Point-in-time snapshots stay on `telemetry()`;
+  per-turn cost rollups stay on the [operator telemetry store](/guides/observability#local-telemetry-store).
 
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap
