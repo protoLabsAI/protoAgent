@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.81.0",
+    "date": "2026-07-02",
+    "changes": [
+      "seccomp-profile.json moved to deploy/.",
+      "The in-app update notes now match the Discord release announcement"
+    ]
+  },
+  {
     "version": "v0.80.0",
     "date": "2026-07-02",
     "changes": [
