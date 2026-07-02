@@ -53,6 +53,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while its flag resolves ON, so forks can flag-gate their own commands the
   same way.
 
+### Security
+- **Fleet: the hub no longer lends a remote member's token over an unauthenticated
+  WebSocket, and live events now work through a token-gated hub.** Two proxy-auth
+  gaps in remote fleet members (ADR 0042 §I), both only reachable on a non-loopback
+  (tailnet/LAN) hub — a loopback desktop hub was never exposed:
+  - The hub's default-deny auth is an HTTP middleware (Starlette `BaseHTTPMiddleware`
+    skips non-HTTP scopes), so the `/agents/<slug>/*` **WebSocket** proxy route ran
+    with no hub auth. For a *remote* member the hub would attach that member's stored
+    bearer and proxy any caller into its authenticated sockets (e.g. a terminal
+    plugin's PTY). WebSocket proxying to a **remote** member is now refused (close
+    1008); host/local-peer sockets — which carry no hub-stored credential — are
+    unaffected. Live plugin views into a remote member should use `delegate_to` / a
+    direct connection.
+  - The SSE token for `/api/events` was fetched slug-routed (signed by the *member*),
+    but the proxied stream is validated at the **hub's** middleware first — so on a
+    bearer-gated hub, live events 401'd for every non-host member. The console now
+    fetches a **hub-signed** SSE token; the hub validates it, then forwards with the
+    member's own credential so the member accepts it downstream.
+
 ## [0.79.0] - 2026-07-01
 
 ### Added
