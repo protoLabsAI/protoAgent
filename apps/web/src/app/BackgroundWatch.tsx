@@ -83,9 +83,13 @@ export function BackgroundWatch() {
       const header = failed
         ? `Background agent failed — ${desc}`
         : `Background agent finished — ${desc}`;
+      // The report CARD renders its own header row (title + "Background report",
+      // ADR 0070 D4) — a finished job injects just the result preview as the card's
+      // excerpt so the lede isn't duplicated. Failures keep the explicit failed-lede
+      // (the card header alone doesn't convey the outcome); no result → lede only.
       const injected = appendSystem(
         session,
-        result ? `${header}\n\n${result}` : header,
+        failed && result ? `${header}\n\n${result}` : result || header,
         jobId ? { jobId, title: desc } : undefined,
       );
       toast({

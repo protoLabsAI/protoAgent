@@ -61,25 +61,83 @@
   display: contents;
 }
 
-/* Background-agent report card (ADR 0050/0062). The DS system message is a de-emphasized
-   centered pill (bg-inset fill); for a report + "Read full report" button that reads wrong.
-   Restyle it as a bordered card sitting on the chat surface: same background as the surface
-   (transparent), a border instead of the fill, de-pilled + left-aligned + readable size. */
+/* Background-agent report card (ADR 0070 D4). The DS system message is a de-emphasized
+   centered near-black pill (bg-inset fill, 100px radius); a finished job's report is a
+   DOCUMENT teaser, not a status blip. The card itself is the bespoke .chat-report-card
+   inside the message content (raised surface, real corners, shadow, header row, clamped
+   fading excerpt, "Open report" CTA — built in ChatMessageView); here we only NEUTRALIZE
+   the DS pill on the content wrapper. Specificity is STACKED on the message root
+   (.pl-message--system.chat-report …) — the .chat-note pattern below — so the DS default
+   (.pl-message--system .pl-message__content, 0-2-0) can never win by load order; the
+   .chat-session-slot-anchored variant (0-4-0) also outranks our own base system-message
+   rule further down (0-3-0), and the bare variant covers a card rendered outside the
+   chat slot (the shared renderer also serves the ⌘K palette chat). */
 .chat-report.pl-message--system {
   justify-content: stretch;
 }
-.chat-report .pl-message__content {
-  background: transparent; /* match the chat surface — no bg-inset fill */
-  border: var(--pl-border-width) solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
+.chat-session-slot .pl-message--system.chat-report .pl-message__content,
+.pl-message--system.chat-report .pl-message__content {
   display: block;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
   text-align: left;
   font-size: 0.9rem;
   color: var(--pl-color-fg);
-  padding: 10px 14px;
 }
-.chat-report-open {
-  margin-top: 8px;
+.chat-report-card {
+  background: var(--pl-color-bg-raised); /* lifted OFF the surface — not the bg-inset well */
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  /* Raised-element shadow — the DS .pl-convo__jump precedent, same literal fallback for
+     themes that don't define the popover shadow token. */
+  box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
+  padding: 14px 16px;
+  cursor: pointer; /* the whole card opens the report (selection-guarded in JSX) */
+}
+.chat-report-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chat-report-head > svg {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+}
+.chat-report-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.chat-report-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+.chat-report-sub {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pl-color-fg-muted);
+}
+/* The excerpt is a TEASER, not the content: clamp to ~7 text lines and fade the tail
+   out so the text visibly trails off into the card — the full report lives in the
+   document viewer behind the CTA. */
+.chat-report-excerpt {
+  margin-top: 10px;
+  max-height: 10.5em; /* ≈7 lines at the markdown 1.5 line height */
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+}
+.chat-report-excerpt .markdown > :first-child,
+.chat-report-excerpt .pl-markdown > :first-child {
+  margin-top: 0;
+}
+.chat-report-cta {
+  margin-top: 10px;
 }
 
 /* Per-turn token/cost footer under an assistant answer (#1372) — a quiet, monospace row of

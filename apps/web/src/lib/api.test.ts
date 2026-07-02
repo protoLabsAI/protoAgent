@@ -1,11 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import {
   ApiError,
+  api,
   apiUrl,
   drainSseBuffer,
   frameIsForeign,
   isColdStart,
   isAgentNotRunning,
+  loadBackgroundReport,
   textFromParts,
   hitlFromParts,
 } from "./api";
@@ -207,5 +209,87 @@ describe("frameIsForeign — cross-context stream guard (subagent-stream-isolati
   it("never treats an empty / resultless frame as foreign", () => {
     expect(frameIsForeign({}, SESSION)).toBe(false);
     expect(frameIsForeign({ result: {} }, SESSION)).toBe(false);
+  });
+});
+
+// ── Background report by-id fetch (ADR 0070 D4) ────────────────────────────────
+// api.backgroundJob hits GET /api/background/{id} (the only route carrying the FULL
+// result); loadBackgroundReport wraps it for the report card / document viewer with
+// a legacy list-and-filter fallback that fires ONLY on a 404.
+
+const JOB = "bg-abcdefabcdef";
+const GONE = /no longer available/;
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Stub global fetch with a per-URL router; returns the list of requested paths. */
+function stubFetch(route: (path: string) => Response) {
+  const calls: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      return route(path);
+    }),
+  );
+  return calls;
+}
+
+describe("api.backgroundJob / loadBackgroundReport (ADR 0070 D4)", () => {
+  beforeEach(() => {
+    // The apiUrl slug-routing suite above leaves the jsdom URL focused on a member
+    // (/app/agent/m/) — reset to the host window so paths aren't /agents/m/-prefixed.
+    window.history.replaceState({}, "", "/app/");
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("backgroundJob GETs the by-id route and returns the full row", async () => {
+    const calls = stubFetch(() =>
+      json({ id: JOB, status: "completed", subagent_type: "researcher", description: "dig", result: "the FULL report" }),
+    );
+    const job = await api.backgroundJob(JOB);
+    expect(calls).toEqual([`/api/background/${JOB}`]);
+    expect(job.id).toBe(JOB);
+    expect(job.result).toBe("the FULL report");
+  });
+
+  it("loadBackgroundReport resolves the by-id result without touching the list", async () => {
+    const calls = stubFetch(() => json({ id: JOB, status: "completed", result: "full text" }));
+    await expect(loadBackgroundReport(JOB)).resolves.toBe("full text");
+    expect(calls).toEqual([`/api/background/${JOB}`]);
+  });
+
+  it("falls back to list-and-filter ONLY on a 404 (pre-ADR-0070 server)", async () => {
+    const calls = stubFetch((path) =>
+      path === `/api/background/${JOB}`
+        ? json({ detail: "not found" }, 404)
+        : json({ enabled: true, jobs: [{ id: JOB, status: "completed", result: "from the list" }] }),
+    );
+    await expect(loadBackgroundReport(JOB)).resolves.toBe("from the list");
+    expect(calls).toEqual([`/api/background/${JOB}`, "/api/background"]);
+  });
+
+  it("404 + job absent from the list → the 'no longer available' placeholder", async () => {
+    stubFetch((path) =>
+      path === `/api/background/${JOB}` ? json({ detail: "gone" }, 404) : json({ enabled: true, jobs: [] }),
+    );
+    await expect(loadBackgroundReport(JOB)).resolves.toMatch(GONE);
+  });
+
+  it("a completed row with an empty result also reads as unavailable", async () => {
+    stubFetch(() => json({ id: JOB, status: "completed", result: "" }));
+    await expect(loadBackgroundReport(JOB)).resolves.toMatch(GONE);
+  });
+
+  it("non-404 failures PROPAGATE (no silent fallback that hides a real error)", async () => {
+    const calls = stubFetch(() => json({ detail: "boom" }, 500));
+    await expect(loadBackgroundReport(JOB)).rejects.toMatchObject({ status: 500 });
+    expect(calls).toEqual([`/api/background/${JOB}`]); // never reached the list
   });
 });

@@ -42,6 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job's full row (strict `bg-<12 hex>` id validation) for the console report
   card.
 
+### Changed
+- **The background report card is a real card**
+  ([ADR 0070](docs/adr/0070-background-results-push-resume.md) D4, console).
+  A finished background job's report no longer renders as the DS system-message
+  pill (near-black inset fill, 100px radius, a quiet ghost "Read full report"
+  link): it's now a raised card — `--pl-color-bg-raised` surface, 1px border,
+  real corners, drop shadow — with a header row (report title + "Background
+  report"), an excerpt **clamped to ~7 lines with a bottom fade-out mask** (a
+  teaser, not the content), and a clear **"Open report"** CTA into the document
+  viewer; the whole card is click-to-open (selection-guarded). The viewer now
+  fetches the full report **by id** via the new `GET /api/background/{id}`
+  (`api.backgroundJob`), replacing the list-and-filter hack — kept only as a
+  fallback when the by-id route 404s (pre-0070 servers / deleted rows). Card
+  styling uses stacked specificity (`.pl-message--system.chat-report …`) so the
+  DS default can't win by stylesheet load order.
+
 ## [0.79.0] - 2026-07-01
 
 ### Added
