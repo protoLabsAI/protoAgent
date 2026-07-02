@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.85.0] - 2026-07-02
+
 ### Changed
 - **Semantic recall (embeddings) now ships OFF by default** (#1681). Out of the box
   the app no longer depends on an optional gateway route: a gateway without a
