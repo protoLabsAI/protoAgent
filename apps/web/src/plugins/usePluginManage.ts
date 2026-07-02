@@ -8,22 +8,30 @@ import { queryKeys, runtimeStatusQuery } from "../lib/queries";
 // A plugin the actions target — just its id (for the API) + name (for the toast).
 export type PluginRef = { id: string; name: string };
 
-// Shared update + uninstall mutations for a single plugin (#1521 / #1522, ADR 0027).
-// Used by BOTH the Plugins manager rows (PluginsSurface) and the rail context-menu
-// actions (PluginRailManage), so the toast copy + query-refresh are identical wherever
-// a plugin is updated/removed. On success we refresh: runtime (the rail icons + the
+// The ONE post-mutation refresh for anything that changes the installed-plugin set
+// (install / update / uninstall / sync). Invalidates: runtime (the rail icons + the
 // loaded set), the installed inventory (removable list), the freshness poll, and the
-// settings schema (a new/removed plugin changes which config fields exist, #1423).
-export function usePluginManage() {
+// settings schema — a new/removed plugin changes which config fields exist (#1423),
+// and a stale schema renders a freshly installed plugin's Configure dialog empty
+// until a page refresh (#1643). Every install path must call this (or invalidate
+// the same keys); keeping it in one place is the fix for that class of bug.
+export function usePluginRefresh() {
   const qc = useQueryClient();
-  const toast = useToast();
-
-  const refreshAll = () => {
+  return () => {
     qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
     qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
     qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
     qc.invalidateQueries({ queryKey: queryKeys.settings });
   };
+}
+
+// Shared update + uninstall mutations for a single plugin (#1521 / #1522, ADR 0027).
+// Used by BOTH the Plugins manager rows (PluginsSurface) and the rail context-menu
+// actions (PluginRailManage), so the toast copy + query-refresh are identical wherever
+// a plugin is updated/removed.
+export function usePluginManage() {
+  const toast = useToast();
+  const refreshAll = usePluginRefresh();
 
   // Pull the latest code at the plugin's recorded ref + hot-reload (same path as enable).
   const update = useMutation({

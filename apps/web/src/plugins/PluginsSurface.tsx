@@ -17,7 +17,7 @@ import { StatusPill } from "../app/StatusPill";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginSettingsDialog } from "./PluginSettingsDialog";
 import { PluginFreshness } from "./PluginFreshness";
-import { usePluginManage } from "./usePluginManage";
+import { usePluginManage, usePluginRefresh } from "./usePluginManage";
 import { catalogCategories, filterCatalog } from "./catalog";
 import { api } from "../lib/api";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
@@ -168,17 +168,11 @@ function LocalTab() {
   const [uninstallPending, setUninstallPending] = useState<Plugin | null>(null);
   const [restartPending, setRestartPending] = useState(false);
   // Update + uninstall mutations (toast + query-refresh) shared with the rail context
-  // menu (#1521 / #1522), so both entry points behave identically.
+  // menu (#1521 / #1522), so both entry points behave identically. `refreshAll` is the
+  // shared installed-set invalidation (runtime + inventory + freshness + the settings
+  // schema, which carries each enabled plugin's declared config fields — #1423/#1643).
   const { update, remove } = usePluginManage();
-
-  const refreshAll = () => {
-    qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-    qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
-    qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
-    // The active plugin set changed, so the settings schema (which carries each enabled
-    // plugin's declared config fields, ADR 0019) is stale — refetch it (#1423).
-    qc.invalidateQueries({ queryKey: queryKeys.settings });
-  };
+  const refreshAll = usePluginRefresh();
 
   const toggle = useMutation({
     mutationFn: (p: Plugin) => api.setPluginEnabled(p.id, !p.enabled),
@@ -367,12 +361,17 @@ function DiscoverTab() {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("All");
   const toast = useToast();
+  const refreshAll = usePluginRefresh();
 
   const install = useMutation({
     mutationFn: (p: CatalogPlugin) => api.installPlugin(p.repo),
     onSuccess: (res, p) => {
       qc.invalidateQueries({ queryKey: ["plugin-catalog"] });
-      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      // Full installed-set refresh — this path used to invalidate only the catalog +
+      // runtime, so the (5-min-stale) settings schema kept no group for the new plugin
+      // and its Configure dialog opened EMPTY until a page refresh (#1643). It also
+      // hid the row's Configure/Uninstall buttons (inventory + schema drive both).
+      refreshAll();
       toast({ tone: "success", title: "Plugin installed", message: `${p.name}${res.reloaded ? " — enabled and live" : ""}.` });
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install plugin", message: `${p.name}: ${errMsg(err)}` }),

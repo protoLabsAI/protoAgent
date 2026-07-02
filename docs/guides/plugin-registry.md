@@ -29,7 +29,10 @@ manifest + capabilities, install, uninstall.
 
 **Installing from the console AUTO-ENABLES + runs the plugin** (trust-by-default):
 it's added to `plugins.enabled` and hot-reloaded, so its tools, console views and
-background surfaces come up live — no separate enable step and no restart. The
+background surfaces come up live — no separate enable step and no restart. Its
+declared settings are live too: the row's **Configure** dialog carries the plugin's
+config fields immediately after install (both the Discover directory and
+install-from-URL — no page refresh needed, #1643). The
 console flashes a one-time "this runs code on your machine" confirm for unofficial
 sources first (official `protoLabsAI/*` installs skip it; "don't show again" flips to
 full trust). Only install code you trust — for untrusted code, use an MCP server.

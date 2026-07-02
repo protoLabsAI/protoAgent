@@ -1,12 +1,12 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Input } from "@protolabsai/ui/forms";
 import { Dialog } from "@protolabsai/ui/overlays";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { queryKeys, runtimeStatusQuery } from "../lib/queries";
+import { usePluginRefresh } from "./usePluginManage";
 
 const REGISTRY_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/plugin-registry";
 
@@ -15,23 +15,20 @@ const REGISTRY_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/plug
 // tab toolbar. Installing AUTO-ENABLES + runs it (trust-by-default): its tools, console
 // views and background surfaces come up live, no separate enable step and no restart.
 export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const qc = useQueryClient();
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
   const [status, setStatus] = useState("");
+  const refreshAll = usePluginRefresh();
 
   const install = useMutation({
     mutationFn: () => api.installPlugin(url.trim(), ref.trim() || undefined),
     onSuccess: (res) => {
       const s = res.installed;
-      // Refresh the Installed list (runtime roster) AND the lock-backed inventory that
-      // gates Uninstall.
-      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
-      // Install auto-enables the plugin, so its declared Settings fields (ADR 0019) are
-      // now in the schema — refetch it or the plugin's config section won't appear until
-      // a restart clears the 5-min-stale cache (#1423).
-      qc.invalidateQueries({ queryKey: queryKeys.settings });
+      // Shared installed-set refresh: the runtime roster, the lock-backed inventory that
+      // gates Uninstall, the freshness poll, and the settings schema — install auto-enables
+      // the plugin, so its declared Settings fields (ADR 0019) must land in the schema or
+      // its Configure dialog renders empty until a page refresh (#1423 / #1643).
+      refreshAll();
       setUrl("");
       setRef("");
       // Clean install (auto-enabled, nothing to flag) → close; the new row shows in the

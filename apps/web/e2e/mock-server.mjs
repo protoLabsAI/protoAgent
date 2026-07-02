@@ -123,6 +123,14 @@ function fleetFor(req) {
   return fleetScopes.get(scope);
 }
 
+// Drop a plugin's Settings group from the (mutable, in-place) schema fixture — used by
+// install (replace-don't-duplicate) and uninstall so cross-test state stays clean (#1643).
+function removePluginSchemaGroup(id) {
+  for (let i = SETTINGS_SCHEMA.length - 1; i >= 0; i--) {
+    if (SETTINGS_SCHEMA[i].plugin_id === id) SETTINGS_SCHEMA.splice(i, 1);
+  }
+}
+
 function handleApiGet(pathname, fleet = FLEET) {
   switch (pathname) {
     case "/api/runtime/status":
@@ -720,6 +728,17 @@ const server = createServer(async (req, res) => {
       RUNTIME_STATUS.plugins = RUNTIME_STATUS.plugins.filter((p) => p.id !== id).concat({
         id, name: id, version: "0.1.0", enabled: true, loaded: true, tools: [], skills: 0,
       });
+      // ... and its declared Settings group joins the schema (ADR 0019 — install
+      // auto-enables), so the e2e can prove a fresh install's Configure dialog
+      // hydrates WITHOUT a page refresh (#1643): the console must refetch the
+      // (5-min-stale) schema after install for this group to appear.
+      removePluginSchemaGroup(id);
+      SETTINGS_SCHEMA.push({
+        section: id, category: "Plugins", plugin_id: id,
+        fields: [
+          { key: `${id}.greeting`, label: "Greeting", type: "string", section: id, restart: false, description: "Shown by the plugin.", options: [], value: "hi", default: "hi", scope: "agent", source: "agent" },
+        ],
+      });
       return sendJson(res, {
         installed: {
           id, name: id, version: "0.1.0", description: "installed via console",
@@ -752,6 +771,7 @@ const server = createServer(async (req, res) => {
       const id = decodeURIComponent(pathname.split("/").pop());
       INSTALLED_PLUGINS = INSTALLED_PLUGINS.filter((p) => p.id !== id);
       RUNTIME_STATUS.plugins = RUNTIME_STATUS.plugins.filter((p) => p.id !== id);
+      removePluginSchemaGroup(id);  // uninstall drops its Settings group too (#1643)
       return sendJson(res, { ok: true });
     }
     return sendJson(res, { ok: true });
