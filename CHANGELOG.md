@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Existing configs that set the key explicitly are unaffected.
 
 ### Fixed
+- **`current_time` works on Windows (and database-less hosts)** (#1683). stdlib
+  `zoneinfo` ships no IANA data — Windows has none of its own, so in the frozen
+  sidecar every `ZoneInfo(...)` raised and the tool rejected all timezones,
+  including its own docstring examples. The `tzdata` package is now a declared
+  dependency and explicitly collected into the sidecar bundle (zoneinfo imports
+  it dynamically — the static scan missed it), and the tool itself degrades
+  gracefully when no database exists at all: it answers in UTC, noting the
+  unavailable zone, instead of erroring on "what time is it".
 - **A hung gateway embedding route can no longer freeze chat** (#1681). The
   embeddings client carried the OpenAI SDK defaults — 600s timeout, 2 retries —
   so one Cloudflare-524-style hang blocked a turn for minutes while the knowledge

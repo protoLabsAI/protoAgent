@@ -127,3 +127,28 @@ async def test_fetch_url_rejects_non_http_scheme():
     ):
         result = await fetch_url.ainvoke({"url": bad})
         assert result.startswith("Error:"), f"accepted unsafe url: {bad!r}"
+
+
+@pytest.mark.asyncio
+async def test_current_time_survives_a_missing_tz_database(monkeypatch):
+    """Windows ships no IANA data (stdlib zoneinfo needs the bundled tzdata
+    package, #1683): with NO database, every name — including the tool's own
+    docstring examples — raised, and the tool errored on every call. It must
+    instead answer in UTC, noting the unavailable zone for named requests."""
+    import tools.lg_tools as lg
+
+    class _NoDb:
+        def __init__(self, name):
+            raise lg.ZoneInfoNotFoundError(name)
+
+    monkeypatch.setattr(lg, "ZoneInfo", _NoDb)
+
+    default = await lg.current_time.ainvoke({})
+    assert not default.startswith("Error:")
+    assert "(UTC)" in default and "Human:" in default
+    assert "Note:" not in default  # UTC asked, UTC answered — nothing to caveat
+
+    named = await lg.current_time.ainvoke({"timezone": "America/New_York"})
+    assert not named.startswith("Error:")
+    assert "(UTC)" in named
+    assert "no IANA timezone database" in named

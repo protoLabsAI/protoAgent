@@ -13,6 +13,10 @@ requires-python = ">=3.11"
 # core (the `none`/`console` tiers) — mirrors requirements-core.txt:
 dependencies = [
   "httpx>=0.27",
+  # IANA timezone database for stdlib zoneinfo — Windows ships none (every
+  # ZoneInfo(...) raised there, #1683) and slim containers often lack
+  # /usr/share/zoneinfo. Inert wherever system data exists (POSIX prefers it).
+  "tzdata",
   "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
   "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.2.0",
   "fastapi>=0.115",
