@@ -87,6 +87,14 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
             )
         )
 
+    # Per-turn subagent tool fence for detached background runs (#1639) — sits with
+    # the enforcement gate (block before execution). Always on: it's a no-op unless
+    # the turn's state carries `subagent_fence` (stamped only by the background fire
+    # path for registry subagents), so ordinary turns pay one dict lookup.
+    from graph.middleware.subagent_fence import SubagentFenceMiddleware
+
+    middleware.append(SubagentFenceMiddleware())
+
     # KnowledgeMiddleware also carries the always-on skill index (the
     # <available_skills> injection, ADR 0060). Build it when knowledge OR skills
     # is active, so skills work even on a KB-less agent (the store is None-tolerant).

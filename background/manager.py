@@ -113,7 +113,8 @@ class BackgroundManager:
             origin_incognito=origin_incognito,
         )
         fired_prompt = _build_fired_prompt(subagent_type, description, prompt)
-        t = asyncio.create_task(self._fire(job_id, fired_prompt), name=f"background.fire.{job_id}")
+        fence = _subagent_fence(subagent_type)
+        t = asyncio.create_task(self._fire(job_id, fired_prompt, fence), name=f"background.fire.{job_id}")
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
         log.info("[background] spawned %s (%s): %s", job_id, subagent_type, description)
@@ -326,7 +327,7 @@ class BackgroundManager:
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
 
-    async def _fire(self, job_id: str, prompt: str) -> None:
+    async def _fire(self, job_id: str, prompt: str, fence: list[str] | None = None) -> None:
         """POST the job to our own /a2a as a turn in a dedicated background context.
 
         On any delivery failure (non-2xx / network / timeout), mark the job failed —
@@ -350,6 +351,11 @@ class BackgroundManager:
                         "origin": "background",
                         "trigger": job_id,
                         "background_job_id": job_id,
+                        # Per-subagent tool fence (#1639): the chat entry stamps this on
+                        # the turn's state and SubagentFenceMiddleware enforces it — the
+                        # same allowlist the in-graph task path applies, now on detached
+                        # runs too. Absent for non-registry types (no fence).
+                        **({"subagent_fence": fence} if fence else {}),
                     },
                 )
             except Exception as exc:  # noqa: BLE001
@@ -400,12 +406,37 @@ class BackgroundManager:
             return False
 
 
+def _subagent_fence(subagent_type: str) -> list[str]:
+    """The subagent's resolved tool allowlist for a detached run (#1639): the registry
+    ``tools`` with any config override applied — the SAME fence the in-graph ``task``
+    path enforces (mirrors ``operator_api.subagents.list_subagents``'s resolution).
+    Empty when the type isn't a registry subagent (no fence). Best-effort: a
+    resolution failure means no fence, never a failed fire."""
+    try:
+        from graph.subagents.config import SUBAGENT_REGISTRY
+
+        registry_def = SUBAGENT_REGISTRY.get(subagent_type)
+        if registry_def is None:
+            return []
+        tools = list(registry_def.tools or [])
+        try:
+            from runtime.state import STATE
+
+            override = getattr(STATE.graph_config, subagent_type, None) if STATE.graph_config else None
+            tools = list(getattr(override, "tools", None) or tools)
+        except Exception:  # noqa: BLE001 — config overlay is best-effort
+            pass
+        return tools
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _build_fired_prompt(subagent_type: str, description: str, prompt: str) -> str:
     """Compose the message the background turn runs.
 
-    The background turn runs the full lead graph (ADR 0050 — self-POST substrate), so the
-    subagent's own system prompt is prepended as role guidance rather than enforced as a
-    tool fence (per-subagent tool scoping for background jobs is deferred)."""
+    The background turn runs the full lead graph (ADR 0050 — self-POST substrate); the
+    subagent's own system prompt is prepended as role guidance, and the tool allowlist
+    is enforced separately via the ``subagent_fence`` fire metadata (#1639)."""
     role = ""
     try:
         from graph.prompts import build_subagent_prompt

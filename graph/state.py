@@ -37,6 +37,12 @@ class ProtoAgentState(AgentState):
     # swap the lead model for this turn; unset → the configured default.
     model: NotRequired[str]
 
+    # Per-turn subagent tool fence (#1639): a detached background job running a
+    # registry subagent stamps the subagent's resolved tool allowlist here (fire
+    # metadata → request metadata → state); SubagentFenceMiddleware blocks any
+    # tool call outside it. Unset → no fence (ordinary turns).
+    subagent_fence: NotRequired[list[str]]
+
     # Knowledge context injected by KnowledgeMiddleware before LLM call
     context: NotRequired[str]
 

@@ -463,6 +463,7 @@ async def _run_turn_stream(
     model=None,
     reasoning_effort=None,
     incognito=False,
+    subagent_fence=None,
 ):
     """Run one graph turn over ``astream_events``.
 
@@ -507,6 +508,10 @@ async def _run_turn_stream(
             # both); omit each key when unset so the configured default applies.
             **({"model": model} if model else {}),
             **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
+            # Per-subagent tool fence for a detached background run (#1639) —
+            # SubagentFenceMiddleware blocks tool calls outside it. Omitted (not
+            # empty) when unset so ordinary turns carry no fence channel.
+            **({"subagent_fence": [str(t) for t in subagent_fence]} if subagent_fence else {}),
         }
     )
     from observability import metrics
@@ -968,6 +973,11 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # Incognito thread (ADR 0069 D3b): the console/A2A caller sets metadata
     # `incognito: true` per message — no session persistence, no memory injection.
     _incognito = bool((request_metadata or {}).get("incognito"))
+    # Detached background runs of a registry subagent carry the resolved tool
+    # allowlist in the fire metadata (#1639) — stamped onto the turn's state below.
+    _fence = (request_metadata or {}).get("subagent_fence") or None
+    if _fence is not None and not isinstance(_fence, (list, tuple)):
+        _fence = None
     # When a goal is already active, the whole turn is goal-driven (suppress cross-session
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     goal_active = STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
@@ -996,6 +1006,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                 model=_model,
                 reasoning_effort=_effort,
                 incognito=_incognito,
+                subagent_fence=_fence,
             ):
                 if kind == "__raw__":
                     accumulated_raw = payload
