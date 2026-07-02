@@ -1171,6 +1171,19 @@ textarea {
   font-size: 13px;
 }
 
+/* What the subagent DOES (#1660) — plain prose (not the mono tools line), clamped:
+   the registry descriptions are written for the model and run several sentences. */
+.subagent-row span.subagent-desc {
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .notes-editor {
   height: 100%;
   border: 0;

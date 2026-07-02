@@ -471,9 +471,28 @@
   font-size: 13px;
   color: var(--brand-violet-light);
 }
+.slash-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.slash-kind {
+  flex: 0 0 auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
 .slash-desc {
   font-size: 11px;
   color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Delete-chat dialog: the opt-in harvest checkbox (harvest is never automatic). */

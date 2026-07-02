@@ -24,6 +24,7 @@ function SubagentsBody() {
             <div className="subagent-row" key={subagent.name}>
               <div>
                 <strong>{subagent.name}</strong>
+                <span className="subagent-desc">{subagent.description}</span>
                 <span>{subagent.tools.join(", ") || "no tools"}</span>
               </div>
               <StatusPill label={`${subagent.max_turns} turns`} tone={subagent.enabled ? "success" : "muted"} />
