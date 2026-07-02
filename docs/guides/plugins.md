@@ -241,6 +241,22 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   completion (vs `host.invoke`, which runs a full lead-agent *chat turn*).
 - `subagent_types()` — the configured subagent ids.
 - `config()` — the live `LangGraphConfig`.
+- `knowledge_search(query, *, k=5, domain=None, epoch=None)` /
+  `knowledge_add(content, *, domain="general", heading=None, epoch=None)` — the
+  plugin↔knowledge channel: search the agent's knowledge graph (hybrid FTS5 +
+  embeddings) and write chunks back, scoped to a `domain` bucket. Both degrade to a
+  no-op (`[]` / `None`) without a store. `epoch` (#1634) tags a chunk with the **era**
+  it was learned in (an opaque string — typically a reset date); passing `epoch=` to
+  `knowledge_search` filters **both** rankings to exactly that era, so a plugin in a
+  resettable world (spacetraders' weekly wipes) retires old lessons by just searching
+  with the new tag — they stay stored for post-mortems but stop polluting retrieval.
+- `knowledge_purge(domain, *, before=None) -> int` — the knowledge **lifecycle**
+  primitive (#1634): hard-delete every chunk in a domain (optionally only those
+  created before an ISO-8601 timestamp) and return the count. Deletes consistently
+  from every index (rows, FTS, vectors); on a layered store only the **private** tier
+  is purged (the commons is curated, never bulk-deleted). Refuses (returns 0) on an
+  empty domain or an unparseable `before`. See
+  [Knowledge ▸ Plugin knowledge lifecycle](/guides/knowledge#plugin-knowledge-lifecycle).
 - `run_in_session(session_id, prompt, *, delay_seconds=0, job_id=None)` — enqueue a
   **non-blocking one-shot agent turn** in a session (that session's memory + full tools).
   The primitive behind "when a goal fires, prompt the agent" — call it from a

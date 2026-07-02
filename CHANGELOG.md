@@ -41,6 +41,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   degrades that entry to names-only — it never fails the plugin load.
   Dev-channel publish-time validation is deliberately deferred (follow-up,
   developer-flag-gated).
+- **Knowledge lifecycle — `sdk.knowledge_purge` + epoch scoping** (#1634). The plugin
+  knowledge channel (ADR 0043) was add-and-search only, so a long-running plugin's
+  knowledge could go actively wrong with no way to retire it (spacetraders: weekly
+  universe wipes → recalled routes reference dead markets).
+  `sdk.knowledge_purge(domain, *, before=None) -> int` hard-deletes a domain's chunks
+  (optionally only those created before an ISO-8601 timestamp), consistently across
+  every index — main rows, FTS, and the hybrid store's vectors (layered stores purge
+  the private tier only; the commons stays curated). And `knowledge_add(...,
+  epoch="2026-06-29")` tags a chunk with the era it was learned in:
+  `knowledge_search(..., epoch=...)` then filters BOTH rankings to exactly that era
+  (other epochs and untagged chunks excluded), so a wipe becomes a new tag — old
+  lessons stay for post-mortems but stop polluting retrieval. Additive `epoch` column
+  migration; pre-existing ADR 0031 backends keep working (purge degrades to a 0-count
+  no-op; `epoch` is only forwarded when passed).
 - **`graph.sdk.react_on` — reactive-rule sugar** (#1633). The canonical reactive
   composition `registry.on(topic, handler)` → `sdk.run_in_session(session, prompt)` made
   every plugin write identical glue (missing-host guard, prompt-from-payload, idempotent

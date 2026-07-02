@@ -88,6 +88,7 @@ class Chunk:
     updated_at: str
     namespace: str | None = None
     invalidated_at: str | None = None
+    epoch: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +100,7 @@ class Chunk:
             "source_type": self.source_type,
             "finding_type": self.finding_type,
             "namespace": self.namespace,
+            "epoch": self.epoch,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "invalidated_at": self.invalidated_at,
@@ -138,6 +140,22 @@ def _resolve_path(db_path: str | Path | None, *, scoped: bool = True) -> Path:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _normalize_before(before: str | datetime | None) -> str | None:
+    """Normalize a purge cutoff to the stored ``created_at`` format (UTC ISO-8601)
+    so string comparison in SQL is well-defined. ``None`` passes through (no
+    cutoff). Raises ``ValueError`` on an unparseable value — the caller refuses
+    to purge rather than deleting the wrong rows."""
+    if before is None:
+        return None
+    if isinstance(before, datetime):
+        dt = before
+    else:
+        dt = datetime.fromisoformat(str(before).strip())  # ValueError on junk
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)  # naive input = UTC (the stored convention)
+    return dt.astimezone(UTC).isoformat()
 
 
 # Preview length in the hot-write event payload — enough for a console toast /
@@ -245,6 +263,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     source_type   TEXT,
     finding_type  TEXT,
     namespace     TEXT,
+    epoch         TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     invalidated_at TEXT
@@ -365,6 +384,18 @@ class KnowledgeStore:
                 db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_invalidated_at ON chunks(invalidated_at)")
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] invalidated_at migration skipped: %s", exc)
+            # Migration: add the epoch column (#1634 — knowledge lifecycle). Same
+            # additive+nullable pattern; an epoch tag ("2026-06-29") scopes a chunk
+            # to one era of a resettable world, so a wipe is a new tag rather than
+            # a delete — old lessons stay for post-mortems but stop matching an
+            # epoch-filtered search.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "epoch" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN epoch TEXT")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_epoch ON chunks(epoch)")
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] epoch migration skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -437,6 +468,7 @@ class KnowledgeStore:
         source_type: str | None = None,
         finding_type: str | None = None,
         namespace: str | None = None,
+        epoch: str | None = None,
     ) -> int | None:
         """Insert a chunk. Returns the new row id, or None on failure.
 
@@ -445,6 +477,10 @@ class KnowledgeStore:
         store. We strip ``<scratch_pad>``/``<think>`` defensively — covering all
         writers (memory tools, ingest, harvest, future ones), not just the ones
         that remember to clean their input.
+
+        ``epoch`` (#1634) tags the chunk with the era it was learned in (an
+        opaque string, e.g. a reset date) so ``search(epoch=...)`` can scope
+        retrieval to the current era of a resettable world.
         """
         if not content or not content.strip():
             return None
@@ -459,8 +495,8 @@ class KnowledgeStore:
             cur = db.execute(
                 "INSERT INTO chunks "
                 "(content, domain, heading, source, source_type, finding_type, "
-                "namespace, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (content, domain, heading, source, source_type, finding_type, namespace, now, now),
+                "namespace, epoch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (content, domain, heading, source, source_type, finding_type, namespace, epoch, now, now),
             )
             db.commit()
             chunk_id = int(cur.lastrowid)
@@ -507,6 +543,7 @@ class KnowledgeStore:
         source_type: str | None = None,
         finding_type: str | None = None,
         namespace: str | None = None,
+        epoch: str | None = None,
         max_chars: int | None = None,
         overlap_chars: int | None = None,
         min_chars: int | None = None,
@@ -549,6 +586,7 @@ class KnowledgeStore:
                 source_type=source_type,
                 finding_type=finding_type,
                 namespace=namespace,
+                epoch=epoch,
             )
             if cid is not None:
                 ids.append(cid)
@@ -626,6 +664,7 @@ class KnowledgeStore:
         domain: str | None = None,
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
+        epoch: str | None = None,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
@@ -640,6 +679,10 @@ class KnowledgeStore:
         Superseded rows (``invalidated_at`` set — ADR 0069 D9) are excluded
         by default; ``include_invalidated=True`` is the escape hatch for
         audit tooling that needs the full history.
+
+        ``epoch`` (#1634) restricts hits to chunks tagged with exactly that
+        epoch (see :meth:`add_chunk`) — chunks from other eras, and untagged
+        chunks, don't match. ``None`` = unfiltered (today's behavior).
         """
         if not query or not query.strip():
             return []
@@ -648,9 +691,9 @@ class KnowledgeStore:
             return []
         try:
             rows = (
-                self._search_fts(db, query, k, domain, namespace, include_invalidated)
+                self._search_fts(db, query, k, domain, namespace, include_invalidated, epoch)
                 if self._fts_available
-                else self._search_like(db, query, k, domain, namespace, include_invalidated)
+                else self._search_like(db, query, k, domain, namespace, include_invalidated, epoch)
             )
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] search failed: %s", exc)
@@ -678,6 +721,7 @@ class KnowledgeStore:
         domain: str | None,
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
+        epoch: str | None = None,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -696,6 +740,9 @@ class KnowledgeStore:
         if domain:
             where.append("c.domain = ?")
             params.append(domain)
+        if epoch:
+            where.append("c.epoch = ?")
+            params.append(epoch)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)
@@ -717,6 +764,7 @@ class KnowledgeStore:
         domain: str | None,
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
+        epoch: str | None = None,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
@@ -738,6 +786,9 @@ class KnowledgeStore:
         if domain:
             sql += " AND domain = ?"
             params.append(domain)
+        if epoch:
+            sql += " AND epoch = ?"
+            params.append(epoch)
         ns_sql, ns_params = _namespace_clause(namespace)
         if ns_sql:
             sql += f" AND {ns_sql}"
@@ -999,6 +1050,43 @@ class KnowledgeStore:
             return int(cur.rowcount)
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] delete_by_namespace failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def purge_domain(self, domain: str, *, before: str | datetime | None = None) -> int:
+        """HARD-delete every chunk in ``domain`` — optionally only those created
+        strictly before ``before`` (an ISO-8601 timestamp or a datetime; naive =
+        UTC). The knowledge-lifecycle primitive (#1634): a long-running plugin
+        retires a whole bucket of now-wrong lessons (or just the old ones) in one
+        call. Returns the count removed.
+
+        Explicit-intent path like :meth:`delete_by_id` — rows are removed
+        outright (the FTS delete trigger keeps ``chunks_fts`` in sync); for
+        keep-for-audit retirement, tag writes with ``epoch`` instead. An empty
+        ``domain`` or an unparseable ``before`` refuses to purge (returns 0)
+        rather than risk deleting the wrong rows."""
+        if not domain or not domain.strip():
+            return 0
+        try:
+            cutoff = _normalize_before(before)
+        except ValueError:
+            log.warning("[knowledge] purge_domain(%r): unparseable before=%r — refusing to purge", domain, before)
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            sql = "DELETE FROM chunks WHERE domain = ?"
+            params: list[Any] = [domain]
+            if cutoff is not None:
+                sql += " AND created_at < ?"
+                params.append(cutoff)
+            cur = db.execute(sql, params)
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] purge_domain failed: %s", exc)
             return 0
         finally:
             db.close()

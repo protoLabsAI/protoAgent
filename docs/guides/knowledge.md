@@ -213,6 +213,34 @@ D9) instead of judging it with a model at write time:
   inspector's DELETE routes remove rows outright — explicit operator intent
   beats history-keeping. Supersession is only for the *automatic* write paths.
 
+### Plugin knowledge lifecycle
+
+Supersession covers facts that get *revised*; a long-running **plugin's** knowledge can
+become wrong wholesale — spacetraders' game universe wipes weekly, so last week's route
+lessons reference markets that no longer exist. The consumption SDK
+([ADR 0043](/adr/0043-plugin-consumption-sdk-workflows-extraction)) gives plugins two
+lifecycle tools for that (#1634):
+
+- **Purge a domain** — `sdk.knowledge_purge(domain, *, before=None) -> int`
+  hard-deletes every chunk in a domain (optionally only those created before an
+  ISO-8601 timestamp) and returns the count. The delete is consistent across **every
+  index** — main rows, the FTS index, and the hybrid store's vectors — so a purged
+  chunk can't linger as a vector-only hit. On a layered store only the **private**
+  tier is purged; the shared commons is curated (promote/forget), never bulk-deleted.
+  An empty domain or an unparseable `before` refuses (returns 0) rather than risk
+  deleting the wrong rows.
+- **Scope by epoch** — `sdk.knowledge_add(..., epoch="2026-06-29")` tags a chunk with
+  the era it was learned in (an opaque string, typically a reset date), and
+  `sdk.knowledge_search(..., epoch=...)` filters **both rankings** (FTS + vector, and
+  both layered tiers) to exactly that era — other epochs *and* untagged chunks don't
+  match. A wipe becomes a new tag: old lessons stay stored for post-mortem analysis
+  but stop polluting retrieval. Unfiltered search (`epoch=None`) still sees every era.
+
+Both work on the store API too (`purge_domain`, the `epoch` kwarg on
+`add_chunk`/`add_document`/`search`). A custom [ADR 0031](/adr/0031-pluggable-knowledge-backend)
+backend that predates this surface keeps working: `knowledge_purge` degrades to a
+0-count no-op, and the SDK only forwards `epoch` when a caller passes one.
+
 ### The Memory inspector (console)
 
 The **Memory** rail view is the operator half of all of the above — a security
