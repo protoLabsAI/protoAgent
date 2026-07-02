@@ -30,6 +30,7 @@ import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
+import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { addComponent, addToolRef, appendReasoning, appendText } from "./parts";
 
 function messageId() {
@@ -1296,18 +1297,33 @@ function ChatSessionSlot({
   }
 
   async function stop() {
-    if (taskId) {
-      try {
-        await api.cancelTask(taskId);
-      } catch {
-        // The local abort below still releases the UI even if the task already finished.
-      }
-    }
+    // Release any locally-owned stream first — the server cancel is an RPC and
+    // must never gate the UI stopping (#1617: Stop appeared dead while a long
+    // reasoning chain streamed).
     abortRef.current?.abort();
+    // The task to cancel: this slot's live turn, or — when the slot re-attached
+    // to a turn it didn't start (reload / remount / the desktop relay, all of
+    // which leave taskId state empty and abortRef null) — the streaming
+    // message's durable taskId. Resolve BEFORE settling bubbles below, which
+    // erases the `streaming` marker the fallback keys off. On desktop the relay
+    // ignores the abort signal entirely, so this server-side cancel is the only
+    // thing that actually halts the turn there.
+    const before = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+    const cancelId = resolveStopTarget(before?.messages || [], taskId);
+    // Settle the thread immediately: no bubble may stay `streaming` after Stop.
+    // The send-loop only finalizes turns it owns; a re-attached turn has none.
+    if (before) chatStore.updateMessages(sessionId, finalizeStoppedMessages(before.messages));
     chatStore.setSessionStatus(sessionId, "idle");
     setStatusMessage("stopped");
     // Drop any optimistic queued-steer bubbles; the user chose to stop.
     setSteerQueue([]);
+    if (cancelId) {
+      try {
+        await api.cancelTask(cancelId);
+      } catch {
+        // Best-effort — the UI is already released; the task may have finished.
+      }
+    }
   }
 
   if (!session) return null;
