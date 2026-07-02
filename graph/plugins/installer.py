@@ -826,12 +826,64 @@ def _ls_remote_sha(source_url: str, ref: str) -> str:
     return sha
 
 
+# A release tag per the ADR 0049 pin lifecycle — `v1.2.3` / `1.2.3`. Prereleases and
+# anything fancier deliberately don't match (they fall back to the moving-ref compare).
+_SEMVER_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver_key(tag: str) -> tuple[int, int, int] | None:
+    """``(major, minor, patch)`` for a release tag, or ``None`` if not one."""
+    m = _SEMVER_TAG_RE.match((tag or "").strip())
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def is_release_tag(ref: str) -> bool:
+    """True when ``ref`` is a semver release tag (``v1.2.3`` / ``1.2.3``) — the pin
+    shape whose update moves tag → NEWER tag instead of re-fetching the same ref."""
+    return _semver_key(ref) is not None
+
+
+# `git ls-remote --tags` cache — same TTL/timeout regime as _lsremote_cache, its own
+# dict because the value is a {tag: sha} map, not a single sha.
+_lstags_cache: dict[str, tuple[float, dict[str, str]]] = {}
+
+
+def _ls_remote_tags(source_url: str) -> dict[str, str]:
+    """``{tag: commit_sha}`` for every tag at ``source_url`` (TTL-cached, one
+    timeout-bounded ``ls-remote --tags``). An annotated tag lists twice — the bare
+    ref (tag-object SHA) and the peeled ``<ref>^{}`` (commit SHA); the peeled one
+    wins, mirroring _ls_remote_sha's compare semantics (ADR 0049)."""
+    now = time.monotonic()
+    hit = _lstags_cache.get(source_url)
+    if hit is not None and (now - hit[0]) < _LSREMOTE_TTL_S:
+        return hit[1]
+    out = _git("ls-remote", "--tags", source_url, timeout=_LSREMOTE_TIMEOUT_S)
+    tags: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2 or not parts[0].strip():
+            continue
+        sha, ref = parts[0].strip(), parts[1].strip()
+        if not ref.startswith("refs/tags/"):
+            continue
+        name = ref[len("refs/tags/") :]
+        if name.endswith("^{}"):
+            tags[name[:-3]] = sha  # peeled commit — overwrite the tag-object sha
+        else:
+            tags.setdefault(name, sha)
+    _lstags_cache[source_url] = (now, tags)
+    return tags
+
+
 def check_plugin_update(entry: dict) -> dict:
     """Update status for one ``plugins.lock`` entry. A *pinned* plugin (its
     ``requested_ref`` is a full/abbrev commit SHA per ``_SHA_RE``) never
-    auto-updates — we skip the network call entirely. Otherwise compare the
-    stored ``resolved_sha`` against the latest remote SHA for its ref. Any
-    network/timeout/lookup failure is reported in ``error`` (non-fatal)."""
+    auto-updates — we skip the network call entirely. A RELEASE-TAG ref
+    (``vX.Y.Z``) is immutable, so "behind" there means a NEWER semver tag exists
+    on the remote (reported as ``latest_ref`` — the pin-lifecycle signal, ADR
+    0049) — with a moved-tag compare as the fallback. Any other ref compares the
+    stored ``resolved_sha`` against the latest remote SHA. Any network/timeout/
+    lookup failure is reported in ``error`` (non-fatal)."""
     pid = entry.get("id", "")
     source_url = entry.get("source_url", "")
     requested_ref = entry.get("requested_ref", "") or ""
@@ -844,6 +896,7 @@ def check_plugin_update(entry: dict) -> dict:
         "requested_ref": requested_ref,
         "current_sha": current_sha,
         "latest_sha": None,
+        "latest_ref": None,
         "behind": False,
         "pinned": pinned,
         "error": None,
@@ -853,8 +906,24 @@ def check_plugin_update(entry: dict) -> dict:
             result["error"] = "no source_url recorded — cannot check for updates"
         return result
 
+    tag_key = _semver_key(requested_ref)
     try:
-        latest = _ls_remote_sha(source_url, requested_ref)
+        if tag_key is not None:
+            tags = _ls_remote_tags(source_url)
+            newest_key, newest = tag_key, None
+            for name, sha in tags.items():
+                k = _semver_key(name)
+                if k is not None and k > newest_key:
+                    newest_key, newest = k, (name, sha)
+            if newest is not None:
+                result["latest_ref"], result["latest_sha"] = newest
+                result["behind"] = True
+                return result
+            # No newer release — fall through to the moved-tag compare: the SAME
+            # tag re-pointed at a different commit still counts as behind.
+            latest = tags.get(requested_ref, "")
+        else:
+            latest = _ls_remote_sha(source_url, requested_ref)
     except subprocess.TimeoutExpired:
         result["error"] = f"ls-remote timed out after {_LSREMOTE_TIMEOUT_S:.0f}s"
         return result

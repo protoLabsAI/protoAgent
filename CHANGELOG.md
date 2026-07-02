@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Release-tag-pinned plugins now see updates.** The update check ls-remoted the
+  SAME tag a plugin was installed at — tags are immutable, so a tag-pinned plugin
+  (every pm-stack member) could never report "behind" and the console never offered
+  an Update. A `vX.Y.Z` pin now scans the remote's tags for a **newer semver
+  release** (numeric ordering, peeled SHAs, prereleases ignored) and reports it as
+  `latest_ref`; the Update action installs that tag instead of pointlessly
+  re-fetching the recorded one. A force-moved tag still reads as behind, and
+  branch-ref plugins are unchanged.
+
 ## [0.82.0] - 2026-07-02
 
 ### Added

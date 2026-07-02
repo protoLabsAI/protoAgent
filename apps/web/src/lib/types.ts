@@ -216,12 +216,15 @@ export type McpCatalogEntry = {
 // the network; the rest ls-remote their ref. `behind` ⇒ the recorded
 // `current_sha` lags `latest_sha`; a per-entry `error` is non-fatal (the check
 // failed, the row stays usable). `latest_sha` is null when pinned or on error.
+// `latest_ref` is set when a release-tag pin has a NEWER semver tag to move to
+// (the update installs that tag); null for branch refs / moved-tag cases.
 export type PluginUpdate = {
   id: string;
   behind: boolean;
   pinned: boolean;
   current_sha: string;
   latest_sha: string | null;
+  latest_ref?: string | null;
   error?: string | null;
 };
 
