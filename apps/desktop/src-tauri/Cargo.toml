@@ -28,6 +28,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
+# External links open in the system browser via the opener plugin; the shell
+# plugin stays for the sidecar (its `open` is deprecated in favor of opener).
+tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 # Desktop chat streaming: WKWebView can't read a streaming fetch body, so the

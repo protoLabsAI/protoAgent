@@ -8,6 +8,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -556,6 +557,7 @@ pub fn run() {
             focus_main
         ])
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // In-app updates: checks the latest.json manifest on GitHub Releases,
         // verifies the minisign signature, installs, relaunches.
@@ -647,10 +649,11 @@ pub fn run() {
             // the host to spawn a child window. We don't host child windows, so without
             // a handler WKWebView silently drops the request and the click does nothing
             // — e.g. the GitHub plugin's PR/issue links were dead in the desktop app.
-            // Open external http(s) links in the system browser (shell:allow-open) and
+            // Open external http(s) links in the system browser (the opener plugin) and
             // deny the in-app window. (Browsers handle this implicitly via allow-popups;
             // the desktop shell has to do it explicitly.)
             let link_opener = app.handle().clone();
+            #[allow(unused_mut)] // `mut` is only used on the macOS title-bar branch below.
             let mut win = WebviewWindowBuilder::new(app, "main", app_url())
                 .title("protoAgent")
                 .inner_size(1280.0, 820.0)
@@ -661,7 +664,7 @@ pub fn run() {
                 .on_new_window(move |url, _features| {
                     let target = url.as_str();
                     if target.starts_with("http://") || target.starts_with("https://") {
-                        if let Err(e) = link_opener.shell().open(target, None) {
+                        if let Err(e) = link_opener.opener().open_url(target, None::<&str>) {
                             log::error!("desktop: failed to open external link {target}: {e}");
                         }
                     }
