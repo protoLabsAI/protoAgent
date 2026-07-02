@@ -14,6 +14,7 @@ so the test never clobbers the real host.
 from __future__ import annotations
 
 import importlib
+import inspect
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ import pytest
 
 from graph.plugins import testkit
 from graph.plugins.loader import _plugin_module_name  # the harness must match the runtime
+from graph.plugins.registry import PluginRegistry  # the surface FakeRegistry must mirror
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_plugin"
 PID = "sample-plugin"
@@ -75,6 +77,78 @@ def test_register_runs_host_free_and_fake_registry_captures():
     assert len(reg.tools) == 1
     assert "sample:done" in reg.verifiers
     assert reg.skill_dirs == ["skills"]
+    assert "sample-cmd" in reg.chat_commands  # "Sample Cmd" slugified — the #1637 hole, now captured
+    assert len(reg.late_tool_factories) == 1
+
+
+# ── registry parity — the drift guard (#1637) ────────────────────────────────────────
+# FakeRegistry drifted from PluginRegistry (register_chat_command was missing), which made
+# that seam silently untestable: plugins hasattr-guard the call, so the smoke test passed
+# while asserting nothing. These tests make the NEXT new seam fail here instead of drifting.
+
+
+def _public_methods(cls) -> dict:
+    return {n: fn for n, fn in inspect.getmembers(cls, inspect.isfunction) if not n.startswith("_")}
+
+
+def test_fake_registry_mirrors_the_full_plugin_registry_surface():
+    real = _public_methods(PluginRegistry)
+    fake = _public_methods(testkit.FakeRegistry)
+    assert "register_chat_command" in real  # sanity: introspection sees the surface
+    for name, fn in real.items():
+        fake_fn = fake.get(name)
+        assert fake_fn is not None, (
+            f"FakeRegistry is missing PluginRegistry.{name} — every public registry method "
+            f"must be mirrored in graph/plugins/testkit.py, or the seam is silently "
+            f"untestable in plugin smoke tests (plugins hasattr-guard these calls)."
+        )
+        real_params = [(p.name, p.kind) for p in inspect.signature(fn).parameters.values()]
+        fake_params = [(p.name, p.kind) for p in inspect.signature(fake_fn).parameters.values()]
+        assert fake_params == real_params, (
+            f"FakeRegistry.{name} signature drifted from PluginRegistry.{name}: "
+            f"{fake_params} != {real_params}"
+        )
+
+
+def test_testkit_slugify_matches_the_host_slugifier():
+    # testkit is host-free by contract (vendored verbatim into standalone plugin CI), so it
+    # duplicates slugify_slash instead of importing it — this keeps the copies in sync.
+    from graph.slash_commands import slugify_slash
+
+    for raw in ("Issue", "My Cmd", "foo_bar", "  /Weird--Token!!  ", "GOAL", "", "---", "héllo", "a1-b2"):
+        assert testkit._slugify_slash(raw) == slugify_slash(raw), f"slug drift for {raw!r}"
+
+
+def test_fake_registry_captures_chat_commands_slugified():
+    reg = testkit.FakeRegistry()
+
+    async def h(rest, session_id):
+        return "ok"
+
+    reg.register_chat_command("Issue", h)  # mixed case — stored under the live token
+    assert reg.chat_commands == {"issue": h}
+
+
+def test_fake_registry_chat_command_rejects_what_the_host_rejects():
+    # The real registry warns-and-skips these (degrade-safe live); the fake raises so a
+    # broken registration fails the test instead of shipping green.
+    reg = testkit.FakeRegistry()
+
+    async def h(rest, session_id):
+        return "ok"
+
+    with pytest.raises(ValueError):  # reserved core token
+        reg.register_chat_command("goal", h)
+    with pytest.raises(ValueError):  # slugifies to the reserved token too
+        reg.register_chat_command("/GOAL", h)
+    with pytest.raises(ValueError):  # empty after slugify
+        reg.register_chat_command("!!!", h)
+    with pytest.raises(ValueError):  # non-callable handler
+        reg.register_chat_command("fine-name", "not-callable")
+    reg.register_chat_command("Issue", h)
+    with pytest.raises(ValueError):  # duplicate token (live: first wins + warning)
+        reg.register_chat_command("issue", h)
+    assert reg.chat_commands == {"issue": h}  # nothing rejected leaked into the capture
 
 
 def test_install_host_stubs_creates_patchable_seam_for_absent_host():

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 
 def register(registry):
-    """Contribute a tool + a goal verifier + a skill dir (host imports lazy)."""
+    """Contribute a tool + a goal verifier + a skill dir + a chat command (host imports lazy)."""
     from graph.goals.types import VerifyResult  # lazy host import — resolved by host_stubs
 
     from . import tools
@@ -19,3 +19,9 @@ def register(registry):
 
     registry.register_goal_verifier("sample:done", _verify)
     registry.register_skill_dir("skills")
+
+    async def _cmd(rest, session_id):
+        return f"sample:{rest}"
+
+    registry.register_chat_command("Sample Cmd", _cmd)  # mixed case — slugified to /sample-cmd
+    registry.register_late_tool_factory(lambda all_tools, config: None)

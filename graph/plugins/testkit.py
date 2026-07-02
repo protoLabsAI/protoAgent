@@ -158,16 +158,43 @@ def install_host_stubs(extra: dict | None = None) -> list[str]:
 
 
 # ── fake registry ────────────────────────────────────────────────────────────────────
+def _slugify_slash(raw: str) -> str:
+    """Lowercase + non-alphanumerics→hyphens slug for a slash token — mirrors
+    ``graph.slash_commands.slugify_slash`` (this file is host-free by contract, so it
+    can't import it; a parity test in ``tests/test_plugin_testkit.py`` keeps them in sync)."""
+    return re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower()).strip("-")
+
+
 class FakeRegistry:
     """Records what ``register(registry)`` contributes, with no host — mirrors the real
     ``graph.plugins.registry.PluginRegistry`` surface so a plugin's ``register()`` runs
     unchanged. Assert against the captured lists/dicts.
 
     e.g. ``reg = FakeRegistry(); plugin.register(reg); assert reg.tools and reg.verifiers``.
+
+    **Parity contract: every public method on ``PluginRegistry`` (``register_*``, ``emit``,
+    ``on``, ``navigate``, ``live_config``) must exist here with the same parameters** — a
+    missing method makes that seam silently untestable (a plugin's ``hasattr`` guard skips
+    it and a typo'd registration ships green). Enforced by
+    ``tests/test_plugin_testkit.py::test_fake_registry_mirrors_the_full_plugin_registry_surface``
+    — adding a seam to the registry without mirroring it here fails that test.
+
+    Capture shapes are assert-friendly, not the registry's internal shapes. One behavioral
+    divergence, on purpose: where the real registry *warns and skips* a bad registration
+    (degrade-safe live), the fake **raises ``ValueError``** — a test harness must fail loud,
+    not ship a silently-dropped registration green.
     """
 
-    def __init__(self, config: dict | None = None):
+    def __init__(
+        self, config: dict | None = None, *, plugin_id: str = "test-plugin", plugin_dir=None, config_section=None
+    ):
+        # The registry attributes a plugin reads in register() (host is None — like the
+        # real registry docstring says, "guard for None (e.g. in tests)").
+        self.plugin_id = plugin_id
+        self.plugin_dir = Path(plugin_dir) if plugin_dir is not None else Path(".")
         self.config = config or {}
+        self.config_section = config_section or plugin_id
+        self.host = None
         self.tools: list = []
         self.routers: list = []
         self.surfaces: list = []
@@ -182,10 +209,17 @@ class FakeRegistry:
         self.watch_hooks: list = []
         self.knowledge_stores: dict = {}
         self.embedders: dict = {}
+        self.chat_commands: dict = {}  # slugified token -> handler
+        self.late_tool_factories: list = []
         self.handlers: dict = {}  # topic -> [handlers]
         self.emitted: list = []  # (topic, data)
         self.navigations: list = []
         self.thread_id_resolver = None
+
+    def live_config(self) -> dict:
+        """The real registry re-reads host state here; with no host that falls back to
+        the register-time snapshot — which is all the fake has."""
+        return self.config
 
     # contributions
     def register_tool(self, tool) -> None:
@@ -193,6 +227,21 @@ class FakeRegistry:
 
     def register_tools(self, tools) -> None:
         self.tools.extend(tools)
+
+    def register_chat_command(self, name: str, handler) -> None:
+        """Capture a user-only ``/<name>`` control command — with the real registry's
+        slugify + validation, so a registration the host would refuse (empty/unslugifiable
+        name, non-callable handler, the reserved core token ``goal``, a duplicate token)
+        fails the test instead of shipping green. Live those are warn-and-skip; here they
+        raise (see the class docstring)."""
+        token = _slugify_slash(name)
+        if not token or not callable(handler):
+            raise ValueError(f"register_chat_command needs a name + callable: {name!r} / {handler!r}")
+        if token == "goal":  # reserved core token — mirrors PluginRegistry
+            raise ValueError(f"chat command /{token} is reserved")
+        if token in self.chat_commands:
+            raise ValueError(f"chat command /{token} registered twice")
+        self.chat_commands[token] = handler
 
     def register_router(self, router, prefix: str | None = None) -> None:
         self.routers.append((prefix, router))
@@ -205,6 +254,9 @@ class FakeRegistry:
 
     def register_middleware(self, factory) -> None:
         self.middlewares.append(factory)
+
+    def register_late_tool_factory(self, factory) -> None:
+        self.late_tool_factories.append(factory)
 
     def register_mcp_server(self, factory) -> None:
         self.mcp_servers.append(factory)

@@ -80,6 +80,8 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 | `register_middleware(factory)` | A LangGraph **`AgentMiddleware`** (per-turn before/after-model + tool hooks) — `factory(config) → middleware \| None` | graph build; appended before message-capture (ADR 0032) |
 | `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
 | `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
+| `register_chat_command(name, handler)` | A **user-only** `/<name>` chat control command that short-circuits the turn (the generalized `/goal`) — token slugified+lowercased; `goal` reserved; see [publish guide](/guides/plugin-registry) | chat dispatch; first plugin to claim a token wins |
+| `register_late_tool_factory(factory)` | A tool factory that runs **after** the full toolset is assembled — `factory(all_tools, config) → tool \| list \| None`, for meta-tools that must see every other tool | graph build, appended last |
 
 ```python
 def register(registry):
@@ -315,6 +317,34 @@ Bundled skills load as `disk`-source [skills](./skills.md), re-seeded each boot.
 - `GET /api/runtime/status` lists `plugins` with `{id, name, enabled, loaded,
   tools, skills}`.
 - Plugins are (re)loaded at startup and on config reload.
+
+## Test it host-free (the testkit)
+
+`graph/plugins/testkit.py` is a host-free test harness: it loads a plugin the way the
+runtime does (as a package, so relative imports and deep engine modules work), stubs the
+host-only `graph.*` / `knowledge.*` imports, and hands `register()` a **`FakeRegistry`**
+that captures every contribution — so a plugin's real modules run under plain `pytest`
+with no protoAgent server. It's stdlib-only by design: `scaffold_plugin(with_tests=True)`
+vendors it verbatim into a standalone plugin repo as `tests/_plugin_testkit.py`; bundled
+plugins import it directly (`from graph.plugins.testkit import load_plugin,
+install_host_stubs, FakeRegistry`).
+
+```python
+install_host_stubs()                       # graph.* / knowledge.* resolve with no host
+pkg = load_plugin("path/to/my-plugin")     # loaded as a package, like the runtime
+reg = FakeRegistry()
+pkg.register(reg)
+assert reg.tools and "issue" in reg.chat_commands   # assert the captured contributions
+```
+
+**The parity contract:** `FakeRegistry` mirrors every public `PluginRegistry` method
+(`register_*`, `emit`, `on`, `navigate`, `live_config`) with the same parameters — a
+missing method would make that seam silently untestable (plugins `hasattr`-guard these
+calls, so a typo'd registration would ship green). A drift guard in
+`tests/test_plugin_testkit.py` introspects both classes and fails when a new registry
+seam isn't mirrored. One intentional divergence: where the real registry *warns and
+skips* an invalid registration (degrade-safe live — e.g. a chat command named `goal`,
+which is reserved), the fake **raises `ValueError`** so the mistake fails your test.
 
 ## Try it
 
