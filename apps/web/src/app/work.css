@@ -69,10 +69,6 @@
   gap: 8px;
   padding: 10px 12px 0;
 }
-.work-card-icon {
-  flex: none;
-  color: var(--fg-muted);
-}
 .work-card-title {
   font-weight: 600;
   min-width: 0;

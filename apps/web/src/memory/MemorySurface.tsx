@@ -38,7 +38,7 @@ export function MemorySurface() {
   const [injectionFilter, setInjectionFilter] = useState("");
 
   return (
-    <section className="panel stage-panel" data-testid="memory-surface">
+    <section className="panel stage-panel memory-panel" data-testid="memory-surface">
       <PanelHeader
         title="Memory"
         kicker="what auto-injects into the agent's turns — inspect, audit, prune"

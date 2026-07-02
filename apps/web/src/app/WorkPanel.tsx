@@ -9,8 +9,7 @@ import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-q
 import { Badge, Button, Empty, type Status } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
-import { ArrowLeft, Boxes, CalendarClock, Eye, Plus, Target } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 
 import { StagePanel } from "./ErrorBoundary";
 import { GoalCreateDialog, GoalsPanel } from "./GoalsPanel";
@@ -203,7 +202,6 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
         <OverviewCard
           id="goals"
           title="Goals"
-          icon={Target}
           count={active.length}
           pulse={goalsPulse(goals)}
           onOpen={() => onOpen("goals")}
@@ -228,7 +226,6 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
         <OverviewCard
           id="watches"
           title="Watches"
-          icon={Eye}
           count={activeWatches(watches).length}
           pulse={watchesPulse(watches)}
           onOpen={() => onOpen("watches")}
@@ -257,7 +254,6 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
         <OverviewCard
           id="tasks"
           title="Tasks"
-          icon={Boxes}
           count={ready.length + inProgress.length}
           pulse={tasksPulse(issues)}
           onOpen={() => onOpen("tasks")}
@@ -280,7 +276,6 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
         <OverviewCard
           id="schedule"
           title="Schedule"
-          icon={CalendarClock}
           count={upcoming.length}
           pulse={schedulePulse(jobs)}
           onOpen={() => onOpen("schedule")}
@@ -320,7 +315,7 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
 }
 
 // One overview card: the WHOLE card is the click-through to its panel (role=button,
-// Enter/Space, selection-guarded like the chat report card), with a header (icon + name +
+// Enter/Space, selection-guarded like the chat report card), with a header (name +
 // count Badge), the muted one-line pulse, a short StatusDot micro-list, and a corner "+"
 // quick-add that stops propagation so adding never navigates. When the card is empty the
 // DS Empty takes over the body, with the same quick-add as its action (when the card has
@@ -328,7 +323,6 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
 function OverviewCard({
   id,
   title,
-  icon: Icon,
   count,
   pulse,
   onOpen,
@@ -338,7 +332,6 @@ function OverviewCard({
 }: {
   id: string;
   title: string;
-  icon: LucideIcon;
   count: number;
   pulse?: string;
   onOpen: () => void;
@@ -374,7 +367,6 @@ function OverviewCard({
       }}
     >
       <header className="work-card-head">
-        <Icon size={15} className="work-card-icon" aria-hidden />
         <span className="work-card-title">{title}</span>
         <Badge status={count > 0 ? "info" : "neutral"}>{count}</Badge>
       </header>
