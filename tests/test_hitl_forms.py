@@ -185,21 +185,23 @@ async def test_autonomous_turn_force_completes_after_cap(monkeypatch):
     assert len(cleared) == 1  # the stray interrupt was cleared exactly once
 
 
-# ── multiple-pending-interrupt tripwire ───────────────────────────────────────
-# create_agent runs an assistant turn's tool calls sequentially, so only ONE interrupt ever
-# pends; _pending_interrupt_value returns it. If multiple ever pend (a LangGraph behavior
-# change), it warns rather than silently dropping the rest.
+# ── multiple pending interrupts (parallel gated tool calls) ───────────────────
+# The tool node runs an assistant turn's tool calls concurrently, so several interrupts
+# can pend at once. _pending_interrupt surfaces the first UNANSWERED one (a completed
+# task's interrupt must not resurface) with its id, so the resume can target it; the
+# end-to-end drain lives in test_hitl_hold.py.
 
 
 class _FakeInterrupt:
-    def __init__(self, value):
+    def __init__(self, value, id="i-" + "0" * 30):
         self.value = value
+        self.id = id
 
 
 class _FakeSnapshot:
-    def __init__(self, interrupts):
+    def __init__(self, interrupts, tasks=()):
         self.interrupts = interrupts
-        self.tasks = ()
+        self.tasks = tasks
 
 
 class _FakeGraph:
@@ -217,13 +219,42 @@ async def test_single_pending_interrupt_returns_value(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_multiple_pending_interrupts_warn_and_return_first(monkeypatch, caplog):
-    import logging
-
+async def test_multiple_pending_interrupts_return_first_with_id(monkeypatch):
     monkeypatch.setattr(
-        STATE, "graph", _FakeGraph([_FakeInterrupt("first"), _FakeInterrupt("second")]), raising=False
+        STATE,
+        "graph",
+        _FakeGraph([_FakeInterrupt("first", id="aaa"), _FakeInterrupt("second", id="bbb")]),
+        raising=False,
     )
-    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
-        val = await chat_mod._pending_interrupt_value({"configurable": {"thread_id": "t"}})
-    assert val == "first"  # still surfaces the first; never drops silently or raises
-    assert any("pending interrupts at once" in r.getMessage() for r in caplog.records)
+    cfg = {"configurable": {"thread_id": "t"}}
+    assert await chat_mod._pending_interrupt_value(cfg) == "first"  # never drops silently or raises
+    assert await chat_mod._pending_interrupt(cfg) == ("aaa", "first")
+    # …and the resume payload targets exactly that interrupt, by id.
+    assert await chat_mod._resume_payload(cfg, "yes") == {"aaa": "yes"}
+
+
+class _FakeTask:
+    def __init__(self, interrupts, result=None):
+        self.interrupts = interrupts
+        self.result = result
+
+
+@pytest.mark.asyncio
+async def test_answered_interrupt_does_not_resurface(monkeypatch):
+    """A super-step doesn't commit until ALL its parallel tasks finish, so an already-
+    answered interrupt stays in the snapshot next to the unanswered one — its task
+    carries a ``result``. Surfacing must skip it, else the operator loops on a
+    question they already answered."""
+    answered = _FakeTask([_FakeInterrupt("first", id="aaa")], result={"messages": []})
+    waiting = _FakeTask([_FakeInterrupt("second", id="bbb")])
+    graph = _FakeGraph([_FakeInterrupt("first", id="aaa"), _FakeInterrupt("second", id="bbb")])
+    graph._snapshot_tasks = (answered, waiting)
+
+    async def aget_state(config):
+        return _FakeSnapshot(graph._interrupts, tasks=graph._snapshot_tasks)
+
+    graph.aget_state = aget_state
+    monkeypatch.setattr(STATE, "graph", graph, raising=False)
+    cfg = {"configurable": {"thread_id": "t"}}
+    assert await chat_mod._pending_interrupt(cfg) == ("bbb", "second")
+    assert await chat_mod._resume_payload(cfg, "us-east-1") == {"bbb": "us-east-1"}

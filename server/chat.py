@@ -372,36 +372,60 @@ def _interrupt_payload(val) -> dict:
     return {"question": (str(val) if val is not None else "Input required.")}
 
 
-async def _pending_interrupt_value(config: dict):
-    """Return the value of a pending LangGraph interrupt (ask_human / HITL) for
-    this thread, or ``None``. Both chat paths read the same snapshot to detect a
-    turn that paused for human input instead of producing a final answer.
+async def _pending_interrupt(config: dict):
+    """The FIRST pending LangGraph interrupt for this thread as ``(interrupt_id, value)``,
+    or ``None``. Both chat paths read the same snapshot to detect a turn that paused for
+    human input instead of producing a final answer.
 
-    Returns a single value because the graph only ever has one interrupt pending:
-    ``create_agent`` / ``ToolNode`` runs an assistant turn's tool calls SEQUENTIALLY, so the
-    first ask_human / request_user_input ``interrupt()`` halts the tool node before the next
-    tool runs (verified). Multiple HITL calls therefore surface as back-to-back pauses — each
-    drained on its own resume by the lead/autonomous turn loop — not as one batch."""
+    A turn can pend SEVERAL interrupts at once: the tool node runs an assistant turn's
+    tool calls concurrently, so two approval-gated tools called in one turn both hit
+    ``interrupt()`` before either resolves. They drain one at a time — the first is
+    surfaced, the operator's answer resumes exactly that one BY ID (a bare resume with
+    more than one pending is a hard LangGraph error), and the graph re-pauses on the
+    next still-unanswered interrupt, which surfaces on the following pass."""
     try:
         snapshot = await STATE.graph.aget_state(config)
     except Exception:
         return None
-    pending = list(getattr(snapshot, "interrupts", None) or [])
+    # Task-level first, SKIPPING completed tasks: a super-step doesn't commit until all
+    # its parallel tasks finish, so an already-ANSWERED interrupt stays in the snapshot
+    # (its task carries a ``result``) alongside the still-unanswered ones. Surfacing it
+    # again would loop the operator on a question they already answered.
+    pending = []
+    for t in getattr(snapshot, "tasks", ()) or ():
+        if getattr(t, "result", None) is not None:
+            continue
+        pending.extend(getattr(t, "interrupts", ()) or ())
     if not pending:
-        for t in getattr(snapshot, "tasks", ()) or ():
-            pending.extend(getattr(t, "interrupts", ()) or ())
+        # Fallback for snapshot shapes without task-level interrupts.
+        pending = list(getattr(snapshot, "interrupts", None) or [])
     if not pending:
         return None
     if len(pending) > 1:
-        # Tripwire: with sequential tool execution this can't happen. If a LangGraph change
-        # ever makes interrupts pend simultaneously, surfacing only pending[0] would silently
-        # drop the rest — warn loudly so we build real multi-interrupt handling instead.
-        log.warning(
-            "[hitl] %d pending interrupts at once — only the first is surfaced; tool execution "
-            "is expected to be sequential, so this signals a behavior change to handle.",
+        log.info(
+            "[hitl] %d interrupts pending at once (parallel gated tool calls) — surfacing "
+            "one at a time; each resume targets its interrupt id.",
             len(pending),
         )
-    return getattr(pending[0], "value", pending[0])
+    first = pending[0]
+    return (getattr(first, "id", None), getattr(first, "value", first))
+
+
+async def _pending_interrupt_value(config: dict):
+    """Just the pending interrupt's value (the payload the console renders), or ``None``."""
+    found = await _pending_interrupt(config)
+    return None if found is None else found[1]
+
+
+async def _resume_payload(config: dict, resume_value):
+    """What ``Command(resume=…)`` should carry: the id-keyed form ``{interrupt_id: value}``
+    answering exactly the surfaced (first-pending) interrupt. The bare value is only a
+    fallback for an unreadable snapshot / an id-less interrupt — safe there, since with a
+    single pending interrupt both forms are equivalent, and multi-pending implies modern
+    LangGraph whose interrupts always carry ids."""
+    found = await _pending_interrupt(config)
+    iid = found[0] if found else None
+    return {iid: resume_value} if iid else resume_value
 
 
 async def _clear_pending_interrupt(config: dict) -> None:
@@ -468,7 +492,7 @@ async def _run_turn_stream(
         human = HumanMessage(content=message)
 
     graph_input = (
-        Command(resume=resume_value)
+        Command(resume=await _resume_payload(config, resume_value))
         if resume_value is not None
         # Prepend any completed background-job notifications (ADR 0050) so the model
         # learns of detached work that finished since this session last ran a turn.
@@ -1493,7 +1517,7 @@ async def _chat_langgraph(
                 if hold is _HITL_RESUME:
                     from langgraph.types import Command
 
-                    graph_input = Command(resume=message)
+                    graph_input = Command(resume=await _resume_payload(config, message))
                 else:
                     graph_input = {
                         "messages": [HumanMessage(content=message)],

@@ -107,6 +107,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `report` once terminal) instead of reaching into `STATE.background_mgr` directly.
 
 ### Fixed
+- **Parallel approval-gated tool calls no longer crash the resume.** The model is free
+  to call two gated tools (`run_command` approvals, `request_user_input` forms) in one
+  assistant turn; both `interrupt()` concurrently, and answering the surfaced one then
+  died with LangGraph's `RuntimeError: When there are multiple pending interrupts, you
+  must specify the interrupt id when resuming`. Resumes now carry the id-keyed form
+  (`Command(resume={interrupt_id: answer})`) targeting exactly the surfaced interrupt,
+  and pending-interrupt detection skips tasks that already completed — a super-step
+  doesn't commit until all its parallel tasks finish, so an already-answered interrupt
+  otherwise resurfaces and loops the operator on a question they answered. Multiple
+  interrupts drain one at a time: answer the first, the next surfaces.
 - **Re-installing a plugin from its own origin converges instead of erroring.**
   `plugin install` of an already-installed plugin from the SAME recorded source is
   now a no-op at the same commit (`up_to_date` in the summary) and an in-place
