@@ -54,17 +54,57 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
         raise
 
 
+def _anchored_pyproject_version() -> str | None:
+    """``[project].version`` from the ``pyproject.toml`` that governs *this* package,
+    or ``None`` when this package didn't ship one (wheel install).
+
+    Anchored to the package's **own location** — never the cwd, never an unbounded
+    upward search (either could swallow an unrelated project's ``pyproject.toml``,
+    e.g. when protoAgent is wheel-installed under ``<their-project>/.venv``):
+
+    - **Frozen (PyInstaller onefile):** the bundle root ``_MEIPASS``, where
+      ``build_sidecar.py`` bundles ``pyproject.toml`` (#894).
+    - **Source checkout / ``COPY .`` image:** the repo root, exactly two levels up
+      (this module is ``<root>/infra/paths.py``).
+    - **Wheel install:** the anchor is ``site-packages`` — no pyproject there, so
+      this returns ``None`` and installed metadata answers instead.
+    """
+    import sys
+
+    here = Path(__file__).resolve()
+    if getattr(sys, "frozen", False):
+        root = Path(getattr(sys, "_MEIPASS", here.parent))
+    else:
+        root = here.parents[1]
+    try:
+        m = re.search(r'^version\s*=\s*"([^"]+)"', (root / "pyproject.toml").read_text(), re.MULTILINE)
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
 def package_version() -> str:
     """This instance's app version — ``pyproject.toml`` ``[project].version`` is the
     one source of truth (the release pipeline bumps it).
 
-    Prefer installed-package metadata; fall back to reading pyproject.toml next to
-    this module (source checkout / ``COPY .`` image) or the PyInstaller bundle root;
-    final fallback keeps callers valid if neither is available. Lives here (a leaf
-    module) so the A2A card (``server/a2a.py``), the runtime status, and the fleet
-    supervisor all report it without import cycles — the hub↔remote version
-    handshake compares it.
+    Prefer the pyproject this package ships with (source checkout / ``COPY .``
+    image / PyInstaller bundle — see ``_anchored_pyproject_version``); fall back to
+    installed-package metadata (wheel installs, where no pyproject ships); final
+    ``"0.0.0"`` fallback keeps callers valid if neither is available. The pyproject
+    must win when both exist: editable installs don't rewrite dist-info on a
+    version bump (only the next ``uv sync`` does), so on a dev checkout the
+    metadata goes stale — and when metadata was consulted first, the plugin
+    ``min_protoagent_version`` gate refused valid plugins and the A2A card
+    advertised the old version (#1644).
+
+    Lives here (a leaf module) so the A2A card (``server/a2a.py``), the plugin
+    compat gate (``graph/plugins/loader.py``), the runtime status, and the fleet
+    supervisor all report it without import cycles — one shared resolver, so those
+    surfaces can never disagree.
     """
+    pinned = _anchored_pyproject_version()
+    if pinned:
+        return pinned
     try:
         from importlib.metadata import PackageNotFoundError, version
 
@@ -74,25 +114,6 @@ def package_version() -> str:
             pass
     except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
         pass
-
-    import sys
-
-    here = Path(__file__).resolve()
-    if getattr(sys, "frozen", False):  # PyInstaller onefile — pyproject bundled at _MEIPASS (#894)
-        candidates = [Path(getattr(sys, "_MEIPASS", here.parent))]
-    else:
-        # Search UPWARD for pyproject.toml: it's at the repo root (or the `COPY .`
-        # image root), NOT next to this module — paths.py lives in infra/, so a
-        # plain `__file__.parent` would look in infra/ and miss it (the regression
-        # the root-module reorg introduced). The nearest one going up is the repo's.
-        candidates = list(here.parents)
-    for base in candidates:
-        try:
-            m = re.search(r'^version\s*=\s*"([^"]+)"', (base / "pyproject.toml").read_text(), re.MULTILINE)
-            if m:
-                return m.group(1)
-        except OSError:
-            continue
     return "0.0.0"
 
 

@@ -195,30 +195,17 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
 def _host_version() -> str:
     """The running protoAgent version, for the manifest compat gate.
 
-    Same resolution order as the A2A card (``server.a2a._package_version`` —
-    not imported here, ``graph`` must not depend on ``server``): installed
-    package metadata first, then the repo ``pyproject.toml`` ``[project].version``.
+    Delegates to the shared resolver ``infra.paths.package_version()`` — the same
+    source the A2A card advertises (``server.a2a._package_version``; ``graph``
+    must not import ``server``, so both delegate to the ``infra`` leaf) — so the
+    gate and the card can never disagree. The resolver prefers the repo
+    ``pyproject.toml`` over installed metadata: on a dev checkout the editable
+    install's dist-info goes stale on version bumps, and this gate used to refuse
+    valid plugins because of it (#1644).
     """
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    from infra.paths import package_version
 
-        try:
-            return version("protoagent")
-        except PackageNotFoundError:
-            pass
-    except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
-        pass
-
-    from infra.paths import instance_paths
-
-    pyproject = instance_paths().app_root / "pyproject.toml"
-    try:
-        m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE)
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
-    return "0.0.0"
+    return package_version()
 
 
 def _min_version_gate(manifest: PluginManifest) -> str | None:

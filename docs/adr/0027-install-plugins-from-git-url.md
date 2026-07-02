@@ -89,7 +89,11 @@ fast-follow; untrusted code → MCP (D1).
 ### D7 — Manifest additions (all data, all optional)
 
 `requires_pip: [..]` (D4); `repository:` / `homepage:` (provenance, shown in review);
-`min_protoagent_version:` (compat — warn/refuse if the host is older).
+`min_protoagent_version:` (compat — warn/refuse if the host is older; the host
+version is the shared `infra.paths.package_version()` resolver the A2A card also
+advertises — repo `pyproject.toml` first, installed metadata on wheel/frozen
+installs — so a dev checkout's stale editable-install dist-info can't refuse a
+valid plugin, #1644).
 
 ### D8 — Integrity rails
 
