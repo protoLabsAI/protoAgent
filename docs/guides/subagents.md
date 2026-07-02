@@ -216,7 +216,7 @@ or plugin has a long **deterministic** operation that shouldn't block the turn (
 pipeline — the report card, KB indexing, and the push-resume nudge all land for free — and
 `graph.sdk.background_status(task_id)` reads the job row (`{status, description, report?}`) so a
 plugin dashboard can show progress between launch and the nudge. See
-[Plugins ▸ Tapping core deeper](/guides/plugins#tapping-core-deeper--graphsdk-adr-0043).
+[Plugins ▸ Tapping core deeper](/guides/plugins#tapping-core-deeper-graph-sdk-adr-0043).
 
 ## What you get for free
 
