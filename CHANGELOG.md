@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Existing configs that set the key explicitly are unaffected.
 
 ### Fixed
+- **Windows reinstall over kept data no longer fails on a running server**
+  (#1685). Tauri's stock NSIS template closes the main app before (un)installing,
+  but the bundled sidecar (`protoagent-server.exe`) is a separate process it
+  never knew about — a live server (including one run standalone) held the
+  install dir and the installer died with a locked-file error that read as "the
+  directory already exists". New NSIS installer hooks stop the sidecar before
+  install and uninstall; the kept `%APPDATA%` data dir is untouched, so
+  uninstall-keep-data → reinstall is now the reconfigure-free upgrade path it
+  was meant to be.
 - **`current_time` works on Windows (and database-less hosts)** (#1683). stdlib
   `zoneinfo` ships no IANA data — Windows has none of its own, so in the frozen
   sidecar every `ZoneInfo(...)` raised and the tool rejected all timezones,
