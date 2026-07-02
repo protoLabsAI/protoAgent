@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.80.0] - 2026-07-02
+
 ### Added
 - **Remote fleet members are fully manageable from the console** (ADR 0042 §I).
   You can now **add a remote by URL** (name + URL + optional token) — the only way

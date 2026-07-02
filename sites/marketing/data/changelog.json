@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.80.0",
+    "date": "2026-07-02",
+    "changes": [
+      "Remote fleet members are fully manageable from the console",
+      "A down or mis-tokened fleet agent gives you a way out instead of a boot hang.",
+      "Background results are pushed, indexed, and worker-disposable",
+      "The Work surface is card-first — no tabs",
+      "The background report card is a real card",
+      "/compact is now behind the chat.compact developer flag",
+      "tools.disabled now actually removes any tool — including run_command — and the filesystem knobs are per-agent Settings toggles.",
+      "Fleet: the hub no longer lends a remote member's token over an unauthenticated WebSocket, and live events now work through a token-gated hub."
+    ]
+  },
+  {
     "version": "v0.79.0",
     "date": "2026-07-01",
     "changes": [
