@@ -184,6 +184,13 @@ test it; keeping host-only imports lazy is still good practice but no longer a h
 requirement. In-repo (bundled) plugins import the same testkit directly:
 `from graph.plugins.testkit import load_plugin, install_host_stubs, FakeRegistry`.
 
+`FakeRegistry` mirrors **every** public `PluginRegistry` method (a parity test in core
+enforces it), so run `register()` against it bare — no `hasattr` guards — and assert every
+contribution: `reg.tools`, `reg.chat_commands["issue"]`, `reg.subagents`, … . Where the live
+registry warns-and-skips an invalid registration (a chat command named `goal` — reserved,
+an unslugifiable name, a duplicate token), the fake **raises `ValueError`**, so a typo'd
+registration fails your suite instead of shipping green.
+
 From the shell (no agent): `python -m server plugin new "My Plugin" --view --skill --tests`
 scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`
 scaffolds an ADR-0040 bundle.

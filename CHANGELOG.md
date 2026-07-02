@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `already installed — use --force`. `--force` remains required for the real
   conflicts: a same-id install from a different source, or a plugins-dir entry
   `plugins.lock` doesn't know about (a working-tree plugin).
+- **Testkit `FakeRegistry` now mirrors the full `PluginRegistry` surface** (#1637).
+  `register_chat_command` (with the live slugify/reserved-`goal` validation — the fake
+  *raises* where the host warns-and-skips, so a typo'd registration fails the test),
+  `register_late_tool_factory`, and `live_config()` were missing, which made those seams
+  silently untestable in host-free plugin smoke tests (plugins `hasattr`-guard the
+  calls). A parity test now introspects both classes so the next registry seam can't
+  drift out of the testkit. Refresh a standalone plugin's vendored copy by recopying
+  `graph/plugins/testkit.py` to `tests/_plugin_testkit.py`.
 
 ## [0.81.0] - 2026-07-02
 
