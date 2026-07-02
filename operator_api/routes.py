@@ -244,6 +244,30 @@ def register_operator_routes(
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    @app.get("/api/background/{job_id}")
+    async def _background_job(job_id: str):
+        """One background job's full row by id (ADR 0070 D4) — the console report
+        card fetches this instead of list-and-filter, and it carries the FULL result
+        (the ``background.completed`` bus event only carries a preview). Job ids are
+        strictly ``bg-<12 hex>`` (background/store.py), so anything else is rejected
+        before it reaches the store."""
+        import re as _re
+
+        from runtime.state import STATE
+
+        if not _re.fullmatch(r"bg-[a-f0-9]{12}", job_id or ""):
+            raise HTTPException(status_code=400, detail="Invalid background job id.")
+        mgr = getattr(STATE, "background_mgr", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Background jobs are not available.")
+        try:
+            job = await asyncio.to_thread(mgr.store.get, job_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"No background job {job_id}.")
+        return job.to_dict()
+
     @app.post("/api/background/{job_id}/cancel")
     async def _background_cancel(job_id: str):
         """Stop a running background job (ADR 0051) — cancels its detached A2A turn."""

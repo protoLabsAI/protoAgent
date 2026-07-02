@@ -429,6 +429,19 @@ checkpoint:
 | `prune_interval_hours` | `6` | How often the background pruner runs. |
 | `harvest_enabled` | `true` | On thread retire, harvest its history into the knowledge store before purging. |
 
+## `background`
+
+Background subagent jobs (`task(run_in_background=true)`, [ADR 0050](/adr/0050-background-subagents-reactive-notifications)) and how their results are delivered ([ADR 0070](/adr/0070-background-results-push-resume)).
+
+```yaml
+background:
+  auto_resume: true
+```
+
+| Key | Default | What |
+|---|---|---|
+| `auto_resume` | `true` | When a background job finishes, immediately run a turn in the session that spawned it — its `<task-notification>` drains into that turn and the agent briefs the operator. `false` restores pull-only delivery (the report waits for the session's next manual turn; the ADR 0050 Activity idle-wake covers autonomous reaction instead). Never fires for canceled jobs, incognito-spawned jobs, or jobs spawned from another background turn. |
+
 ## `workflows`
 
 Declarative multi-step recipes over subagents ([ADR 0002](../adr/0002-reusable-subagent-workflows.md)) — the `run_workflow` / `save_workflow` tools.

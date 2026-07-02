@@ -93,6 +93,14 @@ async def harvest_thread(
     """
     if knowledge_store is None:
         return None
+    # Background worker thread (ADR 0070 D3): its transcript is disposable — the
+    # report was already delivered to (and indexed under) the ORIGIN session at
+    # completion, so harvesting the worker would duplicate the report into the KB
+    # under the worker's identity. Mirrors the incognito skip below; string-matched
+    # so legacy retired threads are covered too.
+    if thread_id.startswith("background:") or ":background:" in thread_id:
+        log.info("[harvest] thread %s is a background worker — skipping harvest", thread_id)
+        return None
     try:
         tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
         if tup is None:

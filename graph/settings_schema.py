@@ -609,6 +609,17 @@ FIELDS: list[Field] = [
     # A plugin's Settings group is declared by its manifest (ADR 0019) and rendered
     # via the plugin-fields path in build_schema — same for bundled or external
     # plugins; the generic Test button + guide link come from the manifest (ADR 0059).
+    # ── Background jobs (ADR 0050/0070) ──────────────────────────────────────
+    Field(
+        "background.auto_resume",
+        "background_auto_resume",
+        "Push-resume on completion",
+        "bool",
+        "Background",
+        "When a background job finishes, immediately run a turn in the session that "
+        "spawned it so the agent reviews the report and briefs the operator (ADR 0070). "
+        "Off = the report waits for that session's next manual turn.",
+    ),
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field(
         "runtime.autostart_on_boot",
@@ -843,6 +854,7 @@ _SECTION_CATEGORY = {
     "Goal mode": "Behavior",
     "Compaction": "Behavior",
     "Middleware": "Behavior",
+    "Background": "Behavior",
     "Runtime": "Behavior",
     # Capabilities — the sharing/tier knobs for what the agent is wired to (the rich
     # Tools/MCP/Skills/Subagents/Delegates managers are bespoke console panels).

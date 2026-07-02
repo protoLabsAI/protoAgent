@@ -96,6 +96,14 @@ def _persist_session(state: dict, trace_id: str) -> None:
         # injected everywhere via <prior_sessions>.
         log.warning("[memory] no session_id resolved — skipping session persistence")
         return
+    if session_id.startswith("background:"):
+        # Background worker turn (ADR 0070 D3): the worker's transcript is
+        # disposable — the report is delivered to the ORIGIN session (drain +
+        # push-resume) and indexed to it in the knowledge store; a summary file
+        # here would leak the full report into every thread's digest under the
+        # worker's identity. The jobs DB is the system of record.
+        log.debug("[memory] background worker session %s — skipping session persistence", session_id)
+        return
     messages_raw: list = state.get("messages", []) or []
 
     # --- Extract user-visible messages ---
@@ -345,6 +353,11 @@ def load_prior_sessions_digest(
         entries: list[tuple[float, str]] = []
         for fname in os.listdir(memory_dir):
             if not fname.endswith(".json"):
+                continue
+            if fname.startswith("background:"):
+                # Background worker summaries are disposable (ADR 0070 D3). The
+                # writer no longer produces them; this read-side filter also
+                # keeps LEGACY files already on disk out of the digest.
                 continue
             fpath = os.path.join(memory_dir, fname)
             try:

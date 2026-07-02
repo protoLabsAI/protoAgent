@@ -50,6 +50,7 @@ TRUST_TIERS: dict[str, int] = {
     "harvest": 2,  # graph/conversation_harvest.py — retired-thread summaries
     "conversation": 2,  # memory_ingest tool + compaction archives
     "chat": 2,  # knowledge/store.add_finding default
+    "background_report": 2,  # server/a2a.py — background job reports indexed at completion (ADR 0070 D2)
     # Tier 1 — ingested / third-party content (ingestion/engine.py source types).
     "text": 1,
     "markdown": 1,

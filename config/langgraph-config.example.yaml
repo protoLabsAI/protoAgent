@@ -234,6 +234,13 @@ checkpoint:
   # checkpoints. Needs the knowledge middleware enabled.
   harvest_enabled: true
 
+# Background jobs (ADR 0050/0070) — delegations fired with run_in_background.
+# auto_resume: when a job finishes, immediately run a turn in the session that
+# spawned it so the agent reviews the report and briefs the operator; false
+# restores pull-only delivery (the report drains on that session's next turn).
+background:
+  auto_resume: true
+
 # Model routing / failover.
 #   aux_model: ONE cheap/fast alias for the non-reasoning calls — context
 #     summarization, goal verification, and subagent delegation all fall back

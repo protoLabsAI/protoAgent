@@ -36,6 +36,10 @@ class BackgroundJob:
     created_at: str
     completed_at: str | None
     a2a_task_id: str = ""  # the detached turn's A2A task id — the handle for stop_task
+    # The spawning thread was incognito (ADR 0069 D3b → ADR 0070): the completion
+    # must leave NO memory trail — no push-resume nudge, no knowledge-store indexing.
+    # The report still lives here (jobs.db) and drains into the origin session normally.
+    origin_incognito: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +54,7 @@ class BackgroundJob:
             "created_at": self.created_at,
             "completed_at": self.completed_at,
             "a2a_task_id": self.a2a_task_id,
+            "origin_incognito": self.origin_incognito,
         }
 
 
@@ -68,6 +73,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         created_at=row["created_at"],
         completed_at=row["completed_at"],
         a2a_task_id=(row["a2a_task_id"] if "a2a_task_id" in keys else "") or "",
+        origin_incognito=bool(row["origin_incognito"] if "origin_incognito" in keys else 0),
     )
 
 
@@ -101,7 +107,8 @@ class BackgroundStore:
                     notified       INTEGER NOT NULL DEFAULT 0,
                     created_at     TEXT NOT NULL,
                     completed_at   TEXT,
-                    a2a_task_id    TEXT
+                    a2a_task_id    TEXT,
+                    origin_incognito INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -109,6 +116,9 @@ class BackgroundStore:
             cols = {r[1] for r in db.execute("PRAGMA table_info(background_jobs)").fetchall()}
             if "a2a_task_id" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN a2a_task_id TEXT")
+            # Migrate a pre-ADR-0070 DB: incognito propagation (existing rows default 0).
+            if "origin_incognito" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN origin_incognito INTEGER NOT NULL DEFAULT 0")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -127,6 +137,7 @@ class BackgroundStore:
         subagent_type: str,
         description: str,
         prompt: str,
+        origin_incognito: bool = False,
         now: datetime | None = None,
     ) -> str:
         """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``)."""
@@ -137,9 +148,18 @@ class BackgroundStore:
             db.execute(
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
-                " status, result, notified, created_at, completed_at, a2a_task_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '')",
-                (job_id, agent_name, origin_session, subagent_type, description, prompt, created),
+                " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?)",
+                (
+                    job_id,
+                    agent_name,
+                    origin_session,
+                    subagent_type,
+                    description,
+                    prompt,
+                    created,
+                    1 if origin_incognito else 0,
+                ),
             )
             db.commit()
         finally:

@@ -179,6 +179,14 @@ def _resolve_aux_model(config, specific: str = "") -> str | None:
     return None
 
 
+def _incognito_from(state: Any) -> bool:
+    """Whether the CURRENT turn is incognito, read from injected graph state (the
+    same source ``_session_id_from`` uses — the tracing contextvar is not visible
+    in tool bodies). Propagated onto spawned background jobs (ADR 0070) so their
+    completions honor the no-memory-trail contract (ADR 0069 D3b)."""
+    return bool(state.get("incognito")) if isinstance(state, dict) else False
+
+
 def _auto_background_seconds() -> float:
     """Time budget (seconds) after which a *foreground* ``task`` delegation transparently
     detaches to the background (ADR 0051). ``BACKGROUND_AUTO_S`` env; 0 (default) = off."""
@@ -498,11 +506,15 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             # Resolve the originating session from injected graph state, not the
             # tracing contextvar — the contextvar reads empty in a tool body, so
             # the completion could never drain back to the spawning chat (ADR 0050).
+            # The state's incognito flag rides along (ADR 0070): a job spawned from
+            # an incognito thread must leave no memory trail at completion (no
+            # push-resume, no knowledge indexing) — the report still drains here.
             job_id = await background_mgr.spawn(
                 origin_session=_session_id_from(state),
                 subagent_type=subagent_type,
                 description=description,
                 prompt=prompt,
+                origin_incognito=_incognito_from(state),
             )
             return job_id
 
@@ -670,6 +682,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                     subagent_type=st,
                     description=desc,
                     prompt=prm,
+                    origin_incognito=_incognito_from(state),
                 )
                 started += 1
                 lines.append(f"Task {i}: {job_id} ({st}: {desc})")

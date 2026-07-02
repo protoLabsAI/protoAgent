@@ -593,9 +593,11 @@ class _ToolFake(GenericFakeChatModel):
 class _RecordingBG:
     def __init__(self):
         self.seen_origin = "__unset__"
+        self.seen_incognito = None
 
-    async def spawn(self, *, origin_session, subagent_type, description, prompt):
+    async def spawn(self, *, origin_session, subagent_type, description, prompt, origin_incognito=False):
         self.seen_origin = origin_session
+        self.seen_incognito = origin_incognito
         return "bg-test-1"
 
 
@@ -652,7 +654,7 @@ class _RecordingBatchBG:
     def __init__(self):
         self.spawns: list[dict] = []
 
-    async def spawn(self, *, origin_session, subagent_type, description, prompt):
+    async def spawn(self, *, origin_session, subagent_type, description, prompt, origin_incognito=False):
         self.spawns.append({"origin": origin_session, "subagent_type": subagent_type, "description": description})
         return f"bg-{len(self.spawns)}"
 
