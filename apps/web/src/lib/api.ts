@@ -1167,8 +1167,11 @@ export const api = {
   },
   addRemoteAgent(body: { name: string; url: string; token?: string }) {
     // Register a remote protoAgent as a SWITCHABLE fleet member (ADR 0042 §I) —
-    // it gets a slug window; the hub reverse-proxies its console + A2A.
-    return request<{ ok: boolean; agent: FleetAgent }>("/api/fleet/remotes", {
+    // it gets a slug window; the hub reverse-proxies its console + A2A. The server
+    // probes it at register time and returns `reachable`/`version` so the caller can
+    // warn up front (registration is NOT rejected for an unreachable peer — deferred
+    // registration is intentional; a peer can come online later).
+    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string }>("/api/fleet/remotes", {
       method: "POST",
       body,
     });
