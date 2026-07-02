@@ -17,6 +17,11 @@ test("a subagent tool nests under the task even when its frames arrive after the
   await expect(card).toBeVisible();
   await expect(card.locator(".pl-toolcard__name")).toContainText("task");
   await expect(card.locator(".pl-toolcard__name")).toContainText("1 tool");
+  // Settle the turn BEFORE expanding: on settle the live-parts view regroups into the
+  // history card, which REMOUNTS the toolcard — an expansion clicked mid-stream is
+  // silently dropped (same latent race the sibling nesting.spec.ts gated; #1621).
+  await expect(page.getByText("Delegated; the child frame arrived after the task closed.")).toBeVisible();
+
   // It's nested in the body (revealed on expand), not a stray top-level sibling.
   await card.locator(".pl-toolcard__head").click();
   await expect(card.locator(".pl-toolcard__children .pl-toolcard__name")).toHaveText("web_search");
