@@ -83,6 +83,20 @@ browser only ever talks to the hub (same-origin), so no per-agent CORS/token spr
 > member, opens a client WS (carrying the bearer + subprotocols), and pumps frames both
 > ways — so WS plugin views traverse the hub like HTTP does.
 
+> **Amendment (#1607):** WS proxying is now **refused for REMOTE members** (close `1008`),
+> narrowing the v0.35.0 amendment above. The hub's default-deny auth is an HTTP middleware
+> (Starlette `BaseHTTPMiddleware` skips non-HTTP scopes), so the `@app.websocket` proxy route
+> runs with **no hub auth**. For a `host`/local peer that's benign — the hub attaches no
+> stored credential, and a browser WS can't carry one — but for a **remote** member the hub
+> *would* attach that member's stored bearer, lending an unauthenticated caller a ride into
+> its authenticated sockets (e.g. a terminal plugin's PTY). Until the WS caller can be
+> authenticated at the hub, a remote member's live sockets don't traverse the hub — use
+> `delegate_to` / a direct connection for remote live views. Host + local-peer WS (the
+> original #883 use case) are unchanged. Same change also makes the proxied **SSE** token
+> (`/api/events`) **hub-signed** (the console fetches `/api/sse-token` with `host:true`),
+> because the hub's auth middleware validates the proxied stream *before* forwarding — a
+> member-signed token 401'd at the hub for every non-host member on a bearer-gated hub.
+
 ### D. Session continuity (≈ free)
 Each agent's checkpoints/goals/memory are already `instance.id`-scoped (ADR 0004/0041) —
 so switching back loads that agent's thread, and it survives stop→restart (resume from
@@ -170,6 +184,15 @@ local is *process spawning*. Everything else is address-based:
   control-plane API (turtles all the way down).
 - **Transport/auth** — real network now: TLS + a per-remote token (reuse the existing A2A /
   console bearer-gate). The proxy attaches the token on forward.
+- **Console management (#1608/#1609).** A remote is added from Settings ▸ Agents by URL +
+  optional token — the only way to register a token-gated peer (discovery can't carry a
+  credential) — and **edited in place** via `PATCH /api/fleet/remotes/{ident}`
+  (`supervisor.update_remote`: url/token/name, id + slug stable so open windows survive;
+  `token:""` clears, re-runs the same SSRF-egress/collision checks as add). An offline remote
+  reads **"unreachable"** (not "stopped"); a member that 502s (box offline) or 401s (bad token)
+  gets a targeted boot-gate recovery — *Return to host* / *update its token* — and a proxied
+  member's 401 is kept off the hub's global token prompt (it's the member's credential, not the
+  hub's).
 
 **Relationship to the delegate registry (ADR 0025).** protoAgent *already* connects to remote
 agents — `delegate_to` over a2a/openai/acp (Settings → Integrations). That's the **delegation**
