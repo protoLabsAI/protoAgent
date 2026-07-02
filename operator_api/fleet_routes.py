@@ -55,6 +55,28 @@ def register_fleet_routes(app) -> None:
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
+    @app.patch("/api/fleet/remotes/{ident}")
+    async def _update_remote(ident: str, req: dict):
+        """Edit a remote member's ``url`` / ``token`` / display ``name`` in place (ADR 0042 §I).
+
+        Omitted fields are left as-is; ``token: ""`` clears the stored bearer (a rotated/wrong
+        token is fixed by PATCHing the new one — the recovery path when a proxied member 401s).
+        The id — and so the slug + open windows — never changes. Re-probes so the response
+        reports fresh reachability, same shape as add. 400 on a bad url/name/collision."""
+        body = req or {}
+        try:
+            rec = await asyncio.to_thread(
+                supervisor.update_remote,
+                ident,
+                name=body.get("name"),
+                url=body.get("url"),
+                token=body.get("token"),
+            )
+            reachable, version = await asyncio.to_thread(supervisor.probe_remote, rec["id"])
+            return {"ok": True, "agent": rec, "reachable": reachable, "version": version}
+        except (supervisor.FleetError, manager.WorkspaceError) as exc:
+            raise HTTPException(400, str(exc))
+
     @app.delete("/api/fleet/remotes/{ident}")
     async def _remove_remote(ident: str):
         """Unregister a remote member (the remote agent itself is untouched)."""

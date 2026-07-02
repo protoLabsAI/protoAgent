@@ -7,10 +7,13 @@ import {
   frameIsForeign,
   isColdStart,
   isAgentNotRunning,
+  isAgentUnreachable,
+  isMemberScoped,
   loadBackgroundReport,
   textFromParts,
   hitlFromParts,
 } from "./api";
+import { authRequired, clearAuthRequired } from "./auth";
 
 describe("cold-start detection (ApiError / isColdStart)", () => {
   it("ApiError carries the HTTP status", () => {
@@ -46,6 +49,73 @@ describe("focused-agent-down detection (isAgentNotRunning)", () => {
     expect(isAgentNotRunning(new ApiError(404, "nope"))).toBe(false);
     expect(isAgentNotRunning(new TypeError("Load failed"))).toBe(false);
     expect(isAgentNotRunning(undefined)).toBe(false);
+  });
+});
+
+describe("unreachable-remote detection (isAgentUnreachable)", () => {
+  it("true ONLY for a 502 (the fleet proxy's 'can't reach the member') — a remote never 409s", () => {
+    expect(isAgentUnreachable(new ApiError(502, "agent is not reachable"))).toBe(true);
+    expect(isAgentUnreachable(new ApiError(409, "not running"))).toBe(false); // that's a local peer
+    expect(isAgentUnreachable(new ApiError(401, "unauthorized"))).toBe(false); // that's a bad token
+    expect(isAgentUnreachable(new TypeError("Load failed"))).toBe(false);
+    expect(isAgentUnreachable(undefined)).toBe(false);
+  });
+});
+
+describe("isMemberScoped — which 401s belong to a member vs the hub (ADR 0042 §I)", () => {
+  const focus = (slug: string | null) =>
+    window.history.replaceState({}, "", slug ? `/app/agent/${slug}/` : "/app/");
+
+  it("host window: nothing is member-scoped", () => {
+    focus(null);
+    expect(isMemberScoped("/api/runtime/status")).toBe(false);
+    expect(isMemberScoped("/a2a")).toBe(false);
+  });
+
+  it("member window: slug-routed agent paths are member-scoped, hub paths are not", () => {
+    focus("ava");
+    expect(isMemberScoped("/api/runtime/status")).toBe(true); // proxied to the member
+    expect(isMemberScoped("/a2a")).toBe(true);
+    expect(isMemberScoped("/api/fleet")).toBe(false); // hub control-plane — stays on the hub
+    expect(isMemberScoped("/api/runtime/status", true)).toBe(false); // host:true forces the hub
+  });
+});
+
+describe("member-scoped 401 must NOT hijack the hub AuthGate (ADR 0042 §I)", () => {
+  // The load-bearing behavior: a proxied member's bad/rotated token 401s, but that's the
+  // MEMBER's credential problem — tripping the global hub prompt would ask for (and overwrite)
+  // the wrong token. request() suppresses notifyAuthRequired() for member-scoped requests.
+  const focus = (slug: string | null) =>
+    window.history.replaceState({}, "", slug ? `/app/agent/${slug}/` : "/app/");
+  const unauthorized = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        text: async () => "unauthorized",
+      })),
+    );
+
+  beforeEach(() => clearAuthRequired());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearAuthRequired();
+  });
+
+  it("a HOST-scoped 401 trips the global auth prompt", async () => {
+    focus(null);
+    unauthorized();
+    await expect(api.runtimeStatus()).rejects.toBeInstanceOf(ApiError);
+    expect(authRequired()).toBe(true);
+  });
+
+  it("a MEMBER-scoped 401 does NOT trip it (it's the member's token, not the hub's)", async () => {
+    focus("ava");
+    unauthorized();
+    await expect(api.runtimeStatus()).rejects.toBeInstanceOf(ApiError);
+    expect(authRequired()).toBe(false); // the boot gate / fleet panel own this recovery instead
   });
 });
 

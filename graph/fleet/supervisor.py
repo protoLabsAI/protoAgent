@@ -351,26 +351,35 @@ def remote_for_slug(slug: str) -> dict | None:
     return _load_remotes().get(slug)
 
 
+def _normalize_remote_url(url: str) -> str:
+    """Validate + canonicalize a remote member URL (trailing slash trimmed, must be http(s),
+    SSRF-guarded). Shared by add/update. Raises FleetError.
+
+    SSRF guard (#871): the hub reverse-proxies /agents/<slug>/* to this URL, so a registered
+    remote can turn the hub into an internal-network proxy. Fleet remotes ARE normally private
+    (LAN / tailnet / a co-located instance), so allow_private — but ALWAYS block
+    link-local/cloud-metadata (169.254.169.254), multicast, reserved.
+    """
+    u = (url or "").strip().rstrip("/")
+    if not u.startswith(("http://", "https://")):
+        raise FleetError(f"remote url must be http(s), got {u!r}")
+    from security import egress
+
+    if egress.check_url(u, allow_private=True, block_unresolvable=False):
+        raise FleetError(
+            f"remote url {u} is blocked by the egress guard (link-local/metadata/"
+            f"reserved address); allowlist it via egress.allowed_hosts if intentional"
+        )
+    return u
+
+
 def add_remote(name: str, url: str, token: str = "") -> dict:
     """Register a remote protoAgent as a fleet member. Name follows the workspace
     charset + uniqueness rules; the id is opaque like a local agent's (#823)."""
     name = manager._safe(name)
     if name.lower() in manager._RESERVED_NAMES:
         raise FleetError(f"{name!r} is reserved — it's how the fleet addresses this instance")
-    url = (url or "").strip().rstrip("/")
-    if not url.startswith(("http://", "https://")):
-        raise FleetError(f"remote url must be http(s), got {url!r}")
-    # SSRF guard (#871): the hub reverse-proxies /agents/<slug>/* to this URL, so a
-    # registered remote can turn the hub into an internal-network proxy. Fleet remotes
-    # ARE normally private (LAN / tailnet / a co-located instance), so allow_private —
-    # but ALWAYS block link-local/cloud-metadata (169.254.169.254), multicast, reserved.
-    from security import egress
-
-    if egress.check_url(url, allow_private=True, block_unresolvable=False):
-        raise FleetError(
-            f"remote url {url} is blocked by the egress guard (link-local/metadata/"
-            f"reserved address); allowlist it via egress.allowed_hosts if intentional"
-        )
+    url = _normalize_remote_url(url)
     with _remotes_lock():
         remotes = _load_remotes()
         taken = {r["name"] for r in remotes.values()} | {w["name"] for w in manager.list_workspaces()}
@@ -383,6 +392,43 @@ def add_remote(name: str, url: str, token: str = "") -> dict:
         remotes[rid] = rec
         _save_remotes(remotes)
     log.info("[fleet] remote member added: %s (%s)", name, url)
+    return {k: v for k, v in rec.items() if k != "token"}
+
+
+def update_remote(ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None) -> dict:
+    """Edit a registered remote's ``name`` / ``url`` / ``token`` in place (by id or name).
+
+    Only the fields you pass change — a ``None`` field is left as-is, so ``token=None`` KEEPS
+    the stored bearer while ``token=""`` clears it (the recovery path for a rotated/wrong
+    token). The id — and so the URL slug, open windows, and data scope — never changes. Re-runs
+    the same reserved-name / SSRF-egress / collision checks as ``add_remote``. Returns the
+    sanitized record (token stripped). ``FleetError`` if no such remote.
+    """
+    with _remotes_lock():
+        remotes = _load_remotes()
+        rid = ident if ident in remotes else next((k for k, r in remotes.items() if r["name"] == ident), None)
+        if rid is None:
+            raise FleetError(f"no remote member {ident!r}")
+        rec = dict(remotes[rid])
+        if name is not None:
+            new_name = manager._safe(name)
+            if new_name.lower() in manager._RESERVED_NAMES:
+                raise FleetError(f"{new_name!r} is reserved — it's how the fleet addresses this instance")
+            others = {r["name"] for k, r in remotes.items() if k != rid} | {w["name"] for w in manager.list_workspaces()}
+            if new_name in others:
+                raise FleetError(f"an agent named {new_name!r} already exists")
+            rec["name"] = new_name
+        if url is not None:
+            new_url = _normalize_remote_url(url)
+            if any(r["url"] == new_url for k, r in remotes.items() if k != rid):
+                raise FleetError(f"a remote at {new_url} is already in the fleet")
+            rec["url"] = new_url
+        if token is not None:
+            rec["token"] = token
+        remotes[rid] = rec
+        _save_remotes(remotes)
+    _probe_cache.pop(rid, None)  # url/token may have changed reachability — force a fresh probe
+    log.info("[fleet] remote member updated: %s (%s)", rec["name"], rec["url"])
     return {k: v for k, v in rec.items() if k != "token"}
 
 

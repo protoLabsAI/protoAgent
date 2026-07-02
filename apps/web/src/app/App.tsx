@@ -65,6 +65,7 @@ import { BackgroundWatch } from "./BackgroundWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
+import { bootGatePhase } from "./bootGate";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { TenantGuard } from "./TenantGuard";
@@ -89,7 +90,17 @@ import {
   type RightPanel,
   type Surface,
 } from "../state/uiStore";
-import { api, apiUrl, authToken, is401, isAgentNotRunning, currentSlug, agentHref, activateSlugAgent } from "../lib/api";
+import {
+  api,
+  apiUrl,
+  authToken,
+  is401,
+  isAgentNotRunning,
+  isAgentUnreachable,
+  currentSlug,
+  agentHref,
+  activateSlugAgent,
+} from "../lib/api";
 import { PluginView, consoleTheme } from "./PluginView";
 import { UtilityWidget } from "./UtilityWidget";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
@@ -378,19 +389,27 @@ export function App() {
   // copy/escape-hatch swap. STUCK_AFTER_MS=45s — past it, offer "Continue anyway"
   // so a graph that never compiles can't trap the operator on the loading screen.
   const bootFailed = !runtime && runtimeQ.isError;
-  // Focused fleet agent is DOWN (ADR 0042): a non-host slug whose boot probe keeps 409'ing
-  // ("agent not running") past a normal spawn window — `activate` didn't bring it up (or it
-  // failed to start). Without this the operator waited out the full ~30 retries for a generic
-  // "isn't responding" gate whose "Continue anyway" just opens a 409-broken app. Detect it
+  // Focused fleet agent is DOWN (ADR 0042): a non-host slug whose boot probe keeps failing
+  // past a normal spawn window. Two shapes: a LOCAL peer 409s ("agent not running" — `activate`
+  // didn't bring it up), a REMOTE member 502s (its box is offline / URL wrong — it never 409s,
+  // it isn't a local process). Without this the operator waited out the full ~30 retries for a
+  // generic "isn't responding" gate whose "Continue anyway" just opens a broken app. Detect it
   // early (≥6 retries ≈ ~6s at the 1s delay) and offer targeted recovery: return to the host
-  // console, or try starting the agent again. `failureReason`/`failureCount` are live during
+  // console, or try starting/reaching it again. `failureReason`/`failureCount` are live during
   // retries (TanStack Query v5), so recovery shows before the probe fully gives up.
   const focusedSlug = currentSlug();
   const agentDown =
     focusedSlug !== "host" &&
     !runtime &&
-    isAgentNotRunning(runtimeQ.failureReason) &&
+    (isAgentNotRunning(runtimeQ.failureReason) || isAgentUnreachable(runtimeQ.failureReason)) &&
     runtimeQ.failureCount >= 6;
+  // Focused REMOTE member's stored token is wrong/missing: its proxied boot probe 401s. That's
+  // the MEMBER's credential problem, not the hub's — api.ts already keeps it off the global
+  // AuthGate (which prompts for the HUB token), and the probe's 401 stops the retry loop
+  // immediately (is401), so we surface a targeted "update its token / return to host" recovery
+  // instead of the generic "isn't responding" gate. Host-window 401s stay with the AuthGate.
+  const memberAuthFailed = focusedSlug !== "host" && !runtime && is401(runtimeQ.failureReason);
+  const agentUnreachable = isAgentUnreachable(runtimeQ.failureReason); // 502 (remote) vs 409 (local peer)
   // Token-gated first run (#873): the boot probe itself 401s. The BootGate's
   // "Starting… / isn't responding" copy is wrong for that — and its overlay
   // (z-1900) would cover the AuthGate dialog (z-1000) — so the gate yields to
@@ -404,6 +423,8 @@ export function App() {
     const t = window.setTimeout(() => setBootStuck(true), 45_000);
     return () => window.clearTimeout(t);
   }, [bootReady]);
+  // Which recovery the boot gate shows (pure precedence — tested in bootGate.test.ts).
+  const gatePhase = bootGatePhase({ memberAuthFailed, agentDown, unreachable: agentUnreachable, bootFailed, bootStuck });
   const [error, setError] = useState("");
 
   // Clear the stale "Load failed" strip once the engine reports ready. The
@@ -758,23 +779,41 @@ export function App() {
           <BootGate
             logo={<ProtoLabsIcon variant="outline" size={56} decorative gradientStroke tone="accent" />}
             title={
-              agentDown
-                ? `Agent “${focusedSlug}” isn’t running`
-                : bootFailed
-                  ? `${bootName} isn’t responding`
-                  : `Starting ${bootName}…`
+              gatePhase === "memberAuth"
+                ? `Can’t authenticate to “${focusedSlug}”`
+                : gatePhase === "unreachable"
+                  ? `Agent “${focusedSlug}” is unreachable`
+                  : gatePhase === "notRunning"
+                    ? `Agent “${focusedSlug}” isn’t running`
+                    : gatePhase === "failed"
+                      ? `${bootName} isn’t responding`
+                      : `Starting ${bootName}…`
             }
             detail={
-              agentDown
-                ? "This fleet agent didn’t start. Return to the host console to keep working, or try starting it again."
-                : bootFailed
-                  ? "The engine didn’t come up in time. It may still be warming up — give it another moment, then retry."
-                  : bootStuck
-                    ? "This is taking longer than usual. The engine may still be compiling, or it may need attention in Settings."
-                    : "Warming up the engine — first launch (and finishing setup) can take up to a minute. Later launches are quick."
+              gatePhase === "memberAuth"
+                ? "This remote member rejected the hub’s stored token (it’s wrong, missing, or was rotated). Return to the host console and update its token in Settings ▸ Agents."
+                : gatePhase === "unreachable"
+                  ? "This remote member didn’t answer. Return to the host console to keep working, or check its URL and token in Settings ▸ Agents."
+                  : gatePhase === "notRunning"
+                    ? "This fleet agent didn’t start. Return to the host console to keep working, or try starting it again."
+                    : gatePhase === "failed"
+                      ? "The engine didn’t come up in time. It may still be warming up — give it another moment, then retry."
+                      : gatePhase === "stuck"
+                        ? "This is taking longer than usual. The engine may still be compiling, or it may need attention in Settings."
+                        : "Warming up the engine — first launch (and finishing setup) can take up to a minute. Later launches are quick."
             }
             action={
-              agentDown ? (
+              gatePhase === "memberAuth" ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    window.location.href = agentHref("host");
+                  }}
+                >
+                  Return to host
+                </Button>
+              ) : gatePhase === "unreachable" || gatePhase === "notRunning" ? (
                 <div style={{ display: "flex", gap: 8 }}>
                   <Button
                     variant="primary"
@@ -795,14 +834,14 @@ export function App() {
                       })();
                     }}
                   >
-                    Try to start it
+                    {gatePhase === "unreachable" ? "Try again" : "Try to start it"}
                   </Button>
                 </div>
-              ) : bootFailed ? (
+              ) : gatePhase === "failed" ? (
                 <Button variant="primary" size="sm" onClick={() => void runtimeQ.refetch()}>
                   Retry
                 </Button>
-              ) : bootStuck ? (
+              ) : gatePhase === "stuck" ? (
                 <Button variant="primary" size="sm" onClick={() => setBootOverride(true)}>
                   Continue anyway
                 </Button>
