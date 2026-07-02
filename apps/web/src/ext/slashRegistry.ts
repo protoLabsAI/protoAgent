@@ -37,6 +37,12 @@ export type ClientSlashCommand = {
   description: string;
   /** Optional usage hint. */
   usage?: string;
+  /** Optional developer-flag id (ADR 0068). When set, the host lists and dispatches the
+   *  command only while the flag resolves ON (`useFlagPredicate`) — a flag-off command
+   *  behaves as if it were never registered (the token falls through to the server /
+   *  draft path). Registration itself is unconditional, so flipping the flag needs no
+   *  re-registration. */
+  flag?: string;
   /** Run when the user picks or submits `/<name>`. Return `true` if handled (the send is
    *  short-circuited + the draft cleared); return `false` to fall through to the default
    *  (insert `/<name> ` into the draft to edit + send). Fire async work and return `true`

@@ -41,6 +41,7 @@ registerSlashCommand({
 registerSlashCommand({
   name: "compact",
   description: "Summarize & archive older history, keeping recent context",
+  flag: "chat.compact", // pre-release (ADR 0068) — hidden + inert while the flag is off
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
     const sessionId = ctx.sessionId;

@@ -27,6 +27,22 @@ test("slash menu opens and lists the client + server commands", async ({ page })
   expect(names).toContain("/research-and-brief");
 });
 
+test("a flag-gated command (/compact, ADR 0068) vanishes when its flag is forced off", async ({ page }) => {
+  // The ?flag: query override is the shareable "try this build" layer — here it turns the
+  // chat.compact flag OFF over the mock server's enabled state, so /compact must not list.
+  await page.goto("/app/?flag:chat.compact=off", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.fill("/");
+
+  const menu = page.locator(".slash-menu");
+  await expect(menu).toBeVisible();
+  const names = await menu.locator(".slash-name").allInnerTexts();
+  expect(names).toEqual([
+    ...CLIENT_SLASH.filter((n) => n !== "/compact"),
+    ...SLASH_COMMANDS.map((c) => `/${c.name}`),
+  ]);
+});
+
 test("filtering narrows the menu and selecting completes the command", async ({ page }) => {
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.fill("/go");
