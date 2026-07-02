@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin metric timeseries — `sdk.record_metric` / `metric_history` / `metric_last`**
+  (#1632). Plugins with background engines need small named numeric series (treasury,
+  net worth, fleet size) for history-dependent watch verifiers (ADR 0067
+  drawdown-vs-high-water, flatline detection — a verifier only sees live state) and
+  dashboard sparklines, and each hand-rolled its own persistence. The consumption SDK
+  (ADR 0043) now owns it: `record_metric(name, value, *, ts=None, plugin_id)` appends a
+  sample to the series `<plugin_id>:<name>` (Unix-epoch `ts`, defaults to now; NaN/inf
+  rejected), `metric_history(name, *, since=None, limit=500, plugin_id)` returns the
+  newest `limit` points oldest→newest as `(ts, value)` tuples, `metric_last` the latest
+  point. Backed by a new always-on per-instance `metrics.db`
+  (`observability/metrics_store.py`, connection-per-call WAL sqlite) — deliberately NOT
+  the `telemetry.enabled`-gated turn-rollup store, since metric series are functional
+  plugin state. Retention is capped per series (90 days / 10k points, trimmed on
+  write). `plugin_id` is an explicit required kwarg with `':'` rejected (the #1642/#1656
+  precedent), so one plugin can't reach another's namespace.
 - **`graph.sdk.react_on` — reactive-rule sugar** (#1633). The canonical reactive
   composition `registry.on(topic, handler)` → `sdk.run_in_session(session, prompt)` made
   every plugin write identical glue (missing-host guard, prompt-from-payload, idempotent

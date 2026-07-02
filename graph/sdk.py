@@ -626,3 +626,113 @@ def cancel_plugin_jobs(plugin_id: str) -> int:
         if jid.startswith(prefix) and scheduler.cancel_job(jid):
             cancelled += 1
     return cancelled
+
+
+# ── plugin metric timeseries (#1632) ────────────────────────────────────────────────
+# History-dependent watch verifiers (ADR 0067: drawdown-vs-high-water, flatline
+# detection) and dashboard sparklines need PRIOR values — but a verifier only sees live
+# state and sdk.telemetry() is a point-in-time envelope, so every plugin with a
+# background engine hand-rolled its own persistence (a knobs JSON here, a private
+# sqlite there). These three calls are that store, once: small named numeric series,
+# namespaced `<plugin_id>:<name>`, SQLite-backed in the instance dir
+# (observability/metrics_store.py), retention-capped per series (90d / 10k points).
+
+
+def _metric_series(name: str, plugin_id: str) -> str | None:
+    """The namespaced metric series key ``<plugin_id>:<name>``, or ``None`` on bad
+    input. Same ``':'`` guard as :func:`schedule_recurring` — plugin ``a:b`` must not
+    be able to reach into plugin ``a``'s namespace. (The SDK has no ambient plugin
+    identity — functions are plain imports, not registry-bound — so ``plugin_id`` is an
+    explicit required kwarg on every metric call; pass ``registry.plugin_id``.)"""
+    plugin_id = (plugin_id or "").strip()
+    name = (name or "").strip()
+    if not plugin_id or ":" in plugin_id or not name:
+        return None
+    return f"{plugin_id}:{name}"
+
+
+def record_metric(name: str, value: float, *, ts: float | None = None, plugin_id: str) -> dict:
+    """Append one sample to the plugin metric timeseries ``name`` (#1632).
+
+    Small named numeric series — treasury, net worth, fleet size — are what
+    history-dependent watch verifiers (ADR 0067 drawdown-vs-high-water, flatline
+    detection) and dashboard sparklines need, and a verifier can only see *live* state
+    (``sdk.telemetry()`` is point-in-time). Series are namespaced
+    ``<plugin_id>:<name>``, SQLite-backed in the instance dir
+    (``observability/metrics_store.py``), and retention-capped per series (90 days /
+    10k points, trimmed on write) — record freely from an engine tick.
+
+    Args:
+        name: the plugin-local series name (e.g. ``"credits"``). Namespacing is
+            applied here, never by the caller.
+        value: the sample — any real number (NaN/inf are rejected; they poison
+            drawdown math downstream).
+        ts: Unix epoch seconds for the sample; ``None`` → now. Useful for backfill
+            and deterministic tests.
+        plugin_id: the owning plugin's id (``registry.plugin_id``) — explicit, like
+            :func:`schedule_recurring`; ``':'`` is rejected.
+
+    Returns ``{"ok", "series", "message"}`` — ``ok=False`` with a readable message
+    when the store is unavailable (non-server context) or the inputs are bad; a write
+    failure never raises into an engine loop.
+    """
+    import math
+
+    store = getattr(STATE, "metrics_store", None)
+    if store is None:
+        return {"ok": False, "series": None, "message": "metrics store unavailable (non-server context)"}
+    series = _metric_series(name, plugin_id)
+    if series is None:
+        return {
+            "ok": False,
+            "series": None,
+            "message": "name and plugin_id are required (and plugin_id must not contain ':')",
+        }
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return {"ok": False, "series": series, "message": f"value must be numeric, got {value!r}"}
+    if not math.isfinite(value):
+        return {"ok": False, "series": series, "message": f"value must be finite, got {value!r}"}
+    if ts is not None:
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            return {"ok": False, "series": series, "message": f"ts must be Unix epoch seconds, got {ts!r}"}
+        if not math.isfinite(ts):
+            return {"ok": False, "series": series, "message": f"ts must be finite, got {ts!r}"}
+    try:
+        store.record(series, value, ts=ts)
+    except Exception as e:  # noqa: BLE001 — best-effort: a disk hiccup must not kill an engine tick
+        log.exception("[sdk] record_metric(%r) failed", series)
+        return {"ok": False, "series": series, "message": f"could not record: {e}"}
+    return {"ok": True, "series": series, "message": f"recorded {series}={value:g}"}
+
+
+def metric_history(
+    name: str, *, since: float | None = None, limit: int = 500, plugin_id: str
+) -> list[tuple[float, float]]:
+    """The newest ``limit`` samples of the plugin metric series ``name`` — at/after
+    ``since`` (Unix epoch seconds) when given — returned **oldest→newest** as
+    ``(ts, value)`` tuples: chronological order, ready for verifier math
+    (``high_water = max(v for _, v in points)``) or a sparkline. Returns ``[]`` when
+    the store is unavailable, the inputs are bad, or the series has no samples.
+    Same namespacing + ``plugin_id`` contract as :func:`record_metric`."""
+    store = getattr(STATE, "metrics_store", None)
+    series = _metric_series(name, plugin_id)
+    if store is None or series is None:
+        return []
+    return store.history(series, since=since, limit=limit)
+
+
+def metric_last(name: str, *, plugin_id: str) -> tuple[float, float] | None:
+    """The most recent ``(ts, value)`` of the plugin metric series ``name``, or
+    ``None`` when there is no sample (never recorded / fully aged out / store
+    unavailable). The cheap read for "what did I last see?" checks — e.g. a verifier
+    comparing the live reading against the last recorded one. Same namespacing +
+    ``plugin_id`` contract as :func:`record_metric`."""
+    store = getattr(STATE, "metrics_store", None)
+    series = _metric_series(name, plugin_id)
+    if store is None or series is None:
+        return None
+    return store.last(series)

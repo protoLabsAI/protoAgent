@@ -125,6 +125,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # compile time below — a checkpointer in the invoke config is ignored.
     STATE.checkpointer = _build_checkpointer(STATE.graph_config)
 
+    # Plugin metric timeseries (#1632) — sdk.record_metric / metric_history / metric_last.
+    # Wired BEFORE any plugin load (including the pre-setup routes/surfaces load below)
+    # so a plugin's register() can already record. Not config-dependent, so it survives
+    # hot-reloads untouched (like tasks_store / background_mgr) — and it is never
+    # threaded into the graph build, so the #1630 reload-drop class doesn't apply.
+    STATE.metrics_store = _build_metrics_store()
+
     if not is_setup_complete():
         if headless_setup:
             # No wizard in this tier — auto-complete from a validated config,
@@ -993,6 +1000,25 @@ def _build_telemetry_store(config):
         return store
     except Exception:
         log.exception("[telemetry] failed to build store at %s; telemetry disabled", path)
+        return None
+
+
+def _build_metrics_store():
+    """Plugin metric timeseries store (#1632) — behind ``sdk.record_metric`` /
+    ``metric_history`` / ``metric_last``. Always on, no config gate: unlike the turn
+    telemetry store (an observability preference), metric series are *functional*
+    plugin state — history-dependent watch verifiers go blind without them — so they
+    get their own per-instance ``metrics.db`` (retention is capped per series inside
+    the store). Best-effort: a build failure degrades the SDK calls to no-ops."""
+    from observability.metrics_store import MetricsStore
+
+    db = instance_paths().store("metrics.db")
+    try:
+        store = MetricsStore(str(db))
+        log.info("[metrics] plugin metric store ready at %s", db)
+        return store
+    except Exception:
+        log.exception("[metrics] failed to build plugin metric store at %s; sdk metrics disabled", db)
         return None
 
 

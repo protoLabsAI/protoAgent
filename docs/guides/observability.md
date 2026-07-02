@@ -106,6 +106,10 @@ curl localhost:7870/api/telemetry/insights
 
 `summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. `insights` flags turns ≥ 5× the rolling-median cost/latency and proves the cache lever (`{levers: {cache: {hit_ratio, est_savings_usd}, …}}`) — **advise-only**, no autonomous config changes. The operator console surfaces all of this under **Settings ▸ Overview** (Slices 3–4). History is pruned by `telemetry.retention_days` (default 90; `TelemetryStore.prune` runs on the maintenance loop), and `/api/telemetry/export` downloads it as CSV.
 
+::: tip Plugin metric timeseries are a separate store
+Named numeric series a plugin records (`sdk.record_metric` — treasury, net worth, fleet size, #1632) live in their own always-on per-instance `metrics.db`, **not** in this turn-rollup store: they're functional plugin state (history-dependent watch verifiers read them), so the `telemetry.enabled` toggle never affects them. See [Plugins ▸ consumption SDK](/guides/plugins#consumption-sdk).
+:::
+
 ## Audit log
 
 Every tool call is written to `/sandbox/audit/audit.jsonl`. One line per call:
