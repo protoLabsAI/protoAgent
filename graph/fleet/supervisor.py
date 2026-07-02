@@ -129,9 +129,47 @@ def is_running(ident: str) -> bool:
     return bool(rec) and _alive(rec.get("pid"))
 
 
+def _port_listening(port: int | None, timeout: float = 0.25) -> bool:
+    """Is something accepting connections on localhost:``port``? The member binds its
+    HTTP port early in boot, so this is the cheap 'it came up' signal."""
+    if not port:
+        return False
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except (OSError, OverflowError, ValueError):  # unreachable, or a nonsense port record
+        return False
+
+
+def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
+    """The last ``limit`` chars the child wrote past ``offset`` (the log is opened
+    append — earlier runs' output stays; only this boot's lines are the reason)."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(offset)
+            fresh = f.read().decode("utf-8", errors="replace").strip()
+        return fresh[-limit:]
+    except OSError:
+        return ""
+
+
+# How long start() watches a fresh spawn for insta-death before returning. It returns
+# EARLY on either signal (port bound → up, process exited → raise), so a healthy boot
+# pays only its own bind latency and only a hung-but-not-listening child waits it out.
+_BOOT_WATCH_SECONDS = 10.0
+
+
 def start(ident: str) -> dict:
     """Spawn the workspace's agent (by id or display name) as a detached background
-    process. No-op (returns the live record) if it's already running."""
+    process. No-op (returns the live record) if it's already running.
+
+    Raises ``FleetError`` (with the fresh ``agent.log`` tail) when the child exits
+    during the boot watch — a member that dies at boot (broken spawn, bad config,
+    taken port) used to report ``running: true`` and just show up dead on the next
+    poll, with the reason buried in a log nothing surfaced (#1565 fallout).
+    """
     ws = manager._find(manager._safe(ident))
     if ws is None:
         raise FleetError(f"no workspace {ident!r} — create it: workspace new {ident}")
@@ -147,6 +185,7 @@ def start(ident: str) -> dict:
         full_env = {**os.environ, **env}
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_offset = log_path.stat().st_size if log_path.exists() else 0
         logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
         # start_new_session detaches it from this CLI's process group so it survives exit.
         proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
@@ -167,6 +206,28 @@ def start(ident: str) -> dict:
         }
         state[wid] = rec
         _save_state(state)
+
+    # Boot watch — OUTSIDE the lock (like stop()'s kill) so other state ops can't freeze
+    # behind it. NOTE: blocks up to _BOOT_WATCH_SECONDS; call off the event loop
+    # (``asyncio.to_thread``) — the routes do.
+    deadline = time.monotonic() + _BOOT_WATCH_SECONDS
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:  # died at boot — reap the entry + surface the reason
+            with _state_lock():
+                state = _load_state()
+                if (state.get(wid) or {}).get("pid") == proc.pid:
+                    state.pop(wid, None)
+                    _save_state(state)
+            tail = _log_tail_since(log_path, log_offset)
+            log.error("[fleet] %s exited during boot (code %s): %s", name, proc.returncode, tail)
+            raise FleetError(
+                f"{name!r} exited during boot (exit code {proc.returncode})."
+                + (f" Log tail: {tail}" if tail else "")
+                + f" Full log: {log_path}"
+            )
+        if _port_listening(rec["port"]):
+            break
+        time.sleep(0.2)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
     return {**rec, "name": name, "running": True, "already": False}
 
@@ -471,9 +532,16 @@ def status() -> list[dict]:
 
 
 def up(names: list[str] | None = None) -> list[dict]:
-    """Start a set of agents (named, or all workspaces)."""
-    targets = names or [w["name"] for w in manager.list_workspaces()]
-    return [start(n) for n in targets]
+    """Start a set of agents (named, or all workspaces). One member dying at boot
+    (start() now raises on that) doesn't abort the rest — it's reported as its own
+    ``{running: False, error}`` row instead."""
+    out = []
+    for n in names or [w["name"] for w in manager.list_workspaces()]:
+        try:
+            out.append(start(n))
+        except FleetError as exc:
+            out.append({"name": n, "running": False, "error": str(exc)})
+    return out
 
 
 def down(names: list[str] | None = None) -> list[dict]:

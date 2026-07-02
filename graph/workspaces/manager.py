@@ -427,6 +427,16 @@ def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: s
     save_yaml_doc(doc, cfg)
 
 
+def _server_argv() -> list[str]:
+    """Argv prefix that re-invokes THIS server binary. A source checkout launches
+    ``python -m server``; in the frozen desktop sidecar ``sys.executable`` *is* the
+    server entrypoint, and passing ``-m server`` to it dies at argparse with
+    "unrecognized arguments" — the fleet's created-agents never booted there."""
+    if getattr(sys, "frozen", False):  # PyInstaller sidecar — entrypoint is already `-m server`
+        return [sys.executable]
+    return [sys.executable, "-m", "server"]
+
+
 def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
     """Install a bundle (or plugin) into the workspace via a scoped subprocess —
     ``PROTOAGENT_HOME=<ws>`` makes the workspace the installer's instance root, so
@@ -436,7 +446,7 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
         "PROTOAGENT_HOME": str(ws),
     }
     proc = subprocess.run(
-        [sys.executable, "-m", "server", "plugin", "install", bundle],
+        [*_server_argv(), "plugin", "install", bundle],
         env=env,
         capture_output=True,
         text=True,
@@ -471,7 +481,7 @@ def run_exec(ident: str, passthrough: list[str]) -> tuple[dict, list[str]]:
         "PROTOAGENT_HOME": str(ws),
         "PROTOAGENT_INSTANCE": str(rec.get("id", ident)),
     }
-    argv = [sys.executable, "-m", "server", "--port", str(rec.get("port", PORT_BASE + 1)), *passthrough]
+    argv = [*_server_argv(), "--port", str(rec.get("port", PORT_BASE + 1)), *passthrough]
     return env, argv
 
 
