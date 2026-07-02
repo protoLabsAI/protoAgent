@@ -9,6 +9,15 @@
 }
 /* QuickSetting dialog (ADR 0048) — contextual settings shortcut. Reuses the
    .setting-row chrome; the dialog just stacks the rows with breathing room. */
+
+/* Cap the dialog well short of the viewport (the DS default max-height is ~full height, so a
+   handful of fields make it tower over the surface it popped from). The DS body already scrolls
+   (overflow-y:auto), so overflow just scrolls inside the cap. Two-class selector so it beats the
+   DS `.pl-dialog` max-height regardless of stylesheet load order (both classes ride the same
+   element). */
+.pl-dialog.quick-setting-dialog {
+  max-height: min(72vh, 620px);
+}
 .quick-setting-body {
   display: flex;
   flex-direction: column;
@@ -23,9 +32,18 @@
   white-space: nowrap;
 }
 .quick-setting-body .setting-row {
+  /* The base .setting-row is `display: grid` with a 220–320px control column — right for a text
+     input on the wide settings page, but in the narrow dialog it starves the meta column, so a
+     long field description wraps into a tall one-word-per-line sliver. This override always MEANT
+     to stack the row (per the comment above), but `flex-direction: column` is inert on a grid, so
+     the grid + its wide control column stayed in effect. Switch to a real flex column: label +
+     FULL-WIDTH description, then the control below — shorter overall, and works for every control
+     type (toggle / input / select). */
+  display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
+  padding: 16px 4px;
 }
 
 /* ── Settings shell: DS SideNav rail + content ───────────────────────────────
