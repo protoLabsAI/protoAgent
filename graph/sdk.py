@@ -716,8 +716,8 @@ def metric_history(
     ``since`` (Unix epoch seconds) when given — returned **oldest→newest** as
     ``(ts, value)`` tuples: chronological order, ready for verifier math
     (``high_water = max(v for _, v in points)``) or a sparkline. Returns ``[]`` when
-    the store is unavailable, the inputs are bad, or the series has no samples.
-    Same namespacing + ``plugin_id`` contract as :func:`record_metric`."""
+    the store is unavailable, ``name``/``plugin_id`` are invalid, or the series has no
+    samples. Same namespacing + ``plugin_id`` contract as :func:`record_metric`."""
     store = getattr(STATE, "metrics_store", None)
     series = _metric_series(name, plugin_id)
     if store is None or series is None:
