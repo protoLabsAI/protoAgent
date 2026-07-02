@@ -247,6 +247,12 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   poll `condition` on a cadence, and on met run `run_prompt` as a follow-up turn
   (`run_in_session`) + fire `on_met` hooks. Plugin-verifier only; hold **many** at once (unlike
   a monitor goal). Pair with `registry.register_watch_hook(on_met/on_expired/on_stalled=…)`.
+- `list_watches(prefix="")` / `clear_watch(watch_id)` — the watch **lifecycle** half (#1638):
+  enumerate the registered watches (each `{id, condition, status, verifier}`, optionally
+  id-prefix-filtered — e.g. `list_watches("st-")` for your own suite) and remove one by id
+  (`True` if it existed). Together they make a plugin's arm step a *reconcile* — clear the
+  suite ids no longer in your spec set, then create/replace the rest — so a renamed/dropped
+  watch spec can't leak a zombie watch. See [Watches](/guides/watches).
 
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap

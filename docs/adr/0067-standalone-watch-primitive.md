@@ -74,7 +74,10 @@ This is the parallel-supervision engine: N watches, each with its own trip-actio
   shell/eval watch.
 - **Operator** `POST/GET/DELETE /api/watches` — accepts **any** verifier type, safe because
   `/api` is operator-tier by the ADR 0066 path ceiling (the operator channel).
-- **SDK** `sdk.create_watch(...)` + `register_watch_hook(...)` for plugins.
+- **SDK** `sdk.create_watch(...)` + `register_watch_hook(...)` for plugins — plus the
+  lifecycle half (#1638): `sdk.list_watches(prefix="")` / `sdk.clear_watch(watch_id)`, mirroring
+  the agent tools' data access so a plugin can reconcile its watch suite (clear the ids no
+  longer in its spec set) instead of leaking zombie watches when a spec is renamed/dropped.
 
 ### D5 — Relationship to the monitor-goal disposition
 
