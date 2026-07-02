@@ -59,10 +59,19 @@ function ToolsBody() {
         });
       return { key, prev };
     },
-    onSuccess: (r) => {
-      if (!r.ok) toast({ tone: "error", title: "Toggle failed", message: r.messages.join(" · ") });
+    // On failure, roll the optimistic flip back to the snapshot NOW — the settled
+    // refetch is authoritative but can itself fail (often for the same reason the
+    // save did), which would strand the never-persisted state in the cache; onToggle
+    // computes the next payload from that cache, so a stale flip would compound.
+    onSuccess: (r, _vars, ctx) => {
+      if (r.ok) return;
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+      toast({ tone: "error", title: "Toggle failed", message: r.messages.join(" · ") });
     },
-    onError: (e) => toast({ tone: "error", title: "Toggle failed", message: errMsg(e) }),
+    onError: (e, _vars, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+      toast({ tone: "error", title: "Toggle failed", message: errMsg(e) });
+    },
     onSettled: (_r, _e, _vars, ctx) => {
       void queryClient.invalidateQueries({ queryKey: ctx?.key ?? queryKeys.tools });
       // tools.disabled's current value also renders in the settings schema (central home).
