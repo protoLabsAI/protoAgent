@@ -187,12 +187,19 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
 
       <!-- Unsigned + beta note -->
       <div class="border-l-2 pl-4 mb-10" style="border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);">
+        <p class="text-zinc-400 text-sm mb-3">
+          <strong class="text-zinc-200">Heads up:</strong> the Windows build isn’t signed or
+          notarized yet, so SmartScreen shows a warning on first run — in-app updates are
+          cryptographically verified once installed, and code signing is on the roadmap. protoAgent
+          is in <strong class="text-zinc-200">public beta</strong> and updates itself in place;
+          expect frequent releases.
+        </p>
         <p class="text-zinc-400 text-sm">
-          <strong class="text-zinc-200">Heads up:</strong> the Windows installer isn’t
-          Authenticode-signed yet, so SmartScreen shows a warning on first run — in-app updates are
-          cryptographically verified once installed. protoAgent is in
-          <strong class="text-zinc-200">public beta</strong> and updates itself in place; expect
-          frequent releases.
+          Prefer a verified binary today? The
+          <strong class="text-zinc-200">macOS build is fully signed &amp; notarized by Apple</strong>,
+          or you can
+          <a href={repo} target="_blank" rel="noopener noreferrer" class="text-zinc-300 hover:text-zinc-100 transition-colors underline underline-offset-2">build from source</a>
+          — see the note at the bottom of this page.
         </p>
       </div>
     </div>
