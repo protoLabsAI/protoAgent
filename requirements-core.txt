@@ -5,6 +5,10 @@
 # run in the `console` and `none` UI tiers (ADR 0010). `requirements.txt`
 # installs exactly this list (`-e .`).
 httpx>=0.27
+# IANA timezone database for stdlib zoneinfo — Windows ships none (every
+# ZoneInfo(...) raised in the frozen sidecar, #1683) and slim containers often
+# lack /usr/share/zoneinfo. Inert wherever system data exists.
+tzdata
 # A2A protocol (spec 1.0) — official SDK. Owns JSON-RPC dispatch, SSE streaming,
 # the task lifecycle, the task + push-config stores, and push delivery. The
 # protolabs-a2a package + a2a_executor.py are a thin conventions/bridge layer on
