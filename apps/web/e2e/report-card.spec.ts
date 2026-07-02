@@ -17,6 +17,11 @@ const TITLE = "Quarterly numbers deep-dive";
 const PREVIEW = Array.from({ length: 40 }, (_, i) => `Preview line ${i + 1} of the trimmed result.`).join("\n\n");
 const FULL_MARKER = "FULL-REPORT-ONLY-SERVED-BY-ID";
 const FULL = `# ${TITLE}\n\n${FULL_MARKER}\n\nThe untruncated report body.`;
+// A SHORT report that fits entirely: the fade mask must NOT apply (an unconditional
+// mask would ghost the report's last line into a fake truncation).
+const SHORT_JOB_ID = "bg-abcdefabcd99";
+const SHORT_TITLE = "Quick store check";
+const SHORT_PREVIEW = "All 4 stores match the drive.\n\nNothing to fix.";
 
 test("report card: clamped fading excerpt, Open CTA → docviewer, fetched by id", async ({ page }) => {
   // An open chat session whose id matches the job's origin_session — BackgroundWatch
@@ -35,24 +40,37 @@ test("report card: clamped fading excerpt, Open CTA → docviewer, fetched by id
     [SESSION],
   );
 
-  // SSE: one background.completed frame for the seeded session. The stream then closes;
-  // EventSource reconnects and replays it — BackgroundWatch dedupes, so the card renders
-  // exactly once even though delivery is repeated.
-  const frame = {
-    topic: "background.completed",
-    data: {
-      job_id: JOB_ID,
-      origin_session: SESSION,
-      status: "completed",
-      description: TITLE,
-      result: PREVIEW, // the truncated preview the bus event carries
+  // SSE: two background.completed frames for the seeded session — a long report (must
+  // clamp + fade) and a short one (must NOT fade). The stream then closes; EventSource
+  // reconnects and replays them — BackgroundWatch dedupes, so each card renders exactly
+  // once even though delivery is repeated.
+  const frames = [
+    {
+      topic: "background.completed",
+      data: {
+        job_id: JOB_ID,
+        origin_session: SESSION,
+        status: "completed",
+        description: TITLE,
+        result: PREVIEW, // the truncated preview the bus event carries
+      },
     },
-  };
+    {
+      topic: "background.completed",
+      data: {
+        job_id: SHORT_JOB_ID,
+        origin_session: SESSION,
+        status: "completed",
+        description: SHORT_TITLE,
+        result: SHORT_PREVIEW,
+      },
+    },
+  ];
   await page.route("**/api/events**", (route) =>
     route.fulfill({
       status: 200,
       headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-      body: `data: ${JSON.stringify(frame)}\n\n`,
+      body: frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join(""),
     }),
   );
 
@@ -76,24 +94,42 @@ test("report card: clamped fading excerpt, Open CTA → docviewer, fetched by id
 
   await page.goto("/app/", { waitUntil: "load" });
 
-  // The card: raised-card wrapper, header row (title + subtitle), CTA.
-  const card = page.locator(".chat-report-card");
+  // The long-report card: raised-card wrapper, header row (title + subtitle), CTA.
+  const card = page.locator(".chat-report-card").filter({ hasText: TITLE });
   await expect(card).toBeVisible({ timeout: 15_000 });
   await expect(card.locator(".chat-report-title")).toHaveText(TITLE);
   await expect(card.locator(".chat-report-sub")).toHaveText("Background report");
 
   // The excerpt is CLAMPED (content overflows the fade window) and carries the
-  // fade-out mask class.
+  // fade-out mask.
   const excerpt = card.locator(".chat-report-excerpt");
   await expect(excerpt).toBeVisible();
   await expect(excerpt).toContainText("Preview line 1");
   expect(await excerpt.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true);
+  await expect(excerpt).toHaveClass(/chat-report-excerpt--clamped/);
   expect(
     await excerpt.evaluate((el) => {
       const s = getComputedStyle(el);
       return s.maskImage || s.webkitMaskImage || "";
     }),
   ).toContain("linear-gradient");
+
+  // The SHORT report fits entirely — no clamp, and crucially NO fade mask (an
+  // unconditional mask would ghost its final line into a fake truncation).
+  const shortExcerpt = page
+    .locator(".chat-report-card")
+    .filter({ hasText: SHORT_TITLE })
+    .locator(".chat-report-excerpt");
+  await expect(shortExcerpt).toBeVisible();
+  await expect(shortExcerpt).toContainText("Nothing to fix.");
+  expect(await shortExcerpt.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(false);
+  await expect(shortExcerpt).not.toHaveClass(/chat-report-excerpt--clamped/);
+  expect(
+    await shortExcerpt.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return s.maskImage === "none" ? "" : s.maskImage || s.webkitMaskImage || "";
+    }),
+  ).not.toContain("linear-gradient");
 
   // The CTA opens the document viewer with the FULL report — which only the by-id
   // route serves, so its presence + the recorded hit prove the fetch path.

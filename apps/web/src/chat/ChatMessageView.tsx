@@ -3,6 +3,7 @@ import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
 import { ArrowDownToLine, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, Maximize2, RotateCcw } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { openDocument } from "../docviewer";
 import { slashCommandName } from "../ext/slashRegistry";
@@ -218,6 +219,22 @@ function BackgroundReportCard({
       subtitle: "Background agent report",
       load: () => loadBackgroundReport(report.jobId),
     });
+  // The bottom fade-out is a CLAMP indicator, not decoration: apply it only when the
+  // excerpt actually overflows its max-height. An unconditional mask scales to the
+  // element's own box, so a SHORT report (which fits entirely) would have its last
+  // line faded toward invisible — the report's conclusion, misread as truncation.
+  // Re-measured on resize (width changes rewrap the text and move the overflow point).
+  const excerptRef = useRef<HTMLDivElement | null>(null);
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const el = excerptRef.current;
+    if (!el) return;
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [message.content]);
   return (
     <Message role={message.role} className="chat-report">
       <div
@@ -235,7 +252,7 @@ function BackgroundReportCard({
           </div>
         </div>
         {message.content ? (
-          <div className="chat-report-excerpt">
+          <div ref={excerptRef} className={`chat-report-excerpt${clamped ? " chat-report-excerpt--clamped" : ""}`}>
             <Markdown>{message.content}</Markdown>
           </div>
         ) : null}

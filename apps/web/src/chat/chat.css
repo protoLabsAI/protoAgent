@@ -122,13 +122,18 @@
   letter-spacing: 0.05em;
   color: var(--pl-color-fg-muted);
 }
-/* The excerpt is a TEASER, not the content: clamp to ~7 text lines and fade the tail
-   out so the text visibly trails off into the card — the full report lives in the
-   document viewer behind the CTA. */
+/* The excerpt is a TEASER, not the content: clamp to ~7 text lines, and when the text
+   actually overflows (the --clamped modifier, measured in ChatMessageView) fade the tail
+   out so it visibly trails off into the card — the full report lives in the document
+   viewer behind the CTA. The mask is NOT unconditional: it scales to the element's own
+   box, so on a short, fully-visible report it would ghost the last line — the report's
+   conclusion — into a fake "there's more" truncation. */
 .chat-report-excerpt {
   margin-top: 10px;
   max-height: 10.5em; /* ≈7 lines at the markdown 1.5 line height */
   overflow: hidden;
+}
+.chat-report-excerpt--clamped {
   -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
   mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
 }
