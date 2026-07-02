@@ -873,6 +873,11 @@ select:disabled {
   max-width: 100%;
   container-type: inline-size;
   container-name: pl-mdtable;
+  /* The DS clips the wrapper (overflow:hidden) for rounded corners, but the inner table
+     scroller is inset by the p-2 padding + has its own radius, so the clip isn't needed for
+     that — and it was eating the copy dropdown (which opens below the top-right button). Let
+     it escape. The table's own horizontal scroll lives on the inner overflow-x:auto child. */
+  overflow: visible;
 }
 /* The table's own scroll container (streamdown's overflow-x:auto child) must be able to shrink
    below the table's intrinsic width for that scroll to engage. */
@@ -960,6 +965,13 @@ select:disabled {
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  /* streamdown positions the menu with an inline left offset (its right-0/top-full Tailwind is
+     inert), which shoved the 150px menu off the wrapper's right edge and out of view. Anchor it
+     explicitly under the button, right-aligned, so it stays on-screen. !important beats the
+     inline style. */
+  top: 100% !important;
+  right: 0 !important;
+  left: auto !important;
 }
 .pl-markdown [data-streamdown="table-wrapper"] .relative > div button {
   display: block;
