@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Background results are pushed, indexed, and worker-disposable**
+  ([ADR 0070](docs/adr/0070-background-results-push-resume.md), backend). When a
+  background job (ADR 0050) reaches a terminal state: **(D1)** the server
+  **push-resumes the origin session** — a terse self-A2A nudge turn (the
+  spawner's self-POST mechanics, factored into a shared
+  `BackgroundManager._send_a2a_message`) whose drain attaches the pending
+  `<task-notification>`, so the agent reviews the report and briefs the operator
+  immediately instead of the report waiting for the session's next manual turn.
+  New config `background.auto_resume` (default on; Settings ▸ Background).
+  Guarded: never for canceled jobs, `background:*` origins (no resume chains),
+  or incognito-spawned jobs; never-raises — a delivery failure falls back to the
+  ADR 0050 Activity idle-wake and the report still drains exactly-once on the
+  next manual turn. When the resume fires, the Activity wake is skipped (one
+  briefing turn, in the right place — never both). A mid-turn origin session is
+  safe: A2A turns serialize per thread. **(D2)** a substantial completed report
+  (> 800 chars) is **indexed into the knowledge store** keyed to the origin
+  session (`source_type: background_report`, trust tier 2 — agent-derived;
+  chunked by `add_document`), and the drain notification shrinks (cap 6 000 →
+  3 000 chars) with a pointer to `memory_recall` + the console report card.
+  **(D3)** worker transcripts are **disposable**: `background:*` sessions skip
+  session-summary persistence, the `<prior_sessions>` digest filters worker
+  files (legacy ones included), and retirement harvest skips worker threads —
+  the jobs DB is the system of record. The `task`/`task_batch` tools propagate
+  the turn's **incognito** flag onto the job row (new `origin_incognito`
+  column, migrated in place). New `GET /api/background/{job_id}` returns one
+  job's full row (strict `bg-<12 hex>` id validation) for the console report
+  card.
+
 ## [0.79.0] - 2026-07-01
 
 ### Added
