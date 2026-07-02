@@ -94,6 +94,10 @@ COLLECT_ALL = [
     "ddgs",
     "langfuse",
     "croniter",
+    # stdlib zoneinfo's fallback IANA database — Windows has no system tz data,
+    # and zoneinfo imports tzdata DYNAMICALLY, so the import-scan misses it;
+    # without the collect every ZoneInfo(...) in the frozen sidecar raised (#1683).
+    "tzdata",
     # A2A 1.0 (ADR 0014): the SDK + the protoLabs conventions layer (git-dep).
     # Both pull submodules/metadata that a bare import-scan misses — without a
     # full collect, the frozen `protolabs_a2a` is missing `build_agent_card`.

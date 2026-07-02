@@ -192,6 +192,22 @@ async def current_time(timezone: str = "UTC") -> str:
     try:
         tz = ZoneInfo(timezone)
     except ZoneInfoNotFoundError:
+        # Two distinct failures share this exception: an unknown NAME, and a host
+        # with NO IANA database at all — Windows ships none (stdlib zoneinfo needs
+        # the bundled `tzdata` package there, #1683) and slim containers often lack
+        # /usr/share/zoneinfo. On a database-less host every name fails — including
+        # this docstring's examples — so answer in UTC rather than erroring the
+        # tool's core job ("what time is it").
+        try:
+            ZoneInfo("UTC")
+        except ZoneInfoNotFoundError:
+            now = datetime.now(UTC)
+            note = (
+                ""
+                if timezone.strip().upper() in ("UTC", "ETC/UTC")
+                else f"\nNote: no IANA timezone database on this host — {timezone!r} unavailable, showing UTC."
+            )
+            return f"{now.isoformat()} (UTC)\nHuman: {now.strftime('%A, %B %d %Y, %H:%M:%S %Z')}{note}"
         return f"Error: unknown timezone {timezone!r}. Use an IANA name like 'UTC' or 'America/New_York'."
 
     now = datetime.now(tz)
