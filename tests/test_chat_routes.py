@@ -131,9 +131,12 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
 
 def test_compact_session_route(monkeypatch):
     # The route is a thin pass-through to server.chat.compact_session — forwards the
-    # path session_id and returns the compaction result dict verbatim.
+    # path session_id and returns the compaction result dict verbatim. /compact is
+    # behind the chat.compact developer flag (ADR 0068); force it ON via the env
+    # override so the pass-through is what's under test, not the gate.
     import operator_api.chat_routes as cr
 
+    monkeypatch.setenv("PROTOAGENT_FLAG_CHAT_COMPACT", "1")
     seen: list[str] = []
 
     async def _fake_compact(session_id):
@@ -155,6 +158,28 @@ def test_compact_session_route(monkeypatch):
     assert seen == ["s1"]
     assert body["removed"] == 9 and body["kept"] == 4 and body["archived"] is True
     assert body["message"] == "Compacted this conversation"
+
+
+def test_compact_session_route_refuses_when_flag_off(monkeypatch):
+    # /compact is pre-release (chat.compact developer flag, ADR 0068): on the prod
+    # channel the dev-tier flag resolves OFF, the route 403s, and compact_session is
+    # never reached — the checkpoint can't be touched through a disabled gate.
+    import operator_api.chat_routes as cr
+
+    monkeypatch.delenv("PROTOAGENT_FLAG_CHAT_COMPACT", raising=False)
+    monkeypatch.setenv("PROTOAGENT_CHANNEL", "prod")
+    called: list[str] = []
+
+    async def _fake_compact(session_id):
+        called.append(session_id)
+        return {}
+
+    monkeypatch.setattr(cr, "compact_session", _fake_compact)
+    c = _client(monkeypatch)
+    resp = c.post("/api/chat/sessions/s1/compact")
+    assert resp.status_code == 403
+    assert "chat.compact" in resp.json()["detail"]
+    assert called == []
 
 
 def test_rewind_session_route(monkeypatch):

@@ -24,6 +24,7 @@ import {
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
+import { useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
@@ -446,6 +447,10 @@ function ChatSessionSlot({
 
   const slashQuery = slashDismissed ? null : slashCtx?.query ?? null;
 
+  // Developer-flag gate (ADR 0068): a registered command tagged with `flag:` is listed
+  // and dispatched only while its flag resolves ON — flag-off, it's as if unregistered.
+  const flagOn = useFlagPredicate();
+
   const slashMatches = useMemo(() => {
     if (slashQuery === null) return [];
     const q = slashQuery.toLowerCase();
@@ -453,13 +458,15 @@ function ChatSessionSlot({
     // comes from the slash-command registry — core (/new, /clear, /effort) AND any fork-
     // registered commands — so neither is hardcoded here.
     const all: SlashCommand[] = [
-      ...registeredSlashCommands().map((c) => ({ name: c.name, description: c.description, usage: c.usage })),
+      ...registeredSlashCommands()
+        .filter((c) => !c.flag || flagOn(c.flag))
+        .map((c) => ({ name: c.name, description: c.description, usage: c.usage })),
       ...commands,
     ];
     return all.filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
-  }, [slashQuery, commands]);
+  }, [slashQuery, commands, flagOn]);
 
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
@@ -495,6 +502,7 @@ function ChatSessionSlot({
     const [verb, ...rest] = raw.split(/\s+/);
     const cmd = findSlashCommand(verb);
     if (!cmd) return false;
+    if (cmd.flag && !flagOn(cmd.flag)) return false; // flag-off ⇒ as if unregistered
     return cmd.run({
       rest: rest.join(" ").trim(),
       sessionId: session?.id ?? null,

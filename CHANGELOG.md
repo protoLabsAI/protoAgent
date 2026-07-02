@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job's full row (strict `bg-<12 hex>` id validation) for the console report
   card.
 
+### Changed
+- **`/compact` is now behind the `chat.compact` developer flag** (ADR 0068,
+  first real flag in the registry). The command shipped in #1558 but is still
+  pre-release: on the prod channel it no longer appears in the slash menu and
+  `POST /api/chat/sessions/{id}/compact` refuses with 403; the dev channel (and
+  `PROTOAGENT_FLAG_CHAT_COMPACT=1`, `?flag:chat.compact=on`, or the Settings ▸
+  Developer toggle) keeps it on. The client slash-command seam (ADR 0061) gains
+  an optional `flag:` tag — the host lists and dispatches a tagged command only
+  while its flag resolves ON, so forks can flag-gate their own commands the
+  same way.
+
 ## [0.79.0] - 2026-07-01
 
 ### Added

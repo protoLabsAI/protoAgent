@@ -7,6 +7,8 @@
 //   ?flag:<id>= query param  >  device-local panel toggle  >  server channel-resolved state
 // (The server has already applied the PROTOAGENT_FLAG_<ID> env override beneath that.)
 
+import { useCallback } from "react";
+
 import { useQuery } from "@tanstack/react-query";
 
 import { createUISlice } from "../ext/uiStateRegistry";
@@ -51,13 +53,26 @@ export function useFlags() {
   return useQuery(flagsQuery());
 }
 
+/** A predicate over ANY flag id, same precedence as `useFlag` — for gating LISTS (e.g.
+ *  flag-tagged slash commands) where calling a per-id hook in a loop is illegal. Stable
+ *  per (server state, overrides) so it's safe in memo deps. Fail-closed like `useFlag`. */
+export function useFlagPredicate(): (id: string) => boolean {
+  const { data } = useFlags();
+  const overrides = useFlagOverrides((s) => s.overrides);
+  return useCallback(
+    (id: string) => {
+      if (id in _queryOverrides) return _queryOverrides[id];
+      const override = overrides[id];
+      if (override !== undefined) return override;
+      return data?.flags.find((f) => f.id === id)?.enabled ?? false;
+    },
+    [data, overrides],
+  );
+}
+
 /** Is a developer flag ON for this session? Fail-closed: an unknown/loading flag is off. */
 export function useFlag(id: string): boolean {
-  const { data } = useFlags();
-  const override = useFlagOverrides((s) => s.overrides[id]);
-  if (id in _queryOverrides) return _queryOverrides[id];
-  if (override !== undefined) return override;
-  return data?.flags.find((f) => f.id === id)?.enabled ?? false;
+  return useFlagPredicate()(id);
 }
 
 /** The runtime channel this instance runs on (prod | beta | dev). */

@@ -276,6 +276,9 @@ function handleApiGet(pathname, fleet = FLEET) {
         flags: [
           { id: "chat.new_dashboard", description: "Preview of the redesigned dashboard.", tier: "beta", owner: "kj", remove_by: "v1.0", enabled: true, source: "channel" },
           { id: "chat.experimental_widget", description: "An in-progress widget.", tier: "dev", owner: "kj", remove_by: "", enabled: true, source: "channel" },
+          // The REAL chat.compact flag (runtime/flags.py) — enabled so commands.spec sees
+          // /compact in the slash menu; the flag-off path is covered via ?flag:chat.compact=off.
+          { id: "chat.compact", description: "/compact — summarize + archive a chat thread.", tier: "dev", owner: "kj", remove_by: "2026-09-01", enabled: true, source: "channel" },
         ],
       };
     default:
