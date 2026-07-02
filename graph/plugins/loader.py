@@ -282,6 +282,19 @@ def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
             )
 
 
+def _sweep_plugin_jobs(plugin_id: str) -> None:
+    """Cancel a not-enabled plugin's ``plugin:<id>:*`` scheduler jobs (#1642) —
+    best-effort, never breaks a load. See ``sdk.cancel_plugin_jobs``."""
+    try:
+        from graph.sdk import cancel_plugin_jobs
+
+        cancelled = cancel_plugin_jobs(plugin_id)
+    except Exception:  # noqa: BLE001 — hygiene must never break plugin loading
+        return
+    if cancelled:
+        log.info("[plugins] %s is disabled — cancelled %d scheduled job(s) it owned", plugin_id, cancelled)
+
+
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:
     """Load enabled plugins and collect their contributions.
 
@@ -323,6 +336,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         }
 
         if not enabled:
+            # Lifecycle hygiene (#1642): a disabled plugin must not keep a recurring
+            # cadence firing — sweep its `plugin:<id>:*` scheduler jobs on every
+            # (re)load. The console disable toggle and a hand-edited config both
+            # funnel through a (re)load, so this one hook covers both; uninstall is
+            # covered by the installer (the manifest is gone from disk, so this loop
+            # can't see it). Pre-setup loads run before the scheduler is wired
+            # (STATE.scheduler is None → no-op).
+            _sweep_plugin_jobs(manifest.id)
             result.meta.append(entry)
             continue
 

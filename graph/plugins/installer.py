@@ -647,9 +647,30 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
 
     if not removed:
         raise InstallError(f"plugin {plugin_id!r} is not installed.")
+
+    # Plugin-owned scheduler jobs (#1642): cancel `plugin:<id>:*` so an uninstalled
+    # plugin's recurring cadence can't keep firing prompts about a plugin that's gone.
+    # The loader's disable-sweep can't cover this case — the manifest is gone from
+    # disk. Best-effort: in a CLI process there's no live scheduler (STATE.scheduler
+    # is None → 0); the console uninstall route runs in the live server where it works.
+    try:
+        from graph.sdk import cancel_plugin_jobs
+
+        jobs_cancelled = cancel_plugin_jobs(plugin_id)
+    except Exception:  # noqa: BLE001 — job hygiene must never fail the uninstall
+        jobs_cancelled = 0
+    if jobs_cancelled:
+        removed.append("jobs")
+
     _audit("uninstall", {"id": plugin_id, "purge": purge}, f"uninstalled {plugin_id} ({', '.join(removed)})")
     log.info("[plugins] uninstalled %s (%s)", plugin_id, ", ".join(removed))
-    return {"id": plugin_id, "removed": removed, "deps_left": deps_left, "purged": purge}
+    return {
+        "id": plugin_id,
+        "removed": removed,
+        "deps_left": deps_left,
+        "purged": purge,
+        "jobs_cancelled": jobs_cancelled,
+    }
 
 
 def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
