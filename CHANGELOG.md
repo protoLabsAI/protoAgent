@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.82.0] - 2026-07-02
+
 ### Added
 - **The console now says what each subagent does** (#1660). The Runtime → Subagents
   panel shows every subagent's plain-language description (from the registry — the
