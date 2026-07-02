@@ -282,3 +282,55 @@ async def test_nonstreaming_chat_holds_and_resumes(monkeypatch):
         i for i, m in enumerate(history) if isinstance(m, HumanMessage) and "typed while form open" in str(m.content)
     )
     assert tool_idx < fold_idx
+
+
+# ── parallel gated tool calls: several interrupts pend at once, drain by id ───
+
+
+def _two_form_calls() -> AIMessage:
+    """One assistant turn calling ``request_user_input`` TWICE — the tool node runs a
+    turn's tool calls concurrently, so BOTH interrupts pend at once. Resuming bare
+    (no interrupt id) in that state is a hard LangGraph RuntimeError."""
+
+    def call(cid: str, title: str) -> dict:
+        return {
+            "name": "request_user_input",
+            "args": {"title": title, "steps": _FORM_STEPS},
+            "id": cid,
+            "type": "tool_call",
+        }
+
+    return AIMessage(content="", tool_calls=[call("c1", "Pick env"), call("c2", "Pick region")])
+
+
+async def _pending_count(session_id: str) -> int:
+    snap = await STATE.graph.aget_state(_cfg(session_id))
+    pend = list(getattr(snap, "interrupts", None) or [])
+    if not pend:
+        for t in getattr(snap, "tasks", ()) or ():
+            pend.extend(getattr(t, "interrupts", ()) or ())
+    return len(pend)
+
+
+@pytest.mark.asyncio
+async def test_parallel_interrupts_drain_one_at_a_time_by_id(monkeypatch):
+    sid = "multi-1"
+    _install_graph(monkeypatch, [_two_form_calls(), AIMessage(content="Both picked.")])
+
+    # Turn 1: both gated tools interrupt concurrently — TWO pending; the first surfaces.
+    frames = await _frames("configure the deploy", sid)
+    assert frames[-1][0] == "input_required"
+    assert frames[-1][1].get("title") == "Pick env"
+    assert await _pending_count(sid) == 2
+
+    # Answer 1 resumes exactly the surfaced interrupt BY ID — a bare resume here is
+    # "RuntimeError: When there are multiple pending interrupts, you must specify the
+    # interrupt id". The still-unanswered second interrupt surfaces on the next pass.
+    frames = await _frames('{"env": "prod"}', sid, request_metadata={"hitl_resume": True})
+    assert frames[-1][0] == "input_required"
+    assert frames[-1][1].get("title") == "Pick region"
+
+    # Answer 2 drains the last interrupt; the turn completes normally.
+    frames = await _frames('{"env": "us-east-1"}', sid, request_metadata={"hitl_resume": True})
+    assert any(kind == "done" for kind, _ in frames)
+    assert await chat_mod._pending_interrupt_value(_cfg(sid)) is None
