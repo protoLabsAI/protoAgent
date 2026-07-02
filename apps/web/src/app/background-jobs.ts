@@ -58,3 +58,19 @@ export function byRecency(a: BackgroundJobDTO, b: BackgroundJobDTO): number {
   const bt = Date.parse(b.completed_at || b.created_at || "") || 0;
   return bt - at;
 }
+
+/** Whether a completed job's result should render as a compact inline note instead of
+ *  the report card (#1651). Short = a successful single line that arrived complete
+ *  (the server truncates previews at 2000 chars with a `…_[truncated]_` suffix, so an
+ *  untruncated one-liner IS the whole result — the card's open-report CTA adds
+ *  nothing). Failures, multi-line, long, or truncated results keep the card. */
+export function isShortResult(result: string, failed: boolean): boolean {
+  const trimmed = result.trim();
+  return (
+    !failed &&
+    trimmed.length > 0 &&
+    trimmed.length <= 120 &&
+    !trimmed.includes("\n") &&
+    !result.includes("…_[truncated]_")
+  );
+}

@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **One-line background results render as a compact inline note, not a report card**
+  (#1651). A short single-line success (e.g. "Ingested 'notes.md' → 15 chunk(s)")
+  arrives complete in the completion event — the full-height report card and its
+  Open-report CTA added nothing but bulk. Such results now inject as a
+  success-tinted system note; multi-line, long, truncated, or failed results keep
+  the card (and failures keep their explicit failed lede).
 - **Desktop no longer aborts on launch when a global hotkey is already taken**
   (#1670). Hotkey registration lived in the global-shortcut plugin's init, so a
   hotkey another app owns (Discord, PowerToys, AutoHotkey, …) became a
