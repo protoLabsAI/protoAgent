@@ -1553,8 +1553,13 @@ function ChatSessionSlot({
                   onMouseEnter={() => setSlashIndex(index)}
                   onClick={() => completeCommand(cmd)}
                 >
-                  <span className="slash-name">/{cmd.name}</span>
-                  <span className="slash-desc">{cmd.usage || cmd.description}</span>
+                  <span className="slash-title">
+                    <span className="slash-name">/{cmd.name}</span>
+                    {cmd.kind ? (
+                      <span className="slash-kind">{cmd.kind === "plugin_command" ? "plugin" : cmd.kind}</span>
+                    ) : null}
+                  </span>
+                  <span className="slash-desc">{cmd.description || cmd.usage}</span>
                 </button>
               ))}
             </div>

@@ -242,6 +242,10 @@ export type SlashCommand = {
   name: string;
   description: string;
   usage?: string;
+  // What the token dispatches to (server-resolved: "workflow" | "subagent" | "skill" |
+  // "plugin_command"…) — shown as a badge in the composer palette so the operator knows
+  // what kind of thing /name runs (#1660). Client-registered commands carry none.
+  kind?: string;
 };
 
 export type SettingsField = {

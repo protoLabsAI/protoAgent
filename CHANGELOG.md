@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The console now says what each subagent does** (#1660). The Runtime → Subagents
+  panel shows every subagent's plain-language description (from the registry — the
+  same text the lead agent reads) under its name, and the composer's slash palette
+  badges each server command with its kind (`subagent` / `workflow` / `skill` /
+  `plugin`) and prefers the description over the bare usage line — so "what does
+  /antagonist do?" is answered at the point of use, before picking it.
 - **Plugin metric timeseries — `sdk.record_metric` / `metric_history` / `metric_last`**
   (#1632). Plugins with background engines need small named numeric series (treasury,
   net worth, fleet size) for history-dependent watch verifiers (ADR 0067
