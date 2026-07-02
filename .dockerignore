@@ -53,7 +53,7 @@ node_modules/
 
 # Seccomp profile — Docker reads this on the host at runtime
 # (via docker-compose security_opt), NOT from inside the image
-seccomp-profile.json
+deploy/seccomp-profile.json
 
 # OS junk
 .DS_Store

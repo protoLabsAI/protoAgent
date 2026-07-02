@@ -2,9 +2,9 @@
 #
 # `docker compose up --build` runs the agent locked down: read-only root
 # filesystem, all Linux capabilities dropped, no privilege escalation, and
-# the bundled seccomp-profile.json applied (the Dockerfile ships that profile
-# but nothing referenced it until now). The few writable paths are explicit —
-# /tmp + /home as ephemeral tmpfs, agent state in named volumes.
+# the bundled deploy/seccomp-profile.json applied (Docker reads it from the
+# host at compose time, not from the image). The few writable paths are
+# explicit — /tmp + /home as ephemeral tmpfs, agent state in named volumes.
 #
 # Backported from the protoLabs fleet (pwnDeck), generalised to neutral
 # defaults. Tune the resource ceiling and ports per deployment.
@@ -30,7 +30,7 @@ services:
     # ── Hardening ──────────────────────────────────────────────────────────
     security_opt:
       - no-new-privileges:true
-      - seccomp=seccomp-profile.json
+      - seccomp=deploy/seccomp-profile.json
     cap_drop:
       - ALL
     read_only: true
