@@ -294,7 +294,14 @@ function ChatSessionSlot({
   // a spinner/"working…" strip above the composer — the inline indicators cover it now.
   const [, setStatusMessage] = useState("");
   const [taskId, setTaskId] = useState("");
-  const [hitl, setHitl] = useState<HitlPayload | null>(null);
+  const [hitl, setHitlState] = useState<HitlPayload | null>(null);
+  // Ref mirror for async closures (reconcileSteer runs after an await — the render
+  // closure's `hitl` is stale by then). Always set both via updateHitl.
+  const hitlRef = useRef<HitlPayload | null>(null);
+  const updateHitl = (payload: HitlPayload | null) => {
+    hitlRef.current = payload;
+    setHitlState(payload);
+  };
   const abortRef = useRef<AbortController | null>(null);
   // Transient "copied ✓" feedback on a message's copy action.
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -720,6 +727,15 @@ function ChatSessionSlot({
 
   async function send() {
     if (!session || !canSend) return;
+    // A HITL form/question/approval is open (#1560): a fresh send would race the
+    // pending form — the server holds unmarked messages anyway — so queue it as a
+    // steer instead. It folds into the agent's context right AFTER the form
+    // response (submit or dismiss), with the same queued-bubble + ✕ affordances
+    // as mid-turn steering. Attachments stay in the tray for the next real send.
+    if (hitl) {
+      void queueSteer();
+      return;
+    }
     const text = draft.trim();
     pushInputHistory(text); // record for ↑/↓ recall, then reset nav to the newest
     histIndexRef.current = null;
@@ -844,6 +860,14 @@ function ChatSessionSlot({
     const consumed = queued.filter((q) => !remainingIds.has(q.id));
     const unconsumed = queued.filter((q) => remainingIds.has(q.id));
     if (consumed.length) settleConsumed(consumed);
+    // The turn parked on a HITL form (#1560): steers the agent hasn't folded yet stay
+    // QUEUED — the server keeps holding them and folds them in right after the form
+    // response. Re-sending them as a fresh turn here would deliver them BEFORE the
+    // form answer (and abandon the pending interrupt).
+    if (unconsumed.length && hitlRef.current) {
+      setSteerQueue(unconsumed);
+      return;
+    }
     setSteerQueue([]);
     if (unconsumed.length) {
       void runTurn(unconsumed.map((u) => u.text).join("\n\n"));
@@ -966,14 +990,17 @@ function ChatSessionSlot({
     // the tool card itself (running → done on approve, error on deny), so the bubble is
     // just noise. A form/question answer IS meaningful content, so those stay visible.
     const silent = hitl?.kind === "approval";
-    setHitl(null);
+    updateHitl(null);
     // For an approval resume, CONTINUE the original assistant message (the one that paused) so the
     // pre- and post-approval tool cards live in ONE bubble / one WorkBlock — otherwise they split
     // across two message bubbles with a gap between them. Forms/questions keep the new-bubble path
     // (their answer is meaningful conversation).
+    // `hitlResume` marks this as THE answer to the pending interrupt (#1560): the server
+    // resumes the parked graph with it, while any other message sent meanwhile is held
+    // and folds in right after.
     void runTurn(
       typeof response === "string" ? response : JSON.stringify(response),
-      silent ? { hidden: true, resumeMessageId: lastAssistantId } : {},
+      silent ? { hidden: true, resumeMessageId: lastAssistantId, hitlResume: true } : { hitlResume: true },
     );
   }
 
@@ -985,11 +1012,11 @@ function ChatSessionSlot({
   // the paused assistant message (matching the approval-resume path) rather than minting a
   // new bubble.
   async function dismissHitl() {
-    setHitl(null);
+    updateHitl(null);
     void runTurn(
       "[dismissed] The operator dismissed this request without providing input. Continue " +
         "without it — proceed using your best judgment, or stop and explain what you need.",
-      { hidden: true, resumeMessageId: lastAssistantId },
+      { hidden: true, resumeMessageId: lastAssistantId, hitlResume: true },
     );
   }
 
@@ -1000,6 +1027,8 @@ function ChatSessionSlot({
       sendAs?: string;
       images?: { b64: string; mime: string; name: string }[];
       resumeMessageId?: string;
+      // This message answers the pending HITL interrupt (#1560) — see resumeHitl.
+      hitlResume?: boolean;
     } = {},
   ) {
     if (!session || !content) return;
@@ -1086,7 +1115,7 @@ function ChatSessionSlot({
           }
         },
         onInputRequired: (payload) => {
-          setHitl(payload);
+          updateHitl(payload);
           // Alert natively if the window is hidden/unfocused (menu-bar-only
           // desktop, or a backgrounded tab) so the form isn't missed.
           notifyIfHidden(
@@ -1266,6 +1295,8 @@ function ChatSessionSlot({
         // EVERY send while the tab's toggle is on (a mixed thread would leak earlier
         // incognito content into a later non-incognito turn's summary).
         incognito: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.incognito,
+        // Marks this message as the answer to the pending HITL interrupt (#1560).
+        hitlResume: opts.hitlResume,
       });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");

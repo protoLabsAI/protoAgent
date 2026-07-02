@@ -42,6 +42,11 @@ class ChatRequest(BaseModel):
     # memory injection for this turn. Additive, default False — existing
     # callers are unaffected.
     incognito: bool = False
+    # This message answers a pending HITL form/question/approval (#1560): resume
+    # the parked interrupt instead of running a fresh turn. Set by the console's
+    # desktop /api/chat fallback — the streaming path carries the same flag as
+    # A2A message metadata (`hitl_resume`). Additive, default False.
+    hitl_resume: bool = False
 
 
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -67,7 +72,9 @@ def register_chat_routes(app, ui: str) -> None:
         # Echo the (possibly minted) session_id so callers can continue the
         # session — additive key, existing consumers unaffected.
         session_id = req.session_id.strip() or _mint_session_id()
-        result = await chat(req.message, session_id, model=req.model, incognito=req.incognito)
+        result = await chat(
+            req.message, session_id, model=req.model, incognito=req.incognito, hitl_resume=req.hitl_resume
+        )
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 

@@ -301,7 +301,12 @@ def _setup_required_message() -> list[dict[str, Any]]:
 
 
 async def chat(
-    message: str, session_id: str, *, model: str | None = None, incognito: bool = False
+    message: str,
+    session_id: str,
+    *,
+    model: str | None = None,
+    incognito: bool = False,
+    hitl_resume: bool = False,
 ) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
@@ -312,11 +317,13 @@ async def chat(
     artifact. ``model`` overrides the lead model for this turn (per-tab / per
     OpenAI request); unset → the configured default. ``incognito`` (ADR 0069
     D3b) marks the turn as leaving no memory trail: no session-summary
-    persistence, no memory injection.
+    persistence, no memory injection. ``hitl_resume`` marks the message as the
+    operator's answer to a pending HITL interrupt (#1560 — the desktop /api/chat
+    fallback's analogue of the streaming path's ``hitl_resume`` metadata).
     """
     if STATE.graph is None:
         return _setup_required_message()
-    return await _chat_langgraph(message, session_id, model=model, incognito=incognito)
+    return await _chat_langgraph(message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume)
 
 
 # Cap tool input/output previews so a single frame stays small on the wire.
@@ -863,6 +870,65 @@ _AUTONOMOUS_HITL_SENTINEL = (
 _MAX_AUTONOMOUS_AUTOANSWERS = 3
 
 
+def _is_autonomous(request_metadata: dict | None) -> bool:
+    """Whether this turn runs with no operator watching (see _AUTONOMOUS_ORIGINS)."""
+    return ((request_metadata or {}).get("origin") or "").strip().lower() in _AUTONOMOUS_ORIGINS
+
+
+def _is_hitl_resume(request_metadata: dict | None) -> bool:
+    """Whether this message IS the operator's answer to the pending HITL pause.
+
+    The console stamps ``hitl_resume`` on the message metadata when it submits or
+    dismisses a form / question / approval card — that message must resume the parked
+    interrupt (``Command(resume=…)``), not run a fresh graph turn. A2A callers that
+    resume properly (message/send on the parked taskId) never need this marker — the
+    executor already flips ``resume`` for them."""
+    return bool((request_metadata or {}).get("hitl_resume"))
+
+
+# _hold_if_hitl_pending's "this message answers the pending interrupt" signal — a
+# sentinel (not a string) so it can never collide with an interrupt VALUE.
+_HITL_RESUME = object()
+
+
+async def _hold_if_hitl_pending(message: str, session_id: str, config: dict, *, request_metadata: dict | None):
+    """The HITL hold (#1560): decide what a FRESH message may do while this thread is
+    parked at a ``request_user_input`` / ``ask_human`` / approval ``interrupt()``.
+
+    LangGraph treats fresh input on an interrupted thread as "abandon the interrupt and
+    continue" — the un-answered tool_call is left dangling (later stripped by
+    ToolCallRepairMiddleware) and the model sees the new message BEFORE (and instead of)
+    the form answer, while the parked task can never resolve. So while a HITL interrupt
+    is pending:
+
+    - the operator's actual answer (``hitl_resume`` metadata) → resume the graph
+      properly (returns the ``_HITL_RESUME`` sentinel);
+    - any other operator message → HOLD it: park it in the per-session steering queue
+      (returns the interrupt payload). It stays queued while the form is open — the
+      queue only drains at a model call, and the parked graph makes none — and folds in
+      via ``SteeringMiddleware`` at the FIRST model call after the form resolves
+      (submitted OR dismissed), i.e. immediately after the form response, in arrival
+      order. A dismissal is also a resume, so held messages can never deadlock; the
+      pending-form state itself lives in the durable LangGraph checkpoint (re-read
+      here every time), so a restart can't strand the hold.
+
+    Autonomous turns are exempt (they must never park — unchanged clobber semantics),
+    and with no pending interrupt this returns ``None`` and the turn is untouched.
+    Callers must hold the per-thread lock (the check must not race a parking turn)."""
+    if _is_autonomous(request_metadata):
+        return None
+    pending_val = await _pending_interrupt_value(config)
+    if pending_val is None:
+        return None
+    if _is_hitl_resume(request_metadata):
+        return _HITL_RESUME
+    from graph import steering
+
+    steering.enqueue(session_id, message)
+    log.info("[hitl] holding operator message for session %s — form pending", session_id)
+    return pending_val
+
+
 async def _run_native_turn(message, session_id, config, *, request_metadata=None, resume=False, images=None):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal confidence + done
@@ -890,7 +956,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # An autonomous turn (no operator watching) must never deadlock on a HITL pause: when one
     # of these turns hits input_required we resume the graph with a "no operator" sentinel and
     # run another pass, up to a cap, instead of parking the task forever (see _AUTONOMOUS_*).
-    _autonomous = ((request_metadata or {}).get("origin") or "").strip().lower() in _AUTONOMOUS_ORIGINS
+    _autonomous = _is_autonomous(request_metadata)
     _resume_value = (message if resume else None)
     _auto_answers = 0
     with goal_turn(goal_active):
@@ -1180,6 +1246,20 @@ async def _chat_langgraph_stream(
             # queue; different contexts never block each other). The turn body lives in
             # _run_native_turn so the lock wraps it without a deep in-line reindent.
             async with _thread_lock(_tid):
+                # HITL hold (#1560): while this thread is parked at a form/question/
+                # approval interrupt, a fresh operator message is HELD in the steering
+                # queue (it folds in right after the form response) and the turn re-parks
+                # on the same payload; the marked form answer converts to a real resume.
+                # No pending interrupt ⇒ hold is None and nothing changes.
+                if not resume:
+                    hold = await _hold_if_hitl_pending(
+                        message, session_id, config, request_metadata=request_metadata
+                    )
+                    if hold is _HITL_RESUME:
+                        resume = True
+                    elif hold is not None:
+                        yield ("input_required", _interrupt_payload(hold))
+                        return
                 async for frame in _run_native_turn(
                     message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
                 ):
@@ -1315,7 +1395,12 @@ async def rewind_session(
 
 
 async def _chat_langgraph(
-    message: str, session_id: str, *, model: str | None = None, incognito: bool = False
+    message: str,
+    session_id: str,
+    *,
+    model: str | None = None,
+    incognito: bool = False,
+    hitl_resume: bool = False,
 ) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
@@ -1386,11 +1471,37 @@ async def _chat_langgraph(
             # unlocked graph turn here could lost-update a concurrent one (e.g. the
             # desktop /api/chat fallback racing a console /compact on the same tab).
             async with _thread_lock(config["configurable"]["thread_id"]):
+                # HITL hold (#1560) — same contract as the streaming path: while the
+                # thread is parked at a form/question/approval interrupt, hold a fresh
+                # operator message (it folds in right after the form response) and echo
+                # the pending ask; the marked answer resumes the graph properly.
+                hold = await _hold_if_hitl_pending(
+                    message, session_id, config, request_metadata=({"hitl_resume": True} if hitl_resume else None)
+                )
+                if hold is not None and hold is not _HITL_RESUME:
+                    payload = _interrupt_payload(hold)
+                    question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
+                    return [
+                        {
+                            "role": "assistant",
+                            "content": (
+                                f"🙋 **Input needed first:** {question}\n\n"
+                                "_(Your message is queued — the agent gets it right after you answer.)_"
+                            ),
+                        }
+                    ]
+                if hold is _HITL_RESUME:
+                    from langgraph.types import Command
+
+                    graph_input = Command(resume=message)
+                else:
+                    graph_input = {
+                        "messages": [HumanMessage(content=message)],
+                        "session_id": session_id,
+                        **_state_extra,
+                    }
                 with goal_turn(goal_active):
-                    result = await STATE.graph.ainvoke(
-                        {"messages": [HumanMessage(content=message)], "session_id": session_id, **_state_extra},
-                        config=config,
-                    )
+                    result = await STATE.graph.ainvoke(graph_input, config=config)
             raw = _last_ai(result)
             response = extract_output(raw)
 

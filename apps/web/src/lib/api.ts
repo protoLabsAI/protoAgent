@@ -1334,6 +1334,11 @@ export const api = {
       // console stamps it on EVERY send while the thread's toggle is on — a mixed
       // thread would leak earlier incognito content into a later turn's summary.
       incognito?: boolean;
+      // This message ANSWERS a pending HITL form/question/approval (#1560): the server
+      // resumes the parked interrupt with it (Command(resume=…)) instead of running a
+      // fresh turn. Unmarked messages sent while a form is pending are held server-side
+      // until the form resolves.
+      hitlResume?: boolean;
     } = {},
   ) {
     // One A2A SendStreamingMessage body + one frame dispatcher, shared by the desktop
@@ -1355,13 +1360,14 @@ export const api = {
           // Per-turn overrides ride the A2A message metadata (server/chat.py reads them):
           // the tab's chosen model + the /effort reasoning level + incognito (ADR 0069 D3b —
           // per-message server-side, stamped on every send while the thread toggle is on).
-          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions || opts.incognito)
+          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions || opts.incognito || opts.hitlResume)
             ? {
                 metadata: {
                   ...(opts.model ? { model: opts.model } : {}),
                   ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
                   ...(opts.bypassPermissions ? { bypass_permissions: true } : {}),
                   ...(opts.incognito ? { incognito: true } : {}),
+                  ...(opts.hitlResume ? { hitl_resume: true } : {}),
                 },
               }
             : {}),
@@ -1455,6 +1461,9 @@ export const api = {
             // The non-streaming fallback must carry incognito too — dropping it here
             // would silently persist a thread the operator marked private.
             ...(opts.incognito ? { incognito: true } : {}),
+            // …and hitl_resume (#1560) — dropping it would make the server HOLD the
+            // operator's own form answer behind the form it answers (deadlock).
+            ...(opts.hitlResume ? { hitl_resume: true } : {}),
           }),
         });
         if (!res.ok) {

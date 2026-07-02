@@ -11,7 +11,7 @@ def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
         suffix = f"@{model}" if model else ""
         return chat_reply or [{"role": "assistant", "content": f"echo:{message}{suffix}"}]
 
@@ -39,7 +39,7 @@ def test_api_chat_mints_unique_session_id_when_omitted(monkeypatch):
 
     seen: list[str] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
         seen.append(session_id)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -74,7 +74,7 @@ def test_api_chat_passes_incognito_flag(monkeypatch):
 
     seen: list[bool] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
         seen.append(incognito)
         return [{"role": "assistant", "content": "ok"}]
 
