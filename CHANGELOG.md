@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The in-app update notes now match the Discord release announcement** ([#1516]).
+  The desktop updater's "what's new" card renders the same LLM-themed release notes
+  that are posted to Discord — one changelog, one voice — instead of the raw
+  `CHANGELOG.md` section. The release pipeline persists the generated notes as a
+  `release-notes.md` release asset (the *same* generation that posts the Discord
+  embed), and the desktop build's `latest.json` fan-in prefers it, falling back to
+  the curated `CHANGELOG.md` section when the notes step didn't run (e.g. a fork
+  with no gateway key). Takes effect from the next release.
+
+[#1516]: https://github.com/protoLabsAI/protoAgent/issues/1516
+
 ## [0.80.0] - 2026-07-02
 
 ### Added
