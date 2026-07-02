@@ -670,6 +670,13 @@ export const api = {
     return request<{ enabled: boolean; jobs: BackgroundJobDTO[] }>("/api/background");
   },
 
+  // One background job's full row by id (ADR 0070 D4). This is the ONLY place the
+  // FULL result text is fetchable — the `background.completed` bus event and the
+  // drained <task-notification> both carry truncated previews.
+  backgroundJob(jobId: string) {
+    return request<BackgroundJobDTO>(`/api/background/${encodeURIComponent(jobId)}`);
+  },
+
   // Stop a running background job (ADR 0051) — cancels its detached A2A turn.
   stopBackground(jobId: string) {
     return request<{ ok: boolean; status?: string; detail?: string }>(
@@ -1742,3 +1749,24 @@ export const api = {
     return request<DelegateProbe>("/api/delegates/test", { method: "POST", body: entry });
   },
 };
+
+/** Full report body for the chat report card → document viewer (ADR 0070 D4).
+ *
+ *  Fetches the job by id (`GET /api/background/{id}` — the only route that carries the
+ *  untruncated result). Falls back to the legacy list-and-filter ONLY on a 404: a
+ *  pre-ADR-0070 server has no by-id route (its router answers 404), and on a current
+ *  server a 404 means the job row was deleted — which the list fallback resolves to the
+ *  same "no longer available" placeholder. Any other failure (401/500/network) is real
+ *  and propagates so the viewer shows its error state instead of a misleading placeholder. */
+export async function loadBackgroundReport(jobId: string): Promise<string> {
+  const gone =
+    "_The full report is no longer available — it may have been cleared from the Background agents panel._";
+  try {
+    return (await api.backgroundJob(jobId)).result || gone;
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status !== 404) throw err;
+    // Old server (no by-id route) or deleted row — the list answers both.
+    const listed = await api.background().catch(() => null);
+    return listed?.jobs.find((j) => j.id === jobId)?.result || gone;
+  }
+}

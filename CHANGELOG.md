@@ -43,6 +43,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   card.
 
 ### Changed
+- **The background report card is a real card**
+  ([ADR 0070](docs/adr/0070-background-results-push-resume.md) D4, console).
+  A finished background job's report no longer renders as the DS system-message
+  pill (near-black inset fill, 100px radius, a quiet ghost "Read full report"
+  link): it's now a raised card — `--pl-color-bg-raised` surface, 1px border,
+  real corners, drop shadow — with a header row (report title + "Background
+  report"), an excerpt **clamped to ~7 lines with a bottom fade-out mask** (a
+  teaser, not the content — the fade applies only when the text actually
+  overflows, so a short report's final line stays fully readable), and a clear
+  **"Open report"** CTA into the document
+  viewer; the whole card is click-to-open (selection-guarded). The viewer now
+  fetches the full report **by id** via the new `GET /api/background/{id}`
+  (`api.backgroundJob`), replacing the list-and-filter hack — kept only as a
+  fallback when the by-id route 404s (pre-0070 servers / deleted rows). Card
+  styling uses stacked specificity (`.pl-message--system.chat-report …`) so the
+  DS default can't win by stylesheet load order.
 - **`/compact` is now behind the `chat.compact` developer flag** (ADR 0068,
   first real flag in the registry). The command shipped in #1558 but is still
   pre-release: on the prod channel it no longer appears in the slash menu and
