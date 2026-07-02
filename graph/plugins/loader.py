@@ -333,6 +333,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # surfaced for discoverability (the console can show a plugin's event catalog).
             "emits": list(manifest.emits) if enabled else [],
             "subscribes": list(manifest.subscribes) if enabled else [],
+            # Typed event contracts (#1636) — topic → {summary?, schema?} for emits
+            # entries that declared a payload shape. Rides /api/runtime/status so a
+            # cross-plugin consumer can discover the contract instead of reverse-
+            # engineering the emitter. Declarative only — no publish-time validation.
+            "emits_schemas": dict(manifest.emits_schemas) if enabled else {},
         }
 
         if not enabled:

@@ -66,6 +66,16 @@ structurally, not by etiquette:
   tooling), but undeclared subscriptions are allowed — the guard is on *publishing*, which is the
   only direction that can spoof or spam.
 
+> **Grown since (typed event contracts, #1636):** as the first real cross-plugin consumers appeared
+> (a Discord feed subscribing `spacetraders.#`), names-only `emits:` proved to be the composition
+> bottleneck — the consumer reverse-engineers the emitter's payload and silently breaks. An `emits:`
+> entry may now optionally be `{topic, summary?, schema?}` (JSON Schema inline, or a `$ref` to a
+> file inside the plugin repo, read at manifest load). Purely declarative, like `capabilities`: the
+> shapes ride `/api/runtime/status` as a per-plugin `emits_schemas` map (`topic → {summary?,
+> schema?}`) so consumers/console can discover them; nothing validates payloads at publish time, and
+> a broken schema/ref warns and degrades that entry to names-only — never a load failure. A
+> dev-channel warn-on-mismatch validator (developer-flag-gated) remains a possible later slice.
+
 This maps onto the ADR 0038 threat model: **subscribe is safe; publish is the risky direction**, so
 publish is the gated one (namespace-stamped, rate-limited for iframes).
 

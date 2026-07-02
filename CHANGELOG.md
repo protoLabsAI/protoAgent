@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin state. Retention is capped per series (90 days / 10k points, trimmed on
   write). `plugin_id` is an explicit required kwarg with `':'` rejected (the #1642/#1656
   precedent), so one plugin can't reach another's namespace.
+- **Typed event contracts — `emits:` entries can declare payload schemas** (#1636).
+  The event bus (ADR 0039) is the only inter-plugin channel, but the manifest's
+  `emits:` list was names-only — a cross-plugin consumer (a Discord feed
+  subscribing `spacetraders.#`) had no payload-shape contract and
+  reverse-engineered the emitter. An `emits:` entry may now be `{topic,
+  summary?, schema?}` — the schema inline JSON Schema, or a `$ref` to a file
+  inside the plugin repo (resolved relative to the plugin dir, read at manifest
+  load). Purely declarative, like `capabilities`: the shapes surface in
+  `/api/runtime/status` as a per-plugin `emits_schemas` map (`topic →
+  {summary?, schema?}`); bare-string entries and the names-only `emits` list
+  are unchanged everywhere, and a missing/invalid/escaping ref warns and
+  degrades that entry to names-only — it never fails the plugin load.
+  Dev-channel publish-time validation is deliberately deferred (follow-up,
+  developer-flag-gated).
 - **`graph.sdk.react_on` — reactive-rule sugar** (#1633). The canonical reactive
   composition `registry.on(topic, handler)` → `sdk.run_in_session(session, prompt)` made
   every plugin write identical glue (missing-host guard, prompt-from-payload, idempotent

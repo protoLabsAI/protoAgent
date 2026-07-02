@@ -57,6 +57,125 @@ def test_manifest_parse(tmp_path) -> None:
     assert load_manifest(tmp_path / "bad") is None  # missing id
 
 
+# --- Typed event contracts (#1636) — `emits:` entries may carry a payload schema ---
+
+
+def test_emits_bare_strings_unchanged(tmp_path) -> None:
+    # Today's names-only form keeps working verbatim — no contract map.
+    _make_plugin(tmp_path, "ev0", enabled=True, manifest_extra='emits: ["ev0.created", "ev0.closed"]\n')
+    m = load_manifest(tmp_path / "ev0")
+    assert m.emits == ["ev0.created", "ev0.closed"]
+    assert m.emits_schemas == {}
+
+
+def test_emits_inline_schema(tmp_path) -> None:
+    # A dict entry contributes its topic to the names list AND its declared
+    # summary/schema to the contract map; bare siblings stay names-only.
+    _make_plugin(
+        tmp_path, "ev1", enabled=True,
+        manifest_extra=(
+            "emits:\n"
+            "  - ev1.plain\n"
+            "  - topic: ev1.trade_executed\n"
+            "    summary: A hauler completed a buy-sell leg\n"
+            "    schema:\n"
+            "      type: object\n"
+            "      required: [route, profit]\n"
+            "      properties:\n"
+            "        route: {type: string}\n"
+            "        profit: {type: integer}\n"
+        ),
+    )
+    m = load_manifest(tmp_path / "ev1")
+    assert m.emits == ["ev1.plain", "ev1.trade_executed"]
+    contract = m.emits_schemas["ev1.trade_executed"]
+    assert contract["summary"] == "A hauler completed a buy-sell leg"
+    assert contract["schema"]["required"] == ["route", "profit"]
+    assert contract["schema"]["properties"]["profit"] == {"type": "integer"}
+    assert "ev1.plain" not in m.emits_schemas
+
+
+def test_emits_schema_ref_file(tmp_path) -> None:
+    # `schema: {$ref: <path>}` (and the bare-string shorthand) reads a JSON/YAML
+    # schema file from INSIDE the plugin dir at manifest-load time.
+    d = _make_plugin(
+        tmp_path, "ev2", enabled=True,
+        manifest_extra=(
+            "emits:\n"
+            "  - topic: ev2.ship_purchased\n"
+            "    schema: {$ref: events/ship.json}\n"
+            "  - topic: ev2.window_closed\n"
+            "    schema: events/ship.json\n"
+        ),
+    )
+    (d / "events").mkdir()
+    (d / "events" / "ship.json").write_text(
+        '{"type": "object", "properties": {"ship": {"type": "string"}}}', encoding="utf-8"
+    )
+    m = load_manifest(d)
+    assert m.emits == ["ev2.ship_purchased", "ev2.window_closed"]
+    assert m.emits_schemas["ev2.ship_purchased"]["schema"]["type"] == "object"
+    assert m.emits_schemas["ev2.window_closed"]["schema"]["properties"]["ship"] == {"type": "string"}
+
+
+def test_emits_invalid_ref_warns_not_fails(tmp_path, caplog) -> None:
+    # Every bad-schema mode degrades to names-only for THAT entry with a warning
+    # — a broken contract must never fail the plugin load (issue #1636).
+    import logging as _logging
+
+    d = _make_plugin(
+        tmp_path, "ev3", enabled=True,
+        manifest_extra=(
+            "emits:\n"
+            "  - topic: ev3.missing\n"
+            "    summary: still has a summary\n"
+            "    schema: {$ref: events/nope.json}\n"   # file doesn't exist
+            "  - topic: ev3.escape\n"
+            "    schema: {$ref: ../../outside.json}\n"  # path traversal → refused
+            "  - topic: ev3.badtype\n"
+            "    schema: 7\n"                           # not a mapping / ref
+            "  - summary: no topic here\n"              # unusable entry → skipped
+            "  - ev3.ok\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(d)
+    assert m is not None  # the load itself never fails
+    assert m.emits == ["ev3.missing", "ev3.escape", "ev3.badtype", "ev3.ok"]
+    # the summary survives a broken ref; the schema key is simply absent
+    assert m.emits_schemas["ev3.missing"] == {"summary": "still has a summary"}
+    assert "ev3.escape" not in m.emits_schemas
+    assert "ev3.badtype" not in m.emits_schemas
+    assert "unreadable" in caplog.text
+    assert "escapes the plugin directory" in caplog.text
+
+
+def test_emits_schemas_flow_to_runtime_status(tmp_path, monkeypatch) -> None:
+    # The loader meta carries `emits_schemas`, and /api/runtime/status passes the
+    # plugins block through verbatim — the discovery surface for consumers.
+    root = tmp_path / "plugins"
+    extra = (
+        "emits:\n"
+        "  - topic: evp.trade_executed\n"
+        "    summary: A trade completed\n"
+        "    schema: {type: object, required: [profit]}\n"
+    )
+    _make_plugin(root, "evp", enabled=True, tool="evp_tool", manifest_extra=extra)
+    _make_plugin(root, "evoff", enabled=False, tool="evoff_tool", manifest_extra=extra)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg())
+    meta = {m["id"]: m for m in res.meta}
+    assert meta["evp"]["emits"] == ["evp.trade_executed"]
+    assert meta["evp"]["emits_schemas"]["evp.trade_executed"]["schema"]["required"] == ["profit"]
+    assert meta["evoff"]["emits_schemas"] == {}  # disabled → not advertised
+
+    from operator_api.runtime import build_runtime_status
+
+    status = build_runtime_status(config=None, setup_complete=True, graph_loaded=False, plugins=res.meta)
+    by_id = {p["id"]: p for p in status["plugins"]}
+    assert by_id["evp"]["emits_schemas"] == meta["evp"]["emits_schemas"]
+
+
 def test_public_paths_namespace_scoped(tmp_path) -> None:
     # A plugin may declare auth-exempt paths only under its OWN namespace; anything
     # else (a core path, another plugin's path) is dropped by the parser.

@@ -73,8 +73,12 @@ description: >-
   {summary}
 enabled: false
 config_section: {id_us}
-# Event bus (ADR 0039) — topics this plugin broadcasts / listens for (optional, for discovery):
+# Event bus (ADR 0039) — topics this plugin broadcasts / listens for (optional, for discovery).
+# An emits entry may also declare its payload shape (typed event contracts, #1636):
 # emits: ["{id_us}.something"]
+#   # - topic: {id_us}.something
+#   #   summary: One-line meaning of the event
+#   #   schema: {{type: object}}          # inline JSON Schema, or {{$ref: events/foo.json}}
 # subscribes: ["other-plugin.*"]
 {views_block}"""
 
