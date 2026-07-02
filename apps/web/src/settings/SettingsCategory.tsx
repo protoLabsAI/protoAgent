@@ -56,7 +56,7 @@ export function SettingsCategory({
   pluginId?: string;
 }) {
   const queryClient = useQueryClient();
-  const { data } = useSuspenseQuery(settingsSchemaQuery());
+  const { data, isFetching } = useSuspenseQuery(settingsSchemaQuery());
   const groups = useMemo(() => {
     // One category, or several aggregated into one panel (the `categories` prop).
     const inScope = (g: SettingsGroup) =>
@@ -289,7 +289,12 @@ export function SettingsCategory({
             Needs a restart to take effect: {pendingRestart.join(", ")}
           </Alert>
         ) : null}
-        {!groups.length && !footer ? <p className="muted">{emptyHint || "Nothing to configure here."}</p> : null}
+        {/* While a background refetch is in flight (the #1643 fresh-install hydration
+            re-pulls the schema), an empty group set is "still loading", not "nothing
+            here" — don't flash the misleading empty hint. */}
+        {!groups.length && !footer ? (
+          <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
+        ) : null}
 
         {/* Each field group is a collapsible accordion (DS 0.29) so a dense category
             (the Workspace home's panels run long) can be tidied to the few sections
