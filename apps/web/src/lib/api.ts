@@ -642,10 +642,16 @@ export const api = {
   // Short-lived HMAC token for the SSE EventSource, which can't send an
   // Authorization header. Bearer-gated; in open mode the server returns "" and
   // accepts a tokenless /api/events. events.ts fetches this before each
-  // (re)connect. Same slug routing as /api/events so the token is signed by
-  // whichever server actually terminates the stream (host or a proxied member).
+  // (re)connect.
+  //
+  // Signed by the HUB (host:true), NOT slug-routed. The proxied `/api/events`
+  // is validated at the HUB's auth middleware FIRST (before it forwards to the
+  // member), so the token must carry the hub's signature or the stream 401s at
+  // the hub for every non-host member on a bearer-gated hub. The hub then
+  // forwards with the member's own credential attached, so the member accepts it
+  // downstream (its SSE branch falls through to the bearer check).
   sseToken() {
-    return request<{ token: string }>("/api/sse-token");
+    return request<{ token: string }>("/api/sse-token", { host: true });
   },
 
   // Gracefully restart the server process (POST /api/restart) — the server drains and

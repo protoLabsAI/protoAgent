@@ -167,8 +167,27 @@ async def forward_ws(slug: str, ws, path: str) -> None:
     live WS — agent_browser's viewport/feed, say — couldn't traverse the hub: HTTP loaded
     the panel but the socket showed "Disconnected". This resolves the slug → member, opens
     a client WS to it (carrying the bearer + subprotocols), and pumps frames both ways.
+
+    **Remote members are NOT proxied over WS (security).** The hub's default-deny auth is an
+    HTTP middleware (``A2AAuthMiddleware`` is a Starlette ``BaseHTTPMiddleware``, which skips
+    non-HTTP scopes), so this ``@app.websocket`` route runs with NO hub auth. For a local
+    peer/host that's benign — the hub attaches no stored credential, and a browser WS can't
+    carry one — but for a REMOTE member the hub would attach the remote's stored bearer
+    (``_target_for_slug``) and thereby lend an unauthenticated caller a ride into the remote's
+    authed sockets (e.g. a terminal plugin's PTY). Until the caller can be authenticated over
+    the WS handshake, remote-member live sockets don't traverse the hub; use ``delegate_to`` /
+    a direct connection to the remote instead.
     """
     import websockets
+
+    # Refuse WS to a remote member (see docstring). A live LOCAL peer takes precedence over a
+    # same-slug remote in _target_for_slug, so only refuse when the slug resolves to a remote
+    # (not a running local process). host/local peers fall through and proxy as before.
+    live_local = supervisor._load_state().get(slug)
+    if not (live_local and supervisor._alive(live_local.get("pid"))) and supervisor.remote_for_slug(slug):
+        log.info("[fleet] refusing WS proxy to remote member %r (hub auth is HTTP-only)", slug)
+        await ws.close(code=1008, reason="websocket proxying to a remote member is disabled")
+        return
 
     target = _target_for_slug(slug)
     if target is None:

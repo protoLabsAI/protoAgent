@@ -171,6 +171,15 @@ describe("apiUrl — fleet slug routing (ADR 0042)", () => {
     expect(apiUrl("/api/fleet")).not.toContain("/agents/");
     expect(apiUrl("/api/archetypes")).not.toContain("/agents/");
   });
+
+  it("host:true keeps the SSE token on the hub in a member window (proxied /api/events is validated by the HUB key)", () => {
+    // The SSE-token fix: /api/events is proxied and the HUB's auth middleware validates the
+    // ?token= with the HUB's key before forwarding, so the token must be hub-signed. Without
+    // host:true, /api/sse-token would slug-route and be member-signed → 401 at the hub.
+    focus("m");
+    expect(apiUrl("/api/sse-token")).toContain("/agents/m/api/sse-token"); // default: slug-routed (the bug)
+    expect(apiUrl("/api/sse-token", { host: true })).not.toContain("/agents/"); // the fix
+  });
 });
 
 describe("frameIsForeign — cross-context stream guard (subagent-stream-isolation #1394 follow-up)", () => {
