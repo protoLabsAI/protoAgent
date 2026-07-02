@@ -117,7 +117,7 @@ def test_colocated_sibling_same_instance_is_warned(monkeypatch, tmp_path):
     (d / "12345.json").write_text(
         json.dumps({"pid": 12345, "port": 7871, "identity": "roxy", "instance_root": mine})
     )
-    monkeypatch.setattr(paths, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(paths, "pid_alive", lambda pid: True)
     monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
     sibs = paths.colocated_instances()
     assert sibs == [{"pid": 12345, "port": 7871, "identity": "roxy", "instance_root": mine}]
@@ -139,7 +139,7 @@ def test_box_only_coresident_is_not_warned(monkeypatch, tmp_path):
     (d / "12345.json").write_text(
         json.dumps({"pid": 12345, "port": 7871, "identity": "dev", "instance_root": other})
     )
-    monkeypatch.setattr(paths, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(paths, "pid_alive", lambda pid: True)
     monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
     # Still discoverable on the box…
     assert paths.colocated_instances()[0]["identity"] == "dev"
@@ -154,7 +154,7 @@ def test_stale_heartbeats_pruned(monkeypatch, tmp_path):
     (d / "12345.json").write_text('{"pid": 12345}')  # dead pid
     (d / "23456.json").write_text('{"pid": 23456}')  # recycled pid (not a server)
     (d / "not-a-pid.json").write_text("{}")  # garbage name → ignored
-    monkeypatch.setattr(paths, "_pid_alive", lambda pid: pid == 23456)
+    monkeypatch.setattr(paths, "pid_alive", lambda pid: pid == 23456)
     monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: False)
     assert paths.colocated_instances() == []
     assert not (d / "12345.json").exists() and not (d / "23456.json").exists()

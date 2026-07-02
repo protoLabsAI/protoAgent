@@ -307,7 +307,45 @@ def instance_uid() -> str:
         return ""
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive_windows(pid: int, kernel32=None) -> bool:
+    """Windows liveness probe: ``OpenProcess`` + ``GetExitCodeProcess == STILL_ACTIVE``.
+    Access-denied means the process EXISTS (we just can't query it); ambiguity leans
+    *alive* — for the callers (parent-death watchdog, heartbeat) a false "dead" is the
+    catastrophic direction (a healthy sidecar self-killing, #1678)."""
+    import ctypes
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    error_access_denied = 5
+    k32 = kernel32 if kernel32 is not None else ctypes.windll.kernel32  # type: ignore[attr-defined]
+    handle = k32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return k32.GetLastError() == error_access_denied
+    try:
+        code = ctypes.c_ulong()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True  # queryable handle but unreadable exit code — lean alive
+        return code.value == still_active
+    finally:
+        k32.CloseHandle(handle)
+
+
+def pid_alive(pid: int) -> bool:
+    """True when ``pid`` is a running process — a real CROSS-PLATFORM liveness probe.
+
+    ``os.kill(pid, 0)`` is NOT one on Windows: signal 0 is ``CTRL_C_EVENT``
+    (``GenerateConsoleCtrlEvent``), which fails with ``OSError`` for any
+    non-console-group target — reading a LIVE pid as dead. That self-killed the
+    desktop sidecar ~2s after every Windows boot (#1678: the parent-death watchdog
+    read its healthy GUI launcher as gone). On POSIX, only ``ProcessLookupError``
+    means gone; ``PermissionError`` means it exists but isn't ours to signal."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            return _pid_alive_windows(pid)
+        except Exception:  # noqa: BLE001 — a probe must never take the caller down
+            return True  # lean alive: false "dead" is the catastrophic direction
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -382,7 +420,7 @@ def colocated_instances() -> list[dict]:
                 continue
             if pid == os.getpid():
                 continue
-            if not _pid_alive(pid) or not _is_protoagent_pid(pid):
+            if not pid_alive(pid) or not _is_protoagent_pid(pid):
                 f.unlink(missing_ok=True)  # stale heartbeat (crash / pid recycled)
                 continue
             try:

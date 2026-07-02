@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Windows desktop sidecar no longer self-kills ~2s after boot** (#1678). The
+  parent-death watchdog probed the launcher with `os.kill(ppid, 0)` — a POSIX
+  idiom that on Windows sends `CTRL_C_EVENT` instead of probing: against the GUI
+  launcher it raises `OSError`, which the watchdog misread as "launcher gone" and
+  `os._exit(0)`'d a perfectly healthy server on every launch (window up, backend
+  dead, 7870 idle). Liveness now goes through a real cross-platform
+  `infra.paths.pid_alive` (`OpenProcess`/`GetExitCodeProcess` on Windows; on POSIX
+  only `ProcessLookupError` means gone — `PermissionError` means *exists*, which
+  the old bare `except OSError` also got wrong). The colocated-instance heartbeat
+  and the fleet supervisor's member probe shared the same idiom and now use the
+  same helper.
+
 ### Added
 - **Desktop's system-wide hotkeys are now rebindable, visible, and self-healing**
   (#1675). The shell's two OS-global hotkeys (console toggle, quick launcher) were
