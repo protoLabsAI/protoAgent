@@ -30,7 +30,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-from knowledge.store import KnowledgeStore, _namespace_clause
+from knowledge.store import KnowledgeStore, _namespace_clause, _normalize_before
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +257,38 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().delete_by_namespace(namespace)
 
+    def purge_domain(self, domain: str, *, before=None) -> int:
+        """Purge the domain's chunks AND their vectors (#1634) — the
+        :meth:`delete_by_namespace` pattern: no FK cascade on the side table, so
+        the vectors go first (under the SAME cutoff — the base delete's FTS
+        trigger covers ``chunks_fts``, nothing covers ``chunk_vectors``). A
+        purged chunk must vanish from BOTH search modes, not linger as a
+        vector-only hit."""
+        if not domain or not domain.strip():
+            return 0
+        try:
+            cutoff = _normalize_before(before)
+        except ValueError:
+            # Mirror the base refusal BEFORE touching vectors — a bad cutoff must
+            # not strip embeddings off rows that then survive the row delete.
+            log.warning("[knowledge] purge_domain(%r): unparseable before=%r — refusing to purge", domain, before)
+            return 0
+        db = self._get_db()
+        if db is not None:
+            try:
+                sql = "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE domain = ?"
+                params: list = [domain]
+                if cutoff is not None:
+                    sql += " AND created_at < ?"
+                    params.append(cutoff)
+                db.execute(sql + ")", params)
+                db.commit()
+            except sqlite3.DatabaseError as exc:
+                log.warning("[knowledge] purge_domain vectors failed: %s", exc)
+            finally:
+                db.close()
+        return super().purge_domain(domain, before=cutoff)
+
     def _vector_search(
         self,
         query_vec: list[float],
@@ -264,6 +296,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         domain: str | None,
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
+        epoch: str | None = None,
     ) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
         db = self._get_db()
@@ -276,6 +309,9 @@ class HybridKnowledgeStore(KnowledgeStore):
         if domain:
             where.append("c.domain = ?")
             params.append(domain)
+        if epoch:
+            where.append("c.epoch = ?")
+            params.append(epoch)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)
@@ -318,6 +354,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         domain: str | None = None,
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
+        epoch: str | None = None,
     ) -> list[dict]:
         """RRF-fuse the FTS5 ranking with a vector ranking.
 
@@ -327,19 +364,25 @@ class HybridKnowledgeStore(KnowledgeStore):
         never come from outside the requested scope. Superseded rows
         (``invalidated_at``, ADR 0069 D9) are likewise excluded from BOTH
         rankings by default; ``include_invalidated=True`` is the audit escape
-        hatch.
+        hatch. ``epoch`` (#1634) likewise filters BOTH rankings — an
+        out-of-era chunk can't surface as a vector-only hit.
         """
         if not query or not query.strip():
             return []
 
         base = super().search(
-            query, k=self._vector_k, domain=domain, namespace=namespace, include_invalidated=include_invalidated
+            query,
+            k=self._vector_k,
+            domain=domain,
+            namespace=namespace,
+            include_invalidated=include_invalidated,
+            epoch=epoch,
         )
         query_vec = self._embed(query)
         if query_vec is None:
             return base[:k]
 
-        vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace, include_invalidated)
+        vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace, include_invalidated, epoch)
         if not vec_ids:
             return base[:k]
 

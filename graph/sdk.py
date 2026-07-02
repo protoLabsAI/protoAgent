@@ -108,31 +108,70 @@ async def complete(prompt: str, *, system: str | None = None, model_name: str | 
 # ── knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge") ──
 # The consumption SDK exposed run_subagent/complete but not the knowledge store, so a
 # plugin couldn't ground its work in (or contribute to) what the agent knows. These
-# two thin accessors close that: the coding loop reads distilled lessons to inject into
+# thin accessors close that: the coding loop reads distilled lessons to inject into
 # a coder's prompt; the loop-retro writes recurring failures back as searchable chunks.
-# Both degrade to a no-op ([] / None) when no store is configured, and run the
-# (HTTP-embedding) store call off the event loop.
+# knowledge_purge + the epoch tag (#1634) are the LIFECYCLE half — a long-running
+# plugin's knowledge can become actively wrong (spacetraders: weekly universe wipes),
+# so it needs a way to retire a bucket (purge) or scope retrieval to the current era
+# (epoch) without core knowing the plugin's reset semantics. All degrade to a no-op
+# ([] / None / 0) when no store is configured, and run the (HTTP-embedding) store
+# call off the event loop.
 
 
-async def knowledge_search(query: str, *, k: int = 5, domain: str | None = None) -> list[dict]:
+async def knowledge_search(
+    query: str, *, k: int = 5, domain: str | None = None, epoch: str | None = None
+) -> list[dict]:
     """Search the agent's knowledge graph (hybrid FTS5 + embeddings); return the top-``k``
     matching chunks (each a dict with ``preview``/``content``, ``domain``, ``score`` …),
     or ``[]`` when no store is configured. ``domain`` scopes to one bucket
-    (e.g. ``"loop-lessons"``)."""
+    (e.g. ``"loop-lessons"``); ``epoch`` (#1634) scopes to chunks tagged with exactly
+    that era via ``knowledge_add(..., epoch=...)`` — out-of-era and untagged chunks
+    don't match (both search modes filter). ``None`` = unfiltered."""
     store = getattr(STATE, "knowledge_store", None)
     if store is None:
         return []
-    return await asyncio.to_thread(store.search, query, k=k, domain=domain)
+    if epoch is None:
+        # Only pass epoch when set — an ADR 0031 plugin backend predating the epoch
+        # kwarg keeps working untouched on the common unfiltered path.
+        return await asyncio.to_thread(store.search, query, k=k, domain=domain)
+    return await asyncio.to_thread(store.search, query, k=k, domain=domain, epoch=epoch)
 
 
-async def knowledge_add(content: str, *, domain: str = "general", heading: str | None = None) -> int | None:
+async def knowledge_add(
+    content: str, *, domain: str = "general", heading: str | None = None, epoch: str | None = None
+) -> int | None:
     """Add one chunk to the agent's knowledge graph; return its id, or ``None`` when no
     store is configured / it was a no-op. ``domain`` is the bucket, ``heading`` an
-    optional title — e.g. ``knowledge_add(lesson, domain="loop-lessons", heading=cls)``."""
+    optional title — e.g. ``knowledge_add(lesson, domain="loop-lessons", heading=cls)``.
+    ``epoch`` (#1634) tags the chunk with the era it was learned in — an opaque string,
+    typically a reset date (``epoch="2026-06-29"``). On the next wipe the plugin just
+    searches with the NEW epoch: old lessons stay for post-mortems but stop matching."""
     store = getattr(STATE, "knowledge_store", None)
     if store is None:
         return None
-    return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading)
+    if epoch is None:
+        return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading)
+    return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading, epoch=epoch)
+
+
+async def knowledge_purge(domain: str, *, before: str | None = None) -> int:
+    """HARD-delete every chunk in ``domain`` — optionally only those created strictly
+    before ``before`` (an ISO-8601 timestamp) — and return how many were removed.
+
+    The knowledge-lifecycle primitive (#1634): retire a bucket of now-wrong lessons
+    (``knowledge_purge("st-routes")``) or expire just the stale tail
+    (``knowledge_purge("st-routes", before="2026-06-01")``). Deletes consistently from
+    every index (main rows, FTS, vectors); on a layered store only the PRIVATE tier is
+    purged — the shared commons is curated, never bulk-deleted. Keep-for-audit
+    retirement is the ``epoch`` tag instead (see :func:`knowledge_add`). Returns 0 when
+    no store is configured (or the backend has no ``purge_domain``), when ``domain`` is
+    empty, or when ``before`` is unparseable — it refuses rather than risk deleting the
+    wrong rows."""
+    store = getattr(STATE, "knowledge_store", None)
+    purge = getattr(store, "purge_domain", None)
+    if store is None or not callable(purge):
+        return 0
+    return await asyncio.to_thread(purge, domain, before=before)
 
 
 # ── goal-driven recurring loop (the OODA pattern) ──────────────────────────────────────

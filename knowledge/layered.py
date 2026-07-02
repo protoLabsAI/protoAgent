@@ -41,8 +41,9 @@ class LayeredKnowledgeStore:
 
     def __getattr__(self, name):
         # Everything not overridden below (add_chunk/add_finding/add_document, the
-        # delete_* family, get_hot_memory, stats, find_chunk_containing, reset_embed_breaker,
-        # path, close, …) targets the PRIVATE store — writes never touch the commons.
+        # delete_*/purge_domain family, get_hot_memory, stats, find_chunk_containing,
+        # reset_embed_breaker, path, close, …) targets the PRIVATE store — writes
+        # (and purges) never touch the commons; it's curated via promote/forget only.
         return getattr(self._private, name)
 
     # ── read: commons ∪ private, fused with RRF over rank ─────────────────────
@@ -54,14 +55,20 @@ class LayeredKnowledgeStore:
         domain: str | None = None,
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
+        epoch: str | None = None,
     ) -> list[dict]:
         """Top-k across BOTH tiers, fused by RRF over each tier's rank, tier-tagged.
         A chunk promoted into the commons (same content as its private original) is
         de-duped — the private record wins (it's editable) but keeps the summed score.
-        ``namespace`` (ADR 0069 D3a) and ``include_invalidated`` (ADR 0069 D9 —
-        superseded rows are excluded by default) are passed through to both tiers."""
-        priv = self._private.search(query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated)
-        comm = self._commons.search(query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated)
+        ``namespace`` (ADR 0069 D3a), ``include_invalidated`` (ADR 0069 D9 —
+        superseded rows are excluded by default), and ``epoch`` (#1634 — era
+        scoping) are passed through to both tiers."""
+        priv = self._private.search(
+            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch
+        )
+        comm = self._commons.search(
+            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch
+        )
 
         fused: dict[str, dict] = {}
         scores: dict[str, float] = {}

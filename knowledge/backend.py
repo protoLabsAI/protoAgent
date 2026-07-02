@@ -22,7 +22,15 @@ from typing import Protocol, runtime_checkable
 class KnowledgeBackend(Protocol):
     """The methods the agent calls on the knowledge store. Implement these for a
     custom backend; ``factory(config) -> KnowledgeBackend`` is what a plugin
-    registers."""
+    registers.
+
+    Optional (not part of the required protocol, so pre-existing backends stay
+    conformant): ``purge_domain(domain, *, before=None) -> int`` — the knowledge
+    lifecycle primitive (#1634). ``graph.sdk.knowledge_purge`` degrades to a
+    0-count no-op on a backend without it; implement it to support plugins that
+    retire stale knowledge. Likewise the ``epoch: str`` kwarg on ``add_chunk`` /
+    ``search`` (era scoping) — the SDK only forwards it when a caller passes one.
+    """
 
     def add_chunk(self, content: str, domain: str = "general", **kwargs) -> int | None:
         """Store a chunk; return its id (or None if not stored)."""

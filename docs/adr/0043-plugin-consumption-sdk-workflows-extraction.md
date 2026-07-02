@@ -52,6 +52,18 @@ deliberately as more plugins tap core; this is the seam we lean on going forward
 > (`None`/empty skips the event), idempotent replace via `job_id`, thread-safe
 > trailing-edge debounce (a burst coalesces into ONE turn; the last event's prompt wins).
 > Returns an unsubscribe fn. First consumer: spacetraders engine-event → turn rules.
+>
+> `knowledge_search(query, *, k=5, domain=None, epoch=None)` /
+> `knowledge_add(content, *, domain="general", heading=None, epoch=None)` (#1089) +
+> `knowledge_purge(domain, *, before=None)` (#1634) — the knowledge channel and its
+> **lifecycle** half. Add-and-search alone let a long-running plugin's knowledge go
+> actively wrong with no way to retire it (spacetraders: weekly universe wipes → recalled
+> routes reference dead markets). `knowledge_purge` hard-deletes a domain (optionally only
+> rows older than an ISO timestamp), consistently across every index (rows, FTS, vectors;
+> layered = private tier only — the commons stays curated); the optional `epoch` tag scopes
+> a chunk to the era it was learned in, and an epoch-filtered search excludes other eras
+> *and* untagged chunks from both rankings — a wipe becomes a new tag, not a delete.
+> First consumer: spacetraders route/lesson memory.
 
 **2. Workflows becomes an opt-in plugin (`plugins/workflows`, `enabled: false`).**
 
