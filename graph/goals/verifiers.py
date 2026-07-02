@@ -25,6 +25,7 @@ import ast
 import json
 import logging
 from dataclasses import dataclass
+from typing import Literal
 
 from graph.goals.types import VerifyResult
 
@@ -104,7 +105,7 @@ class VerifierInvoker:
                  goals (they evaluate post-turn, not on a cadence).
     """
 
-    kind: str
+    kind: Literal["goal", "watch"]
     id: str
     session_id: str = ""
     interval_s: float | None = None
