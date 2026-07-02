@@ -893,6 +893,26 @@ select:disabled {
   }
 }
 
+/* ── Code block layout (streamdown flex-col fallback fix) ──────────────────────
+   streamdown lays the code block out as `flex flex-col` (a language HEADER stacked on top
+   of the code body). But the console build only generates the `flex` utility, NOT `flex-col`
+   — so the block falls back to flex-ROW: the language label renders as a cramped LEFT column
+   beside the code, and the row grows past the message width. Force the intended vertical
+   stack and let the body own its horizontal scroll, so the header sits on TOP and a long line
+   scrolls INSIDE the block instead of stretching the panel. Applies wherever markdown renders
+   (chat, reports, memory, doc viewer). DS-owned — the `[data-streamdown]` selectors should set
+   this; fold back into @protolabsai/ui markdown.css on the next DS sync (see the DS issue). */
+.pl-markdown [data-streamdown="code-block"] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+.pl-markdown [data-streamdown="code-block-body"] {
+  min-width: 0; /* shrink so overflow-x:auto scrolls the code instead of widening the block */
+  max-width: 100%;
+}
+
 /* Chat composer + slash-command autocomplete — moved to src/chat/chat.css (#832). */
 /* HITL request card — moved to src/chat/hitl.css (#832). */
 
