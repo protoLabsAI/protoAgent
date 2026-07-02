@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.82.0] - 2026-07-02
+
 ### Added
 - **Plugin metric timeseries — `sdk.record_metric` / `metric_history` / `metric_last`**
   (#1632). Plugins with background engines need small named numeric series (treasury,
