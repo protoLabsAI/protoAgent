@@ -247,11 +247,15 @@ def list_watches(prefix: str = "") -> list[dict]:
     its spec set, then create/replace the rest (stable-id replace alone only heals specs
     that still exist; a renamed/dropped spec would keep polling forever). Returns ``[]``
     when the watch system is unavailable."""
+    from copy import deepcopy
+
     controller = STATE.watch_controller
     if controller is None:
         return []
     return [
-        {"id": w.id, "condition": w.condition, "status": w.status, "verifier": dict(w.verifier)}
+        # deepcopy: the verifier spec nests dicts (``args``) — hand the caller a snapshot,
+        # not a mutable reference into the stored watch.
+        {"id": w.id, "condition": w.condition, "status": w.status, "verifier": deepcopy(w.verifier)}
         for w in controller.list_watches()
         if w.id.startswith(prefix)
     ]

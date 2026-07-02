@@ -87,19 +87,26 @@ def test_sdk_list_watches_returns_id_condition_status_verifier(monkeypatch, tmp_
     from graph import sdk
 
     ctrl = _wire(monkeypatch, tmp_path)
-    ctrl.create(condition="credits over 1M", verifier={"type": "plugin", "check": "st:credits"}, watch_id="st-credits")
+    ctrl.create(
+        condition="credits over 1M",
+        verifier={"type": "plugin", "check": "st:credits", "args": {"min": 1_000_000}},
+        watch_id="st-credits",
+    )
     listed = sdk.list_watches()
     assert listed == [
         {
             "id": "st-credits",
             "condition": "credits over 1M",
             "status": "active",
-            "verifier": {"type": "plugin", "check": "st:credits"},
+            "verifier": {"type": "plugin", "check": "st:credits", "args": {"min": 1_000_000}},
         }
     ]
-    # The returned verifier is a COPY — mutating it must not corrupt the stored watch.
+    # The returned verifier is a DEEP copy — mutating it (even the nested args) must not
+    # corrupt the stored watch.
     listed[0]["verifier"]["check"] = "tampered"
+    listed[0]["verifier"]["args"]["min"] = 0
     assert ctrl.store.get("st-credits").verifier["check"] == "st:credits"
+    assert ctrl.store.get("st-credits").verifier["args"]["min"] == 1_000_000
 
 
 def test_sdk_list_watches_prefix_filters_to_the_plugins_suite(monkeypatch, tmp_path):
