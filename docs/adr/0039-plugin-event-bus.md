@@ -76,6 +76,13 @@ publish is the gated one (namespace-stamped, rate-limited for iframes).
 - **artifact-plugin v0.2.0.** `show_artifact` emits `artifact.created` ⇒ the dot lights even when the
   panel is closed. (History/download are local plugin features, unrelated to the bus.)
 
+> **Grown since:** the dominant server-side subscriber pattern turned out to be *event →
+> agent turn* ("when X happens, have the agent react" — engine emissions, watch trips).
+> That composition — `subscribe_handler` + prompt-from-payload + `run_in_session` with an
+> idempotent job id and thread-safe burst debouncing — ships as consumption-SDK sugar:
+> `graph.sdk.react_on(topic, *, prompt, job_id, session=…, debounce_s=…)` (#1633,
+> ADR 0043). Pure composition; no new bus semantics or persistent state.
+
 ## Options considered
 
 **Topology** — *(chosen)* extend the one server bus, server-authoritative; vs a client-only UI bus
