@@ -358,6 +358,7 @@ export type WatchState = {
   last_reason?: string;
   last_evidence?: string;
   last_checked?: number | null; // last out-of-band verifier check (epoch seconds)
+  finished_at?: number | null; // met/expired time (epoch seconds); the met path sets THIS, not last_checked
   created_at?: number;
 };
 

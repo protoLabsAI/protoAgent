@@ -36,14 +36,19 @@ export function activeWatches(watches: WatchState[]): WatchState[] {
 }
 
 /** "2 watching · 1 met today" (the met fragment only when something was met today).
- *  `last_checked` is epoch seconds; "today" is the local calendar day of `now`. */
+ *  The met time is `finished_at` — the controller's met path finishes BEFORE its
+ *  `last_checked = now` write, so `last_checked` on a met watch is the PREVIOUS check
+ *  (or unset when it met on the first one). Both are epoch seconds; "today" is the
+ *  local calendar day of `now`. */
 export function watchesPulse(watches: WatchState[], now: number = Date.now()): string {
   const watching = activeWatches(watches).length;
   const dayStart = new Date(now);
   dayStart.setHours(0, 0, 0, 0);
-  const metToday = watches.filter(
-    (w) => w.status === "met" && (w.last_checked ?? 0) * 1000 >= dayStart.getTime() && (w.last_checked ?? 0) * 1000 <= now,
-  ).length;
+  const metToday = watches.filter((w) => {
+    if (w.status !== "met") return false;
+    const met = (w.finished_at ?? w.last_checked ?? 0) * 1000;
+    return met >= dayStart.getTime() && met <= now;
+  }).length;
   if (!watching && !metToday) return "";
   const head = `${watching} watching`;
   return metToday ? `${head} · ${metToday} met today` : head;

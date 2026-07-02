@@ -80,14 +80,32 @@ describe("watches card", () => {
     expect(activeWatches(ws)).toHaveLength(1);
   });
 
-  it("pulse counts watching + met-today (local day)", () => {
+  it("pulse counts watching + met-today (local day) off finished_at", () => {
     const ws = [
       watch({ id: "a" }),
       watch({ id: "b" }),
-      watch({ id: "m1", status: "met", last_checked: secsAt(9) }), // this morning
-      watch({ id: "m2", status: "met", last_checked: secsAt(9) - 86_400 }), // yesterday
+      watch({ id: "m1", status: "met", finished_at: secsAt(9) }), // this morning
+      watch({ id: "m2", status: "met", finished_at: secsAt(9) - 86_400 }), // yesterday
     ];
     expect(watchesPulse(ws, now)).toBe("2 watching · 1 met today");
+  });
+
+  it("met time is finished_at, not the stale pre-met last_checked (falls back when absent)", () => {
+    // The controller's met path finishes BEFORE the `last_checked = now` write: a watch
+    // that met on its FIRST check has no last_checked at all, and one that met later
+    // still carries the previous check's time (possibly yesterday).
+    const firstCheckMet = watch({ id: "f", status: "met", finished_at: secsAt(9) });
+    const metAfterYesterdaysCheck = watch({
+      id: "y",
+      status: "met",
+      finished_at: secsAt(9),
+      last_checked: secsAt(9) - 86_400,
+    });
+    expect(watchesPulse([watch({}), firstCheckMet], now)).toBe("1 watching · 1 met today");
+    expect(watchesPulse([watch({}), metAfterYesterdaysCheck], now)).toBe("1 watching · 1 met today");
+    // Older payloads without finished_at still count via last_checked.
+    const legacy = watch({ id: "l", status: "met", last_checked: secsAt(9) });
+    expect(watchesPulse([watch({}), legacy], now)).toBe("1 watching · 1 met today");
   });
 
   it("pulse omits the met fragment when nothing was met today", () => {

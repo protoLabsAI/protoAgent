@@ -130,6 +130,41 @@ test("an empty card shows the DS Empty with the quick-add as its CTA", async ({ 
   await expect(page.getByTestId("goal-create-submit")).toBeEnabled();
 });
 
+test("the Goals PANEL hosts the same create dialog via its New goal header action", async ({ page }) => {
+  // The other host of the lifted GoalCreateDialog (one form, two hosts): the Goals
+  // panel's header action — the replacement for the old inline <details> form. Tasks/
+  // Schedule panel create flows have their own specs; this covers the Goals panel's.
+  let posted: Record<string, unknown> | null = null;
+  await page.route("**/api/goals", async (route) => {
+    if (route.request().method() === "POST") {
+      posted = route.request().postDataJSON();
+      return route.fulfill({ json: { ok: true, message: "goal set" } });
+    }
+    return route.fallback();
+  });
+
+  await openWork(page);
+  await page.getByTestId("work-card-goals").click();
+  await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
+
+  await page.getByTestId("goal-new").click();
+  await expect(page.getByTestId("goal-create-dialog")).toBeVisible();
+  await expect(page.getByTestId("goal-create-submit")).toBeDisabled(); // gated on a condition
+  await page.getByTestId("goal-create-condition").fill("All tests pass twice");
+  await page.getByTestId("goal-create-submit").click();
+
+  // Same payload/endpoint as the old inline form; success closes the dialog + toasts.
+  await expect(page.getByTestId("goal-create-dialog")).toHaveCount(0);
+  await expect(page.locator(".pl-toast__title", { hasText: "Goal set" })).toBeVisible();
+  expect(posted).toMatchObject({
+    session_id: "operator",
+    condition: "All tests pass twice",
+    verifier: { type: "llm" },
+  });
+  // Still in the nested Goals view — creating never navigates.
+  await expect(page.getByTestId("work-back")).toBeVisible();
+});
+
 test("watches empty state explains agent-created watches and offers no CTA", async ({ page }) => {
   await page.route("**/api/watches", (route) =>
     route.fulfill({ json: { enabled: true, watches: [] } }),
