@@ -118,3 +118,10 @@
 .memory-none {
   color: var(--pl-color-text-muted, #8a8f98);
 }
+
+/* Header · tab strip · scrolling body. The tab strip is a direct child of the
+   .stage-panel grid, so without this it lands in the default template's 1fr row
+   and stretches to fill the panel (same shape as .settings-panel's sub-nav). */
+.stage-panel.memory-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
