@@ -993,7 +993,9 @@ export const api = {
   },
 
   tools() {
-    return request<{ tools: ToolInfo[]; count: number }>("/api/tools");
+    // `count` = wired (enabled) tools; `disabled` = the RAW tools.disabled denylist —
+    // the base a row toggle edits, so stale names (no live tool) survive a save.
+    return request<{ tools: ToolInfo[]; count: number; disabled: string[] }>("/api/tools");
   },
 
   runSubagent(body: {

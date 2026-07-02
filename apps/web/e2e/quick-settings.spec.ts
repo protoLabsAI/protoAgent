@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 // Contextual quick-settings + the topbar Settings overlay (ADR 0048): a gear icon
 // opens a dialog editing fields via the same /api/settings path, and the central
@@ -91,7 +92,11 @@ test("Tools panel: the Shell & filesystem chip disables run_command via /api/set
   await expect(page.locator(".pl-toast").getByText("Saved")).toBeVisible();
 });
 
-test("Tools panel: the Disabled tools chip edits the tools.disabled denylist", async ({ page }) => {
+// The old "Disabled tools" chip (a raw tools.disabled textarea) is gone — every row
+// in the list carries an on/off switch writing the same denylist. These specs pin the
+// row-toggle contract: the POST edits the RAW denylist (preserving entries it didn't
+// touch, incl. stale names with no live tool) and off rows stay listed.
+async function openToolsTab(page: Page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
   await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
@@ -99,17 +104,47 @@ test("Tools panel: the Disabled tools chip edits the tools.disabled denylist", a
     .locator(".settings-overlay .pl-sidenav")
     .getByRole("tab", { name: "Tools", exact: true })
     .click();
+}
 
-  await page.getByRole("button", { name: "Disabled tools" }).click();
-  const dialog = page.getByRole("dialog", { name: "Disabled tools" });
-  await expect(dialog).toBeVisible();
+test("Tools panel: the Disabled tools chip is gone (row switches replaced it)", async ({ page }) => {
+  await openToolsTab(page);
+  await expect(page.getByRole("button", { name: "Shell & filesystem tools" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Disabled tools" })).toHaveCount(0);
+});
+
+test("Tools panel: toggling a tool row off appends it to tools.disabled", async ({ page }) => {
+  await openToolsTab(page);
+
+  // web_search sits in General — the first group, expanded by default.
+  const row = page.locator(".tools-row", { has: page.getByText("web_search", { exact: true }) });
+  await expect(row).toBeVisible();
 
   const saved = page.waitForRequest(
     (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
   );
-  // string_list renders as the one-per-line editor.
-  await dialog.locator('[data-key="tools.disabled"] textarea').fill("run_command");
-  await dialog.getByRole("button", { name: "Save" }).click();
+  await row.locator(".pl-switch").click();
   const req = await saved;
-  expect(req.postDataJSON().updates["tools.disabled"]).toEqual(["run_command"]);
+  const body = req.postDataJSON();
+  // Appends the toggled name and PRESERVES the rest of the raw denylist — including
+  // ghost_tool, a stale entry with no live tool row to recompute it from.
+  expect(body.updates["tools.disabled"]).toEqual(["run_command", "ghost_tool", "web_search"]);
+  expect(body.layer ?? "agent").toBe("agent"); // per-agent leaf, not box-wide
+});
+
+test("Tools panel: an off tool stays listed and toggles back on", async ({ page }) => {
+  await openToolsTab(page);
+
+  // run_command ships disabled in the fixture — still listed (dimmed) under Filesystem.
+  await page.locator(".pl-accordion__trigger", { hasText: "Filesystem" }).click();
+  const row = page.locator(".tools-row", { has: page.getByText("run_command", { exact: true }) });
+  await expect(row).toBeVisible();
+  await expect(row).toHaveClass(/tools-row--off/);
+
+  const saved = page.waitForRequest(
+    (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
+  );
+  await row.locator(".pl-switch").click();
+  const req = await saved;
+  // Re-enabling removes ONLY run_command; the stale ghost_tool entry survives.
+  expect(req.postDataJSON().updates["tools.disabled"]).toEqual(["ghost_tool"]);
 });

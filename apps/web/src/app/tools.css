@@ -41,6 +41,16 @@
   color: var(--fg-muted);
   min-width: 0;
 }
+/* The per-row on/off switch must not shrink against a long description. */
+.tools-row .pl-switch {
+  flex-shrink: 0;
+}
+/* Toggled-off rows stay listed (so they can be re-enabled) but read as inert. */
+.tools-row--off .tools-name,
+.tools-row--off .tools-desc {
+  color: var(--fg-muted);
+  opacity: 0.65;
+}
 
 /* Contextual settings chips above the search (mirrors .mcp-browse-row). */
 .tools-config-row {

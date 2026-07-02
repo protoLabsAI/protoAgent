@@ -823,6 +823,12 @@ def create_agent_graph(
 
     set_disabled_tools(getattr(config, "tools_disabled", []))
 
+    # Everything the denylist drops, across every assembly seam below. Stamped on the
+    # graph (like bound_tools) so the operator Tools tab can render disabled tools as
+    # toggled-off rows — without this a disabled tool vanishes from the catalog and
+    # can never be re-enabled from the console.
+    disabled_tools: list = []
+
     all_tools = get_all_tools(
         knowledge_store,
         scheduler=scheduler,
@@ -839,6 +845,7 @@ def create_agent_graph(
         graph_config=config,
         # Lets knowledge_ingest detach a slow URL/media ingest as a background job (ADR 0050).
         background_mgr=background_mgr,
+        dropped=disabled_tools,
     )
 
     if extra_tools:
@@ -847,7 +854,7 @@ def create_agent_graph(
     # get_all_tools already filtered the core set, but extra_tools bypassed it. Applied
     # BEFORE the subagent tool_map snapshot below so a disabled tool can't ride into a
     # subagent via an allowlist either.
-    all_tools = drop_disabled_tools(all_tools)
+    all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
     if include_subagents:
         all_tools.extend(
@@ -887,7 +894,7 @@ def create_agent_graph(
     # tools). Sits before the deferred build so search_tools never advertises a dropped
     # name. This is what makes ``tools.disabled: [run_command]`` actually work (#1527-era
     # gap: the filter used to live only inside get_all_tools, which fs tools bypass).
-    all_tools = drop_disabled_tools(all_tools)
+    all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
     # search_tools meta-tool is built over the full set (so it can surface any
@@ -898,6 +905,12 @@ def create_agent_graph(
 
         keep = resolve_deferred_keep(config.tools_deferred_keep)
         all_tools.append(build_search_tools_tool(all_tools, keep))
+        # The meta-tool is denylistable like everything else — without this pass,
+        # ``tools.disabled: [search_tools]`` silently re-binds it (it's appended after
+        # the final filter above), which a Tools-tab row toggle would surface as a
+        # switch that snaps back on. Everything else was already filtered, so only
+        # search_tools can drop here.
+        all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
     middleware = _build_middleware(
         config, knowledge_store, skills_index=skills_index, extra_middleware=extra_middleware
@@ -929,6 +942,9 @@ def create_agent_graph(
     # and drifting from it (set_goal advertised-but-unbound bd-2aa; task /
     # filesystem / execute_code under-reported bd-67j).
     agent.bound_tools = list(all_tools)
+    # The denylist's complement — what ``tools.disabled`` dropped, kept as tool objects
+    # so /api/tools can list them (name/description/category) as toggle-off rows.
+    agent.disabled_tools = list(disabled_tools)
     return agent
 
 

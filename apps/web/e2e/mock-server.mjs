@@ -135,13 +135,18 @@ function handleApiGet(pathname, fleet = FLEET) {
     case "/api/subagents":
       return { subagents: SUBAGENTS };
     case "/api/tools":
+      // run_command ships toggled OFF (still listed — disabled tools stay in the
+      // catalog); `disabled` is the RAW denylist and carries a stale name with no
+      // live tool (ghost_tool) so specs can assert a row toggle preserves it.
       return {
         tools: [
-          { name: "web_search", description: "Search the web.", source: "core", category: "General" },
-          { name: "memory_recall", description: "Search long-term memory.", source: "core", category: "Memory" },
-          { name: "echo__ping", description: "Echo ping.", source: "mcp", category: "echo" },
+          { name: "web_search", description: "Search the web.", source: "core", category: "General", enabled: true },
+          { name: "memory_recall", description: "Search long-term memory.", source: "core", category: "Memory", enabled: true },
+          { name: "run_command", description: "Run a shell command.", source: "core", category: "Filesystem", enabled: false },
+          { name: "echo__ping", description: "Echo ping.", source: "mcp", category: "echo", enabled: true },
         ],
         count: 3,
+        disabled: ["run_command", "ghost_tool"],
       };
     case "/api/chat/commands":
       return { commands: SLASH_COMMANDS };

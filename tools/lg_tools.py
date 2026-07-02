@@ -455,13 +455,24 @@ def set_disabled_tools(names) -> None:
     _disabled_tools = {str(n).strip() for n in (names or []) if str(n).strip()}
 
 
-def drop_disabled_tools(tools: list) -> list:
+def drop_disabled_tools(tools: list, dropped: list | None = None) -> list:
     """Filter the denylist (``tools.disabled``) out of ``tools`` — the single filter
     every assembly point uses, so a disabled name is gone no matter which seam
-    contributed it. Returns ``tools`` unchanged (same list) when the denylist is empty."""
+    contributed it. Returns ``tools`` unchanged (same list) when the denylist is empty.
+
+    ``dropped`` (optional) collects the tool objects that were filtered out, so the
+    graph builder can stamp a full catalog (bound + disabled) for the operator Tools
+    tab — a toggled-off tool must stay visible there or it could never be re-enabled."""
     if not _disabled_tools:
         return tools
-    return [t for t in tools if getattr(t, "name", None) not in _disabled_tools]
+    kept = []
+    for t in tools:
+        if getattr(t, "name", None) in _disabled_tools:
+            if dropped is not None:
+                dropped.append(t)
+        else:
+            kept.append(t)
+    return kept
 
 
 # Stable list of scheduler tool names. Exposed as a module-level
@@ -1576,6 +1587,7 @@ def get_all_tools(
     goal_enabled=False,
     graph_config=None,
     background_mgr=None,
+    dropped=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
 
@@ -1636,8 +1648,9 @@ def get_all_tools(
     tools.extend(_build_curation_tools())
     # Operator denylist (config ``tools.disabled``): drop named core tools without
     # editing this function. Applied last so it covers every branch above. (graph.agent
-    # re-applies it over the FULL assembled set — extra/fs/late tools — post-assembly.)
-    return drop_disabled_tools(tools)
+    # re-applies it over the FULL assembled set — extra/fs/late tools — post-assembly.
+    # ``dropped`` collects the filtered-out tools for the operator catalog.)
+    return drop_disabled_tools(tools, dropped)
 
 
 # ── deferred tools (ADR 0005 #3) ──────────────────────────────────────────────

@@ -10,8 +10,19 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
+
+
+@pytest.fixture(autouse=True)
+def _reset_denylist():
+    """The denylist is a module global (graph builds sync it from their config);
+    reset it so a test's denylist never leaks into the rest of the suite."""
+    from tools.lg_tools import set_disabled_tools
+
+    yield
+    set_disabled_tools([])
 
 
 class _ToolFake(GenericFakeChatModel):
@@ -19,39 +30,76 @@ class _ToolFake(GenericFakeChatModel):
         return self
 
 
-def _graph(goal_enabled=True):
+def _graph(goal_enabled=True, **over):
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
 
     fake = _ToolFake(messages=iter([AIMessage(content="x")]))
+    cfg = LangGraphConfig(goal_enabled=goal_enabled, **over)
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
-        return create_agent_graph(LangGraphConfig(goal_enabled=goal_enabled))
+        return create_agent_graph(cfg), cfg
 
 
 def test_tools_tab_exactly_matches_the_bound_graph(monkeypatch):
     import operator_api.console_handlers as ch
     import runtime.state as rs
 
-    g = _graph(goal_enabled=True)
+    g, cfg = _graph(goal_enabled=True)
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
     monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
 
-    listed = {t["name"] for t in ch._operator_tools_list()["tools"]}
+    res = ch._operator_tools_list()
+    listed = {t["name"] for t in res["tools"]}
     bound = {getattr(t, "name", None) for t in g.bound_tools}
 
     assert listed == bound  # no drift, either direction
     assert "task" in listed  # subagent delegation now visible
     assert "read_file" in listed  # filesystem now visible (was omitted)
     assert "set_goal" in listed  # bound when goal_enabled (bd-2aa)
+    # Empty denylist → every row is wired, count is the full set, raw denylist empty.
+    assert all(t["enabled"] for t in res["tools"])
+    assert res["count"] == len(res["tools"])
+    assert res["disabled"] == []
+
+
+def test_denylisted_tools_stay_listed_toggled_off(monkeypatch):
+    """A tools.disabled tool is NOT bound but STAYS in the inventory (enabled: false) —
+    drop it from the catalog and the console row toggle could never re-enable it. The
+    response also echoes the RAW denylist (stale names included) so a row toggle edits
+    one name without clobbering the rest."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    g, cfg = _graph(goal_enabled=False, tools_disabled=["calculator", "ghost_tool"])
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
+
+    res = ch._operator_tools_list()
+    by_name = {t["name"]: t for t in res["tools"]}
+
+    assert "calculator" not in {getattr(t, "name", None) for t in g.bound_tools}
+    assert by_name["calculator"]["enabled"] is False
+    assert by_name["calculator"]["category"] == "General"  # still grouped like a live row
+    assert by_name["current_time"]["enabled"] is True
+    # ``count`` stays the WIRED count (the "N wired tools" kicker), not rows.
+    assert res["count"] == sum(1 for t in res["tools"] if t["enabled"])
+    assert res["count"] == len(res["tools"]) - 1
+    # The raw denylist survives verbatim; a stale name has no row to render.
+    assert res["disabled"] == ["calculator", "ghost_tool"]
+    assert "ghost_tool" not in by_name
 
 
 def test_tools_tab_omits_set_goal_when_goal_disabled(monkeypatch):
     import operator_api.console_handlers as ch
     import runtime.state as rs
 
-    g = _graph(goal_enabled=False)
+    g, cfg = _graph(goal_enabled=False)
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
     monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
 
@@ -108,7 +156,7 @@ def test_inventory_uses_plugin_owner_map(monkeypatch):
             self.name = name
             self.description = "x"
 
-    g = _graph(goal_enabled=True)
+    g, _cfg = _graph(goal_enabled=True)
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [_Tool("show_artifact")], raising=False)
     monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)

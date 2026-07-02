@@ -80,6 +80,41 @@ def test_tools_disabled_drops_task_tools(tmp_path):
     assert "task" not in names and "task_batch" not in names
 
 
+# ── the deferred meta-tool seam (appended after the final assembly pass) ─────
+
+
+def test_tools_disabled_drops_search_tools(tmp_path):
+    # search_tools is appended AFTER the final denylist pass (it's built over the
+    # filtered set), so it needs its own pass — otherwise a disabled search_tools
+    # silently re-binds, which the Tools-tab row toggle would surface as a switch
+    # that snaps back on.
+    g = create_agent_graph(
+        _cfg(tmp_path, tools_deferred_enabled=True, tools_disabled=["search_tools"])
+    )
+    assert "search_tools" not in _bound_names(g)
+    assert "search_tools" in {t.name for t in g.disabled_tools}
+
+
+# ── the disabled catalog (Tools-tab rows stay toggleable) ─────────────────────
+
+
+def test_disabled_tools_are_stamped_for_the_catalog(tmp_path):
+    g = create_agent_graph(
+        _cfg(tmp_path, tools_disabled=["run_command", "calculator", "ghost_tool"])
+    )
+    dropped = {t.name for t in g.disabled_tools}
+    # The dropped tool OBJECTS are kept (name/description feed the console row) …
+    assert {"run_command", "calculator"} <= dropped
+    # … a denylisted name with no live tool has nothing to catalog …
+    assert "ghost_tool" not in dropped
+    # … and nothing cataloged as dropped leaks into the bound set.
+    assert not (dropped & _bound_names(g))
+
+
+def test_empty_denylist_stamps_an_empty_catalog(tmp_path):
+    assert create_agent_graph(_cfg(tmp_path)).disabled_tools == []
+
+
 # ── config-driven sync (no reliance on the server boot side effect) ──────────
 
 
@@ -103,3 +138,21 @@ def test_drop_disabled_tools_noop_when_empty():
     set_disabled_tools([])
     tools = get_all_tools(None)
     assert drop_disabled_tools(tools) is tools  # same list — no copy on the hot path
+
+
+def test_drop_disabled_tools_collects_dropped():
+    @tool
+    def alpha() -> str:
+        """A."""
+        return "a"
+
+    @tool
+    def beta() -> str:
+        """B."""
+        return "b"
+
+    set_disabled_tools(["alpha"])
+    dropped: list = []
+    kept = drop_disabled_tools([alpha, beta], dropped)
+    assert [t.name for t in kept] == ["beta"]
+    assert [t.name for t in dropped] == ["alpha"]

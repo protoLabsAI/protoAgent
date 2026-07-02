@@ -1302,6 +1302,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
                 late_tool_factories=new_late_tool_factories,
                 checkpointer=STATE.checkpointer,
                 inbox_store=new_inbox_store,
+                # The tasks store survives reloads like the checkpointer (its path isn't
+                # reloadable config). It was missing here, so ANY settings hot-reload
+                # silently dropped task_create/task_list/task_update/task_close from the
+                # rebuilt graph until the next full restart.
+                tasks_store=STATE.tasks_store,
                 # The background manager (ADR 0050) survives reloads unchanged — its
                 # store path + self-invoke URL/auth don't depend on reloadable config.
                 background_mgr=STATE.background_mgr,
