@@ -7,7 +7,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -37,14 +37,165 @@ fn choose_port() -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
-/// The quick-launcher hotkey: ⌥Space on macOS (the Raycast-familiar default);
-/// Ctrl+Alt+Space elsewhere — plain Alt+Space is the Windows window system-menu
-/// accelerator (and PowerToys Run's default), a guaranteed conflict (#1670).
-fn launcher_shortcut() -> Shortcut {
-    #[cfg(target_os = "macos")]
-    return Shortcut::new(Some(Modifiers::ALT), Code::Space);
-    #[cfg(not(target_os = "macos"))]
-    return Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+/// The shell's OS-global hotkeys (#1675): stable id → default chord, in the
+/// global-hotkey string grammar ("super+shift+p"). The quick launcher is ⌥Space on
+/// macOS (the Raycast-familiar default) and Ctrl+Alt+Space elsewhere — plain
+/// Alt+Space is the Windows window system-menu accelerator (and PowerToys Run's
+/// default), a guaranteed conflict (#1670). Operator overrides persist in
+/// `<app-config>/hotkeys.json`, edited from Settings ▸ Keyboard.
+const HOTKEY_CONSOLE: &str = "console_toggle";
+const HOTKEY_LAUNCHER: &str = "quick_launcher";
+
+fn default_hotkeys() -> Vec<(&'static str, String)> {
+    let launcher = if cfg!(target_os = "macos") {
+        "alt+space"
+    } else {
+        "ctrl+alt+space"
+    };
+    vec![
+        (HOTKEY_CONSOLE, "super+shift+p".to_string()),
+        (HOTKEY_LAUNCHER, launcher.to_string()),
+    ]
+}
+
+/// One OS-global hotkey's live status — what Settings ▸ Keyboard renders: the
+/// chord, whether it's actually registered, and the denial when it isn't
+/// (typically "already registered": another app owns the chord).
+#[derive(Clone, serde::Serialize)]
+struct HotkeyStatus {
+    id: String,
+    chord: String,
+    registered: bool,
+    error: Option<String>,
+}
+
+/// Managed registry of the shell's global hotkeys (#1675).
+#[derive(Default)]
+struct Hotkeys(Mutex<Vec<HotkeyStatus>>);
+
+fn hotkeys_file<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("hotkeys.json"))
+}
+
+/// Operator chord overrides (`{id: chord}`) — best-effort read; absent/garbled
+/// files just mean defaults.
+fn load_hotkey_overrides<R: Runtime>(
+    app: &AppHandle<R>,
+) -> std::collections::HashMap<String, String> {
+    hotkeys_file(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_hotkey_overrides<R: Runtime>(app: &AppHandle<R>, entries: &[HotkeyStatus]) {
+    let Some(path) = hotkeys_file(app) else {
+        return;
+    };
+    let map: std::collections::HashMap<&str, &str> = entries
+        .iter()
+        .map(|e| (e.id.as_str(), e.chord.as_str()))
+        .collect();
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        if let Err(e) = std::fs::write(&path, json) {
+            log::warn!("desktop: could not persist hotkeys to {path:?}: {e}");
+        }
+    }
+}
+
+/// (Re)register every hotkey that isn't currently live. FALLIBLE per hotkey
+/// (#1670): a chord another app owns records `registered:false` + the error in
+/// the managed state (Settings ▸ Keyboard shows it) and the app stays fully
+/// usable via window/tray. Called at setup and again on window focus — a cheap,
+/// user-driven retry moment — so a chord freed by the other app re-acquires
+/// without a restart (#1675).
+fn sync_hotkeys<R: Runtime>(app: &AppHandle<R>) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let Some(state) = app.try_state::<Hotkeys>() else {
+        return;
+    };
+    let mut entries = state.0.lock().unwrap();
+    for e in entries.iter_mut() {
+        if e.registered {
+            continue;
+        }
+        match app.global_shortcut().register(e.chord.as_str()) {
+            Ok(()) => {
+                log::info!("desktop: global hotkey {} registered ({})", e.id, e.chord);
+                e.registered = true;
+                e.error = None;
+            }
+            Err(err) => {
+                if e.error.is_none() {
+                    log::warn!(
+                        "desktop: {} hotkey ({}) unavailable ({err}) — another app may own it; \
+                         continuing without the global shortcut",
+                        e.id,
+                        e.chord
+                    );
+                }
+                e.error = Some(err.to_string());
+            }
+        }
+    }
+}
+
+/// Which registered hotkey id a fired shortcut belongs to, from the managed state.
+fn hotkey_id_for<R: Runtime>(app: &AppHandle<R>, fired: &Shortcut) -> Option<String> {
+    let state = app.try_state::<Hotkeys>()?;
+    let entries = state.0.lock().unwrap();
+    entries
+        .iter()
+        .find(|e| {
+            e.chord
+                .parse::<Shortcut>()
+                .map(|s| s == *fired)
+                .unwrap_or(false)
+        })
+        .map(|e| e.id.clone())
+}
+
+/// Settings ▸ Keyboard reads the shell globals' live status (#1675).
+#[tauri::command]
+fn hotkeys_status(state: tauri::State<'_, Hotkeys>) -> Vec<HotkeyStatus> {
+    state.0.lock().unwrap().clone()
+}
+
+/// Rebind one shell global (#1675): validate the chord, release the old one,
+/// persist, then re-register fallibly — a chord another app owns comes back as
+/// `registered:false` + error rather than an exception, matching launch behavior.
+#[tauri::command]
+fn hotkeys_set<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    chord: String,
+) -> Result<Vec<HotkeyStatus>, String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let chord = chord.trim().to_lowercase();
+    chord
+        .parse::<Shortcut>()
+        .map_err(|e| format!("'{chord}' is not a valid chord: {e}"))?;
+    {
+        let state = app.state::<Hotkeys>();
+        let mut entries = state.0.lock().unwrap();
+        let Some(entry) = entries.iter_mut().find(|e| e.id == id) else {
+            return Err(format!("unknown hotkey id '{id}'"));
+        };
+        if entry.registered {
+            let _ = app.global_shortcut().unregister(entry.chord.as_str());
+        }
+        entry.chord = chord;
+        entry.registered = false;
+        entry.error = None;
+        save_hotkey_overrides(&app, &entries);
+    } // drop the lock — sync_hotkeys re-locks
+    sync_hotkeys(&app);
+    Ok(app.state::<Hotkeys>().0.lock().unwrap().clone())
 }
 
 /// Holds the running sidecar so it can be killed when the app exits.
@@ -554,7 +705,9 @@ pub fn run() {
             updater_check,
             updater_install,
             hide_launcher,
-            focus_main
+            focus_main,
+            hotkeys_status,
+            hotkeys_set
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -578,10 +731,11 @@ pub fn run() {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    if shortcut == &launcher_shortcut() {
-                        toggle_launcher(app);
-                    } else {
-                        toggle_main_window(app);
+                    // Chords are rebindable (#1675) — resolve the fired shortcut to
+                    // its hotkey id via the managed registry, not a hardcoded compare.
+                    match hotkey_id_for(app, shortcut).as_deref() {
+                        Some(HOTKEY_LAUNCHER) => toggle_launcher(app),
+                        _ => toggle_main_window(app),
                     }
                 })
                 .build(),
@@ -600,28 +754,26 @@ pub fn run() {
             app.manage(SidecarProcess::default());
 
             // Two global, system-wide hotkeys (fire even when the app is unfocused or
-            // hidden in the menu bar):
-            //   ⌘⇧P / Win⇧P — toggle the full console window.
-            //   ⌥Space (macOS) / Ctrl⌥Space (elsewhere) — the quick launcher.
-            // FALLIBLE by design (#1670): a hotkey another app already owns logs a
-            // warning and the app stays fully usable via the window/tray — it must
-            // never abort the launch. Registered here (after logging init) so the
-            // warning lands on disk.
+            // hidden in the menu bar): the console toggle and the quick launcher —
+            // defaults in default_hotkeys(), operator overrides from hotkeys.json
+            // (Settings ▸ Keyboard, #1675). FALLIBLE by design (#1670): a hotkey
+            // another app already owns records its state for the settings UI and the
+            // app stays fully usable via the window/tray — it must never abort the
+            // launch. Registered here (after logging init) so warnings land on disk;
+            // re-attempted on window focus (sync_hotkeys in the run handler).
             {
-                use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-                let console_toggle =
-                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP);
-                for (label, hotkey) in
-                    [("console toggle", console_toggle), ("quick launcher", launcher_shortcut())]
-                {
-                    if let Err(e) = app.global_shortcut().register(hotkey) {
-                        log::warn!(
-                            "desktop: {label} hotkey unavailable ({e}) — another app owns it; \
-                             continuing without the global shortcut"
-                        );
-                    }
-                }
+                let overrides = load_hotkey_overrides(app.handle());
+                let entries: Vec<HotkeyStatus> = default_hotkeys()
+                    .into_iter()
+                    .map(|(id, default_chord)| HotkeyStatus {
+                        id: id.to_string(),
+                        chord: overrides.get(id).cloned().unwrap_or(default_chord),
+                        registered: false,
+                        error: None,
+                    })
+                    .collect();
+                app.manage(Hotkeys(Mutex::new(entries)));
+                sync_hotkeys(app.handle());
             }
 
             // The sidecar prefers the fixed port the web client falls back to in the
@@ -746,6 +898,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // Re-acquire any global hotkey another app owned earlier but has since
+            // released (#1675) — focus is a cheap, user-driven retry moment (no
+            // polling); sync_hotkeys is a no-op when everything is registered.
+            if let RunEvent::WindowEvent { event: WindowEvent::Focused(true), .. } = &event {
+                sync_hotkeys(app_handle);
+            }
             // Tear the bundled server down with the app rather than orphaning it.
             if let RunEvent::Exit = event {
                 // The kill below fires the sidecar's Terminated event — mark the

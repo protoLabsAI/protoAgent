@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Desktop's system-wide hotkeys are now rebindable, visible, and self-healing**
+  (#1675). The shell's two OS-global hotkeys (console toggle, quick launcher) were
+  hardcoded in Rust: a chord another app owned failed silently (a log line at
+  best), couldn't be changed, and stayed lost until restart. Settings ▸ Keyboard
+  gains a **System-wide (desktop)** section that shows each hotkey's live state —
+  including "unavailable — another app owns this shortcut" — and rebinds it with
+  the same press-to-record flow as web bindings (chords persist in the shell's
+  `hotkeys.json`). Registration also retries whenever the app regains focus, so a
+  chord freed by the conflicting app re-acquires without a restart.
+
 ## [0.83.0] - 2026-07-02
 
 ### Fixed
