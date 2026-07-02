@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`seccomp-profile.json` moved to `deploy/`.** The Docker hardening profile now
+  lives with the other deployment assets instead of at the repo root;
+  `docker-compose.yml` and `.dockerignore` reference the new path. No behavior
+  change — Docker reads the profile from the host at compose time.
 - **The in-app update notes now match the Discord release announcement** ([#1516]).
   The desktop updater's "what's new" card renders the same LLM-themed release notes
   that are posted to Discord — one changelog, one voice — instead of the raw
