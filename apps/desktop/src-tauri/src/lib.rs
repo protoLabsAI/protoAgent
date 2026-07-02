@@ -14,24 +14,61 @@ use tauri_plugin_shell::{
 };
 use tauri_plugin_updater::UpdaterExt;
 
-/// Fallback port if probing for a free one fails (matches the historical
-/// hardcoded default + the web client's last-resort base).
-const FALLBACK_PORT: u16 = 7870;
+/// The web client's zero-handoff fallback port (apps/web/src/lib/api.ts) —
+/// preferred so the no-handoff path still lands on the live server.
+const DEFAULT_PORT: u16 = 7870;
 
-/// Pick a free localhost port for the bundled sidecar, so several agents (and a
-/// pre-existing server on 7870) can coexist without a collision. We bind :0,
-/// read the OS-assigned port, then drop the listener and hand the port to the
-/// sidecar — a tiny TOCTOU window, acceptable for a single local launch.
-fn pick_free_port() -> u16 {
+/// The sidecar's port: the fixed default when it's free, else an OS-assigned free
+/// port. Launching straight at an occupied 7870 — an orphaned sidecar, a headless
+/// dev server, any unrelated app — meant the new sidecar died at bind and the
+/// webview loaded a dead/foreign server with no error (#1668). The chosen port
+/// reaches the page via `?__apiPort=` on the webview URL (primary — the URL is
+/// always visible to the page, unlike the injected global) plus the
+/// `__PROTOAGENT_API_BASE__` init script. Bind-probe-then-release has a tiny
+/// TOCTOU window — acceptable for a single local launch.
+fn choose_port() -> u16 {
+    if TcpListener::bind(("127.0.0.1", DEFAULT_PORT)).is_ok() {
+        return DEFAULT_PORT;
+    }
     TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .map(|addr| addr.port())
-        .unwrap_or(FALLBACK_PORT)
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// The quick-launcher hotkey: ⌥Space on macOS (the Raycast-familiar default);
+/// Ctrl+Alt+Space elsewhere — plain Alt+Space is the Windows window system-menu
+/// accelerator (and PowerToys Run's default), a guaranteed conflict (#1670).
+fn launcher_shortcut() -> Shortcut {
+    #[cfg(target_os = "macos")]
+    return Shortcut::new(Some(Modifiers::ALT), Code::Space);
+    #[cfg(not(target_os = "macos"))]
+    return Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
 }
 
 /// Holds the running sidecar so it can be killed when the app exits.
 #[derive(Default)]
 struct SidecarProcess(Mutex<Option<CommandChild>>);
+
+/// Set when the app is tearing down — a sidecar `Terminated` event during shutdown
+/// is the clean kill, not a crash to alert on.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A blocking, user-visible "the server didn't come up / died" alert with the log
+/// location — a launch that silently shows a dead console is undebuggable from the
+/// UI alone (#1668: fresh Windows install, blank window, zero diagnostics).
+fn sidecar_alert<R: Runtime>(app: &AppHandle<R>, detail: &str) {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|_| "the app's log directory".to_string());
+    app.dialog()
+        .message(format!("{detail}\n\nLogs: {log_dir}"))
+        .title("protoAgent server problem")
+        .buttons(MessageDialogButtons::Ok)
+        .show(|_| {});
+}
 
 /// Split a `:`-delimited PATH string and append each new, non-empty dir to `entries`,
 /// preserving order and skipping duplicates.
@@ -98,18 +135,32 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         Ok(dir) => dir,
         Err(e) => {
             log::error!("sidecar: cannot resolve app config dir: {e}");
+            sidecar_alert(
+                app,
+                &format!("The server can't start: no app config directory ({e})."),
+            );
             return;
         }
     };
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
         log::error!("sidecar: cannot create config dir {config_dir:?}: {e}");
+        sidecar_alert(
+            app,
+            &format!("The server can't start: config directory {config_dir:?} ({e})."),
+        );
         return;
     }
 
     let command = match app.shell().sidecar("protoagent-server") {
         Ok(cmd) => cmd,
         Err(e) => {
-            log::error!("sidecar: binary not found (run apps/desktop/sidecar/build_sidecar.py): {e}");
+            log::error!(
+                "sidecar: binary not found (run apps/desktop/sidecar/build_sidecar.py): {e}"
+            );
+            sidecar_alert(
+                app,
+                &format!("The bundled server binary is missing or unlaunchable ({e})."),
+            );
             return;
         }
     };
@@ -138,6 +189,7 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         Ok(pair) => pair,
         Err(e) => {
             log::error!("sidecar: spawn failed: {e}");
+            sidecar_alert(app, &format!("The server failed to launch ({e})."));
             return;
         }
     };
@@ -147,6 +199,7 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
     }
 
     // Drain stdout/stderr so the OS pipe buffer never fills and stalls the child.
+    let alert_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -155,6 +208,18 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
                 }
                 CommandEvent::Terminated(payload) => {
                     log::warn!("[sidecar] terminated: {payload:?}");
+                    // A death that ISN'T our shutdown kill leaves a console with no
+                    // server behind it — say so instead of a silently dead window
+                    // (#1668). Boot crashes (port races, bad config) land here too.
+                    if !QUITTING.load(std::sync::atomic::Ordering::Relaxed) {
+                        let code = payload
+                            .code
+                            .map_or("unknown".to_string(), |c| c.to_string());
+                        sidecar_alert(
+                            &alert_handle,
+                            &format!("The server stopped unexpectedly (exit code {code})."),
+                        );
+                    }
                     break;
                 }
                 _ => {}
@@ -262,7 +327,9 @@ fn check_for_updates<R: Runtime>(app: AppHandle<R>, interactive: bool) {
                 log::info!("updater: unavailable for this install: {e}");
                 if interactive {
                     app.dialog()
-                        .message(format!("Updates aren't managed in-app for this install.\n\n{e}"))
+                        .message(format!(
+                            "Updates aren't managed in-app for this install.\n\n{e}"
+                        ))
                         .title("protoAgent updates")
                         .show(|_| {});
                 }
@@ -408,7 +475,10 @@ async fn chat_stream(
         // Relay raw bytes; the webview accumulates + parses SSE (handles frames split
         // across chunks). Stop if the frontend dropped the channel (window closed /
         // turn cancelled via the server-side CancelTask, which ends the stream).
-        if on_event.send(String::from_utf8_lossy(&bytes).into_owned()).is_err() {
+        if on_event
+            .send(String::from_utf8_lossy(&bytes).into_owned())
+            .is_err()
+        {
             break;
         }
     }
@@ -495,25 +565,18 @@ pub fn run() {
         // menu-bar window is hidden.
         .plugin(tauri_plugin_notification::init())
         .plugin(
-            // Two global, system-wide hotkeys (fire even when the app is unfocused or
-            // hidden in the menu bar):
-            //   ⌘⇧P    — toggle the full console window.
-            //   ⌥Space — summon the Raycast-style quick launcher (just the palette).
-            // ⌥Space is Raycast's familiar alt-default; to rebind, change `launcher_hotkey`
-            // here AND the comparison in the handler (e.g. SUPER|SHIFT + Space if you'd
-            // rather keep Option+Space free for the non-breaking space it normally types).
+            // The global-shortcut HANDLER only — registration happens fallibly in
+            // setup(). Registering here (with_shortcuts) turned a hotkey another app
+            // already owns (Discord, PowerToys, AutoHotkey…) into a
+            // PluginInitialization error that panicked the whole launch at the
+            // top-level .expect — before the window, sidecar, or even logging
+            // existed, so the app just "didn't start" (#1670).
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts([
-                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP),
-                    Shortcut::new(Some(Modifiers::ALT), Code::Space),
-                ])
-                .expect("valid global shortcuts")
                 .with_handler(|app, shortcut, event| {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    let launcher_hotkey = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-                    if shortcut == &launcher_hotkey {
+                    if shortcut == &launcher_shortcut() {
                         toggle_launcher(app);
                     } else {
                         toggle_main_window(app);
@@ -534,16 +597,49 @@ pub fn run() {
             )?;
             app.manage(SidecarProcess::default());
 
-            // Pin the sidecar to the fixed port the web client falls back to in
-            // the Tauri context (apps/web/src/lib/api.ts → http://127.0.0.1:7870).
-            // The dynamic-free-port + window-injection handoff proved unreliable
-            // across Tauri v2 webview contexts: the page couldn't see the injected
-            // `__PROTOAGENT_API_BASE__`, fell back to a (then-dead) port, and every
-            // request failed ("Load failed"). A fixed port makes the fallback the
-            // live server — no handoff needed. (Trades multi-agent port
-            // coexistence for a desktop console that actually connects.)
-            let port: u16 = 7870;
+            // Two global, system-wide hotkeys (fire even when the app is unfocused or
+            // hidden in the menu bar):
+            //   ⌘⇧P / Win⇧P — toggle the full console window.
+            //   ⌥Space (macOS) / Ctrl⌥Space (elsewhere) — the quick launcher.
+            // FALLIBLE by design (#1670): a hotkey another app already owns logs a
+            // warning and the app stays fully usable via the window/tray — it must
+            // never abort the launch. Registered here (after logging init) so the
+            // warning lands on disk.
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+                let console_toggle =
+                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP);
+                for (label, hotkey) in
+                    [("console toggle", console_toggle), ("quick launcher", launcher_shortcut())]
+                {
+                    if let Err(e) = app.global_shortcut().register(hotkey) {
+                        log::warn!(
+                            "desktop: {label} hotkey unavailable ({e}) — another app owns it; \
+                             continuing without the global shortcut"
+                        );
+                    }
+                }
+            }
+
+            // The sidecar prefers the fixed port the web client falls back to in the
+            // Tauri context (apps/web/src/lib/api.ts → http://127.0.0.1:7870) but
+            // yields to a free port when 7870 is held (an orphaned sidecar, a headless
+            // dev server — previously the new sidecar died at bind and the console
+            // showed a dead/foreign server with zero diagnostics, #1668). The chosen
+            // port travels on the webview URL as `?__apiPort=` — the handoff the web
+            // client checks FIRST, chosen over the injected global precisely because
+            // the URL is always visible to the page (the `__PROTOAGENT_API_BASE__`
+            // injection proved unreliable across Tauri v2 webview contexts; it stays
+            // as a secondary channel).
+            let port: u16 = choose_port();
+            if port != DEFAULT_PORT {
+                log::warn!(
+                    "desktop: port {DEFAULT_PORT} is in use — sidecar on {port} (handoff via ?__apiPort)"
+                );
+            }
             spawn_sidecar(app.handle(), port);
+            let app_url = || WebviewUrl::App(format!("index.html?__apiPort={port}").into());
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
             );
@@ -555,7 +651,7 @@ pub fn run() {
             // deny the in-app window. (Browsers handle this implicitly via allow-popups;
             // the desktop shell has to do it explicitly.)
             let link_opener = app.handle().clone();
-            let mut win = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+            let mut win = WebviewWindowBuilder::new(app, "main", app_url())
                 .title("protoAgent")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(980.0, 640.0)
@@ -585,14 +681,14 @@ pub fn run() {
 
             // The Raycast-style quick launcher: a second, frameless, always-on-top
             // window hosting ONLY the command palette (the web boots into launcher mode
-            // off `__PROTOAGENT_LAUNCHER__`). Created HIDDEN and reused — the ⌥Space
-            // global shortcut reveals/centers it; it hides on blur (see on_window_event)
-            // or Escape. Same fixed-port API base as the main window.
+            // off `__PROTOAGENT_LAUNCHER__`). Created HIDDEN and reused — the
+            // launcher_shortcut() global hotkey reveals/centers it; it hides on blur
+            // (see on_window_event) or Escape. Same API-base handoff as the main window.
             let launcher_init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\"; \
                  window.__PROTOAGENT_LAUNCHER__ = true;"
             );
-            WebviewWindowBuilder::new(app, "launcher", WebviewUrl::default())
+            WebviewWindowBuilder::new(app, "launcher", app_url())
                 .title("protoAgent — Quick Command")
                 .inner_size(720.0, 480.0)
                 .decorations(false)
@@ -649,6 +745,9 @@ pub fn run() {
         .run(|app_handle, event| {
             // Tear the bundled server down with the app rather than orphaning it.
             if let RunEvent::Exit = event {
+                // The kill below fires the sidecar's Terminated event — mark the
+                // shutdown so it isn't alerted as an unexpected server death.
+                QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
                 kill_sidecar(app_handle);
             }
         });
