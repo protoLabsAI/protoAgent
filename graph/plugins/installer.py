@@ -191,11 +191,20 @@ def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
 def _clone(url: str, ref: str | None, dest: Path) -> str:
     """Clone ``url`` at ``ref`` into ``dest``; return the resolved commit SHA.
 
-    ``--no-hardlinks``: when ``url`` is a LOCAL path, ``git clone`` hardlinks the
-    source's object files by default, which intermittently fails with
-    ``fatal: hardlink different from source`` (a known local-clone race — it also
-    silently ignores ``--depth``). It's a no-op for the normal remote/network case,
-    so this only makes local-path installs (and the test fixtures) robust."""
+    A plain LOCAL path is rewritten to a ``file://`` URL first. Without it git
+    uses its "local transport" — a readdir+copy of the source's ``.git/objects``
+    — which silently ignores ``--depth`` and races anything concurrently writing
+    the source repo: ``git commit`` spawns a DETACHED ``git maintenance run
+    --auto``, and on CI that background maintenance renamed a ``tmp_rev_*`` pack
+    file mid-copy → ``fatal: failed to copy file … No such file or directory``
+    (#1600). ``file://`` forces the regular pack transport (upload-pack streams a
+    fresh pack; nothing enumerates the source's raw object files), which is
+    immune to that race — exactly what git's own warning recommends.
+    ``--no-hardlinks`` stays as the belt for any local-transport clone that
+    slips through (it avoids the older ``hardlink different from source`` race);
+    it's a no-op for the file:// and remote cases."""
+    if url.startswith("/"):
+        url = Path(url).resolve().as_uri()
     if ref and _SHA_RE.match(ref):
         # A specific commit: full clone (shallow can't reliably check out an
         # arbitrary SHA), then check it out.

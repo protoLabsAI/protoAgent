@@ -11,7 +11,15 @@ from graph.plugins import installer
 
 
 def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
+    # maintenance.auto=false / gc.auto=0: `git commit` spawns a DETACHED
+    # `git maintenance run --auto` in the fixture repo, whose pack-file churn can
+    # race a subsequent clone of that repo (#1600). Fixture repos stay inert.
+    subprocess.run(
+        ["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+    )
 
 
 def _make_plugin_repo(root: Path, pid: str = "demo_ext", manifest_extra: str = "", tag: str | None = None) -> Path:
