@@ -63,6 +63,38 @@ cancel. It's backed by these operator-API endpoints:
 
 A malformed `schedule` returns `400` and leaves the job untouched.
 
+## Plugin-owned recurring jobs
+
+A plugin arms its own cadence through the [consumption SDK](/guides/plugins#consumption-sdk)
+(#1642) rather than asking the operator to wire a cron job:
+
+```python
+from graph import sdk
+
+def register(registry):
+    sdk.schedule_recurring(
+        "Run the strategist OODA tick.", "0 9 * * *",
+        plugin_id=registry.plugin_id, job_id="strategist-tick",
+    )
+```
+
+- `sdk.schedule_recurring(prompt, cron, *, plugin_id, job_id, session="", timezone=None)`
+  — a **recurring** cron cadence (one-shot turns stay on `sdk.run_in_session`; an ISO
+  datetime is rejected here). Fires into the Activity thread by default; pass `session`
+  to target a chat context. **Idempotent by id** — re-calling with the same `job_id`
+  replaces the pending job, so `register()` can re-arm on every (re)load and a cadence
+  knob change just re-schedules.
+- `sdk.cancel_scheduled(job_id, *, plugin_id)` / `sdk.cancel_plugin_jobs(plugin_id)` —
+  remove one cadence / all of them.
+
+The job id is namespaced **`plugin:<plugin_id>:<job_id>`** — that ownership tag is what
+lets the host clean up: **disabling** a plugin sweeps its `plugin:<id>:*` jobs on the
+reload, and **uninstalling** sweeps them in the same pass that removes the code — no
+orphan job keeps firing prompts about a plugin that's gone. Re-enabling relies on the
+plugin re-arming in `register()` (which is why the idempotent-replace shape matters).
+The `AGENT_NAME` scoping below is untouched — plugin ownership rides on the id *within*
+an instance's jobs.db; it never crosses instances.
+
 ## Multi-agent isolation
 
 Every job is namespaced by `AGENT_NAME` so spinning up

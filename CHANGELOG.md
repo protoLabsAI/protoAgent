@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing-edge debounce (the last event's prompt wins; skipped events don't extend the
   window). Returns an unsubscribe fn mirroring `registry.on`; degrades to a warned no-op
   without a host bus.
+- **Plugins own their recurring cadence — and it dies with them** (#1642). The
+  consumption SDK (ADR 0043) adds `sdk.schedule_recurring(prompt, cron, *,
+  plugin_id, job_id, session="", timezone=None)` — a cron job namespaced
+  `plugin:<plugin_id>:<job_id>`, idempotent by id (a re-call replaces, so
+  `register()` re-arms and a cadence knob change just re-schedules), firing
+  into the Activity thread by default — plus `sdk.cancel_scheduled(job_id, *,
+  plugin_id)` and `sdk.cancel_plugin_jobs(plugin_id)`. The ownership tag closes
+  the orphan-job gap: **disabling** a plugin now sweeps its `plugin:<id>:*`
+  jobs on the reload and **uninstalling** sweeps them with the code removal
+  (`jobs_cancelled` in the uninstall report), so no job keeps firing prompts
+  about a plugin that's gone. The ADR 0004 `agent_name` instance scoping is
+  untouched — plugin ownership is a new dimension on the job id, inside one
+  instance's jobs.db.
 - **Plugins can now enumerate and remove watches** (#1638). The consumption SDK
   (ADR 0043) grows the lifecycle half of the ADR 0067 watch surface:
   `sdk.list_watches(prefix="")` (each `{id, condition, status, verifier}`,

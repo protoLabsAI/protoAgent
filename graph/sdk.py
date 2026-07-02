@@ -494,3 +494,134 @@ def react_on(
             timer.cancel()
 
     return _unsubscribe
+
+
+# ── plugin-owned recurring jobs (#1642) ─────────────────────────────────────────────
+# run_in_session covers one-shot turns; a RECURRING cadence (spacetraders' daily
+# strategist tick) had no plugin-owned path — the operator wired a cron job manually, and
+# nothing tied it to the plugin, so uninstall/disable left an orphan job firing prompts
+# about a plugin that's gone. These helpers namespace the job id `plugin:<plugin_id>:<job_id>`
+# so the lifecycle hooks (loader disable sweep + installer uninstall) can cancel exactly the
+# plugin's jobs. The ADR 0004 `agent_name` scoping is untouched — the scheduler still
+# namespaces per instance underneath; this adds a *plugin* ownership dimension on the id.
+
+_PLUGIN_JOB_PREFIX = "plugin:"
+
+
+def plugin_job_prefix(plugin_id: str) -> str:
+    """The id prefix every scheduler job owned by ``plugin_id`` carries."""
+    return f"{_PLUGIN_JOB_PREFIX}{plugin_id}:"
+
+
+def schedule_recurring(
+    prompt: str,
+    cron: str,
+    *,
+    plugin_id: str,
+    job_id: str,
+    session: str = "",
+    timezone: str | None = None,
+) -> dict:
+    """Schedule ``prompt`` as a RECURRING agent turn on a ``cron`` cadence, owned by
+    ``plugin_id``.
+
+    Thin over ``STATE.scheduler.add_job`` with the id namespaced
+    ``plugin:<plugin_id>:<job_id>`` — that ownership tag is what lets the host cancel
+    the plugin's jobs on disable/uninstall (and :func:`cancel_scheduled` /
+    :func:`cancel_plugin_jobs` find them). Idempotent by id: re-calling with the same
+    ``job_id`` REPLACES the pending job, so a plugin re-arms its cadence in
+    ``register()`` (or when a cadence knob changes) without colliding.
+
+    There is no ambient plugin identity in the SDK (functions are plain imports, not
+    registry-bound), so ``plugin_id`` is an explicit required kwarg — pass
+    ``registry.plugin_id``. Note: a *disable* cancels the plugin's jobs; re-enabling
+    relies on the plugin re-arming in ``register()``, which runs after the scheduler
+    is wired on both boot and hot-reload.
+
+    Args:
+        prompt: the message the agent processes each fire.
+        cron: a 5-field cron expression (e.g. ``"0 9 * * *"``). One-shot turns belong
+            to :func:`run_in_session`, so an ISO datetime is rejected here.
+        plugin_id: the owning plugin's id (``registry.plugin_id``).
+        job_id: a stable plugin-local id for this cadence (e.g. ``"strategist-tick"``).
+        session: the A2A contextId to fire into; empty → the durable Activity thread
+            (the default for scheduled work).
+        timezone: IANA name the cron is evaluated in (None = UTC).
+
+    Returns ``{"ok", "job_id", "next_fire", "message"}`` — ``job_id`` is the full
+    namespaced id; ``ok=False`` with a readable message when the scheduler is
+    unavailable or the inputs are bad.
+    """
+    from scheduler.interface import is_cron
+
+    scheduler = STATE.scheduler
+    if scheduler is None:
+        return {"ok": False, "job_id": None, "message": "scheduler unavailable — cannot schedule a recurring job"}
+    plugin_id = (plugin_id or "").strip()
+    if not plugin_id or ":" in plugin_id:
+        return {"ok": False, "job_id": None, "message": "plugin_id is required (and must not contain ':')"}
+    if not (job_id or "").strip():
+        return {"ok": False, "job_id": None, "message": "job_id is required"}
+    if not (prompt or "").strip():
+        return {"ok": False, "job_id": None, "message": "prompt is required"}
+    cron = (cron or "").strip()
+    if not is_cron(cron):
+        return {
+            "ok": False,
+            "job_id": None,
+            "message": f"schedule {cron!r} is not a 5-field cron expression — "
+            "for a one-shot turn use run_in_session",
+        }
+    full_id = f"{plugin_job_prefix(plugin_id)}{job_id.strip()}"
+    # Idempotent replace: add_job RAISES on a duplicate id, so drop any pending job
+    # with this id first — a re-arm (register() re-run, cadence knob change) updates
+    # rather than collides (mirrors run_in_session).
+    scheduler.cancel_job(full_id)
+    try:
+        job = scheduler.add_job(
+            prompt, cron, job_id=full_id, timezone=timezone, context_id=(session or "").strip() or None
+        )
+    except ValueError as e:
+        return {"ok": False, "job_id": full_id, "message": f"could not schedule: {e}"}
+    return {
+        "ok": True,
+        "job_id": job.id,
+        "next_fire": getattr(job, "next_fire", None),
+        "message": f"recurring job {job.id!r} scheduled ({cron!r})",
+    }
+
+
+def cancel_scheduled(job_id: str, *, plugin_id: str) -> bool:
+    """Cancel the plugin-owned recurring job ``job_id`` (the same plugin-local id passed
+    to :func:`schedule_recurring` — namespacing is applied here, never by the caller).
+    Returns ``True`` if a job was removed; ``False`` when there was none — or when the
+    scheduler is unavailable."""
+    scheduler = STATE.scheduler
+    if scheduler is None:
+        return False
+    plugin_id = (plugin_id or "").strip()
+    if not plugin_id or not (job_id or "").strip():
+        return False
+    return bool(scheduler.cancel_job(f"{plugin_job_prefix(plugin_id)}{job_id.strip()}"))
+
+
+def cancel_plugin_jobs(plugin_id: str) -> int:
+    """Cancel EVERY scheduler job owned by ``plugin_id`` (ids ``plugin:<plugin_id>:*``).
+    Returns how many were cancelled (0 when the scheduler is unavailable).
+
+    This is the lifecycle hygiene hook (#1642): the loader sweeps a disabled plugin's
+    jobs on (re)load and the installer sweeps on uninstall, so an orphan cadence can't
+    keep firing prompts about a plugin that's gone. Only jobs under this instance's
+    ``agent_name`` are visible (``list_jobs`` filters), so the ADR 0004 scoping holds.
+    Also useful to a plugin that wants to tear down its whole cadence at once."""
+    scheduler = STATE.scheduler
+    plugin_id = (plugin_id or "").strip()
+    if scheduler is None or not plugin_id:
+        return 0
+    prefix = plugin_job_prefix(plugin_id)
+    cancelled = 0
+    for job in scheduler.list_jobs():
+        jid = getattr(job, "id", "") or ""
+        if jid.startswith(prefix) and scheduler.cancel_job(jid):
+            cancelled += 1
+    return cancelled

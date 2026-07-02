@@ -229,7 +229,7 @@ def register(registry):
     registry.register_surface(lambda: _gateway(_on_message), name="my-gateway")
 ```
 
-### Tapping core deeper — `graph.sdk` (ADR 0043)
+### Tapping core deeper — `graph.sdk` (ADR 0043) {#consumption-sdk}
 
 `registry.host` covers the common cases. For deeper capability, import the **consumption
 SDK** directly — `from graph.sdk import …`, the *stable* surface plugins call into core
@@ -269,6 +269,13 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   into ONE turn (trailing-edge; the last event's prompt wins), `session` defaults to the
   Activity thread. Returns an unsubscribe fn. The one-call form of the canonical
   `registry.on` → `run_in_session` composition — see [Events](#events-the-plugin-bus-adr-0039).
+- `schedule_recurring(prompt, cron, *, plugin_id, job_id, session="", timezone=None)` — a
+  plugin-owned **recurring** cadence (#1642): a cron job whose id is namespaced
+  `plugin:<plugin_id>:<job_id>` so the host cancels it on disable/uninstall (no orphan
+  cadence outlives its plugin). Idempotent by id (a re-call replaces), fires into Activity
+  by default; pass `plugin_id=registry.plugin_id`. One-shot turns stay on `run_in_session`.
+  With `cancel_scheduled(job_id, *, plugin_id)` and `cancel_plugin_jobs(plugin_id)` — see
+  [Scheduler ▸ Plugin-owned recurring jobs](/guides/scheduler#plugin-owned-recurring-jobs).
 
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap
