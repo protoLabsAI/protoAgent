@@ -929,6 +929,50 @@ select:disabled {
   max-width: 100%;
 }
 
+/* ── GFM task-list items ───────────────────────────────────────────────────────
+   Two bugs: the disc marker shows alongside the checkbox, and — the real one — the console's
+   global `input,textarea,select { width: 100% }` blew the checkbox to the full row width,
+   shoving the label onto the next line. Drop the marker and pin the checkbox back to its
+   intrinsic size so the checkbox + label sit inline. Scoped to .task-list-item, so plain/
+   ordered items (which render fine) are untouched. */
+.pl-markdown [data-streamdown="list-item"].task-list-item {
+  list-style: none;
+}
+.pl-markdown [data-streamdown="list-item"].task-list-item input[type="checkbox"] {
+  width: auto;
+  margin: 0 0.4em 0 0;
+  vertical-align: middle;
+}
+.pl-markdown [data-streamdown="list-item"].task-list-item > p {
+  display: inline; /* if a label happens to be wrapped in a <p> (multi-node items) */
+  margin: 0;
+}
+
+/* ── Table "copy as" dropdown ──────────────────────────────────────────────────
+   streamdown's table copy button opens a Markdown/CSV/TSV menu styled with inert Tailwind
+   (min-w-[120px], px-3, py-2, w-full), so the menu collapses to ~22px and the labels wrap
+   one character per line (unreadable). Give it a readable surface + real menu items. */
+.pl-markdown [data-streamdown="table-wrapper"] .relative > div {
+  min-width: 150px;
+  white-space: nowrap;
+  padding: 4px;
+  background: var(--pl-color-bg-raised);
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+}
+.pl-markdown [data-streamdown="table-wrapper"] .relative > div button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-radius: var(--pl-radius);
+}
+.pl-markdown [data-streamdown="table-wrapper"] .relative > div button:hover {
+  background: var(--pl-color-bg-inset);
+}
+
 /* Chat composer + slash-command autocomplete — moved to src/chat/chat.css (#832). */
 /* HITL request card — moved to src/chat/hitl.css (#832). */
 
