@@ -25,36 +25,35 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
 });
 
 // The Work hub (2026-06) consolidates the former Tasks / Goals / Schedule rail surfaces
-// into one right-rail "Work" surface with Overview · Goals · Tasks · Schedule tabs.
-// Work is the default-active right panel, so it's already open — clicking its rail icon
-// when active would TOGGLE it closed, so only click when it's not the active surface.
-// In the narrow right panel the DS responsive Tabs collapse the role="tab" strip into a
-// native <select.pl-tabs__select>; pick the tab through it.
-const TAB_VALUE: Record<string, string> = { Overview: "overview", Goals: "goals", Tasks: "tasks", Schedule: "schedule" };
-async function openWorkTab(page, tab: string) {
+// into one right-rail "Work" surface. Card-first navigation (2026-07, no tabs): the
+// landing is the Overview's four cards (Goals · Watches · Tasks · Schedule); clicking a
+// card opens the panel. Work is the default-active right panel, so it's already open —
+// clicking its rail icon when active would TOGGLE it closed, so only click when it's not
+// the active surface.
+async function openWorkView(page, card: string) {
   const workBtn = page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true });
   const cls = (await workBtn.getAttribute("class")) ?? "";
   if (!cls.includes("--active")) await workBtn.click();
-  await page.locator(".pl-tabs__select").first().selectOption(TAB_VALUE[tab]);
+  await page.getByTestId(`work-card-${card}`).click();
 }
 
-test("Work → Schedule tab lists scheduled jobs", async ({ page }) => {
-  await openWorkTab(page, "Schedule");
+test("Work → Schedule card opens the panel listing scheduled jobs", async ({ page }) => {
+  await openWorkView(page, "schedule");
   await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });
 
-test("Work → Goals tab lists active goals", async ({ page }) => {
-  // Goals folded into the Work hub's Goals tab (still renders the GoalsPanel verbatim).
-  await openWorkTab(page, "Goals");
+test("Work → Goals card opens the panel listing active goals", async ({ page }) => {
+  // Goals folded into the Work hub (still renders the GoalsPanel verbatim).
+  await openWorkView(page, "goals");
   await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
   await expect(page.getByText("All tests pass")).toBeVisible();
 });
 
-test("Work → Tasks tab lists tasks issues (query-backed)", async ({ page }) => {
-  // The tab is labeled "Tasks" but the panel content is still Tasks (TanStack Query /
+test("Work → Tasks card opens the panel listing tasks issues (query-backed)", async ({ page }) => {
+  // The card is labeled "Tasks" and the panel is the Tasks board (TanStack Query /
   // Suspense, ADR 0013) — folded into the Work hub.
-  await openWorkTab(page, "Tasks");
+  await openWorkView(page, "tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
@@ -181,8 +180,8 @@ test("right-click → Move to bottom dock docks the surface at the bottom", asyn
   // Work now lives in the (icon-only) bottom rail, off the right rail, and its panel opens.
   await expect(bottomRail.getByRole("button", { name: "Work", exact: true })).toBeVisible();
   await expect(rightRail.getByRole("button", { name: "Work", exact: true })).toHaveCount(0);
-  // Its panel renders — the Work hub's Tabs strip is present in the bottom dock.
-  await expect(page.locator(".pl-appshell__bottom .pl-tabs").getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
+  // Its panel renders — the Work hub's overview card grid is present in the bottom dock.
+  await expect(page.locator(".pl-appshell__bottom").getByTestId("work-card-goals")).toBeVisible();
 });
 
 test("right-click a core surface → Hide removes it; Chat offers no Hide (ADR 0035/0036)", async ({ page }) => {

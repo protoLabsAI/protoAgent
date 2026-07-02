@@ -8,7 +8,8 @@ async function openTasks(page) {
   const workBtn = page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true });
   const cls = (await workBtn.getAttribute("class")) ?? "";
   if (!cls.includes("--active")) await workBtn.click();
-  await page.locator(".pl-tabs__select").first().selectOption("tasks");
+  // Card-first Work hub (2026-07, no tabs): the overview's Tasks card IS the navigation.
+  await page.getByTestId("work-card-tasks").click();
 }
 
 test("New task opens a dialog; submit is gated on a title, then creates", async ({ page }) => {

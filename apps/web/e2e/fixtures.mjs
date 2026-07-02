@@ -175,6 +175,36 @@ export const GOALS = {
   ],
 };
 
+// Watches (ADR 0067) — varied statuses so the Work overview card renders an active
+// count, a met-today pulse fragment, and tinted status badges. `last_checked` is epoch
+// SECONDS; "met today" derives from the local day, so keep it near now.
+export const WATCHES = {
+  enabled: true,
+  watches: [
+    {
+      id: "watch-1",
+      condition: "CI is green on main",
+      status: "active",
+      verifier: { type: "llm" },
+      last_checked: Math.floor(Date.now() / 1000) - 120,
+    },
+    {
+      id: "watch-2",
+      condition: "The staging deploy finishes",
+      status: "met",
+      verifier: { type: "llm" },
+      last_checked: Math.floor(Date.now() / 1000) - 600,
+    },
+    {
+      id: "watch-3",
+      condition: "Inbox zero before Friday",
+      status: "expired",
+      verifier: { type: "llm" },
+      last_checked: Math.floor(Date.now() / 1000) - 7200,
+    },
+  ],
+};
+
 export const NOTES_WORKSPACE = {
   version: 1,
   workspaceVersion: 1,
