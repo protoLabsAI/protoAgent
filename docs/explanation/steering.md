@@ -35,6 +35,29 @@ next step regardless of how deep the tool loop is.
   the turn's last model call (so it wasn't folded in) is **re-sent as a fresh turn**, so a
   late steer is never silently lost.
 
+## While a HITL form is open: messages are held
+
+When the agent pauses on a **HITL interrupt** — a `request_user_input` form, an
+`ask_human` question, or a `run_command` approval card — the graph is parked at the
+interrupt and makes no model calls. A fresh message invoked on that parked thread would
+make LangGraph *abandon* the interrupt (the form could never resolve) and the agent would
+see your message **before** the form answer.
+
+So while a form is pending, operator messages are **held**, not delivered (#1560):
+
+- The console queues them as steers (same pending bubble + ✕ as mid-turn steering), and
+  the server holds any unmarked message that arrives for the parked thread in the same
+  queue — re-parking the caller on the same form payload.
+- The form **submission or dismissal** (marked `hitl_resume`, or an A2A `message/send` on
+  the parked task id) resumes the interrupt properly — the tool returns the answer — and
+  the held messages fold in at the very next model call: **after** the form response, in
+  arrival order. Dismissing the form releases them too, so nothing can deadlock or be
+  silently dropped.
+- The pending-form state is read from the durable LangGraph checkpoint each time, so a
+  restart can't leave messages held behind a form that no longer exists.
+
+With no pending form, none of this runs — sends behave exactly as before.
+
 ## Steering vs. cancelling a delegation
 
 Two different controls:
