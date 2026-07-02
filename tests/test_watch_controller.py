@@ -226,3 +226,49 @@ async def test_concurrent_evaluate_finishes_once(tmp_path, monkeypatch):
     )
     await asyncio.gather(c.evaluate(w.id), c.evaluate(w.id))
     assert calls.count(f"watch-{w.id}") == 1  # not 2 — the lock prevented a double-finish
+
+
+# --- verifier invoker identity (#1641) --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evaluate_passes_watch_invoker_to_plugin_verifier(tmp_path):
+    # A plugin verifier registered via the normal path (PluginRegistry →
+    # set_plugin_verifiers) can tell WHICH watch is polling it — the key that
+    # lets one verifier hold per-watch state (e.g. a per-watch high-water mark)
+    # instead of one global mark.
+    from pathlib import Path
+
+    from graph.goals.types import VerifyResult
+    from graph.goals.verifiers import set_plugin_verifiers
+    from graph.plugins.registry import PluginRegistry
+
+    seen = []
+
+    async def probe(spec, ctx):
+        seen.append(ctx.invoker)
+        return VerifyResult(False, "still waiting")
+
+    reg = PluginRegistry("demo", Path("."))
+    reg.register_goal_verifier("probe", probe)  # → demo:probe
+    set_plugin_verifiers(reg.goal_verifiers)
+    try:
+        c = _ctrl(tmp_path)
+        _ok, _m, w1 = c.create(
+            condition="reach 1M",
+            verifier={"type": "plugin", "check": "demo:probe"},
+            interval_s=12.5,
+            run_session="ops",
+        )
+        assert await c.evaluate(w1.id) is None
+        _ok, _m, w2 = c.create(condition="other thing", verifier={"type": "plugin", "check": "demo:probe"})
+        assert await c.evaluate(w2.id) is None
+    finally:
+        set_plugin_verifiers({})
+    first, second = seen
+    assert first.kind == "watch" and first.id == w1.id
+    assert first.session_id == "ops"  # the watch's run_session is the owning session
+    assert first.interval_s == 12.5  # per-watch cadence override
+    assert second.kind == "watch" and second.id == w2.id and second.id != w1.id
+    assert second.session_id == ""  # no target session
+    assert second.interval_s == 30.0  # config-default cadence (the server tick fallback)

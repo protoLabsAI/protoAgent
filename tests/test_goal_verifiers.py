@@ -197,3 +197,28 @@ def test_registry_auto_namespaces_and_guards():
     reg.register_goal_verifier("", _ok_verifier)  # invalid — ignored
     reg.register_goal_verifier("bad", None)  # invalid — ignored
     assert set(reg.goal_verifiers) == {"myplugin:credits", "other:explicit"}
+
+
+# ── verifier invoker identity (#1641) ────────────────────────────────────────
+
+from graph.goals.verifiers import VerifierInvoker  # noqa: E402
+
+
+def test_bare_ctx_carries_no_invoker():
+    # The pre-#1641 ctx shape is frozen contract: a bare context still builds,
+    # the legacy fields keep their defaults, and there is no invoker — so
+    # verifiers that ignore ctx (or run outside the loops) are unaffected.
+    ctx = VerifyContext()
+    assert ctx.invoker is None
+    assert (ctx.config, ctx.condition, ctx.last_text, ctx.tool_summary, ctx.cwd) == (None, "", "", "", None)
+
+
+def test_invoker_is_frozen_and_hashable():
+    from dataclasses import FrozenInstanceError
+
+    inv = VerifierInvoker(kind="watch", id="w-1", session_id="ops", interval_s=30.0)
+    with pytest.raises(FrozenInstanceError):
+        inv.kind = "goal"
+    # hashable + value-equal → usable directly as a per-invoker state key
+    same = VerifierInvoker(kind="watch", id="w-1", session_id="ops", interval_s=30.0)
+    assert {inv: "high-water"}[same] == "high-water"

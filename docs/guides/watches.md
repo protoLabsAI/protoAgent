@@ -16,7 +16,10 @@ metric stops moving.
 `{ condition, verifier, interval_s?, deadline?, stall_after?, run_prompt?, run_session? }` — the
 `verifier` is the same spec [goals use](/guides/goal-mode#verifier-types) (`plugin` / `command`
 / `test` / `ci` / `data` / `llm`). It's polled **out-of-band** on a cadence (default 30s),
-verifier-only — no agent turn, no model call.
+verifier-only — no agent turn, no model call. A `plugin` verifier is handed the invoking
+watch's identity on `ctx.invoker` (`kind="watch"`, the watch `id`, its `run_session`, and the
+effective `interval_s`) so one verifier can keep **per-watch** state — see
+[Plugins ▸ Goal & watch verifiers](/guides/plugins#goal-and-watch-verifiers).
 
 ## Creating a watch
 

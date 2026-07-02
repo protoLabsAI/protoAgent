@@ -1,8 +1,9 @@
 """Goal verifiers — the testable-outcome backing for goal mode.
 
 Each verifier is ``async verify(spec, ctx) -> VerifyResult``. ``spec`` is the
-goal's ``verifier`` dict (``type`` + params); ``ctx`` carries the runtime
-(config + last-turn transcript) the verifier may need. Look up by
+goal's ``verifier`` dict (``type`` + params); ``ctx`` is a ``VerifyContext``
+carrying the runtime (config + last-turn transcript) the verifier may need,
+plus ``ctx.invoker`` — which goal/watch is polling (#1641). Look up by
 ``spec["type"]`` in ``VERIFIERS``.
 
 Types:
@@ -84,13 +85,44 @@ def _eval_data_expr(expr: str, data):
     return eval(code, {"__builtins__": _SAFE_BUILTINS}, {"data": data})  # noqa: S307 — AST-validated above
 
 
+@dataclass(frozen=True)
+class VerifierInvoker:
+    """Identity of the goal/watch whose controller is running the verifier (#1641).
+
+    Lets a plugin verifier tell WHO is polling it — so it can key per-invoker
+    state (e.g. one drawdown high-water mark PER watch instead of one global
+    mark), tailor evidence, or log trips against the right context. Frozen and
+    hashable, so the invoker itself (or ``(kind, id)``) works as a dict key.
+
+    kind       — ``"goal"`` or ``"watch"``.
+    id         — the invoker's id: a goal is keyed by its session (== ``session_id``);
+                 a watch by its own watch id.
+    session_id — the session that owns the invoker: the goal's session, or the
+                 watch's ``run_session`` (``""`` when the watch targets no session).
+    interval_s — the watch's effective polling cadence (its ``interval_s``
+                 override, else the config ``watch_interval``); ``None`` for
+                 goals (they evaluate post-turn, not on a cadence).
+    """
+
+    kind: str
+    id: str
+    session_id: str = ""
+    interval_s: float | None = None
+
+
 @dataclass
 class VerifyContext:
+    # These five fields are the frozen (pre-#1641) ctx contract external plugin
+    # verifiers may already read — enrich this dataclass additively, never
+    # rename/remove them.
     config: object = None
     condition: str = ""  # the goal condition (used by the llm verifier)
     last_text: str = ""  # last assistant message of the turn
     tool_summary: str = ""  # short summary of recent tool calls
     cwd: str | None = None  # working dir for command/test verifiers
+    # Who is polling — set by the goal/watch controllers (#1641); None when the
+    # verifier runs outside either loop (e.g. a direct run_verifier call).
+    invoker: VerifierInvoker | None = None
 
 
 def _tail(text: str, cap: int = _EVIDENCE_CAP) -> str:

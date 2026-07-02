@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from graph.goals.store import GoalStore
 from graph.goals.types import GoalState
-from graph.goals.verifiers import VerifyContext, run_verifier
+from graph.goals.verifiers import VerifierInvoker, VerifyContext, run_verifier
 
 log = logging.getLogger(__name__)
 
@@ -258,6 +258,8 @@ class GoalController:
             last_text=last_text or "",
             tool_summary=tool_summary or "",
             cwd=os.getcwd(),
+            # A goal is keyed by its session (one per session), so id == session_id (#1641).
+            invoker=VerifierInvoker(kind="goal", id=state.session_id, session_id=state.session_id),
         )
         result = await run_verifier(state.verifier, ctx)
 
