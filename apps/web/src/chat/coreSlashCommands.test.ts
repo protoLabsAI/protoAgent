@@ -17,6 +17,13 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
     expect(findSlashCommand("compact")).toBeTruthy();
   });
 
+  it("/compact is tagged with the chat.compact developer flag (ADR 0068)", () => {
+    // Registration is unconditional; the HOST (ChatSurface) hides + skips dispatch of a
+    // flag-tagged command while its flag is off. The tag is the contract under test here.
+    expect(findSlashCommand("compact")!.flag).toBe("chat.compact");
+    expect(findSlashCommand("new")!.flag).toBeUndefined(); // shipped commands stay untagged
+  });
+
   it("/clear, /effort, /compact are no-ops (return false → fall through) without a session", () => {
     expect(findSlashCommand("clear")!.run(ctx())).toBe(false);
     expect(findSlashCommand("effort")!.run(ctx())).toBe(false);
