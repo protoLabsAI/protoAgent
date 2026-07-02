@@ -45,9 +45,20 @@ def test_split_does_not_mutate_input() -> None:
     assert original["model"]["api_key"] == "sk-x"  # deep-copied, untouched
 
 
-def test_strip_secrets_from_doc_scrubs_existing_key() -> None:
+def _isolate_secrets_file(monkeypatch, tmp_path: Path) -> Path:
+    """Point the secrets overlay at a temp file so strip/save never touch the
+    developer's real ``secrets.yaml`` (strip RELOCATES inline secrets, #1645)."""
+    from graph import config_io
+
+    secrets_path = tmp_path / "secrets.yaml"
+    monkeypatch.setattr(config_io, "secrets_yaml_path", lambda: secrets_path)
+    return secrets_path
+
+
+def test_strip_secrets_from_doc_scrubs_existing_key(monkeypatch, tmp_path: Path) -> None:
     from graph.config_io import strip_secrets_from_doc
 
+    _isolate_secrets_file(monkeypatch, tmp_path)
     doc = {"model": {"name": "m", "api_key": "sk-leftover"}, "auth": {"token": "t"}}
     strip_secrets_from_doc(doc)
     assert doc["model"] == {"name": "m"}
@@ -166,10 +177,12 @@ def test_secret_paths_falls_back_to_cache_on_discovery_failure(monkeypatch, capl
     assert any("secret-path discovery failed" in r.message for r in caplog.records)
 
 
-def test_a_plugin_secret_is_stripped_from_the_doc_even_if_rediscovery_fails(monkeypatch):
+def test_a_plugin_secret_is_stripped_from_the_doc_even_if_rediscovery_fails(monkeypatch, tmp_path):
     """End-to-end of the #877 guarantee: once a plugin secret is known, a later
     discovery failure doesn't let strip_secrets_from_doc leave it in the main YAML."""
     from graph import config_io
+
+    _isolate_secrets_file(monkeypatch, tmp_path)
 
     class _Schema:
         section = "myplugin"
@@ -215,3 +228,86 @@ def test_config_to_dict_blanks_plugin_section_on_discovery_failure(monkeypatch):
     )
     d2 = config_io.config_to_dict(cfg)
     assert d2["discord"] == {"bot_token": "", "guild": ""}
+
+
+# ── #1645: stripping an inline secret must RELOCATE it to secrets.yaml, never drop it ──
+
+
+def test_strip_relocates_inline_secret_to_secrets_yaml(monkeypatch, tmp_path: Path) -> None:
+    """Fresh instance with a hand-seeded ``model.api_key`` and NO secrets.yaml:
+    stripping the key from the main YAML must land it in the overlay in the same
+    operation — stripping without the overlay write loses the credential (#1645)."""
+    from graph import config_io
+
+    secrets_path = _isolate_secrets_file(monkeypatch, tmp_path)
+    doc = {"model": {"name": "m", "api_key": "sk-seeded"}}
+    config_io.strip_secrets_from_doc(doc)
+
+    assert "api_key" not in doc["model"]  # stripped from the tracked YAML…
+    assert secrets_path.exists()  # …because it landed in the overlay
+    assert config_io.load_secrets() == {"model": {"api_key": "sk-seeded"}}
+    assert stat.S_IMODE(os.stat(secrets_path).st_mode) == 0o600  # still owner-only
+
+
+def test_strip_keeps_secret_inline_when_overlay_write_fails(monkeypatch, tmp_path: Path) -> None:
+    """Failure injection (#1645): if the secrets-file write raises, the key must
+    STAY in the main YAML (recoverable) rather than being stripped (gone)."""
+    from graph import config_io
+
+    secrets_path = _isolate_secrets_file(monkeypatch, tmp_path)
+
+    def _boom(updates):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(config_io, "save_secrets", _boom)
+    doc = {"model": {"name": "m", "api_key": "sk-keep-me"}, "auth": {"token": ""}}
+    config_io.strip_secrets_from_doc(doc)
+
+    assert doc["model"]["api_key"] == "sk-keep-me"  # left inline, not dropped
+    assert not secrets_path.exists()
+    assert "auth" not in doc  # a blank secret has nothing to preserve → still scrubbed
+
+
+def test_strip_does_not_clobber_existing_overlay_value(monkeypatch, tmp_path: Path) -> None:
+    """A stale inline copy must not overwrite a stored overlay value: the overlay
+    wins at load time (the inline copy was shadowed), so relocation only fills a
+    MISSING overlay entry — it never replaces one."""
+    from graph import config_io
+
+    secrets_path = _isolate_secrets_file(monkeypatch, tmp_path)
+    secrets_path.write_text("model:\n  api_key: sk-current\n")
+
+    doc = {"model": {"name": "m", "api_key": "sk-stale-inline"}}
+    config_io.strip_secrets_from_doc(doc)
+
+    assert "api_key" not in doc["model"]
+    assert config_io.load_secrets() == {"model": {"api_key": "sk-current"}}
+
+
+def test_unrelated_save_relocates_seeded_secret(monkeypatch, tmp_path: Path) -> None:
+    """#1645 end-to-end at the server save path: a fresh instance whose main YAML
+    was hand-seeded with ``model.api_key`` (no secrets.yaml yet) gets ANY config
+    save (the live repro was a plugin enable/disable toggle) — the key must move
+    to secrets.yaml, and the follow-up graph rebuild must still see it."""
+    import yaml as _yaml
+
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from graph.config import LangGraphConfig
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    _isolate_secrets_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (True, "reloaded"))
+
+    leaf.write_text("model:\n  name: m\n  api_key: sk-seeded\n")
+
+    ok, _ = ai._apply_settings_changes(config={"plugins": {"enabled": []}})
+    assert ok
+
+    doc = _yaml.safe_load(leaf.read_text())
+    assert "api_key" not in (doc.get("model") or {})  # stripped from the tracked YAML
+    assert _yaml.safe_load((tmp_path / "secrets.yaml").read_text()) == {"model": {"api_key": "sk-seeded"}}
+    # The rebuild that follows the save still has credentials (this is what
+    # failed live: "config saved; graph rebuild failed: Missing credentials").
+    assert LangGraphConfig.from_yaml(str(leaf)).api_key == "sk-seeded"
