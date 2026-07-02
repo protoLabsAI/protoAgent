@@ -634,6 +634,47 @@ export function App() {
     }
   }
 
+  // Background event delivery (#1640): a plugin view whose iframe subscribed with
+  // `background: true` stays MOUNTED (hidden) when another surface is active, so the
+  // bridge keeps relaying bus events to it (a live map / dashboard keeps its model warm;
+  // everyone else keeps the unmount + notification-dot default). Session-scoped: the set
+  // only ever contains views the operator opened this session (the page can't ask before
+  // its iframe exists), and it empties on reload.
+  const pluginBackground = useUI((s) => s.pluginBackground);
+  const backgroundViews = allPluginViews.filter((v) => pluginBackground[v.key]);
+  const bgViewsFor = (side: "left" | "right" | "bottom") =>
+    backgroundViews.filter((v) => railOrder[side].includes(v.key));
+  // On mobile every dock's surfaces render in the one mobile pane — keep any DOCKED
+  // background view mounted there (never one parked in the hidden bucket).
+  const bgViewsDocked = backgroundViews.filter(
+    (v) =>
+      railOrder.left.includes(v.key) ||
+      railOrder.right.includes(v.key) ||
+      railOrder.bottom.includes(v.key),
+  );
+
+  // Render a dock's active surface, keeping that dock's background-delivery views
+  // mounted-but-hidden. The active view renders INSIDE its persistent slot (a display
+  // swap, the ChatSlot #613 pattern) so toggling visibility never reloads its iframe.
+  function renderDock(activeId: string, bgViews: typeof allPluginViews): ReactNode {
+    return (
+      <>
+        {bgViews.map((v) => (
+          <div
+            key={v.key}
+            className="plugin-bg-slot"
+            style={{ display: activeId === v.key ? "contents" : "none" }}
+          >
+            <PluginView view={v} />
+          </div>
+        ))}
+        {activeId !== "chat" && !bgViews.some((v) => v.key === activeId)
+          ? renderSurface(activeId)
+          : null}
+      </>
+    );
+  }
+
   // Keep plugin views as first-class railOrder members (ADR 0036) — append new ones, prune gone.
   // Keyed on a stable signature so the effect only fires when the view set actually changes.
   // GATED on the runtime status having RESOLVED: on boot `runtime` is null → zero views →
@@ -1003,9 +1044,10 @@ export function App() {
                 enabledPluginIds={enabledPluginIds}
               />
             ) : null}
-            {(isMobile ? mobileActive : leftActive) !== "chat"
-              ? renderSurface(isMobile ? mobileActive : leftActive)
-              : null}
+            {renderDock(
+              isMobile ? mobileActive : leftActive,
+              isMobile ? bgViewsDocked : bgViewsFor("left"),
+            )}
           </>
         }
         rightContent={
@@ -1018,7 +1060,9 @@ export function App() {
                 enabledPluginIds={enabledPluginIds}
               />
             ) : null}
-            {rightActive !== "chat" ? renderSurface(rightActive) : null}
+            {/* On mobile the right dock's surfaces render in the mobile pane instead —
+                pass no bg views here so a background iframe is never mounted twice. */}
+            {renderDock(rightActive, isMobile ? [] : bgViewsFor("right"))}
           </>
         }
         bottomContent={
@@ -1034,7 +1078,7 @@ export function App() {
                 enabledPluginIds={enabledPluginIds}
               />
             ) : null}
-            {bottomActive && bottomActive !== "chat" ? renderSurface(bottomActive) : null}
+            {renderDock(bottomActive, isMobile ? [] : bgViewsFor("bottom"))}
           </>
         }
         utilityBar={

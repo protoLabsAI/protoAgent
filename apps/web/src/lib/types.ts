@@ -104,6 +104,11 @@ export type PluginView = {
   label: string;
   icon?: string; // a lucide-react icon name
   path: string;
+  // The console surface key (`plugin:<pluginId>:<viewId>`) — stamped on by App when it
+  // builds the view list from runtime status. The view host needs it to report per-view
+  // state upward (a `background: true` subscribe → the ui store, #1640). Optional:
+  // absent on raw manifest-shaped views that never passed through App's mapping.
+  key?: string;
   tabs?: { id: string; label: string; path: string }[];
   // "rail" (default) = a left-rail surface; "right" = a right-sidebar panel
   // alongside Notes/Tasks/Goals/Schedule (ADR 0026); "bottom" = the bottom dock.

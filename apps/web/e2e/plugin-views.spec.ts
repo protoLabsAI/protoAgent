@@ -59,6 +59,78 @@ test("console hands the plugin view a bearer + theme via postMessage", async ({ 
   await expect(body).toHaveAttribute("data-bridge", "authed");
 });
 
+test("subscribe with `since` replays missed bus events on reopen — no poll needed (#1640)", async ({ page }) => {
+  // The mock plugin page subscribes `{patterns:["boardy.#"], since: 0}` and records every
+  // delivered frame's seq into body[data-events]. The mock bus emits a seq'd boardy event
+  // every 500ms. Replay is the ONLY way an already-emitted seq can reach a fresh iframe —
+  // live relay never re-sends an old seq — so seq containment proves the ring catch-up.
+  await page.goto("/app/", { waitUntil: "load" });
+  const rail = page.locator(".pl-rail");
+  await rail.getByRole("button", { name: "Board", exact: true }).click();
+  const body = page.frameLocator(".plugin-view-frame").locator("body");
+  await expect(body).toHaveAttribute("data-events", /\d/); // live delivery, each frame seq'd
+  const firstSeqs = ((await body.getAttribute("data-events")) ?? "").split(",").map(Number);
+
+  // Hide the view (unmounted — the pre-#1640 default) while the bus keeps emitting.
+  await rail.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(page.locator(".plugin-view-frame")).toHaveCount(0);
+  await page.waitForTimeout(1200); // ≥2 mock ticks arrive while hidden
+
+  // Reopen: a FRESH page subscribes with since:0 → the host immediately replays what the
+  // console retains, including everything from before + during the hidden window.
+  await rail.getByRole("button", { name: "Board", exact: true }).click();
+  const body2 = page.frameLocator(".plugin-view-frame").locator("body");
+  await expect
+    .poll(async () => ((await body2.getAttribute("data-events")) ?? "").split(",").map(Number))
+    .toEqual(expect.arrayContaining(firstSeqs));
+
+  // Replay-then-live must not duplicate: wait for a live frame past the replay, then
+  // check every recorded seq is unique and strictly increasing.
+  const replayed = ((await body2.getAttribute("data-events")) ?? "").split(",").map(Number);
+  await expect
+    .poll(async () => ((await body2.getAttribute("data-events")) ?? "").split(",").length)
+    .toBeGreaterThan(replayed.length);
+  const seqs = ((await body2.getAttribute("data-events")) ?? "").split(",").map(Number);
+  expect(new Set(seqs).size).toBe(seqs.length);
+  expect([...seqs].sort((a, b) => a - b)).toEqual(seqs);
+});
+
+test("subscribe with background:true keeps the view mounted + receiving while hidden (#1640)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const rail = page.locator(".pl-rail");
+  await rail.getByRole("button", { name: "Board", exact: true }).click();
+  const frame = page.locator(".plugin-view-frame");
+  await expect(frame).toBeVisible();
+
+  // The page opts into hidden delivery (per-subscribe, plugin-declared) — posted from
+  // INSIDE the iframe so the host's e.source check accepts it.
+  await page.frameLocator(".plugin-view-frame").locator("body").evaluate(() => {
+    window.parent.postMessage(
+      { type: "protoagent:subscribe", patterns: ["boardy.#"], background: true },
+      "*",
+    );
+  });
+
+  // Switch away: unlike the default (unmount — see the first test), the view stays
+  // mounted, just hidden.
+  await rail.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(frame).toHaveCount(1);
+  await expect(frame).toBeHidden();
+
+  // …and bus events keep landing in the hidden page (no dropped delivery off-screen).
+  const body = page.frameLocator(".plugin-view-frame").locator("body");
+  const before = ((await body.getAttribute("data-events")) ?? "").split(",").filter(Boolean).length;
+  await expect
+    .poll(async () => ((await body.getAttribute("data-events")) ?? "").split(",").filter(Boolean).length)
+    .toBeGreaterThan(before);
+
+  // Reopening never reloads a background view's iframe — same page, same recorded state.
+  await rail.getByRole("button", { name: "Board", exact: true }).click();
+  await expect(frame).toBeVisible();
+  expect(((await body.getAttribute("data-events")) ?? "").split(",").filter(Boolean).length)
+    .toBeGreaterThanOrEqual(before);
+});
+
 test("a plugin bus event lights the rail notification dot, cleared on open", async ({ page }) => {
   // ADR 0039 — the mock pushes a `boardy.created` event on the /api/events stream; the
   // console routes it by topic and lights the boardy surface's rail icon until it's opened.

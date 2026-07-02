@@ -55,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lessons stay for post-mortems but stop polluting retrieval. Additive `epoch` column
   migration; pre-existing ADR 0031 backends keep working (purge degrades to a 0-count
   no-op; `epoch` is only forwarded when passed).
+- **Plugin-view event bridge: replay-on-subscribe + hidden delivery** (#1640). The iframe
+  bridge's `protoagent:subscribe` accepts optional `since` — the host immediately replays
+  retained bus events newer than that seq (from the console's client-side mirror of the
+  `events/bus.py` ring buffer), then continues live with seq-dedupe so nothing drops or
+  duplicates across the handoff — and every relayed `protoagent:event` now carries `seq`,
+  the page's high-water mark for its next `since`. A dashboard that was hidden (or just
+  mounted) catches up instead of polling its state route. `background: true` on subscribe
+  opts a view into hidden delivery: the console keeps its iframe mounted (hidden) across
+  surface switches so a live model keeps updating off-screen. The unmount +
+  notification-dot default is unchanged for everyone else, and plain `{patterns}`
+  subscribes behave exactly as before.
 - **`graph.sdk.react_on` — reactive-rule sugar** (#1633). The canonical reactive
   composition `registry.on(topic, handler)` → `sdk.run_in_session(session, prompt)` made
   every plugin write identical glue (missing-host guard, prompt-from-payload, idempotent

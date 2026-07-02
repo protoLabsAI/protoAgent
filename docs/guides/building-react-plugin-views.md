@@ -228,7 +228,7 @@ def register(registry):
 parent.postMessage({ type: "protoagent:subscribe", patterns: ["artifact.#"] }, "*");
 window.addEventListener("message", (e) => {
   const m = e.data || {};
-  if (m.type === "protoagent:event") { /* m.topic, m.data */ }   // 2. delivered events
+  if (m.type === "protoagent:event") { /* m.topic, m.data, m.seq */ } // 2. delivered events
 });
 // 3. publish — the host FORCES your plugin's namespace + gates it
 parent.postMessage({ type: "protoagent:publish", topic: "created", data: { id: "a1" } }, "*");
@@ -244,6 +244,58 @@ subscribes: ["notes.changed"]
 **Notification dots come for free:** any event under `<plugin_id>.*` lights your plugin's rail icon
 until the user opens that surface — no badge endpoint, no polling. Subscribing is always safe;
 publishing is the gated direction (namespace-forced).
+
+### Replay and hidden delivery (#1640)
+
+By default your iframe exists **only while its surface is visible** — switch away and the page is
+torn down; unseen activity becomes a rail dot. Two subscribe options refine that for event-driven
+views:
+
+```js
+parent.postMessage({
+  type: "protoagent:subscribe",
+  patterns: ["boardy.#"],
+  since: lastSeq,        // optional — replay retained events with seq > lastSeq, NOW
+  background: true,      // optional — keep this view mounted + receiving while hidden
+}, "*");
+```
+
+- **`seq` on every event.** Each `protoagent:event` carries the bus sequence number. Track the
+  highest one you've applied — it's your high-water mark.
+- **`since` — replay on subscribe.** When present, the host immediately relays the retained
+  events **newer than that seq** that match your patterns (from the console's mirror of the
+  server ring buffer — the same catch-up the console itself uses on SSE reconnect), then
+  continues live with **no gap and no duplicate** (the host dedupes by seq). `since: 0` means
+  "everything you still have". Replay is **best-effort**, exactly like the server ring: seqs
+  older than the retention horizon (or from before this console tab connected) are gone —
+  treat an empty replay after a long absence as "do one full state fetch", not as "nothing
+  happened".
+- **`background: true` — hidden delivery.** Per-subscribe opt-in: the console keeps your view
+  mounted (hidden) when the operator switches away, so events keep flowing to your live model
+  (a map, a running chart). Your page is **not** reloaded on re-open. `background: false`
+  opts back out; omitting the field never changes the current mode. The notification dot
+  still lights either way. Use it only when you genuinely keep state — a hidden iframe still
+  costs memory and timers; session-scoped, so ask on every load.
+
+**The recommended pattern** for a dashboard that used to poll:
+
+```js
+let lastSeq = Number(sessionStorage.getItem("myview.seq") || 0);
+const subscribe = () => parent.postMessage(
+  { type: "protoagent:subscribe", patterns: ["myplugin.#"], since: lastSeq }, "*");
+window.addEventListener("message", (e) => {
+  const m = e.data || {};
+  if (m.type !== "protoagent:event") return;
+  apply(m.topic, m.data);                       // update your model
+  if (typeof m.seq === "number") { lastSeq = m.seq; sessionStorage.setItem("myview.seq", String(m.seq)); }
+});
+subscribe();
+```
+
+Your plugin page is same-origin, so `sessionStorage` survives the hide→unmount→reopen cycle
+within a console tab — a reopened view catches up from its stored mark instead of refetching or
+polling. On hosts that predate #1640 the extra fields are ignored and events carry no `seq`;
+if you need to support them, keep a poll fallback and disarm it the first time a `seq` arrives.
 
 ## Trust & the sandbox split
 
