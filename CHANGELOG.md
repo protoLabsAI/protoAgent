@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Open-report CTA added nothing but bulk. Such results now inject as a
   success-tinted system note; multi-line, long, truncated, or failed results keep
   the card (and failures keep their explicit failed lede).
+- **Per-subagent tool fences now apply to detached background jobs** (#1639). A
+  background run of a registry subagent executed the full lead graph with the FULL
+  toolset — the subagent's `tools` allowlist was role guidance only (the in-graph
+  `task` path enforced it; the detached path enforced nothing), so an unattended
+  explorer could buy ships. The fire now stamps the resolved allowlist (registry
+  tools ⊕ config override — the same fence the inline path applies) into the turn's
+  state via the fire metadata, and a new `SubagentFenceMiddleware` blocks any tool
+  call outside it with the enforcement-style ToolMessage denial the model can read
+  and adapt to. Non-registry types and ordinary turns are untouched.
 - **Desktop no longer aborts on launch when a global hotkey is already taken**
   (#1670). Hotkey registration lived in the global-shortcut plugin's init, so a
   hotkey another app owns (Discord, PowerToys, AutoHotkey, …) became a

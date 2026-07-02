@@ -227,6 +227,26 @@ class TestManager:
         assert msg["contextId"] == f"background:{jid}"
         assert msg["metadata"]["origin"] == "background"
         assert msg["metadata"]["trigger"] == jid
+        # A registry subagent's detached run carries its tool ALLOWLIST (#1639) —
+        # the chat entry stamps it on the turn's state and SubagentFenceMiddleware
+        # enforces it, closing the "role guidance is the only guard" gap.
+        from graph.subagents.config import SUBAGENT_REGISTRY
+
+        assert msg["metadata"]["subagent_fence"] == list(SUBAGENT_REGISTRY["researcher"].tools)
+
+    async def test_fire_carries_no_fence_for_unknown_types(self, tmp_path, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        mgr = _manager(tmp_path)
+        await mgr.spawn(
+            origin_session="s1",
+            subagent_type="totally-custom-role",
+            description="d",
+            prompt="p",
+        )
+        await _drain_fire_tasks(mgr)
+        assert "subagent_fence" not in _FakeClient.captured["json"]["params"]["message"]["metadata"]
 
     async def test_spawn_publishes_started_event(self, tmp_path, monkeypatch):
         import httpx
