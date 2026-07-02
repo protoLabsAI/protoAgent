@@ -600,7 +600,8 @@ def cancel_scheduled(job_id: str, *, plugin_id: str) -> bool:
     if scheduler is None:
         return False
     plugin_id = (plugin_id or "").strip()
-    if not plugin_id or not (job_id or "").strip():
+    # Same ':' guard as schedule_recurring — plugin "a:b" must not reach into "a"'s namespace.
+    if not plugin_id or ":" in plugin_id or not (job_id or "").strip():
         return False
     return bool(scheduler.cancel_job(f"{plugin_job_prefix(plugin_id)}{job_id.strip()}"))
 

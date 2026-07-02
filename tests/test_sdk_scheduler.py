@@ -127,6 +127,10 @@ def test_cancel_scheduled_unavailable_or_bad_input(monkeypatch):
     monkeypatch.setattr(STATE, "scheduler", _Scheduler())
     assert sdk.cancel_scheduled("", plugin_id="st") is False
     assert sdk.cancel_scheduled("t", plugin_id="") is False
+    # Same ':' guard as schedule_recurring: plugin "a:b" can't reach into "a"'s namespace
+    # (plugin "a" may legitimately hold a job whose plugin-local id contains ':').
+    monkeypatch.setattr(STATE, "scheduler", _Scheduler(seed=("plugin:a:b:t",)))
+    assert sdk.cancel_scheduled("t", plugin_id="a:b") is False
 
 
 # --- cancel_plugin_jobs ------------------------------------------------------
