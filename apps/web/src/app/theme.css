@@ -859,10 +859,26 @@ select:disabled {
    see the [[ds-contribute-back-loop]]. */
 
 /* Establish an inline-size query context on the table wrapper so the cells query the
-   COLUMN width, not the viewport. The DS wrapper is already full-column-width. */
+   COLUMN width, not the viewport. Also force the vertical stack: streamdown emits the
+   wrapper as `flex flex-col` (a copy-action row above the table), but the console build only
+   generates `flex`, not `flex-col` — so it falls back to flex-ROW, putting the copy cluster
+   BESIDE a crushed table (cell text wraps one char per line in a narrow panel). flex-direction:
+   column restores the stack; min-width:0 lets the table scroller shrink so a wide table scrolls
+   inside its own overflow-x:auto instead of pinning the panel. (Same streamdown flex-col
+   fallback as code blocks.) */
 .pl-markdown.markdown [data-streamdown="table-wrapper"] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   container-type: inline-size;
   container-name: pl-mdtable;
+}
+/* The table's own scroll container (streamdown's overflow-x:auto child) must be able to shrink
+   below the table's intrinsic width for that scroll to engage. */
+.pl-markdown.markdown [data-streamdown="table-wrapper"] > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Base = narrow column (mobile-first): compact type + padding. The DS keeps overflow-x:auto
