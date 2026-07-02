@@ -341,8 +341,9 @@ export function isAgentUnreachable(error: unknown): boolean {
 /** A request is MEMBER-scoped when it's slug-routed to the focused agent (not the hub). A 401
  *  from one is that member's credential problem — a wrong/missing stored token for a REMOTE —
  *  NOT the hub's, so it must not trip the global AuthGate (which prompts for, and would
- *  overwrite, the HUB token). `host:true` and the host window are always hub-scoped. */
-function isMemberScoped(path: string, host?: boolean): boolean {
+ *  overwrite, the HUB token). `host:true` and the host window are always hub-scoped. Exported
+ *  for unit testing (it gates whether a 401 reaches `notifyAuthRequired`). */
+export function isMemberScoped(path: string, host?: boolean): boolean {
   return !host && currentSlug() !== "host" && isAgentPath(path);
 }
 
