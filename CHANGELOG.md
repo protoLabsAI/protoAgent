@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renamed or dropped watch spec left a zombie watch polling its verifier
   forever (unresolvable after uninstall). An `arm_all()` can now clear the
   suite ids no longer in its spec set before re-arming the rest.
+- **`graph.sdk.spawn_background` + `graph.sdk.background_status`** (#1635). The
+  consumption SDK (ADR 0043) now covers detached background subagent jobs: a plugin
+  spawns campaign-scale work with `spawn_background(prompt, *, subagent_type,
+  origin_session, label=None)` — the job rides the full ADR 0070 results pipeline
+  (push-resume nudge into the origin session, KB-indexed report, console report card) —
+  and polls progress with `background_status(task_id)` (`{status, description, report?}`,
+  `report` once terminal) instead of reaching into `STATE.background_mgr` directly.
 
 ### Fixed
 - **Re-installing a plugin from its own origin converges instead of erroring.**
