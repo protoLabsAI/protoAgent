@@ -73,7 +73,7 @@ auth:
   federation_token: fed-...   # optional (ADR 0066) — semi-trusted peers get THIS, not `token`
 ```
 
-`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free. The `/api/config` endpoint redacts both fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value.
+`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts both fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value.
 
 ### Federation token — operator vs peer (ADR 0066)
 

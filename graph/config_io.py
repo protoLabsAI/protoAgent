@@ -617,14 +617,58 @@ def split_secret_updates(config: dict[str, Any]) -> tuple[dict[str, Any], dict[s
 
 
 def strip_secrets_from_doc(doc: Any) -> Any:
-    """Remove any secret keys already present in the main YAML document.
+    """Relocate any secret keys still present in the main YAML document to the
+    ``secrets.yaml`` overlay, then remove them from the doc.
 
     Belt-and-suspenders alongside ``split_secret_updates``: even if an older
     YAML still carries an ``api_key`` (or a hand-edit reintroduces one), every
-    save scrubs it so the tracked file converges to secret-free.
+    save scrubs it so the tracked file converges to secret-free. Stripping is
+    only safe once the value is preserved, though — a hand-seeded key on a
+    fresh instance (no ``secrets.yaml`` yet) used to be scrubbed with no
+    overlay write, losing the credential outright (#1645). So: a non-blank
+    inline value the overlay doesn't already hold is written to ``secrets.yaml``
+    first (an existing overlay value is never clobbered by a stale inline copy —
+    the overlay wins at load time, so the inline copy was shadowed anyway), and
+    if that write fails the key is left inline rather than dropped.
     """
+
+    def _blank(v: Any) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    # Pass 1: find every inline secret; queue the ones whose value would be
+    # LOST by stripping (non-blank, and not already stored in the overlay).
+    stored = load_secrets()
+    present: list[tuple[str, str]] = []
+    pending: dict[str, dict[str, Any]] = {}
     for section, key in secret_paths():
         sect = doc.get(section) if hasattr(doc, "get") else None
+        if not isinstance(sect, dict) or key not in sect:
+            continue
+        present.append((section, key))
+        value = sect.get(key)
+        overlay = stored.get(section)
+        held = overlay.get(key) if isinstance(overlay, dict) else None
+        if not _blank(value) and _blank(held):
+            pending.setdefault(section, {})[key] = value.strip() if isinstance(value, str) else value
+
+    relocated = True
+    if pending:
+        try:
+            save_secrets(pending)
+        except Exception:
+            relocated = False
+            log.warning(
+                "[config] secrets overlay write failed — leaving %s inline in the main "
+                "YAML rather than dropping the value(s) (#1645)",
+                ", ".join(f"{s}.{k}" for s, vals in pending.items() for k in vals),
+                exc_info=True,
+            )
+
+    # Pass 2: strip. A key whose relocation failed stays inline (recoverable).
+    for section, key in present:
+        if not relocated and key in pending.get(section, {}):
+            continue
+        sect = doc.get(section)
         if isinstance(sect, dict) and key in sect:
             del sect[key]
         if isinstance(sect, dict) and not sect:
