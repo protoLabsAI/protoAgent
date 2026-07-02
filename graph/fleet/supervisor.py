@@ -23,6 +23,8 @@ from pathlib import Path
 
 from filelock import FileLock
 
+from infra.paths import pid_alive
+
 from graph.workspaces import manager
 
 log = logging.getLogger(__name__)
@@ -106,9 +108,12 @@ def _alive(pid: int | None) -> bool:
         return False
     _reap(pid)  # clear a crashed child's zombie first, so the probe below sees it as gone
     try:
-        os.kill(int(pid), 0)  # signal 0 = liveness probe (a reaped zombie → ProcessLookupError)
-        return True
-    except (OSError, ValueError):
+        # pid_alive, not os.kill(pid, 0): the raw idiom isn't a liveness probe on
+        # Windows (signal 0 = CTRL_C_EVENT → OSError on live pids) and misreads a
+        # POSIX PermissionError (exists) as dead (#1678). A reaped zombie is gone
+        # from the table, so it still probes as dead here.
+        return pid_alive(int(pid))
+    except ValueError:
         return False
 
 

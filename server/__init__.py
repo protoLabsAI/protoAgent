@@ -137,14 +137,19 @@ def _install_parent_death_watchdog() -> None:
 
     import threading
 
+    from infra.paths import pid_alive
+
     def _watch() -> None:
+        # pid_alive, NOT os.kill(ppid, 0): on Windows signal 0 is CTRL_C_EVENT, which
+        # fails with OSError against a GUI launcher — the old probe read the healthy
+        # desktop shell as "gone" and self-killed the sidecar ~2s after every Windows
+        # boot (#1678). (It also misread POSIX PermissionError — exists — as dead.)
         while True:
             time.sleep(2)
             try:
-                os.kill(ppid, 0)  # signal 0 = liveness probe; raises if gone
-            except OSError:
-                log.info("[watchdog] launcher pid %d gone — exiting sidecar", ppid)
-                os._exit(0)
+                if not pid_alive(ppid):
+                    log.info("[watchdog] launcher pid %d gone — exiting sidecar", ppid)
+                    os._exit(0)
             except Exception:  # noqa: BLE001 — never let the watchdog crash the server
                 return
 
