@@ -633,6 +633,10 @@
           "title": "ADR 0070 — Background results: push-resume, indexed reports, disposable workers"
         },
         {
+          "path": "adr/0071-plugin-permissions-trust-model.md",
+          "title": "ADR 0071 — Plugin permissions: a trust-and-consent model, not a runtime sandbox"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
