@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.87.0] - 2026-07-03
+
 ### Fixed
 - **`wait` no longer stacks wake-ups — one pending wait per thread** (#1702). The
   `wait` tool scheduled a new one-shot resume on every call with no dedup, so an
