@@ -177,6 +177,7 @@ export function ChatSurface({
     if (!(e.target as HTMLElement).closest(".pl-tabbar__add")) return;
     e.preventDefault();
     e.stopPropagation();
+    if (e.repeat) return; // held key auto-repeats keydown — only the first press creates a session
     chatStore.createSession({ incognito: true });
   }
 

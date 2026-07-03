@@ -177,7 +177,7 @@ registerSlashCommand({
         "**Shortcuts**",
         "- `Enter` send · `⌘/Ctrl+Enter` newline · `↑` recall input history · `/` command menu",
         "- While the agent is working, `Enter` queues a steer into the running turn",
-        "- `Shift+click` the tab bar's `+` → new incognito chat (also on a tab's right-click menu)",
+        "- `Shift+click` (or focus the `+` and `Shift+Enter`/`Shift+Space`) → new incognito chat (also on a tab's right-click menu)",
         "- `Shift+click` a tab's ✕ → delete the chat without the confirm dialog",
         "",
         "**Capabilities** — watches, schedules, tasks, and goals all run from chat; manage them from the rail surfaces.",

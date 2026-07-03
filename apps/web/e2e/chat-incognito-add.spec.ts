@@ -41,6 +41,23 @@ test("Shift+Enter on the focused + is the keyboard twin of the gesture", async (
   await expect(page.locator(".pl-tabbar__tab--active .session-incognito-icon")).toHaveCount(0);
 });
 
+test("holding Shift+Enter (key auto-repeat) creates only one incognito session", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const tabs = page.locator(".pl-tabbar__tab");
+  await expect(tabs).toHaveCount(1);
+
+  const addBtn = page.locator(".pl-tabbar__add:visible");
+  await addBtn.focus();
+  // The first keydown (repeat:false) creates the session; the OS then fires further
+  // keydowns with repeat:true for as long as the key is held — those must be ignored,
+  // or holding the key would spawn one incognito tab per repeat event.
+  await addBtn.dispatchEvent("keydown", { key: "Enter", shiftKey: true, repeat: false });
+  await expect(tabs).toHaveCount(2);
+  await addBtn.dispatchEvent("keydown", { key: "Enter", shiftKey: true, repeat: true });
+  await addBtn.dispatchEvent("keydown", { key: "Enter", shiftKey: true, repeat: true });
+  await expect(tabs).toHaveCount(2);
+});
+
 test("the + button's hover hint teaches the Shift+click gesture", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.locator(".pl-tabbar__add:visible")).toHaveAttribute(
