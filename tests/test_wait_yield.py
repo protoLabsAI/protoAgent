@@ -255,3 +255,83 @@ async def test_wait_logs_the_scheduling(caplog):
         await _wait_tool(sched).ainvoke({"seconds": 45, "then": "dock and sell", "state": {"session_id": "chat-x"}})
     line = next((r.getMessage() for r in caplog.records if "[wait]" in r.getMessage()), "")
     assert "thread=chat-x" in line and "45s" in line and "dock and sell" in line
+
+
+# ── the `wait` tool × the REAL LocalScheduler (#1702 edge cases) ──────────────
+# The supersede tests above run against _FakeScheduler; these pin the two edge
+# cases only the real SQLite-backed scheduler can prove — so the fake's claimed
+# faithfulness (duplicate-id ValueError, cancel-on-miss False) can't silently
+# drift from the backend the tool actually runs on.
+
+
+def _real_scheduler(tmp_path, agent: str = "wait-test"):
+    from scheduler.local import LocalScheduler
+
+    # Constructed but never start()ed — no loop, no owner-lock contention.
+    return LocalScheduler(
+        agent_name=agent,
+        invoke_url="http://127.0.0.1:7870",
+        api_key="k",
+        bearer_token="b",
+        db_dir=tmp_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_supersede_works_against_a_persisted_wait_across_restart(tmp_path, caplog):
+    """#1702 edge (c): the pending set persists in SQLite, so a wait scheduled
+    before a server restart must still be superseded by the next wait for the
+    same thread — the stable ``wait:<session>`` id has to dedup across process
+    lifetimes, not just within one scheduler instance."""
+    import logging
+
+    s1 = _real_scheduler(tmp_path)
+    await _wait_tool(s1).ainvoke({"seconds": 300, "then": "check ship (pre-restart)", "state": {"session_id": "chat-abc"}})
+    del s1  # "restart": a fresh scheduler instance over the same persisted db
+
+    s2 = _real_scheduler(tmp_path)
+    assert [j.id for j in s2.list_jobs()] == ["wait:chat-abc"]  # survived the restart
+    with caplog.at_level(logging.INFO, logger="protoagent.tools"):
+        await _wait_tool(s2).ainvoke({"seconds": 60, "then": "check ship (post-restart)", "state": {"session_id": "chat-abc"}})
+
+    jobs = s2.list_jobs()
+    assert [j.id for j in jobs] == ["wait:chat-abc"]  # exactly one pending — the later one
+    assert jobs[0].prompt == "check ship (post-restart)"
+    assert jobs[0].context_id == "chat-abc"
+    # Select the post-restart scheduling line by its snippet — depending on suite
+    # order the pre-restart line can land in caplog too (capture spans the test,
+    # not just the at_level block).
+    line = next((r.getMessage() for r in caplog.records if "post-restart" in r.getMessage()), "")
+    assert "[wait]" in line and "superseded a pending wait" in line
+
+
+@pytest.mark.asyncio
+async def test_wait_after_the_pending_wait_fired_is_not_a_supersede(tmp_path, caplog):
+    """#1702 edge (a): a wait that already FIRED is deleted by the fire loop
+    (one-shots: delete on success), so the next wait must schedule cleanly and
+    must NOT claim it superseded anything."""
+    import logging
+    from datetime import timedelta
+
+    s = _real_scheduler(tmp_path)
+    # A due wait, then the exact backend path the fire loop runs on success.
+    past = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+    s.add_job("stale resume", past, job_id="wait:chat-abc", context_id="chat-abc")
+    s._reschedule_or_delete(s.list_jobs()[0], fired_at=datetime.now(UTC))
+    assert s.list_jobs() == []  # fired one-shot is gone
+
+    with caplog.at_level(logging.INFO, logger="protoagent.tools"):
+        await _wait_tool(s).ainvoke({"seconds": 60, "then": "next step", "state": {"session_id": "chat-abc"}})
+
+    assert [j.prompt for j in s.list_jobs()] == ["next step"]
+    line = next((r.getMessage() for r in caplog.records if "next step" in r.getMessage()), "")
+    assert "[wait]" in line and "superseded" not in line  # scheduled, but no retroactive supersede
+
+
+@pytest.mark.asyncio
+async def test_wait_real_backend_keeps_different_threads_independent(tmp_path):
+    """#1702 edge (b) against the real backend: per-context job ids never collide."""
+    s = _real_scheduler(tmp_path)
+    await _wait_tool(s).ainvoke({"seconds": 30, "then": "a", "state": {"session_id": "chat-1"}})
+    await _wait_tool(s).ainvoke({"seconds": 30, "then": "b", "state": {"session_id": "chat-2"}})
+    assert {j.id for j in s.list_jobs()} == {"wait:chat-1", "wait:chat-2"}  # both pending
