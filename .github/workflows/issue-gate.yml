@@ -61,9 +61,9 @@ jobs:
 
             const text = body.replace(/\s+/g, ' ').trim();
             const longEnough = text.length >= 80;
-            const hasProblem = hasSection(/problem|what'?s? wrong|motivation|background|context|summary/i);
-            const hasRepro = hasSection(/repro|reproduce|steps|evidence|expected|actual|observed/i);
-            const hasProposal = hasSection(/propos|solution|approach|direction|fix|design/i);
+            const hasProblem = hasSection(/problem|what'?s? wrong|motivation|background|context|summary|observed|symptom|idea|current behavior|\bwhat\b/i);
+            const hasRepro = hasSection(/repro|reproduce|steps|evidence|expected|actual|observed|symptom|root cause/i);
+            const hasProposal = hasSection(/propos|solution|approach|direction|fix|design|\bwork\b|plan/i);
             const hasAcceptance = hasSection(/acceptance|done when|success criteria|definition of done/i);
 
             const missing = [];
