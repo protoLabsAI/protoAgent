@@ -24,6 +24,23 @@ test("Shift+click the + opens an incognito chat; plain click stays regular", asy
   await expect(page.locator(".composer-incognito-toggle:visible")).toHaveCount(0);
 });
 
+test("Shift+Enter on the focused + is the keyboard twin of the gesture", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const tabs = page.locator(".pl-tabbar__tab");
+  await expect(tabs).toHaveCount(1);
+
+  await page.locator(".pl-tabbar__add:visible").focus();
+  await page.keyboard.press("Shift+Enter");
+  await expect(tabs).toHaveCount(2);
+  await expect(page.locator(".pl-tabbar__tab--active .session-incognito-icon")).toBeVisible();
+
+  // Plain Enter on the focused + still creates a REGULAR session.
+  await page.locator(".pl-tabbar__add:visible").focus();
+  await page.keyboard.press("Enter");
+  await expect(tabs).toHaveCount(3);
+  await expect(page.locator(".pl-tabbar__tab--active .session-incognito-icon")).toHaveCount(0);
+});
+
 test("the + button's hover hint teaches the Shift+click gesture", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.locator(".pl-tabbar__add:visible")).toHaveAttribute(

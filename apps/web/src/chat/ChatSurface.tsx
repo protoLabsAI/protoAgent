@@ -5,7 +5,7 @@ import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import { Check, EyeOff, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
@@ -167,6 +167,19 @@ export function ChatSurface({
     closeSession(session.id, false); // false = no knowledge harvest
   }
 
+  // Keyboard twin of the Shift+click incognito gesture (#1697): Shift+Enter/Space on the
+  // focused "+" also creates an incognito session. Keyboard activation synthesizes the
+  // button's click AFTER keydown (Enter) / on keyup (Space), and its modifier state isn't
+  // reliable across browsers — so intercept at keydown-capture and preventDefault, which
+  // stops the synthetic click (and thus the DS onAdd) from ever firing.
+  function onTabBarKeyDownCapture(e: ReactKeyboardEvent) {
+    if (!e.shiftKey || (e.key !== "Enter" && e.key !== " ")) return;
+    if (!(e.target as HTMLElement).closest(".pl-tabbar__add")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    chatStore.createSession({ incognito: true });
+  }
+
   // Right-click a chat tab → context menu (ADR 0036). The DS TabBar's `onTabContextMenu`
   // (@protolabsai/ui@0.53.0) hands us the session id directly — no sibling-index DOM sniffing.
   // Rename opens the TabBar's inline editor via a synthetic dblclick on the tab element (the DS
@@ -207,6 +220,7 @@ export function ChatSurface({
         className={`chat-tabbar-wrap${shiftDel ? " chat-tabbar-wrap--del" : ""}`}
         onContextMenu={onTabBarBackgroundContextMenu}
         onClickCapture={onTabBarClickCapture}
+        onKeyDownCapture={onTabBarKeyDownCapture}
       >
         <TabBar
           ariaLabel="Chat sessions"
@@ -236,8 +250,9 @@ export function ChatSurface({
           onAdd={() => chatStore.createSession()}
           onTabContextMenu={onTabContextMenu}
           // The DS TabBar renders this as the + button's native title/aria-label — the
-          // hover hint for the Shift+click incognito gesture (#1697).
-          addLabel="New chat — Shift+click for incognito"
+          // hover hint for the Shift+click incognito gesture (#1697). Shift+Enter is the
+          // keyboard twin (onTabBarKeyDownCapture), so the label teaches both paths.
+          addLabel="New chat — Shift+click for incognito (Shift+Enter when focused)"
         />
       </div>
 
