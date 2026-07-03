@@ -909,6 +909,22 @@ function ChatSessionSlot({
   // then re-run the user message that prompted it via the `hidden` path — no
   // duplicate user bubble, just a fresh streaming assistant. Only offered on the
   // last assistant message when idle.
+  // Drop a local-only errored turn from the transcript (#1695). A hard turn error
+  // parks the assistant bubble at status "error" with the error as content — it's
+  // never backend history (a reload omits it), so removing it here is purely local
+  // and safe. Only errored messages expose the Dismiss action that calls this.
+  function dismissErroredMessage(messageId: string) {
+    if (!session) return;
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    if (!snap) return;
+    chatStore.updateMessages(
+      session.id,
+      snap.messages.filter((m) => m.id !== messageId),
+    );
+    // Clear the session's error dot too (it drove the red status pill).
+    if (status === "error") chatStore.setSessionStatus(session.id, "idle");
+  }
+
   function regenerate(assistantId?: string) {
     if (!assistantId || !session || status === "streaming") return;
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
@@ -1376,6 +1392,7 @@ function ChatSessionSlot({
                 onFork: forkAtMessage,
                 onRewind: rewindAtMessage,
                 onRegenerate: regenerate,
+                onDismiss: dismissErroredMessage,
                 lastAssistantId,
                 regenDisabled: status === "streaming",
               }}

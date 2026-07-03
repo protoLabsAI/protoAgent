@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Dismiss a hard turn-error bubble in place** (#1695). A hard turn error (network
+  drop, backend 500 mid-stream) left an error bubble that could only be cleared by
+  reloading the whole app. The message action row now shows a **Dismiss** action on
+  errored messages that removes the local-only bubble and clears the session's error
+  dot — no reload.
+
 ## [0.86.0] - 2026-07-03
 
 ### Fixed
