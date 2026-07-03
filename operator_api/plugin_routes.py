@@ -106,12 +106,18 @@ def register_plugin_routes(app) -> None:
 
     @app.get("/api/plugins/installed")
     async def _installed():
-        # enabled state comes from the loader's per-plugin meta (id → enabled)
-        enabled = {p["id"]: bool(p.get("enabled")) for p in (STATE.plugin_meta or [])}
+        # enabled + incomplete state come from the loader's per-plugin meta (#1719)
+        meta_by_id = {p["id"]: p for p in (STATE.plugin_meta or [])}
         root = installer.live_plugins_dir()
         out = []
         for e in installer.list_installed():
-            item = {**e, "enabled": enabled.get(e["id"], False)}
+            mt = meta_by_id.get(e["id"], {})
+            item = {
+                **e,
+                "enabled": bool(mt.get("enabled")),
+                "incomplete": bool(mt.get("incomplete")),
+                "needs_config": list(mt.get("needs_config") or []),
+            }
             m = load_manifest(root / e["id"]) if e.get("present") else None
             if m is not None:
                 item["manifest"] = {

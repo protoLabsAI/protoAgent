@@ -176,6 +176,73 @@ def test_emits_schemas_flow_to_runtime_status(tmp_path, monkeypatch) -> None:
     assert by_id["evp"]["emits_schemas"] == meta["evp"]["emits_schemas"]
 
 
+# ── Required-config / incomplete-plugin gate (#1719) ─────────────────────────
+
+_REQUIRED_SETTINGS = (
+    "settings:\n"
+    "  - {key: api_key, label: API Key, type: password, required: true}\n"
+    "  - {key: base_url, label: Base URL, type: text}\n"  # optional
+)
+
+
+def test_is_blank_semantics() -> None:
+    from graph.plugins.loader import _is_blank
+
+    assert _is_blank(None) and _is_blank("") and _is_blank("   ") and _is_blank([]) and _is_blank({})
+    # 0 / False are real values, not "unset".
+    assert not _is_blank("x") and not _is_blank(0) and not _is_blank(False) and not _is_blank(["a"])
+
+
+async def test_missing_required_config_flags_incomplete_and_guards_tools(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "plugins"
+    _make_plugin(root, "needy", enabled=True, tool="needy_tool", manifest_extra=_REQUIRED_SETTINGS)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+
+    res = load_plugins(_cfg())  # no plugin_config → api_key blank
+    meta = {m["id"]: m for m in res.meta}
+    # The plugin still loads — this is a soft gate, not requires_env.
+    assert meta["needy"]["loaded"] is True
+    assert meta["needy"]["incomplete"] is True
+    assert [n["key"] for n in meta["needy"]["needs_config"]] == ["api_key"]  # only the REQUIRED one
+
+    # Its tool is swapped for a same-name stand-in that returns a needs-setup notice.
+    tool = next(t for t in res.tools if t.name == "needy_tool")
+    out = await tool.ainvoke({"x": "ignored"})
+    assert "needs setup" in out and "API Key" in out
+
+    # Pass-through to /api/runtime/status (verbatim plugins block).
+    from operator_api.runtime import build_runtime_status
+
+    status = build_runtime_status(config=None, setup_complete=True, graph_loaded=False, plugins=res.meta)
+    by_id = {p["id"]: p for p in status["plugins"]}
+    assert by_id["needy"]["incomplete"] is True and by_id["needy"]["needs_config"][0]["label"] == "API Key"
+
+
+async def test_required_config_present_runs_normally(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "plugins"
+    _make_plugin(root, "ready", enabled=True, tool="ready_tool", manifest_extra=_REQUIRED_SETTINGS)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+
+    res = load_plugins(_cfg(plugin_config={"ready": {"api_key": "sk-live"}}))
+    meta = {m["id"]: m for m in res.meta}
+    assert meta["ready"]["incomplete"] is False
+    assert meta["ready"]["needs_config"] == []
+    # The real tool is registered (echoes its arg), not the stand-in.
+    tool = next(t for t in res.tools if t.name == "ready_tool")
+    assert await tool.ainvoke({"x": "hi"}) == "hi"
+
+
+def test_blank_optional_config_does_not_flag_incomplete(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "plugins"
+    optional_only = "settings:\n  - {key: base_url, label: Base URL, type: text}\n"
+    _make_plugin(root, "opt", enabled=True, tool="opt_tool", manifest_extra=optional_only)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+
+    res = load_plugins(_cfg())  # base_url blank, but it isn't required
+    meta = {m["id"]: m for m in res.meta}
+    assert meta["opt"]["incomplete"] is False and meta["opt"]["needs_config"] == []
+
+
 def test_public_paths_namespace_scoped(tmp_path) -> None:
     # A plugin may declare auth-exempt paths only under its OWN namespace; anything
     # else (a core path, another plugin's path) is dropped by the parser.

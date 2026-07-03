@@ -307,6 +307,70 @@ def _sweep_plugin_jobs(plugin_id: str) -> None:
         log.info("[plugins] %s is disabled — cancelled %d scheduled job(s) it owned", plugin_id, cancelled)
 
 
+# ── Required-config / incomplete-plugin gate (#1719) ─────────────────────────
+# A plugin marks a setting `required: true` (a `settings[]` field spec) to say "I
+# need this to function". If the resolved config leaves a required field blank, the
+# plugin still LOADS but is flagged `incomplete`, and its tools are swapped for a
+# same-signature stand-in that returns a friendly "needs setup" notice instead of
+# erroring cryptically. Enable/disable stays whole-plugin; this is a soft gate.
+
+
+def _is_blank(value: object) -> bool:
+    """A config value that counts as 'not provided' — ``None``, an empty/whitespace
+    string, or an empty collection. ``0``/``False`` are real values, not blank."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
+
+
+def _missing_required_config(manifest: PluginManifest, resolved: dict) -> list[dict]:
+    """Required settings (``settings[].required``) left blank in the resolved config.
+    Returns ``[{key, label}]`` — empty ⇒ the plugin has everything it declared it needs.
+    Secrets resolve into ``resolved`` too (unset ⇒ ``""``), so this covers API keys."""
+    out: list[dict] = []
+    for spec in manifest.settings:
+        if not (isinstance(spec, dict) and spec.get("required")):
+            continue
+        key = str(spec.get("key") or "").strip()
+        if not key:
+            continue
+        if _is_blank(resolved.get(key)):
+            out.append({"key": key, "label": str(spec.get("label") or key)})
+    return out
+
+
+def _needs_config_tool(orig, plugin_name: str, needs: list[dict]):
+    """Same-signature stand-in for a tool whose plugin is missing required config —
+    the model sees the same name/description/args but the call returns a friendly
+    'needs setup' notice, so the agent can point the operator at configuration instead
+    of surfacing a cryptic KeyError/None-credential failure (#1719)."""
+    from langchain_core.tools import StructuredTool
+
+    fields = ", ".join(n["label"] for n in needs) or "required config"
+    msg = (
+        f"⚠️ The {plugin_name} plugin needs setup before this tool works — "
+        f"missing: {fields}. Ask the operator to complete it in the plugin's settings."
+    )
+
+    def _blocked(*_args, **_kwargs) -> str:
+        return msg
+
+    async def _ablocked(*_args, **_kwargs) -> str:
+        return msg
+
+    return StructuredTool(
+        name=orig.name,
+        description=orig.description,
+        args_schema=orig.args_schema,
+        func=_blocked,
+        coroutine=_ablocked,
+    )
+
+
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:
     """Load enabled plugins and collect their contributions.
 
@@ -336,6 +400,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # aren't optional add-ons) — the flag rides along in /api/runtime/status.
             "builtin": manifest.builtin,
             "loaded": False,
+            # Required-config gate (#1719) — set True + populated below when an enabled
+            # plugin loads but a `required: true` setting is blank. Present on every
+            # entry so consumers can rely on the shape.
+            "incomplete": False,
+            "needs_config": [],
             "tools": [],
             "skills": 0,
             # Console surfaces (ADR 0026) — the rail reads these from /api/runtime/status. Views
@@ -402,13 +471,27 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             result.meta.append(entry)
             continue
 
+        # Required-config gate (#1719) — the plugin loaded, but if it declared
+        # required settings that are still blank, flag it incomplete and swap its
+        # tools for needs-setup stand-ins (below) so a misconfigured plugin degrades
+        # gracefully instead of erroring mid-call.
+        needs_config = _missing_required_config(manifest, pconf)
+        if needs_config:
+            entry["incomplete"] = True
+            entry["needs_config"] = needs_config
+            log.warning(
+                "[plugins] %s loaded but missing required config (%s) — its tools return a needs-setup notice",
+                manifest.id,
+                ", ".join(n["key"] for n in needs_config),
+            )
+
         kept = []
         for tool in registry.tools:
             if tool.name in seen_tool_names:
                 log.warning("[plugins] %s: tool %s collides with an existing tool — skipped", manifest.id, tool.name)
                 continue
             seen_tool_names.add(tool.name)
-            kept.append(tool)
+            kept.append(_needs_config_tool(tool, manifest.name or manifest.id, needs_config) if needs_config else tool)
 
         result.tools.extend(kept)
         # Attribute each kept tool to this plugin (display name, id fallback) for the Tools tab.
