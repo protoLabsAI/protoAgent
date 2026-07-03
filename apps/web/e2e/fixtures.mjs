@@ -764,6 +764,9 @@ export const KNOWLEDGE_CHUNKS = [
 
 // Memory inspector (ADR 0069 D7) — session-summary digest rows, hot-memory chunks,
 // and the per-turn injection record the Memory surface renders.
+// Delivery-truth fields are MIXED on purpose: in_digest/injecting true, false,
+// and ABSENT (a backend predating the fields) — the badge specs assert that only
+// an explicit `false` draws a badge and absent fields degrade gracefully.
 export const MEMORY_SESSIONS = [
   {
     session_id: "chat-1750000000000-abc123",
@@ -772,6 +775,7 @@ export const MEMORY_SESSIONS = [
     topic: "plan the memory hardening rollout",
     message_count: 12,
     size_bytes: 2048,
+    in_digest: true,
   },
   {
     session_id: "sched-hourly-report",
@@ -780,6 +784,15 @@ export const MEMORY_SESSIONS = [
     topic: "compile the hourly ops report",
     message_count: 4,
     size_bytes: 512,
+    in_digest: false,
+  },
+  {
+    // Legacy row: no in_digest / size_bytes — renders with no badge, no size.
+    session_id: "a2a-legacy-noflags",
+    timestamp: "2026-06-29T12:00:00+00:00",
+    surface: "a2a",
+    topic: "row from a backend without delivery flags",
+    message_count: 2,
   },
 ];
 
@@ -796,18 +809,26 @@ export const MEMORY_HOT = [
     id: 31, heading: "Operator timezone", content: "The operator works in US/Pacific.",
     preview: "The operator works in US/Pacific.",
     domain: "hot", source: "chat-1750000000000-abc123", source_type: "extracted", finding_type: null,
-    created_at: "2026-06-29T10:00:00+00:00",
+    created_at: "2026-06-29T10:00:00+00:00", injecting: true,
   },
   {
     id: 32, heading: "", content: "Weekly report goes out Fridays at 9am.",
     preview: "Weekly report goes out Fridays at 9am.",
     domain: "hot", source: "console", source_type: "operator", finding_type: null,
-    created_at: "2026-06-28T09:00:00+00:00",
+    created_at: "2026-06-28T09:00:00+00:00", injecting: false,
+  },
+  {
+    // Legacy row: no `injecting` field — renders with no badge.
+    id: 33, heading: "", content: "Legacy row predating the injection-window field.",
+    preview: "Legacy row predating the injection-window field.",
+    domain: "hot", source: null, source_type: null, finding_type: null,
+    created_at: "2026-06-27T08:00:00+00:00",
   },
 ];
 
 export const MEMORY_INJECTIONS = [
   {
+    id: 7,
     ts: "2026-06-30T18:05:00+00:00",
     session_id: "chat-1750000000000-abc123",
     digest_session_ids: ["sched-hourly-report"],
@@ -816,6 +837,7 @@ export const MEMORY_INJECTIONS = [
     approx_tokens: 420,
   },
   {
+    id: 6,
     ts: "2026-06-30T17:01:00+00:00",
     session_id: "sched-hourly-report",
     digest_session_ids: [],

@@ -48,3 +48,10 @@ export function ms(n: number): string {
 export function pct(n: number): string {
   return `${Math.round((n || 0) * 100)}%`;
 }
+
+/** Byte counts — "512 B", "2.0 KB", "3.4 MB". */
+export function bytes(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+}
