@@ -74,8 +74,9 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 
 The audit surface for the memory delivery layer
 ([ADR 0069](../adr/0069-memory-delivery-layer.md) D7): the persisted session
-summaries behind the `<prior_sessions>` digest, and the hot-memory chunks
-injected every turn.
+summaries behind the `<prior_sessions>` digest, the hot-memory chunks (of which
+the newest ride each turn's injection window), and the per-turn injection
+record.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -83,6 +84,7 @@ injected every turn.
 | GET · DELETE | `/api/memory/sessions/{session_id}` | Full rendered summary (what `recall_session` returns) / delete one |
 | GET | `/api/memory/hot` | List hot-memory chunks (`domain="hot"`); each row carries `injecting`: whether the chunk is in the current per-turn injection window (omitted on backends without the id-attributed reader) |
 | PUT · DELETE | `/api/memory/hot/{chunk_id}` | Edit (revision stays `hot`) / delete a hot chunk |
+| GET | `/api/memory/injections` | Per-model-call injection records ([ADR 0069](../adr/0069-memory-delivery-layer.md) D6), newest first: which digest sessions / hot chunk ids / RAG chunk ids entered each turn, at what approximate token cost. `?session_id=` filters to one session; `?limit=` clamps to 1–500 (default 50) |
 
 ## Activity, inbox & events
 
