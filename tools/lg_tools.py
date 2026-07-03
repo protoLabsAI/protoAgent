@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import logging
 import operator as _op
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -50,6 +51,8 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from tools.fallbacks import with_fallback
+
+log = logging.getLogger("protoagent.tools")
 
 
 # ── current_time ─────────────────────────────────────────────────────────────
@@ -1118,10 +1121,30 @@ def _build_scheduler_tools(scheduler) -> list:
         # tracing contextvar — the contextvar reads empty in a tool body under
         # LangGraph, which silently dropped this resume to the Activity thread.
         ctx = _session_id_from(state) or None
+        # ONE pending wait per thread. A stable per-session job id means a new wait
+        # SUPERSEDES a still-pending one instead of stacking beside it — the bug behind
+        # "old resume messages catching up" (#1702): an agent that under-waited then
+        # re-waited scheduled N overlapping wakes that all fired into this thread. The
+        # cancel-then-add is safe because waits within a turn are sequential.
+        wait_job_id = f"wait:{ctx or 'activity'}"
+        superseded = False
         try:
-            await asyncio.to_thread(scheduler.add_job, then, when, context_id=ctx)
+            superseded = await asyncio.to_thread(scheduler.cancel_job, wait_job_id)
+        except Exception:  # noqa: BLE001 — a stale/absent prior wait must not block the new one
+            pass
+        try:
+            await asyncio.to_thread(scheduler.add_job, then, when, job_id=wait_job_id, context_id=ctx)
         except Exception as exc:  # noqa: BLE001
             return f"Error: couldn't schedule the wake-up: {exc}"
+        # Observability (#1702): every wait is logged with its thread, delay, resume
+        # snippet, and whether it replaced a pending wait — so a stacking loop is visible.
+        log.info(
+            "[wait] thread=%s in %ss%s → resume: %.80s",
+            ctx or "activity",
+            secs,
+            " (superseded a pending wait)" if superseded else "",
+            then,
+        )
         # Concise, human-friendly summary — the agent should paraphrase this, not
         # echo it (the old ISO timestamp / "re-invoked at" phrasing read as raw
         # system text when parroted into chat). Machine-relevant facts stay intact:
