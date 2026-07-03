@@ -617,6 +617,25 @@ def test_persist_session_removes_legacy_raw_name(tmp_path):
     assert ids == ["system:activity"]  # once, not twice
 
 
+def test_persist_session_overwrites_existing_summary(tmp_path):
+    """Re-persisting a live session replaces its summary IN PLACE — os.replace,
+    not os.rename: on Windows os.rename raises FileExistsError when dest
+    exists, which would freeze every summary at its first write."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    mod._persist_session(_make_state("sess-live"), "t-first")
+    mod._persist_session(
+        _make_state(
+            "sess-live",
+            messages=[HumanMessage(content="Later turn"), AIMessage(content="Updated answer, longer now. " * 5)],
+        ),
+        "t-second",
+    )
+    assert [p.name for p in tmp_path.glob("*")] == ["sess-live.json"]  # no .tmp leftovers
+    data = json.loads((tmp_path / "sess-live.json").read_text())
+    assert data["trace_id"] == "t-second"
+    assert data["messages"][0]["content"] == "Later turn"
+
+
 # ---------------------------------------------------------------------------
 # Default path resolution (no MEMORY_PATH override)
 # ---------------------------------------------------------------------------

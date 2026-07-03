@@ -145,6 +145,28 @@ def test_session_routes_read_encoded_and_legacy_names(tmp_path, monkeypatch):
     assert not (tmp_path / "a2a:legacy.json").exists()
 
 
+def test_session_get_prefers_encoded_over_legacy(tmp_path, monkeypatch):
+    # Both names on disk (the writer's legacy cleanup is best-effort): the
+    # encoded file is the source of truth — the read surfaces it, and a CORRUPT
+    # encoded file is a 422, never a fall-through to the stale legacy body.
+    (tmp_path / "sys%3Aboth.json").write_text(
+        json.dumps(
+            {
+                "session_id": "sys:both",
+                "timestamp": "2026-07-02T00:00:00Z",
+                "messages": [{"role": "user", "content": "current-encoded-body"}],
+            }
+        )
+    )
+    _write(tmp_path, "sys:both", [{"role": "user", "content": "stale-legacy-body"}])
+    c = _client(monkeypatch, tmp_path)
+    rendered = c.get("/api/memory/sessions/sys:both").json()["session"]["rendered"]
+    assert "current-encoded-body" in rendered
+    assert "stale-legacy-body" not in rendered
+    (tmp_path / "sys%3Aboth.json").write_text("{not json")
+    assert c.get("/api/memory/sessions/sys:both").status_code == 422
+
+
 def test_session_id_guard_rejects_unsafe_ids(tmp_path, monkeypatch):
     # The recall_session filename guard: [A-Za-z0-9._:-] only, so a crafted id
     # (encoded separators, spaces) can't escape the memory dir. An encoded "/"

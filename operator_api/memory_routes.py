@@ -53,17 +53,16 @@ def _session_paths(session_id: str) -> list[str] | None:
 
 def _read_summary(paths: list[str]) -> dict:
     """Load the first candidate file that exists (encoded name, then legacy).
-    Raises FileNotFoundError only when NO candidate exists; a corrupt encoded
-    file propagates its decode error (the caller 422s — it must not fall
-    through to a stale legacy copy)."""
-    for fpath in paths[:-1]:
+    Raises FileNotFoundError only when NO candidate exists; a corrupt candidate
+    propagates its decode error (the caller 422s — a corrupt encoded file must
+    not fall through to a stale legacy copy)."""
+    for fpath in paths:
         try:
             with open(fpath, encoding="utf-8") as fh:
                 return json.load(fh)
         except FileNotFoundError:
             continue
-    with open(paths[-1], encoding="utf-8") as fh:
-        return json.load(fh)
+    raise FileNotFoundError(paths[0])
 
 
 def _list_sessions() -> list[dict]:

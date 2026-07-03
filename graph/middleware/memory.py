@@ -93,7 +93,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
         final_output     — str | null
         timestamp        — ISO-8601 UTC string
 
-    Writes atomically: temp file → os.rename to avoid partial reads.
+    Writes atomically: temp file → os.replace to avoid partial reads.
     """
     if _PERSISTENCE_DISABLED:
         return
@@ -211,7 +211,10 @@ def _persist_session(state: dict, trace_id: str) -> None:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             json.dump(summary, fh, indent=2, default=str)
             tmp_fd = None  # fdopen took ownership
-        os.rename(tmp_path, dest)
+        # os.replace, not os.rename: sessions re-persist on every terminal
+        # turn, and on Windows os.rename raises FileExistsError when dest
+        # exists — every summary would freeze at its first write.
+        os.replace(tmp_path, dest)
         log.info("[memory] persisted session %s -> %s", session_id, dest)
         tmp_path = None  # rename succeeded — no cleanup needed
         # A pre-encoding build may have left the raw-':' name on POSIX; drop it
@@ -253,8 +256,9 @@ _SESSION_ID_SAFE_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
 
 
 def is_safe_session_id(session_id: str) -> bool:
-    """True when *session_id* maps safely onto ``{memory_path()}/{id}.json`` —
-    non-empty and confined to ``[A-Za-z0-9._:-]`` (no path separators, no NUL)."""
+    """True when *session_id* maps safely onto a :func:`session_filename` under
+    ``memory_path()`` — non-empty and confined to ``[A-Za-z0-9._:-]`` (no path
+    separators, no NUL, and no ``%``, so an id can't spoof an encoded name)."""
     return bool(session_id) and set(session_id) <= _SESSION_ID_SAFE_CHARS
 
 # The always-present framing header (ADR 0069 D1): the digest lists OTHER
