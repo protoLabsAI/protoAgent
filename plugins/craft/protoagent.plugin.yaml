@@ -1,0 +1,20 @@
+id: craft
+name: Craft
+version: 0.1.0
+# user_only skills (withheld from agent retrieval, slash-only) landed 2026-06;
+# first host release carrying them is 0.85.0.
+min_protoagent_version: "0.85.0"
+description: >-
+  Engineering rituals as user-only slash commands: /grill (relentless plan
+  interview), /standup (operational status report), /code-review (two-axis
+  Standards vs Spec review), /writing-skills (the skill-authoring discipline) —
+  plus a skill_writer subagent that drafts SKILL.md skills to that discipline.
+  Prompt-only: no tools, routes, network, or filesystem access. The grilling,
+  code-review, and skill-authoring material is adapted from mattpocock/skills
+  (MIT).
+# First-party and ON by default, like artifact/notes/docs — pure prompt content,
+# nothing to trust. Turn it off per-instance with `plugins: { disabled: [craft] }`.
+enabled: true
+capabilities:
+  network: []
+  filesystem: none

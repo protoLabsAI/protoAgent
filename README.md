@@ -155,8 +155,8 @@ python -m server plugin uninstall your-plugin --purge                # removes c
 
 **Browse the directory → [agent.protolabs.studio/plugins](https://agent.protolabs.studio/plugins)**
 
-First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `docs`, and
-`artifact` are on by default, and the rest are opt-in (enable via `plugins.enabled`):
+First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `docs`,
+`artifact`, and `craft` are on by default, and the rest are opt-in (enable via `plugins.enabled`):
 
 | Plugin | Adds | What it does |
 | --- | --- | --- |
@@ -164,6 +164,7 @@ First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `
 | [`notes`](./plugins/notes/) | tools · view | **On by default** — one shared markdown note the agent and operator both read/write |
 | [`docs`](./plugins/docs/) | tools · view · skill | **On by default** — offline search over protoAgent's own docs |
 | [`artifact`](./plugins/artifact/) | tools · view · skill | **On by default** — generative UI; `show_artifact` renders charts, diagrams, Mermaid, Markdown, or live React into a sandboxed panel ([ADR 0038](./docs/adr/0038-generative-ui-artifacts-two-mode.md)) |
+| [`craft`](./plugins/craft/) | skills · subagent | **On by default** — engineering rituals as user-only slash commands (`/grill`, `/standup`, `/code-review`, `/writing-skills`) + the `skill_writer` subagent; prompt-only |
 | [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
 | [`workflows`](./plugins/workflows/) | tools | Declarative multi-step subagent workflows (DAG recipes) |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
