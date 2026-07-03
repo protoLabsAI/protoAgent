@@ -1,6 +1,6 @@
 # ADR 0071 — Plugin permissions: a trust-and-consent model, not a runtime sandbox
 
-- **Status:** Proposed (2026-07-03) — design-only; the consent layer (§3 D3) is a tracked follow-up, no runtime code lands with this ADR.
+- **Status:** Accepted (2026-07-03) — design-only; the consent layer (§3 D3) is a tracked follow-up, no runtime code lands with this ADR.
 - **Deciders:** core maintainers
 - **Issue:** #1725
 - **Relates to:** [ADR 0001](./0001-extensibility-and-plugin-architecture.md) (plugin architecture), [ADR 0018](./0018-plugin-surfaces-routes-subagents.md) (backend seams), [ADR 0019](./0019-plugin-config-settings-secrets.md) (config/secrets), [ADR 0027](./0027-install-plugins-from-git-url.md) (git-URL install, `install ≠ enable ≠ trust`), [ADR 0008](./0008-sandboxing-and-openshell.md) (sandboxing posture), [ADR 0005](./0005-tool-pollution-and-progressive-disclosure.md) (`tools.disabled`)
