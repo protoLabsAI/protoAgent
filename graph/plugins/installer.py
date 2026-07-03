@@ -29,7 +29,7 @@ from pathlib import Path
 
 from infra.paths import instance_paths
 
-from graph.plugins.manifest import PluginManifest, load_manifest
+from graph.plugins.manifest import MANIFEST_FILENAME, PluginManifest, load_manifest
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +38,19 @@ def bundled_plugins_dir() -> Path:
     """In-tree bundled (built-in) plugins root — ``app_root/plugins``. Resolved at
     call time so the env (PyInstaller _MEIPASS) is honored, never import-time."""
     return instance_paths().app_root / "plugins"
+
+
+def _is_builtin(plugin_id: str) -> bool:
+    """True iff ``plugins/<id>`` is a REAL bundled plugin or bundle — i.e. it holds
+    a manifest (``protoagent.plugin.yaml``) or bundle file (``protoagent.bundle.yaml``),
+    mirroring how the loader (:func:`load_manifest`) decides a directory is a plugin.
+
+    A bare directory is NOT a built-in: a ``__pycache__``-only leftover from a
+    core→standalone extraction (git doesn't track it, so it survives on every
+    machine that ever imported the old plugin) must not block installing or
+    uninstalling the standalone successor of the same id (#1731)."""
+    d = bundled_plugins_dir() / plugin_id
+    return (d / MANIFEST_FILENAME).exists() or (d / BUNDLE_FILENAME).exists()
 
 
 def lock_path() -> Path:
@@ -404,8 +417,9 @@ def install(
             )
         pid = manifest.id
 
-        # No silent shadowing of a built-in (repo) plugin.
-        if (bundled_plugins_dir() / pid).exists():
+        # No silent shadowing of a built-in (repo) plugin. A manifest-less ghost
+        # dir (e.g. a __pycache__ leftover) is not a built-in and must not block.
+        if _is_builtin(pid):
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
 
         # Frozen runtime (desktop): no pip — a plugin can only run if its declared
@@ -621,7 +635,7 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     With ``purge=True`` ALSO removes the plugin's config section + its secrets.
     Built-ins are refused; pip deps are NEVER auto-removed (shared venv) — they're
     returned for the operator to remove. Returns a report dict."""
-    if (bundled_plugins_dir() / plugin_id).exists():
+    if _is_builtin(plugin_id):
         raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
     target = live_plugins_dir() / plugin_id
     # Read the manifest BEFORE deleting — purge needs the config section + we report

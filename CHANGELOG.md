@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the convention the plugin-views guide prescribes. Both the registration-time and
   mount-time checks now accept `/api/plugins/<id>` as canonical (shared predicate),
   reserving the warning for genuinely off-convention prefixes.
+- **A manifest-less ghost dir under `plugins/` no longer blocks install/uninstall**
+  (#1731). Built-in detection treated any directory under `plugins/<id>` as a
+  built-in — so a `__pycache__`-only leftover, orphaned when a plugin is extracted
+  core→standalone (git doesn't track it, so it survives on every machine that ever
+  imported the old plugin), refused installing the standalone successor
+  (`plugin id 'google' is a built-in — cannot install over it`). A directory now
+  counts as built-in only if it actually holds a `protoagent.plugin.yaml` or
+  `protoagent.bundle.yaml`, matching how the loader decides a dir is a plugin.
 
 ## [0.88.0] - 2026-07-03
 

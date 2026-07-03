@@ -129,6 +129,34 @@ def test_refuses_to_shadow_a_builtin(env):
         installer.install(str(repo))
 
 
+def test_ghost_dir_without_manifest_does_not_block_install(env, tmp_path, monkeypatch):
+    # A manifest-less leftover under plugins/<id> (e.g. a __pycache__ dir orphaned
+    # when a plugin was extracted core→standalone, #1731) is NOT a built-in and
+    # must not block installing the standalone successor of the same id.
+    builtins = tmp_path / "builtins"
+    ghost = builtins / "ghost_ext" / "__pycache__"
+    ghost.mkdir(parents=True)
+    (ghost / "loader.cpython-312.pyc").write_bytes(b"\x00")
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: builtins)
+
+    repo = _make_plugin_repo(env, pid="ghost_ext")
+    summary = installer.install(str(repo))  # must not raise "is a built-in"
+    assert summary["id"] == "ghost_ext"
+
+
+def test_manifest_dir_is_treated_as_builtin(env, tmp_path, monkeypatch):
+    # A directory that DOES hold a manifest is a real built-in and still blocks.
+    builtins = tmp_path / "builtins"
+    real = builtins / "real_ext"
+    real.mkdir(parents=True)
+    (real / "protoagent.plugin.yaml").write_text("id: real_ext\nname: R\nversion: 0.1.0\ndescription: x\n")
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: builtins)
+
+    repo = _make_plugin_repo(env, pid="real_ext")
+    with pytest.raises(installer.InstallError, match="built-in"):
+        installer.install(str(repo))
+
+
 def test_repo_without_manifest_is_rejected(env, tmp_path):
     bare = tmp_path / "src-bare"
     bare.mkdir()
