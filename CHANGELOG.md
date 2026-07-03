@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regardless. A plugin pinned to a commit SHA is never auto-updated, and only
   plugins explicitly listed in the policy are ever touched — the default is
   unchanged manual-only updates. See the [plugins guide](docs/guides/plugins.md).
+- **`coder.solve()` can run one forced rung, for testing** (ADR 0064). Verifying
+  fusion (rung 4) actually works required contriving a task hard enough to fail
+  greedy, best-of-k, *and* tree-search first — impractical for a quick check. A new
+  `force_rung` param runs exactly one named rung once — no cascade, no escalation —
+  and reports pass/fail against the real verifier. Deliberately NOT exposed on the
+  agent-facing `coder_solve` tool (it's an operator/testing affordance, same
+  boundary as `board_create_feature` vs. the operator-only `/features/{id}/cancel`
+  route); `projectBoard-plugin` wires it behind a new, non-tool API route.
 
 ### Fixed
 - **Plugin smoke tests can assert surface lifecycle wiring** (#1729). The testkit's

@@ -23,6 +23,15 @@ subprocess test runner / worktree) and call this same engine.
 The gate is **test pass/fail**, never an LLM judge — that judge-of-code ceiling
 is exactly what this escapes. With no verifier (no tests), the ladder degrades to
 **greedy** and says so; it never silently falls back to best-of-k-with-a-judge.
+
+``force_rung`` (an operator/testing affordance, not something the ladder ever sets
+itself): run exactly ONE named rung once — no cheaper-rung-first cascade, no
+escalation past it — and report pass/fail. Verifying a specific rung (especially
+fusion, only otherwise reached after three cheaper rungs fail) shouldn't require
+contriving a task hard enough to fail its way there. A forced ``tree-search`` seeds
+one un-refined attempt first (purely to generate the failing-test feedback the
+refine step needs) — that seed itself isn't scored as the rung's result unless it
+happens to pass outright.
 """
 
 from __future__ import annotations
@@ -92,6 +101,9 @@ class Budget:
         return self.remaining >= n
 
 
+FORCEABLE_RUNGS = ("greedy", "best-of-k", "tree-search", "fusion")
+
+
 async def solve(
     task: str,
     *,
@@ -102,12 +114,37 @@ async def solve(
     tree_depth: int = 2,
     fusion_generate: Optional[Generate] = None,
     fusion_k: int = 2,
+    force_rung: Optional[str] = None,
 ) -> SolveResult:
     """Run the execution-grounded ladder. See module docstring.
 
     ``verify=None`` (no oracle) ⇒ greedy 1-shot, returned with ``passed=None`` and
     a scope note — never an un-grounded best-of-k.
+
+    ``force_rung`` bypasses the whole cascade — see the module docstring. Raises
+    ``ValueError`` for an unknown rung name or ``force_rung="fusion"`` with no
+    ``fusion_generate`` configured (a misconfigured test, not a runtime outcome to
+    report as a ``SolveResult``).
     """
+    if force_rung is not None:
+        if force_rung not in FORCEABLE_RUNGS:
+            raise ValueError(f"force_rung must be one of {FORCEABLE_RUNGS}, got {force_rung!r}")
+        if force_rung == "fusion" and fusion_generate is None:
+            raise ValueError("force_rung='fusion' requires fusion_generate to be configured")
+        if verify is None:
+            raise ValueError("force_rung requires a verifier — there's nothing to test a rung against otherwise")
+        return await _solve_forced_rung(
+            force_rung,
+            task,
+            generate=generate,
+            verify=verify,
+            budget=budget,
+            k=k,
+            tree_depth=tree_depth,
+            fusion_generate=fusion_generate,
+            fusion_k=fusion_k,
+        )
+
     tried = 0
 
     # ── No oracle: honest greedy degrade ──────────────────────────────────────
@@ -189,4 +226,104 @@ async def solve(
         tried,
         best_verdict,
         f"no candidate passed within budget; best partial has {best_verdict.failed}/{best_verdict.total} failing",
+    )
+
+
+async def _solve_forced_rung(
+    rung: str,
+    task: str,
+    *,
+    generate: Generate,
+    verify: Verify,
+    budget: Budget,
+    k: int,
+    tree_depth: int,
+    fusion_generate: Optional[Generate],
+    fusion_k: int,
+) -> SolveResult:
+    """Run exactly ONE rung, once, and stop — no cascade, no escalation past it.
+    Reports pass/fail against the real verifier; never used by the real ladder
+    path (``solve()`` only reaches here when the CALLER explicitly asked for one
+    rung, an operator/testing affordance — see the module docstring)."""
+    if rung == "greedy":
+        if not budget.can_afford(1):
+            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
+        code = await generate(task, feedback=None)
+        budget.spend(1)
+        v = await verify(code)
+        note = "forced greedy (test) — passed" if v.passed else f"forced greedy (test) — {v.failed}/{v.total} failing"
+        return SolveResult(code, v.passed, "greedy", budget.spent, 1, v, note)
+
+    if rung == "best-of-k":
+        n = min(k, budget.remaining)
+        if n <= 0:
+            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
+        cands = await asyncio.gather(*(generate(task, feedback=None) for _ in range(n)))
+        budget.spend(n)
+        verdicts = await asyncio.gather(*(verify(c) for c in cands))
+        best, best_v = cands[0], verdicts[0]
+        for c, v in zip(cands, verdicts):
+            if v.passed:
+                return SolveResult(c, True, "best-of-k", budget.spent, n, v, f"forced best-of-{n} (test) — passed")
+            if v.failed < best_v.failed:
+                best, best_v = c, v
+        return SolveResult(
+            best, False, "best-of-k", budget.spent, n, best_v, f"forced best-of-{n} (test) — no candidate passed"
+        )
+
+    if rung == "tree-search":
+        if not budget.can_afford(1):
+            return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
+        seed = await generate(task, feedback=None)
+        budget.spend(1)
+        tried = 1
+        best, best_v = seed, await verify(seed)
+        if best_v.passed:
+            return SolveResult(
+                seed,
+                True,
+                "tree-search",
+                budget.spent,
+                tried,
+                best_v,
+                "forced tree-search (test) — seed passed before any refine",
+            )
+        for depth in range(tree_depth):
+            if not budget.can_afford(1):
+                break
+            refined = await generate(task, feedback=best_v.feedback())
+            budget.spend(1)
+            tried += 1
+            v = await verify(refined)
+            if v.passed:
+                return SolveResult(
+                    refined,
+                    True,
+                    "tree-search",
+                    budget.spent,
+                    tried,
+                    v,
+                    f"forced tree-search (test) — solved by refine@{depth + 1}",
+                )
+            if v.failed <= best_v.failed:
+                best, best_v = refined, v
+        return SolveResult(
+            best, False, "tree-search", budget.spent, tried, best_v, "forced tree-search (test) — no refinement passed"
+        )
+
+    # rung == "fusion" (validated by the caller; fusion_generate is guaranteed non-None)
+    fk = min(fusion_k, budget.remaining)
+    if fk <= 0:
+        return SolveResult(None, None, "none", budget.spent, 0, note="budget exhausted before any generation")
+    cands = await asyncio.gather(*(fusion_generate(task, feedback=None) for _ in range(fk)))
+    budget.spend(fk)
+    verdicts = await asyncio.gather(*(verify(c) for c in cands))
+    best, best_v = cands[0], verdicts[0]
+    for c, v in zip(cands, verdicts):
+        if v.passed:
+            return SolveResult(c, True, "fusion", budget.spent, fk, v, f"forced fusion (test, k={fk}) — passed")
+        if v.failed < best_v.failed:
+            best, best_v = c, v
+    return SolveResult(
+        best, False, "fusion", budget.spent, fk, best_v, f"forced fusion (test, k={fk}) — no candidate passed"
     )

@@ -1,6 +1,6 @@
 id: coder
 name: Coder (execution-grounded code-solve)
-version: 0.1.0
+version: 0.2.0
 description: >-
   Execution-grounded code-solve (ADR 0064) — the verifier-grounded coder for
   VERIFIABLE coding tasks. Contributes a `coder_solve` tool + a `coder` subagent

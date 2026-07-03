@@ -6,6 +6,8 @@ model, no subprocess), the real subprocess pytest verifier, and code extraction.
 
 from __future__ import annotations
 
+import pytest
+
 from plugins.coder.generate import extract_code
 from plugins.coder.solve import Budget, Verdict, solve
 from plugins.coder.verify import _parse, run_tests
@@ -105,9 +107,94 @@ async def test_fusion_not_invoked_when_cheaper_rung_solves():
         fcalls["n"] += 1
         return "good"
 
-    res = await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(12), fusion_generate=fusion_gen)
+    res = await solve(
+        "t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(12), fusion_generate=fusion_gen
+    )
     assert res.rung == "greedy"
     assert fcalls["n"] == 0  # fusion never paid for
+
+
+# ── force_rung: an operator/testing affordance, never used by the real ladder ────
+
+
+async def test_force_rung_greedy_reports_pass_without_escalating():
+    gen, calls = _gen_sequence(["good"])
+    res = await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), force_rung="greedy")
+    assert res.passed is True and res.rung == "greedy"
+    assert calls["n"] == 1
+
+
+async def test_force_rung_greedy_reports_fail_without_escalating():
+    """A forced rung STOPS after that one rung — even though best-of-k would have
+    solved it (see test_escalates_to_best_of_k), forcing greedy never gets there."""
+    gen, calls = _gen_sequence(["bad", "good"])
+    res = await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), k=3, force_rung="greedy")
+    assert res.passed is False and res.rung == "greedy"
+    assert calls["n"] == 1  # never escalated to best-of-k, even though gen[1] would pass
+
+
+async def test_force_rung_best_of_k_generates_k_fresh_candidates():
+    gen, calls = _gen_sequence(["bad", "bad", "good"])
+    res = await solve(
+        "t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), k=3, force_rung="best-of-k"
+    )
+    assert res.passed is True and res.rung == "best-of-k"
+    assert calls["n"] == 3  # k candidates generated fresh — no greedy pre-spend to reuse
+
+
+async def test_force_rung_tree_search_seeds_then_refines_on_failure():
+    # seed "bad" fails; refine round 1 returns "good".
+    gen, calls = _gen_sequence(["bad", "good"])
+    res = await solve(
+        "t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), tree_depth=2, force_rung="tree-search"
+    )
+    assert res.passed is True and res.rung == "tree-search"
+    assert calls["feedbacks"][-1] is not None and "failing" in calls["feedbacks"][-1]
+
+
+async def test_force_rung_tree_search_seed_can_pass_outright():
+    gen, calls = _gen_sequence(["good"])
+    res = await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), force_rung="tree-search")
+    assert res.passed is True and res.rung == "tree-search"
+    assert calls["n"] == 1  # solved on the seed — no refine round needed
+
+
+async def test_force_rung_fusion_generates_fresh_no_prior_feedback():
+    gen, gcalls = _gen_sequence(["irrelevant"])  # the base generator is never touched
+
+    async def fusion_gen(task, *, feedback=None):
+        assert feedback is None  # no prior attempt in an isolated forced-fusion test
+        return "good"
+
+    res = await solve(
+        "t",
+        generate=gen,
+        verify=_verify_passes_on("good"),
+        budget=Budget(6),
+        fusion_generate=fusion_gen,
+        fusion_k=2,
+        force_rung="fusion",
+    )
+    assert res.passed is True and res.rung == "fusion"
+    assert gcalls["n"] == 0  # the ACP generator was never called — fusion only
+
+
+async def test_force_rung_fusion_without_a_fusion_generate_raises():
+    gen, _ = _gen_sequence(["x"])
+    with pytest.raises(ValueError, match="fusion_generate"):
+        await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), force_rung="fusion")
+
+
+async def test_force_rung_unknown_name_raises():
+    gen, _ = _gen_sequence(["x"])
+    with pytest.raises(ValueError, match="force_rung"):
+        await solve("t", generate=gen, verify=_verify_passes_on("good"), budget=Budget(6), force_rung="nonsense")
+
+
+async def test_force_rung_requires_a_verifier():
+    gen, _ = _gen_sequence(["x"])
+    with pytest.raises(ValueError, match="verifier"):
+        await solve("t", generate=gen, verify=None, budget=Budget(6), force_rung="greedy")
 
 
 async def test_no_oracle_degrades_to_greedy():
