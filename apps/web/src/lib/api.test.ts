@@ -3,6 +3,7 @@ import {
   ApiError,
   api,
   apiUrl,
+  artifactAppends,
   drainSseBuffer,
   frameIsForeign,
   isColdStart,
@@ -185,6 +186,24 @@ describe("textFromParts", () => {
 
   it("returns an empty string for undefined parts", () => {
     expect(textFromParts(undefined)).toBe("");
+  });
+});
+
+describe("artifactAppends — the A2A append flag's wire shape (#1709 companion)", () => {
+  // proto3 gives `append` no presence: the SDK OMITS the key at false, so the
+  // terminal frame that REPLACES the artifact with the full canonical answer
+  // arrives with NO `append` at all. Reading absent as append (`append !== false`,
+  // the old mapping) re-appended the whole answer — every streamed turn doubled.
+  it("an ABSENT append key is a REPLACE (the terminal last-chunk frame's wire shape)", () => {
+    expect(artifactAppends({ artifact: { parts: [{ text: "full answer" }] }, lastChunk: true })).toBe(false);
+  });
+
+  it("an explicit append:true is an append (mid-stream chunk frames)", () => {
+    expect(artifactAppends({ append: true })).toBe(true);
+  });
+
+  it("an explicit append:false is a replace", () => {
+    expect(artifactAppends({ append: false })).toBe(false);
   });
 });
 

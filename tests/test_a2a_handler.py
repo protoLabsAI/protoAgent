@@ -680,6 +680,64 @@ async def test_streamed_answer_lands_exactly_once_in_durable_artifact():
 
 
 @pytest.mark.asyncio
+async def test_terminal_replace_wire_shape_omits_append_key():
+    """The CONSUMER CONTRACT of the terminal replace, at the wire level: proto3
+    gives the A2A ``append`` bool no presence, so the SDK OMITS the key when it's
+    False — the terminal frame arrives as ``{artifact: <full text + meta>,
+    lastChunk: true}`` with NO ``append`` key at all. Every frame consumer must
+    read that ABSENCE as replace (only an explicit ``true`` appends); mapping
+    absent→append re-appends the whole canonical answer and doubles every
+    streamed turn (the operator-console regression this locks against —
+    ``artifactAppends`` in apps/web/src/lib/api.ts, mirrored by
+    evals/client.py)."""
+    import json
+
+    chunks = ["First streamed chunk, over the flush threshold. ", "Second streamed chunk, also flushed."]
+    full = "".join(chunks)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        for c in chunks:
+            yield ("text", c)
+        yield ("done", full)
+
+    app = _build_app(stream)
+    artifact_frames: list[dict] = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                update = json.loads(line[5:].strip()).get("result", {}).get("artifactUpdate")
+                if update:
+                    artifact_frames.append(update)
+
+    assert len(artifact_frames) >= 2  # streamed chunks + the terminal replace
+    terminal, mid = artifact_frames[-1], artifact_frames[:-1]
+    # Terminal frame: last chunk, full canonical text — and the ``append`` key is
+    # ABSENT (proto3 omitted-false), which consumers MUST read as replace.
+    assert terminal.get("lastChunk") is True
+    assert "append" not in terminal, f"expected proto3 to omit append=False, got {terminal.get('append')!r}"
+    terminal_texts = [p["text"] for p in terminal["artifact"]["parts"] if p.get("text")]
+    assert terminal_texts == [full]
+    # Mid-stream chunks after the first carry an EXPLICIT append=true — the only
+    # value a consumer may treat as append. (The first chunk creates the artifact
+    # with append=False, so it too arrives with the key omitted.)
+    assert "append" not in mid[0]
+    assert all(f.get("append") is True for f in mid[1:])
+
+
+@pytest.mark.asyncio
 async def test_input_required_form_carries_hitl_datapart():
     """A request_user_input form (or run_command approval) parks the task with a
     protoAgent-local hitl-v1 DataPart carrying the full payload, plus a text

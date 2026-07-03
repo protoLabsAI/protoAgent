@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { ChatMessageView } from "../chat/ChatMessageView";
-import { addToolRef, appendReasoning, appendText } from "../chat/parts";
+import { addToolRef, appendReasoning, appendText, replaceText } from "../chat/parts";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
@@ -178,7 +178,13 @@ export function PaletteChat({ agentName }: { agentName: string }) {
           // effect + the unmount flush.
           onTaskId: (id) => update((m) => ({ ...m, taskId: id })),
           onText: (t, append) =>
-            update((m) => ({ ...m, content: append ? m.content + t : t, parts: appendText(m.parts, t, append) })),
+            // Replace = the terminal frame's full-turn canonical text (#1709) — spans every
+            // text run, so it goes through replaceText (appendText only rewrites the open run).
+            update((m) => ({
+              ...m,
+              content: append ? m.content + t : t,
+              parts: append ? appendText(m.parts, t, true) : replaceText(m.parts, t, m.content),
+            })),
           onReasoning: (d) =>
             update((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d, parts: appendReasoning(m.parts, d) })),
           onToolCall: (evt) => update((m) => upsertTool(m, evt)),

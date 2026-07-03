@@ -332,9 +332,14 @@ class ProtoAgentExecutor(AgentExecutor):
             matched ``final_text``) compared against the IN-PROCESS accumulation,
             so a downstream loss looked like "nothing diverged" and permanently
             sealed a truncated artifact into the store. Frame consumers must
-            honor the A2A ``append`` flag (append=False ⇒ replace — the console
-            and the SDK task store both do); naive concat consumers would
-            otherwise see the answer twice."""
+            honor the A2A ``append`` flag — and beware its WIRE SHAPE: proto3
+            gives ``append`` no presence, so ``append=False`` serializes as an
+            ABSENT key. Absent/false ⇒ replace; only an explicit ``true`` is an
+            append (the SDK task store, evals/client.py and the console's
+            ``artifactAppends`` all read it that way — the console's previous
+            ``append !== false`` mapping would have doubled every streamed
+            answer). Naive concat consumers would otherwise see the answer
+            twice."""
             body = final_text
             # Compaction context (#1372): the live prompt size + the configured trigger /
             # token threshold, merged into one context-v1 DataPart. Provider failures
