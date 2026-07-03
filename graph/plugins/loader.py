@@ -125,6 +125,18 @@ def _plugin_module_name(plugin_id: str) -> str:
     return "protoagent_plugin_" + re.sub(r"\W", "_", plugin_id)
 
 
+def purge_plugin_modules(plugin_id: str) -> None:
+    """Drop a plugin's module subtree from ``sys.modules`` so the next reload
+    re-execs every file from disk. The loader re-execs the entry ``__init__`` each
+    reload, but a multi-file plugin's ``from .tools import …`` resolves the SUBMODULE
+    through ``sys.modules`` — which still holds the OLD code after a force
+    re-install. Scoped to the plugin's own prefix; the reload rebuilds it. Shared by
+    the console Update route and the auto-update loop (#1720)."""
+    prefix = _plugin_module_name(plugin_id)
+    for name in [n for n in list(sys.modules) if n == prefix or n.startswith(prefix + ".")]:
+        sys.modules.pop(name, None)
+
+
 def _load_plugin_module(manifest: PluginManifest, entry: Path):
     """Import a plugin's entry ``__init__.py`` as a **package** so it can have
     sibling modules and use relative imports (``from .tools import …``). The

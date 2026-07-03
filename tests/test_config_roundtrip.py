@@ -150,10 +150,12 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "operator_project_dir": "",
     "operator_mcp_enabled": False,
     "operator_mcp_tools": [],
+    "plugins_autoupdate_interval_hours": 6,
     "plugins_dir": "",
     "plugins_disabled": [],
     "plugins_enabled": [],
     "plugins_sources_allow": [],
+    "plugins_update_policy": {},
     "presence_penalty": None,
     "prompt_cache_enabled": True,
     "prompt_cache_force": False,
@@ -290,6 +292,8 @@ _LEGACY_EMITTED_ATTRS = {
     "plugins_disabled",
     "plugins_dir",
     "plugins_sources_allow",
+    "plugins_update_policy",
+    "plugins_autoupdate_interval_hours",
 }
 # Redacted secrets (api_key / auth_token / federation_token) resolve to "" on both sides.
 EMITTED_ATTRS = _FIELDS_ATTRS | _LEGACY_EMITTED_ATTRS
@@ -653,4 +657,6 @@ def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
         "disabled": ["beta"],
         "dir": "/custom/plugins",
         "sources": {"allow": ["github.com/protolabsai/*"]},
+        "update_policy": {},
+        "autoupdate_interval_hours": 6,
     }

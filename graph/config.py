@@ -627,6 +627,17 @@ class LangGraphConfig:
     # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org globs
     # (e.g. ``github.com/protoLabsAI/*``); empty = any URL allowed (gated install).
     plugins_sources_allow: list[str] = field(default_factory=list)
+    # Opt-in auto-update policy (#1720), keyed by plugin id. Each value is a policy
+    # dict ``{"track": "main", "when": "idle"}`` — ``track`` opts the plugin in (a
+    # non-empty value; the actual ref comes from the lock), ``when`` gates the
+    # safe-moment (``idle`` = defer while a chat turn is/was just in flight;
+    # ``always`` = update on the next sweep regardless). Empty = manual-only
+    # updates (the default). A pinned-to-SHA plugin is never auto-updated.
+    plugins_update_policy: dict = field(default_factory=dict)
+    # Auto-update sweep cadence in hours (mirrors ``checkpoint_prune_interval_hours``);
+    # ``0`` disables the loop entirely. Only plugins listed in ``update_policy`` are
+    # ever touched, so this is a safe non-zero default.
+    plugins_autoupdate_interval_hours: int = 6
     # Plugin-declared config sections (ADR 0019), keyed by the claimed top-level
     # section. Each value is the section's resolved config (manifest defaults ⊕
     # YAML ⊕ secrets overlay). A plugin reads its own via plugin_config["<section>"].
@@ -983,6 +994,10 @@ class LangGraphConfig:
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
             plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
+            plugins_update_policy=dict(plugins.get("update_policy", {}) or {}),
+            plugins_autoupdate_interval_hours=int(
+                plugins.get("autoupdate_interval_hours", cls.plugins_autoupdate_interval_hours) or 0
+            ),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
             identity_org=identity.get("org", cls.identity_org),

@@ -24,6 +24,7 @@ class AppState:
     checkpoint_prune_task: Any = None
     monitor_goals_task: Any = None  # ADR 0030 monitor-goal cadence loop
     watch_task: Any = None  # ADR 0067 watch cadence loop
+    plugin_autoupdate_task: Any = None  # #1720 opt-in plugin auto-update loop
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
     skills_index: Any = None

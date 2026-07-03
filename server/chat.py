@@ -1098,6 +1098,30 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     yield ("done", final_text)
 
 
+# ── Idle beacon (#1720) ──────────────────────────────────────────────────────
+# A monotonic timestamp stamped at the start of every chat turn (both entries
+# below cover A2A, the console, and the OpenAI-compat surface). The plugin
+# auto-update loop reads ``seconds_since_last_turn()`` to honor a plugin's
+# ``when: idle`` policy — a hot-reload rebuilds tools/routers, which is safe
+# between turns but disruptive during one. A bare timestamp write can't raise or
+# leak, so it stays out of the turn's try/finally.
+_LAST_TURN_MONOTONIC: float = 0.0
+
+
+def _note_chat_activity() -> None:
+    """Record that a chat turn just started (feeds the auto-update idle gate)."""
+    global _LAST_TURN_MONOTONIC
+    _LAST_TURN_MONOTONIC = time.monotonic()
+
+
+def seconds_since_last_turn() -> float:
+    """Seconds since the most recent chat turn began, or ``inf`` if none yet this
+    process. The auto-update loop treats a large value as 'server is idle'."""
+    if _LAST_TURN_MONOTONIC <= 0:
+        return float("inf")
+    return max(0.0, time.monotonic() - _LAST_TURN_MONOTONIC)
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -1130,6 +1154,8 @@ async def _chat_langgraph_stream(
     from observability import tracing
 
     from graph.middleware.request_context import request_metadata_scope
+
+    _note_chat_activity()  # idle-gate beacon for the plugin auto-update loop (#1720)
 
     trace_meta: dict = {"message_preview": message[:100]}
     if caller_trace:
@@ -1459,6 +1485,8 @@ async def _chat_langgraph(
     from langchain_core.messages import HumanMessage, AIMessage
 
     from graph.goals.goal_turn import goal_turn
+
+    _note_chat_activity()  # idle-gate beacon for the plugin auto-update loop (#1720)
 
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
     # Incognito is stamped explicitly every turn (the channel persists in the
