@@ -4,10 +4,13 @@ All models route through the LiteLLM gateway (OpenAI-compatible),
 so we use ChatOpenAI for everything.
 """
 
+import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 
+import httpcore
+import httpx
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from graph.config import LangGraphConfig
@@ -16,6 +19,59 @@ log = logging.getLogger(__name__)
 
 # Same allowlisted UA the chat client uses (Cloudflare WAF blocks the SDK default).
 _GATEWAY_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
+
+# A provider stream can drop mid-read — an `httpcore.ReadError` / `httpx.TransportError`
+# (or a read timeout) surfaces while iterating the SSE body. `ChatOpenAI(max_retries=…)`
+# retries the request *start*, never a mid-body read, so a rate-limited or flaky gateway
+# that terminates the response kills the whole turn (#1728). These are the read/transport
+# failures we treat as retryable when the stream produced NOTHING yet.
+RETRYABLE_STREAM_ERRORS: tuple[type[BaseException], ...] = (
+    httpx.TransportError,  # httpx.ReadError / ConnectError / ReadTimeout / …
+    httpcore.NetworkError,  # httpcore.ReadError / WriteError / ConnectError (raw, unwrapped)
+    httpcore.TimeoutException,  # httpcore.ReadTimeout / ConnectTimeout
+)
+_STREAM_RETRY_BACKOFF_S = 0.5
+
+
+async def _stream_with_reconnect(
+    make_stream: Callable[[], AsyncIterator],
+    *,
+    max_retries: int,
+    backoff: float = _STREAM_RETRY_BACKOFF_S,
+    sleep: Callable = asyncio.sleep,
+) -> AsyncIterator:
+    """Yield from a model stream, restarting it on a transport/read error that occurs
+    **before any item is emitted**.
+
+    Retrying is only safe with zero items emitted: each chunk fires its
+    ``on_llm_new_token`` callback as it's yielded, so once one has streamed a fresh
+    stream would duplicate it — there we re-raise. This reconnects the model call only;
+    it never replays tools or restarts the turn. A provider closing the stream at the
+    top (the rate-limit case in #1728) emits nothing, so it reconnects cleanly.
+    """
+    attempts = max(max_retries, 0) + 1
+    delay = backoff
+    for attempt in range(attempts):
+        emitted = 0
+        try:
+            async for item in make_stream():
+                emitted += 1
+                yield item
+            return
+        except RETRYABLE_STREAM_ERRORS as exc:
+            if emitted or attempt == attempts - 1:
+                raise
+            log.warning(
+                "model stream dropped before any content (%s: %s) — reconnecting, "
+                "attempt %d/%d in %.1fs (provider closed stream; possible rate limit)",
+                type(exc).__name__,
+                exc,
+                attempt + 1,
+                attempts - 1,
+                delay,
+            )
+            await sleep(delay)
+            delay *= 2
 
 
 class _ReasoningChatOpenAI(ChatOpenAI):
@@ -36,6 +92,19 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             if reasoning:
                 gen.message.additional_kwargs["reasoning_content"] = reasoning
         return gen
+
+    async def _astream(self, *args, **kwargs):
+        """Reconnect a provider stream that drops before emitting any content (#1728).
+
+        Transparent pass-through on the happy path; on a mid-read transport error with
+        zero chunks yielded it reconnects (within the model's ``max_retries`` budget)
+        instead of letting the error kill the turn — the failure mode a rate-limited
+        gateway produces. Once a chunk has streamed, the error propagates unchanged."""
+        async for chunk in _stream_with_reconnect(
+            lambda: super(_ReasoningChatOpenAI, self)._astream(*args, **kwargs),
+            max_retries=self.max_retries or 0,
+        ):
+            yield chunk
 
 
 def _build_llm_kwargs(config: LangGraphConfig) -> dict:

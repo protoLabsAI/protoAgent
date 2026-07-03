@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`plugin id 'google' is a built-in — cannot install over it`). A directory now
   counts as built-in only if it actually holds a `protoagent.plugin.yaml` or
   `protoagent.bundle.yaml`, matching how the loader decides a dir is a plugin.
+- **A dropped provider stream reconnects instead of killing the turn** (#1728). A
+  mid-read `httpcore.ReadError` / `httpx.TransportError` — what a rate-limited or flaky
+  gateway raises when it terminates the SSE response — bubbled unhandled through the
+  A2A stream handler and silently lost a whole background turn's work, despite
+  `model.max_retries` (which only covers request *start*, not a mid-body read). The
+  model stream now reconnects when it drops **before emitting any content** (the
+  rate-limit case), within the configured `max_retries` budget — model-call only, no
+  tool replay, and no reconnect once a token has streamed (which would duplicate it).
+  If reconnects are exhausted (or content already streamed), the turn now fails
+  *cleanly* with a clear "provider closed the stream — possible rate limit" log so a
+  background scheduler can observe and reschedule, instead of an alarming unhandled-
+  exception traceback.
 
 ## [0.88.0] - 2026-07-03
 
