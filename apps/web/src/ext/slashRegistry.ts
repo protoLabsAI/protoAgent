@@ -12,7 +12,17 @@
 // Core itself registers `/new`, `/clear`, `/effort` through this seam (see
 // `chat/coreSlashCommands.ts`) — the seam is the only path, not a special case.
 
-import type { SystemNoteTone } from "../lib/types";
+import type { HitlPayload, SystemNoteTone } from "../lib/types";
+
+/** A form a CLIENT command opens in the composer (#1701). Rendered through the SAME
+ *  `HitlForm` the agent's HITL interrupt uses, but resolved LOCALLY: the host shows
+ *  `payload` and calls `onSubmit` with the answers (a values record for a `kind:"form"`
+ *  payload) — no agent round-trip. `onCancel` fires if the operator dismisses it. */
+export type ComposerFormSpec = {
+  payload: HitlPayload;
+  onSubmit: (answers: Record<string, unknown> | string) => void;
+  onCancel?: () => void;
+};
 
 /** What a client slash command's handler receives. The host (ChatSurface) builds this
  *  from its local state + the chat store when the command fires. */
@@ -28,6 +38,12 @@ export type SlashContext = {
   setDraft: (text: string) => void;
   /** Return focus to the composer textarea. */
   focusComposer: () => void;
+  /** Open a form in the composer panel (#1701) — the same `HitlForm` the agent's HITL
+   *  interrupt uses, resolved LOCALLY (host renders `spec.payload`, calls `spec.onSubmit`
+   *  with the answers, no agent round-trip). Lets a command (e.g. `/effort`) or a fork
+   *  present a picker/wizard instead of a note. Optional: a host that hasn't wired the
+   *  panel omits it, so a command must fall back gracefully when it's absent. */
+  openForm?: (spec: ComposerFormSpec) => void;
   /** The host's developer-flag predicate (ADR 0068) — the SAME gate that hides/skips
    *  flag-tagged commands — so a command that enumerates the registry (e.g. `/help`)
    *  applies the host's visibility rules instead of guessing. Fail-closed when absent. */

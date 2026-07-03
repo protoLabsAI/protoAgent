@@ -24,6 +24,7 @@ import {
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
+import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
@@ -331,6 +332,11 @@ function ChatSessionSlot({
     setHitlState(payload);
   };
   const abortRef = useRef<AbortController | null>(null);
+  // Client composer-form (#1701): a form a CLIENT command opens in the composer (e.g.
+  // `/effort`'s picker), rendered through the same HitlForm but resolved LOCALLY — no
+  // agent round-trip. Kept DISTINCT from the agent `hitl` interrupt so the two never
+  // collide; the agent interrupt takes precedence when both somehow exist.
+  const [composerForm, setComposerForm] = useState<ComposerFormSpec | null>(null);
   // Transient "copied ✓" feedback on a message's copy action.
   const [copiedId, setCopiedId] = useState<string | null>(null);
   // The message a "Rewind to here" is pending confirmation on (null = dialog closed).
@@ -545,6 +551,8 @@ function ChatSessionSlot({
       noteToThread,
       setDraft,
       focusComposer: () => textareaRef.current?.focus(),
+      // Open a form in the composer panel, resolved locally (#1701) — /effort's picker.
+      openForm: setComposerForm,
       // Registry-enumerating commands (/help) see the HOST's visibility rules + the live
       // server command list — never a hardcoded copy of either.
       flagOn,
@@ -1503,6 +1511,23 @@ function ChatSessionSlot({
                 }
               : undefined
           }
+        />
+      )}
+
+      {/* Client composer-form (#1701) — a locally-resolved form (e.g. /effort's picker),
+          the same HitlForm but with a LOCAL onSubmit. Only when the agent isn't already
+          holding the panel for its own HITL interrupt, so the two never collide. */}
+      {!hitl && composerForm && (
+        <HitlForm
+          payload={composerForm.payload}
+          onSubmit={(answers) => {
+            composerForm.onSubmit(answers);
+            setComposerForm(null);
+          }}
+          onCancel={() => {
+            composerForm.onCancel?.();
+            setComposerForm(null);
+          }}
         />
       )}
 

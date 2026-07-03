@@ -7,7 +7,7 @@
 
 import { registeredSlashCommands, registerSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
 
 // Local id for the system notes /compact posts (the command manages messages
@@ -107,26 +107,85 @@ registerSlashCommand({
   },
 });
 
+// One-line hint per level, shown on the picker cards (#1701).
+const EFFORT_HINTS: Record<string, string> = {
+  low: "Fastest — least deliberation",
+  medium: "Balanced",
+  high: "More deliberate reasoning",
+  max: "Maximum reasoning budget",
+  off: "Disable reasoning for this tab",
+};
+
+// A one-step HITL form whose single `effort` field renders as option cards (the `oneOf`
+// + descriptions turn it into cards — see hitl-form.isCardChoice). `current` preselects
+// the tab's active level.
+function effortFormPayload(current: string): HitlPayload {
+  return {
+    kind: "form",
+    title: "Reasoning effort",
+    description: "Applies to this tab's next message.",
+    steps: [
+      {
+        schema: {
+          type: "object",
+          required: ["effort"],
+          properties: {
+            effort: {
+              type: "string",
+              title: "Effort",
+              default: current,
+              oneOf: REASONING_EFFORTS.map((e) => ({ const: e, title: e, description: EFFORT_HINTS[e] })),
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+function applyEffort(ctx: { sessionId: string; noteToThread: (m: string) => void; focusComposer: () => void }, level: string) {
+  chatStore.setSessionReasoningEffort(ctx.sessionId, level);
+  const off = level === "off" ? " — reasoning disabled for this tab" : "";
+  ctx.noteToThread(`Reasoning effort set to **${level}**${off}. Applies to the next message.`);
+  ctx.focusComposer();
+}
+
 registerSlashCommand({
   name: "effort",
   description: "Reasoning effort: low | medium | high | max | off",
   usage: "/effort low|medium|high|max|off",
   run: (ctx) => {
-    if (!ctx.sessionId) return false;
+    const sid = ctx.sessionId;
+    if (!sid) return false;
     const arg = ctx.rest.trim().toLowerCase();
     const opts = REASONING_EFFORTS.join(" · ");
     if (!arg) {
-      const session = chatStore.getSnapshot().sessions.find((s) => s.id === ctx.sessionId);
-      const cur = session?.reasoningEffort ?? `${DEFAULT_REASONING_EFFORT} (default)`;
-      ctx.noteToThread(`Reasoning effort: **${cur}**. Set it with \`/effort ${REASONING_EFFORTS.join("|")}\`.`);
+      // Bare `/effort` opens a picker form in the composer (#1701) — submit sets the tab's
+      // effort locally, no agent round-trip. Falls back to a note where the host hasn't
+      // wired the composer-form panel (openForm is optional on the seam).
+      const session = chatStore.getSnapshot().sessions.find((s) => s.id === sid);
+      const cur = session?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+      if (ctx.openForm) {
+        ctx.openForm({
+          payload: effortFormPayload(cur),
+          onSubmit: (answers) => {
+            const level = typeof answers === "object" && answers ? String((answers as Record<string, unknown>).effort ?? "") : "";
+            if ((REASONING_EFFORTS as readonly string[]).includes(level)) {
+              applyEffort({ sessionId: sid, noteToThread: ctx.noteToThread, focusComposer: ctx.focusComposer }, level);
+            }
+          },
+          onCancel: ctx.focusComposer,
+        });
+      } else {
+        ctx.noteToThread(`Reasoning effort: **${cur}**. Set it with \`/effort ${REASONING_EFFORTS.join("|")}\`.`);
+        ctx.focusComposer();
+      }
     } else if ((REASONING_EFFORTS as readonly string[]).includes(arg)) {
-      chatStore.setSessionReasoningEffort(ctx.sessionId, arg);
-      const off = arg === "off" ? " — reasoning disabled for this tab" : "";
-      ctx.noteToThread(`Reasoning effort set to **${arg}**${off}. Applies to the next message.`);
+      applyEffort({ sessionId: sid, noteToThread: ctx.noteToThread, focusComposer: ctx.focusComposer }, arg);
     } else {
       ctx.noteToThread(`Unknown effort \`${arg}\`. Options: ${opts}.`);
+      ctx.focusComposer();
     }
-    ctx.focusComposer();
     return true;
   },
 });

@@ -3,10 +3,17 @@ import { describe, expect, it } from "vitest";
 import { findSlashCommand } from "../ext/slashRegistry";
 import "./coreSlashCommands"; // side-effect: registers /new, /clear, /effort
 
-import type { SlashContext } from "../ext/slashRegistry";
+import type { ComposerFormSpec, SlashContext } from "../ext/slashRegistry";
+import { REASONING_EFFORTS } from "./chat-store";
 
 function ctx(over: Partial<SlashContext> = {}): SlashContext {
   return { rest: "", sessionId: null, noteToThread: () => {}, setDraft: () => {}, focusComposer: () => {}, ...over };
+}
+
+/** The `effort` field schema from a `/effort` picker payload (typed access for the tests). */
+function effortField(spec: ComposerFormSpec): { oneOf: { const: string }[]; default?: string } {
+  const props = (spec.payload.steps![0].schema as { properties: Record<string, unknown> }).properties;
+  return props.effort as { oneOf: { const: string }[]; default?: string };
 }
 
 describe("core slash commands (dogfood the seam, ADR 0061)", () => {
@@ -39,6 +46,48 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
     );
     expect(handled).toBe(true);
     expect(noted).toContain("Unknown effort");
+  });
+});
+
+describe("/effort composer-form picker (#1701)", () => {
+  it("bare /effort opens a picker form with a card for every level", () => {
+    let spec: ComposerFormSpec | null = null;
+    const handled = findSlashCommand("effort")!.run(ctx({ sessionId: "s1", openForm: (s) => (spec = s) }));
+    expect(handled).toBe(true);
+    expect(spec).toBeTruthy();
+    expect(spec!.payload.kind).toBe("form");
+    // A card per level, in order, and a default preselected (the tab's current level).
+    expect(effortField(spec!).oneOf.map((o) => o.const)).toEqual([...REASONING_EFFORTS]);
+    expect(effortField(spec!).default).toBeTruthy();
+  });
+
+  it("submitting the picker applies + notes a valid level; ignores an invalid one", () => {
+    let spec: ComposerFormSpec | null = null;
+    let noted = "";
+    findSlashCommand("effort")!.run(ctx({ sessionId: "s1", openForm: (s) => (spec = s), noteToThread: (m) => (noted = m) }));
+    spec!.onSubmit({ effort: "max" });
+    expect(noted).toContain("set to **max**");
+    noted = "";
+    spec!.onSubmit({ effort: "bogus" }); // not a real level → no-op
+    expect(noted).toBe("");
+  });
+
+  it("falls back to a note when the host hasn't wired openForm (optional seam)", () => {
+    let noted = "";
+    const handled = findSlashCommand("effort")!.run(ctx({ sessionId: "s1", noteToThread: (m) => (noted = m) }));
+    expect(handled).toBe(true);
+    expect(noted).toContain("Reasoning effort:");
+  });
+
+  it("typed /effort <level> still applies directly, never opening the form", () => {
+    let noted = "";
+    let opened = false;
+    const handled = findSlashCommand("effort")!.run(
+      ctx({ sessionId: "s1", rest: "high", noteToThread: (m) => (noted = m), openForm: () => (opened = true) }),
+    );
+    expect(handled).toBe(true);
+    expect(opened).toBe(false);
+    expect(noted).toContain("set to **high**");
   });
 });
 
