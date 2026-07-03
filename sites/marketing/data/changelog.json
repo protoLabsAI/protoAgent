@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.87.0",
+    "date": "2026-07-03",
+    "changes": [
+      "wait no longer stacks wake-ups — one pending wait per thread",
+      "Dismiss a hard turn-error bubble in place"
+    ]
+  },
+  {
     "version": "v0.86.0",
     "date": "2026-07-03",
     "changes": [
