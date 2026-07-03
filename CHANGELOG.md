@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.86.0] - 2026-07-03
+
 ### Fixed
 - **Declining a command is no longer a scary full-screen error** (#1692). Denying a
   `run_command` approval raised a `ToolException`, which the chat rendered as a

@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.86.0",
+    "date": "2026-07-03",
+    "changes": [
+      "Declining a command is no longer a scary full-screen error",
+      "Long commands and errors scroll instead of filling the chat"
+    ]
+  },
+  {
     "version": "v0.85.0",
     "date": "2026-07-02",
     "changes": [
