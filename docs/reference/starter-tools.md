@@ -223,6 +223,43 @@ Cancel a scheduled job by id. Returns `"Canceled <id>."` or `"Error: no such job
 
 Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path.
 
+## `wait`
+
+```python
+@tool
+async def wait(seconds: int, then: str) -> str
+```
+
+Yield the turn and resume LATER instead of busy-polling a status tool to wait
+something out ([ADR 0053](/adr/0053-wait-yield-and-resume)). Calling `wait` **ends
+the current turn** (via `WaitYieldMiddleware`) and schedules a one-shot resume
+`seconds` from now; when it fires the agent is re-invoked with `then` as its
+instruction, in the **same conversation thread** (history intact) — so it acts
+exactly once, when the thing is actually ready. This is the right way to run
+long-horizon "do X, wait, do Y" work without burning the recursion budget on a
+poll loop.
+
+`then` is required and **self-contained** — it's the agent's only context on
+resume, so it must name what to do and which entities are involved ("Dock
+NOVAHAUL-5 at X1-UC87-K93, sell the ore, accept the next contract"), not a
+back-reference. `seconds` is clamped to ≥ 1; pass the ETA a status tool gave you
+(e.g. `st_navigate` returns `arriving in Ns` and the exact `wait(N, …)` call) and
+wait the **full** duration in one call — under-waiting just wakes early to wait
+again.
+
+**One pending wait per thread** ([#1702](https://github.com/protoLabsAI/protoAgent/issues/1702)):
+a new `wait` **supersedes** any still-pending wait for the same session (a stable
+`wait:<session>` job id → cancel-then-add), so repeated waits can't stack up into
+a pile of wake-ups that all fire into the thread. A user `schedule_task` uses its
+own id and is untouched. Every scheduling is logged —
+`[wait] thread=… in Ns (superseded a pending wait) → resume: …` — so a stacking
+loop is visible in logs.
+
+**Lead-agent only** (gated on the scheduler; subagents run bounded by `max_turns`
+and don't get it). The yield is durable across restart (a persisted scheduler
+job). For an absolute time or a recurring cadence use `schedule_task` instead —
+`wait` is for "yield for a bit, then pick this back up".
+
 ## `ask_human`
 
 ```python
