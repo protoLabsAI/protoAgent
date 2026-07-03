@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin's `on_submit` (never a graph resume). `on_submit` may return a reply or
   another form — a multi-step wizard. Callbacks are single-use, session-scoped, and
   TTL-reaped; non-streaming callers (e.g. `/v1`) get a "open it in the console" note.
+- **`/effort` opens a picker in the composer** (#1701). Bare `/effort` now opens a
+  radio-card form (low · medium · high · max · off, each with a one-line hint, the tab's
+  current level preselected) right in the composer instead of just printing the current
+  value; picking a card sets the tab's reasoning effort locally, no agent round-trip.
+  `/effort <level>` still applies directly. Under the hood this adds a client
+  **composer-form seam** — `SlashContext.openForm(spec)` renders any JSON-schema form
+  through the same `HitlForm` the agent's HITL interrupt uses, resolved with a local
+  `onSubmit` — so client commands (and, later, plugins) can present pickers/wizards in
+  that spot. The client panel is kept distinct from the agent interrupt so the two never
+  collide.
 
 ### Fixed
 - **Plugin smoke tests can assert surface lifecycle wiring** (#1729). The testkit's
