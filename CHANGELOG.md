@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugins declare required config and degrade gracefully when it's missing**
+  (#1719). A plugin marks a setting `required: true` in its manifest to say it needs
+  that value (an API key, endpoint, …) to function. If an enabled plugin loads while
+  a required field is still blank, it now **stays loaded but is flagged `incomplete`**
+  — a soft gate, unlike `requires_env` which refuses to load. `GET /api/runtime/status`
+  and `/api/plugins/installed` carry `incomplete: true` + `needs_config: [{key, label}]`
+  (so the console can show a ⚠️ "needs setup" cue), and the plugin's **tools are swapped
+  for same-signature stand-ins that return a friendly "needs setup" notice** instead of
+  erroring mid-call — so the agent can point the operator at configuration. Filling the
+  field in and reloading restores the real tools. This is the backend foundation for the
+  guided install wizard (the frontend follow-up); `0`/`false` count as provided, only
+  `null`/empty-string/empty-collection read as unset.
 - **Opt-in plugin auto-update policy** (#1720). Plugins were update-only-on-demand:
   an operator had to click **Update** in the console for each behind plugin. A new
   `plugins.update_policy` config map opts individual plugins into background

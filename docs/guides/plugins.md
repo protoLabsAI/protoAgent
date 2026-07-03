@@ -426,6 +426,22 @@ settings:
       depends_on: { key: ask_enabled, equals: true } }   # also: { key, in: [...] } | bare { key } = truthy
 ```
 
+**Required config & incomplete plugins (#1719):** mark a setting `required: true`
+to declare the plugin needs it to work. If an enabled plugin loads while a required
+field is still blank, it **stays loaded but is flagged `incomplete`** — a soft gate,
+not `requires_env` (which refuses to load). `GET /api/runtime/status` and
+`/api/plugins/installed` then carry `incomplete: true` + `needs_config: [{key, label}]`,
+and the plugin's **tools are swapped for same-signature stand-ins that return a
+friendly "needs setup" notice** instead of erroring mid-call — so the agent can point
+the operator at configuration. Fill the field in; the next config reload restores the
+real tools. (`0` / `false` count as provided — only `null` / empty-string / empty-list
+read as "unset".)
+
+```yaml
+settings:
+  - { key: api_key, label: "API key", type: secret, required: true }
+```
+
 Read the resolved config (manifest defaults ⊕ YAML ⊕ secrets) in `register()`:
 
 ```python
@@ -437,8 +453,9 @@ def register(registry):
 A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`,
 …) is ignored. (A plugin section like `discord` is **not** reserved — a plugin,
 bundled or external, claims its own section the same way.)
-The **wizard step** is not yet plugin-contributable (Settings + a docs link
-suffice for now).
+A plugin declares its required config with `required: true` (above) and the console
+surfaces the **incomplete** state so an operator knows to finish setup; a guided
+install **wizard** over those fields is the frontend follow-up (#1719).
 
 **Routes + surfaces are wired once at process init and don't hot-reload** — a
 config reload reuses them, so changing `plugins.enabled` needs a restart
