@@ -1,3 +1,4 @@
+import { Alert } from "@protolabsai/ui/data";
 import { Dialog } from "@protolabsai/ui/overlays";
 import { useQueryClient } from "@tanstack/react-query";
 import { Suspense, useEffect } from "react";
@@ -15,11 +16,16 @@ import { pluginSchemaNeedsRefetch } from "./settingsHydration";
 export function PluginSettingsDialog({
   pluginId,
   pluginName,
+  needsConfig,
   open,
   onClose,
 }: {
   pluginId: string;
   pluginName: string;
+  // Required-config gate (#1719) — when the plugin is INCOMPLETE, the fields it's
+  // missing; renders a setup hint above the form so the dialog reads as a wizard.
+  // Saving those fields reloads the plugin, which clears `incomplete` and the badge.
+  needsConfig?: { key: string; label: string }[];
   open: boolean;
   onClose: () => void;
 }) {
@@ -40,6 +46,13 @@ export function PluginSettingsDialog({
   if (!open) return null;
   return (
     <Dialog open onClose={onClose} title={pluginName} width="min(640px, 95vw)" className="plugin-settings-dialog">
+      {needsConfig && needsConfig.length ? (
+        <Alert status="warning" className="settings-banner">
+          <strong>Finish setup to activate this plugin.</strong>{" "}
+          {`Add the required config below — ${needsConfig.map((n) => n.label).join(", ")}. `}
+          Its tools return a “needs setup” notice until then; you can close this and complete it later.
+        </Alert>
+      ) : null}
       <Suspense fallback={<p className="muted">Loading settings…</p>}>
         <SettingsCategory category="Plugins" pluginId={pluginId} title="Configuration" />
       </Suspense>
