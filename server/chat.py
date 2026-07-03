@@ -1309,12 +1309,29 @@ async def _chat_langgraph_stream(
             # tracing.py.
             raise
         except Exception as e:
-            log.exception(
-                "[a2a-stream] unhandled exception for session=%s: %s",
-                session_id,
-                e,
-            )
-            yield ("error", str(e))
+            from graph.llm import RETRYABLE_STREAM_ERRORS
+
+            if isinstance(e, RETRYABLE_STREAM_ERRORS):
+                # The provider dropped the stream and the per-call reconnects
+                # (graph.llm._astream) were exhausted, or content had already
+                # streamed. That's a clean terminal outcome — most likely account
+                # rate limiting — not a code bug, so log it as such (a background
+                # scheduler can observe the failed turn and reschedule). #1728.
+                log.warning(
+                    "[a2a-stream] provider closed the stream for session=%s (%s: %s) — "
+                    "possible rate limit; failing the turn cleanly",
+                    session_id,
+                    type(e).__name__,
+                    e,
+                )
+                yield ("error", "The model provider closed the stream (possibly rate-limited). Please retry.")
+            else:
+                log.exception(
+                    "[a2a-stream] unhandled exception for session=%s: %s",
+                    session_id,
+                    e,
+                )
+                yield ("error", str(e))
         finally:
             tracing.flush()
 
@@ -1599,6 +1616,21 @@ async def _chat_langgraph(
 
             return [{"role": "assistant", "content": response}]
         except Exception as e:
+            from graph.llm import RETRYABLE_STREAM_ERRORS
+
+            if isinstance(e, RETRYABLE_STREAM_ERRORS):
+                log.warning(
+                    "[chat] provider closed the stream for session=%s (%s: %s) — possible rate limit",
+                    session_id,
+                    type(e).__name__,
+                    e,
+                )
+                return [
+                    {
+                        "role": "assistant",
+                        "content": "**Error:** the model provider closed the stream (possibly rate-limited). Please retry.",
+                    }
+                ]
             log.exception(
                 "[chat] unhandled exception for session=%s: %s",
                 session_id,

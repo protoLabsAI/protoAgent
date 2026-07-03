@@ -1,7 +1,10 @@
 """Tests for LLM kwargs assembly — sampling params + extra_body wiring."""
 
+import httpcore
+import pytest
+
 from graph.config import LangGraphConfig
-from graph.llm import _build_llm_kwargs
+from graph.llm import _build_llm_kwargs, _stream_with_reconnect
 
 
 def test_defaults_omit_optional_sampling_params():
@@ -135,3 +138,74 @@ def test_create_llm_routes_acp_model_name_to_acp_aux(monkeypatch):
     monkeypatch.setattr(AR, "make_acp_aux_model", _fake)
     out = create_llm(LangGraphConfig(), model_name="acp:claude")
     assert out is sentinel and captured["agent"] == "claude"
+
+
+# --- #1728: reconnect a provider stream that drops before emitting any content ---
+
+
+async def _nosleep(_delay):
+    return None
+
+
+def _scripted_stream(script):
+    """Build a `make_stream` whose Nth call replays script[N] = (items, exc_or_None):
+    yield each item, then raise `exc` if given. Returns (make_stream, state) so a test
+    can assert how many times the stream was (re)opened."""
+    state = {"opens": 0}
+
+    def make_stream():
+        idx = state["opens"]
+        state["opens"] += 1
+        items, exc = script[idx]
+
+        async def gen():
+            for it in items:
+                yield it
+            if exc is not None:
+                raise exc
+
+        return gen()
+
+    return make_stream, state
+
+
+async def test_stream_reconnect_happy_path_is_transparent():
+    make, state = _scripted_stream([(["a", "b", "c"], None)])
+    out = [x async for x in _stream_with_reconnect(make, max_retries=2, sleep=_nosleep)]
+    assert out == ["a", "b", "c"]
+    assert state["opens"] == 1  # no reconnect on a clean stream
+
+
+async def test_stream_reconnect_recovers_when_nothing_emitted():
+    # Provider closed the stream at the top (rate-limit case) — zero chunks, safe to retry.
+    make, state = _scripted_stream([([], httpcore.ReadError()), (["x", "y"], None)])
+    out = [x async for x in _stream_with_reconnect(make, max_retries=2, sleep=_nosleep)]
+    assert out == ["x", "y"]
+    assert state["opens"] == 2  # reconnected once
+
+
+async def test_stream_reconnect_does_not_retry_after_a_token_streamed():
+    # A drop AFTER a token would duplicate it on a fresh stream — must propagate.
+    make, state = _scripted_stream([(["a"], httpcore.ReadError())])
+    got = []
+    with pytest.raises(httpcore.ReadError):
+        async for x in _stream_with_reconnect(make, max_retries=2, sleep=_nosleep):
+            got.append(x)
+    assert got == ["a"]
+    assert state["opens"] == 1  # no reconnect once content emitted
+
+
+async def test_stream_reconnect_is_bounded_by_max_retries():
+    make, state = _scripted_stream([([], httpcore.ReadError())] * 3)  # attempts = 2 + 1
+    with pytest.raises(httpcore.ReadError):
+        async for _ in _stream_with_reconnect(make, max_retries=2, sleep=_nosleep):
+            pass
+    assert state["opens"] == 3  # bounded — no infinite reconnect loop
+
+
+async def test_stream_reconnect_propagates_non_transport_errors():
+    make, state = _scripted_stream([([], ValueError("boom"))])
+    with pytest.raises(ValueError, match="boom"):
+        async for _ in _stream_with_reconnect(make, max_retries=2, sleep=_nosleep):
+            pass
+    assert state["opens"] == 1  # a non-transport error is never retried
