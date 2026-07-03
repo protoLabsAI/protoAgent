@@ -76,11 +76,21 @@ class _FakeScheduler:
     def __init__(self):
         self.added: list[tuple[str, str]] = []
         self.last_context_id: str | None = "__unset__"
+        self.jobs: dict[str, str] = {}  # job_id → schedule (models the pending set)
+        self.cancelled: list[str] = []
 
     def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
+        if job_id and job_id in self.jobs:
+            raise ValueError(f"job id {job_id!r} already exists")  # faithful to the real backend
         self.added.append((prompt, schedule))
         self.last_context_id = context_id
+        if job_id:
+            self.jobs[job_id] = schedule
         return _FakeJob(schedule)
+
+    def cancel_job(self, job_id):
+        self.cancelled.append(job_id)
+        return self.jobs.pop(job_id, None) is not None
 
     def list_jobs(self):
         return []
@@ -210,3 +220,38 @@ async def test_wait_in_a_real_graph_stamps_the_turn_session(monkeypatch):
         config={"configurable": {"thread_id": "t1"}},
     )
     assert sched.last_context_id == "sess-XYZ"
+
+
+@pytest.mark.asyncio
+async def test_wait_supersedes_a_pending_wait_for_the_same_thread():
+    """One pending wait per thread (#1702): a second wait for the same session cancels
+    the first, so stacked wakes can't pile up (the 'old resume messages catching up' bug)."""
+    sched = _FakeScheduler()
+    state = {"session_id": "chat-abc"}
+    await _wait_tool(sched).ainvoke({"seconds": 30, "then": "check ship", "state": state})
+    await _wait_tool(sched).ainvoke({"seconds": 200, "then": "check ship again", "state": state})
+    # both waits target the stable per-session id; the second actually superseded the
+    # first (proven by exactly ONE pending job despite two add_jobs — without the
+    # cancel, the second add_job would ValueError on the duplicate id).
+    assert sched.cancelled == ["wait:chat-abc", "wait:chat-abc"]
+    assert list(sched.jobs) == ["wait:chat-abc"]
+    assert len(sched.added) == 2  # both scheduled cleanly (no duplicate-id error)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_different_threads_do_not_supersede_each_other():
+    sched = _FakeScheduler()
+    await _wait_tool(sched).ainvoke({"seconds": 10, "then": "a", "state": {"session_id": "chat-1"}})
+    await _wait_tool(sched).ainvoke({"seconds": 10, "then": "b", "state": {"session_id": "chat-2"}})
+    assert set(sched.jobs) == {"wait:chat-1", "wait:chat-2"}  # both pending, independent
+
+
+@pytest.mark.asyncio
+async def test_wait_logs_the_scheduling(caplog):
+    import logging
+
+    sched = _FakeScheduler()
+    with caplog.at_level(logging.INFO, logger="protoagent.tools"):
+        await _wait_tool(sched).ainvoke({"seconds": 45, "then": "dock and sell", "state": {"session_id": "chat-x"}})
+    line = next((r.getMessage() for r in caplog.records if "[wait]" in r.getMessage()), "")
+    assert "thread=chat-x" in line and "45s" in line and "dock and sell" in line

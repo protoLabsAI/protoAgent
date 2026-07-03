@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`wait` no longer stacks wake-ups — one pending wait per thread** (#1702). The
+  `wait` tool scheduled a new one-shot resume on every call with no dedup, so an
+  agent that under-waited and re-waited piled up overlapping wakes that all fired
+  into the same thread ("old resume messages catching up"). A new `wait` now
+  supersedes any still-pending wait for the same session (a stable per-thread job
+  id → cancel-then-add), and every scheduling is logged (`[wait] thread=… in Ns …`
+  incl. whether it superseded a prior wait) — previously the loop was invisible in
+  logs.
+
 ### Added
 - **Dismiss a hard turn-error bubble in place** (#1695). A hard turn error (network
   drop, backend 500 mid-stream) left an error bubble that could only be cleared by
