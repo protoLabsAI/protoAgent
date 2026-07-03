@@ -425,6 +425,9 @@ function scenarioFor(prompt) {
       name: "web_search",
       input: { query: "agent client protocol" },
       output: "1 result(s): Agent Client Protocol — https://agentclientprotocol.com",
+      // The executor streams the post-tool answer as deltas too — the terminal
+      // replace then matches the client's accumulation and keeps interleaving.
+      streamChunks: ["Found it — Agent Client Protocol."],
       answer: "Found it — Agent Client Protocol.",
     };
   if (t.includes("SUBAGENT"))
@@ -612,7 +615,10 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
       artifact: {
         artifactId: taskId,
         parts: [
-          { kind: "text", text: scenario.answer },
+          // The real terminal frame re-sends the FULL turn text — including any
+          // pre-tool narration (the executor's `accumulated` spans the whole
+          // turn) — not just the post-tool answer.
+          { kind: "text", text: (scenario.preText || "") + scenario.answer },
           {
             kind: "data",
             data: {
@@ -640,7 +646,9 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
           },
         ],
       },
-      append: false,
+      // No `append` key: proto3 omits the bool at false on the real wire, so the
+      // terminal REPLACE frame arrives with `append` absent (#1709). Mirroring that
+      // keeps e2e guarding the console's absent→replace mapping.
       lastChunk: true,
     }),
     wrap({ kind: "status-update", taskId, contextId, status: { state: "completed" }, final: true }),
