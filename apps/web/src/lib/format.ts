@@ -49,9 +49,15 @@ export function pct(n: number): string {
   return `${Math.round((n || 0) * 100)}%`;
 }
 
-/** Byte counts — "512 B", "2.0 KB", "3.4 MB". */
+/** Byte counts — "512 B", "2.0 KB", "3.4 MB", "1.2 GB"; ≥10 in a unit drops the decimal ("14 KB"). */
 export function bytes(n: number): string {
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${n} B`;
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }

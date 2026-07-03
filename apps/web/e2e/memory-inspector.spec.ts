@@ -12,18 +12,19 @@ test.describe.configure({ mode: "serial" });
 
 // Fresh page → Memory surface. Tests that pre-set a mock mode re-run this so the
 // first fetch happens under that mode (a page load resets the query cache). The
-// shell PERSISTS the open surface across reloads, so a second visit may restore
-// Memory on its own — clicking the rail button then would TOGGLE it closed; only
-// click when the surface didn't come back by itself.
+// shell PERSISTS the open surface across reloads (uiStore hydrates synchronously
+// from localStorage, so a restored surface mounts in the SAME commit that paints
+// the rail) — clicking the rail button then would TOGGLE it closed. Once the rail
+// is visible, one instant check decides restored vs. fresh; no timeout probe.
 async function openMemory(page: import("@playwright/test").Page) {
   await page.goto("/app/", { waitUntil: "load" });
   const surface = page.getByTestId("memory-surface");
-  try {
-    await expect(surface).toBeVisible({ timeout: 2000 });
-  } catch {
-    await page.getByRole("button", { name: "Memory" }).click();
-    await expect(surface).toBeVisible();
-  }
+  // exact: role-name matching is substring by default, and once the surface is
+  // restored a session row whose topic mentions "memory" would also match.
+  const rail = page.getByRole("button", { name: "Memory", exact: true });
+  await expect(rail).toBeVisible();
+  if (!(await surface.isVisible())) await rail.click();
+  await expect(surface).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
