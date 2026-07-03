@@ -232,13 +232,24 @@ test("cancel paths leave rows untouched: both delete dialogs dismiss, edit Cance
   await expect(surface.getByText("The operator works in US/Pacific.")).toBeVisible();
   await expect(surface.getByText("scribble that must not persist")).toHaveCount(0);
 
-  // Hot delete → Cancel: dialog closes, chunk survives.
+  // Hot delete → Cancel: dialog closes, chunk survives. Entry 32 is OUTSIDE the
+  // injection window (badged "not injecting"), so the dialog must not claim the
+  // delete stops anything — that would contradict the badge behind it.
   await surface.getByLabel("delete hot entry 32").click();
   const hotDialog = page.getByRole("dialog", { name: "Delete this hot-memory entry?" });
   await expect(hotDialog).toBeVisible();
+  await expect(hotDialog).toContainText("outside the injection window");
+  await expect(hotDialog).not.toContainText("stops injecting");
   await hotDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(hotDialog).not.toBeVisible();
   await expect(surface.getByText("Weekly report goes out Fridays at 9am.")).toBeVisible();
+
+  // Entry 31 IS in the window — its dialog says the delete stops injection.
+  await surface.getByLabel("delete hot entry 31").click();
+  await expect(hotDialog).toBeVisible();
+  await expect(hotDialog).toContainText("stops injecting into the agent's turns");
+  await hotDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(hotDialog).not.toBeVisible();
 });
 
 test("a hot edit whose old revision couldn't be removed warns via toast", async ({ page }) => {
@@ -254,4 +265,45 @@ test("a hot edit whose old revision couldn't be removed warns via toast", async 
   await expect(
     page.locator(".pl-toast.pl-toast--warning", { hasText: "both may inject" }),
   ).toBeVisible();
+});
+
+test("a hot edit against a store that went off errors — not the stale-revision warning", async ({ page }) => {
+  const surface = page.getByTestId("memory-surface");
+  await surface.getByRole("tab", { name: "Hot memory" }).click();
+  await expect(surface.getByText("The operator works in US/Pacific.")).toBeVisible();
+
+  // The store goes off AFTER the list rendered (settings hot-reload / restart);
+  // no focus-refetch, so the stale list still shows rows. The PUT now answers the
+  // store-off shape {enabled:false, id:null, replaced:false} — replaced:false is
+  // in that shape, so the store-off branch must win over the "both may inject"
+  // warning, whose every clause would be false here (nothing saved, nothing injects).
+  await page.request.post("/api/__test__/memory/mode", { data: { enabled: false } });
+
+  await surface.getByLabel("edit hot entry 31").click();
+  await surface.getByLabel("hot entry 31 content").fill("The operator works in US/Eastern.");
+  await surface.getByRole("button", { name: "Save", exact: true }).click();
+
+  await expect(
+    page.locator(".pl-toast.pl-toast--error", { hasText: /knowledge store is off — nothing was saved/ }),
+  ).toBeVisible();
+  await expect(page.locator(".pl-toast", { hasText: "both may inject" })).toHaveCount(0);
+  // The refetch lands on the store-off notice — the stale rows are gone.
+  await expect(surface.getByText(/knowledge store is off/)).toBeVisible();
+});
+
+test("a hot delete against a store that went off errors instead of claiming success", async ({ page }) => {
+  const surface = page.getByTestId("memory-surface");
+  await surface.getByRole("tab", { name: "Hot memory" }).click();
+  await expect(surface.getByText("Weekly report goes out Fridays at 9am.")).toBeVisible();
+
+  await page.request.post("/api/__test__/memory/mode", { data: { enabled: false } });
+
+  await surface.getByLabel("delete hot entry 32").click();
+  const dialog = page.getByRole("dialog", { name: "Delete this hot-memory entry?" });
+  await dialog.getByRole("button", { name: "Delete entry" }).click();
+
+  await expect(
+    page.locator(".pl-toast.pl-toast--error", { hasText: /knowledge store is off — nothing was deleted/ }),
+  ).toBeVisible();
+  await expect(page.locator(".pl-toast", { hasText: "Hot-memory entry deleted." })).toHaveCount(0);
 });

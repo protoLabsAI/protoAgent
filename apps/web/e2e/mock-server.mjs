@@ -116,7 +116,8 @@ let memory = cloneMemory();
 // Degradation switches the memory spec flips via POST /api/__test__/memory/mode
 // (merged; /api/__test__/memory/reset restores the defaults):
 //   fail: "sessions"|"hot"|"injections" → that GET answers 500
-//   enabled: false                      → the hot route reports the store off
+//   enabled: false                      → the hot routes report the store off
+//                                         (GET list; PUT/DELETE drop the write)
 //   empty: true                         → all three lists serve zero rows
 //   replaced: false                     → the hot PUT reports the old revision survived
 //   legacy: true                        → rows are served WITHOUT the delivery-truth
@@ -585,6 +586,8 @@ const server = createServer(async (req, res) => {
       const h = pathname.match(/^\/api\/memory\/hot\/(\d+)$/);
       if (h && req.method === "DELETE") {
         const id = Number(h[1]);
+        // Store off → the write is dropped before any lookup, like the backend.
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, deleted: false });
         const i = memory.hot.findIndex((x) => x.id === id);
         if (i < 0) return sendJson(res, { detail: "no hot-memory chunk with that id" }, 404);
         memory.hot.splice(i, 1);
@@ -592,6 +595,9 @@ const server = createServer(async (req, res) => {
       }
       if (h && req.method === "PUT") {
         const id = Number(h[1]);
+        // Store off → the edit is dropped; the exact contract shape the console's
+        // store-off toast branch keys on (NOT the replaced:false warning).
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, id: null, replaced: false });
         const c = memory.hot.find((x) => x.id === id);
         if (!c) return sendJson(res, { detail: "no hot-memory chunk with that id" }, 404);
         c.content = String(body.content || "");

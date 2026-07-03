@@ -211,10 +211,22 @@ function HotMemoryPanel() {
   const [draft, setDraft] = useState("");
   const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.memoryHot });
 
+  // Both write routes answer 200 with enabled:false when the knowledge store went
+  // off AFTER this list rendered (settings hot-reload / restart; the list has no
+  // focus-refetch so it goes stale silently) — the write was DROPPED, and the
+  // refetch below swaps the panel to the store-off notice.
+  const storeOffToast = (verb: string) =>
+    toast({
+      tone: "error",
+      title: "Memory",
+      message: `The knowledge store is off — nothing was ${verb} (enable middleware.knowledge).`,
+    });
+
   const del = useMutation({
     mutationFn: (id: number) => api.deleteMemoryHot(id),
-    onSuccess: () => {
-      toast({ tone: "success", title: "Memory", message: "Hot-memory entry deleted." });
+    onSuccess: (r) => {
+      if (r.enabled === false) storeOffToast("deleted");
+      else toast({ tone: "success", title: "Memory", message: "Hot-memory entry deleted." });
       invalidate();
     },
     onError: (e) => toast({ tone: "error", title: "Memory", message: errMsg(e) }),
@@ -224,9 +236,14 @@ function HotMemoryPanel() {
     mutationFn: ({ id, content }: { id: number; content: string }) =>
       api.updateMemoryHot(id, { content }),
     onSuccess: (r) => {
-      // The edit is add-new-then-delete-old server-side; replaced:false means the
-      // old revision survived, so BOTH rows sit in the store until one is pruned.
-      if (r.replaced === false) {
+      if (r.enabled === false) {
+        // Store-off branch ({enabled:false, id:null, replaced:false}) — must win
+        // over the replaced check: nothing was updated and nothing injects, so
+        // the stale-revision warning below would be false in every clause.
+        storeOffToast("saved");
+      } else if (r.replaced === false) {
+        // The edit is add-new-then-delete-old server-side; replaced:false means the
+        // old revision survived, so BOTH rows sit in the store until one is pruned.
         toast({
           tone: "warning",
           title: "Memory",
@@ -331,7 +348,7 @@ function HotMemoryPanel() {
                       icon
                       variant="ghost"
                       type="button"
-                      title="Delete this hot-memory entry (stops injecting immediately)"
+                      title="Delete this hot-memory entry outright"
                       aria-label={`delete hot entry ${c.id}`}
                       onClick={() => setPendingDelete(c)}
                     >
@@ -355,8 +372,17 @@ function HotMemoryPanel() {
         }}
         onClose={() => setPendingDelete(null)}
       >
+        {/* Effect copy tracks the row's injection-window state — a backlog row
+            (badged "not injecting") isn't being sent to the agent, so claiming
+            the delete "stops injecting" would contradict its own badge. */}
         {pendingDelete
-          ? `"${(pendingDelete.heading || pendingDelete.content || pendingDelete.preview || "").slice(0, 80)}" stops injecting into every turn. This can't be undone.`
+          ? `"${(pendingDelete.heading || pendingDelete.content || pendingDelete.preview || "").slice(0, 80)}" is removed from hot memory${
+              pendingDelete.injecting === false
+                ? " — it's outside the injection window, so nothing the agent currently sees changes"
+                : pendingDelete.injecting === true
+                  ? " and stops injecting into the agent's turns"
+                  : ""
+            }. This can't be undone.`
           : undefined}
       </ConfirmDialog>
     </>
