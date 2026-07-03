@@ -81,6 +81,38 @@ def test_register_runs_host_free_and_fake_registry_captures():
     assert len(reg.late_tool_factories) == 1
 
 
+def test_fake_registry_captures_surface_lifecycle_callables():
+    # #1729: register_surface used to keep only the NAME, so a plugin's surface
+    # lifecycle wiring (arming watches in `start`, etc.) couldn't be exercised from
+    # a register-smoke test. The start/stop/reload callables are now captured and the
+    # smoke can actually CALL them and assert the side effect.
+    reg = testkit.FakeRegistry(plugin_id="demo")
+    armed = []
+
+    def _start():
+        armed.append("armed")
+
+    def _stop():
+        return None
+
+    def _reload(cfg):
+        return None
+
+    reg.register_surface(_start, stop=_stop, name="fleet", reload=_reload)
+
+    assert reg.surfaces == ["fleet"]  # names still captured for existing assertions
+    start, stop, reload = reg.surface_specs["fleet"]
+    assert (start, stop, reload) == (_start, _stop, _reload)
+    start()  # exercisable: mutation-kills a plugin that forgets to wire `start`
+    assert armed == ["armed"]
+
+    # An unnamed surface is keyed by the plugin id (the effective name), so a plugin
+    # that relies on the default name is still reachable.
+    reg2 = testkit.FakeRegistry(plugin_id="solo")
+    reg2.register_surface(_start)
+    assert "solo" in reg2.surface_specs
+
+
 # ── registry parity — the drift guard (#1637) ────────────────────────────────────────
 # FakeRegistry drifted from PluginRegistry (register_chat_command was missing), which made
 # that seam silently untestable: plugins hasattr-guard the call, so the smoke test passed

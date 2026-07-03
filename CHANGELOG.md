@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugin smoke tests can assert surface lifecycle wiring** (#1729). The testkit's
+  `FakeRegistry.register_surface` kept only the surface *name* and discarded the
+  `start`/`stop`/`reload` callables, so a plugin's surface lifecycle wiring (e.g.
+  arming watch tripwires in `start`) couldn't be exercised from a `register(FakeRegistry)`
+  smoke test — deleting the wiring left the suite green. The callables are now captured
+  in `surface_specs` (keyed by effective name), keeping `surfaces` (names) for existing
+  assertions. Mirror of #1637 (`register_chat_command`).
+
 ## [0.88.0] - 2026-07-03
 
 ### Fixed

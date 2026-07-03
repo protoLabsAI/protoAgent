@@ -198,6 +198,7 @@ class FakeRegistry:
         self.tools: list = []
         self.routers: list = []
         self.surfaces: list = []
+        self.surface_specs: dict = {}  # name -> (start, stop, reload) — assert lifecycle wiring
         self.subagents: list = []
         self.middlewares: list = []
         self.mcp_servers: list = []
@@ -247,7 +248,12 @@ class FakeRegistry:
         self.routers.append((prefix, router))
 
     def register_surface(self, start, stop=None, name: str | None = None, reload=None) -> None:
+        # Keep `surfaces` (names) for existing name-only assertions, AND capture the
+        # start/stop/reload callables so a smoke test can actually exercise a surface's
+        # lifecycle wiring (#1729) — e.g. call `start` and assert it armed its watches.
+        # Keyed by the effective name (name or plugin_id), mirroring the real registry.
         self.surfaces.append(name)
+        self.surface_specs[name or self.plugin_id] = (start, stop, reload)
 
     def register_subagent(self, config) -> None:
         self.subagents.append(config)
