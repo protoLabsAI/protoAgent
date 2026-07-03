@@ -292,6 +292,14 @@
   color: var(--error);
   font-size: 0.8rem;
   line-height: 1.45;
+  /* Cap like .tool-text — a long error body (a failed command echoing its whole
+     input) must scroll inside the card, not fill the pane (#1691). */
+  max-height: 220px;
+  overflow-y: auto;
+}
+.tool-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .tool-error svg {
   flex: none;

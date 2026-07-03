@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Declining a command is no longer a scary full-screen error** (#1692). Denying a
+  `run_command` approval raised a `ToolException`, which the chat rendered as a
+  full-bleed red block that read like a crash and couldn't be dismissed. A decline
+  is the operator's deliberate choice, not a failure — it now returns a normal
+  result (naming the command and telling the model not to retry), rendering as an
+  ordinary collapsed tool card.
+- **Long commands and errors scroll instead of filling the chat** (#1692). The HITL
+  approval command preview (`.hitl-detail`) and tool-error blocks (`.tool-error`)
+  weren't height-capped, so an agent-built long command (e.g. a `gh issue create`
+  with a full body) pushed the Approve/Deny buttons off-screen and a long error
+  filled the pane. Both now cap and scroll, matching the tool-output block.
+
 ## [0.85.0] - 2026-07-02
 
 ### Changed

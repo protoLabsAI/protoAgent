@@ -85,6 +85,10 @@
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--fg);
+  /* A long command (e.g. an agent-built `gh issue create` with a full body) must
+     scroll inside the approval card, not push Approve/Deny off-screen (#1691). */
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .hitl-actions {
