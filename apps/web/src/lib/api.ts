@@ -418,6 +418,19 @@ export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
     .join("");
 }
 
+/** Does this artifact-update frame APPEND to the artifact (vs REPLACE it)?
+ *
+ *  The A2A `append` bool has NO wire presence at its default: the SDK serializes
+ *  frames with proto3 semantics, so `append=false` is OMITTED from the JSON —
+ *  the key is simply absent on every replace frame, including the terminal
+ *  last-chunk frame that re-sends the full canonical answer (#1709). Per the
+ *  A2A spec an absent/false `append` means REPLACE, so only an explicit `true`
+ *  may be read as append — `append !== false` treated the terminal replace as
+ *  an append and rendered every streamed answer twice. */
+export function artifactAppends(update: { append?: boolean; [key: string]: unknown }): boolean {
+  return update.append === true;
+}
+
 const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
@@ -1414,7 +1427,7 @@ export const api = {
       if (artifactUpdate) {
         const aParts = artifactUpdate.artifact?.parts;
         const text = textFromParts(aParts);
-        if (text) handlers.onText?.(text, artifactUpdate.append !== false);
+        if (text) handlers.onText?.(text, artifactAppends(artifactUpdate));
         // The terminal answer artifact also carries the cost-v1 + context-v1 DataParts
         // (a2a_impl executor) — surface this turn's spend and its context-window fill.
         const usage = costFromParts(aParts);

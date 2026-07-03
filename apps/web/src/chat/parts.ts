@@ -9,8 +9,9 @@ import type { ChatPart, ComponentSpec, ToolCall } from "../lib/types";
 
 /** Append a streamed text delta to the ordered parts. Extends the open text run,
  *  or starts a new one when the previous block was a tool group (so post-tool text
- *  renders below the cards). `append=false` replaces the open run (the terminal,
- *  non-streamed answer) or starts the first run. */
+ *  renders below the cards). `append=false` replaces the OPEN run only — a full-turn
+ *  replace (the terminal A2A frame) must go through `replaceText`, which knows the
+ *  replacement spans EVERY text run, not just the trailing one. */
 export function appendText(parts: ChatPart[] | undefined, text: string, append: boolean): ChatPart[] {
   const next = [...(parts ?? [])];
   const last = next[next.length - 1];
@@ -27,6 +28,27 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
   if (!trimmed) return next;
   next.push({ kind: "text", text: trimmed });
   return next;
+}
+
+/** REPLACE the turn's text with the canonical full-turn `text` (an A2A
+ *  artifact-update with `append` absent/false — e.g. the terminal frame, which always
+ *  re-sends the whole answer, #1709). The replacement spans EVERY text run — for a
+ *  [preamble → tools → answer] turn it includes the pre-tool preamble — so rewriting
+ *  only the trailing run would render the preamble twice.
+ *
+ *  `streamed` is the client's OWN accumulation of this turn's text deltas (the flat
+ *  `content` string). When it already equals the replacement, the streamed parts ARE
+ *  canonical: keep them untouched, preserving the text↔tool interleaving. Only on a
+ *  real divergence (frames lost/duplicated en route) do we rebuild — drop every prior
+ *  text run and land the canonical text as one trailing run. That trades the (already
+ *  unreliable) interleaving for the guarantee the answer renders exactly once. */
+export function replaceText(parts: ChatPart[] | undefined, text: string, streamed: string): ChatPart[] {
+  const next = [...(parts ?? [])];
+  if (streamed.trim() === text.trim()) return next;
+  const kept = next.filter((p) => p.kind !== "text");
+  const trimmed = text.replace(/^\s+/, "");
+  if (!trimmed) return kept;
+  return [...kept, { kind: "text", text: trimmed }];
 }
 
 /** Append a streamed reasoning ("thinking") delta to the ordered parts. Extends the

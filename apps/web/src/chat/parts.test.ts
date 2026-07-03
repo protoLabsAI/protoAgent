@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { addComponent, addToolRef, appendReasoning, appendText, foldPlan, toolsForGroup } from "./parts";
+import { addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -60,6 +60,62 @@ describe("appendText", () => {
       { kind: "tools", ids: ["a"] },
       { kind: "text", text: "Here's the answer" },
     ]);
+  });
+});
+
+describe("replaceText — the terminal full-turn replace (#1709 companion)", () => {
+  // The terminal A2A frame re-sends the WHOLE turn's canonical text as a replace.
+  // These lock the two behaviors: no-op when the client's own accumulation already
+  // matches (keep the interleaving), rebuild-once on real divergence.
+
+  it("keeps the streamed interleaving when the client's accumulation matches — the preamble is NOT doubled", () => {
+    // [preamble → tools → answer]: rewriting only the trailing run would yield
+    // [preamble, tools, preamble+answer] — the doubled-preamble regression.
+    let p: ChatPart[] | undefined;
+    p = appendText(p, "Let me check. ", true);
+    p = addToolRef(p, "t1");
+    p = appendText(p, "The answer.", true);
+    const streamed = "Let me check. The answer.";
+    expect(replaceText(p, "Let me check. The answer.", streamed)).toEqual([
+      { kind: "text", text: "Let me check. " },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "The answer." },
+    ]);
+  });
+
+  it("tolerates leading/trailing whitespace differences between streamed and canonical text", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "answer" }];
+    expect(replaceText(p, "answer\n", "answer")).toEqual([{ kind: "text", text: "answer" }]);
+  });
+
+  it("rebuilds on divergence: drops EVERY prior text run and lands the canonical text exactly once", () => {
+    // Mid-stream frames were lost en route — the client's accumulation is truncated.
+    const p: ChatPart[] = [
+      { kind: "text", text: "Let me ch" }, // truncated preamble
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "The an" }, // truncated answer
+    ];
+    expect(replaceText(p, "Let me check. The answer.", "Let me chThe an")).toEqual([
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Let me check. The answer." },
+    ]);
+  });
+
+  it("keeps non-text parts (reasoning/components) on a rebuild", () => {
+    const p: ChatPart[] = [
+      { kind: "reasoning", text: "thinking" },
+      { kind: "text", text: "old" },
+      { kind: "component", spec: { component: "table", props: {} } },
+    ];
+    expect(replaceText(p, "new answer", "old-diverged")).toEqual([
+      { kind: "reasoning", text: "thinking" },
+      { kind: "component", spec: { component: "table", props: {} } },
+      { kind: "text", text: "new answer" },
+    ]);
+  });
+
+  it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {
+    expect(replaceText(undefined, "full answer", "")).toEqual([{ kind: "text", text: "full answer" }]);
   });
 });
 

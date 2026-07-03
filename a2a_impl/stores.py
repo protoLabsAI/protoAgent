@@ -46,7 +46,7 @@ from a2a.server.tasks import (
     DatabaseTaskStore,
 )
 from a2a.server.tasks.push_notification_sender import PushNotificationEvent
-from a2a.types import TaskPushNotificationConfig
+from a2a.types import Task, TaskPushNotificationConfig
 
 log = logging.getLogger(__name__)
 
@@ -229,6 +229,119 @@ class ValidatingPushNotificationSender(BasePushNotificationSender):
         return await super()._dispatch_notification(event, push_info, task_id)
 
 
+# ── Reasoning coalescing (#1710) ────────────────────────────────────────────────
+
+# Duplicated from a2a_impl.executor (the executor imports graph.* at module
+# scope; keeping the constant local avoids pulling the whole agent brain into
+# the store's import chain). Locked together by test_a2a_stores.
+_REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
+
+
+def coalesce_reasoning_history(task: Task) -> int:
+    """Collapse each contiguous run of reasoning-v1 Messages in ``task.history``
+    into ONE Message, in place. Returns the number of messages removed.
+
+    Reasoning ("thinking") deltas are a STREAMING affordance: the executor emits
+    them as reasoning-v1 DataParts on WORKING status frames so the console fills
+    the live thinking bubble. But the a2a-sdk ``TaskManager`` moves every status
+    frame's message into durable ``history`` — so a token-per-frame reasoning
+    stream persisted one near-single-word Message per delta (~700 rows for one
+    turn: #1710), bloating the store and making ``GetTask(historyLength=N)``
+    return word fragments instead of conversation. The executor now batches the
+    wire frames (~24-char granularity, keeping the live bubble); this collapses
+    whatever reaches the durable store to one Message per contiguous reasoning
+    block, mirroring how the answer text finalizes into a single canonical part.
+
+    Deliberately mutates the task in place: the SDK ``TaskManager`` re-saves its
+    ONE in-memory ``Task`` on every event and copies it whole for every
+    subscriber frame, so keeping history compact also removes the O(events ×
+    history) serialization/copy pressure the flood created (the prime suspect
+    for the mid-stream artifact frame loss in #1709). Only agent messages whose
+    parts are ALL reasoning DataParts are touched; user messages, tool frames,
+    and HITL prompts are never merged, and non-contiguous runs stay separate.
+    """
+    from google.protobuf import json_format, struct_pb2
+
+    from a2a.types import Part, Role
+
+    def _reasoning_text(part) -> str | None:
+        """The part's reasoning text, or None when it isn't a reasoning DataPart."""
+        if part.WhichOneof("content") != "data":
+            return None
+        mime = part.metadata.fields["mimeType"].string_value if "mimeType" in part.metadata.fields else ""
+        if mime != _REASONING_MIME:
+            return None
+        fields = part.data.struct_value.fields
+        return fields["text"].string_value if "text" in fields else ""
+
+    def _run_texts(msg) -> list[str] | None:
+        """All parts' reasoning texts when the whole message is reasoning, else None."""
+        if msg.role != Role.ROLE_AGENT or not msg.parts:
+            return None
+        texts = [_reasoning_text(p) for p in msg.parts]
+        return texts if all(t is not None for t in texts) else None  # type: ignore[return-value]
+
+    merged: list = []
+    run_head = None  # first Message of the current contiguous reasoning run
+    run_texts: list[str] = []
+
+    def _close_run() -> None:
+        nonlocal run_head, run_texts
+        if run_head is None:
+            return
+        # Rewrite the head's parts to a single data part with the run's full text
+        # (same shape the executor emits, so parsers see one big reasoning part).
+        del run_head.parts[:]
+        part = Part()
+        value = struct_pb2.Value()
+        json_format.ParseDict({"text": "".join(run_texts)}, value.struct_value)
+        part.data.CopyFrom(value)
+        part.metadata.update({"mimeType": _REASONING_MIME})
+        part.media_type = "application/json"
+        run_head.parts.append(part)
+        merged.append(run_head)
+        run_head, run_texts = None, []
+
+    for msg in task.history:
+        texts = _run_texts(msg)
+        if texts is None:
+            _close_run()
+            merged.append(msg)
+            continue
+        if run_head is None:
+            head = type(msg)()
+            head.CopyFrom(msg)
+            run_head = head
+        run_texts.extend(texts)
+    _close_run()
+
+    removed = len(task.history) - len(merged)
+    if removed:
+        # `merged` holds references into task.history — copy before clearing.
+        kept = []
+        for m in merged:
+            c = type(m)()
+            c.CopyFrom(m)
+            kept.append(c)
+        del task.history[:]
+        task.history.extend(kept)
+    return removed
+
+
+class ReasoningCoalescingTaskStore(DatabaseTaskStore):
+    """Durable task store that coalesces contiguous reasoning-v1 history runs
+    into one Message per run on every save (#1710). Streaming frames are
+    untouched — this is persistence-shape only, so the wire contract and the
+    live thinking bubble are unchanged."""
+
+    async def save(self, task: Task, context: ServerCallContext) -> None:
+        try:
+            coalesce_reasoning_history(task)
+        except Exception:  # noqa: BLE001 — coalescing must never lose a save
+            log.exception("[a2a] reasoning coalescing failed; saving uncoalesced")
+        await super().save(task, context)
+
+
 # ── Durable store construction (paths match the bespoke stores) ─────────────────
 
 
@@ -263,10 +376,12 @@ def build_a2a_stores() -> tuple[
     Each store gets its own engine/file (same split the bespoke stores used:
     ``a2a-tasks.db`` and ``a2a-push.db``). The SDK stores lazy-init their schema
     on first use; ``initialize_a2a_stores`` forces that + a TTL sweep at boot.
+    The task store coalesces streamed reasoning runs into one durable history
+    Message per run (#1710) — see ``ReasoningCoalescingTaskStore``.
     """
     task_db = _resolve_db_path("a2a-tasks.db")
     push_db = _resolve_db_path("a2a-push.db")
-    task_store = DatabaseTaskStore(make_sqlite_engine(task_db))
+    task_store = ReasoningCoalescingTaskStore(make_sqlite_engine(task_db))
     push_store = ValidatingPushNotificationConfigStore(make_sqlite_engine(push_db))
     return task_store, push_store, task_db, push_db
 

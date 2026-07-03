@@ -31,7 +31,7 @@ import { ComposerModelSelect } from "./ComposerModelSelect";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
-import { addComponent, addToolRef, appendReasoning, appendText } from "./parts";
+import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1149,7 +1149,14 @@ function ChatSessionSlot({
                 ? {
                     ...message,
                     content: append ? `${message.content}${text}` : text,
-                    parts: appendText(message.parts, text, append),
+                    // A replace spans the WHOLE turn's text (the terminal frame re-sends
+                    // the full canonical answer, preamble included) — replaceText keeps
+                    // the streamed interleaving when nothing diverged and rebuilds
+                    // otherwise; appendText's open-run rewrite would double a pre-tool
+                    // preamble.
+                    parts: append
+                      ? appendText(message.parts, text, true)
+                      : replaceText(message.parts, text, message.content),
                     status: "streaming",
                   }
                 : message,

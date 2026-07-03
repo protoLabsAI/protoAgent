@@ -292,7 +292,22 @@ class AgentClient:
                         task_id = payload_obj.get("taskId", "") or task_id
                         art = payload_obj.get("artifact")
                         if art:
-                            artifacts.append(art)
+                            # Honor the A2A `append` flag (spec §TaskArtifactUpdateEvent):
+                            # append=True extends the same-id artifact; append absent/False
+                            # REPLACES it. The executor's terminal frame re-sends the full
+                            # canonical answer as a replace (#1709) — blind accumulation
+                            # would double the text.
+                            aid = art.get("artifactId", "")
+                            idx = next(
+                                (i for i, a in enumerate(artifacts) if a.get("artifactId", "") == aid),
+                                None,
+                            )
+                            if idx is None:
+                                artifacts.append(art)
+                            elif payload_obj.get("append"):
+                                artifacts[idx].setdefault("parts", []).extend(art.get("parts") or [])
+                            else:
+                                artifacts[idx] = art
                     elif kind == "statusUpdate":
                         task_id = payload_obj.get("taskId", "") or task_id
                         status = payload_obj.get("status") or {}
