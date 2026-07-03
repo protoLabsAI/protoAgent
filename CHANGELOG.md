@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Memory inspector tells the truth about what injects** (#1726). The Hot
+  memory and Sessions tabs listed a superset of what actually rides the agent's
+  turns with no way to tell the difference. Hot rows now carry `injecting` (in the
+  newest-100 / 6,000-char injection window or backlog) and session rows `in_digest`
+  (inside the 10-newest, token-capped `<prior_sessions>` digest). Also: injection-log
+  rows can no longer lose session attribution (tracing fallback), the memory routes
+  no longer block the event loop on large stores, and session summaries persist on
+  Windows (`:` in ids — e.g. `system:activity` — is now NTFS-safe, with legacy-file
+  fallback).
+
+### Changed
+- **Memory view accuracy and polish** (#1727). Tab copy matches the real injection
+  behavior; "not injecting" / "not in digest" badges mark backlog rows; a failed
+  hot-edit replacement now warns (both revisions may inject) instead of toasting
+  success; the Injections filter is debounced, keeps prior results while fetching,
+  and says it matches exact session ids; session rows show summary size; the tab
+  strip has an accessible name.
+
 ## [0.87.0] - 2026-07-03
 
 ### Fixed
