@@ -178,7 +178,7 @@ def test_build_agent_card_omits_bearer_when_not_configured():
 # ── ProtoAgentExecutor end-to-end (through a2a-sdk) ───────────────────────────
 
 
-def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None):
+def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task_store=None):
     """Mount a real a2a-sdk app driven by ProtoAgentExecutor(stream_fn)."""
     card = pa.build_agent_card(
         name="test",
@@ -190,7 +190,7 @@ def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None):
     )
     handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(stream_fn),
-        task_store=InMemoryTaskStore(),
+        task_store=task_store if task_store is not None else InMemoryTaskStore(),
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
@@ -495,6 +495,188 @@ async def test_text_deltas_stream_as_incremental_artifact_frames():
     assert len(artifact_texts) >= 2, artifact_texts
     assert any("First sentence" in t for t in artifact_texts)
     assert "Third and final sentence" in "".join(artifact_texts)
+
+
+# ── Durable-store pair: #1710 reasoning flood + #1709 truncated artifact ──────
+
+_REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
+
+
+def _reasoning_texts_from_history(history: list[dict]) -> list[str]:
+    """The concatenated reasoning text of each all-reasoning history Message."""
+    out: list[str] = []
+    for m in history or []:
+        parts = m.get("parts") or []
+        texts: list[str] | None = []
+        for p in parts:
+            mime = (p.get("metadata") or {}).get("mimeType")
+            if mime == _REASONING_MIME and isinstance(p.get("data"), dict):
+                texts.append(p["data"].get("text", ""))
+            else:
+                texts = None
+                break
+        if texts:
+            out.append("".join(texts))
+    return out
+
+
+@pytest.mark.asyncio
+async def test_reasoning_flood_coalesces_in_durable_history(tmp_path):
+    """#1710: a token-per-event reasoning stream (~200 deltas) lands in durable
+    task history as ONE coalesced reasoning Message carrying the full text —
+    not a Message row per word — so GetTask history stays conversation-shaped."""
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+
+    words = [f" think{i}" for i in range(200)]
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        for w in words:
+            yield ("reasoning", w)
+        yield ("done", "short answer")
+
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(str(tmp_path / "a2a-tasks.db")))
+    await store.initialize()
+    app = _build_app(stream, task_store=store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    history = final.get("history") or []
+    reasoning = _reasoning_texts_from_history(history)
+    assert len(reasoning) == 1, f"expected ONE coalesced reasoning Message, got {len(reasoning)} in {len(history)} rows"
+    assert reasoning[0] == "".join(words)  # nothing dropped by coalescing
+    # The flood never lands as per-word rows: user message + reasoning (+ status moves).
+    assert len(history) <= 4, f"history bloated: {len(history)} rows"
+    # The answer artifact is unaffected.
+    parts = final["artifacts"][0]["parts"]
+    assert parts[0]["text"] == "short answer"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_stream_stays_live_but_batched():
+    """The live thinking bubble still fills incrementally — multiple reasoning
+    frames on the wire, batched to ~_FLUSH_CHARS granularity (not one WORKING
+    frame per token), with no reasoning content lost and the tail flushed
+    before the answer text frame (stream order)."""
+    import json
+
+    words = [f" w{i}" for i in range(120)]
+    answer = "answer text long enough to flush as its own frame"
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        for w in words:
+            yield ("reasoning", w)
+        yield ("text", answer)
+        yield ("done", answer)
+
+    app = _build_app(stream)
+    reasoning_frames: list[str] = []
+    saw_artifact_frame = False
+    reasoning_after_artifact = False
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                result = json.loads(line[5:].strip()).get("result", {})
+                status = result.get("statusUpdate", {}).get("status", {})
+                for part in (status.get("message") or {}).get("parts", []):
+                    if (part.get("metadata") or {}).get("mimeType") == _REASONING_MIME:
+                        reasoning_frames.append(part.get("data", {}).get("text", ""))
+                        if saw_artifact_frame:
+                            reasoning_after_artifact = True
+                if result.get("artifactUpdate"):
+                    saw_artifact_frame = True
+
+    assert "".join(reasoning_frames) == "".join(words)  # wire carries ALL reasoning
+    # Live (more than one frame) but batched (far fewer frames than tokens).
+    assert 2 <= len(reasoning_frames) < len(words) // 2, len(reasoning_frames)
+    # The buffered reasoning tail flushed BEFORE the answer frame (stream order).
+    assert saw_artifact_frame and not reasoning_after_artifact
+
+
+@pytest.mark.asyncio
+async def test_finalize_repairs_durable_artifact_after_downstream_frame_loss(monkeypatch):
+    """#1709: mid-stream artifact-append frames lost DOWNSTREAM of the executor
+    (emitted, but never persisted) — the terminal last_chunk frame must REPLACE
+    the artifact with the canonical text so the durable task self-heals, instead
+    of appending meta-only and permanently sealing the truncation."""
+    from a2a.server.tasks.task_manager import TaskManager
+    from a2a.types import TaskArtifactUpdateEvent
+
+    chunks = [
+        "First chunk of the streamed answer, well over the flush threshold. ",
+        "Second chunk that the durable store never sees. ",
+        "Third chunk, also lost downstream of the executor.",
+    ]
+    full = "".join(chunks)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        for c in chunks:
+            yield ("text", c)
+        yield ("usage", {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001})
+        yield ("done", full)
+
+    orig_process = TaskManager.process
+
+    async def lossy_process(self, event):
+        # The forensic loss shape from #1709: mid-stream appends vanish; the
+        # first (create) frame and the terminal last_chunk frame arrive.
+        if isinstance(event, TaskArtifactUpdateEvent) and event.append and not event.last_chunk:
+            return event
+        return await orig_process(self, event)
+
+    monkeypatch.setattr(TaskManager, "process", lossy_process)
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    parts = final["artifacts"][0]["parts"]
+    text_parts = [p["text"] for p in parts if p.get("text")]
+    # The canonical answer, exactly once — neither truncated nor doubled.
+    assert text_parts == [full]
+    # The meta parts still land exactly once.
+    mimes = [(p.get("metadata") or {}).get("mimeType") for p in parts]
+    assert mimes.count(pa.COST_MIME) == 1
+
+
+@pytest.mark.asyncio
+async def test_streamed_answer_lands_exactly_once_in_durable_artifact():
+    """Normal (no-loss) path: the authoritative terminal REPLACE leaves the
+    durable artifact holding ONE canonical text part — the streamed chunk parts
+    don't linger (concat readers of the stored task would re-join them with
+    separators) and the replace doesn't double the answer."""
+
+    chunks = ["First streamed chunk, over the threshold. ", "Second streamed chunk, also flushed."]
+    full = "".join(chunks)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        for c in chunks:
+            yield ("text", c)
+        yield ("done", full)
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    text_parts = [p["text"] for p in final["artifacts"][0]["parts"] if p.get("text")]
+    assert text_parts == [full]
 
 
 @pytest.mark.asyncio

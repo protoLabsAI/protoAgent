@@ -494,3 +494,131 @@ async def test_initialize_recreates_sdk_schema_over_legacy_db(tmp_path):
 
     await task_engine.dispose()
     await push_engine.dispose()
+
+
+# ── (c) reasoning coalescing (#1710) ─────────────────────────────────────────────
+
+REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
+
+
+def _reasoning_part(text: str):
+    """A reasoning-v1 DataPart in the exact shape the executor emits — built via
+    the executor's own packer so the store's parser stays locked to it."""
+    from a2a_impl.executor import _data_part_proto
+
+    return _data_part_proto({"text": text}, REASONING_MIME)
+
+
+def _reasoning_msg(text: str):
+    from a2a.types import a2a_pb2
+
+    return a2a_pb2.Message(role=a2a_pb2.ROLE_AGENT, parts=[_reasoning_part(text)])
+
+
+def _text_msg(text: str, *, role=None):
+    from a2a.types import a2a_pb2
+
+    return a2a_pb2.Message(role=role or a2a_pb2.ROLE_USER, parts=[a2a_pb2.Part(text=text)])
+
+
+def _reasoning_text_of(msg) -> str:
+    return msg.parts[0].data.struct_value.fields["text"].string_value
+
+
+def test_coalesce_reasoning_history_merges_contiguous_runs():
+    """Each contiguous run of all-reasoning agent Messages collapses to ONE
+    Message with the concatenated text; everything else keeps its row and
+    position, and separate runs stay separate."""
+    from a2a.types import a2a_pb2
+
+    from a2a_impl.stores import coalesce_reasoning_history
+
+    task = a2a_pb2.Task(id="t", context_id="c")
+    task.history.append(_text_msg("the question"))
+    for w in ("one", " two", " three"):
+        task.history.append(_reasoning_msg(w))
+    task.history.append(_text_msg("tool status", role=a2a_pb2.ROLE_AGENT))  # breaks the run
+    for w in (" four", " five"):
+        task.history.append(_reasoning_msg(w))
+    task.history.append(_text_msg("the answer", role=a2a_pb2.ROLE_AGENT))
+
+    removed = coalesce_reasoning_history(task)
+
+    assert removed == 3  # 5 reasoning rows → 2 (one per contiguous run)
+    assert len(task.history) == 5
+    assert task.history[0].parts[0].text == "the question"
+    assert _reasoning_text_of(task.history[1]) == "one two three"
+    assert task.history[2].parts[0].text == "tool status"
+    assert _reasoning_text_of(task.history[3]) == " four five"
+    assert task.history[4].parts[0].text == "the answer"
+    # Idempotent: a second pass changes nothing (the TaskManager re-saves per event).
+    assert coalesce_reasoning_history(task) == 0
+    assert len(task.history) == 5
+
+
+def test_coalesce_skips_mixed_part_and_user_messages():
+    """A message mixing reasoning with other parts, or a non-agent message, is
+    never merged — only pure reasoning frames coalesce."""
+    from a2a.types import a2a_pb2
+
+    from a2a_impl.stores import coalesce_reasoning_history
+
+    mixed = a2a_pb2.Message(role=a2a_pb2.ROLE_AGENT, parts=[_reasoning_part("keep"), a2a_pb2.Part(text="me")])
+    user_reasoning = a2a_pb2.Message(role=a2a_pb2.ROLE_USER, parts=[_reasoning_part("user-owned")])
+
+    task = a2a_pb2.Task(id="t", context_id="c")
+    task.history.append(mixed)
+    task.history.append(user_reasoning)
+    task.history.append(_reasoning_msg("a"))
+    task.history.append(_reasoning_msg("b"))
+
+    assert coalesce_reasoning_history(task) == 1
+    assert len(task.history) == 3
+    assert len(task.history[0].parts) == 2  # mixed message untouched
+    assert task.history[1].role == a2a_pb2.ROLE_USER  # user message untouched
+    assert _reasoning_text_of(task.history[2]) == "ab"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_coalescing_store_persists_compact_history(tmp_path):
+    """ReasoningCoalescingTaskStore.save collapses the flood before it hits
+    sqlite, in place (the SDK TaskManager re-saves its one in-memory Task per
+    event — compact history also kills the O(events × history) copy pressure).
+    A fresh PLAIN store reads back the compact, text-complete history."""
+    from a2a.types import a2a_pb2
+
+    from a2a_impl.stores import ReasoningCoalescingTaskStore
+
+    db = str(tmp_path / "a2a-tasks.db")
+    ctx = _ctx()
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(db))
+    await store.initialize()
+
+    task = a2a_pb2.Task(
+        id="t-flood",
+        context_id="c",
+        status=a2a_pb2.TaskStatus(state=a2a_pb2.TASK_STATE_WORKING),
+    )
+    task.history.append(_text_msg("q"))
+    for i in range(50):
+        task.history.append(_reasoning_msg(f" w{i}"))
+
+    await store.save(task, ctx)
+
+    assert len(task.history) == 2  # in-place: the live task stays compact too
+
+    fresh = DatabaseTaskStore(make_sqlite_engine(db))
+    await fresh.initialize()
+    got = await fresh.get("t-flood", ctx)
+    assert got is not None
+    assert len(got.history) == 2
+    assert got.history[0].parts[0].text == "q"
+    assert _reasoning_text_of(got.history[1]) == "".join(f" w{i}" for i in range(50))
+
+
+def test_reasoning_mime_constant_matches_executor():
+    """stores._REASONING_MIME is deliberately duplicated from the executor (to
+    keep graph.* out of the store's import chain) — lock them together."""
+    from a2a_impl import executor
+
+    assert stores._REASONING_MIME == executor.REASONING_MIME

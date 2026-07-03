@@ -288,6 +288,25 @@ class ProtoAgentExecutor(AgentExecutor):
         _text_buf = ""
         _answer_started = False  # first chunk creates the artifact (append=False); rest append
         _FLUSH_CHARS = 24
+        # Reasoning ("thinking") deltas arrive one token at a time. Batch them
+        # like the answer text so the live thinking bubble still fills word by
+        # word without a WORKING status frame per token — unbatched, one turn
+        # produced ~700 single-word frames, and each one becomes a durable
+        # history Message row downstream (#1710; the durable store additionally
+        # coalesces whole contiguous reasoning runs — a2a_impl.stores).
+        _reasoning_buf = ""
+
+        async def _flush_reasoning() -> None:
+            nonlocal _reasoning_buf
+            if not _reasoning_buf:
+                return
+            payload_text, _reasoning_buf = _reasoning_buf, ""
+            await updater.update_status(
+                TaskState.TASK_STATE_WORKING,
+                message=updater.new_agent_message(
+                    [_data_part_proto({"text": payload_text}, REASONING_MIME)]
+                ),
+            )
 
         async def _flush_text() -> None:
             nonlocal _text_buf, _answer_started
@@ -303,20 +322,20 @@ class ProtoAgentExecutor(AgentExecutor):
             _text_buf = ""
 
         async def _finalize(final_text: str) -> None:
-            """Close the answer artifact + emit the cost/context DataParts. If
-            the text was streamed (delta frames), append ONLY the meta parts so
-            concat-based consumers don't double the answer; otherwise emit the full
-            text once (the non-streaming path: workflow/subagent short-circuits)."""
-            # If text streamed but the canonical final_text DIVERGES from what
-            # streamed (a goal-outcome note appended, a kicker / multi-iteration retry,
-            # or extract_output reshaping it), REPLACE the artifact (append=False) with
-            # the full final_text so the durable task + any tasks/get re-fetch carry the
-            # real answer, not the raw streamed deltas. When it matches (the common case)
-            # append meta-only so concat-based consumers don't double the answer.
-            diverged = _answer_started and (final_text or "").strip() != accumulated.strip()
-            replace = (not _answer_started) or diverged
-            # body="" yields a dataparts-only list (the text part is conditional).
-            body = final_text if replace else ""
+            """Close the answer artifact + emit the cost/context DataParts.
+
+            AUTHORITATIVE (#1709): the terminal frame always carries the full
+            canonical ``final_text`` with ``append=False`` — a REPLACE — so the
+            durable task (and any tasks/get re-fetch) holds the answer exactly
+            once even when mid-stream append frames were lost downstream of this
+            process. The old heuristic (append meta-only when the streamed text
+            matched ``final_text``) compared against the IN-PROCESS accumulation,
+            so a downstream loss looked like "nothing diverged" and permanently
+            sealed a truncated artifact into the store. Frame consumers must
+            honor the A2A ``append`` flag (append=False ⇒ replace — the console
+            and the SDK task store both do); naive concat consumers would
+            otherwise see the answer twice."""
+            body = final_text
             # Compaction context (#1372): the live prompt size + the configured trigger /
             # token threshold, merged into one context-v1 DataPart. Provider failures
             # degrade to "size only" — never break the turn's finalization.
@@ -343,7 +362,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 await updater.add_artifact(
                     parts,
                     artifact_id=answer_aid,
-                    append=not replace,
+                    append=False,
                     last_chunk=True,
                 )
 
@@ -374,6 +393,12 @@ class ProtoAgentExecutor(AgentExecutor):
                 request_metadata=_md,
                 images=images,
             ):
+                # A contiguous reasoning run ends at the first non-reasoning event:
+                # flush the buffered tail first so frames reach the consumer in
+                # stream order (thinking before the text/tool frame it preceded).
+                if event_type != "reasoning":
+                    await _flush_reasoning()
+
                 if event_type == "text":
                     accumulated += payload
                     _text_buf += payload
@@ -411,13 +436,13 @@ class ProtoAgentExecutor(AgentExecutor):
                 elif event_type == "reasoning":
                     # Live "thinking" — a reasoning DataPart on a WORKING frame,
                     # separate from the answer artifact (plain consumers ignore it).
+                    # Batched to the same char threshold as the answer text so a
+                    # token-per-event reasoning stream doesn't become a frame per
+                    # word (#1710).
                     if payload:
-                        await updater.update_status(
-                            TaskState.TASK_STATE_WORKING,
-                            message=updater.new_agent_message(
-                                [_data_part_proto({"text": str(payload)}, REASONING_MIME)]
-                            ),
-                        )
+                        _reasoning_buf += str(payload)
+                        if len(_reasoning_buf) >= _FLUSH_CHARS:
+                            await _flush_reasoning()
 
                 elif event_type == "delta":
                     if isinstance(payload, dict):
@@ -463,6 +488,7 @@ class ProtoAgentExecutor(AgentExecutor):
 
             # Stream ended without an explicit terminal event — treat the
             # accumulated text as the answer.
+            await _flush_reasoning()
             await _flush_text()
             await _finalize(accumulated)
             await updater.complete()
