@@ -75,6 +75,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { InboxWidget } from "../inbox/InboxWidget";
+import { AgentDownBanner } from "./AgentDownBanner";
 import { ChatSlot } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
@@ -936,6 +937,11 @@ export function App() {
           {w}
         </Alert>
       ))}
+
+      {/* Focused fleet member stopped mid-session (the boot gate only catches boot-time
+          down; a runtime stop otherwise surfaces only as plugin views 409-ing). Slim
+          strip with a hub-routed Start; renders nothing on the host or a running agent. */}
+      <AgentDownBanner />
 
       {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +
           cross-rail via dnd-kit), resizable right column, mobile shell, and the utility bar — all
