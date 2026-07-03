@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.88.0",
+    "date": "2026-07-03",
+    "changes": [
+      "The Memory inspector tells the truth about what injects",
+      "Memory view accuracy and polish"
+    ]
+  },
+  {
     "version": "v0.87.0",
     "date": "2026-07-03",
     "changes": [

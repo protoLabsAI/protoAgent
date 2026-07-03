@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.88.0] - 2026-07-03
+
 ### Fixed
 - **The Memory inspector tells the truth about what injects** (#1726). The Hot
   memory and Sessions tabs listed a superset of what actually rides the agent's
