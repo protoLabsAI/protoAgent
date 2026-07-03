@@ -728,10 +728,19 @@ export type KnowledgeChunk = {
   source_type: string | null;
   finding_type: string | null;
   created_at: string | null;
+  // BM25/RRF relevance — the backend always sends it (null on plain listings).
+  score?: number | null;
   // Tier (ADR 0041 / bd-2wu): "private" | "commons" — present only when the store is
   // layered (commons ∪ private); null otherwise. Drives the tier badge + promote/unshare.
   tier?: "private" | "commons" | null;
 };
+
+// One hot-memory row (GET /api/memory/hot): a knowledge chunk plus whether it's
+// inside the CURRENT per-turn injection window (the newest ~100 domain="hot"
+// chunks under the character budget). Absent on backends that predate the field
+// (or custom stores without get_hot_memory_entries) → unknown; the console only
+// draws the "not injecting" badge on an explicit `false`.
+export type MemoryHotChunk = KnowledgeChunk & { injecting?: boolean };
 
 // Memory inspector (ADR 0069 D7) — the delivery-layer audit surface.
 // One session-summary digest row (GET /api/memory/sessions) — the same
@@ -744,6 +753,10 @@ export type MemorySessionDigest = {
   topic: string;
   message_count: number;
   size_bytes?: number;
+  // Whether this session is in the CURRENT <prior_sessions> digest window (the
+  // ~10 newest under the token cap, background:* excluded). Absent on older
+  // backends → unknown; only an explicit `false` draws the "not in digest" badge.
+  in_digest?: boolean;
   // Detail-only fields (GET /api/memory/sessions/{id}):
   trace_id?: string | null;
   rendered?: string; // the full render recall_session returns
@@ -752,6 +765,7 @@ export type MemorySessionDigest = {
 // One per-model-call injection record (GET /api/memory/injections, ADR 0069 D6):
 // which memory items entered which turn — the poisoning-forensics trail.
 export type MemoryInjectionRow = {
+  id: number;
   ts: string;
   session_id: string;
   digest_session_ids: string[];

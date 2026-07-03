@@ -113,6 +113,25 @@ const cloneMemory = () => ({
 });
 let memory = cloneMemory();
 
+// Degradation switches the memory spec flips via POST /api/__test__/memory/mode
+// (merged; /api/__test__/memory/reset restores the defaults):
+//   fail: "sessions"|"hot"|"injections" → that GET answers 500
+//   enabled: false                      → the hot routes report the store off
+//                                         (GET list; PUT/DELETE drop the write)
+//   empty: true                         → all three lists serve zero rows
+//   replaced: false                     → the hot PUT reports the old revision survived
+//   legacy: true                        → rows are served WITHOUT the delivery-truth
+//                                         fields (in_digest/injecting/size_bytes), like
+//                                         a backend predating them
+const defaultMemoryMode = () => ({ fail: "", enabled: true, empty: false, replaced: true, legacy: false });
+let memoryMode = defaultMemoryMode();
+const stripFields = (rows, keys) =>
+  rows.map((r) => {
+    const copy = { ...r };
+    for (const k of keys) delete copy[k];
+    return copy;
+  });
+
 // Fleet state is the one slice of the mock backend the specs MUTATE (create /
 // stop / rename / add-remote). Isolate it PER SPEC so parallel files and serial-
 // group retries can't observe each other's writes: every `x-e2e-fleet` request
@@ -450,7 +469,12 @@ const server = createServer(async (req, res) => {
       if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname)) return sendJson(res, { pending: [] });
       // Memory inspector (ADR 0069 D7) — needs the query string (injections filter),
       // so it's handled here rather than in the pathname-only handleApiGet switch.
-      if (pathname === "/api/memory/sessions") return sendJson(res, { sessions: memory.sessions });
+      if (pathname === "/api/memory/sessions") {
+        if (memoryMode.fail === "sessions") return sendJson(res, { detail: "kaboom (mock)" }, 500);
+        let rows = memoryMode.empty ? [] : memory.sessions;
+        if (memoryMode.legacy) rows = stripFields(rows, ["in_digest", "size_bytes"]);
+        return sendJson(res, { sessions: rows });
+      }
       {
         const m = pathname.match(/^\/api\/memory\/sessions\/([^/]+)$/);
         if (m) {
@@ -460,8 +484,16 @@ const server = createServer(async (req, res) => {
           return sendJson(res, { session: { ...s, trace_id: null, rendered: MEMORY_SESSION_RENDERED } });
         }
       }
-      if (pathname === "/api/memory/hot") return sendJson(res, { enabled: true, chunks: memory.hot });
+      if (pathname === "/api/memory/hot") {
+        if (memoryMode.fail === "hot") return sendJson(res, { detail: "kaboom (mock)" }, 500);
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, chunks: [] });
+        let rows = memoryMode.empty ? [] : memory.hot;
+        if (memoryMode.legacy) rows = stripFields(rows, ["injecting"]);
+        return sendJson(res, { enabled: true, chunks: rows });
+      }
       if (pathname === "/api/memory/injections") {
+        if (memoryMode.fail === "injections") return sendJson(res, { detail: "kaboom (mock)" }, 500);
+        if (memoryMode.empty) return sendJson(res, { injections: [] });
         const sid = url.searchParams.get("session_id") || "";
         const rows = sid
           ? MEMORY_INJECTIONS.filter((r) => r.session_id === sid)
@@ -533,6 +565,11 @@ const server = createServer(async (req, res) => {
     }
     if (pathname === "/api/__test__/memory/reset" && req.method === "POST") {
       memory = cloneMemory();
+      memoryMode = defaultMemoryMode();
+      return sendJson(res, { ok: true });
+    }
+    if (pathname === "/api/__test__/memory/mode" && req.method === "POST") {
+      memoryMode = { ...memoryMode, ...body };
       return sendJson(res, { ok: true });
     }
     // Memory inspector writes (ADR 0069 D7): delete a session summary / edit + delete
@@ -549,6 +586,8 @@ const server = createServer(async (req, res) => {
       const h = pathname.match(/^\/api\/memory\/hot\/(\d+)$/);
       if (h && req.method === "DELETE") {
         const id = Number(h[1]);
+        // Store off → the write is dropped before any lookup, like the backend.
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, deleted: false });
         const i = memory.hot.findIndex((x) => x.id === id);
         if (i < 0) return sendJson(res, { detail: "no hot-memory chunk with that id" }, 404);
         memory.hot.splice(i, 1);
@@ -556,11 +595,16 @@ const server = createServer(async (req, res) => {
       }
       if (h && req.method === "PUT") {
         const id = Number(h[1]);
+        // Store off → the edit is dropped; the exact contract shape the console's
+        // store-off toast branch keys on (NOT the replaced:false warning).
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, id: null, replaced: false });
         const c = memory.hot.find((x) => x.id === id);
         if (!c) return sendJson(res, { detail: "no hot-memory chunk with that id" }, 404);
         c.content = String(body.content || "");
         c.preview = c.content;
-        return sendJson(res, { enabled: true, id: id + 100, replaced: true });
+        // replaced:false = the re-add landed but the old revision couldn't be
+        // deleted (both rows linger) — the console warns via toast.
+        return sendJson(res, { enabled: true, id: id + 100, replaced: memoryMode.replaced });
       }
     }
     if (req.method === "POST" && /^\/api\/knowledge\/\d+\/promote$/.test(pathname)) {

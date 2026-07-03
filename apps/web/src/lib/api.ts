@@ -25,6 +25,7 @@ import type {
   PluginInstallSummary,
   PluginUpdate,
   KnowledgeChunk,
+  MemoryHotChunk,
   MemoryInjectionRow,
   MemorySessionDigest,
   RuntimeStatus,
@@ -835,9 +836,10 @@ export const api = {
       { method: "DELETE" },
     );
   },
-  // Hot memory: the domain="hot" chunks injected every turn.
+  // Hot memory: the domain="hot" chunks; the newest slice under the budget
+  // injects every turn (rows carry `injecting` when the backend can tell).
   memoryHot() {
-    return request<{ enabled: boolean; chunks: KnowledgeChunk[] }>("/api/memory/hot");
+    return request<{ enabled: boolean; chunks: MemoryHotChunk[] }>("/api/memory/hot");
   },
   updateMemoryHot(chunkId: number, body: { content: string; heading?: string }) {
     return request<{ enabled: boolean; id: number | null; replaced: boolean }>(

@@ -3,6 +3,7 @@ import { Bot, Database, HardDrive, Settings2, Tag } from "lucide-react";
 import { type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
+import { bytes } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
 import { StagePanel } from "../app/ErrorBoundary";
@@ -11,18 +12,8 @@ import { StagePanel } from "../app/ErrorBoundary";
 // on-disk store sizes). Telemetry is its own tab now. The editable
 // bits (name, persona, middleware, tools) live under the Agent section.
 
-function fmtBytes(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
-}
+// Store sizes can be null while a store is unbuilt — only this surface needs the dash.
+const fmtBytes = (n: number | null | undefined): string => (n == null ? "—" : bytes(n));
 
 function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (

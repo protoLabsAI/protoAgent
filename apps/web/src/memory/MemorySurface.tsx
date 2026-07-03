@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@protolabsai/ui/data";
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
@@ -10,9 +10,9 @@ import { Flame, History, Pencil, Syringe, Trash2 } from "lucide-react";
 import { RefreshButton } from "../app/ui-kit";
 import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
-import { ago, errMsg } from "../lib/format";
+import { ago, bytes, errMsg } from "../lib/format";
 import { queryKeys } from "../lib/queries";
-import type { KnowledgeChunk, MemorySessionDigest } from "../lib/types";
+import type { MemoryHotChunk, MemorySessionDigest } from "../lib/types";
 
 import "./memory.css";
 
@@ -49,6 +49,7 @@ export function MemorySurface() {
         active={tab}
         onSelect={(t) => setTab(t as MemoryTab)}
         items={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))}
+        ariaLabel="Memory sections"
       />
       <div className="stage-body">
         {tab === "sessions" ? (
@@ -109,9 +110,10 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
     <>
       <div className="memory-panel-head">
         <p className="memory-panel-hint">
-          Persisted session summaries — each is one line of the <code>&lt;prior_sessions&gt;</code>{" "}
-          digest the agent sees every turn. Click a row for the full summary
-          (what <code>recall_session</code> returns); delete to forget a session.
+          Persisted session summaries. The <code>&lt;prior_sessions&gt;</code> digest the agent
+          sees each turn carries only the newest few (token-capped; background sessions
+          excluded) — badged rows are stored but not currently in it. Click a row for the full
+          summary (what <code>recall_session</code> returns); delete to forget a session.
         </p>
         <RefreshButton onClick={() => void refetch()} busy={isFetching} />
       </div>
@@ -134,10 +136,18 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
                 <span className="memory-row-title">
                   <Badge status="neutral">{s.surface}</Badge>
                   <code>{s.session_id}</code>
+                  {/* Only an explicit false draws the badge — an older backend omits
+                      the field entirely, and unknown must not read as "excluded". */}
+                  {s.in_digest === false ? (
+                    <span title="Outside the current digest window (the newest summaries under the token cap; background sessions excluded) — stored, but not in the <prior_sessions> digest the agent sees.">
+                      <Badge status="warning">not in digest</Badge>
+                    </span>
+                  ) : null}
                 </span>
                 <span className="memory-row-topic">{s.topic || "(no user message)"}</span>
                 <span className="memory-row-meta">
                   {s.timestamp !== "unknown" ? ago(s.timestamp) : "unknown"} · {s.message_count} msgs
+                  {typeof s.size_bytes === "number" ? <> · {bytes(s.size_bytes)}</> : null}
                 </span>
               </button>
               <span className="knowledge-chunk-actions">
@@ -178,7 +188,7 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
         onClose={() => setPendingDelete(null)}
       >
         {pendingDelete
-          ? `"${pendingDelete.session_id}" leaves the <prior_sessions> digest and recall_session — the agent will no longer know of this session. This can't be undone.`
+          ? `"${pendingDelete.session_id}" leaves the <prior_sessions> digest and recall_session — the agent will no longer know of this session. Takes effect within about a minute (the digest is cached per turn loop). This can't be undone.`
           : undefined}
       </ConfirmDialog>
     </>
@@ -196,15 +206,27 @@ function HotMemoryPanel() {
   });
   const enabled = data?.enabled ?? true;
   const chunks = data?.chunks ?? [];
-  const [pendingDelete, setPendingDelete] = useState<KnowledgeChunk | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<MemoryHotChunk | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.memoryHot });
 
+  // Both write routes answer 200 with enabled:false when the knowledge store went
+  // off AFTER this list rendered (settings hot-reload / restart; the list has no
+  // focus-refetch so it goes stale silently) — the write was DROPPED, and the
+  // refetch below swaps the panel to the store-off notice.
+  const storeOffToast = (verb: string) =>
+    toast({
+      tone: "error",
+      title: "Memory",
+      message: `The knowledge store is off — nothing was ${verb} (enable middleware.knowledge).`,
+    });
+
   const del = useMutation({
     mutationFn: (id: number) => api.deleteMemoryHot(id),
-    onSuccess: () => {
-      toast({ tone: "success", title: "Memory", message: "Hot-memory entry deleted." });
+    onSuccess: (r) => {
+      if (r.enabled === false) storeOffToast("deleted");
+      else toast({ tone: "success", title: "Memory", message: "Hot-memory entry deleted." });
       invalidate();
     },
     onError: (e) => toast({ tone: "error", title: "Memory", message: errMsg(e) }),
@@ -213,8 +235,24 @@ function HotMemoryPanel() {
   const save = useMutation({
     mutationFn: ({ id, content }: { id: number; content: string }) =>
       api.updateMemoryHot(id, { content }),
-    onSuccess: () => {
-      toast({ tone: "success", title: "Memory", message: "Hot-memory entry updated." });
+    onSuccess: (r) => {
+      if (r.enabled === false) {
+        // Store-off branch ({enabled:false, id:null, replaced:false}) — must win
+        // over the replaced check: nothing was updated and nothing injects, so
+        // the stale-revision warning below would be false in every clause.
+        storeOffToast("saved");
+      } else if (r.replaced === false) {
+        // The edit is add-new-then-delete-old server-side; replaced:false means the
+        // old revision survived, so BOTH rows sit in the store until one is pruned.
+        toast({
+          tone: "warning",
+          title: "Memory",
+          message:
+            "Updated, but the old revision couldn't be removed; both may inject — delete the stale row.",
+        });
+      } else {
+        toast({ tone: "success", title: "Memory", message: "Hot-memory entry updated." });
+      }
       setEditingId(null);
       setDraft("");
       invalidate();
@@ -226,8 +264,10 @@ function HotMemoryPanel() {
     <>
       <div className="memory-panel-head">
         <p className="memory-panel-hint">
-          Always-on memory — every entry here is injected into <em>every</em> turn. Keep it
-          small; anything wrong or planted here steers the agent until it's removed.
+          Always-on memory — the <em>newest</em> entries (roughly 100, under a small character
+          budget) are injected into every turn; older rows are backlog that no longer injects.
+          Keep it small; anything wrong or planted in the window steers the agent until it's
+          removed.
         </p>
         <RefreshButton onClick={() => void refetch()} busy={isFetching} />
       </div>
@@ -278,6 +318,14 @@ function HotMemoryPanel() {
                           <Badge status="neutral">{c.source}</Badge>
                         </span>
                       ) : null}
+                      {/* Only an explicit false draws the badge — an older backend
+                          (or a custom store) omits the field, and unknown must not
+                          read as "outside the window". */}
+                      {c.injecting === false ? (
+                        <span title="Outside the injection window — only the newest hot entries under the character budget ride each turn; this row is kept but not currently sent to the agent.">
+                          <Badge status="warning">not injecting</Badge>
+                        </span>
+                      ) : null}
                     </span>
                     <span className="memory-row-topic">{c.content || c.preview}</span>
                     <span className="memory-row-meta">{ago(c.created_at)}</span>
@@ -300,7 +348,7 @@ function HotMemoryPanel() {
                       icon
                       variant="ghost"
                       type="button"
-                      title="Delete this hot-memory entry (stops injecting immediately)"
+                      title="Delete this hot-memory entry outright"
                       aria-label={`delete hot entry ${c.id}`}
                       onClick={() => setPendingDelete(c)}
                     >
@@ -324,8 +372,17 @@ function HotMemoryPanel() {
         }}
         onClose={() => setPendingDelete(null)}
       >
+        {/* Effect copy tracks the row's injection-window state — a backlog row
+            (badged "not injecting") isn't being sent to the agent, so claiming
+            the delete "stops injecting" would contradict its own badge. */}
         {pendingDelete
-          ? `"${(pendingDelete.heading || pendingDelete.content || pendingDelete.preview || "").slice(0, 80)}" stops injecting into every turn. This can't be undone.`
+          ? `"${(pendingDelete.heading || pendingDelete.content || pendingDelete.preview || "").slice(0, 80)}" is removed from hot memory${
+              pendingDelete.injecting === false
+                ? " — it's outside the injection window, so nothing the agent currently sees changes"
+                : pendingDelete.injecting === true
+                  ? " and stops injecting into the agent's turns"
+                  : ""
+            }. This can't be undone.`
           : undefined}
       </ConfirmDialog>
     </>
@@ -335,9 +392,22 @@ function HotMemoryPanel() {
 // ── Injections — which memory entered which turn (ADR 0069 D6) ───────────────
 
 function InjectionsPanel({ filter, setFilter }: { filter: string; setFilter: (v: string) => void }) {
+  // Local echo of the filter so typing paints instantly; the lifted filter (and
+  // with it the query key) only changes after the debounce, so a fast typist
+  // doesn't fire a request per keystroke. Mount seeds from the lifted value —
+  // the Sessions panel's "injections" jump pre-fills it before switching tabs.
+  const [input, setInput] = useState(filter);
+  useEffect(() => {
+    const t = window.setTimeout(() => setFilter(input), 250);
+    return () => window.clearTimeout(t);
+  }, [input, setFilter]);
+
   const { data, isFetching, error, refetch } = useQuery({
     queryKey: [...queryKeys.memoryInjections, filter] as const,
     queryFn: () => api.memoryInjections(filter, 100),
+    // Keep the last page while the filtered fetch is in flight — otherwise the
+    // table flashes the "no recorded turns" empty state on every filter change.
+    placeholderData: keepPreviousData,
   });
   const rows = data?.injections ?? [];
 
@@ -356,9 +426,9 @@ function InjectionsPanel({ filter, setFilter }: { filter: string; setFilter: (v:
       </div>
       <Input
         type="search"
-        placeholder="Filter by session id (blank = all sessions)…"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+        placeholder="Exact session id (blank = all sessions)…"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
         aria-label="filter injections by session id"
       />
       {error ? <Alert status="error">Couldn't read the injection log — {errMsg(error)}</Alert> : null}
@@ -380,8 +450,8 @@ function InjectionsPanel({ filter, setFilter }: { filter: string; setFilter: (v:
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={`${r.ts}-${i}`}>
+            {rows.map((r) => (
+              <tr key={r.id}>
                 <td title={r.ts}>{ago(r.ts)}</td>
                 <td>
                   <code>{r.session_id}</code>
