@@ -13,6 +13,15 @@ from pathlib import Path
 log = logging.getLogger("protoagent.plugins")
 
 
+def _prefix_conforms(prefix: str, plugin_id: str) -> bool:
+    """True iff a router prefix follows the two-router convention: the public view
+    ``/plugins/<id>`` or the bearer-gated data router ``/api/plugins/<id>`` (docs/
+    guides/plugin-views.md, ADR 0026). Both are canonical — the loader must not nag
+    plugins that follow the prescribed pattern (#1732). Shared by the server-side
+    mount check (server/agent_init.py) so the two never drift."""
+    return prefix.startswith(f"/plugins/{plugin_id}") or prefix.startswith(f"/api/plugins/{plugin_id}")
+
+
 class PluginRegistry:
     """Collects a single plugin's contributions during ``register()``.
 
@@ -314,21 +323,25 @@ class PluginRegistry:
 
         Defaults to the namespaced prefix ``/plugins/<id>`` so a plugin can't
         silently shadow a core route. Pass ``prefix=""`` (or your own) to mount
-        elsewhere — an escape hatch, logged. Plugin routes SHOULD live under
-        ``/plugins/<id>/``; a non-conforming prefix logs a WARNING (#870).
-        The default-deny auth middleware guards all non-public paths regardless
-        of prefix.
+        elsewhere — an escape hatch, logged. The two canonical prefixes are the
+        public view ``/plugins/<id>`` and the bearer-gated data router
+        ``/api/plugins/<id>`` (the documented two-router pattern — docs/guides/
+        plugin-views.md, ADR 0026); a prefix outside both logs a WARNING (#870,
+        #1732). The default-deny auth middleware guards all non-public paths
+        regardless of prefix.
         """
         if router is None or not hasattr(router, "routes"):
             log.warning("[plugins] %s: register_router got a non-router: %r", self.plugin_id, router)
             return
         eff = f"/plugins/{self.plugin_id}" if prefix is None else str(prefix)
-        if eff and not eff.startswith(f"/plugins/{self.plugin_id}"):
+        if eff and not _prefix_conforms(eff, self.plugin_id):
             log.warning(
                 "[plugins] %s: register_router prefix %r does not start with "
-                "/plugins/%s/ — plugin routes SHOULD live under /plugins/<id>/",
+                "/plugins/%s or /api/plugins/%s — plugin routes SHOULD live under "
+                "/plugins/<id>/ (public) or /api/plugins/<id>/ (gated data)",
                 self.plugin_id,
                 eff,
+                self.plugin_id,
                 self.plugin_id,
             )
         self.routers.append({"router": router, "prefix": eff})

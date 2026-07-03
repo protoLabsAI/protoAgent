@@ -423,6 +423,31 @@ def register(registry):
 """
 
 
+def test_register_router_prefix_warning_accepts_both_canonical_prefixes(tmp_path, caplog) -> None:
+    # The documented two-router pattern (#1732): a plugin's public view lives under
+    # /plugins/<id> and its bearer-gated data router under /api/plugins/<id>. Neither
+    # should trip the #870 non-conforming-prefix warning; only a genuinely off-
+    # convention prefix should.
+    import logging
+
+    from graph.plugins.registry import PluginRegistry
+
+    class _FakeRouter:
+        routes: list = []
+
+    reg = PluginRegistry("wh", tmp_path)
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        reg.register_router(_FakeRouter())                              # default /plugins/wh
+        reg.register_router(_FakeRouter(), prefix="/api/plugins/wh")    # gated data router
+        reg.register_router(_FakeRouter(), prefix="/api/plugins/wh/data")
+    assert "does not start with" not in caplog.text  # both canonical prefixes are silent
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        reg.register_router(_FakeRouter(), prefix="/rogue")            # genuinely off-convention
+    assert "does not start with" in caplog.text
+
+
 def test_plugin_contributes_router_surface_subagent(tmp_path, monkeypatch) -> None:
     root = tmp_path / "plugins"
     _make_plugin(root, "ext", enabled=True, body=_EXT_PLUGIN)
