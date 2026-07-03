@@ -93,3 +93,28 @@ chat's next interaction.
 - Follow-up: live UI surfacing of the resumed turn in the originating chat tab
   (per-session push à la ADR 0050), so a watching user sees the continuation
   arrive rather than only the agent picking it up server-side.
+
+## Update (2026-07-03, #1702) — one pending wait per thread + logging
+
+The turn-ending middleware stops the *in-turn* poll loop, but a subtler failure
+survived: an agent that **under-waits** (waits 30s of a 200s transit, wakes
+early, sees "not done", waits again) scheduled a NEW one-shot resume each time —
+`wait` called `scheduler.add_job` unconditionally, with no dedup. The pending
+wakes stacked up and all fired into the same thread, and the agent narrated them
+as "old resume messages catching up". It was also invisible in logs.
+
+Refinement:
+
+- **One pending wait per thread.** `wait` now uses a stable per-session job id
+  `wait:<context_id>` and cancels any still-pending wait for that thread before
+  adding the new one (cancel-then-add; waits within a turn are sequential, so
+  it's safe). A new `wait` therefore *supersedes* the prior one instead of
+  stacking beside it. A user `schedule_task` uses its own generated id and is
+  never touched.
+- **Logging.** Every wait logs its thread, delay, resume snippet, and whether it
+  superseded a pending wait (`[wait] thread=… in Ns (superseded a pending wait)
+  → resume: …`) — so a stacking loop is diagnosable from logs.
+- **Complement (spacetraders-plugin):** the amplifier was a nav tool returning
+  the arrival as an ISO timestamp the agent had to diff against `current_time`
+  (and lowballed). Status/nav tools should hand the agent the ETA in **seconds**
+  plus the exact `wait(N, …)` call, so it waits the full duration once.
