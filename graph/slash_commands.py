@@ -16,10 +16,49 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+import uuid
+from dataclasses import dataclass
 
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
+
+
+@dataclass
+class PluginFormRequest:
+    """A plugin chat command asked to open a form instead of replying (#1701 Slice 2).
+
+    ``form`` is a ``request_user_input``-shaped payload (``{"kind":"form","title",
+    "description","steps":[…]}``) the console renders via ``HitlForm``; the dispatcher
+    surfaces it on the SAME ``input_required`` frame the agent's HITL uses, tagged with
+    ``callback_id`` so the answers route back to the plugin's ``on_submit`` (via
+    ``POST /api/chat/commands/submit``) instead of resuming a graph interrupt."""
+
+    form: dict
+    callback_id: str
+
+
+@dataclass
+class _PendingPluginForm:
+    on_submit: object  # async (answers: dict, session_id: str) -> str | dict | None
+    session_id: str
+    created: float  # time.monotonic() at registration — for TTL reaping
+
+
+# A plugin form's submit callback can't cross the HTTP boundary, so the runtime holds
+# it here between open and submit, keyed by an opaque callback_id. Single-use + TTL'd so
+# a form the user never submits can't leak the closure (and its captured plugin state).
+_PLUGIN_FORM_CALLBACKS: dict[str, _PendingPluginForm] = {}
+_PLUGIN_FORM_TTL_S = 1800  # 30 min
+
+
+def _reap_stale_plugin_forms() -> None:
+    if not _PLUGIN_FORM_CALLBACKS:
+        return
+    now = time.monotonic()
+    for cid in [c for c, p in _PLUGIN_FORM_CALLBACKS.items() if now - p.created > _PLUGIN_FORM_TTL_S]:
+        _PLUGIN_FORM_CALLBACKS.pop(cid, None)
 
 # Slash tokens already warned as shadowed (a skill whose token a workflow/subagent
 # claims) — warn once, not on every resolve.
@@ -62,21 +101,64 @@ def find_plugin_chat_command(name: str):
     return commands.get(name.strip().lower()) or commands.get(slugify_slash(name))
 
 
-async def run_plugin_chat_command(name: str, rest: str, session_id: str) -> str | None:
+def _coerce_command_result(result, session_id: str) -> str | PluginFormRequest | None:
+    """Normalize a handler's return: a reply string (short-circuit the turn), ``None``
+    (fall through), or a form-request dict ``{"form": <spec>, "on_submit": <async
+    callable>}`` → register the callback + return a :class:`PluginFormRequest` (#1701
+    Slice 2). A form dict missing a callable ``on_submit`` degrades to a warning + fall
+    through so a malformed plugin can't wedge the turn."""
+    if isinstance(result, dict) and "form" in result:
+        on_submit = result.get("on_submit")
+        if not callable(on_submit):
+            log.warning("[slash] plugin form request missing a callable on_submit — ignoring")
+            return None
+        _reap_stale_plugin_forms()
+        callback_id = uuid.uuid4().hex
+        _PLUGIN_FORM_CALLBACKS[callback_id] = _PendingPluginForm(
+            on_submit=on_submit, session_id=session_id, created=time.monotonic()
+        )
+        return PluginFormRequest(form=result["form"], callback_id=callback_id)
+    return result  # str | None (or anything else the handler chose — passed through)
+
+
+async def run_plugin_chat_command(name: str, rest: str, session_id: str) -> str | PluginFormRequest | None:
     """Invoke the plugin chat command matching ``/<name>`` and return its reply (the
-    dispatcher short-circuits the turn with it), or ``None`` to fall through. A
-    handler that itself returns ``None`` falls through too (it decided not to handle
-    the message); precedence still excludes a same-named workflow/skill from firing
-    because ``slash_kind`` reports ``plugin_command`` for the token. A raising handler
-    is logged + swallowed into a ``⚠️`` reply so one bad plugin can't 500 the turn."""
+    dispatcher short-circuits the turn with it), a :class:`PluginFormRequest` (open a
+    form in the composer, #1701 Slice 2), or ``None`` to fall through. A handler that
+    itself returns ``None`` falls through too (it decided not to handle the message);
+    precedence still excludes a same-named workflow/skill from firing because
+    ``slash_kind`` reports ``plugin_command`` for the token. A raising handler is logged
+    + swallowed into a ``⚠️`` reply so one bad plugin can't 500 the turn."""
     handler = find_plugin_chat_command(name)
     if handler is None:
         return None
     try:
-        return await handler(rest, session_id)
+        return _coerce_command_result(await handler(rest, session_id), session_id)
     except Exception as exc:  # noqa: BLE001 — a bad plugin command must not break the turn
         log.warning("[slash] plugin chat command /%s failed: %s", name, exc)
         return f"⚠️ /{name} failed: {exc}"
+
+
+async def submit_plugin_form(callback_id: str, answers: dict, session_id: str) -> str | PluginFormRequest | None:
+    """Route a submitted plugin form's answers back to the plugin's ``on_submit``
+    (``POST /api/chat/commands/submit``). Returns the plugin's reply string (posted as a
+    note), ``None``, or another :class:`PluginFormRequest` for a multi-step form. The
+    callback is SINGLE-USE (popped) and session-scoped — a stale/foreign id is refused,
+    a raising ``on_submit`` is swallowed to a ``⚠️`` note."""
+    pending = _PLUGIN_FORM_CALLBACKS.get(callback_id)
+    if pending is None:
+        return "⚠️ This form has expired — please re-run the command."
+    if pending.session_id and session_id and pending.session_id != session_id:
+        # A form belongs to the tab that opened it; a foreign submit is refused WITHOUT
+        # consuming it (peek before pop), so the legit owner can still submit.
+        return "⚠️ This form belongs to a different session."
+    _PLUGIN_FORM_CALLBACKS.pop(callback_id, None)  # single-use — consume now
+    try:
+        result = await pending.on_submit(answers or {}, pending.session_id)
+    except Exception as exc:  # noqa: BLE001 — a bad submit handler must not break the turn
+        log.warning("[slash] plugin form submit failed: %s", exc)
+        return f"⚠️ form submit failed: {exc}"
+    return _coerce_command_result(result, pending.session_id)  # multi-step forms fall out for free
 
 
 def slash_kind(name: str) -> str | None:

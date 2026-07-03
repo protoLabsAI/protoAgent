@@ -73,6 +73,13 @@ class TaskCloseRequest(BaseModel):
     reason: str | None = None
 
 
+class ChatFormSubmitRequest(BaseModel):
+    # A plugin composer-form's answers routed back to the plugin's on_submit (#1701 S2).
+    callback_id: str
+    session_id: str = ""
+    answers: dict = {}
+
+
 async def _sse_event_stream(
     subscribe: Callable[..., AsyncIterator[dict[str, Any]]],
     *,
@@ -498,6 +505,23 @@ def register_operator_routes(
                 return chat_commands()
             except Exception as exc:
                 raise _http_error(exc) from exc
+
+    # A plugin composer-form's answers route back to the plugin's on_submit here
+    # (#1701 Slice 2) — the form itself rode the input_required frame with a
+    # `plugin_callback_id`; the console POSTs the field values to redeem it. Not gated
+    # on `chat_commands` (a plugin can open a form even if no static commands exist).
+    @app.post("/api/chat/commands/submit")
+    async def _chat_command_submit(req: ChatFormSubmitRequest):
+        from graph.slash_commands import PluginFormRequest, submit_plugin_form
+
+        try:
+            result = await submit_plugin_form(req.callback_id, req.answers or {}, req.session_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        # A multi-step wizard returns the next form; anything else is a reply note.
+        if isinstance(result, PluginFormRequest):
+            return {"form": result.form, "callback_id": result.callback_id}
+        return {"reply": result if isinstance(result, str) else None}
 
     # --- Workflows -----------------------------------------------------------
     # Workflows are an opt-in plugin (plugins/workflows) — it self-registers its

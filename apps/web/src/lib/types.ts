@@ -555,6 +555,10 @@ export type HitlPayload = {
   steps?: HitlFormStep[];
   question?: string; // ask_human shape
   detail?: string; // approval shape — the command/action being approved
+  // #1701 Slice 2: set when this input-required is a PLUGIN composer-form (not a graph
+  // interrupt). The console redeems the answers via POST /api/chat/commands/submit with
+  // this id instead of resuming the agent graph.
+  plugin_callback_id?: string;
 };
 
 

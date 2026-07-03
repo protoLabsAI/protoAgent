@@ -770,6 +770,15 @@ export const api = {
     }>(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
   },
 
+  // #1701 Slice 2: redeem a plugin composer-form — POST the field values back to the
+  // plugin's on_submit. Returns a reply note, or the next form for a multi-step wizard.
+  submitChatCommandForm(body: { callback_id: string; session_id: string; answers: Record<string, unknown> }) {
+    return request<{ reply?: string | null; form?: HitlPayload; callback_id?: string }>(
+      "/api/chat/commands/submit",
+      { method: "POST", body },
+    );
+  },
+
   // Knowledge chunk CRUD — operator curation of the store (add a fact, fix a
   // stale one, drop a wrong one). Edit replaces the chunk (new id): the server
   // adds the revision first, then deletes the old row, so it works on every
