@@ -1,9 +1,9 @@
 # Tune the knowledge store (RAG)
 
-The knowledge store is what the agent recalls from. By default it's **hybrid** —
-keyword (SQLite FTS5) **and** semantic (vector) search, fused with Reciprocal Rank
-Fusion (RRF). `KnowledgeMiddleware` injects the top hits into the system prompt every
-turn. This guide is the tuning surface; for the design and write paths see
+The knowledge store is what the agent recalls from: keyword (SQLite FTS5) search
+out of the box, **hybrid** keyword + semantic (vector) search — fused with
+Reciprocal Rank Fusion (RRF) — once you opt in. `KnowledgeMiddleware` injects the
+top hits into the system prompt every turn. This guide is the tuning surface; for the design and write paths see
 [Memory & the knowledge store](/explanation/memory-and-knowledge), and to load
 content see [Ingest documents & media](/guides/ingestion).
 
@@ -27,7 +27,7 @@ All under `knowledge:` in `langgraph-config.yaml`:
 
 ```yaml
 knowledge:
-  embeddings: true            # hybrid (semantic+keyword); false → keyword-only
+  embeddings: true            # opt-in hybrid (semantic+keyword); default false → keyword-only
   embed_model: qwen3-embedding # gateway EMBEDDING model (not the chat model);
                               #   must be served by your gateway (check GET /v1/models)
   top_k: 10                   # hits injected into the prompt per turn

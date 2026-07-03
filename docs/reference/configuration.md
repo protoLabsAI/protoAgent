@@ -351,12 +351,12 @@ Only read when `middleware.knowledge` is `true`.
 |---|---|---|
 | `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. Falls back to `~/.protoagent/knowledge/agent.db` automatically when the configured path isn't writable (e.g. running locally without `/sandbox`). Override at runtime with `KNOWLEDGE_DB_PATH`. |
 | `scope` | `""` (→ `scoped`) | Tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private, **default**) · `shared` (the whole store is the host-level commons) · `layered` (read commons ∪ private, write private, operator-`promote`d). The commons lives at `commons.path`/knowledge.db and is host-level + un-scoped (every agent reading the same `commons.path` shares it). A shared/layered fleet must share one `embed_model` — the commons is stamped with it and a mismatched agent serves the commons tier **FTS5-only** (no incompatible-vector fusion). |
-| `embeddings` | `true` | Hybrid `HybridKnowledgeStore` (FTS5 keyword + vector similarity, RRF-fused). `false` = keyword-only FTS5. (ADR 0021.) |
+| `embeddings` | `false` | Opt-in hybrid `HybridKnowledgeStore` (FTS5 keyword + vector similarity, RRF-fused); off = keyword-only FTS5. Off by default so a fresh install never depends on a gateway embedding route (#1681). |
 | `embed_model` | `qwen3-embedding` | Gateway embedding model used when `embeddings` is on — must be a model your gateway serves (not the chat model). |
 | `facts` | `true` | Extract semantic facts during the conversation-harvest pass. |
-| `top_k` | `5` | Results per query fed into state. |
+| `top_k` | `10` | RAG hits auto-injected into the prompt per turn. |
 
-The bundled store is hybrid by default — FTS5 keyword search fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage; set `embeddings: false` for keyword-only. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `conversation_harvest` (`domain='finding'`).
+The bundled store is keyword-only FTS5 by default; once your gateway serves `embed_model`, opt in with `embeddings: true` for hybrid search — keyword fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), always-on hot facts (`hot`), episodic summaries stored by `conversation_harvest` (`conversation`), and extracted facts (`fact`).
 
 **Hot memory** — chunks stored under `domain='hot'` are *always-on*: `KnowledgeMiddleware` injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added hot fact is seen immediately. Set one with `memory_ingest(content, domain="hot")` for facts the agent should never forget (operator preferences, standing constraints).
 

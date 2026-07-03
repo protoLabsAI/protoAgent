@@ -58,11 +58,13 @@ onto primitives it already has:
    (no more pooled `unknown.json`).
 3. **Harvest on retirement** — when a chat thread is retired (aged out by the
    checkpoint pruner, or deleted), `graph/conversation_harvest.py` runs a single
-   **session-end pass** (cheap aux model): it stores an episodic *summary*
-   (`source_type="harvest"`) and, when `knowledge.facts` is on, **extracts
-   durable facts** (`source_type="extracted"`). This is *extract, don't dump* —
-   it never stores raw turns. Every row carries the originating thread id in
-   `source`, so recall and audit can always answer "where did this come from".
+   **session-end pass** (the cheap `routing.aux_model`): it stores an episodic
+   *summary* (`source_type="harvest"`) and, when `knowledge.facts` is on,
+   **extracts durable facts** (`source_type="extracted"`). This is *extract,
+   don't dump* — it never stores raw turns, and the same no-trail rules hold at
+   retirement: incognito and `background:*` threads are never harvested. Every
+   row carries the originating thread id in `source`, so recall and audit can
+   always answer "where did this come from".
 
 ### The reasoning guardrail
 
@@ -100,7 +102,7 @@ third-party — never instructions and never part of the current conversation
 prompt layer, don't just hope the store stays clean). Three parts, in order:
 
 1. **The prior-sessions digest.** One **attributed line per session** — id ·
-   timestamp · surface (chat/background/a2a/…) · topic · message count — for the
+   timestamp · surface (chat/a2a/…) · topic · message count — for the
    newest 10 session summaries under a ~2 000-token cap, behind a framing
    header that says these are *other, separate* sessions. The topic derives
    from the first *user* message only (no assistant text — that's the identity
