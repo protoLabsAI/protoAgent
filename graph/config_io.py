@@ -481,6 +481,8 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "disabled": list(config.plugins_disabled),
                 "dir": config.plugins_dir,
                 "sources": {"allow": list(config.plugins_sources_allow)},
+                "update_policy": dict(config.plugins_update_policy),
+                "autoupdate_interval_hours": config.plugins_autoupdate_interval_hours,
             },
             "subagents": {
                 "researcher": {

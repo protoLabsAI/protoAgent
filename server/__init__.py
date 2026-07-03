@@ -242,6 +242,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _build_telemetry_store,
     _checkpoint_prune_loop,
     _init_langgraph_agent,
+    _plugin_autoupdate_loop,
     _watch_loop,
     _mount_plugin_routers,
     _plugin_agent_invoke,
@@ -531,6 +532,15 @@ def _main():
 
             STATE.watch_task = asyncio.create_task(_watch_loop())
 
+        # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
+        # in ``plugins.update_policy``; the loop self-guards each pass (empty policy
+        # or interval 0 ⇒ idle). Start it unconditionally so a later config reload
+        # that turns it on takes effect without a restart — the idle loop just sleeps.
+        if STATE.graph_config is not None:
+            import asyncio
+
+            STATE.plugin_autoupdate_task = asyncio.create_task(_plugin_autoupdate_loop())
+
         # (The inbound Discord gateway now starts as the discord plugin's surface,
         # below — ADR 0018/0019.)
 
@@ -648,6 +658,8 @@ def _main():
             STATE.checkpoint_prune_task.cancel()
         if STATE.watch_task is not None:
             STATE.watch_task.cancel()
+        if STATE.plugin_autoupdate_task is not None:
+            STATE.plugin_autoupdate_task.cancel()
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters
         # in the desktop-sidecar restart loop. Best-effort; NameError if boot

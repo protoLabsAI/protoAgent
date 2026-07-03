@@ -390,6 +390,8 @@ def test_config_round_trip() -> None:
         "disabled": ["c"],
         "dir": "/x",
         "sources": {"allow": ["github.com/protolabsai/*"]},
+        "update_policy": {},
+        "autoupdate_interval_hours": 6,
     }
 
 

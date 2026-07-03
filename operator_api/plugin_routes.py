@@ -92,18 +92,12 @@ def _mounted_router_ids() -> set[str]:
 
 
 def _purge_plugin_modules(plugin_id: str) -> None:
-    """Drop a plugin's module subtree from ``sys.modules`` so the next reload
-    re-execs every file from disk. The loader re-execs the entry ``__init__`` each
-    reload, but a multi-file plugin's ``from .tools import …`` resolves the SUBMODULE
-    through ``sys.modules`` — which still holds the OLD code after a force
-    re-install. Scoped to the plugin's own prefix; the reload rebuilds it."""
-    import sys
+    """Drop a plugin's module subtree from ``sys.modules`` (see
+    ``loader.purge_plugin_modules``) so the next reload re-execs every file from
+    disk. Thin alias kept for the route's existing call sites."""
+    from graph.plugins.loader import purge_plugin_modules
 
-    from graph.plugins.loader import _plugin_module_name
-
-    prefix = _plugin_module_name(plugin_id)
-    for name in [n for n in list(sys.modules) if n == prefix or n.startswith(prefix + ".")]:
-        sys.modules.pop(name, None)
+    purge_plugin_modules(plugin_id)
 
 
 def register_plugin_routes(app) -> None:

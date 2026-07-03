@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Opt-in plugin auto-update policy** (#1720). Plugins were update-only-on-demand:
+  an operator had to click **Update** in the console for each behind plugin. A new
+  `plugins.update_policy` config map opts individual plugins into background
+  auto-updates — `plugins.update_policy: { <id>: { track: main, when: idle } }`. A
+  periodic sweep (cadence `plugins.autoupdate_interval_hours`, default 6h, `0`
+  disables) pulls each opted-in, non-pinned plugin that's *behind* and hot-reloads
+  it through the same path the Update button uses, then emits `plugin.updated` on
+  the event bus. `when: idle` (the default) defers a plugin's update while a chat
+  turn is — or was just — in flight (a reload rebuilds tools/routers, safe between
+  turns but disruptive during one); `when: always` updates on the next sweep
+  regardless. A plugin pinned to a commit SHA is never auto-updated, and only
+  plugins explicitly listed in the policy are ever touched — the default is
+  unchanged manual-only updates. See the [plugins guide](docs/guides/plugins.md).
+
 ### Fixed
 - **Plugin smoke tests can assert surface lifecycle wiring** (#1729). The testkit's
   `FakeRegistry.register_surface` kept only the surface *name* and discarded the

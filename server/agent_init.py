@@ -875,6 +875,174 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
     return chunk_id
 
 
+# ── Opt-in plugin auto-update (#1720) ────────────────────────────────────────
+# Only plugins the operator lists in ``plugins.update_policy`` are ever touched;
+# a pinned-to-SHA plugin is never auto-updated. ``when: idle`` defers a plugin's
+# update while a chat turn is (or was just) in flight — the reload rebuilds
+# tools/routers, safe between turns but disruptive during one.
+_AUTOUPDATE_IDLE_QUIET_S = 300.0  # "idle" = no chat turn started in this window
+
+
+def _server_is_idle() -> bool:
+    """True when no chat turn is in flight AND none finished within the quiet window
+    (the ``when: idle`` gate). Reads the beacon ``server.chat`` maintains around
+    every turn; if that import fails we conservatively report NOT idle so we never
+    reload mid-turn."""
+    try:
+        from server.chat import active_turns, seconds_since_last_turn
+
+        return active_turns() == 0 and seconds_since_last_turn() >= _AUTOUPDATE_IDLE_QUIET_S
+    except Exception:
+        return False
+
+
+async def _autoupdate_one_plugin(plugin_id: str, entry: dict, status: dict, cfg, enabled: list[str]) -> None:
+    """Pull + hot-reload one plugin, mirroring the console Update route
+    (``operator_api/plugin_routes.py``): resolve the target ref (a release-tag pin
+    moves to the newest tag; a branch pulls its head), re-install with ``force``,
+    then — if the plugin is enabled — purge its modules and reload through the
+    enable path so the fresh code mounts. Emits ``plugin.updated`` on the bus. Reads
+    the allowlist / disabled set off the SAME ``cfg`` the sweep was handed."""
+    import asyncio
+
+    from graph.plugins import installer
+    from graph.plugins.loader import purge_plugin_modules
+
+    source_url = entry.get("source_url", "")
+    if not source_url:
+        return
+
+    ref = entry.get("requested_ref", "") or None
+    if ref and installer.is_release_tag(ref):
+        # A release-tag pin is immutable — the update target is the newest semver
+        # tag (the check's latest_ref), not the recorded one.
+        ref = status.get("latest_ref") or ref
+
+    allow = list(getattr(cfg, "plugins_sources_allow", []) or []) or None
+    try:
+        summary = await asyncio.to_thread(
+            installer.install, source_url, ref, force=True, by="autoupdate", allow=allow
+        )
+    except installer.InstallError as exc:
+        log.warning("[plugin-autoupdate] install failed for %s: %s", plugin_id, exc)
+        return
+    except Exception:
+        log.exception("[plugin-autoupdate] install crashed for %s", plugin_id)
+        return
+
+    reloaded = False
+    if plugin_id in enabled:
+        # Force a genuinely fresh import of the just-pulled code, then reload
+        # through the enable route's path (router re-mount, tools/MCP rebuild, #822).
+        # Guard the whole block: the code + lock are already updated on disk, so a
+        # reload crash must not abort the rest of the sweep (a bare raise here would
+        # unwind past the per-plugin loop) — the new code mounts on the next
+        # boot/enable regardless.
+        try:
+            purge_plugin_modules(plugin_id)
+            disabled = list(getattr(cfg, "plugins_disabled", []) or [])
+            ok, messages = _apply_settings_changes(
+                config={"plugins": {"enabled": list(enabled), "disabled": disabled}},
+            )
+            reloaded = bool(ok)
+            if not ok:
+                log.error("[plugin-autoupdate] reload failed for %s: %s", plugin_id, "; ".join(messages))
+        except Exception:
+            log.exception(
+                "[plugin-autoupdate] reload crashed for %s (update is on disk; next boot/enable mounts it)",
+                plugin_id,
+            )
+
+    try:
+        from server import _event_bus
+
+        _event_bus.publish(
+            "plugin.updated",
+            {
+                "id": plugin_id,
+                "version": summary.get("version"),
+                "resolved_sha": summary.get("resolved_sha"),
+                "reloaded": reloaded,
+                "by": "autoupdate",
+            },
+        )
+    except Exception:
+        log.exception("[plugin-autoupdate] event publish failed for %s", plugin_id)
+
+    log.info(
+        "[plugin-autoupdate] updated %s → %s (reloaded=%s)",
+        plugin_id,
+        (summary.get("resolved_sha") or "")[:8],
+        reloaded,
+    )
+
+
+async def _plugin_autoupdate_sweep(cfg, policy: dict) -> int:
+    """One pass over the update policy. For each opted-in, non-pinned, behind plugin
+    at a safe moment, pull + reload it. Returns the number of plugins updated. Each
+    plugin is guarded independently — one failure never blocks the rest."""
+    import asyncio
+
+    from graph.plugins import installer
+
+    installed = {e.get("id"): e for e in installer.list_installed()}
+    enabled = list(getattr(cfg, "plugins_enabled", []) or [])
+    updated = 0
+    for plugin_id, raw in policy.items():
+        pol = raw if isinstance(raw, dict) else {}
+        # ``track`` opts the plugin in (the ref itself comes from the lock); an
+        # empty/missing track means the entry is present but not armed.
+        if not str(pol.get("track") or "").strip():
+            continue
+        entry = installed.get(plugin_id)
+        if entry is None:
+            log.info("[plugin-autoupdate] %s in policy but not installed — skipping", plugin_id)
+            continue
+        when = str(pol.get("when") or "idle").strip().lower()
+        if when != "always" and not _server_is_idle():
+            log.info("[plugin-autoupdate] %s deferred — server busy (when=%s)", plugin_id, when)
+            continue
+        try:
+            status = await asyncio.to_thread(installer.check_plugin_update, entry)
+        except Exception:
+            log.exception("[plugin-autoupdate] update check failed for %s", plugin_id)
+            continue
+        if status.get("error"):
+            log.info("[plugin-autoupdate] %s check error: %s", plugin_id, status["error"])
+            continue
+        if status.get("pinned") or not status.get("behind"):
+            continue
+        await _autoupdate_one_plugin(plugin_id, entry, status, cfg, enabled)
+        updated += 1
+    return updated
+
+
+async def _plugin_autoupdate_loop() -> None:
+    """Periodically pull opt-in plugins that declare an update policy (#1720).
+
+    Reads ``plugins.update_policy`` + ``plugins.autoupdate_interval_hours`` from the
+    live config each pass, so a config reload takes effect without restarting the
+    loop. Interval ``0`` or an empty policy map = idle (the default — nothing is
+    touched). Failures are logged, never fatal."""
+    import asyncio
+
+    await asyncio.sleep(120)  # let boot settle past the first turn before sweeping
+    while True:
+        cfg = STATE.graph_config
+        interval_h = getattr(cfg, "plugins_autoupdate_interval_hours", 0) if cfg else 0
+        policy = getattr(cfg, "plugins_update_policy", {}) if cfg else {}
+        if cfg and interval_h > 0 and policy:
+            try:
+                n = await _plugin_autoupdate_sweep(cfg, policy)
+                if n:
+                    log.info("[plugin-autoupdate] sweep updated %d plugin(s)", n)
+            except Exception:
+                log.exception("[plugin-autoupdate] sweep failed")
+        # Re-read the interval each pass so a config change re-paces the loop; a
+        # disabled loop still wakes hourly to notice a re-enable.
+        await asyncio.sleep((interval_h if interval_h > 0 else 1) * 3600)
+
+
 def _build_inbox_store(config):
     """Durable inbound inbox (ADR 0003), namespaced by agent name. ``inbox_db_path``
     config (a dir) is used verbatim; else the per-instance ``instance_root/inbox`` store."""
