@@ -274,6 +274,23 @@ def test_injection_log_records_attributed_ids(tmp_path, monkeypatch):
     assert row["ts"]
 
 
+def test_injection_record_falls_back_to_tracing_session_id(tmp_path):
+    """An entry path that omits the (optional) state session_id still gets an
+    ATTRIBUTED injection row — same tracing-contextvar defense _persist_session
+    has, so forensics never silently lose the session linkage."""
+    from unittest.mock import patch
+
+    from observability.injection_log import injection_log
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("deploys go out Fridays", domain="hot")
+    mw = _mw(store)
+    with patch("observability.tracing.current_session_id", return_value="ctx-sid-9"):
+        mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)
+    rows = injection_log().recent()
+    assert rows and rows[0]["session_id"] == "ctx-sid-9"
+
+
 def test_incognito_writes_no_injection_row(tmp_path):
     from observability.injection_log import injection_log
 
@@ -327,3 +344,23 @@ def test_injections_route_newest_first_and_filters():
 def test_injections_route_empty_log():
     body = _injections_client().get("/api/memory/injections").json()
     assert body == {"injections": []}
+
+
+def test_injections_route_clamps_limit(monkeypatch):
+    """The route clamps limit into [1, 500] before it reaches the store — an
+    oversized querystring can't turn the read into an unbounded scan."""
+    import observability.injection_log as il
+
+    captured: dict = {}
+
+    class _Stub:
+        def recent(self, session_id=None, limit=50):
+            captured["limit"] = limit
+            return []
+
+    monkeypatch.setattr(il, "injection_log", lambda: _Stub())
+    c = _injections_client()
+    assert c.get("/api/memory/injections", params={"limit": 99999}).json() == {"injections": []}
+    assert captured["limit"] == 500
+    c.get("/api/memory/injections", params={"limit": -5})
+    assert captured["limit"] == 1

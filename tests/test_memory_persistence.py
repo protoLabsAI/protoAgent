@@ -572,6 +572,71 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 11. Windows-safe filenames — ':' encoded as '%3A' (system:activity, a2a:*)
+# ---------------------------------------------------------------------------
+
+
+def test_session_filename_mapper_roundtrip(tmp_path):
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path)})
+    assert mod.session_filename("system:activity") == "system%3Aactivity.json"
+    assert mod.session_filename("plain-id") == "plain-id.json"
+    # Read candidates: encoded name first, legacy raw-':' fallback; ids without
+    # ':' collapse to the single (identical) path.
+    assert mod.session_file_candidates("a2a:x", str(tmp_path)) == [
+        str(tmp_path / "a2a%3Ax.json"),
+        str(tmp_path / "a2a:x.json"),
+    ]
+    assert mod.session_file_candidates("plain", str(tmp_path)) == [str(tmp_path / "plain.json")]
+    # '%' stays outside the safe-id charset — a crafted id can never collide
+    # with an encoded filename.
+    assert not mod.is_safe_session_id("system%3Aactivity")
+
+
+def test_persist_session_encodes_colon_in_filename(tmp_path):
+    """':' is invalid in NTFS filenames — system:activity summaries silently
+    failed to persist on Windows. The writer encodes it as '%3A'."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    mod._persist_session(_make_state("system:activity"), "t-win")
+    assert (tmp_path / "system%3Aactivity.json").exists()
+    assert not (tmp_path / "system:activity.json").exists()
+    data = json.loads((tmp_path / "system%3Aactivity.json").read_text())
+    assert data["session_id"] == "system:activity"  # only the FILENAME is encoded
+
+
+def test_persist_session_removes_legacy_raw_name(tmp_path):
+    """After a successful encoded write, the pre-encoding raw-':' file for the
+    same id is removed — the digest must never list the session twice."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    (tmp_path / "system:activity.json").write_text(
+        json.dumps({"session_id": "system:activity", "messages": [], "timestamp": "old"})
+    )
+    mod._persist_session(_make_state("system:activity"), "t-win2")
+    assert (tmp_path / "system%3Aactivity.json").exists()
+    assert not (tmp_path / "system:activity.json").exists()
+    _, ids = mod.load_prior_sessions_digest(str(tmp_path))
+    assert ids == ["system:activity"]  # once, not twice
+
+
+def test_persist_session_overwrites_existing_summary(tmp_path):
+    """Re-persisting a live session replaces its summary IN PLACE — os.replace,
+    not os.rename: on Windows os.rename raises FileExistsError when dest
+    exists, which would freeze every summary at its first write."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    mod._persist_session(_make_state("sess-live"), "t-first")
+    mod._persist_session(
+        _make_state(
+            "sess-live",
+            messages=[HumanMessage(content="Later turn"), AIMessage(content="Updated answer, longer now. " * 5)],
+        ),
+        "t-second",
+    )
+    assert [p.name for p in tmp_path.glob("*")] == ["sess-live.json"]  # no .tmp leftovers
+    data = json.loads((tmp_path / "sess-live.json").read_text())
+    assert data["trace_id"] == "t-second"
+    assert data["messages"][0]["content"] == "Later turn"
+
+
+# ---------------------------------------------------------------------------
 # Default path resolution (no MEMORY_PATH override)
 # ---------------------------------------------------------------------------
 

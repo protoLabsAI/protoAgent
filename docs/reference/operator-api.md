@@ -79,9 +79,9 @@ injected every turn.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/memory/sessions` | List session summaries (digest fields: id, timestamp, surface, topic, message count, size) |
+| GET | `/api/memory/sessions` | List session summaries (digest fields: id, timestamp, surface, topic, message count, size, plus `in_digest`: whether the session is in the current `<prior_sessions>` injection window) |
 | GET · DELETE | `/api/memory/sessions/{session_id}` | Full rendered summary (what `recall_session` returns) / delete one |
-| GET | `/api/memory/hot` | List hot-memory chunks (`domain="hot"`) |
+| GET | `/api/memory/hot` | List hot-memory chunks (`domain="hot"`); each row carries `injecting`: whether the chunk is in the current per-turn injection window (omitted on backends without the id-attributed reader) |
 | PUT · DELETE | `/api/memory/hot/{chunk_id}` | Edit (revision stays `hot`) / delete a hot chunk |
 
 ## Activity, inbox & events

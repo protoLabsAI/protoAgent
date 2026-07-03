@@ -427,6 +427,20 @@ def test_digest_surface_classification(tmp_path):
     assert "background:job-7" not in result
 
 
+def test_digest_excludes_encoded_background_files(tmp_path):
+    """The background:* read-side filter must catch the '%3A'-encoded filename
+    a Windows-safe writer produces, not just the legacy raw-':' name."""
+    _write_session(str(tmp_path), "chat-ok", _sample_session("chat-ok"))
+    with open(os.path.join(str(tmp_path), "background%3Ajob-9.json"), "w", encoding="utf-8") as fh:
+        json.dump(_sample_session("background:job-9"), fh)
+
+    from graph.middleware.memory import load_prior_sessions_digest
+
+    block, ids = load_prior_sessions_digest(str(tmp_path))
+    assert ids == ["chat-ok"]
+    assert "background:job-9" not in block
+
+
 def test_digest_topic_truncated(tmp_path):
     session = _sample_session("sess-long")
     session["messages"] = [{"role": "user", "content": "T" * 300}]
@@ -465,6 +479,24 @@ async def test_recall_session_happy_path(monkeypatch, tmp_path):
 async def test_recall_session_unknown_id(monkeypatch, tmp_path):
     out = await _recall_tool(monkeypatch, tmp_path).ainvoke({"session_id": "no-such-session"})
     assert "No session" in out
+
+
+async def test_recall_session_reads_encoded_filename(monkeypatch, tmp_path):
+    # A ':' id persists under the '%3A'-encoded name (Windows-safe filenames);
+    # recall goes through the same session_filename mapper as the writer.
+    with open(os.path.join(str(tmp_path), "a2a%3Asess-1.json"), "w", encoding="utf-8") as fh:
+        json.dump(_sample_session("a2a:sess-1"), fh)
+    out = await _recall_tool(monkeypatch, tmp_path).ainvoke({"session_id": "a2a:sess-1"})
+    assert 'id="a2a:sess-1"' in out
+    assert "Hello" in out
+
+
+async def test_recall_session_legacy_raw_name_fallback(monkeypatch, tmp_path):
+    # Pre-encoding builds wrote the raw ':' filename on POSIX — reads fall back
+    # to it when the encoded name is absent.
+    _write_session(str(tmp_path), "a2a:legacy", _sample_session("a2a:legacy"))
+    out = await _recall_tool(monkeypatch, tmp_path).ainvoke({"session_id": "a2a:legacy"})
+    assert 'id="a2a:legacy"' in out
 
 
 async def test_recall_session_rejects_traversal(monkeypatch, tmp_path):
