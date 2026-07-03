@@ -208,15 +208,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # graph compiles below with STATE.knowledge_store). Default built-in store stays
     # the collision-check binding + the degrade-safe fallback.
     STATE.knowledge_store = _apply_plugin_knowledge_backend(STATE.graph_config, STATE.knowledge_store, _plugins)
-    # Register plugin-contributed goal verifiers (ADR 0028) — re-set on each
-    # (re)load so a config change refreshes the available `plugin` verifiers.
-    from graph.goals import hooks as _goal_hooks
-    from graph.goals import verifiers as _goal_verifiers
-    from graph.watches import hooks as _watch_hooks
-
-    _goal_verifiers.set_plugin_verifiers(_plugins.goal_verifiers)
-    _goal_hooks.set_goal_hooks(_plugins.goal_hooks)
-    _watch_hooks.set_watch_hooks(_plugins.watch_hooks)  # ADR 0067
+    # Register plugin-contributed goal verifiers + goal/watch hooks (ADR 0028/0067) into
+    # their live module registries — re-applied on every (re)load via _apply_plugin_registries
+    # so a config/plugin change refreshes the available `plugin` verifiers and hooks.
+    _apply_plugin_registries(_plugins)
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph
@@ -1394,6 +1389,25 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             log.exception("[plugins] failed to mount router from %s", plugin_id)
 
 
+def _apply_plugin_registries(plugins) -> None:
+    """Push a freshly (re)built plugin bundle's goal verifiers + goal/watch hooks into their
+    LIVE module registries (``graph.goals.verifiers`` / ``graph.goals.hooks`` /
+    ``graph.watches.hooks``). Called at full init AND in the hot-reload commit — without the
+    reload call, a plugin update/enable that adds or changes a verifier or hook leaves the live
+    registry holding the PRE-reload mapping, so a newly-shipped watch/goal verifier resolves as
+    "unknown plugin verifier" (armed but blind) until a full server restart (#1752).
+
+    Not itself serialized: each set_* is a single GIL-atomic global rebind, and the reload
+    caller already holds the config-write lock (init runs once at boot, uncontended)."""
+    from graph.goals import hooks as _goal_hooks
+    from graph.goals import verifiers as _goal_verifiers
+    from graph.watches import hooks as _watch_hooks
+
+    _goal_verifiers.set_plugin_verifiers(plugins.goal_verifiers)  # ADR 0028
+    _goal_hooks.set_goal_hooks(plugins.goal_hooks)
+    _watch_hooks.set_watch_hooks(plugins.watch_hooks)  # ADR 0067
+
+
 @_serialized_config_write
 def _reload_langgraph_agent() -> tuple[bool, str]:
     """Rebuild the compiled graph from the latest config YAML.
@@ -1585,6 +1599,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     if is_setup_complete():
         _mount_plugin_routers(new_plugins.routers)
         STATE.plugin_routers = new_plugins.routers
+        # Refresh the live plugin verifier/hook registries too (#1752) — same as full init.
+        # Without this a plugin update/enable that ships a new verifier leaves the watch/goal
+        # controllers resolving it as "unknown" until a full restart.
+        _apply_plugin_registries(new_plugins)
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")

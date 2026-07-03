@@ -175,6 +175,28 @@ async def test_unknown_plugin_verifier_is_not_met():
 
 
 @pytest.mark.asyncio
+async def test_unknown_plugin_verifier_warns_once_then_again_after_reset(caplog):
+    # #1752 belt-and-braces: an armed goal/watch on a missing verifier logs ONCE (not once per
+    # tick — a stalled watch re-checks 60+×/hour), and re-warns after the mapping is re-set so a
+    # name still missing after a plugin reload is re-surfaced.
+    import logging
+
+    set_plugin_verifiers({})  # empty registry + clears the dedup set
+    spec = {"type": "plugin", "check": "ghost:verifier"}
+    with caplog.at_level(logging.WARNING, logger="graph.goals.verifiers"):
+        await run_verifier(spec, VerifyContext())
+        await run_verifier(spec, VerifyContext())  # tick-after-tick: must NOT re-warn
+        warned = [r for r in caplog.records if "unknown plugin verifier" in r.getMessage()]
+        assert len(warned) == 1
+
+        set_plugin_verifiers({})  # a reload with the name STILL missing → dedup reset
+        await run_verifier(spec, VerifyContext())
+        warned = [r for r in caplog.records if "unknown plugin verifier" in r.getMessage()]
+        assert len(warned) == 2
+    set_plugin_verifiers({})  # cleanup
+
+
+@pytest.mark.asyncio
 async def test_plugin_verifier_error_never_marks_met():
     async def _boom(spec, ctx):
         raise RuntimeError("kaboom")

@@ -291,6 +291,11 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
 # with declarative args — no shell, no eval (that's why a ``plugin`` goal is the
 # only verifier type safe to set programmatically; see ADR 0028 D3).
 _PLUGIN_VERIFIERS: dict = {}
+# Plugin-verifier names already warned as unknown — so an armed goal/watch on a missing
+# verifier logs ONCE, not once per tick (a stalled watch re-checks every cadence, 60+×/hour).
+# Cleared whenever the mapping is re-set, so a still-missing name warns again after a reload
+# and a now-present one goes quiet.
+_WARNED_UNKNOWN_VERIFIERS: set[str] = set()
 
 
 def set_plugin_verifiers(mapping: dict | None) -> None:
@@ -306,6 +311,10 @@ def set_plugin_verifiers(mapping: dict | None) -> None:
     so reassigning the global is safe.)"""
     global _PLUGIN_VERIFIERS
     _PLUGIN_VERIFIERS = dict(mapping or {})
+    # A fresh mapping may now resolve names that were unknown before (e.g. a plugin update
+    # that registers new verifiers, #1752) — reset the dedup set so a still-missing name
+    # warns again and a now-present one stops.
+    _WARNED_UNKNOWN_VERIFIERS.clear()
 
 
 def plugin_verifier_names() -> list[str]:
@@ -320,6 +329,19 @@ async def _verify_plugin(spec: dict, ctx: VerifyContext) -> VerifyResult:
     name = (spec or {}).get("check") or ""
     fn = _PLUGIN_VERIFIERS.get(name)
     if fn is None:
+        # An armed goal/watch pointing at a verifier the live registry doesn't know can never
+        # evaluate — it errors every tick, silently, visible only by polling state. Surface it
+        # once (deduped) so an "armed but blind" monitor (e.g. a plugin update that didn't
+        # refresh the registry, #1752) is diagnosable from the logs.
+        if name and name not in _WARNED_UNKNOWN_VERIFIERS:
+            _WARNED_UNKNOWN_VERIFIERS.add(name)
+            log.warning(
+                "[goal] unknown plugin verifier %r — an armed goal/watch on it can never "
+                "evaluate. Is its plugin installed+enabled, and did the last plugin "
+                "update/reload re-register it? Known: %s",
+                name,
+                ", ".join(sorted(_PLUGIN_VERIFIERS)) or "(none)",
+            )
         return VerifyResult(False, f"unknown plugin verifier {name!r}", "")
     try:
         return await fn(spec, ctx)
