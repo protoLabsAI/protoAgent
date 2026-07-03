@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *cleanly* with a clear "provider closed the stream — possible rate limit" log so a
   background scheduler can observe and reschedule, instead of an alarming unhandled-
   exception traceback.
+- **A locked checkpoint write no longer silently kills a background turn** (#1738).
+  WAL + the existing 5s `busy_timeout` absorb almost all contention on
+  `checkpoints.db`, but a writer holding the lock past the timeout (the incremental
+  pruner mid-VACUUM, or two background turns landing at once) surfaced a
+  `sqlite3.OperationalError: database is locked` that bubbled unhandled and lost the
+  whole turn's work — the worst failure class for an autonomous agent. Checkpoint
+  writes (`aput`/`aput_writes`) now retry a locked write a few times with short
+  exponential backoff before failing (a locked write commits nothing, so retry is
+  safe); every other error still propagates unchanged.
 
 ## [0.88.0] - 2026-07-03
 

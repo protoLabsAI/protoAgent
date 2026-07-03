@@ -19,9 +19,46 @@ its own lock and ``check_same_thread=False``, which keeps the cross-thread
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
+import time
 
 from langgraph.checkpoint.sqlite import SqliteSaver
+
+log = logging.getLogger(__name__)
+
+# WAL + a 5s busy_timeout absorb almost all checkpoint-write contention, but a
+# writer that holds the lock *past* the busy_timeout (e.g. the incremental pruner
+# mid-VACUUM, or two background turns landing at once) still surfaces a
+# ``database is locked`` OperationalError. That killed a whole background turn
+# mid-checkpoint (#1738) — the worst class of failure for an autonomous agent, a
+# silent loss of committed work. A locked write commits nothing, so a bounded
+# retry with short exponential backoff is safe and recovers the turn.
+_LOCK_WRITE_RETRIES = 3
+_LOCK_BACKOFF_S = 0.1
+
+
+def _retry_on_locked(fn, *args, **kwargs):
+    """Run a sync checkpointer write, retrying ``database is locked`` a few times
+    before giving up. Only that specific OperationalError is retried; every other
+    error (and the final locked attempt) propagates unchanged."""
+    delay = _LOCK_BACKOFF_S
+    for attempt in range(_LOCK_WRITE_RETRIES):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as exc:
+            last = attempt == _LOCK_WRITE_RETRIES - 1
+            if "database is locked" not in str(exc).lower() or last:
+                raise
+            log.warning(
+                "checkpoint %s: database is locked, retry %d/%d in %.2fs",
+                getattr(fn, "__name__", fn),
+                attempt + 1,
+                _LOCK_WRITE_RETRIES - 1,
+                delay,
+            )
+            time.sleep(delay)
+            delay *= 2
 
 
 class ThreadedSqliteSaver(SqliteSaver):
@@ -32,10 +69,10 @@ class ThreadedSqliteSaver(SqliteSaver):
         return await asyncio.to_thread(self.get_tuple, config)
 
     async def aput(self, *args, **kwargs):
-        return await asyncio.to_thread(self.put, *args, **kwargs)
+        return await asyncio.to_thread(_retry_on_locked, self.put, *args, **kwargs)
 
     async def aput_writes(self, *args, **kwargs):
-        return await asyncio.to_thread(self.put_writes, *args, **kwargs)
+        return await asyncio.to_thread(_retry_on_locked, self.put_writes, *args, **kwargs)
 
     async def alist(self, *args, **kwargs):
         # The base `list` is a sync generator; materialize it off-thread, then
