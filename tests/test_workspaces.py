@@ -261,3 +261,25 @@ def test_run_exec_frozen_argv(root, monkeypatch):
     _, argv = manager.run_exec("gamma", ["--ui", "none"])
     assert argv[0] == sys.executable and "-m" not in argv
     assert argv[1] == "--port" and argv[-2:] == ["--ui", "none"]
+
+
+def test_is_workspace_member_detects_spawned_instance(root, monkeypatch):
+    """#1708: a spawned member runs with ``PROTOAGENT_HOME=<ws>`` (run_exec), and the
+    workspace registry record at that root is the marker — ``is_workspace_member()``
+    is True exactly there, False for a hub/standalone instance root."""
+    import infra.paths as paths
+
+    s = manager.create("ava")
+    ws = root / s["id"]
+
+    # Standalone/hub: instance root without a workspace.yaml → not a member.
+    monkeypatch.setenv("PROTOAGENT_HOME", str(root.parent / "standalone"))
+    paths.reset_instance_paths()
+    assert manager.is_workspace_member() is False
+
+    # The member's own env (what run_exec wires): instance root IS the workspace dir.
+    env, _ = manager.run_exec("ava", [])
+    monkeypatch.setenv("PROTOAGENT_HOME", env["PROTOAGENT_HOME"])
+    paths.reset_instance_paths()
+    assert str(ws) == env["PROTOAGENT_HOME"]
+    assert manager.is_workspace_member() is True

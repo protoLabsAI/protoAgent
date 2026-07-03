@@ -143,6 +143,15 @@ the slug proxy forwards WS upgrades, not just HTTP/SSE ([#883](https://github.co
 (create / start / stop / rename / remove), and **Discover** finds other protoAgents on the
 box, the LAN (mDNS) and your **tailnet** (via the Tailscale CLI).
 
+**Fleet settings are hub-only.** The topbar dropdown's **Fleet settings** item is enabled
+on the host window (and on a standalone instance — that's where you create your first
+member); in a *member* window it renders **disabled** with a tooltip pointing you at the
+host instance. That covers both a member's slug window and a spawned workspace member
+opened directly on its own port — the member self-reports `member: true` on its own
+`GET /api/fleet` host entry (its instance root carries the `workspace.yaml` spawn marker).
+A **remote** member opened at its own URL stays enabled on purpose: it's an independent
+instance that may run its own fleet, and registration is one-sided on the hub.
+
 ## Remote fleet members — the agent there, the UI here
 
 *(ADR 0042 §I.)* A fleet member doesn't have to be local: register any reachable protoAgent

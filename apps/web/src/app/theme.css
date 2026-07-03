@@ -2115,6 +2115,15 @@ textarea {
   color: var(--accent);
 }
 
+/* Tooltip-wrapped menu row (#1708 — the disabled "Fleet settings" item on a fleet
+   member). The DS Tooltip's trigger span is inline-flex, which would shrink the
+   wrapped .pl-menu__item to its content width; make it block so the row spans the
+   menu like its siblings. (DS gap — a disabled-menu-item-with-tooltip pattern
+   belongs in @protolabsai/ui's Menu; drop this once protoContent ships one.) */
+.pl-menu .pl-tip-wrap {
+  display: block;
+}
+
 /* .fleet-host-tag retired (#832) — the "this instance" / "remote" tags in the
    fleet manager + switcher are now DS <Badge status="neutral">. */
 
