@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, Maximize2, RotateCcw } from "lucide-react";
+import { ArrowDownToLine, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, Maximize2, RotateCcw, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 
 import { openDocument } from "../docviewer";
@@ -25,6 +25,9 @@ export type ChatMessageActions = {
   onFork?: (m: ChatMessage) => void;
   onRewind?: (m: ChatMessage) => void;
   onRegenerate?: (id: string) => void;
+  // Remove a local-only errored turn from the transcript (#1695) — the error bubble is
+  // display-only (not backend history), so a reload clears it; this offers a dismiss in place.
+  onDismiss?: (id: string) => void;
   lastAssistantId?: string;
   regenDisabled?: boolean;
 };
@@ -192,6 +195,9 @@ export function ChatMessageView({
               disabled={actions.regenDisabled}
               onClick={() => actions.onRegenerate!(message.id!)}
             />
+          ) : null}
+          {actions.onDismiss && message.status === "error" ? (
+            <MessageAction label="Dismiss" icon={<X size={14} />} onClick={() => actions.onDismiss!(message.id!)} />
           ) : null}
         </MessageActions>
       ) : null}
