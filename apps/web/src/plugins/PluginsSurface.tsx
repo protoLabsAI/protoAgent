@@ -1,6 +1,6 @@
 import "../settings/plugins.css";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -74,6 +74,17 @@ function PluginRow({
             <strong>{p.name}</strong>
             {p.version ? <span className="plugin-ver">v{p.version}</span> : null}
             <PluginFreshness update={update} />
+            {/* Required-config gate (#1719) — a loaded-but-unconfigured plugin's tools
+                return a needs-setup notice; flag it so the operator can finish setup. */}
+            {p.incomplete ? (
+              <Badge status="warning">
+                <span
+                  title={`Missing required config: ${(p.needs_config ?? []).map((n) => n.label).join(", ") || "setup needed"} — click "Set up"`}
+                >
+                  needs setup
+                </span>
+              </Badge>
+            ) : null}
             {p.error ? <StatusPill label="error" tone="error" /> : null}
           </div>
           <span>{contributionsLabel(p)}</span>
@@ -95,8 +106,20 @@ function PluginRow({
             </Button>
           ) : null}
           {/* Configure opens a per-plugin settings dialog (ADR 0059) rather than expanding
-              the row, so the row stays one line and the form gets room. */}
-          {configurable ? (
+              the row, so the row stays one line and the form gets room. An INCOMPLETE
+              plugin (#1719) gets a prominent labeled "Set up" instead of the gear icon —
+              it's the primary thing to do on that row. */}
+          {p.incomplete ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={() => setConfigOpen(true)}
+              title={`Finish setting up ${p.name}`}
+            >
+              Set up
+            </Button>
+          ) : configurable ? (
             <Button
               type="button"
               icon
@@ -137,10 +160,11 @@ function PluginRow({
           ) : null}
         </div>
       </div>
-      {configurable ? (
+      {configurable || p.incomplete ? (
         <PluginSettingsDialog
           pluginId={p.id}
           pluginName={p.name}
+          needsConfig={p.incomplete ? p.needs_config : undefined}
           open={configOpen}
           onClose={() => setConfigOpen(false)}
         />

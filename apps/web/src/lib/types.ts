@@ -92,6 +92,10 @@ export type RuntimeStatus = {
     tools: string[];
     skills: number;
     error?: string;
+    // Required-config gate (#1719): the plugin loaded but a `required: true` setting
+    // is still blank — its tools return a "needs setup" notice until it's configured.
+    incomplete?: boolean;
+    needs_config?: { key: string; label: string }[];
     // Console surfaces (ADR 0026): rail views the plugin contributes.
     views?: PluginView[];
   }[];
@@ -153,6 +157,10 @@ export type InstalledPlugin = {
   // still listed (and enabled/loaded normally); it just isn't update-tracked.
   tracked?: boolean;
   enabled: boolean;
+  // Required-config gate (#1719) — merged from the loader meta: true when the plugin
+  // loaded but a `required: true` setting is blank, with the fields still needed.
+  incomplete?: boolean;
+  needs_config?: { key: string; label: string }[];
   manifest?: {
     name: string;
     version: string;

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin setup: a "needs setup" cue + guided config for unconfigured plugins**
+  (#1719, console). Building on the required-config gate below, an **incomplete**
+  plugin (loaded but missing a `required: true` setting) now shows a ⚠️ **"needs
+  setup"** badge in the Plugins panel — hovering lists the missing fields — and its
+  row's action becomes a prominent **"Set up"** button instead of the gear icon.
+  "Set up" opens the plugin's config dialog with a **setup banner** naming the
+  fields it still needs; filling them in and saving reloads the plugin, which clears
+  the badge. Skippable — close the dialog and finish later from the same badge.
 - **Plugins declare required config and degrade gracefully when it's missing**
   (#1719). A plugin marks a setting `required: true` in its manifest to say it needs
   that value (an API key, endpoint, …) to function. If an enabled plugin loads while
