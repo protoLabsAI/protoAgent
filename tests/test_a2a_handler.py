@@ -401,14 +401,15 @@ async def test_tool_events_surface_as_tool_call_dataparts():
 @pytest.mark.asyncio
 async def test_errored_tool_end_surfaces_phase_failed():
     """A tool_end flagged error → a phase=\"failed\" tool-call DataPart (the card
-    renders the X), carrying the error text. A declined run_command takes this path."""
+    renders the X), carrying the error text. A genuine command failure takes this
+    path — a DECLINE no longer does (#1692: it returns a normal result now)."""
     import json
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
-        yield ("tool_start", {"id": "t1", "name": "run_command", "input": {"command": "rm -rf /"}})
+        yield ("tool_start", {"id": "t1", "name": "run_command", "input": {"command": "false"}})
         yield (
             "tool_end",
-            {"id": "t1", "name": "run_command", "output": "Command declined by the operator — not run", "error": True},
+            {"id": "t1", "name": "run_command", "output": "Error: command exited 1", "error": True},
         )
         yield ("done", "ok")
 
@@ -442,7 +443,7 @@ async def test_errored_tool_end_surfaces_phase_failed():
     failed = next((p for p in payloads if p["phase"] == "failed"), None)
     assert failed is not None, [p["phase"] for p in payloads]
     assert failed["name"] == "run_command"
-    assert "declined" in (failed.get("error") or "")
+    assert "exited 1" in (failed.get("error") or "")
 
 
 @pytest.mark.asyncio

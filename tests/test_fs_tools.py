@@ -152,12 +152,12 @@ def test_run_command_runs_via_shell(workspace):
     assert out.splitlines() == ["one", "two"]
 
 
-def test_run_command_declined_raises(workspace, monkeypatch):
-    """A declined approval RAISES (ToolException) rather than returning a string —
-    so the ToolNode stamps status="error" and the chat card shows the X, not a green
-    'done'. interrupt() is stubbed to the deny decision (no graph runtime needed)."""
+def test_run_command_declined_returns_not_raises(workspace, monkeypatch):
+    """A declined approval RETURNS a plain result — NOT a ToolException. A decline is
+    the operator's deliberate choice, not a failure: raising stamped status="error"
+    and the chat rendered an undismissable full-bleed red block. The result names the
+    declined command and tells the model not to retry. interrupt() is stubbed to deny."""
     import langgraph.types
-    from langchain_core.tools import ToolException
 
     _, a, _ = workspace
     monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "denied")
@@ -168,8 +168,10 @@ def test_run_command_declined_raises(workspace, monkeypatch):
             filesystem_run_requires_approval=True,
         )
     )
-    with pytest.raises(ToolException):
-        asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+    assert "declined by the operator" in out
+    assert "ls" in out
+    assert "Do not re-run" in out
 
 
 def test_run_command_bypass_skips_approval(workspace, monkeypatch):
@@ -196,9 +198,10 @@ def test_run_command_bypass_skips_approval(workspace, monkeypatch):
 
 def test_run_command_bypass_forbidden_by_host_still_gates(workspace, monkeypatch):
     """When the host forbids bypass (filesystem_bypass_allowed=False), caller bypass metadata is
-    IGNORED and the approval gate still fires (here stubbed to deny → raises)."""
+    IGNORED and the approval gate still fires — here stubbed to deny, so the command doesn't run
+    and returns the decline result (the gate firing is the point; the decline handling is
+    covered by test_run_command_declined_returns_not_raises)."""
     import langgraph.types
-    from langchain_core.tools import ToolException
     from graph.middleware.request_context import request_metadata_scope
 
     _, a, _ = workspace
@@ -212,8 +215,8 @@ def test_run_command_bypass_forbidden_by_host_still_gates(workspace, monkeypatch
         )
     )
     with request_metadata_scope({"bypass_permissions": True}):
-        with pytest.raises(ToolException):
-            asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+        out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+    assert "declined by the operator" in out  # gate fired despite the bypass request
 
 
 # ── config round-trip ──────────────────────────────────────────────────────────

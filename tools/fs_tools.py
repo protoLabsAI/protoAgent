@@ -288,10 +288,16 @@ def build_fs_tools(config) -> list:
                     }
                 )
                 if not _approved(decision):
-                    # Raise (not return) so the ToolNode stamps the ToolMessage
-                    # status="error": the chat card then renders the declined action
-                    # as a failure (red X) instead of a green "done" with decline text.
-                    raise ToolException(f"Command declined by the operator — not run: {command!r}")
+                    # RETURN (not raise): a decline is the operator's deliberate choice,
+                    # not a tool failure — raising stamped status="error", which the chat
+                    # rendered as a full-bleed red block the operator couldn't dismiss
+                    # (and read as "something broke"). A normal result renders as an
+                    # ordinary collapsed tool card. The message tells the model to stop,
+                    # not retry, so a decline ends the attempt cleanly.
+                    return (
+                        f"Command declined by the operator — not run: {command!r}. "
+                        "Do not re-run it; wait for the operator's next instruction or ask how to proceed."
+                    )
             elif run_requires_approval:
                 # Bypass-permissions mode (the operator's explicit per-turn /bypass toggle): the
                 # approval gate is skipped. AUDIT every command that runs without confirmation.
