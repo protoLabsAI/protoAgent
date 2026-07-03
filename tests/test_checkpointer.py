@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -73,3 +74,52 @@ async def test_threaded_saver_async_methods_work(tmp_path):
     saver = build_sqlite_checkpointer(str(tmp_path / "c.db"))
     # No checkpoint yet for this thread → aget_tuple returns None, doesn't raise.
     assert await saver.aget_tuple({"configurable": {"thread_id": "none"}}) is None
+
+
+# --- #1738: a checkpoint write that hits "database is locked" retries, not dies ---
+
+
+def test_retry_on_locked_recovers_transient_lock(monkeypatch):
+    import graph.checkpointer as ckpt
+
+    monkeypatch.setattr(ckpt.time, "sleep", lambda _s: None)  # no real backoff in tests
+    calls = {"n": 0}
+
+    def flaky(x):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return x
+
+    assert ckpt._retry_on_locked(flaky, "ok") == "ok"
+    assert calls["n"] == 3  # two locked attempts, then success — the turn survives
+
+
+def test_retry_on_locked_gives_up_after_bounded_retries(monkeypatch):
+    import graph.checkpointer as ckpt
+
+    monkeypatch.setattr(ckpt.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def always_locked(*_a):
+        calls["n"] += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        ckpt._retry_on_locked(always_locked)
+    assert calls["n"] == ckpt._LOCK_WRITE_RETRIES  # bounded — no infinite retry loop
+
+
+def test_retry_on_locked_does_not_retry_other_errors(monkeypatch):
+    import graph.checkpointer as ckpt
+
+    monkeypatch.setattr(ckpt.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def other(*_a):
+        calls["n"] += 1
+        raise sqlite3.OperationalError("no such table: checkpoints")
+
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        ckpt._retry_on_locked(other)
+    assert calls["n"] == 1  # a non-lock error propagates immediately
