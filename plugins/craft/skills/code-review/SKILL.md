@@ -39,8 +39,9 @@ Get a concrete diff before anything else:
 
 ## 3. Run both axes in parallel
 
-One `task_batch`, two subagents, each given the diff plus only its own source
-documents:
+One `task_batch`, two delegations (`subagent_type: verifier` suits both;
+unknown types are skipped, so use a registered one), each given the diff plus
+only its own source documents:
 
 - **Standards brief**: report every documented-standard violation (cite the
   rule) and any baseline smell (name it, quote the hunk), distinguishing hard
