@@ -579,3 +579,16 @@ def test_up_reports_boot_death_and_continues(tmp_path, monkeypatch):
     rows = supervisor.up(["brokey"])  # must not raise — the row carries the error
     assert rows[0]["name"] == "brokey" and rows[0]["running"] is False
     assert "exit code 2" in rows[0]["error"]
+
+
+# ── member self-report on the host entry (#1708) ──────────────────────────────
+def test_host_entry_member_flag(fleet, monkeypatch):
+    """A spawned workspace member self-reports ``member: True`` on its own /api/fleet
+    host entry (the console's signal to gate hub-only affordances); a hub/standalone
+    host entry doesn't carry the key at all — the payload shape is unchanged for them."""
+    host = next(a for a in supervisor.status() if a.get("host"))
+    assert "member" not in host  # hub/standalone: no new field
+
+    monkeypatch.setattr(manager, "is_workspace_member", lambda: True)
+    host = next(a for a in supervisor.status() if a.get("host"))
+    assert host["member"] is True

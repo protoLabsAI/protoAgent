@@ -288,7 +288,7 @@ def _host_entry() -> dict:
     cfg = getattr(STATE, "graph_config", None)
     name = getattr(cfg, "identity_name", "") or "main"
     port = getattr(STATE, "active_port", None)
-    return {
+    entry = {
         "name": name,
         "id": getattr(cfg, "instance_id", "") or name,
         "port": port,
@@ -302,6 +302,14 @@ def _host_entry() -> dict:
         # release is a real, otherwise-invisible /api/* compat surface.
         "version": package_version(),
     }
+    # This instance is itself a workspace member SPAWNED by another hub's supervisor
+    # (the `workspace.yaml` record at its instance root is the spawn-time marker).
+    # Surfaced read-only on the existing /api/fleet payload so a console reaching the
+    # member DIRECTLY (its own port) can gate hub-only affordances — the header's
+    # "Fleet settings" item disables with a point-at-the-host tooltip (#1708).
+    if manager.is_workspace_member():
+        entry["member"] = True
+    return entry
 
 
 # ── remote fleet members (ADR 0042 §I, the proxy half) ────────────────────────

@@ -3,11 +3,13 @@ import { Check, ChevronDown, ExternalLink, Plus, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
+import { Tooltip } from "@protolabsai/ui/overlays";
 import { Badge } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 
 import { agentHref, api, currentSlug } from "../lib/api";
 import { queryKeys } from "../lib/queries";
+import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
 
 // The URL slug is the agent's STABLE id, never its (editable) display name — renaming an agent
 // must not change its URL/bookmarks. `host` is the reserved slug for this instance.
@@ -34,6 +36,9 @@ export function FleetSwitcher({
   const agents = fleet.data?.agents ?? [];
   const slug = currentSlug(); // the agent THIS window is on
   const current = agents.find((a) => slugOf(a) === slug);
+  // Fleet settings are hub-only (#1708): non-null in a member window (a hub slug window,
+  // or a spawned workspace member reached directly) — the item disables with this tooltip.
+  const fleetSettingsBlocked = fleetSettingsDisabledReason(agents, slug);
 
   // Only a hard fleet-API error hides the switcher; otherwise it's always available.
   if (fleet.isError) return <>{fallbackName}</>;
@@ -80,9 +85,20 @@ export function FleetSwitcher({
       <MenuItem icon={<Plus size={14} />} onSelect={() => onNewAgent?.()}>
         New agent
       </MenuItem>
-      <MenuItem icon={<Settings size={14} />} onSelect={() => onManageFleet?.()}>
-        Fleet settings
-      </MenuItem>
+      {fleetSettingsBlocked ? (
+        // Disabled, not hidden — discoverable: the tooltip says WHERE fleet settings live.
+        // The DS Tooltip's own wrapper span is the hover target (a disabled Radix menu item
+        // is pointer-events:none, so the item itself can't fire the tooltip).
+        <Tooltip label={fleetSettingsBlocked} side="left">
+          <MenuItem icon={<Settings size={14} />} disabled>
+            Fleet settings
+          </MenuItem>
+        </Tooltip>
+      ) : (
+        <MenuItem icon={<Settings size={14} />} onSelect={() => onManageFleet?.()}>
+          Fleet settings
+        </MenuItem>
+      )}
     </Menu>
   );
 }

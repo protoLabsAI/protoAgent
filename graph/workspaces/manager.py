@@ -97,6 +97,20 @@ def _read_record(ws: Path) -> dict | None:
         return None
 
 
+def is_workspace_member() -> bool:
+    """True when THIS process runs as a fleet workspace member (ADR 0042): the hub's
+    supervisor spawns members with ``PROTOAGENT_HOME=<ws>``, so a member's instance
+    root IS a workspace dir — and every workspace dir carries its registry record
+    (``workspace.yaml``, written by ``create()``). A hub or standalone instance root
+    never has one, so the record doubles as the read-only "this instance is managed
+    by a host" signal (#1708) with no new state or endpoint. Remote members (ADR
+    0042 §I) are out of scope by design: registration is one-sided on the hub, and a
+    remote is a full independent instance that may legitimately run its own fleet."""
+    from infra.paths import instance_paths
+
+    return _read_record(instance_paths().instance_root) is not None
+
+
 def list_workspaces() -> list[dict]:
     """Every workspace under the root (each dir with a ``workspace.yaml``)."""
     root = workspaces_root()

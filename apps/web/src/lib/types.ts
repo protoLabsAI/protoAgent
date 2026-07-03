@@ -811,6 +811,10 @@ export type FleetAgent = {
   bundle: string; // "" for a Basic agent
   a2a?: string; // the agent's own A2A endpoint (focus-independent)
   host?: boolean; // the instance serving this console — can't be stopped/removed from itself
+  // Only ever set on the `host` entry, by the instance itself: this instance is a workspace
+  // member SPAWNED by another hub's supervisor (its instance root carries a workspace.yaml).
+  // Consoles reaching a member directly use it to gate hub-only affordances (#1708).
+  member?: boolean;
   remote?: boolean; // a REMOTE member (ADR 0042 §I) — proxied by URL, no start/stop from here
   url?: string; // the remote member's base URL
   // App version (pyproject [project].version). Always set on the host (hub) entry;
