@@ -25,7 +25,7 @@ the agent knows; rows are distinguished by a few columns:
 | `domain` | the bucket — `fact`, `conversation`, `hot`, `finding`, or anything a tool sets (`preferences`, `context`, …) |
 | `finding_type` | sub-type within a domain (e.g. `fact`, `conversation`) |
 | `namespace` | optional per-project / per-owner scope (ADR 0021) — a *filter* for multi-project forks, never required |
-| `source` / `source_type` | provenance: `source` is the **originating session/thread id** (ADR 0069 D5); `source_type` names the write path and maps onto a [trust tier](#trust-tiers) |
+| `source` / `source_type` | provenance: for conversation-derived rows (harvest summaries, extracted facts, background reports) `source` is the **originating session/thread id** (ADR 0069 D5); for ingested content it is the **document origin** (URL/path); other writes may leave it unset or stamp the writing surface (e.g. `console`). `source_type` names the write path and maps onto a [trust tier](#trust-tiers) |
 | `created_at` / `invalidated_at` | when the row was stored, and — for superseded facts — when a newer revision replaced it (ADR 0069 D9; retrieval excludes invalidated rows by default) |
 | `heading`, `content` | the chunk itself |
 
