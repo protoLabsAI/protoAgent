@@ -1032,7 +1032,35 @@ function ChatSessionSlot({
   // Resume a paused (input-required) turn: submitting the HITL form/question
   // sends the response as a follow-up on the same session — the server feeds it
   // to the agent via Command(resume=…). A form response is serialized to JSON.
+  // Redeem a plugin composer-form (#1701 Slice 2): POST the field values to the plugin's
+  // on_submit. A reply becomes a note; a returned form is the next step of a wizard
+  // (re-opened on the same input-required HITL path).
+  async function submitPluginForm(callbackId: string, answers: Record<string, unknown>) {
+    try {
+      const res = await api.submitChatCommandForm({
+        callback_id: callbackId,
+        session_id: session?.id ?? "",
+        answers,
+      });
+      if (res?.form) {
+        updateHitl({ ...res.form, plugin_callback_id: res.callback_id });
+      } else if (res?.reply) {
+        noteToThread(String(res.reply));
+      }
+    } catch (e) {
+      noteToThread(`⚠️ ${e instanceof Error ? e.message : String(e)}`, { tone: "danger" });
+    }
+  }
+
   async function resumeHitl(response: Record<string, unknown> | string) {
+    // A plugin composer-form (#1701 Slice 2) rode the input_required frame but is NOT a
+    // graph interrupt — redeem it via the plugin submit route, never Command(resume).
+    if (hitl?.plugin_callback_id) {
+      const cb = hitl.plugin_callback_id;
+      updateHitl(null);
+      await submitPluginForm(cb, typeof response === "string" ? {} : response);
+      return;
+    }
     // An approval gate (Approve/Deny on, e.g., run_command) isn't conversation — resume
     // the turn but DON'T append an "approved"/"denied" user bubble. The outcome lives on
     // the tool card itself (running → done on approve, error on deny), so the bubble is
@@ -1060,6 +1088,12 @@ function ChatSessionSlot({
   // the paused assistant message (matching the approval-resume path) rather than minting a
   // new bubble.
   async function dismissHitl() {
+    // A plugin composer-form has no parked graph to resume — just close it; its server
+    // callback expires on its own TTL (#1701 Slice 2).
+    if (hitl?.plugin_callback_id) {
+      updateHitl(null);
+      return;
+    }
     updateHitl(null);
     void runTurn(
       "[dismissed] The operator dismissed this request without providing input. Continue " +

@@ -115,6 +115,44 @@ def _build_subagent():
     )
 
 
+async def _hello_form_command(rest: str, session_id: str):
+    """A user-only chat command that opens a FORM instead of replying (#1701 Slice 2):
+    `/hello-form` shows a one-field picker in the composer; submitting it echoes the
+    choice back as a note — the plugin↔composer-form round-trip in ~20 lines."""
+
+    async def _on_submit(answers: dict, _session_id: str) -> str:
+        style = str(answers.get("style") or "friendly")
+        return f"Hello — in a **{style}** style! (from the example plugin's form)"
+
+    return {
+        "form": {
+            "kind": "form",
+            "title": "Say hello",
+            "description": "Pick a greeting style.",
+            "steps": [
+                {
+                    "schema": {
+                        "type": "object",
+                        "required": ["style"],
+                        "properties": {
+                            "style": {
+                                "type": "string",
+                                "title": "Style",
+                                "oneOf": [
+                                    {"const": "friendly", "title": "friendly", "description": "warm and casual"},
+                                    {"const": "formal", "title": "formal", "description": "polished and precise"},
+                                    {"const": "pirate", "title": "pirate", "description": "arr, matey"},
+                                ],
+                            }
+                        },
+                    }
+                }
+            ],
+        },
+        "on_submit": _on_submit,
+    }
+
+
 def register(registry) -> None:
     """Entry point — called once at load with a PluginRegistry."""
     greeting = registry.config.get("greeting", "Hello")  # plugin config (ADR 0019)
@@ -123,3 +161,4 @@ def register(registry) -> None:
     registry.register_router(_build_router(greeting))  # → /plugins/hello/ping (ADR 0018)
     registry.register_surface(_surface_start, stop=_surface_stop, name="hello-surface")
     registry.register_subagent(_build_subagent())
+    registry.register_chat_command("hello-form", _hello_form_command)  # #1701 Slice 2 demo

@@ -118,13 +118,20 @@ class PluginRegistry:
         turn with the handler's reply, like the core ``/goal`` (and the old, now
         plugin-owned, ``/issue``).
 
-        ``handler`` is ``async (rest: str, session_id: str) -> str | None``: ``rest``
-        is everything after the token; return the reply string to send (the turn is
-        NOT run through the agent), or ``None`` to pass the message through as a
+        ``handler`` is ``async (rest: str, session_id: str) -> str | dict | None``:
+        ``rest`` is everything after the token; return the reply string to send (the
+        turn is NOT run through the agent), or ``None`` to pass the message through as a
         normal turn. This is **user-only by design** — it is NOT an agent tool, so a
         plugin can expose a write action (file an issue, open a PR) that the model
         can't invoke autonomously. Read your own config in ``register()`` and close
         over it, e.g. ``repo = self.config.get("default_repo")``.
+
+        To collect input, return a **form request** (#1701 Slice 2):
+        ``{"form": <request_user_input-shaped payload>, "on_submit": <async
+        (answers: dict, session_id: str) -> str | dict | None>}``. The runtime opens
+        the form in the composer (the same ``HitlForm`` the agent's HITL uses) and,
+        on submit, calls ``on_submit`` with the field values — which may itself return
+        a reply string or another form (a multi-step wizard).
 
         The token is slugified + lowercased (``/Issue`` == ``/issue``). The reserved
         core token ``goal`` is refused; a collision with a token another enabled

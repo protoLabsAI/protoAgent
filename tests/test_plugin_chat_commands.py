@@ -140,6 +140,93 @@ async def test_raising_handler_is_swallowed(monkeypatch) -> None:
     assert out.startswith("⚠️") and "boom" in out  # turn still short-circuits, no 500
 
 
+# --- plugin composer forms (#1701 Slice 2) -----------------------------------
+
+
+async def test_form_request_registers_callback_and_round_trips(monkeypatch) -> None:
+    from graph import slash_commands as sc
+    from runtime.state import STATE
+
+    seen = {}
+
+    async def on_submit(answers, session_id):
+        seen["answers"], seen["session_id"] = answers, session_id
+        return f"done:{answers.get('name')}"
+
+    async def handler(rest, session_id):
+        return {"form": {"kind": "form", "title": "Name", "steps": [{"schema": {}}]}, "on_submit": on_submit}
+
+    monkeypatch.setattr(STATE, "plugin_chat_commands", {"c": handler})
+
+    req = await sc.run_plugin_chat_command("c", "", "sess1")
+    assert isinstance(req, sc.PluginFormRequest)
+    assert req.form["kind"] == "form" and req.callback_id
+
+    reply = await sc.submit_plugin_form(req.callback_id, {"name": "Ada"}, "sess1")
+    assert reply == "done:Ada"
+    assert seen == {"answers": {"name": "Ada"}, "session_id": "sess1"}
+    # Single-use: a second submit of the same id is refused.
+    again = await sc.submit_plugin_form(req.callback_id, {"name": "Ada"}, "sess1")
+    assert again.startswith("⚠️") and "expired" in again
+
+
+async def test_form_submit_is_session_scoped_without_consuming(monkeypatch) -> None:
+    from graph import slash_commands as sc
+    from runtime.state import STATE
+
+    async def on_submit(answers, session_id):
+        return "ok"
+
+    async def handler(rest, session_id):
+        return {"form": {"kind": "form", "steps": []}, "on_submit": on_submit}
+
+    monkeypatch.setattr(STATE, "plugin_chat_commands", {"c": handler})
+    req = await sc.run_plugin_chat_command("c", "", "owner")
+
+    foreign = await sc.submit_plugin_form(req.callback_id, {}, "intruder")
+    assert foreign.startswith("⚠️") and "different session" in foreign
+    # The foreign attempt did NOT consume it — the legit owner can still submit.
+    assert await sc.submit_plugin_form(req.callback_id, {}, "owner") == "ok"
+
+
+async def test_multistep_form_submit_returns_another_form(monkeypatch) -> None:
+    from graph import slash_commands as sc
+    from runtime.state import STATE
+
+    async def step2(answers, session_id):
+        return "finished"
+
+    async def on_submit(answers, session_id):
+        return {"form": {"kind": "form", "steps": []}, "on_submit": step2}  # a wizard step
+
+    async def handler(rest, session_id):
+        return {"form": {"kind": "form", "steps": []}, "on_submit": on_submit}
+
+    monkeypatch.setattr(STATE, "plugin_chat_commands", {"w": handler})
+    req = await sc.run_plugin_chat_command("w", "", "s")
+    nxt = await sc.submit_plugin_form(req.callback_id, {}, "s")
+    assert isinstance(nxt, sc.PluginFormRequest)  # step 2 opened
+    assert await sc.submit_plugin_form(nxt.callback_id, {}, "s") == "finished"
+
+
+async def test_form_request_missing_on_submit_falls_through(monkeypatch) -> None:
+    from graph import slash_commands as sc
+    from runtime.state import STATE
+
+    async def handler(rest, session_id):
+        return {"form": {"kind": "form", "steps": []}}  # no on_submit ⇒ malformed
+
+    monkeypatch.setattr(STATE, "plugin_chat_commands", {"bad": handler})
+    assert await sc.run_plugin_chat_command("bad", "", "s") is None  # falls through, no wedge
+
+
+async def test_submit_unknown_callback_is_refused() -> None:
+    from graph import slash_commands as sc
+
+    out = await sc.submit_plugin_form("does-not-exist", {}, "s")
+    assert out.startswith("⚠️") and "expired" in out
+
+
 def test_precedence_over_workflow_and_palette(monkeypatch) -> None:
     from graph import slash_commands as sc
     from runtime.state import STATE

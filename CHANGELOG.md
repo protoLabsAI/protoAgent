@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent-facing `coder_solve` tool (it's an operator/testing affordance, same
   boundary as `board_create_feature` vs. the operator-only `/features/{id}/cancel`
   route); `projectBoard-plugin` wires it behind a new, non-tool API route.
+- **Plugins can open a form in the chat, not just reply** (#1701 Slice 2). A
+  `register_chat_command` handler may now return a form request —
+  `{"form": <request_user_input-shaped payload>, "on_submit": <async(answers,
+  session_id)>}` — instead of a reply string. The form rides the **same
+  `input_required` frame** the agent's HITL uses (one canonical A2A wire, ADR 0045),
+  tagged with a `plugin_callback_id`; the console renders it via `HitlForm` and POSTs
+  the field values to `POST /api/chat/commands/submit`, which routes them back to the
+  plugin's `on_submit` (never a graph resume). `on_submit` may return a reply or
+  another form — a multi-step wizard. Callbacks are single-use, session-scoped, and
+  TTL-reaped; non-streaming callers (e.g. `/v1`) get a "open it in the console" note.
 
 ### Fixed
 - **Plugin smoke tests can assert surface lifecycle wiring** (#1729). The testkit's

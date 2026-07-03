@@ -830,6 +830,7 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
 # — a neutral module both the dispatcher (here) and the console palette import, so
 # the two can't drift (operator_api may not import server, so it can't live here).
 from graph.slash_commands import (  # noqa: E402
+    PluginFormRequest as _PluginFormRequest,
     find_user_facing_skill as _find_user_facing_skill,
     run_plugin_chat_command as _run_plugin_chat_command,
     slash_kind as _slash_kind,
@@ -1231,6 +1232,13 @@ async def _chat_langgraph_stream_impl(
             name, rest = _parse_slash_command(message)
             if name:
                 cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
+                if isinstance(cmd_reply, _PluginFormRequest):
+                    # A plugin form rides the SAME input_required frame the agent HITL
+                    # uses (ADR 0045 — one canonical wire), tagged with a callback id so
+                    # the console routes the answers to the plugin's on_submit instead of
+                    # resuming a graph interrupt (there is none) — #1701 Slice 2.
+                    yield ("input_required", {**cmd_reply.form, "plugin_callback_id": cmd_reply.callback_id})
+                    return
                 if cmd_reply is not None:
                     yield ("done", cmd_reply)
                     return
@@ -1569,6 +1577,11 @@ async def _chat_langgraph_impl(
             name, rest = _parse_slash_command(message)
             if name:
                 cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
+                if isinstance(cmd_reply, _PluginFormRequest):
+                    # Non-streaming callers (e.g. the OpenAI-compat /v1 path) can't render
+                    # a form — degrade to a text note pointing at the console (#1701 S2).
+                    _title = cmd_reply.form.get("title") or "This command"
+                    return [{"role": "assistant", "content": f"**{_title}** needs a form — open it in the protoAgent console."}]
                 if cmd_reply is not None:
                     return [{"role": "assistant", "content": cmd_reply}]
 
