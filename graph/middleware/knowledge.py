@@ -337,8 +337,16 @@ class KnowledgeMiddleware(AgentMiddleware):
         try:
             from observability.injection_log import injection_log
 
+            session_id = state.get("session_id", "") or ""
+            if not session_id:
+                # session_id is a declared-but-optional state field — an entry
+                # path that omits it would leave the row unattributed. Same
+                # tracing-contextvar fallback _persist_session uses.
+                from observability import tracing
+
+                session_id = tracing.current_session_id() or ""
             injection_log().record(
-                session_id=state.get("session_id", "") or "",
+                session_id=session_id,
                 digest_session_ids=digest_ids,
                 hot_chunk_ids=hot_ids,
                 rag_chunk_ids=rag_ids,

@@ -853,24 +853,29 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         as instructions.
         """
         import json
-        import os
 
-        from graph.middleware.memory import format_session_summary, is_safe_session_id, memory_path
+        from graph.middleware.memory import format_session_summary, is_safe_session_id, session_file_candidates
 
         sid = (session_id or "").strip()
-        # Filename guard: ids map to {memory_path()}/{sid}.json, so anything
+        # Filename guard: ids map onto files under memory_path(), so anything
         # outside the safe charset (path separators, "..", NUL) is rejected.
         if not is_safe_session_id(sid):
             return f"Error: invalid session_id {session_id!r} — pass an id from <prior_sessions>."
 
-        fpath = os.path.join(memory_path(), f"{sid}.json")
-        try:
-            with open(fpath, encoding="utf-8") as fh:
-                summary = json.load(fh)
-        except FileNotFoundError:
+        # Shared filename mapper: the '%3A'-encoded name first (Windows-safe
+        # writer output), then the legacy raw-':' name for pre-encoding files.
+        summary = None
+        for fpath in session_file_candidates(sid):
+            try:
+                with open(fpath, encoding="utf-8") as fh:
+                    summary = json.load(fh)
+                break
+            except FileNotFoundError:
+                continue
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                return f"Error: session {sid!r} could not be read ({exc})."
+        if summary is None:
             return f"No session {sid!r} found — pass an id from <prior_sessions>."
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            return f"Error: session {sid!r} could not be read ({exc})."
         rendered = format_session_summary(summary)
         if len(rendered) > _RECALL_SESSION_MAX_CHARS:
             rendered = rendered[:_RECALL_SESSION_MAX_CHARS] + "\n… (truncated)"

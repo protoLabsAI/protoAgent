@@ -52,6 +52,30 @@ def memory_path() -> str:
     return str(instance_paths().store("memory"))
 
 
+def session_filename(session_id: str) -> str:
+    """Filename for *session_id*'s summary, with ``:`` encoded as ``%3A``.
+
+    ``:`` is invalid in NTFS filenames, so ids like ``system:activity`` /
+    ``a2a:...`` silently failed to persist on Windows. ``%`` is outside the
+    :func:`is_safe_session_id` charset, so a crafted id can never collide with
+    an encoded name. Every session_id → filename mapping (the writer below,
+    ``recall_session``, the memory-inspector API) goes through this helper.
+    """
+    return f"{session_id.replace(':', '%3A')}.json"
+
+
+def session_file_candidates(session_id: str, base: str | None = None) -> list[str]:
+    """Paths to try when READING *session_id*'s summary: the encoded name
+    first, then the legacy raw-``:`` name (files a pre-encoding build wrote on
+    POSIX). Writers use the encoded name only — and drop the legacy file after
+    a successful write, so the pair never coexists for long."""
+    if base is None:
+        base = memory_path()
+    encoded = os.path.join(base, session_filename(session_id))
+    legacy = os.path.join(base, f"{session_id}.json")
+    return [encoded] if encoded == legacy else [encoded, legacy]
+
+
 # ---------------------------------------------------------------------------
 # Session persistence
 # ---------------------------------------------------------------------------
@@ -80,11 +104,10 @@ def _persist_session(state: dict, trace_id: str) -> None:
         log.info("[memory] incognito session — skipping session persistence")
         return
 
-    # ``session_id`` is not a declared graph-state field, so LangGraph drops the
-    # key the chat path passes into ``ainvoke`` — ``state.get`` returns "" and
-    # every session would collapse into a single ``unknown.json`` (pooling and
-    # cross-contaminating sessions). Fall back to the tracing contextvar, which
-    # ``trace_session`` always sets, so summaries are keyed per session.
+    # ``session_id`` IS a declared graph-state field (graph/state.py), but it's
+    # optional (NotRequired) — an entry path that omits it leaves ``state.get``
+    # returning "". Fall back to the tracing contextvar, which ``trace_session``
+    # always sets, so summaries stay keyed per session either way.
     session_id: str = state.get("session_id", "") or ""
     if not session_id:
         from observability import tracing
@@ -180,8 +203,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
         return
 
     # --- Atomic write ---
-    filename = f"{session_id}.json"
-    dest = os.path.join(base, filename)
+    dest = os.path.join(base, session_filename(session_id))
     tmp_fd = None
     tmp_path = None
     try:
@@ -192,6 +214,15 @@ def _persist_session(state: dict, trace_id: str) -> None:
         os.rename(tmp_path, dest)
         log.info("[memory] persisted session %s -> %s", session_id, dest)
         tmp_path = None  # rename succeeded — no cleanup needed
+        # A pre-encoding build may have left the raw-':' name on POSIX; drop it
+        # after the encoded write lands so the digest never lists this session
+        # twice. Best-effort — the encoded file is already the source of truth.
+        legacy = os.path.join(base, f"{session_id}.json")
+        if legacy != dest:
+            try:
+                os.remove(legacy)
+            except OSError:
+                pass
     except OSError as exc:
         log.error("[memory] write failed for session %s: %s", session_id, exc)
     finally:
@@ -354,10 +385,11 @@ def load_prior_sessions_digest(
         for fname in os.listdir(memory_dir):
             if not fname.endswith(".json"):
                 continue
-            if fname.startswith("background:"):
+            if fname.startswith(("background:", "background%3A")):
                 # Background worker summaries are disposable (ADR 0070 D3). The
                 # writer no longer produces them; this read-side filter also
-                # keeps LEGACY files already on disk out of the digest.
+                # keeps LEGACY files already on disk out of the digest — under
+                # either the raw or the '%3A'-encoded filename.
                 continue
             fpath = os.path.join(memory_dir, fname)
             try:
