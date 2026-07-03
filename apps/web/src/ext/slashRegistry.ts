@@ -28,6 +28,14 @@ export type SlashContext = {
   setDraft: (text: string) => void;
   /** Return focus to the composer textarea. */
   focusComposer: () => void;
+  /** The host's developer-flag predicate (ADR 0068) — the SAME gate that hides/skips
+   *  flag-tagged commands — so a command that enumerates the registry (e.g. `/help`)
+   *  applies the host's visibility rules instead of guessing. Fail-closed when absent. */
+  flagOn?: (id: string) => boolean;
+  /** SERVER slash commands as the host fetched them (`/api/chat/commands` — `/goal`,
+   *  plugin commands…), so a registry-enumerating command reflects what's actually
+   *  installed rather than a hardcoded list. */
+  serverCommands?: { name: string; description: string; usage?: string }[];
 };
 
 export type ClientSlashCommand = {

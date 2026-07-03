@@ -145,6 +145,16 @@ export function ChatSurface({
   // delete directly. Maps the clicked ✕ to its session by sibling index (DOM = sessions order).
   function onTabBarClickCapture(e: ReactMouseEvent) {
     if (!e.shiftKey) return;
+    // Shift+click the add "+" → new INCOGNITO session (#1697): the click-path twin of the
+    // tab context menu's "New incognito chat" (same createSession({incognito:true})
+    // semantics). Intercepted in the capture phase so the DS button's own onClick (the
+    // plain add) never fires; a plain click is untouched.
+    if ((e.target as HTMLElement).closest(".pl-tabbar__add")) {
+      e.preventDefault();
+      e.stopPropagation();
+      chatStore.createSession({ incognito: true });
+      return;
+    }
     const closeBtn = (e.target as HTMLElement).closest(".pl-tabbar__close");
     if (!closeBtn) return;
     const tabEl = closeBtn.closest(".pl-tabbar__tab") as HTMLElement | null;
@@ -225,7 +235,9 @@ export function ChatSurface({
           onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
           onAdd={() => chatStore.createSession()}
           onTabContextMenu={onTabContextMenu}
-          addLabel="New chat"
+          // The DS TabBar renders this as the + button's native title/aria-label — the
+          // hover hint for the Shift+click incognito gesture (#1697).
+          addLabel="New chat — Shift+click for incognito"
         />
       </div>
 
@@ -517,6 +529,10 @@ function ChatSessionSlot({
       noteToThread,
       setDraft,
       focusComposer: () => textareaRef.current?.focus(),
+      // Registry-enumerating commands (/help) see the HOST's visibility rules + the live
+      // server command list — never a hardcoded copy of either.
+      flagOn,
+      serverCommands: commands,
     });
   }
 
@@ -1476,11 +1492,10 @@ function ChatSessionSlot({
           busy={status === "streaming"}
           onQueue={() => void queueSteer()}
           onStop={() => void stop()}
-          placeholder={
-            status === "streaming"
-              ? "Steer the agent — your message folds into its work at the next step (Enter to queue)"
-              : "Message protoAgent  (/ for commands · Enter to send · ↑ history · ⌘/Ctrl+Enter for newline)"
-          }
+          // Short hints only (#1699) — key/command discoverability lives in /help now, not
+          // in a placeholder wall of text competing with the message being written. ("Steer
+          // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.)
+          placeholder={status === "streaming" ? "Steer the agent…" : "Message protoAgent…"}
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
           onPaste={(e) => {

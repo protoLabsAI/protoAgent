@@ -2,10 +2,10 @@
 // uses (`registerSlashCommand`), so the registry is the only path, never a special case
 // (the way the backend's `register_chat_command` has no core bypass). Imported for its
 // side effects by ChatSurface. `/new` opens a tab, `/clear` wipes this tab's history,
-// `/effort` sets this tab's reasoning effort. Behaviour ported verbatim from the old
-// hardcoded `runClientSlash` switch.
+// `/effort` sets this tab's reasoning effort, `/help` prints the command/shortcut
+// reference. Behaviour ported verbatim from the old hardcoded `runClientSlash` switch.
 
-import { registerSlashCommand } from "../ext/slashRegistry";
+import { registeredSlashCommands, registerSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
 import type { ChatMessage } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
@@ -147,6 +147,41 @@ registerSlashCommand({
         ? "**Incognito ON** for this tab — every message now carries `incognito`: no session summary, no memory harvest, no memory injection, until you turn it off with `/incognito off`. Messages already sent before this were NOT incognito."
         : "Incognito **off** — turns persist to memory and receive memory again.",
       { tone: "info" },
+    );
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "help",
+  description: "Show available commands & shortcuts",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no thread to print into → fall through
+    // Enumerate the LIVE registry with the host's own visibility rules (ADR 0068):
+    // flag-tagged commands appear only while their flag is on — fail-closed, exactly
+    // like the composer's slash menu — so the card never advertises a dead command.
+    const flagOn = ctx.flagOn ?? (() => false);
+    const client = registeredSlashCommands().filter((c) => !c.flag || flagOn(c.flag));
+    const seen = new Set(client.map((c) => c.name));
+    // Server commands (/goal, plugin commands…) reflect what's actually installed. A
+    // client command CLAIMS its token, so drop server duplicates (menu order: client first).
+    const server = (ctx.serverCommands ?? []).filter((c) => !seen.has(c.name.toLowerCase()));
+    const row = (name: string, description: string) => `- \`/${name}\` — ${description}`;
+    ctx.noteToThread(
+      [
+        "**Commands**",
+        ...client.map((c) => row(c.name, c.description)),
+        ...server.map((c) => row(c.name, c.description)),
+        "",
+        "**Shortcuts**",
+        "- `Enter` send · `⌘/Ctrl+Enter` newline · `↑` recall input history · `/` command menu",
+        "- While the agent is working, `Enter` queues a steer into the running turn",
+        "- `Shift+click` the tab bar's `+` → new incognito chat (also on a tab's right-click menu)",
+        "- `Shift+click` a tab's ✕ → delete the chat without the confirm dialog",
+        "",
+        "**Capabilities** — watches, schedules, tasks, and goals all run from chat; manage them from the rail surfaces.",
+      ].join("\n"),
     );
     ctx.focusComposer();
     return true;
