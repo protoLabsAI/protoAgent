@@ -1099,30 +1099,72 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
 
 
 # ── Idle beacon (#1720) ──────────────────────────────────────────────────────
-# A monotonic timestamp stamped at the start of every chat turn (both entries
-# below cover A2A, the console, and the OpenAI-compat surface). The plugin
-# auto-update loop reads ``seconds_since_last_turn()`` to honor a plugin's
-# ``when: idle`` policy — a hot-reload rebuilds tools/routers, which is safe
-# between turns but disruptive during one. A bare timestamp write can't raise or
-# leak, so it stays out of the turn's try/finally.
+# The plugin auto-update loop honors a plugin's ``when: idle`` policy by checking
+# BOTH signals below: the count of chat turns currently in flight (so a turn that
+# runs longer than the idle window is never mistaken for idle — a start-only
+# timestamp had that bug) AND a monotonic timestamp of the last turn boundary (so
+# we also wait out a quiet cooldown after the last turn ends). A hot-reload
+# rebuilds tools/routers — safe between turns, disruptive during one. Both entry
+# points (streaming = A2A + console-stream, non-streaming = console + OpenAI-compat)
+# bracket their turn with ``_turn_started()`` / ``_turn_ended()`` via a thin
+# wrapper so the count is always balanced, even on early generator close or error.
+_ACTIVE_TURNS: int = 0
 _LAST_TURN_MONOTONIC: float = 0.0
 
 
-def _note_chat_activity() -> None:
-    """Record that a chat turn just started (feeds the auto-update idle gate)."""
-    global _LAST_TURN_MONOTONIC
+def _turn_started() -> None:
+    global _ACTIVE_TURNS, _LAST_TURN_MONOTONIC
+    _ACTIVE_TURNS += 1
     _LAST_TURN_MONOTONIC = time.monotonic()
 
 
+def _turn_ended() -> None:
+    global _ACTIVE_TURNS, _LAST_TURN_MONOTONIC
+    _ACTIVE_TURNS = max(0, _ACTIVE_TURNS - 1)
+    _LAST_TURN_MONOTONIC = time.monotonic()
+
+
+def active_turns() -> int:
+    """Chat turns currently in flight (0 ⇒ nothing running)."""
+    return _ACTIVE_TURNS
+
+
 def seconds_since_last_turn() -> float:
-    """Seconds since the most recent chat turn began, or ``inf`` if none yet this
-    process. The auto-update loop treats a large value as 'server is idle'."""
+    """Seconds since the last chat turn boundary (start or end), or ``inf`` if none
+    yet this process. Paired with ``active_turns()`` for the auto-update idle gate."""
     if _LAST_TURN_MONOTONIC <= 0:
         return float("inf")
     return max(0.0, time.monotonic() - _LAST_TURN_MONOTONIC)
 
 
 async def _chat_langgraph_stream(
+    message: str,
+    session_id: str,
+    *,
+    caller_trace: dict | None = None,
+    resume: bool = False,
+    request_metadata: dict | None = None,
+    images: list[tuple[str, str]] | None = None,
+):
+    """Idle-beacon wrapper (#1720): mark a turn in flight for the whole generator
+    lifetime — including early ``aclose()`` and errors — then delegate. Keeps the
+    public name/signature so every caller (A2A executor, console) is unchanged."""
+    _turn_started()
+    try:
+        async for _ev in _chat_langgraph_stream_impl(
+            message,
+            session_id,
+            caller_trace=caller_trace,
+            resume=resume,
+            request_metadata=request_metadata,
+            images=images,
+        ):
+            yield _ev
+    finally:
+        _turn_ended()
+
+
+async def _chat_langgraph_stream_impl(
     message: str,
     session_id: str,
     *,
@@ -1154,8 +1196,6 @@ async def _chat_langgraph_stream(
     from observability import tracing
 
     from graph.middleware.request_context import request_metadata_scope
-
-    _note_chat_activity()  # idle-gate beacon for the plugin auto-update loop (#1720)
 
     trace_meta: dict = {"message_preview": message[:100]}
     if caller_trace:
@@ -1480,13 +1520,30 @@ async def _chat_langgraph(
     incognito: bool = False,
     hitl_resume: bool = False,
 ) -> list[dict[str, Any]]:
+    """Idle-beacon wrapper (#1720): mark a turn in flight for the call's lifetime,
+    then delegate. Keeps the public name/signature for every caller."""
+    _turn_started()
+    try:
+        return await _chat_langgraph_impl(
+            message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume
+        )
+    finally:
+        _turn_ended()
+
+
+async def _chat_langgraph_impl(
+    message: str,
+    session_id: str,
+    *,
+    model: str | None = None,
+    incognito: bool = False,
+    hitl_resume: bool = False,
+) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
     from langchain_core.messages import HumanMessage, AIMessage
 
     from graph.goals.goal_turn import goal_turn
-
-    _note_chat_activity()  # idle-gate beacon for the plugin auto-update loop (#1720)
 
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
     # Incognito is stamped explicitly every turn (the channel persists in the

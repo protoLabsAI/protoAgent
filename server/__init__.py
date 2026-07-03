@@ -533,9 +533,10 @@ def _main():
             STATE.watch_task = asyncio.create_task(_watch_loop())
 
         # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
-        # in ``plugins.update_policy``; the loop self-guards each pass, so we start
-        # it whenever the cadence is non-zero (default 6h).
-        if STATE.graph_config is not None and getattr(STATE.graph_config, "plugins_autoupdate_interval_hours", 0) > 0:
+        # in ``plugins.update_policy``; the loop self-guards each pass (empty policy
+        # or interval 0 ⇒ idle). Start it unconditionally so a later config reload
+        # that turns it on takes effect without a restart — the idle loop just sleeps.
+        if STATE.graph_config is not None:
             import asyncio
 
             STATE.plugin_autoupdate_task = asyncio.create_task(_plugin_autoupdate_loop())

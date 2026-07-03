@@ -884,13 +884,14 @@ _AUTOUPDATE_IDLE_QUIET_S = 300.0  # "idle" = no chat turn started in this window
 
 
 def _server_is_idle() -> bool:
-    """True when no chat turn has started recently (the ``when: idle`` gate). Reads
-    the beacon ``server.chat`` stamps at the top of every turn; if that import
-    fails we conservatively report NOT idle so we never reload mid-turn."""
+    """True when no chat turn is in flight AND none finished within the quiet window
+    (the ``when: idle`` gate). Reads the beacon ``server.chat`` maintains around
+    every turn; if that import fails we conservatively report NOT idle so we never
+    reload mid-turn."""
     try:
-        from server.chat import seconds_since_last_turn
+        from server.chat import active_turns, seconds_since_last_turn
 
-        return seconds_since_last_turn() >= _AUTOUPDATE_IDLE_QUIET_S
+        return active_turns() == 0 and seconds_since_last_turn() >= _AUTOUPDATE_IDLE_QUIET_S
     except Exception:
         return False
 
@@ -933,14 +934,24 @@ async def _autoupdate_one_plugin(plugin_id: str, entry: dict, status: dict, cfg,
     if plugin_id in enabled:
         # Force a genuinely fresh import of the just-pulled code, then reload
         # through the enable route's path (router re-mount, tools/MCP rebuild, #822).
-        purge_plugin_modules(plugin_id)
-        disabled = list(getattr(cfg, "plugins_disabled", []) or [])
-        ok, messages = _apply_settings_changes(
-            config={"plugins": {"enabled": list(enabled), "disabled": disabled}},
-        )
-        reloaded = bool(ok)
-        if not ok:
-            log.error("[plugin-autoupdate] reload failed for %s: %s", plugin_id, "; ".join(messages))
+        # Guard the whole block: the code + lock are already updated on disk, so a
+        # reload crash must not abort the rest of the sweep (a bare raise here would
+        # unwind past the per-plugin loop) — the new code mounts on the next
+        # boot/enable regardless.
+        try:
+            purge_plugin_modules(plugin_id)
+            disabled = list(getattr(cfg, "plugins_disabled", []) or [])
+            ok, messages = _apply_settings_changes(
+                config={"plugins": {"enabled": list(enabled), "disabled": disabled}},
+            )
+            reloaded = bool(ok)
+            if not ok:
+                log.error("[plugin-autoupdate] reload failed for %s: %s", plugin_id, "; ".join(messages))
+        except Exception:
+            log.exception(
+                "[plugin-autoupdate] reload crashed for %s (update is on disk; next boot/enable mounts it)",
+                plugin_id,
+            )
 
     try:
         from server import _event_bus
