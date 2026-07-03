@@ -107,9 +107,10 @@ summarized into the knowledge store).
   **metadata** (alongside `model` / `reasoning_effort`).
 - **Console** — toggle a chat tab incognito with the `/incognito` slash command
   or the tab's right-click menu ("Turn incognito on/off"; "New incognito chat"
-  starts a thread private). While ON the tab shows an eye-off glyph and the
-  composer an `incognito` chip (click it to turn off), and the console stamps
-  the metadata flag onto **every** message it sends from that tab.
+  starts a thread private — **Shift+click** the tab bar's `+` does the same).
+  While ON the tab shows an eye-off glyph and the composer an `incognito` chip
+  (click it to turn off), and the console stamps the metadata flag onto
+  **every** message it sends from that tab.
 
 The flag is per-message and stamped explicitly on every turn, so a thread is only
 as incognito as its latest message — a raw API caller must send the flag on each

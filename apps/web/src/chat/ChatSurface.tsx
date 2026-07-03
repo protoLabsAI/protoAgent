@@ -5,7 +5,7 @@ import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import { Check, EyeOff, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
@@ -145,6 +145,16 @@ export function ChatSurface({
   // delete directly. Maps the clicked ✕ to its session by sibling index (DOM = sessions order).
   function onTabBarClickCapture(e: ReactMouseEvent) {
     if (!e.shiftKey) return;
+    // Shift+click the add "+" → new INCOGNITO session (#1697): the click-path twin of the
+    // tab context menu's "New incognito chat" (same createSession({incognito:true})
+    // semantics). Intercepted in the capture phase so the DS button's own onClick (the
+    // plain add) never fires; a plain click is untouched.
+    if ((e.target as HTMLElement).closest(".pl-tabbar__add")) {
+      e.preventDefault();
+      e.stopPropagation();
+      chatStore.createSession({ incognito: true });
+      return;
+    }
     const closeBtn = (e.target as HTMLElement).closest(".pl-tabbar__close");
     if (!closeBtn) return;
     const tabEl = closeBtn.closest(".pl-tabbar__tab") as HTMLElement | null;
@@ -155,6 +165,20 @@ export function ChatSurface({
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
     closeSession(session.id, false); // false = no knowledge harvest
+  }
+
+  // Keyboard twin of the Shift+click incognito gesture (#1697): Shift+Enter/Space on the
+  // focused "+" also creates an incognito session. Keyboard activation synthesizes the
+  // button's click AFTER keydown (Enter) / on keyup (Space), and its modifier state isn't
+  // reliable across browsers — so intercept at keydown-capture and preventDefault, which
+  // stops the synthetic click (and thus the DS onAdd) from ever firing.
+  function onTabBarKeyDownCapture(e: ReactKeyboardEvent) {
+    if (!e.shiftKey || (e.key !== "Enter" && e.key !== " ")) return;
+    if (!(e.target as HTMLElement).closest(".pl-tabbar__add")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.repeat) return; // held key auto-repeats keydown — only the first press creates a session
+    chatStore.createSession({ incognito: true });
   }
 
   // Right-click a chat tab → context menu (ADR 0036). The DS TabBar's `onTabContextMenu`
@@ -197,6 +221,7 @@ export function ChatSurface({
         className={`chat-tabbar-wrap${shiftDel ? " chat-tabbar-wrap--del" : ""}`}
         onContextMenu={onTabBarBackgroundContextMenu}
         onClickCapture={onTabBarClickCapture}
+        onKeyDownCapture={onTabBarKeyDownCapture}
       >
         <TabBar
           ariaLabel="Chat sessions"
@@ -225,7 +250,10 @@ export function ChatSurface({
           onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
           onAdd={() => chatStore.createSession()}
           onTabContextMenu={onTabContextMenu}
-          addLabel="New chat"
+          // The DS TabBar renders this as the + button's native title/aria-label — the
+          // hover hint for the Shift+click incognito gesture (#1697). Shift+Enter is the
+          // keyboard twin (onTabBarKeyDownCapture), so the label teaches both paths.
+          addLabel="New chat — Shift+click for incognito (Shift+Enter when focused)"
         />
       </div>
 
@@ -517,6 +545,10 @@ function ChatSessionSlot({
       noteToThread,
       setDraft,
       focusComposer: () => textareaRef.current?.focus(),
+      // Registry-enumerating commands (/help) see the HOST's visibility rules + the live
+      // server command list — never a hardcoded copy of either.
+      flagOn,
+      serverCommands: commands,
     });
   }
 
@@ -1476,11 +1508,10 @@ function ChatSessionSlot({
           busy={status === "streaming"}
           onQueue={() => void queueSteer()}
           onStop={() => void stop()}
-          placeholder={
-            status === "streaming"
-              ? "Steer the agent — your message folds into its work at the next step (Enter to queue)"
-              : "Message protoAgent  (/ for commands · Enter to send · ↑ history · ⌘/Ctrl+Enter for newline)"
-          }
+          // Short hints only (#1699) — key/command discoverability lives in /help now, not
+          // in a placeholder wall of text competing with the message being written. ("Steer
+          // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.)
+          placeholder={status === "streaming" ? "Steer the agent…" : "Message protoAgent…"}
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
           onPaste={(e) => {

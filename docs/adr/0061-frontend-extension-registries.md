@@ -53,8 +53,12 @@ registerSlashCommand({
 })                                      // false ⇒ fall through (insert "/name " to edit + send)
 ```
 
-`SlashContext = { rest, sessionId, noteToThread, setDraft, focusComposer }` — the host
-(`ChatSurface`) builds it from local state + the chat store when the command fires.
+`SlashContext = { rest, sessionId, noteToThread, setDraft, focusComposer, flagOn?,
+serverCommands? }` — the host (`ChatSurface`) builds it from local state + the chat store
+when the command fires. The two optional fields carry the host's developer-flag predicate
+(ADR 0068) and its fetched server-command list, so a registry-enumerating command (core's
+`/help`, #1700) reflects the host's own visibility rules and what's actually installed
+instead of a hardcoded copy.
 **Registering a token CLAIMS it** — the frontend twin of `register_chat_command`. Distinct
 from **server** slash commands (`/api/chat/commands`, e.g. `/goal`, plugin `/issue`), which
 fill the draft for the user to send; client commands act locally on pick/submit.
