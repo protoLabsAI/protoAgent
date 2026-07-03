@@ -355,8 +355,21 @@ def test_ac13_mount_warns_non_conforming_prefix(monkeypatch, caplog):
 
     # The router was still mounted (not rejected).
     assert ("myplugin", "/custom/path") in STATE.plugin_router_keys
-    # A warning was logged.
-    assert any("does not start with /plugins/myplugin/" in m for m in caplog.messages)
+    # A warning was logged for the genuinely off-convention prefix.
+    assert any("does not start with" in m for m in caplog.messages)
+
+    # ...but the prescribed gated-data prefix /api/plugins/<id> is canonical and silent (#1732).
+    caplog.clear()
+    r2 = APIRouter()
+
+    @r2.get("/pong")
+    def _pong():
+        return {"ok": True}
+
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        _mount_plugin_routers([{"plugin_id": "myplugin", "router": r2, "prefix": "/api/plugins/myplugin"}])
+    assert ("myplugin", "/api/plugins/myplugin") in STATE.plugin_router_keys
+    assert not any("does not start with" in m for m in caplog.messages)
 
 
 # AC14: /api/sse-token endpoint returns a token

@@ -1183,6 +1183,8 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
     app = STATE.fastapi_app
     if app is None:
         return
+    from graph.plugins.registry import _prefix_conforms
+
     for r in routers:
         plugin_id = r.get("plugin_id", "")
         prefix = r.get("prefix") or ""
@@ -1201,17 +1203,19 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             )
             continue
         # Warn for non-conforming prefixes (#870 plugin prefix enforcement).
-        # The convention is /plugins/<id>/...; routes under other prefixes are
-        # still mounted (existing plugins use /api/... for data routes) but
-        # the warning surfaces mis-configurations. The default-deny middleware
-        # guards all non-public paths regardless of prefix.
-        if plugin_id and prefix and not prefix.startswith(f"/plugins/{plugin_id}"):
+        # The two canonical prefixes are /plugins/<id>/... (public view) and
+        # /api/plugins/<id>/... (bearer-gated data router) — the documented
+        # two-router pattern (#1732). Routes under any other prefix are still
+        # mounted (mounted as-is; the default-deny middleware guards non-public
+        # paths regardless) but the warning surfaces genuine mis-configurations.
+        if plugin_id and prefix and not _prefix_conforms(prefix, plugin_id):
             log.warning(
-                "[plugins] %s: router prefix %r does not start with /plugins/%s/ "
-                "— plugin routes SHOULD live under /plugins/<id>/ (mounted as-is; "
-                "the default-deny auth middleware guards it)",
+                "[plugins] %s: router prefix %r does not start with /plugins/%s or "
+                "/api/plugins/%s — plugin routes SHOULD live under /plugins/<id>/ "
+                "(public) or /api/plugins/<id>/ (gated data; mounted as-is)",
                 plugin_id,
                 prefix,
+                plugin_id,
                 plugin_id,
             )
         try:

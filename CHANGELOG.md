@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smoke test — deleting the wiring left the suite green. The callables are now captured
   in `surface_specs` (keyed by effective name), keeping `surfaces` (names) for existing
   assertions. Mirror of #1637 (`register_chat_command`).
+- **The plugin loader no longer nags about the prescribed `/api/plugins/<id>` data
+  router** (#1732). Every plugin following the documented two-router pattern (public
+  view at `/plugins/<id>`, bearer-gated data at `/api/plugins/<id>` — ADR 0026) drew
+  a `does not start with /plugins/<id>/` WARNING on every boot, including first-party
+  `artifact`/`docs`/`notes` and the `google` plugin — the loader's check contradicted
+  the convention the plugin-views guide prescribes. Both the registration-time and
+  mount-time checks now accept `/api/plugins/<id>` as canonical (shared predicate),
+  reserving the warning for genuinely off-convention prefixes.
 
 ## [0.88.0] - 2026-07-03
 
