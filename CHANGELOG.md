@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **SOUL.md keeps a version history — never lose a persona iteration** (#1691). Every time
+  the agent's persona is saved, the **outgoing** `SOUL.md` is archived to a per-instance
+  `config/soul-history/` directory (deduped against the last snapshot, capped at the most
+  recent 50), so prompt iterations aren't overwritten into oblivion. New read-only + restore
+  API: `GET /api/config/soul/history` (list — id, timestamp, size, preview), `GET
+  /api/config/soul/history/{id}` (full text), and `POST /api/config/soul/history/{id}/restore`
+  to roll back. Restore re-saves through the normal save+reload path, which snapshots the
+  *current* persona first — so rolling back is itself reversible. (Console version-history UI
+  is a follow-up.)
 - **Plugin setup: a "needs setup" cue + guided config for unconfigured plugins**
   (#1719, console). Building on the required-config gate below, an **incomplete**
   plugin (loaded but missing a `required: true` setting) now shows a ⚠️ **"needs

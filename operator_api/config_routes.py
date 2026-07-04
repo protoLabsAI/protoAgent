@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 from runtime.state import STATE
@@ -103,6 +104,41 @@ def register_config_routes(app) -> None:
         # and would otherwise freeze the server for its duration.
         ok, messages = await asyncio.to_thread(_apply_settings_changes, config=req.config, soul=req.soul)
         return {"ok": ok, "messages": messages}
+
+    # --- SOUL.md version history (#1691) -----------------------------------
+    # Every persona save archives the outgoing SOUL.md (config_io.write_soul); the console
+    # lists these and can roll back to one. Restore re-saves through the same apply path, so
+    # it snapshots the CURRENT persona first — rolling back is itself reversible.
+    @app.get("/api/config/soul/history")
+    async def _api_soul_history():
+        from graph.config_io import list_soul_versions
+
+        return {"versions": list_soul_versions()}
+
+    @app.get("/api/config/soul/history/{version_id}")
+    async def _api_soul_history_one(version_id: str):
+        from graph.config_io import read_soul_version
+
+        content = read_soul_version(version_id)
+        if content is None:
+            raise HTTPException(status_code=404, detail=f"no SOUL version {version_id!r}")
+        return {"id": version_id, "content": content}
+
+    @app.post("/api/config/soul/history/{version_id}/restore")
+    async def _api_soul_history_restore(version_id: str):
+        from graph.config_io import read_soul, read_soul_version
+
+        content = read_soul_version(version_id)
+        if content is None:
+            raise HTTPException(status_code=404, detail=f"no SOUL version {version_id!r}")
+        # Restoring the version that's already live is a no-op — skip the (expensive) graph
+        # recompile a "restore" button on the current row would otherwise trigger.
+        if content == read_soul():
+            return {"ok": True, "messages": ["already the current persona"], "restored": version_id}
+        # Reuse the tested save+reload path: it snapshots the CURRENT persona before overwriting
+        # (so restore is reversible) and recompiles the graph off the event loop (#497).
+        ok, messages = await asyncio.to_thread(_apply_settings_changes, soul=content)
+        return {"ok": ok, "messages": messages, "restored": version_id}
 
     @app.post("/api/config/models")
     async def _api_list_models(req: ModelsProbeRequest | None = None):

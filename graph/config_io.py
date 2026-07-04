@@ -23,8 +23,11 @@ Three jobs:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -790,12 +793,155 @@ def read_soul() -> str:
 def write_soul(text: str) -> list[Path]:
     """Write persona text to the instance's live ``SOUL.md`` (mkdir parents).
 
-    Returns the path(s) written for UI feedback.
+    Before overwriting, the OUTGOING persona is archived to the soul-history dir (#1691) so
+    prompt iterations can be reviewed and rolled back — deduped against the newest snapshot and
+    capped; a history failure never blocks the save. Returns the path(s) written for UI feedback.
     """
     target = instance_paths().soul_path
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Archive the effective outgoing persona — the instance file, or the bundled SEED the agent
+    # was actually running on the very first edit (read_soul falls back to it). Capturing the
+    # seed matters: that first save is exactly the iteration you'd otherwise lose. Best-effort:
+    # reading the old text (or archiving it) must never block the actual save.
+    try:
+        old = read_soul()
+    except (OSError, ValueError):
+        old = ""
+    if old and old != text:
+        snapshot_soul(old)
     target.write_text(text, encoding="utf-8")
     return [target]
+
+
+# ---------------------------------------------------------------------------
+# SOUL.md version history (#1691)
+# ---------------------------------------------------------------------------
+# Every persona save archives the OUTGOING text (see write_soul) into the
+# instance's soul-history dir. Versions are plain .md files named
+# ``<YYYYMMDDThhmmss.ffffffZ>-<8-char content hash>`` — lexical sort ==
+# chronological (microsecond precision), the hash disambiguates same-instant
+# saves. The console surfaces them as a restorable list; restore just re-saves
+# the chosen text (which snapshots the current one first, so rolling back is
+# itself reversible).
+
+_SOUL_VERSION_RE = re.compile(r"^\d{8}T\d{6}\.\d{6}Z-[0-9a-f]{8}$")
+_SOUL_HISTORY_CAP = 50  # keep the most recent N snapshots per instance
+
+
+def _soul_version_id(text: str, when: datetime) -> str:
+    # Microsecond precision so a lexical filename sort stays chronological even for rapid
+    # saves — two saves in the same second would otherwise order by hash, not time.
+    stamp = when.strftime("%Y%m%dT%H%M%S.%fZ")
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    return f"{stamp}-{digest}"
+
+
+def _prune_soul_history(hist: Path, cap: int | None = None) -> None:
+    """Keep only the most-recent ``cap`` snapshots (lexical filename sort == chronological).
+    ``cap`` is resolved at call time (not bound as a default) so it honors a patched module cap."""
+    cap = _SOUL_HISTORY_CAP if cap is None else cap
+    try:
+        files = sorted(hist.glob("*.md"))
+    except OSError:
+        return
+    for stale in files[:-cap] if len(files) > cap else []:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
+def snapshot_soul(text: str) -> Path | None:
+    """Archive ``text`` (an outgoing persona) into the soul-history dir, unless it's identical
+    to the newest existing snapshot (so repeat no-op saves don't pile up). Returns the snapshot
+    path, or None when skipped/unwritable. Never raises — history is best-effort."""
+    text = text or ""
+    try:
+        hist = instance_paths().soul_history_dir
+        hist.mkdir(parents=True, exist_ok=True)
+        existing = sorted(hist.glob("*.md"))
+        try:
+            if existing and existing[-1].read_text(encoding="utf-8") == text:
+                return None  # already the latest recorded version — dedupe
+        except (OSError, ValueError):
+            pass  # a corrupt/unreadable newest snapshot must not stop us archiving THIS one
+        path = hist / f"{_soul_version_id(text, datetime.now(timezone.utc))}.md"
+        path.write_text(text, encoding="utf-8")
+        _prune_soul_history(hist)
+        return path
+    except (OSError, ValueError) as exc:  # non-utf8/other read error must never block the save
+        log.warning("[soul] history snapshot failed: %s", exc)
+        return None
+
+
+def _soul_history_files() -> list[Path]:
+    try:
+        return sorted(instance_paths().soul_history_dir.glob("*.md"), reverse=True)  # newest first
+    except OSError:
+        return []
+
+
+def _soul_version_saved_at(version_id: str) -> str:
+    """The ISO-8601 UTC timestamp encoded in a version id, or "" if unparseable."""
+    m = re.match(r"^(\d{8}T\d{6}\.\d{6})Z", version_id)
+    if not m:
+        return ""
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%dT%H%M%S.%f").replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return ""
+
+
+def _soul_preview(text: str, limit: int) -> str:
+    return " ".join((text or "").split())[:limit]
+
+
+def list_soul_versions(preview_chars: int = 140) -> list[dict]:
+    """Recorded SOUL.md snapshots, newest first: ``{id, saved_at, size, preview, is_current}``.
+    ``saved_at`` is ISO-8601 UTC; ``preview`` is the leading text with whitespace collapsed for a
+    one-line UI summary; ``is_current`` marks the snapshot whose text matches the live persona
+    (true right after a restore — so a version panel can flag which one is active without a
+    separate config fetch). Unreadable files are skipped."""
+    try:
+        current = read_soul()
+    except (OSError, ValueError):
+        current = ""
+    out: list[dict] = []
+    for path in _soul_history_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):  # a corrupt history file is skipped, never 500s the list
+            continue
+        out.append(
+            {
+                "id": path.stem,
+                "saved_at": _soul_version_saved_at(path.stem),
+                "size": len(text),
+                "preview": _soul_preview(text, preview_chars),
+                "is_current": text == current,
+            }
+        )
+    return out
+
+
+def read_soul_version(version_id: str) -> str | None:
+    """Full text of a recorded snapshot, or None if the id is invalid/missing/unreadable. The id
+    is validated against the generated format so it can never be a caller-controlled path (no
+    traversal), with a resolved-parent check as defense in depth.
+
+    None (absent) is intentionally distinct from "" (a legitimately archived empty persona) —
+    the restore route's 404 relies on that distinction, so don't collapse them to "" for
+    symmetry with read_soul_preset."""
+    if not _SOUL_VERSION_RE.match(version_id or ""):
+        return None
+    hist = instance_paths().soul_history_dir
+    path = hist / f"{version_id}.md"
+    try:
+        if hist.resolve() not in path.resolve().parents:
+            return None
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError):  # missing / unreadable / non-utf8 → absent, never raise
+        return None
 
 
 # ---------------------------------------------------------------------------
