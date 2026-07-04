@@ -89,33 +89,104 @@
   line-height: 1.5;
 }
 
-/* Injection-record table — a forensics readout, clarity over polish. */
+/* Injection-record table — legible per-turn "what did it use?" readout. Each
+   row is a clickable affordance opening the resolved-detail dialog. */
 .memory-injections {
   width: 100%;
   margin-top: 0.6rem;
   border-collapse: collapse;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
 }
 
 .memory-injections th,
 .memory-injections td {
   text-align: left;
   vertical-align: top;
-  padding: 0.35rem 0.5rem;
+  padding: 0.45rem 0.5rem;
   border-bottom: 1px solid var(--pl-color-border, rgba(128, 128, 128, 0.25));
 }
 
 .memory-injections th {
   font-weight: 600;
+  font-size: 0.75rem;
   color: var(--pl-color-text-muted, #8a8f98);
 }
 
-.memory-injections code {
-  font-size: 0.75rem;
-  overflow-wrap: anywhere;
+.memory-injections-row {
+  cursor: pointer;
+}
+
+.memory-injections-row:hover,
+.memory-injections-row:focus-visible {
+  background: var(--pl-color-surface-2, rgba(128, 128, 128, 0.08));
+  outline: none;
+}
+
+.memory-injections-what {
+  font-weight: 500;
+}
+
+.memory-injections-context {
+  color: var(--pl-color-text-muted, #8a8f98);
+  white-space: nowrap;
 }
 
 .memory-none {
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+/* Injection detail dialog — the resolved items, grouped + scannable. */
+.memory-detail-meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+.memory-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.memory-detail-group h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+.memory-detail-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.memory-detail-group li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-detail-heading {
+  font-weight: 600;
+}
+
+.memory-detail-source {
+  font-size: 0.78rem;
+  color: var(--pl-color-text-muted, #8a8f98);
+}
+
+.memory-detail-snippet {
+  color: var(--pl-color-text, inherit);
+}
+
+.memory-detail-gone {
+  font-style: italic;
   color: var(--pl-color-text-muted, #8a8f98);
 }
 

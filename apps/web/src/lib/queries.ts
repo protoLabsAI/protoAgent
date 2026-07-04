@@ -32,6 +32,7 @@ export const queryKeys = {
   memorySessions: ["memory", "sessions"] as const,
   memoryHot: ["memory", "hot"] as const,
   memoryInjections: ["memory", "injections"] as const,
+  memoryInjectionDetail: (id: number) => ["memory", "injections", "detail", id] as const,
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll

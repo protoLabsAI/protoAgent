@@ -97,24 +97,47 @@ test("editing a hot-memory entry saves via PUT, toasts, and shows the revision",
   await expect(surface.getByText("The operator works in US/Pacific.")).toHaveCount(0);
 });
 
-test("Injections panel shows the per-turn record and filters by session id", async ({ page }) => {
+test("Injections panel shows a plain-language per-turn record and filters by session id", async ({ page }) => {
   const surface = page.getByTestId("memory-surface");
   await surface.getByRole("tab", { name: "Injections" }).click();
 
-  // Both fixture rows, with their injected ids visible.
+  // Both fixture rows, with a plain-language "what it used" summary (built from
+  // the id-array lengths) instead of raw ids: row 7 = 2 hot chunks · 1 digest
+  // session · 1 RAG chunk.
   const table = surface.locator(".memory-injections");
   await expect(table.locator("tbody tr")).toHaveCount(2);
-  await expect(table.getByText("31, 32")).toBeVisible(); // hot chunk ids
-  await expect(table.getByText("sched-hourly-report").first()).toBeVisible();
+  await expect(table.getByText("2 memories · 1 past chat · 1 doc")).toBeVisible();
+  await expect(table.getByText("~420 tokens")).toBeVisible();
+  await expect(table.getByText("31, 32")).toHaveCount(0); // no raw ids in the table
 
   // Filtering to one session narrows the table (the input debounces ~250ms
   // before the query refires; the assertions auto-wait through it). The
   // placeholder says the match is EXACT — it's a lookup, not a substring search.
   const filterInput = surface.getByLabel("filter injections by session id");
-  await expect(filterInput).toHaveAttribute("placeholder", "Exact session id (blank = all sessions)…");
+  await expect(filterInput).toHaveAttribute("placeholder", "Filter by exact chat/session id (blank = all)…");
   await filterInput.fill("sched-hourly-report");
   await expect(table.locator("tbody tr")).toHaveCount(1);
-  await expect(table.getByText("chat-1750000000000-abc123")).toHaveCount(0);
+  await expect(table.getByText("2 memories · 1 past chat · 1 doc")).toHaveCount(0);
+});
+
+test("clicking an injection row opens the resolved-detail dialog", async ({ page }) => {
+  const surface = page.getByTestId("memory-surface");
+  await surface.getByRole("tab", { name: "Injections" }).click();
+
+  // Open the first row's detail — the resolve endpoint turns its ids into content.
+  await surface.locator(".memory-injections-row").first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("What this turn used")).toBeVisible();
+
+  // Grouped, friendly headings + the actual items (not ids).
+  await expect(dialog.getByText("Past conversations (1)")).toBeVisible();
+  await expect(dialog.getByText("send the hourly report")).toBeVisible();
+  await expect(dialog.getByText("Memories (2)")).toBeVisible();
+  await expect(dialog.getByText("Operator timezone")).toBeVisible();
+  await expect(dialog.getByText("The operator works in US/Pacific.")).toBeVisible();
+  // A pruned doc chunk renders gracefully rather than vanishing.
+  await expect(dialog.getByText("Docs (1)")).toBeVisible();
+  await expect(dialog.getByText("no longer stored")).toBeVisible();
 });
 
 test("a session row's injections jump pre-filters the Injections panel", async ({ page }) => {
@@ -186,7 +209,7 @@ test("each tab shows its contained error alert when the backend read fails", asy
 
   await page.request.post("/api/__test__/memory/mode", { data: { fail: "injections" } });
   await surface.getByRole("tab", { name: "Injections" }).click();
-  await expect(surface.getByText(/Couldn't read the injection log/)).toBeVisible();
+  await expect(surface.getByText(/Couldn't read the memory record/)).toBeVisible();
 });
 
 test("empty stores render the Empty states, not errors", async ({ page }) => {
@@ -198,7 +221,7 @@ test("empty stores render the Empty states, not errors", async ({ page }) => {
   await surface.getByRole("tab", { name: "Hot memory" }).click();
   await expect(surface.getByText("No hot memory")).toBeVisible();
   await surface.getByRole("tab", { name: "Injections" }).click();
-  await expect(surface.getByText("No injection records")).toBeVisible();
+  await expect(surface.getByText("Nothing here yet")).toBeVisible();
 });
 
 test("a disabled knowledge store shows the store-off notice on the hot tab", async ({ page }) => {

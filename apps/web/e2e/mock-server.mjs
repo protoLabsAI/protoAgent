@@ -33,6 +33,7 @@ import {
   KNOWLEDGE_CHUNKS,
   MEMORY_HOT,
   MEMORY_INJECTIONS,
+  MEMORY_INJECTION_DETAILS,
   MEMORY_SESSIONS,
   MEMORY_SESSION_RENDERED,
   SUBAGENTS,
@@ -499,6 +500,15 @@ const server = createServer(async (req, res) => {
           ? MEMORY_INJECTIONS.filter((r) => r.session_id === sid)
           : MEMORY_INJECTIONS;
         return sendJson(res, { injections: rows });
+      }
+      {
+        // Resolved detail for the click-through dialog (ids → content, grouped).
+        const m = pathname.match(/^\/api\/memory\/injections\/([^/]+)$/);
+        if (m) {
+          const detail = MEMORY_INJECTION_DETAILS[m[1]];
+          if (!detail) return sendJson(res, { detail: "no injection record with that id" }, 404);
+          return sendJson(res, detail);
+        }
       }
       const payload = handleApiGet(pathname, fleetFor(req));
       if (payload !== null) return sendJson(res, payload);

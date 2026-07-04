@@ -364,3 +364,128 @@ def test_injections_route_clamps_limit(monkeypatch):
     assert captured["limit"] == 500
     c.get("/api/memory/injections", params={"limit": -5})
     assert captured["limit"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 3b) The detail route (GET /api/memory/injections/{id}) — ids → resolved,
+#     grouped content for the console's "what did this turn use?" dialog.
+# ---------------------------------------------------------------------------
+
+
+class _FakeKnowledgeStore:
+    """Minimal store exposing only the reader the resolver uses. Unknown ids
+    return None — the pruned/deleted-chunk path."""
+
+    def __init__(self, chunks: dict[int, dict]):
+        self._chunks = chunks
+
+    def get_chunk(self, chunk_id: int) -> dict | None:
+        return self._chunks.get(int(chunk_id))
+
+
+def _detail_client(monkeypatch, tmp_path, *, knowledge=None):
+    import runtime.state as rs
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api.injection_routes import register_injection_routes
+
+    # Session-summary resolution reads memory_path(); point it at tmp_path so the
+    # digest-session title comes from a summary we control (not the real store).
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    monkeypatch.setattr(rs.STATE, "knowledge_store", knowledge, raising=False)
+    app = FastAPI()
+    register_injection_routes(app)
+    return TestClient(app)
+
+
+def _last_record_id() -> int:
+    from observability.injection_log import injection_log
+
+    return injection_log().recent()[0]["id"]
+
+
+def test_injection_detail_resolves_all_groups(tmp_path, monkeypatch):
+    from observability.injection_log import injection_log
+
+    # A real summary file so the digest-session id resolves to a human title
+    # (its topic = the first user message, via digest_entry).
+    (tmp_path / "sess-prev.json").write_text(
+        json.dumps(
+            {
+                "session_id": "sess-prev",
+                "timestamp": "2026-07-01T00:00:00+00:00",
+                "messages": [{"role": "user", "content": "earlier launch topic"}],
+            }
+        )
+    )
+    store = _FakeKnowledgeStore(
+        {
+            7: {"id": 7, "heading": "Deploy cadence", "content": "deploys go out Fridays", "source": "chat-x"},
+            3: {"id": 3, "content": "gravity pulls apples", "source": "physics.pdf", "source_type": "pdf"},
+        }
+    )
+    injection_log().record(
+        session_id="sess-now",
+        digest_session_ids=["sess-prev"],
+        hot_chunk_ids=[7],
+        rag_chunk_ids=[3],
+        approx_tokens=42,
+    )
+
+    c = _detail_client(monkeypatch, tmp_path, knowledge=store)
+    body = c.get(f"/api/memory/injections/{_last_record_id()}").json()
+
+    assert body["session_id"] == "sess-now"
+    assert body["approx_tokens"] == 42
+    assert body["ts"]
+    assert body["past_sessions"] == [{"id": "sess-prev", "title": "earlier launch topic"}]
+    assert body["memories"] == [
+        {"id": 7, "heading": "Deploy cadence", "snippet": "deploys go out Fridays", "unavailable": False}
+    ]
+    assert body["docs"] == [
+        {"id": 3, "source": "physics.pdf", "snippet": "gravity pulls apples", "unavailable": False}
+    ]
+
+
+def test_injection_detail_pruned_chunk_marked_unavailable(tmp_path, monkeypatch):
+    """A hot/RAG id whose chunk was pruned (get_chunk → None) still renders — as
+    an 'unavailable' item — instead of failing the request."""
+    from observability.injection_log import injection_log
+
+    store = _FakeKnowledgeStore({})  # every id resolves to None
+    injection_log().record(session_id="s", hot_chunk_ids=[999], rag_chunk_ids=[888], approx_tokens=3)
+
+    c = _detail_client(monkeypatch, tmp_path, knowledge=store)
+    body = c.get(f"/api/memory/injections/{_last_record_id()}").json()
+
+    assert body["memories"] == [{"id": 999, "heading": None, "snippet": None, "unavailable": True}]
+    assert body["docs"] == [{"id": 888, "source": None, "snippet": None, "unavailable": True}]
+
+
+def test_injection_detail_no_knowledge_store_is_best_effort(tmp_path, monkeypatch):
+    """A missing knowledge store (middleware.knowledge off) must not 500 — every
+    chunk item comes back marked unavailable."""
+    from observability.injection_log import injection_log
+
+    injection_log().record(session_id="s", hot_chunk_ids=[1], rag_chunk_ids=[2], approx_tokens=1)
+    c = _detail_client(monkeypatch, tmp_path, knowledge=None)
+    body = c.get(f"/api/memory/injections/{_last_record_id()}").json()
+    assert body["memories"][0]["unavailable"] is True
+    assert body["docs"][0]["unavailable"] is True
+
+
+def test_injection_detail_unresolvable_session_falls_back_to_id(tmp_path, monkeypatch):
+    """A digest-session id with no summary file on disk falls back to a null
+    title (the console renders the id) rather than erroring."""
+    from observability.injection_log import injection_log
+
+    injection_log().record(session_id="s", digest_session_ids=["ghost-sess"], approx_tokens=1)
+    c = _detail_client(monkeypatch, tmp_path, knowledge=_FakeKnowledgeStore({}))
+    body = c.get(f"/api/memory/injections/{_last_record_id()}").json()
+    assert body["past_sessions"] == [{"id": "ghost-sess", "title": None}]
+
+
+def test_injection_detail_404_for_unknown_id(tmp_path, monkeypatch):
+    c = _detail_client(monkeypatch, tmp_path, knowledge=_FakeKnowledgeStore({}))
+    assert c.get("/api/memory/injections/424242").status_code == 404

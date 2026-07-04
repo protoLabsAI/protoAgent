@@ -794,6 +794,32 @@ export type MemoryInjectionRow = {
   approx_tokens: number;
 };
 
+// The RESOLVED detail for one injection record (GET /api/memory/injections/{id}):
+// the id arrays turned into their referenced content, grouped for the detail
+// dialog. An item whose underlying chunk was pruned/deleted comes back
+// `unavailable` (the dialog shows "no longer stored") rather than dropping it.
+export type InjectionPastSession = { id: string; title: string | null };
+export type InjectionMemoryItem = {
+  id: number;
+  heading: string | null;
+  snippet: string | null;
+  unavailable: boolean;
+};
+export type InjectionDocItem = {
+  id: number;
+  source: string | null;
+  snippet: string | null;
+  unavailable: boolean;
+};
+export type MemoryInjectionDetail = {
+  ts: string;
+  session_id: string;
+  past_sessions: InjectionPastSession[];
+  memories: InjectionMemoryItem[];
+  docs: InjectionDocItem[];
+  approx_tokens: number;
+};
+
 // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.
 export type DelegateFieldSpec = {
   key: string;
