@@ -20,10 +20,8 @@ import "./app/theme.css";
 import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
-import { initZoom } from "./view/zoom";
 
 watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
-initZoom(); // apply the persisted UI zoom (#1711) before first paint — no flash of unscaled UI
 
 // The desktop quick-launcher window (ADR 0057) boots the same bundle but renders ONLY the
 // command palette — no shell, no slug activation. Everything else is the full console.
