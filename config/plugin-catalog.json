@@ -88,6 +88,14 @@
       "official": true,
       "repo": "https://github.com/protoLabsAI/doom-plugin",
       "tagline": "But can it run DOOM? Play shareware DOOM in a console view via WebAssembly (prboom)."
+    },
+    {
+      "id": "careercoach",
+      "name": "Career Coach",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/careercoach-plugin",
+      "tagline": "Your career coach & job-hunt copilot — strategy, mock interviews, honest CV feedback, and offer/negotiation coaching, plus an autonomous evaluate→tailor→apply pipeline. A full-surface plugin showcase."
     }
   ]
 }

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Career Coach in the plugin catalog** — the new [`careercoach`](https://github.com/protoLabsAI/careercoach-plugin)
+  official plugin (a career coach + job-hunt copilot, and a full-surface showcase: skills, a workflow,
+  a subagent crew, tools + a tunable rubric, a dashboard view, and config) now appears in
+  System → Plugins → Discover for one-click install.
+
 ## [0.89.0] - 2026-07-04
 
 ### Added
