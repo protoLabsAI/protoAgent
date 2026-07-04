@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.91.0",
+    "date": "2026-07-04",
+    "changes": [
+      "Goal completion contracts",
+      "Fleet members can autostart on boot",
+      "Guided goal-creation form",
+      "Composer/HITL forms support conditional fields",
+      "/goal {json} carries the completion contract",
+      "delegate_to no longer hard-fails on member turns >60s",
+      "Memory ▸ Injections is legible to non-developers"
+    ]
+  },
+  {
     "version": "v0.90.0",
     "date": "2026-07-04",
     "changes": [
