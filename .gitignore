@@ -29,7 +29,10 @@ config/plugins/
 # Local-run artifacts — autostart stdout/stderr logs + memory middleware
 # fallback directory when /sandbox is not available.
 logs/
-.proto/
+# .proto/ session scratch — versioned evolve/skills is tracked
+.proto/memory/
+.proto/session-notes.md
+.proto/repo-map-cache.json
 *.egg-info/
 dist/
 build/

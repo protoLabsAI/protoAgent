@@ -25,11 +25,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   official plugin (a career coach + job-hunt copilot, and a full-surface showcase: skills, a workflow,
   a subagent crew, tools + a tunable rubric, a dashboard view, and config) now appears in
   System → Plugins → Discover for one-click install.
+- **Server-initiated turns show a "responding…" indicator** (#1767). When a background
+  report, scheduled task, or watch fires a turn into your chat, the console now renders its
+  typing indicator — labelled with what triggered it — instead of looking frozen during the
+  agent's longest turns. Additive; the streaming path is untouched.
+- **Shift over the add-chat button previews incognito** (#1744). Holding Shift swaps the
+  `+` to an eye — a clear visual cue that the click opens an incognito chat.
+
+### Changed
+- **Chat errors surface as a toast, not an inline banner** (#1780, console). Attach / image /
+  rewind and other composer errors now show as a dismissible toast, and appear regardless of
+  which dock the chat is on (the old strip only rendered on the left).
 
 ### Removed
 - **Browser-style UI zoom (`⌘/Ctrl` `+` / `-` / `0`)** (#1711, console) — temporarily
   disabled and reverted pending rework. The `document.style.zoom` scaling approach is
   being reconsidered; re-enable by reverting this change. Tracked in #1711.
+
+### Fixed
+- **A saved theme survives a reload** (#1762). A per-agent theme (dark mode, accent, font
+  size) is no longer clobbered by the agent default on reload — persisted overrides win, and
+  a per-agent owner stamp stops a different agent's look from bleeding across same-origin
+  windows.
+- **Scaffolded plugins that register a subagent or use Knobs pass their own smoke test**
+  (#1764). The plugin-devkit testkit's default host-stubs now cover `SubagentConfig` and the
+  `graph.sdk` Knobs surface, so a plugin that follows the guide is green from birth without
+  wrapping each call in try/except.
 
 ## [0.89.0] - 2026-07-04
 
