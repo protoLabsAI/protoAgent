@@ -231,8 +231,10 @@ class A2aAdapter(Adapter):
                 "number",
                 default=300,
                 help="Max seconds to wait for a long-running delegated task to finish before "
-                "giving up locally — the peer keeps working. Raise it for slow agents (e.g. a "
-                "code build); the old fixed 30s cut long tasks off mid-flight.",
+                "giving up locally — the peer keeps working. Also caps the initial synchronous "
+                "SendMessage read, so a peer that answers inline (protoAgent's own server does) "
+                "may legitimately take up to this long to reply — the old flat 60s hard-failed "
+                "every member turn beyond it (#1778). Raise it for slow agents (e.g. a code build).",
             ),
         ]
 
@@ -307,10 +309,17 @@ class A2aAdapter(Adapter):
         poll_timeout = d.poll_timeout_s if d.poll_timeout_s and d.poll_timeout_s > 0 else 300.0
         # A2A 1.0 (a2a-sdk >=1.0): JSON-RPC `SendMessage` / `GetTask`, the ROLE_USER
         # enum, and a `result.task` envelope. (`message/send` + lowercase `user` is
-        # the v0.3 legacy dialect, which 1.0 servers reject with -32601.) The per-request
-        # client timeout caps a single call; the poll DEADLINE caps the overall wait for a
-        # long-running task — so a 2-minute delegated task no longer fails at the old 30s.
-        async with httpx.AsyncClient(timeout=timeout or 60) as client:
+        # the v0.3 legacy dialect, which 1.0 servers reject with -32601.)
+        #
+        # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
+        # holding the connection open for the whole delegated turn before returning the final
+        # Message — so the initial SendMessage READ must be allowed to run as long as the task
+        # legitimately might (poll_timeout), NOT the flat 60s that hard-failed every member turn
+        # >60s (#1778: hub→member delegation silently fell back on any non-trivial turn). Connect
+        # stays short so an unreachable peer still fails fast; the same client serves the GetTask
+        # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
+        read_budget = timeout if timeout is not None else poll_timeout
+        async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             result = await _rpc(
                 client,
                 "SendMessage",

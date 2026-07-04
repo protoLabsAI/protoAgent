@@ -145,3 +145,43 @@ def test_dispatch_returns_immediate_text(patched):
     _install_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
     d = _parse()
     assert asyncio.run(A.dispatch(d, "ping")) == "pong"
+
+
+# ── #1778: the synchronous SendMessage read follows poll_timeout, not a flat 60s ──
+
+
+def _capture_client_timeout(patched, **fake_kw):
+    """Install a fake AsyncClient that records the httpx timeout it was built with."""
+    captured: dict = {}
+
+    def _client(**client_kw):
+        captured["timeout"] = client_kw.get("timeout")
+        return _FakeClient(**fake_kw, **client_kw)
+
+    patched.setattr(httpx, "AsyncClient", _client)
+    return captured
+
+
+def test_sync_read_timeout_tracks_poll_timeout(patched):
+    """A synchronous A2A peer holds the SendMessage connection open for the whole turn,
+    so the read budget must be poll_timeout_s — NOT the old flat 60s that hard-failed
+    every member turn >60s (#1778). Connect stays short so unreachable peers still fail fast."""
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "ok" if result else "")
+    cap = _capture_client_timeout(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "ok"}}))
+    d = _parse(poll_timeout_s=180)
+
+    assert asyncio.run(A.dispatch(d, "hi")) == "ok"
+    t = cap["timeout"]
+    assert isinstance(t, httpx.Timeout)
+    assert t.read == 180.0  # the turn budget, not 60
+    assert t.connect == 10.0  # unreachable peers still fail fast
+
+
+def test_explicit_timeout_overrides_read_budget(patched):
+    """An explicit per-call timeout still wins over poll_timeout_s for the read budget."""
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "ok" if result else "")
+    cap = _capture_client_timeout(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "ok"}}))
+    d = _parse(poll_timeout_s=180)
+
+    assert asyncio.run(A.dispatch(d, "hi", timeout=25)) == "ok"
+    assert cap["timeout"].read == 25.0
