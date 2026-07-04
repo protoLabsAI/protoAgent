@@ -380,11 +380,13 @@ def _main():
         from graph.config_io import (
             config_yaml_path,
             ensure_live_config,
+            ensure_live_soul,
             mark_setup_complete,
             validate_for_headless,
         )
 
         ensure_live_config()
+        ensure_live_soul()
         cfg = LangGraphConfig.from_yaml(config_yaml_path())
         ok, reason = validate_for_headless(cfg)
         if not ok:

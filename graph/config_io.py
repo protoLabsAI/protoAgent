@@ -13,7 +13,10 @@ Three jobs:
 2. **SOUL.md persona.** The live persona lives at the instance's
    ``<instance_root>/config/SOUL.md`` (``instance_paths().soul_path``);
    drawer edits write there and ``read_soul`` falls back to the bundled
-   ``config/SOUL.md`` seed when the instance has none yet.
+   ``config/SOUL.md`` seed when the instance has none yet. ``ensure_live_soul``
+   seeds that live file on first run (seed-not-force, like ``ensure_live_config``)
+   from ``PROTOAGENT_SEED_SOUL`` or the bundle — and heals a lingering starter
+   placeholder so a baked persona isn't shadowed forever.
 
 3. **Gateway introspection.** ``list_gateway_models`` hits
    ``{api_base}/models`` so the drawer's model dropdown reflects
@@ -820,6 +823,70 @@ def write_soul(text: str) -> list[Path]:
         snapshot_soul(old)
     target.write_text(text, encoding="utf-8")
     return [target]
+
+
+# The distinctive sentence in the shipped starter ``config/SOUL.md``. It's the
+# whole point of that file to be replaced, so a live SOUL still carrying this
+# marker was never authored by anyone — it's an un-seeded default we may heal.
+_SOUL_PLACEHOLDER_MARKER = "Replace this file."
+
+
+def _is_placeholder_soul(text: str) -> bool:
+    """True when ``text`` is the shipped starter placeholder (still un-authored)."""
+    return _SOUL_PLACEHOLDER_MARKER in text
+
+
+def ensure_live_soul() -> bool:
+    """Seed the instance's live ``SOUL.md`` on first run — the persona analogue of
+    :func:`ensure_live_config`.
+
+    ``read_soul`` already falls back to the bundled seed when the live SOUL is
+    *absent*, so a fresh agent shows its baked persona. But an older boot (or a
+    finished setup wizard) can materialise the **starter placeholder** into the
+    live path, and that never-absent placeholder then permanently shadows a
+    persona baked into the bundle afterwards — the agent runs "Replace this file"
+    forever. This bridges that gap: it seeds the live SOUL when it is absent
+    **or still the shipped placeholder**, from ``PROTOAGENT_SEED_SOUL`` (a baked
+    persona-as-code file) when set, else the bundled ``soul_source_path()``.
+
+    Seed-not-force, exactly like ``ensure_live_config``: a real (non-placeholder)
+    live SOUL is never touched, and a placeholder is never written *over* another
+    placeholder. Returns ``True`` only when it wrote the file.
+    """
+    live = instance_paths().soul_path
+    if live.exists():
+        try:
+            current = live.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if not _is_placeholder_soul(current):
+            return False  # a real persona already lives here — never clobber
+
+    seed_override = os.environ.get("PROTOAGENT_SEED_SOUL", "").strip()
+    seed_path = Path(seed_override).expanduser() if seed_override else None
+    if seed_path is not None and seed_path.is_file():
+        source = seed_path
+    else:
+        if seed_override:
+            log.warning(
+                "[soul] PROTOAGENT_SEED_SOUL=%r is not a readable file — falling back to the bundled seed",
+                seed_override,
+            )
+        source = soul_source_path()
+    if not source.exists():
+        return False
+
+    try:
+        source_text = source.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if _is_placeholder_soul(source_text):
+        return False  # nothing real to seed — don't replace a placeholder with one
+
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(source_text, encoding="utf-8")
+    log.info("[soul] seeded live SOUL.md %s from %s", live, source.name)
+    return True
 
 
 # ---------------------------------------------------------------------------
