@@ -347,6 +347,73 @@ class TestManager:
         assert _manager(tmp_path)._max_concurrency == 3  # default on a bad value
 
 
+# ── #1767: turn-lifecycle events around the push-resume self-POST ─────────────
+
+
+def _resume_job(status: str = "completed") -> "BackgroundJob":  # noqa: F821 — imported at call sites
+    from background.store import BackgroundJob
+
+    return BackgroundJob(
+        id="bg-xyz",
+        agent_name="a",
+        origin_session="sess-1",
+        subagent_type="researcher",
+        description="dig the archives",
+        prompt="p",
+        status=status,
+        result="found it",
+        notified=False,
+        created_at="t1",
+        completed_at="t2",
+    )
+
+
+class TestResumeOriginTurnEvents:
+    """A push-resume nudge (ADR 0070) holds the connection open for the WHOLE
+    origin-session turn; #1767 wraps it in ``turn.started`` / ``turn.finished`` so an
+    open console can render its typing indicator during that otherwise-invisible turn."""
+
+    async def test_resume_origin_emits_started_then_finished(self, tmp_path, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        events: list = []
+        mgr = _manager(tmp_path, event_publish=lambda topic, data: events.append((topic, data)))
+
+        ok = await mgr.resume_origin(_resume_job())
+
+        assert ok is True
+        turn_events = [(t, d) for (t, d) in events if t.startswith("turn.")]
+        assert [t for (t, _) in turn_events] == ["turn.started", "turn.finished"]
+        for _t, d in turn_events:
+            assert d["session_id"] == "sess-1"
+            assert d["origin"] == "background-resume"
+            assert d["trigger"] == "bg-xyz"
+        # turn.finished carries the outcome so the console clears an accurate state.
+        assert turn_events[-1][1]["ok"] is True
+
+    async def test_resume_origin_finishes_even_on_delivery_failure(self, tmp_path, monkeypatch):
+        """A failed nudge must still emit ``turn.finished`` — a hanging ``turn.started``
+        would spin the console's indicator forever."""
+        import httpx
+
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kw: _FakeClient(None, raise_exc=RuntimeError("conn refused")),
+        )
+        events: list = []
+        mgr = _manager(tmp_path, event_publish=lambda topic, data: events.append((topic, data)))
+
+        ok = await mgr.resume_origin(_resume_job(status="failed"))
+
+        assert ok is False  # push-resume is best-effort; the report still drains next turn
+        topics = [t for (t, _) in events if t.startswith("turn.")]
+        assert topics == ["turn.started", "turn.finished"]
+        finished = next(d for (t, d) in events if t == "turn.finished")
+        assert finished["ok"] is False
+
+
 # ── Phase 2: autonomous idle-wake (server/a2a.py) ────────────────────────────
 
 

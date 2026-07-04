@@ -1,5 +1,6 @@
 import "./chat.css";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
+import { Spinner } from "@protolabsai/ui/data";
 import { Switch } from "@protolabsai/ui/forms";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
@@ -29,6 +30,7 @@ import { useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
+import { useServerTurn } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
@@ -374,6 +376,10 @@ function ChatSessionSlot({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerFocusNonce]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
+  // A server-initiated turn (background push-resume / scheduled / watch fire, #1767) is
+  // running into THIS session — the browser can't stream it, so show a labelled typing
+  // indicator. Suppressed while this tab is itself streaming (its own spinner covers it).
+  const serverTurnLabel = useServerTurn(sessionId);
 
   // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
   // the backend tiers it (inline small / index large) and returns a `context`
@@ -1495,6 +1501,17 @@ function ChatSessionSlot({
             <span className="chat-user-text">{q.text}</span>
           </Message>
         ))}
+        {serverTurnLabel && status !== "streaming" ? (
+          // Server-initiated turn in flight (#1767): the same spinner a streaming
+          // assistant shows, plus a label naming the trigger, so a background/scheduled/
+          // watch turn no longer looks like a hung app. Display-only — the real answer
+          // arrives via chat.resumed (ChatResumeWatch).
+          <Message role="assistant">
+            <span className="chat-server-turn">
+              <Spinner size={15} /> {serverTurnLabel}
+            </span>
+          </Message>
+        ) : null}
       </Conversation>
 
       {hitl && (

@@ -22,14 +22,43 @@ from scheduler.local import LocalScheduler, _compute_next_fire
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 
-def _make_scheduler(tmp_path: Path, agent: str = "gina-test") -> LocalScheduler:
+def _make_scheduler(tmp_path: Path, agent: str = "gina-test", **kw) -> LocalScheduler:
     return LocalScheduler(
         agent_name=agent,
         invoke_url="http://127.0.0.1:7870",
         api_key="k",
         bearer_token="b",
         db_dir=tmp_path,
+        **kw,
     )
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int = 200, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+
+class _FakeClient:
+    """Stubs ``httpx.AsyncClient`` so a unit test exercises ``_fire`` without a live A2A."""
+
+    def __init__(self, response, raise_exc=None, **_kw):
+        self._response = response
+        self._raise = raise_exc
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        if self._raise:
+            raise self._raise
+        return self._response
+
+
+_FUTURE_ISO = "2099-01-01T00:00:00+00:00"
 
 
 # ── interface helpers ──────────────────────────────────────────────────────
@@ -251,6 +280,90 @@ class TestMissedFireRecovery:
         jobs = s.list_jobs()
         assert len(jobs) == 1
         assert jobs[0].next_fire < datetime.now(UTC).isoformat()
+
+
+# ── #1767: turn-lifecycle events around the self-POST ───────────────────────
+
+
+class TestFireTurnEvents:
+    """A scheduled/watch fire holds the connection open for the WHOLE turn, so the
+    console is otherwise blind to it. ``_fire`` brackets the self-POST with
+    ``turn.started`` / ``turn.finished`` (#1767) so the console can render its typing
+    indicator, labelled by trigger, during the agent's longest turns."""
+
+    @pytest.mark.asyncio
+    async def test_scheduler_fire_emits_started_then_finished(self, tmp_path, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        events: list = []
+        s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+        job = s.add_job("sweep the inbox", _FUTURE_ISO, job_id="job-1", context_id="chat-42")
+
+        ok = await s._fire(job)
+
+        assert ok is True
+        turn = [(t, d) for (t, d) in events if t.startswith("turn.")]
+        assert [t for (t, _) in turn] == ["turn.started", "turn.finished"]
+        for _t, d in turn:
+            assert d["session_id"] == "chat-42"  # the fire's context (a wait/run_in_session resume)
+            assert d["origin"] == "scheduler"
+            assert d["trigger"] == "job-1"
+        assert turn[-1][1]["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_watch_reaction_fire_tags_watch_origin(self, tmp_path, monkeypatch):
+        """A watch reaction (ADR 0067) enqueues a one-shot with a ``watch-<id>`` job id
+        via sdk.run_in_session — the origin metadata lets the console label the indicator
+        as a watch trigger rather than a plain schedule."""
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        events: list = []
+        s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+        job = s.add_job("check on it", _FUTURE_ISO, job_id="watch-abc123", context_id="chat-9")
+
+        await s._fire(job)
+
+        started = next(d for (t, d) in events if t == "turn.started")
+        assert started["origin"] == "watch-abc123"
+        assert started["session_id"] == "chat-9"
+        assert started["trigger"] == "watch-abc123"
+
+    @pytest.mark.asyncio
+    async def test_fire_without_context_defaults_to_activity_thread(self, tmp_path, monkeypatch):
+        import httpx
+
+        from events import ACTIVITY_CONTEXT
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        events: list = []
+        s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+        job = s.add_job("daily digest", "0 9 * * *", job_id="cron-1")  # no context_id
+
+        await s._fire(job)
+
+        started = next(d for (t, d) in events if t == "turn.started")
+        assert started["session_id"] == ACTIVITY_CONTEXT
+
+    @pytest.mark.asyncio
+    async def test_fire_finishes_even_on_http_error(self, tmp_path, monkeypatch):
+        """A non-2xx fire must still emit ``turn.finished`` (ok=False) — a hanging
+        ``turn.started`` would spin the console's indicator forever."""
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(500, "boom")))
+        events: list = []
+        s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+        job = s.add_job("sweep", _FUTURE_ISO, job_id="job-err", context_id="chat-1")
+
+        ok = await s._fire(job)
+
+        assert ok is False
+        topics = [t for (t, _) in events if t.startswith("turn.")]
+        assert topics == ["turn.started", "turn.finished"]
+        finished = next(d for (t, d) in events if t == "turn.finished")
+        assert finished["ok"] is False
 
 
 # ── compute_next_fire ───────────────────────────────────────────────────────
