@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a subagent crew, tools + a tunable rubric, a dashboard view, and config) now appears in
   System → Plugins → Discover for one-click install.
 
+### Removed
+- **Browser-style UI zoom (`⌘/Ctrl` `+` / `-` / `0`)** (#1711, console) — temporarily
+  disabled and reverted pending rework. The `document.style.zoom` scaling approach is
+  being reconsidered; re-enable by reverting this change. Tracked in #1711.
+
 ## [0.89.0] - 2026-07-04
 
 ### Added
