@@ -1,10 +1,20 @@
 import { applyStoredTheme } from "@protolabsai/ui/theming";
 
+import { currentSlug } from "./api";
+import { resolveThemeToPersist } from "./themeMerge";
+
 // Bridge the per-agent server theme (/api/theme, ADR 0042) to the DS ThemePanel, which is
 // localStorage-backed (key "pl-theme", an opaque {mode, overrides} blob). The host round-trips
 // that blob: GET seeds localStorage + repaints; the panel's edits persist to localStorage; a
 // "Save" PUTs the current blob back. The blob is opaque — the panel owns its schema.
 const PL_THEME_KEY = "pl-theme"; // @protolabsai/ui theming.tsx LS_THEME
+
+// `pl-theme` is a SINGLE, global localStorage key shared by every same-origin agent window
+// (the fleet console is slug-routed on one origin, ADR 0042). So the blob sitting in it may
+// belong to a DIFFERENT agent — whichever window last wrote it. We stamp a companion key with
+// the focused agent's slug on every write so boot can tell "my unsaved tweak" from "another
+// agent's saved theme left behind" before deciding whether to merge (see #1762 blocker).
+const PL_THEME_OWNER_KEY = "pl-theme:agent";
 
 function root(): HTMLElement {
   return document.documentElement;
@@ -23,13 +33,22 @@ function clearOverrides() {
 /** Apply a server theme blob to the document (+ seed the panel's localStorage). `null`/empty
  *  resets to the design-system defaults. Crossfades via the View Transitions API where
  *  available (`animate`), so switching agents eases between looks — pass `animate: false` for
- *  the initial boot apply (nothing to crossfade from, and the snapshot can disrupt first paint). */
-export function applyAgentTheme(theme: unknown, animate = true) {
+ *  the initial boot apply (nothing to crossfade from, and the snapshot can disrupt first paint).
+ *
+ *  `preservePersisted` (the boot apply, #1762): the user's persisted working copy WINS over the
+ *  incoming agent default — so an unsaved tweak survives a reload and defaults only fill the
+ *  gaps, instead of the default blob clobbering the user's overrides on every mount. On an
+ *  explicit switch/reset (the default) we adopt the incoming theme verbatim (ADR 0042). */
+export function applyAgentTheme(theme: unknown, opts: { animate?: boolean; preservePersisted?: boolean } = {}) {
+  const { animate = true, preservePersisted = false } = opts;
   const apply = () => {
     clearOverrides();
-    if (theme && typeof theme === "object") {
+    // Boot merges persisted user overrides OVER the agent default; switch/reset replaces.
+    const blob = resolveThemeToPersist(theme, currentThemeBlob(), { preservePersisted });
+    if (blob) {
       try {
-        localStorage.setItem(PL_THEME_KEY, JSON.stringify(theme));
+        localStorage.setItem(PL_THEME_KEY, JSON.stringify(blob));
+        localStorage.setItem(PL_THEME_OWNER_KEY, currentSlug()); // stamp the owning agent
       } catch {
         /* ignore */
       }
@@ -37,6 +56,7 @@ export function applyAgentTheme(theme: unknown, animate = true) {
     } else {
       try {
         localStorage.removeItem(PL_THEME_KEY);
+        localStorage.removeItem(PL_THEME_OWNER_KEY);
       } catch {
         /* ignore */
       }
@@ -167,5 +187,22 @@ export function currentThemeBlob(): unknown {
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
+  }
+}
+
+/** Does the persisted `pl-theme` blob belong to the currently-focused agent? Because
+ *  `pl-theme` is a single GLOBAL key shared across every same-origin agent window, another
+ *  agent's saved theme (written by a different window's switch/boot) can be sitting in it.
+ *  Only when it belongs to THIS agent is it safe to MERGE the persisted working copy over the
+ *  incoming server default on boot (#1762) — otherwise the merge bleeds the wrong agent's
+ *  tokens over this agent's saved look, breaking the ADR 0042 boot contract. The DS ThemePanel
+ *  writes `pl-theme` on live edits without touching the owner stamp, but those edits only ever
+ *  target the focused agent, so the last applyAgentTheme stamp stays correct until a different
+ *  agent's window overwrites the shared key. */
+export function persistedThemeIsForCurrentAgent(): boolean {
+  try {
+    return localStorage.getItem(PL_THEME_OWNER_KEY) === currentSlug();
+  } catch {
+    return false;
   }
 }
