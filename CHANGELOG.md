@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so existing goals are unaffected. Plumbed through `POST /api/goals` and the operator/programmatic
   set-paths (`set_goal_operator` / `set_goal_safe`); TS types updated for a follow-up
   goal-creation form. `stop_when` v1 is prompt-injected (the agent self-parks via `abandon_goal`).
+- **Fleet members can autostart on boot** (ADR 0072 slice). A container recreate or host
+  restart kills the hub's detached member processes, but `fleet.json` in the volume keeps
+  their now-dead records — so a declared crew stayed down until someone re-activated each
+  by hand. A new **`fleet.autostart`** roster (member ids or display names; env fallback
+  `PROTOAGENT_FLEET_AUTOSTART`, comma-separated) is (re)started by the hub on boot, right
+  after the version reconcile. Idempotent (an already-running member is skipped), best-effort
+  (a missing workspace or a boot-time spawn failure is logged and skipped, never blocking
+  boot or the rest of the roster), and hub-only (a member's own scoped config carries no
+  roster, so it no-ops inside a member). Surfaced in Settings ▸ Host as "Autostart members".
 
 ## [0.90.0] - 2026-07-04
 

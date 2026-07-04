@@ -1,11 +1,21 @@
 # 0072 — Fleet seed: declare a team in config (team-via-config)
 
-- Status: Proposed
+- Status: Proposed (partially implemented — see below)
 - Date: 2026-07-04
 - Builds on: ADR 0025 (unified delegate registry), 0040 (plugin bundles), 0041
   (workspaces & tiered stores), 0042 (fleet supervisor & unified console).
 - Related: #1778 (hub→member delegation timeout — orthogonal, but a team is only
   as useful as its delegation).
+
+> **Implemented slice — member autostart.** The first, smallest piece of this ADR
+> shipped ahead of the full seed manifest: a `fleet.autostart` roster (member ids/names;
+> env `PROTOAGENT_FLEET_AUTOSTART`) that the hub (re)starts on boot
+> (`graph/fleet/supervisor.start_autostart_members`, wired in `server.__init__`). It
+> reconciles *existing* members (created any way — console, `POST /api/fleet`, or a future
+> seed manifest) against a declared "keep these up" list, so a container recreate no longer
+> drops the crew. The full manifest below (archetype cloning + delegate auto-derivation +
+> commons) is still pending; when it lands, `members[].autostart` folds into this same
+> boot hook rather than adding a second mechanism.
 
 ## Context
 

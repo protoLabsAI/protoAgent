@@ -600,6 +600,10 @@ def _main():
             from graph.fleet import supervisor as _sup
 
             await asyncio.to_thread(_sup.reconcile_on_boot)
+            # Autostart roster (ADR 0072 slice): bring declared members back up after a
+            # container recreate / host restart killed their detached processes. Off the
+            # loop (spawns + per-member boot-watch), best-effort — never blocks hub boot.
+            await asyncio.to_thread(_sup.start_autostart_members)
         except Exception:
             log.exception("[fleet] boot version reconcile failed")
 

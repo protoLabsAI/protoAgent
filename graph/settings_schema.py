@@ -791,6 +791,19 @@ FIELDS: list[Field] = [
         scope="host",
     ),
     Field(
+        "fleet.autostart",
+        "fleet_autostart",
+        "Autostart members",
+        "string_list",
+        "Keep-warm",
+        "Fleet members (by id or display name) the hub (re)starts on boot — so a container "
+        "recreate or host restart brings your declared crew back up automatically instead of "
+        "leaving them down until re-activated by hand. One per line. Env fallback: "
+        "PROTOAGENT_FLEET_AUTOSTART (comma-separated).",
+        restart=True,
+        scope="host",
+    ),
+    Field(
         "developer.channel",
         "developer_channel",
         "Developer channel",

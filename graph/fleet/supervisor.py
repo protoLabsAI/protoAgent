@@ -721,6 +721,62 @@ def reconcile_on_boot() -> str:
     return previous
 
 
+def autostart_members() -> list[str]:
+    """The configured ``fleet.autostart`` roster — member ids or display names to keep
+    (re)started at hub boot. Live config first (folds in the ``PROTOAGENT_FLEET_AUTOSTART``
+    comma-separated env fallback, file > env > default), else the env var directly when no
+    config is loaded. Accepts a list or a comma-separated string; blanks are dropped."""
+    raw: object = None
+    cfg = _live_config()
+    if cfg is not None:
+        raw = getattr(cfg, "fleet_autostart", None)
+    if raw is None:
+        raw = os.environ.get("PROTOAGENT_FLEET_AUTOSTART", "")
+    items = raw.split(",") if isinstance(raw, str) else raw
+    try:
+        return [str(x).strip() for x in items if str(x).strip()]
+    except TypeError:  # a non-iterable in config — treat as empty rather than raise at boot
+        return []
+
+
+def start_autostart_members() -> list[str]:
+    """(Re)start every configured autostart member that isn't already alive — the
+    hub-boot half of ADR 0072's ``autostart``.
+
+    A container recreate or host restart kills the detached member processes (fresh pid
+    namespace), but ``fleet.json`` in the volume keeps their now-dead records; without
+    this the declared crew stays down until someone re-activates each by hand. Idempotent:
+    an already-running member is skipped (never double-spawned).
+
+    Hub-only by construction, like :func:`reconcile_on_boot`: a member runs
+    ``PROTOAGENT_INSTANCE``-scoped, so its own config carries no autostart roster and this
+    no-ops inside a member. Best-effort per member — a missing workspace or a boot-time
+    spawn failure is logged and skipped, never blocking the hub or the rest of the roster.
+    Members are started sequentially (each ``start`` briefly boot-watches the child); call
+    off the event loop (the boot hook does via ``asyncio.to_thread``).
+    """
+    roster = autostart_members()
+    if not roster:
+        return []
+    started: list[str] = []
+    for ident in roster:
+        try:
+            if is_running(ident):
+                continue
+            if manager._find(manager._safe(ident)) is None:
+                log.warning("[fleet] autostart: no workspace %r — skipping (create it first)", ident)
+                continue
+            start(ident)
+            started.append(ident)
+        except FleetError as exc:
+            log.error("[fleet] autostart: %r failed to start: %s", ident, exc)
+        except Exception:  # noqa: BLE001 — autostart must never block hub boot
+            log.exception("[fleet] autostart: unexpected error starting %r", ident)
+    if started:
+        log.info("[fleet] autostart: (re)started %d member(s): %s", len(started), ", ".join(started))
+    return started
+
+
 def version_skew_warning() -> str | None:
     """A live warning when running LOCAL members were spawned by a different app
     version than this process runs.

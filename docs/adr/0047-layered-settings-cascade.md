@@ -442,8 +442,9 @@ throughout:
 
 **Status — all three slices SHIPPED.** Slices 1–2 landed with the settings-IA fold
 (PR #925). Slice 3 (this) promotes the box-runtime knobs `network.bind`,
-`fleet.port_base`, `fleet.discovery.port_min/port_max/mdns`, and
-`fleet.warm.max/grace_seconds` into `FIELDS` (`scope="host"`, section "Fleet" →
+`fleet.port_base`, `fleet.discovery.port_min/port_max/mdns`,
+`fleet.warm.max/grace_seconds`, and `fleet.autostart` (the ADR 0072 boot-autostart
+roster, added later) into `FIELDS` (`scope="host"`, section "Fleet" →
 category System, so they surface in Settings ▸ Host / App ▸ Host config). The
 env-fallback bridge lives in `from_dict` as `section.get(key, _env_default(ENV, default))`,
 fixing **Open decision #2 to file > env > default** (operator, 2026-06-11): the file/UI
