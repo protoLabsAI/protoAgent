@@ -33,6 +33,7 @@ import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
+import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -126,21 +127,12 @@ export function ChatSurface({
     chatStore.deleteSession(id);
   }
 
-  // Quick-delete: Shift+click a tab's ✕ → delete with NO confirm dialog and NO harvest.
-  // While Shift is held the ✕ shows as a red trashcan (the `--del` class → CSS) to signal it.
-  const [shiftDel, setShiftDel] = useState(false);
-  useEffect(() => {
-    const sync = (e: KeyboardEvent) => setShiftDel(e.shiftKey);
-    const clear = () => setShiftDel(false);
-    window.addEventListener("keydown", sync);
-    window.addEventListener("keyup", sync);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("keydown", sync);
-      window.removeEventListener("keyup", sync);
-      window.removeEventListener("blur", clear);
-    };
-  }, []);
+  // Tab-strip Shift cues. While Shift is held the DS TabBar signals both Shift+click gestures:
+  // the "+" becomes the incognito EyeOff (Shift+click → new incognito chat, #1697/#1744) and the
+  // hovered ✕ becomes a red trashcan (Shift+click → quick-delete, no confirm/harvest, #1373).
+  // One "is Shift held" signal drives both, via the `--incognito`/`--del` wrapper classes → CSS.
+  const [shiftHeld, setShiftHeld] = useState(false);
+  useEffect(() => trackShiftHeld(setShiftHeld), []);
   // The DS TabBar's onClose always opens the confirm dialog, so intercept the close-button
   // click in the CAPTURE phase (before the DS button's own onClick) when Shift is down and
   // delete directly. Maps the clicked ✕ to its session by sibling index (DOM = sessions order).
@@ -150,7 +142,7 @@ export function ChatSurface({
     // tab context menu's "New incognito chat" (same createSession({incognito:true})
     // semantics). Intercepted in the capture phase so the DS button's own onClick (the
     // plain add) never fires; a plain click is untouched.
-    if ((e.target as HTMLElement).closest(".pl-tabbar__add")) {
+    if (isIncognitoAddClick(e.target, e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
       chatStore.createSession({ incognito: true });
@@ -175,7 +167,7 @@ export function ChatSurface({
   // stops the synthetic click (and thus the DS onAdd) from ever firing.
   function onTabBarKeyDownCapture(e: ReactKeyboardEvent) {
     if (!e.shiftKey || (e.key !== "Enter" && e.key !== " ")) return;
-    if (!(e.target as HTMLElement).closest(".pl-tabbar__add")) return;
+    if (!(e.target as HTMLElement).closest(ADD_SELECTOR)) return;
     e.preventDefault();
     e.stopPropagation();
     if (e.repeat) return; // held key auto-repeats keydown — only the first press creates a session
@@ -219,7 +211,7 @@ export function ChatSurface({
           (container query). The status dot rides the `icon` slot — wide-strip only:
           the collapsed <option> can't host markup, matching the old behavior. */}
       <div
-        className={`chat-tabbar-wrap${shiftDel ? " chat-tabbar-wrap--del" : ""}`}
+        className={`chat-tabbar-wrap${shiftHeld ? " chat-tabbar-wrap--del chat-tabbar-wrap--incognito" : ""}`}
         onContextMenu={onTabBarBackgroundContextMenu}
         onClickCapture={onTabBarClickCapture}
         onKeyDownCapture={onTabBarKeyDownCapture}
