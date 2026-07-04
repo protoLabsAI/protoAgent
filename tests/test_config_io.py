@@ -351,6 +351,94 @@ def test_soul_revision_empty_when_no_persona(monkeypatch, tmp_path: Path) -> Non
     assert config_io.soul_revision() == ""
 
 
+# ── ensure_live_soul (persona seed / placeholder heal) ───────────────────────
+
+# A minimal stand-in for the shipped starter SOUL — its whole job is to be
+# replaced, so the marker is the signal that a live SOUL was never authored.
+_PLACEHOLDER = "# Soul\n\n**Replace this file.** Starter persona doc.\n"
+
+
+def test_ensure_live_soul_seeds_when_absent(monkeypatch, tmp_path: Path) -> None:
+    """No live SOUL → seed the baked persona so it's present + console-editable."""
+    from graph import config_io
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    source = tmp_path / "SOUL-source.md"
+    source.write_text("I am Jon, the GTM strategist.", encoding="utf-8")
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: source)
+
+    assert config_io.ensure_live_soul() is True
+    assert (home / "config" / "SOUL.md").read_text(encoding="utf-8") == "I am Jon, the GTM strategist."
+
+
+def test_ensure_live_soul_heals_placeholder(monkeypatch, tmp_path: Path) -> None:
+    """A live SOUL still carrying the starter placeholder is un-authored: replace
+    it with the baked persona (the bug — a placeholder shadowing a baked soul)."""
+    from graph import config_io
+
+    home = tmp_path / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "config" / "SOUL.md").write_text(_PLACEHOLDER, encoding="utf-8")
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    source = tmp_path / "SOUL-source.md"
+    source.write_text("real persona", encoding="utf-8")
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: source)
+
+    assert config_io.ensure_live_soul() is True
+    assert (home / "config" / "SOUL.md").read_text(encoding="utf-8") == "real persona"
+
+
+def test_ensure_live_soul_does_not_clobber_authored(monkeypatch, tmp_path: Path) -> None:
+    """A real (non-placeholder) live SOUL is never overwritten — seed-not-force."""
+    from graph import config_io
+
+    home = tmp_path / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "config" / "SOUL.md").write_text("operator-authored persona", encoding="utf-8")
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    source = tmp_path / "SOUL-source.md"
+    source.write_text("baked persona", encoding="utf-8")
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: source)
+
+    assert config_io.ensure_live_soul() is False
+    assert (home / "config" / "SOUL.md").read_text(encoding="utf-8") == "operator-authored persona"
+
+
+def test_ensure_live_soul_seeds_from_seed_soul_env(monkeypatch, tmp_path: Path) -> None:
+    """PROTOAGENT_SEED_SOUL (a baked persona-as-code file) wins over the bundle."""
+    from graph import config_io
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    bundle = tmp_path / "SOUL-source.md"
+    bundle.write_text("from bundle", encoding="utf-8")
+    seed = tmp_path / "my-persona.md"
+    seed.write_text("from seed env", encoding="utf-8")
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: bundle)
+    monkeypatch.setenv("PROTOAGENT_SEED_SOUL", str(seed))
+
+    assert config_io.ensure_live_soul() is True
+    assert (home / "config" / "SOUL.md").read_text(encoding="utf-8") == "from seed env"
+
+
+def test_ensure_live_soul_wont_seed_placeholder_over_placeholder(monkeypatch, tmp_path: Path) -> None:
+    """When the bundle itself is still the starter placeholder there's nothing real
+    to seed — leave the live placeholder untouched rather than rewrite it."""
+    from graph import config_io
+
+    home = tmp_path / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "config" / "SOUL.md").write_text(_PLACEHOLDER, encoding="utf-8")
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    source = tmp_path / "SOUL-source.md"
+    source.write_text(_PLACEHOLDER, encoding="utf-8")
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: source)
+
+    assert config_io.ensure_live_soul() is False
+    assert (home / "config" / "SOUL.md").read_text(encoding="utf-8") == _PLACEHOLDER
+
+
 # ── Gateway model listing ────────────────────────────────────────────────────
 
 

@@ -77,6 +77,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     from graph.config_io import (
         config_yaml_path,
         ensure_live_config,
+        ensure_live_soul,
         is_setup_complete,
         mark_setup_complete,
         validate_for_headless,
@@ -101,6 +102,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # config_yaml_path() resolves to <instance_root>/config/langgraph-config.yaml
     # (env-driven via PROTOAGENT_HOME / PROTOAGENT_INSTANCE), so load through it.
     ensure_live_config()
+    # Seed the live SOUL.md the same way (seed-not-force) — and heal a lingering
+    # starter placeholder so a persona baked into the bundle actually takes effect
+    # instead of being shadowed forever by "Replace this file". No-op once authored.
+    ensure_live_soul()
     STATE.graph_config = LangGraphConfig.from_yaml(config_yaml_path())
     # Fork tool denylist (config ``tools.disabled``) — applied before any
     # get_all_tools() call so dropped tools never reach the graph.

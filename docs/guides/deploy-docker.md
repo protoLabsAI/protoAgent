@@ -91,6 +91,28 @@ Console/settings edits write here and survive reboots + image rolls.
 
 **4. Keep secrets in the env, not the seed.** The model key is read from `OPENAI_API_KEY`; the seed (and your image) carry no credentials. In the console the api-key field shows blank (`api_key_configured: false`) — that's expected, the key is env-sourced.
 
+## Baking a persona (SOUL.md)
+
+The persona has the **same** seed/live split as the config — and the same trap. The live `SOUL.md` sits under the config volume (`<instance_root>/config/SOUL.md`), and `read_soul` only falls back to the bundled `config/SOUL.md` when the live file is **absent**. So a placeholder materialised into the live path on an early boot (e.g. by a finished setup wizard) will **silently shadow** any persona you bake into the image later — the agent runs "Replace this file" forever, even after you `COPY` a real `SOUL.md` into the bundle.
+
+`ensure_live_soul` closes that gap on boot, seed-not-force like the config:
+
+- **Absent** live SOUL → seed it (so it's present and console-editable).
+- **Still the shipped starter placeholder** → heal it — replace with your baked persona.
+- **A real, authored SOUL** → never touched.
+
+Two ways to bake the persona, pick one:
+
+```dockerfile
+# a) Overwrite the bundled seed the agent falls back to:
+COPY SOUL.md /opt/protoagent/config/SOUL.md
+# b) Or point at a persona-as-code seed on a plain path (wins over the bundle):
+COPY persona.seed.md /opt/agent/seed/SOUL.md
+ENV PROTOAGENT_SEED_SOUL=/opt/agent/seed/SOUL.md
+```
+
+To **repair a running instance** whose live SOUL is already a stale placeholder without a redeploy, write the live file directly: `POST /api/config {"soul": "<persona text>"}` (writes the live `SOUL.md` and hot-reloads the graph, no restart).
+
 ## Binding & auth
 
 protoAgent refuses to bind `0.0.0.0` with an **open** operator API (`/api/*`, `/v1/*` include plugin-install + config rewrite). Pick one:
@@ -174,6 +196,7 @@ control (Cloudflare Access, an ngrok OAuth policy, or a fronting auth proxy) —
 ## Reference
 
 - `PROTOAGENT_SEED_CONFIG` — file to seed the live config from on first boot (config-as-code).
+- `PROTOAGENT_SEED_SOUL` — file to seed the live `SOUL.md` persona from (persona-as-code); also heals a lingering starter placeholder. Falls back to the bundled `config/SOUL.md`.
 - `PROTOAGENT_CONFIG_DIR` — where the live config + setup marker live (default `/opt/protoagent/config`).
 - `PROTOAGENT_HEADLESS_SETUP` — validate the seed + auto-complete setup (no wizard).
 - `PROTOAGENT_UI` — `console` (default) serves the operator console at `/app`.
