@@ -41,6 +41,7 @@ _COLUMNS = (
     "tool_calls",
     "created_at",
     "ended_at",
+    "soul_rev",  # short hash of the persona (SOUL.md) live for this turn (#1691)
 )
 
 
@@ -79,17 +80,19 @@ class TelemetryStore:
                     llm_calls                   INTEGER DEFAULT 0,
                     tool_calls                  INTEGER DEFAULT 0,
                     created_at                  TEXT,
-                    ended_at                    TEXT
+                    ended_at                    TEXT,
+                    soul_rev                    TEXT
                 )
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_ended ON turns(ended_at)")
-            # Lightweight migration for stores created before `models` existed
-            # (ADR 0006 Slice 4b). ALTER is idempotent-guarded by the try/except.
-            try:
-                db.execute("ALTER TABLE turns ADD COLUMN models TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already present
+            # Lightweight migrations for stores created before a column existed. Each ALTER is
+            # idempotent-guarded by the try/except (fires once on an older DB, no-ops after).
+            for _col, _type in (("models", "TEXT"), ("soul_rev", "TEXT")):  # `models`: ADR 0006 4b; `soul_rev`: #1691
+                try:
+                    db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
+                except sqlite3.OperationalError:
+                    pass  # column already present
             db.commit()
         finally:
             db.close()

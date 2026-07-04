@@ -1198,7 +1198,9 @@ async def _chat_langgraph_stream_impl(
 
     from graph.middleware.request_context import request_metadata_scope
 
-    trace_meta: dict = {"message_preview": message[:100]}
+    from graph.config_io import soul_revision
+
+    trace_meta: dict = {"message_preview": message[:100], "soul_rev": soul_revision()}
     if caller_trace:
         if caller_trace.get("traceId"):
             trace_meta["caller_trace_id"] = caller_trace["traceId"]
@@ -1559,10 +1561,12 @@ async def _chat_langgraph_impl(
     _state_extra = {"model": model} if (model or "").strip() else {}
     _state_extra["incognito"] = bool(incognito)
 
+    from graph.config_io import soul_revision
+
     async with tracing.trace_session(
         session_id=session_id,
         name="chat",
-        metadata={"message_preview": message[:100]},
+        metadata={"message_preview": message[:100], "soul_rev": soul_revision()},
     ):
         try:
             # Goal control messages short-circuit (set / status / clear).

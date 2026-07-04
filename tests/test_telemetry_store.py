@@ -51,6 +51,34 @@ def test_record_upserts_by_task_id(store):
     assert recent[0]["cost_usd"] == 0.05
 
 
+def test_record_persists_soul_rev(store):
+    # #1691: the persona (SOUL.md) revision live for the turn round-trips.
+    store.record(_row("t1", soul_rev="a1b2c3d4"))
+    assert store.recent()[0]["soul_rev"] == "a1b2c3d4"
+
+
+def test_soul_rev_migrates_onto_an_older_db(tmp_path):
+    # A store created before soul_rev existed gets the column via the guarded ALTER on open,
+    # so a soul_rev row then round-trips (same pattern as the earlier `models` migration).
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    cols = (
+        "task_id TEXT PRIMARY KEY, session_id TEXT, state TEXT, success INTEGER, model TEXT, "
+        "models TEXT, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, "
+        "cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, cost_usd REAL, "
+        "duration_ms INTEGER, llm_calls INTEGER, tool_calls INTEGER, created_at TEXT, ended_at TEXT"
+    )
+    db = sqlite3.connect(path)
+    db.execute(f"CREATE TABLE turns ({cols})")
+    db.commit()
+    db.close()
+
+    store = TelemetryStore(path)  # _init_db runs the guarded ALTER
+    store.record(_row("t1", soul_rev="deadbeef"))
+    assert store.recent()[0]["soul_rev"] == "deadbeef"
+
+
 def test_record_noop_without_task_id(store):
     store.record({"cost_usd": 1.0})  # no task_id
     assert store.recent() == []
