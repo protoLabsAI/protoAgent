@@ -109,18 +109,83 @@ class _StubModule(types.ModuleType):
         return _raise_unpatched(f"{self.__name__}.{item}")
 
 
+# Some host seams a plugin doesn't just IMPORT but CALLS at register() time — it constructs a
+# ``SubagentConfig`` and builds knob tools while wiring the registry. Those can't be the
+# raise-when-called placeholder (that turns a scaffolded plugin's own smoke test red before it
+# writes a line — #1764); they need permissive, RECORD-ONLY stand-ins that run host-free while
+# keeping the contribution assertable.
+
+
+class _StubSubagentConfig:
+    """Stand-in for ``graph.subagents.config.SubagentConfig`` — stores every kwarg as an
+    attribute, so ``registry.register_subagent(SubagentConfig(name=..., ...))`` runs with no
+    host and the captured config stays assertable (``reg.subagents[0].name``)."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class _StubKnobs:
+    """Chainable no-op stand-in for ``graph.knobs.Knobs`` (re-exported from ``graph.sdk``):
+    ``define``/``preset`` record the declaration and return ``self`` so a plugin's fluent knob
+    setup runs host-free; the reads mirror the real surface so an engine that reads a default
+    back at register() time still works (and the record stays assertable)."""
+
+    def __init__(self, *_a, **_k):
+        self.defined: dict = {}
+        self.defined_presets: dict = {}
+
+    def define(self, name=None, default=None, **_k) -> "_StubKnobs":
+        if name is not None:
+            self.defined[name] = default
+        return self
+
+    def preset(self, name=None, overrides=None, **_k) -> "_StubKnobs":
+        if name is not None:
+            self.defined_presets[name] = dict(overrides or {})
+        return self
+
+    def get(self, name):
+        return self.defined.get(name)
+
+    def values(self) -> dict:
+        return dict(self.defined)
+
+    def presets(self) -> dict:
+        return dict(self.defined_presets)
+
+
+def _make_knob_tools(
+    knobs=None, *, prefix: str = "knobs", show: bool = True, tune: bool = True, presets: bool = True, **_k
+) -> list:
+    """Stand-in for ``graph.knobs.make_knob_tools`` — returns one harmless, record-only stub
+    tool per enabled control, named like the real ``<prefix>_knobs`` / ``_tune`` / ``_preset``,
+    so a plugin can ``registry.register_tools(make_knob_tools(...))`` with no host and the tool
+    contribution stays assertable (instead of the old raise-when-called placeholder)."""
+    made: list = []
+    for enabled, suffix in ((show, "knobs"), (tune, "tune"), (presets, "preset")):
+        if enabled:
+            made.append(types.SimpleNamespace(name=f"{prefix}_{suffix}"))
+    return made
+
+
 # Default host surface, derived from what real plugins import (spacetraders, project_board,
 # notes, …). `extra` lets a plugin add its own; anything already importable is left alone.
 def _default_stubs() -> dict:
     return {
         "graph": {},
-        "graph.sdk": {},  # run_subagent / subagent_types / config / complete
+        # Knobs/make_knob_tools are CALLED at register() time, so they're real stand-ins (not
+        # raise-when-called); the rest (run_subagent / subagent_types / config / complete) stay
+        # raise-unpatched placeholders — patch them in a test that exercises the model seam.
+        "graph.sdk": {"Knobs": _StubKnobs, "make_knob_tools": _make_knob_tools},
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
         "graph.config_io": {"secrets_yaml_path": lambda: Path("config/secrets.yaml")},
         "graph.goals": {},
         "graph.goals.types": {
             "VerifyResult": type("VerifyResult", (), {"__init__": lambda self, **kw: self.__dict__.update(kw)})
         },
+        "graph.subagents": {},
+        "graph.subagents.config": {"SubagentConfig": _StubSubagentConfig},
         "knowledge": {},
         "knowledge.store": {"KnowledgeStore": type("KnowledgeStore", (), {})},
     }

@@ -208,3 +208,67 @@ def test_install_host_stubs_is_idempotent():
     first = testkit.install_host_stubs(extra={"phantom_host": {}, "phantom_host.sdk": {}})
     second = testkit.install_host_stubs(extra={"phantom_host": {}, "phantom_host.sdk": {}})
     assert "phantom_host.sdk" in first and second == []  # nothing re-installed the 2nd time
+
+
+# ── subagent-config + knobs stubs (#1764) ────────────────────────────────────────────
+# A plugin's register() doesn't just IMPORT host seams — it CONSTRUCTS a SubagentConfig and
+# builds knob tools inline. Before #1764 `graph.subagents.config` was unstubbed
+# (ModuleNotFoundError) and `graph.sdk` handed back a raise-when-called Knobs, so a scaffolded
+# plugin that registered a subagent or used Knobs failed its OWN host-free smoke test.
+
+
+def test_default_stubs_expose_a_permissive_subagent_config():
+    # #1764: graph.subagents.config.SubagentConfig must be a record-only stand-in that stores
+    # its kwargs, so register_subagent(SubagentConfig(...)) runs host-free and stays assertable.
+    specs = testkit._default_stubs()
+    assert "graph.subagents.config" in specs and "graph.subagents" in specs  # parent pkg too
+    SubagentConfig = specs["graph.subagents.config"]["SubagentConfig"]
+    sc = SubagentConfig(name="architect", description="d", system_prompt="p", tools=["read_file"])
+    assert sc.name == "architect"
+    assert sc.tools == ["read_file"]
+
+
+def test_default_stubs_expose_chainable_knobs_and_a_tool_list():
+    # #1764: graph.sdk Knobs/make_knob_tools are called at register() time, so they must be
+    # real stand-ins (chainable no-op + list), not the raise-when-called placeholder.
+    specs = testkit._default_stubs()
+    Knobs = specs["graph.sdk"]["Knobs"]
+    make_knob_tools = specs["graph.sdk"]["make_knob_tools"]
+    knobs = Knobs()
+    assert knobs.define("depth", 3, lo=1, hi=5).preset("deep", {"depth": 5}) is knobs  # chainable
+    assert knobs.get("depth") == 3  # recorded default reads back
+    tools = make_knob_tools(knobs, prefix="demo")
+    assert isinstance(tools, list) and [t.name for t in tools] == ["demo_knobs", "demo_tune", "demo_preset"]
+
+
+def test_register_with_subagent_and_knobs_runs_against_the_stubs(monkeypatch):
+    # The end-to-end shape #1764 fixes: a register() that registers a subagent (SubagentConfig)
+    # AND wires knob tools (Knobs/make_knob_tools). In-repo the real graph host is importable, so
+    # mask just the two leaf modules the register() imports with the STUBS — exercising exactly
+    # the standalone code path a scaffolded plugin runs. monkeypatch restores sys.modules after.
+    specs = testkit._default_stubs()
+    for name in ("graph.sdk", "graph.subagents.config"):
+        monkeypatch.setitem(sys.modules, name, testkit._StubModule(name, specs[name]))
+
+    def register(registry):
+        from graph.sdk import Knobs, make_knob_tools
+        from graph.subagents.config import SubagentConfig
+
+        knobs = Knobs().define("depth", 3, lo=1, hi=5).preset("deep", {"depth": 5})
+        registry.register_tools(make_knob_tools(knobs, prefix="demo"))
+        registry.register_subagent(
+            SubagentConfig(
+                name="architect",
+                description="Designs the plugin.",
+                system_prompt="You are the architect.",
+                tools=["read_file"],
+            )
+        )
+
+    reg = testkit.FakeRegistry()
+    register(reg)  # must not raise — the whole point of #1764
+
+    assert len(reg.subagents) == 1  # the subagent contribution is recorded + assertable
+    assert reg.subagents[0].name == "architect"
+    assert reg.subagents[0].tools == ["read_file"]
+    assert [t.name for t in reg.tools] == ["demo_knobs", "demo_tune", "demo_preset"]  # knob tools wired
