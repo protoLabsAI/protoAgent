@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API: `GET /api/config/soul/history` (list — id, timestamp, size, preview), `GET
   /api/config/soul/history/{id}` (full text), and `POST /api/config/soul/history/{id}/restore`
   to roll back. Restore re-saves through the normal save+reload path, which snapshots the
-  *current* persona first — so rolling back is itself reversible. (Console version-history UI
-  is a follow-up.)
+  *current* persona first — so rolling back is itself reversible. A **Version history** section
+  under **Agent → Identity** lists every snapshot (with a *current* badge on the live one),
+  expands a row to show its full text, and rolls the persona back in one click behind an inline
+  confirm — the editor re-seeds to the restored persona unless you have an unsaved draft.
 - **Telemetry is tagged with the active persona revision** (#1691). Each per-turn telemetry
   row now carries `soul_rev` — a short hash of the `SOUL.md` persona that was live for that
   turn — so a run can be correlated with a specific soul-history version (which persona was
