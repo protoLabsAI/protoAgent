@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.90.0] - 2026-07-04
+
 ### Added
 - **Background fan-outs report back in ONE briefing, not N** (#1766). When the agent
   fans out several background subagents in a single turn (`task_batch(run_in_background=True)`,
