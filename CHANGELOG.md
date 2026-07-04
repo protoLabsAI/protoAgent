@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Quick-chat with any fleet agent from the command palette** (#1733). ⌘K now has an
+  **Agents** section listing every other reachable agent in your fleet (with its reachability
+  inline); pick one and you land straight in that agent's console. Recently-opened agents sort
+  to the top, and a stopped/unreachable agent is shown disabled. Works from the in-app palette
+  and the always-on-top desktop launcher alike, so it's a true from-anywhere agent switcher.
 - **SOUL.md keeps a version history — never lose a persona iteration** (#1691). Every time
   the agent's persona is saved, the **outgoing** `SOUL.md` is archived to a per-instance
   `config/soul-history/` directory (deduped against the last snapshot, capped at the most

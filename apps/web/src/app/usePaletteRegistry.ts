@@ -16,6 +16,10 @@ import { useUI } from "../state/uiStore";
 import type { View } from "../lib/viewRegistry";
 import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
+import { useQuery } from "@tanstack/react-query";
+import { agentHref, currentSlug } from "../lib/api";
+import { fleetQuery } from "../lib/queries";
+import { fleetPaletteEntries, markAgentOpened, readAgentRecency } from "./fleetPalette";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -74,7 +78,8 @@ export function openView(id: string) {
 export type NavIntent =
   | { kind: "view"; id: string }
   | { kind: "plugins"; tab: "local" | "market" }
-  | { kind: "global"; section?: string };
+  | { kind: "global"; section?: string }
+  | { kind: "agent"; slug: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -92,6 +97,13 @@ export function applyNavIntent(intent: NavIntent) {
       break;
     case "global":
       ui.openGlobalSettings(intent.section);
+      break;
+    case "agent":
+      // Switch the console to another fleet agent (slug-routed, ADR 0042) — a full navigation,
+      // since that agent's chat, threads, and API surface all key off the URL slug. This runs in
+      // a real console window (the launcher forwards the intent to the main window), so
+      // `window.location` targets the window the operator is actually looking at.
+      window.location.href = agentHref(intent.slug);
       break;
   }
 }
@@ -167,6 +179,11 @@ export function usePaletteRegistry(
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
 
+  // The live fleet roster (polled) → a "Quick-chat with any fleet agent" section (#1733). Works
+  // in both the console window and the desktop launcher (both sit under QueryClientProvider).
+  const { data: fleet } = useQuery(fleetQuery());
+  const agents = fleet?.agents ?? [];
+
   // Built-in surfaces (core + fork/ext) live behind `Open ▸`; plugin views are their own
   // root section. A `session` view (none today) would ride with the built-ins.
   const surfaceViews = views.filter((v) => v.kind !== "plugin");
@@ -176,6 +193,9 @@ export function usePaletteRegistry(
   // changes every render; the ids/urls don't).
   const navSig = views.map((v) => `${v.id} ${v.title}`).join("|");
   const inlineSig = inlineViews.map((v) => `${v.id} ${v.url} ${v.title}`).join("|");
+  // Re-register the fleet section only when the roster's identity/status/name actually changes
+  // (React Query's structural sharing keeps `agents` stable when the 3s poll returns equal data).
+  const fleetSig = agents.map((a) => `${a.host ? "host" : a.id}:${a.running}:${a.name}`).join("|");
 
   // Views the palette can morph into: inline plugin iframes, the chat view, and the
   // `Open ▸` submorph (a self-contained command list of the built-in surfaces, so the root
@@ -229,6 +249,25 @@ export function usePaletteRegistry(
           },
         ])
       : undefined;
+    // Fleet quick-chat (#1733): every OTHER agent, in the "Agents" group beneath "Chat with
+    // <this>". Picking one navigates to its slug-routed console via a serializable `agent`
+    // NavIntent (so it also works forwarded from the launcher window). A down agent is listed
+    // but disabled, and opening one records recency so it floats up next time.
+    const recency = readAgentRecency();
+    const fleetCommands: Command[] = fleetPaletteEntries(agents, currentSlug(), recency).map((e) => ({
+      id: e.id,
+      label: e.label,
+      hint: e.hint,
+      group: "Agents",
+      keywords: e.keywords,
+      disabled: e.disabled,
+      run: (c) => {
+        markAgentOpened(e.slug);
+        navigate({ kind: "agent", slug: e.slug });
+        c.close();
+      },
+    }));
+    const offFleet = fleetCommands.length ? registry.registerCommands(fleetCommands) : undefined;
     // Each plugin's views: inline ones morph IN PLACE (also in the launcher window); a
     // rail view navigates — routed through `navigate()` so the launcher hands it off to
     // the main window instead of mutating its own (shell-less) store.
@@ -264,11 +303,12 @@ export function usePaletteRegistry(
     const offCommands = registry.registerCommands([openCommand, ...registeredPaletteCommands().map(toDsCommand)]);
     return () => {
       offChat?.();
+      offFleet?.();
       offPlugins?.();
       offCommands();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, chat, registry]);
+  }, [navSig, inlineSig, fleetSig, chat, registry]);
 
   return registry;
 }
