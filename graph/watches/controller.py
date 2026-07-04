@@ -202,10 +202,23 @@ class WatchController:
         return await self.evaluate(watch_id)
 
     async def tick_all(self) -> int:
-        """Evaluate every active watch out-of-band (verifier-only, no agent turn). The server
-        runs this on a cadence. Returns how many reached a terminal state this tick."""
+        """Evaluate the DUE active watches out-of-band (verifier-only, no agent turn).
+
+        The server runs this on the global ``watch_interval`` cadence, but a watch's own
+        ``interval_s`` is a FLOOR: a watch is skipped on ticks where it isn't due yet, so a
+        slow watch (e.g. ``interval_s=1800``) isn't collapsed to the global tick. That keeps
+        ``stall_after``'s wall-clock meaning (``stall_after × interval_s``) intact instead of
+        firing it every few minutes (#1753). Watches with no explicit ``interval_s`` evaluate
+        every tick, as before. The event-driven ``evaluate``/``evaluate_now`` fast path a plugin
+        calls on state change bypasses this gate by design. Returns how many reached a terminal
+        state this tick."""
+        from time import time
+
+        now = time()
         finished = 0
         for watch in self.active_watches():
+            if not self._due(watch, now):
+                continue
             try:
                 status = await self.evaluate(watch.id)
             except Exception:  # noqa: BLE001 — one bad watch must not stop the tick
@@ -214,6 +227,20 @@ class WatchController:
             if status is not None:
                 finished += 1
         return finished
+
+    @staticmethod
+    def _due(watch: Watch, now: float) -> bool:
+        """Whether a watch is due for a CADENCE evaluation at ``now``. A watch with no explicit
+        ``interval_s`` (or a non-positive one) is always due — the global loop cadence is its
+        interval, unchanged behavior. An explicit ``interval_s`` is a floor since
+        ``last_checked``: skip until it elapses, so the per-watch cadence (and ``stall_after``'s
+        wall-clock span) is honored (#1753). A never-checked watch is due immediately."""
+        interval_s = watch.interval_s
+        if interval_s is None or interval_s <= 0:
+            return True
+        if watch.last_checked is None:
+            return True
+        return (now - watch.last_checked) >= interval_s
 
     async def _finish(self, watch: Watch, status: str, reason: str, evidence: str = "") -> str:
         from time import time

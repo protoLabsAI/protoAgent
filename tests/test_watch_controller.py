@@ -272,3 +272,71 @@ async def test_evaluate_passes_watch_invoker_to_plugin_verifier(tmp_path):
     assert second.kind == "watch" and second.id == w2.id and second.id != w1.id
     assert second.session_id == ""  # no target session
     assert second.interval_s == 30.0  # config-default cadence (the server tick fallback)
+
+
+# --- #1753: per-watch interval_s gates the cadence tick -----------------------
+
+
+def test_due_gate_semantics():
+    # _due decides whether a cadence tick should evaluate a watch. An explicit interval_s is a
+    # floor since last_checked; a default-cadence (None) or non-positive interval is always due.
+    from graph.watches.controller import WatchController
+    from graph.watches.types import Watch
+
+    now = 10_000.0
+
+    def w(**kw):
+        return Watch(id="w", condition="c", **kw)
+
+    assert WatchController._due(w(), now) is True  # default cadence → every tick
+    assert WatchController._due(w(interval_s=600), now) is True  # never checked → due now
+    assert WatchController._due(w(interval_s=600, last_checked=now - 60), now) is False  # floor not elapsed
+    assert WatchController._due(w(interval_s=600, last_checked=now - 601), now) is True  # floor elapsed
+    assert WatchController._due(w(interval_s=0, last_checked=now), now) is True  # non-positive → always due
+
+
+@pytest.mark.asyncio
+async def test_tick_all_skips_watch_not_yet_due(tmp_path, monkeypatch):
+    # #1753: a watch with interval_s=600 checked a minute ago must be SKIPPED by the global
+    # tick — not re-evaluated every cadence (which collapsed stall_after to ~minutes).
+    from time import time
+
+    c = _ctrl(tmp_path)
+    _ok, _m, wch = c.create(condition="slow", verifier={"type": "plugin", "check": "p:c"}, interval_s=600)
+    wch.last_checked = time() - 60
+    c.store.set(wch)
+
+    called = []
+
+    async def _spy(watch_id):
+        called.append(watch_id)
+        return None
+
+    monkeypatch.setattr(c, "evaluate", _spy)
+    assert await c.tick_all() == 0
+    assert called == []  # gated out — not due
+
+
+@pytest.mark.asyncio
+async def test_tick_all_evaluates_due_never_checked_and_default(tmp_path, monkeypatch):
+    # A watch past its floor, a never-checked one, and a default-cadence one are all due.
+    from time import time
+
+    c = _ctrl(tmp_path)
+    _ok, _m, due = c.create(
+        condition="due", watch_id="due", verifier={"type": "plugin", "check": "p:c"}, interval_s=600
+    )
+    due.last_checked = time() - 700
+    c.store.set(due)
+    c.create(condition="fresh", watch_id="fresh", verifier={"type": "plugin", "check": "p:c"}, interval_s=600)
+    c.create(condition="default", watch_id="default", verifier={"type": "plugin", "check": "p:c"})  # interval None
+
+    seen = []
+
+    async def _spy(watch_id):
+        seen.append(watch_id)
+        return None
+
+    monkeypatch.setattr(c, "evaluate", _spy)
+    await c.tick_all()
+    assert set(seen) == {"due", "fresh", "default"}

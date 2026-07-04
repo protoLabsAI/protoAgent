@@ -75,6 +75,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collide.
 
 ### Fixed
+- **Watches honor their per-watch `interval_s` cadence** (#1753). `tick_all` evaluated
+  *every* active watch on the global `watch_interval`, so a watch created with
+  `interval_s: 1800` was actually polled every tick — collapsing `stall_after`'s
+  wall-clock meaning (`stall_after × interval_s`) to a few minutes and firing dozens of
+  spurious "stalled" reactions (each a full agent turn) overnight. The cadence tick now
+  **skips a watch until its own `interval_s` has elapsed since `last_checked`** (a floor);
+  watches with no explicit interval still evaluate every tick, and the event-driven
+  `evaluate()`/`evaluate_now()` fast path a plugin calls on state change is unaffected.
+- **Hot-reloading a plugin refreshes its goal/watch verifier + hook registries** (#1752).
+  `POST /api/plugins/{id}/update` (and any settings hot-reload) rebuilt the plugin bundle
+  but never pushed the rebuilt verifiers/hooks into the *live* registry the goal/watch
+  controllers consult — only full startup did. So a plugin update that shipped a **new**
+  watch verifier left it resolving as `unknown plugin verifier` (armed but blind) until a
+  full server restart. The reload commit now re-applies the registries like init does. As
+  a safety net, an unknown plugin verifier now logs a **one-shot WARNING** (deduped per
+  name, re-armed on the next registry change) instead of only being visible by polling
+  `/api/watches`.
 - **Plugin smoke tests can assert surface lifecycle wiring** (#1729). The testkit's
   `FakeRegistry.register_surface` kept only the surface *name* and discarded the
   `start`/`stop`/`reload` callables, so a plugin's surface lifecycle wiring (e.g.
