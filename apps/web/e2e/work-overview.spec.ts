@@ -151,9 +151,14 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await page.getByTestId("goal-new").click();
   const form = page.getByTestId("goal-form");
   await expect(form).toBeVisible();
-  const submit = form.getByRole("button", { name: "Submit" });
-  await expect(submit).toBeDisabled(); // gated on the required condition (first textbox)
+  // Two-step wizard (ADR 0073): step 1's "Next" is gated on the required condition (the first
+  // textbox); step 2 holds the optional contract, so its "Submit" is enabled straight away.
+  const next = form.getByRole("button", { name: "Next" });
+  await expect(next).toBeDisabled();
   await form.getByRole("textbox").first().fill("All tests pass twice");
+  await expect(next).toBeEnabled();
+  await next.click();
+  const submit = form.getByRole("button", { name: "Submit" });
   await expect(submit).toBeEnabled();
   await submit.click();
 
