@@ -281,7 +281,9 @@ registerSlashCommand({
 // row surfaces the `/goal new` affordance; picking it inserts `/goal ` to edit as before.
 registerSlashCommand({
   name: "goal",
-  description: "Set/manage this session's goal — /goal new opens a guided form",
+  // Prefix kept as the server /goal's "Set or check goals" so the /help card is unchanged
+  // (this client row shadows the server one in the deduped list) — plus the new affordance.
+  description: "Set or check goals — /goal new opens a guided form",
   usage: "/goal new · /goal <text> · /goal clear",
   run: (ctx) => {
     const arg = ctx.rest.trim().toLowerCase();
