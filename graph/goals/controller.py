@@ -30,6 +30,22 @@ log = logging.getLogger(__name__)
 CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 
 
+def _coerce_str_list(value) -> list[str]:
+    """Normalize a contract list field (``constraints``/``boundaries``) to ``list[str]``.
+
+    A bare string becomes a 1-element list; ``None``/empty → ``[]``; a list/tuple is
+    stringified element-wise (blank entries dropped); anything else → ``[]``. Keeps
+    the operator-set seam forgiving of a JSON body that sent a single string where a
+    list was expected (ADR 0073)."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return []
+
+
 @dataclass
 class Decision:
     action: str  # "continue" | "done"
@@ -132,11 +148,18 @@ class GoalController:
         verifier: dict,
         max_iterations: int | None = None,
         no_progress_limit: int | None = None,
+        *,
+        outcome: str = "",
+        constraints: list[str] | None = None,
+        boundaries: list[str] | None = None,
+        stop_when: str = "",
     ) -> tuple[bool, str]:
         """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
         Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
         programmatic set can never reach a shell or `eval` sink (ADR 0028 D3). The
-        operator `/goal` path keeps full access. Returns (ok, message)."""
+        operator `/goal` path keeps full access. The optional completion-contract
+        fields (ADR 0073) shape the continuation prompt only — the verifier still
+        decides DONE. Returns (ok, message)."""
         vtype = (verifier or {}).get("type")
         if vtype not in self.SAFE_PROGRAMMATIC_VERIFIERS:
             return (
@@ -154,6 +177,10 @@ class GoalController:
             verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress_limit,
+            outcome=outcome or "",
+            constraints=_coerce_str_list(constraints),
+            boundaries=_coerce_str_list(boundaries),
+            stop_when=stop_when or "",
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -165,13 +192,19 @@ class GoalController:
         verifier: dict,
         max_iterations: int | None = None,
         no_progress_limit: int | None = None,
+        *,
+        outcome: str = "",
+        constraints: list[str] | None = None,
+        boundaries: list[str] | None = None,
+        stop_when: str = "",
     ) -> tuple[bool, str]:
         """Set a goal from the TRUSTED OPERATOR surface — ``POST /api/goals``, gated to
         operator-tier by the ADR 0066 ``/api`` path ceiling. Unlike ``set_goal_safe``
         (agent/plugin/programmatic → ``plugin``-verifier only), this accepts ANY verifier
         type (command/test/ci/data included) because the caller is the authenticated
         operator — the same power the operator ``/goal`` chat path had before Phase 1.
-        Returns (ok, message)."""
+        The optional completion-contract fields (ADR 0073) shape the continuation prompt
+        only — the verifier still decides DONE. Returns (ok, message)."""
         from graph.goals.verifiers import VERIFIERS
 
         if not condition:
@@ -186,6 +219,10 @@ class GoalController:
             verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress_limit,
+            outcome=outcome or "",
+            constraints=_coerce_str_list(constraints),
+            boundaries=_coerce_str_list(boundaries),
+            stop_when=stop_when or "",
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -356,6 +393,72 @@ class GoalController:
         return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 
     def _continuation(self, state: GoalState, result) -> str:
+        # Re-state the completion contract every drive turn (ADR 0073) — mirrors
+        # Hermes' contract-directed continuation. It is directive ONLY: the DONE
+        # decision still comes from the verifier (see `evaluate`). A goal with no
+        # contract appends nothing, so its continuation prompt is byte-for-byte
+        # unchanged from before contracts existed (backward-compat).
+        base = self._continuation_base(state, result)
+        contract = self._contract_prompt(state)
+        return f"{base}\n\n{contract}" if contract else base
+
+    @staticmethod
+    def _verifier_summary(verifier: dict) -> str:
+        """Compact human summary of a verifier spec for the contract directive, e.g.
+        ``command: pytest -q``, ``ci PR #12``, ``plugin demo:probe``, ``llm judgment``."""
+        v = verifier or {}
+        vt = v.get("type", "llm")
+        if vt in ("command", "test"):
+            cmd = (v.get("command") or "").strip()
+            return f"{vt}: {cmd}" if cmd else vt
+        if vt == "ci":
+            if v.get("pr") is not None:
+                return f"ci PR #{v.get('pr')}"
+            if v.get("branch"):
+                return f"ci branch {v.get('branch')}"
+            return "ci"
+        if vt == "data":
+            return f"data check on {v.get('path')}" if v.get("path") else "data check"
+        if vt == "plugin":
+            return f"plugin {v.get('check')}" if v.get("check") else "plugin verifier"
+        if vt == "llm":
+            return "llm judgment"
+        return vt
+
+    def _contract_prompt(self, state: GoalState) -> str:
+        """Render the goal's completion contract (ADR 0073) into one compact directive
+        block for the continuation prompt. Only the non-empty fields appear; a goal with
+        no contract renders to ``""`` (so its continuation is unchanged). This is
+        directive text — the verifier, NOT this block, decides DONE."""
+        if not state.has_contract:
+            return ""
+        parts = [
+            f"Contract for this goal: it is DONE only when the verifier passes "
+            f"({self._verifier_summary(state.verifier)})."
+        ]
+        outcome = (state.outcome or "").strip()
+        if outcome:
+            parts.append(f"Required outcome: {outcome}.")
+        constraints = [c for c in state.constraints if str(c).strip()]
+        if constraints:
+            parts.append("Constraints (do NOT violate): " + "; ".join(constraints) + ".")
+        boundaries = [b for b in state.boundaries if str(b).strip()]
+        if boundaries:
+            parts.append("Stay within these boundaries: " + "; ".join(boundaries) + ".")
+        stop_when = (state.stop_when or "").strip()
+        if stop_when:
+            # follow-up (ADR 0073 D4): stop_when is prompt-injected in v1 — the agent
+            # self-parks via abandon_goal when it recognizes the condition. A future
+            # option is a `stop_when`-as-verifier auto-check that could park the drive
+            # loop DETERMINISTICALLY (reusing the verifier surface) when the stop
+            # condition is mechanically checkable.
+            parts.append(
+                f"If {stop_when}, STOP and ask the operator instead of continuing "
+                "(call the `abandon_goal` tool with that reason to park the goal)."
+            )
+        return " ".join(parts)
+
+    def _continuation_base(self, state: GoalState, result) -> str:
         if state.fresh_context:
             plan = self._store.read_plan(state.session_id) or "(no plan yet — create one)"
             evidence = (result.evidence or "").strip()

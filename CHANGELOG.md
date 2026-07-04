@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Goal completion contracts** (ADR 0073). A goal can now carry an optional, structured
+  *completion contract* — `outcome` (the single required end-state), `constraints` (invariants
+  the agent must not violate/regress), `boundaries` (files/dirs/systems in scope), and
+  `stop_when` (a condition under which the agent should pause and ask the operator). The
+  contract is re-stated in the drive-loop continuation prompt every turn (Hermes-Judgment-style
+  contract-directed continuation), but it is **directive only**: DONE is still decided by the
+  goal's real, deterministic verifier (ADR 0028) — never an LLM judge. All fields default-empty,
+  so existing goals are unaffected. Plumbed through `POST /api/goals` and the operator/programmatic
+  set-paths (`set_goal_operator` / `set_goal_safe`); TS types updated for a follow-up
+  goal-creation form. `stop_when` v1 is prompt-injected (the agent self-parks via `abandon_goal`).
+
 ## [0.90.0] - 2026-07-04
 
 ### Added

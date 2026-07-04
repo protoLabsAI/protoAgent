@@ -50,6 +50,63 @@ async def test_goals_list_disabled():
     assert await ch._operator_goals_list() == {"goals": [], "enabled": False}
 
 
+# --- goal completion contracts (ADR 0073) via POST /api/goals handler --------
+
+
+def _wire_goal_controller(monkeypatch, tmp_path):
+    import runtime.state as rs
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+
+    ctrl = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+    monkeypatch.setattr(rs.STATE, "goal_controller", ctrl, raising=False)
+    return ctrl
+
+
+async def test_goals_set_accepts_contract_and_coerces_string_list(monkeypatch, tmp_path):
+    """The operator goal-set handler accepts the ADR 0073 contract fields, coerces a
+    bare-string constraint to a 1-element list, and ignores unknown keys."""
+    ctrl = _wire_goal_controller(monkeypatch, tmp_path)
+    res = await ch._operator_goals_set(
+        {
+            "session_id": "s1",
+            "condition": "ship it",
+            "verifier": {"type": "command", "command": "pytest -q"},
+            "outcome": "suite green",
+            "constraints": "no new deps",  # bare string → 1-element list
+            "boundaries": ["graph/", "tools/"],
+            "stop_when": "prod access needed",
+            "junk": {"ignored": True},  # unknown key ignored
+        }
+    )
+    assert res["ok"] is True
+    state = ctrl.active_goal("s1")
+    assert state.outcome == "suite green"
+    assert state.constraints == ["no new deps"]
+    assert state.boundaries == ["graph/", "tools/"]
+    assert state.stop_when == "prod access needed"
+
+
+async def test_goals_set_backward_compatible_without_contract(monkeypatch, tmp_path):
+    # A body with only {session_id, condition, verifier} still works — no contract.
+    ctrl = _wire_goal_controller(monkeypatch, tmp_path)
+    res = await ch._operator_goals_set(
+        {"session_id": "s2", "condition": "done", "verifier": {"type": "command", "command": "true"}}
+    )
+    assert res["ok"] is True
+    assert ctrl.active_goal("s2").has_contract is False
+
+
+def test_as_str_list_coercion():
+    assert ch._as_str_list("x") == ["x"]
+    assert ch._as_str_list(["a", "b"]) == ["a", "b"]
+    assert ch._as_str_list([" ", "b", ""]) == ["b"]  # blank entries dropped
+    assert ch._as_str_list("") == []
+    assert ch._as_str_list(None) == []
+    assert ch._as_str_list({"a": 1}) == []
+    assert ch._as_str_list(5) == []
+
+
 async def test_inbox_add_requires_store():
     with pytest.raises(RuntimeError):
         await ch._operator_inbox_add({"text": "hi"})

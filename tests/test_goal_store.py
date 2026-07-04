@@ -15,6 +15,42 @@ def test_set_get_round_trip(tmp_path):
     assert loaded.active
 
 
+def test_completion_contract_round_trips(tmp_path):
+    """A goal carries the ADR 0073 contract fields (outcome/constraints/boundaries/
+    stop_when) through set→get, and to_dict/from_dict preserve them."""
+    store = GoalStore(tmp_path)
+    state = GoalState(
+        session_id="c1",
+        condition="ship the fix",
+        outcome="the suite is green on main",
+        constraints=["no new network calls", "public API unchanged"],
+        boundaries=["graph/goals/"],
+        stop_when="a schema migration would be required",
+    )
+    store.set(state)
+    loaded = store.get("c1")
+    assert loaded is not None
+    assert loaded.outcome == "the suite is green on main"
+    assert loaded.constraints == ["no new network calls", "public API unchanged"]
+    assert loaded.boundaries == ["graph/goals/"]
+    assert loaded.stop_when == "a schema migration would be required"
+    assert loaded.has_contract is True
+    # to_dict/from_dict are symmetric over the new fields.
+    assert GoalState.from_dict(loaded.to_dict()).to_dict() == loaded.to_dict()
+
+
+def test_contract_defaults_empty_and_resolved_outcome(tmp_path):
+    """A contract-less goal defaults every field empty; resolved_outcome falls back to
+    the condition; has_contract is False (so nothing is injected downstream)."""
+    store = GoalStore(tmp_path)
+    store.set(GoalState(session_id="c2", condition="make the build green"))
+    loaded = store.get("c2")
+    assert loaded.outcome == "" and loaded.constraints == [] and loaded.boundaries == []
+    assert loaded.stop_when == ""
+    assert loaded.has_contract is False
+    assert loaded.resolved_outcome == "make the build green"
+
+
 def test_get_missing_is_none(tmp_path):
     assert GoalStore(tmp_path).get("nope") is None
 
