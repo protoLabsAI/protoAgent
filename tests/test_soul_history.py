@@ -92,6 +92,22 @@ def test_is_current_flags_the_live_version_after_restore(monkeypatch, tmp_path: 
     assert [config_io.read_soul_version(v["id"]) for v in marked] == ["one"]
 
 
+def test_is_current_marks_only_the_newest_of_identical_snapshots(monkeypatch, tmp_path: Path) -> None:
+    # Non-consecutive identical saves BOTH land in history (dedup only collapses adjacent repeats),
+    # so a persona can appear more than once. When the live persona equals them, only the newest
+    # copy may be flagged current — else a restored-to persona lights up every identical row, which
+    # is the "two rows say current" bug reported against #1691.
+    _home(monkeypatch, tmp_path)
+    for text in ("T", "U", "T", "U", "T"):  # archives T, U, T, U → history has T twice; live = "T"
+        config_io.write_soul(text)
+    versions = config_io.list_soul_versions()
+    flagged = [v for v in versions if v["is_current"]]
+    assert len(flagged) == 1, [(v["preview"], v["is_current"]) for v in versions]
+    # ...and it is the NEWEST of the identical "T" snapshots (list is newest-first).
+    t_rows = [v for v in versions if config_io.read_soul_version(v["id"]) == "T"]
+    assert len(t_rows) == 2 and flagged[0]["id"] == t_rows[0]["id"]
+
+
 def test_restore_roundtrip_is_itself_reversible(monkeypatch, tmp_path: Path) -> None:
     home = _home(monkeypatch, tmp_path)
     config_io.write_soul("original")

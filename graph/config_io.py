@@ -908,26 +908,32 @@ def _soul_preview(text: str, limit: int) -> str:
 def list_soul_versions(preview_chars: int = 140) -> list[dict]:
     """Recorded SOUL.md snapshots, newest first: ``{id, saved_at, size, preview, is_current}``.
     ``saved_at`` is ISO-8601 UTC; ``preview`` is the leading text with whitespace collapsed for a
-    one-line UI summary; ``is_current`` marks the snapshot whose text matches the live persona
-    (true right after a restore — so a version panel can flag which one is active without a
+    one-line UI summary; ``is_current`` marks the NEWEST snapshot whose text matches the live
+    persona (true right after a restore — so a version panel can flag which one is active without a
     separate config fetch). Unreadable files are skipped."""
     try:
         current = read_soul()
     except (OSError, ValueError):
         current = ""
     out: list[dict] = []
-    for path in _soul_history_files():
+    current_seen = False
+    for path in _soul_history_files():  # newest first
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, ValueError):  # a corrupt history file is skipped, never 500s the list
             continue
+        # Several archived copies can be byte-identical — dedup only collapses CONSECUTIVE repeats,
+        # so a persona saved, changed, and saved again lands twice. Flag only the FIRST (newest)
+        # match as current, else a restored-to persona lights up every identical row (#1691).
+        is_current = bool(current) and not current_seen and text == current
+        current_seen = current_seen or is_current
         out.append(
             {
                 "id": path.stem,
                 "saved_at": _soul_version_saved_at(path.stem),
                 "size": len(text),
                 "preview": _soul_preview(text, preview_chars),
-                "is_current": text == current,
+                "is_current": is_current,
             }
         )
     return out
