@@ -254,6 +254,26 @@
     "expected_patterns": ["goal achieved"]
   },
   {
+    "id": "goal_llm_verifier",
+    "category": "goal",
+    "kind": "goal",
+    "name": "Fuzzy (llm) verifier resolves an agent-satisfied goal to achieved",
+    "set_goal": {"condition": "the reply clearly names Paris as the capital of France", "verifier": {"type": "llm"}},
+    "prompt": "What is the capital of France? Answer in one word.",
+    "expected_goal_status": "achieved",
+    "expected_patterns": ["goal achieved"]
+  },
+  {
+    "id": "goal_contract_achieved",
+    "category": "goal",
+    "kind": "goal",
+    "name": "A goal carrying an ADR 0073 completion contract resolves via /goal {json}",
+    "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "true"}, "constraints": ["do not touch files outside the target module"], "boundaries": ["the readiness script only"], "stop_when": "a dependency is missing"},
+    "prompt": "Please make progress toward the goal, respecting the contract.",
+    "expected_goal_status": "achieved",
+    "expected_patterns": ["goal achieved"]
+  },
+  {
     "id": "research_delegation",
     "category": "subagent",
     "kind": "ask",

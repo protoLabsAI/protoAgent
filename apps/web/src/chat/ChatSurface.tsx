@@ -503,7 +503,16 @@ function ChatSessionSlot({
         .map((c) => ({ name: c.name, description: c.description, usage: c.usage })),
       ...commands,
     ];
-    return all.filter(
+    // Dedup by token: a command that exists BOTH as a client command and a server skill
+    // (e.g. /goal, /clear) must appear once — the client entry (listed first) wins.
+    const seen = new Set<string>();
+    const unique = all.filter((c) => {
+      const n = c.name.toLowerCase();
+      if (seen.has(n)) return false;
+      seen.add(n);
+      return true;
+    });
+    return unique.filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
   }, [slashQuery, commands, flagOn]);

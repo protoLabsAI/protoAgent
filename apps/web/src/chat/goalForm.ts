@@ -21,10 +21,13 @@ export const GOAL_VERIFIER_TYPES = [
 
 export const DEFAULT_MAX_ITERATIONS = 8;
 
-// A single-step HITL form: the goal + how to verify it, then the OPTIONAL completion
-// contract (outcome/constraints/boundaries/stop_when/max iterations). Single-step (not a
-// wizard) so `condition` — the one required field — gates Submit directly, and both hosts
-// (the chat `/goal new` composer form and the GoalsPanel inline form) render it identically.
+// A two-step wizard (ADR 0073). Step 1 = the goal + how to verify it, with a TYPE-AWARE
+// verification input: the verifier cards drive `showWhen`-conditional fields, so only the
+// input(s) the picked verifier actually needs are shown (a shell command for command/test,
+// a PR#/branch for ci, a file+substring for data, nothing for llm) — no catch-all box.
+// Step 2 = the OPTIONAL completion contract. `condition` (the one required field) lives in
+// step 1 and gates its Next. Both hosts (the `/goal new` composer form and the GoalsPanel
+// inline form) render this identically through `HitlForm`.
 export function goalFormPayload(): HitlPayload {
   return {
     kind: "form",
@@ -32,6 +35,7 @@ export function goalFormPayload(): HitlPayload {
     description: "A testable outcome the agent self-drives toward. The verifier decides DONE.",
     steps: [
       {
+        title: "Goal",
         schema: {
           type: "object",
           required: ["condition"],
@@ -39,11 +43,11 @@ export function goalFormPayload(): HitlPayload {
             condition: {
               type: "string",
               title: "Goal",
-              description: "The outcome the agent should achieve.",
+              description: "The outcome the agent should achieve — in plain English.",
             },
             verifier: {
               type: "string",
-              title: "How to verify",
+              title: "How to verify it's done",
               default: "llm",
               oneOf: GOAL_VERIFIER_TYPES.map((v) => ({
                 const: v.value,
@@ -51,38 +55,64 @@ export function goalFormPayload(): HitlPayload {
                 description: v.description,
               })),
             },
-            verification: {
+            verify_command: {
               type: "string",
-              title: "Verification detail",
-              description:
-                "The verifier's parameter: the shell command (command/test), the PR # or " +
-                "branch (ci), or `path :: substring` (data). Leave blank for llm.",
+              title: "Shell command",
+              description: "Runs on the server; exit 0 = done (e.g. `pytest -q`).",
+              showWhen: { field: "verifier", in: ["command", "test"] },
             },
+            verify_ci: {
+              type: "string",
+              title: "PR # or branch",
+              description: "GitHub checks must be green (e.g. `#1785` or `main`).",
+              showWhen: { field: "verifier", equals: "ci" },
+            },
+            verify_data_path: {
+              type: "string",
+              title: "File to check",
+              description: "Path to a file the goal writes or updates.",
+              showWhen: { field: "verifier", equals: "data" },
+            },
+            verify_data_contains: {
+              type: "string",
+              title: "Must contain (optional)",
+              description: "Done when the file contains this substring — blank just requires the file.",
+              showWhen: { field: "verifier", equals: "data" },
+            },
+          },
+        },
+      },
+      {
+        title: "Completion contract (optional)",
+        description: "Extra guidance the agent re-reads each turn. Everything here is optional.",
+        schema: {
+          type: "object",
+          properties: {
             outcome: {
               type: "string",
-              title: "Outcome (optional)",
+              title: "Outcome",
               description: "The required end-state, in one line. Defaults to the goal.",
             },
             constraints: {
               type: "string",
               format: "textarea",
-              title: "Constraints (optional)",
+              title: "Constraints",
               description: "Invariants the agent must NOT violate — one per line.",
             },
             boundaries: {
               type: "string",
               format: "textarea",
-              title: "Boundaries (optional)",
+              title: "Boundaries",
               description: "Files / dirs / systems in scope — one per line.",
             },
             stop_when: {
               type: "string",
-              title: "Stop and ask when (optional)",
+              title: "Stop and ask when",
               description: "A condition under which the agent pauses and asks you.",
             },
             max_iterations: {
               type: "number",
-              title: "Max iterations (optional)",
+              title: "Max iterations",
               default: DEFAULT_MAX_ITERATIONS,
               description: `Drive-loop budget. Default ${DEFAULT_MAX_ITERATIONS}.`,
             },
@@ -146,6 +176,21 @@ export function buildVerifier(type: unknown, detail: unknown): Record<string, un
   return { type: "llm" };
 }
 
+/** The verifier's free-text detail, read from the TYPE-AWARE field(s) for the picked verifier
+ *  and normalized to the `path :: substring` form `buildVerifier` parses for `data`. Empty for
+ *  llm (and any verifier whose detail field is blank). */
+export function verifierDetail(answers: Record<string, unknown>): string {
+  const t = String(answers.verifier ?? "").trim().toLowerCase();
+  if (t === "command" || t === "test") return String(answers.verify_command ?? "").trim();
+  if (t === "ci") return String(answers.verify_ci ?? "").trim();
+  if (t === "data") {
+    const path = String(answers.verify_data_path ?? "").trim();
+    const contains = String(answers.verify_data_contains ?? "").trim();
+    return contains ? `${path} :: ${contains}` : path;
+  }
+  return "";
+}
+
 /** Coerce the (optional) max-iterations answer to a positive integer, defaulting to
  *  `DEFAULT_MAX_ITERATIONS` when blank / non-numeric / ≤ 0. */
 export function parseMaxIterations(value: unknown): number {
@@ -163,7 +208,7 @@ export function buildGoalSetBody(
   const condition = String(answers.condition ?? "").trim();
   if (!condition) return null;
 
-  const verifier = buildVerifier(answers.verifier, answers.verification);
+  const verifier = buildVerifier(answers.verifier, verifierDetail(answers));
   const outcome = String(answers.outcome ?? "").trim();
   const constraints = splitLines(answers.constraints);
   const boundaries = splitLines(answers.boundaries);

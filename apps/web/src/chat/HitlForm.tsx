@@ -8,11 +8,11 @@ import type { HitlPayload } from "../lib/types";
 import {
   type FieldSchema,
   anyStepMissing,
-  fieldsOf,
   isCardChoice,
   isMultiChoice,
   missingInStep,
   optionsOf,
+  visibleFieldsOf,
 } from "./hitl-form";
 
 // A lightweight JSON-schema form for HITL requests (request_user_input) and a plain prompt
@@ -253,7 +253,7 @@ export function HitlForm({
       <div className="hitl-step" key={stepIdx}>
         {step.title && <div className="hitl-step-title">{step.title}</div>}
         {step.description && <div className="hitl-prompt">{step.description}</div>}
-        {fieldsOf(step).map(([key, schema, req]) => (
+        {visibleFieldsOf(step, values).map(([key, schema, req]) => (
           <Field
             key={key}
             name={key}

@@ -91,7 +91,7 @@ class GoalController:
             return "Goal cleared." if existed else "No active goal to clear."
 
         # /goal {json}  or  /goal <free text>  → set
-        spec, condition, max_iters, no_progress, fresh_context = self._parse_set(rest)
+        spec, condition, max_iters, no_progress, fresh_context, contract = self._parse_set(rest)
         if condition is None:
             return (
                 "Could not parse goal. Use `/goal <text>` or "
@@ -118,6 +118,10 @@ class GoalController:
             fresh_context=fresh_context,
             max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress,  # per-goal patience; None → config
+            outcome=contract.get("outcome", ""),
+            constraints=list(contract.get("constraints") or []),
+            boundaries=list(contract.get("boundaries") or []),
+            stop_when=contract.get("stop_when", ""),
         )
         self._store.set(state)
         return f"Goal set. {state.status_line()}"
@@ -262,22 +266,31 @@ class GoalController:
 
     def _parse_set(self, rest: str):
         """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None,
-        fresh_context)."""
+        fresh_context, contract) — ``contract`` carries the optional ADR 0073 fields
+        (outcome/constraints/boundaries/stop_when) from a JSON spec; ``{}`` for free text.
+        The contract is directive prose (no code-exec), so it's safe from an untrusted chat
+        set — no trust-gate, unlike the verifier."""
         if rest.lstrip().startswith("{"):
             try:
                 data = json.loads(rest)
             except json.JSONDecodeError:
-                return ({}, None, None, None, False)
+                return ({}, None, None, None, False, {})
             condition = data.get("condition")
             if not condition:
-                return ({}, None, None, None, False)
+                return ({}, None, None, None, False, {})
             verifier = data.get("verifier") or {"type": "llm"}
             if "type" not in verifier:
                 verifier["type"] = "llm"
             fresh_context = bool(data.get("fresh_context", False))
-            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), fresh_context)
+            contract = {
+                "outcome": data.get("outcome") or "",
+                "constraints": _coerce_str_list(data.get("constraints")),
+                "boundaries": _coerce_str_list(data.get("boundaries")),
+                "stop_when": data.get("stop_when") or "",
+            }
+            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), fresh_context, contract)
         # plain text → fuzzy goal judged by the llm verifier
-        return ({"type": "llm"}, rest, None, None, False)
+        return ({"type": "llm"}, rest, None, None, False, {})
 
     # --- evaluation --------------------------------------------------------
 
