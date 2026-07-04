@@ -159,13 +159,16 @@ class _RecordingBG:
     def __init__(self):
         self.calls: list[dict] = []
 
-    async def spawn(self, *, origin_session, subagent_type, description, prompt, origin_incognito=False):
+    async def spawn(
+        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None
+    ):
         self.calls.append(
             {
                 "origin": origin_session,
                 "subagent_type": subagent_type,
                 "description": description,
                 "prompt": prompt,
+                "batch_id": batch_id,
             }
         )
         return f"bg-{len(self.calls)}"

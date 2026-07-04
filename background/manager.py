@@ -27,6 +27,10 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_FIRE_TIMEOUT_S = 1800.0  # background turns can run long (research + tools); generous
 _DEFAULT_MAX_CONCURRENCY = 3  # cap on concurrent background turns so a fan-out can't swamp the gateway
+# Straggler safety valve (#1766): if a fan-out batch hasn't fully settled within this many
+# seconds (a member hung), force a PARTIAL push-resume so the finished reports still land.
+_DEFAULT_BATCH_JOIN_TIMEOUT_S = 900.0
+_TERMINAL_STATUSES = ("completed", "failed", "canceled")
 
 
 class BackgroundManager:
@@ -42,6 +46,7 @@ class BackgroundManager:
         bearer_token: str | None = None,
         fire_timeout_s: float | None = None,
         max_concurrency: int | None = None,
+        batch_join_timeout_s: float | None = None,
         event_publish=None,
         on_terminal=None,
     ) -> None:
@@ -82,12 +87,31 @@ class BackgroundManager:
             except ValueError:
                 self._max_concurrency = _DEFAULT_MAX_CONCURRENCY
         self._sem = asyncio.Semaphore(self._max_concurrency)
+        # Straggler-join timeout (#1766). Env ``BACKGROUND_BATCH_JOIN_TIMEOUT_S``.
+        if batch_join_timeout_s is not None:
+            self._batch_join_timeout_s = batch_join_timeout_s
+        else:
+            try:
+                self._batch_join_timeout_s = float(
+                    os.environ.get("BACKGROUND_BATCH_JOIN_TIMEOUT_S", _DEFAULT_BATCH_JOIN_TIMEOUT_S)
+                )
+            except ValueError:
+                self._batch_join_timeout_s = _DEFAULT_BATCH_JOIN_TIMEOUT_S
         # Hold the detached fire tasks so they aren't GC'd mid-flight (the cause of
         # "Task was destroyed but it is pending"); discard on completion.
         self._fire_tasks: set[asyncio.Task] = set()
         # job_id -> the running asyncio.Task for a ``spawn_work`` (deterministic) job, so
         # ``cancel`` can stop the coroutine directly (a work job has no A2A task handle).
         self._work_tasks: dict[str, asyncio.Task] = {}
+        # Fan-out batch-join (#1766). A batch (all jobs sharing a spawning turn id)
+        # push-resumes ONCE, when its last member settles. ``_joined_batches`` is the
+        # single-fire guard — a SYNCHRONOUS check-and-set (``_claim_batch``) so two
+        # concurrent settles, or a settle racing the straggler timeout, can't both fire.
+        # ``_batch_timeouts`` holds the per-batch straggler-timeout task (a hung member
+        # can't strand the finished reports forever); also kept in ``_fire_tasks`` so it
+        # isn't GC'd mid-sleep.
+        self._joined_batches: set[str] = set()
+        self._batch_timeouts: dict[str, asyncio.Task] = {}
 
     async def spawn(
         self,
@@ -97,13 +121,19 @@ class BackgroundManager:
         description: str,
         prompt: str,
         origin_incognito: bool = False,
+        batch_id: str | None = None,
     ) -> str:
         """Register a job and fire it detached. Returns the opaque job id immediately.
 
         ``origin_incognito`` records that the spawning thread was incognito (ADR 0069
         D3b → ADR 0070): the completion then skips the push-resume nudge and the
         knowledge-store indexing — no memory trail — while the report still lives in
-        the jobs DB and drains into the origin session normally."""
+        the jobs DB and drains into the origin session normally.
+
+        ``batch_id`` (#1766) tags the job as a member of a fan-out spawned by one turn
+        (task_batch's specs, or several ``task(run_in_background=True)`` in a turn — all
+        stamp the emitting turn's id), so the completions coalesce into ONE push-resume
+        when the last member settles. ``None`` for a lone spawn (a singleton)."""
         job_id = self.store.create(
             agent_name=self.agent_name,
             origin_session=origin_session or "",
@@ -111,6 +141,7 @@ class BackgroundManager:
             description=description,
             prompt=prompt,
             origin_incognito=origin_incognito,
+            batch_id=batch_id,
         )
         fired_prompt = _build_fired_prompt(subagent_type, description, prompt)
         fence = _subagent_fence(subagent_type)
@@ -133,6 +164,7 @@ class BackgroundManager:
         work,
         detail: str = "",
         origin_incognito: bool = False,
+        batch_id: str | None = None,
     ) -> str:
         """Register and run a deterministic background job — a plain coroutine, NOT an
         LLM subagent turn — through the same durable store + concurrency cap + event
@@ -151,6 +183,7 @@ class BackgroundManager:
             description=description,
             prompt=detail,
             origin_incognito=origin_incognito,
+            batch_id=batch_id,
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
@@ -433,6 +466,144 @@ class BackgroundManager:
         finally:
             self._publish_turn(
                 "turn.finished", session_id=session_id, origin="background-resume", trigger=job.id, ok=ok
+            )
+
+    # ── fan-out batch-join (#1766) ────────────────────────────────────────────
+
+    def _claim_batch(self, batch_id: str) -> bool:
+        """Atomically claim a batch for its single join nudge. Returns ``True`` if THIS
+        caller won the claim (and must fire the join), ``False`` if the batch was already
+        joined. SYNCHRONOUS — no ``await`` between the membership check and the add — so two
+        concurrent settles (or a settle racing the straggler timeout) can't both win under
+        asyncio's single-threaded scheduling. This is the no-double-fire guarantee."""
+        if batch_id in self._joined_batches:
+            return False
+        self._joined_batches.add(batch_id)
+        return True
+
+    async def resume_for_terminal(self, job) -> bool | None:
+        """Batch-aware terminal delivery (#1766). The server calls this in place of
+        ``resume_origin`` when a background job settles, so a fan-out coalesces into ONE
+        push-resume instead of N drip-fed briefings.
+
+        - **Singleton** (no ``batch_id``, or a batch of one) → delegate to
+          ``resume_origin`` — the UNCHANGED single-job push-resume. Returns its bool.
+        - **Not the last member** to settle → hold: arm the straggler timeout once and
+          return ``None`` (nothing delivered, NOT a failure — the last member delivers).
+        - **Last member** to settle → win the single-fire claim and push-resume the WHOLE
+          fan-out once via ``resume_origin_batch`` (the per-session drain then attaches
+          every sibling report to that one turn). A duplicate last-member — the claim was
+          already taken by a sibling or the straggler timeout — returns ``None``.
+
+        Never raises. Incognito batches never reach here: the server's ``_should_auto_resume``
+        guard skips an incognito job before calling this (all members of one turn share the
+        incognito flag), so no push-resume fires — their reports still drain normally."""
+        batch_id = getattr(job, "batch_id", None)
+        if not batch_id or self.store.batch_size(batch_id) <= 1:
+            return await self.resume_origin(job)
+        if self.store.batch_outstanding(batch_id) > 0:
+            # Siblings still running — hold this completion; the last to settle fires the
+            # single coalesced nudge. Arm the straggler timeout so a hung member can't
+            # strand the finished reports forever.
+            self._ensure_batch_timeout(batch_id, job.origin_session)
+            return None
+        # Last member settled. Win the single-fire claim (or bail if a sibling / the
+        # timeout already fired), then push-resume the whole fan-out exactly once.
+        if not self._claim_batch(batch_id):
+            return None
+        self._cancel_batch_timeout(batch_id)  # settled naturally — no straggler nudge needed
+        return await self.resume_origin_batch(batch_id, job.origin_session)
+
+    def _ensure_batch_timeout(self, batch_id: str, origin_session: str) -> None:
+        """Arm ONE straggler-timeout task for a batch, idempotently. If the batch hasn't
+        joined within ``_batch_join_timeout_s`` (a member hung), force the join so the
+        already-finished reports still land. Best-effort; no-op off-loop or if already
+        armed/joined."""
+        if batch_id in self._batch_timeouts or batch_id in self._joined_batches:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _straggle() -> None:
+            try:
+                await asyncio.sleep(self._batch_join_timeout_s)
+                if not self._claim_batch(batch_id):
+                    return  # the batch joined normally while we slept
+                await self.resume_origin_batch(batch_id, origin_session)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — the straggler join is best-effort
+                log.exception("[background] batch straggler-join failed for %s", batch_id)
+
+        t = loop.create_task(_straggle(), name=f"background.batch-timeout.{batch_id}")
+        self._batch_timeouts[batch_id] = t
+        self._fire_tasks.add(t)  # hold a ref so the sleep isn't GC'd mid-flight
+        t.add_done_callback(self._fire_tasks.discard)
+        t.add_done_callback(lambda _t, b=batch_id: self._batch_timeouts.pop(b, None))
+
+    def _cancel_batch_timeout(self, batch_id: str) -> None:
+        """Cancel a batch's straggler timeout once the batch joined normally (no straggler
+        nudge needed). No-op when none is armed."""
+        t = self._batch_timeouts.pop(batch_id, None)
+        if t is not None and not t.done():
+            t.cancel()
+
+    async def resume_origin_batch(self, batch_id: str, origin_session: str) -> bool:
+        """Push-resume a whole fan-out ONCE (#1766). Same self-A2A mechanics as
+        ``resume_origin`` (a nudge into ``origin_session`` wrapped in ``turn.started`` /
+        ``turn.finished``), but the text summarizes the batch — the per-session drain
+        (``server/chat.py``) attaches EVERY sibling report to this one turn, so the agent
+        synthesizes a single briefing across all of them. If a straggler forced an early
+        join (members still running), the text says only the settled ones are attached and
+        the rest will notify separately. Never raises; returns whether the nudge landed —
+        on failure ``notified`` is untouched, so the reports still drain next manual turn."""
+        counts = self.store.batch_status_counts(batch_id)
+        total = self.store.batch_size(batch_id)
+        running = counts.get("running", 0)
+        settled_counts = {k: v for k, v in counts.items() if k in _TERMINAL_STATUSES}
+        settled = sum(settled_counts.values())
+        summary = ", ".join(f"{k} {v}" for k, v in sorted(settled_counts.items())) or "no reports"
+        if running > 0:
+            text = (
+                f"[{settled} of {total} background jobs from your fan-out have finished ({summary}); "
+                "their report notifications are attached to this turn — synthesize ONE briefing against "
+                f"them. The remaining {running} are still running and will notify separately.]"
+            )
+        else:
+            text = (
+                f"[all {total} background jobs from your fan-out have finished ({summary}) — their report "
+                "notifications are attached to this turn; synthesize ONE briefing against all of them]"
+            )
+        # Turn-lifecycle events (#1767), keyed on the batch id: the nudge holds the
+        # connection open for the whole origin-session briefing turn.
+        self._publish_turn("turn.started", session_id=origin_session, origin="background-resume", trigger=batch_id)
+        ok = False
+        try:
+            await self._send_a2a_message(
+                context_id=origin_session,
+                text=text,
+                metadata={
+                    "origin": "background-resume",
+                    "trigger": batch_id,
+                    "background_batch_id": batch_id,
+                },
+            )
+            ok = True
+            return True
+        except Exception as exc:  # noqa: BLE001 — push-resume is best-effort by contract
+            log.warning(
+                "[background] batch push-resume for %s into %s failed (%s) — the reports will "
+                "drain on that session's next turn",
+                batch_id,
+                origin_session,
+                exc,
+            )
+            return False
+        finally:
+            self._publish_turn(
+                "turn.finished", session_id=origin_session, origin="background-resume", trigger=batch_id, ok=ok
             )
 
 

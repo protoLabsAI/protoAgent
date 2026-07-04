@@ -40,6 +40,11 @@ class BackgroundJob:
     # must leave NO memory trail — no push-resume nudge, no knowledge-store indexing.
     # The report still lives here (jobs.db) and drains into the origin session normally.
     origin_incognito: bool = False
+    # The spawning turn's id (#1766): every job a single fan-out turn spawns shares one
+    # ``batch_id`` (task_batch's N specs, or several task(run_in_background=True) in one
+    # turn), so the completions coalesce into ONE push-resume when the last member settles
+    # instead of N drip-fed briefings. ``None`` for a lone / plugin spawn (a singleton).
+    batch_id: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -55,6 +60,7 @@ class BackgroundJob:
             "completed_at": self.completed_at,
             "a2a_task_id": self.a2a_task_id,
             "origin_incognito": self.origin_incognito,
+            "batch_id": self.batch_id,
         }
 
 
@@ -74,6 +80,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         completed_at=row["completed_at"],
         a2a_task_id=(row["a2a_task_id"] if "a2a_task_id" in keys else "") or "",
         origin_incognito=bool(row["origin_incognito"] if "origin_incognito" in keys else 0),
+        batch_id=(row["batch_id"] if "batch_id" in keys else None) or None,
     )
 
 
@@ -108,7 +115,8 @@ class BackgroundStore:
                     created_at     TEXT NOT NULL,
                     completed_at   TEXT,
                     a2a_task_id    TEXT,
-                    origin_incognito INTEGER NOT NULL DEFAULT 0
+                    origin_incognito INTEGER NOT NULL DEFAULT 0,
+                    batch_id       TEXT
                 )
                 """
             )
@@ -119,10 +127,14 @@ class BackgroundStore:
             # Migrate a pre-ADR-0070 DB: incognito propagation (existing rows default 0).
             if "origin_incognito" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN origin_incognito INTEGER NOT NULL DEFAULT 0")
+            # Migrate a pre-#1766 DB: fan-out batch key (existing rows are unbatched → NULL).
+            if "batch_id" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN batch_id TEXT")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_bg_status ON background_jobs(status)")
+            db.execute("CREATE INDEX IF NOT EXISTS ix_bg_batch ON background_jobs(batch_id)")
             db.commit()
         finally:
             db.close()
@@ -138,9 +150,14 @@ class BackgroundStore:
         description: str,
         prompt: str,
         origin_incognito: bool = False,
+        batch_id: str | None = None,
         now: datetime | None = None,
     ) -> str:
-        """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``)."""
+        """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``).
+
+        ``batch_id`` (#1766) tags a job as a member of a fan-out spawned by one turn, so
+        the completions coalesce into ONE push-resume; ``None`` (the default) is a
+        singleton spawn."""
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
         created = (now or datetime.now(UTC)).isoformat()
         db = self._connect()
@@ -148,8 +165,8 @@ class BackgroundStore:
             db.execute(
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
-                " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?)",
+                " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, batch_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?)",
                 (
                     job_id,
                     agent_name,
@@ -159,6 +176,7 @@ class BackgroundStore:
                     prompt,
                     created,
                     1 if origin_incognito else 0,
+                    batch_id or None,
                 ),
             )
             db.commit()
@@ -230,6 +248,54 @@ class BackgroundStore:
                 )
                 db.commit()
             return [_row_to_job(r) for r in rows]
+        finally:
+            db.close()
+
+    # ── fan-out batches (#1766) ───────────────────────────────────────────────
+
+    def batch_size(self, batch_id: str) -> int:
+        """Count every job in a fan-out batch. ``0`` for a null/unknown batch — the
+        caller then treats the job as a singleton (the unchanged single-job path)."""
+        if not batch_id:
+            return 0
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT COUNT(*) AS n FROM background_jobs WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
+            return int(row["n"]) if row else 0
+        finally:
+            db.close()
+
+    def batch_outstanding(self, batch_id: str) -> int:
+        """Count still-``running`` members of a batch — the "batch not yet fully settled"
+        check. A queued-at-semaphore job still reads ``running`` (it IS accepted), so this
+        stays >0 until every member reaches a terminal state."""
+        if not batch_id:
+            return 0
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT COUNT(*) AS n FROM background_jobs WHERE batch_id = ? AND status = 'running'",
+                (batch_id,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+        finally:
+            db.close()
+
+    def batch_status_counts(self, batch_id: str) -> dict[str, int]:
+        """Per-status tallies for a batch, e.g. ``{'completed': 6, 'failed': 1}`` — the
+        summary the join nudge quotes (a still-open batch also carries ``'running'``).
+        Empty for a null/unknown batch."""
+        if not batch_id:
+            return {}
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT status, COUNT(*) AS n FROM background_jobs WHERE batch_id = ? GROUP BY status",
+                (batch_id,),
+            ).fetchall()
+            return {r["status"]: int(r["n"]) for r in rows}
         finally:
             db.close()
 

@@ -81,6 +81,27 @@ Cursor:
   excerpt with a bottom fade-out mask, and a primary "Open report" CTA into the
   document viewer. Specificity stacked (`.pl-message--system.chat-report …`) so
   the DS default can't win by load order.
+- **D5 — Fan-out batch-join (#1766).** D1 push-resumes *per job*, so a fan-out of N
+  background subagents (`task_batch(run_in_background=True)`, or several
+  `task(run_in_background=True)` in one turn) fired N separate briefing turns — the
+  real cross-report synthesis only landed on the last. D1 now **coalesces a fan-out
+  into one push-resume**: every job a single turn spawns is tagged with a `batch_id`
+  = **the emitting assistant turn's id** (`graph.agent._turn_id_from`), carried through
+  `spawn`→`store.create` on the new nullable `background_jobs.batch_id` column. On each
+  terminal completion the server calls `manager.resume_for_terminal(job)` instead of
+  `resume_origin`: a singleton (no batch / `batch_size ≤ 1`) push-resumes unchanged; a
+  member that is not the last to settle is **held** (returns `None` — nothing delivered,
+  not a failure); the **last** member (`batch_outstanding == 0`) wins a synchronous
+  single-fire claim (`_joined_batches`) and fires **one** `resume_origin_batch` whose
+  nudge summarizes the fan-out with per-status counts (`batch_status_counts`, e.g.
+  `completed 6, failed 1`) — the drain (already per-session) then attaches *all* sibling
+  reports to that one turn for a single briefing. A failed member counts as settled and
+  appears in the summary. A **straggler timeout** (`BACKGROUND_BATCH_JOIN_TIMEOUT_S`,
+  default 900s) is armed on the first held completion and forces a *partial* join if a
+  member hangs, so finished reports can't be stranded forever; the remaining reports still
+  drain on the session's next turn. Incognito batches never reach the join (the D1
+  `_should_auto_resume` guard skips them before `resume_for_terminal`). The drain and its
+  exactly-once guarantee are unchanged.
 
 ## 4. Consequences
 

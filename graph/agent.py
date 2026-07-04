@@ -195,6 +195,28 @@ def _incognito_from(state: Any) -> bool:
     return bool(state.get("incognito")) if isinstance(state, dict) else False
 
 
+def _turn_id_from(state: Any) -> str | None:
+    """The id of the EMITTING assistant turn — the ``AIMessage`` carrying the tool
+    calls (``messages[-1]`` at tool-execution time). Used as the fan-out batch key
+    (#1766): every background job a single turn spawns (task_batch's N specs, or a
+    lone ``task(run_in_background=True)``) shares this id, so their completions
+    coalesce into ONE push-resume when the last member settles. Best-effort — returns
+    ``None`` on any miss, so the job simply falls back to the singleton path (its own
+    push-resume), same as before."""
+    if not isinstance(state, dict):
+        return None
+    try:
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        # Only the AIMessage carrying tool calls is a valid turn key; a ToolMessage or
+        # a bare AIMessage without tool_calls is not the fan-out's emitter.
+        if last is not None and getattr(last, "tool_calls", None):
+            return getattr(last, "id", None) or None
+    except Exception:  # noqa: BLE001 — batch keying is best-effort; None → singleton path
+        return None
+    return None
+
+
 def _auto_background_seconds() -> float:
     """Time budget (seconds) after which a *foreground* ``task`` delegation transparently
     detaches to the background (ADR 0051). ``BACKGROUND_AUTO_S`` env; 0 (default) = off."""
@@ -527,6 +549,10 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 description=description,
                 prompt=prompt,
                 origin_incognito=_incognito_from(state),
+                # Tag the job with the emitting turn's id (#1766) so a fan-out — several
+                # task(run_in_background=True) in one turn — coalesces into one push-resume.
+                # A lone task → batch_size 1 → the unchanged singleton path.
+                batch_id=_turn_id_from(state),
             )
             return job_id
 
@@ -674,6 +700,11 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         # how many run at once. Degrades to the foreground batch below when no manager exists.
         if run_in_background and background_mgr is not None:
             session_id = _session_id_from(state)
+            # All N specs are spawned by THIS one turn → they share the emitting turn's id
+            # as their batch key (#1766), so their completions coalesce into ONE push-resume
+            # instead of N drip-fed briefings; the real cross-report synthesis happens once.
+            batch_id = _turn_id_from(state)
+            incognito = _incognito_from(state)
             lines: list[str] = []
             started = 0
             for i, spec in enumerate(tasks, start=1):
@@ -694,7 +725,8 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                     subagent_type=st,
                     description=desc,
                     prompt=prm,
-                    origin_incognito=_incognito_from(state),
+                    origin_incognito=incognito,
+                    batch_id=batch_id,
                 )
                 started += 1
                 lines.append(f"Task {i}: {job_id} ({st}: {desc})")

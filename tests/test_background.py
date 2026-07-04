@@ -135,6 +135,97 @@ class TestStore:
         assert s.get(a) is None
         assert s.get(b) is not None
 
+    # ── fan-out batches (#1766) ───────────────────────────────────────────────
+
+    def test_batch_id_persists_and_defaults_none(self, tmp_path):
+        s = _store(tmp_path)
+        lone = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
+        member = s.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            batch_id="batch-A",
+        )
+        assert s.get(lone).batch_id is None  # unbatched spawn → NULL
+        assert s.get(member).batch_id == "batch-A"
+
+    def test_batch_size_and_outstanding(self, tmp_path):
+        s = _store(tmp_path)
+        ids = [
+            s.create(
+                agent_name="a", origin_session="s1", subagent_type="researcher", description=f"d{i}", prompt="p",
+                batch_id="batch-A",
+            )
+            for i in range(3)
+        ]
+        # a job in a DIFFERENT batch (and one unbatched) must not leak into the counts
+        s.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="other", prompt="p",
+            batch_id="batch-B",
+        )
+        s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="lone", prompt="p")
+        assert s.batch_size("batch-A") == 3
+        assert s.batch_outstanding("batch-A") == 3  # all running
+        s.mark_complete(ids[0], "completed", "r0")
+        assert s.batch_outstanding("batch-A") == 2  # a queued/running sibling still counts
+        s.mark_complete(ids[1], "failed", "boom")
+        s.mark_complete(ids[2], "completed", "r2")
+        assert s.batch_outstanding("batch-A") == 0  # fully settled
+        assert s.batch_size("batch-A") == 3  # size never changes
+        # null / unknown batch is empty, never an error
+        assert s.batch_size("") == 0 and s.batch_size("nope") == 0
+        assert s.batch_outstanding("") == 0
+
+    def test_batch_status_counts(self, tmp_path):
+        s = _store(tmp_path)
+        ids = [
+            s.create(
+                agent_name="a", origin_session="s1", subagent_type="researcher", description=f"d{i}", prompt="p",
+                batch_id="batch-A",
+            )
+            for i in range(3)
+        ]
+        s.mark_complete(ids[0], "completed", "r0")
+        s.mark_complete(ids[1], "failed", "boom")  # a failed member is still a settled member
+        # ids[2] left running
+        counts = s.batch_status_counts("batch-A")
+        assert counts == {"completed": 1, "failed": 1, "running": 1}
+        assert s.batch_status_counts("nope") == {}
+
+    def test_batch_id_migrates_in_place(self, tmp_path):
+        """A pre-#1766 DB (no batch_id column) upgrades in place on open — existing rows
+        read batch_id None and new rows can carry one."""
+        import sqlite3
+
+        db_path = tmp_path / "background" / "jobs.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(db_path))
+        con.execute(
+            """
+            CREATE TABLE background_jobs (
+                id TEXT PRIMARY KEY, agent_name TEXT NOT NULL, origin_session TEXT NOT NULL,
+                subagent_type TEXT NOT NULL, description TEXT NOT NULL, prompt TEXT NOT NULL,
+                status TEXT NOT NULL, result TEXT, notified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, completed_at TEXT
+            )
+            """
+        )
+        con.execute(
+            "INSERT INTO background_jobs (id, agent_name, origin_session, subagent_type, description, prompt, "
+            "status, result, notified, created_at, completed_at) "
+            "VALUES ('bg-old', 'a', 's1', 'researcher', 'legacy', 'p', 'completed', 'r', 0, 't1', 't2')"
+        )
+        con.commit()
+        con.close()
+
+        s = BackgroundStore(str(db_path))  # opening runs the guarded migration
+        old = s.get("bg-old")
+        assert old is not None and old.batch_id is None  # legacy row migrated, unbatched
+        new = s.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            batch_id="batch-A",
+        )
+        assert s.get(new).batch_id == "batch-A"
+        assert s.batch_size("batch-A") == 1
+
 
 # ── manager ──────────────────────────────────────────────────────────────────
 
@@ -414,6 +505,121 @@ class TestResumeOriginTurnEvents:
         assert finished["ok"] is False
 
 
+# ── #1766: fan-out batch-join (coalesce N completions into one push-resume) ──
+
+
+class TestBatchJoin:
+    """A fan-out of background jobs sharing one ``batch_id`` push-resumes ONCE — held
+    until the last member settles — instead of N drip-fed briefing turns (#1766)."""
+
+    def _member(self, mgr, batch_id, origin="s1", desc="d"):
+        return mgr.store.create(
+            agent_name="a", origin_session=origin, subagent_type="researcher",
+            description=desc, prompt="p", batch_id=batch_id,
+        )
+
+    def _patch_send(self, mgr) -> list:
+        """Replace the network self-A2A send with an in-memory recorder (no network)."""
+        sends: list[dict] = []
+
+        async def _fake_send(*, context_id, text, metadata):
+            sends.append({"context_id": context_id, "text": text, "metadata": metadata})
+
+        mgr._send_a2a_message = _fake_send
+        return sends
+
+    async def _settle(self, mgr, job_id, status="completed", result="r"):
+        """Mirror the server flow: mark the row terminal, then route the fresh row through
+        the batch-aware terminal delivery."""
+        mgr.store.mark_complete(job_id, status, result)
+        return await mgr.resume_for_terminal(mgr.store.get(job_id))
+
+    async def test_batch_of_three_fires_exactly_one_join(self, tmp_path):
+        mgr = _manager(tmp_path, batch_join_timeout_s=1000)
+        sends = self._patch_send(mgr)
+        a = self._member(mgr, "batch-A", desc="topic a")
+        b = self._member(mgr, "batch-A", desc="topic b")
+        c = self._member(mgr, "batch-A", desc="topic c")
+        # the first two settles HOLD — nothing delivered, not a failure
+        assert await self._settle(mgr, a) is None
+        assert await self._settle(mgr, b) is None
+        assert sends == []
+        # the last member fires ONE coalesced batch nudge for the whole fan-out
+        assert await self._settle(mgr, c) is True
+        assert len(sends) == 1
+        nudge = sends[0]
+        assert nudge["context_id"] == "s1"
+        assert nudge["metadata"]["background_batch_id"] == "batch-A"
+        assert nudge["metadata"]["origin"] == "background-resume"
+        assert "synthesize ONE briefing" in nudge["text"]
+        assert "all 3 background jobs" in nudge["text"]
+
+    async def test_already_joined_batch_never_double_fires(self, tmp_path):
+        mgr = _manager(tmp_path, batch_join_timeout_s=1000)
+        sends = self._patch_send(mgr)
+        a = self._member(mgr, "batch-A")
+        b = self._member(mgr, "batch-A")
+        assert await self._settle(mgr, a) is None
+        assert await self._settle(mgr, b) is True  # last → fires exactly once
+        assert len(sends) == 1
+        # a redundant delivery for an already-joined batch delivers nothing (no double-fire)
+        assert await mgr.resume_for_terminal(mgr.store.get(b)) is None
+        assert len(sends) == 1
+
+    async def test_singleton_none_batch_uses_resume_origin(self, tmp_path):
+        mgr = _manager(tmp_path, batch_join_timeout_s=1000)
+        sends = self._patch_send(mgr)
+        jid = mgr.store.create(  # batch_id defaults to None → singleton
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="lone", prompt="p"
+        )
+        assert await self._settle(mgr, jid) is True
+        assert len(sends) == 1
+        # single-job text + single-job metadata (no batch key) — the UNCHANGED path
+        assert "background job bg-" in sends[0]["text"]
+        assert "background_batch_id" not in sends[0]["metadata"]
+        assert sends[0]["metadata"]["background_job_id"] == jid
+
+    async def test_batch_of_one_is_a_singleton(self, tmp_path):
+        mgr = _manager(tmp_path, batch_join_timeout_s=1000)
+        sends = self._patch_send(mgr)
+        jid = self._member(mgr, "batch-solo")
+        assert await self._settle(mgr, jid) is True  # batch_size 1 → singleton path
+        assert len(sends) == 1
+        assert "background_batch_id" not in sends[0]["metadata"]
+
+    async def test_failed_member_counts_as_settled_and_in_summary(self, tmp_path):
+        mgr = _manager(tmp_path, batch_join_timeout_s=1000)
+        sends = self._patch_send(mgr)
+        a = self._member(mgr, "batch-A")
+        b = self._member(mgr, "batch-A")
+        assert await self._settle(mgr, a, status="failed", result="boom") is None
+        assert await self._settle(mgr, b, status="completed", result="ok") is True
+        assert len(sends) == 1
+        text = sends[0]["text"]
+        assert "completed 1" in text and "failed 1" in text
+        assert "all 2 background jobs" in text
+
+    async def test_straggler_timeout_forces_partial_join(self, tmp_path):
+        mgr = _manager(tmp_path, batch_join_timeout_s=0.05)  # tiny straggler window
+        sends = self._patch_send(mgr)
+        a = self._member(mgr, "batch-A")
+        b = self._member(mgr, "batch-A")  # left running — the straggler
+        assert await self._settle(mgr, a) is None  # holds + arms the timeout
+        assert sends == []
+        for _ in range(200):  # let the straggler timeout fire the partial join
+            if sends:
+                break
+            await asyncio.sleep(0.01)
+        assert len(sends) == 1
+        text = sends[0]["text"]
+        assert "1 of 2 background jobs" in text
+        assert "still running" in text
+        assert "batch-A" in mgr._joined_batches
+        # the hung member finishing later must NOT fire a second nudge
+        assert await self._settle(mgr, b) is None
+        assert len(sends) == 1
+
+
 # ── Phase 2: autonomous idle-wake (server/a2a.py) ────────────────────────────
 
 
@@ -681,10 +887,14 @@ class _RecordingBG:
     def __init__(self):
         self.seen_origin = "__unset__"
         self.seen_incognito = None
+        self.seen_batch_id = "__unset__"
 
-    async def spawn(self, *, origin_session, subagent_type, description, prompt, origin_incognito=False):
+    async def spawn(
+        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None
+    ):
         self.seen_origin = origin_session
         self.seen_incognito = origin_incognito
+        self.seen_batch_id = batch_id
         return "bg-test-1"
 
 
@@ -698,6 +908,7 @@ async def test_background_task_stamps_the_turn_session_as_origin(monkeypatch):
     from graph.config import LangGraphConfig
 
     task_call = AIMessage(
+        id="turn-single-1",  # #1766: the emitting turn's id becomes the job's batch_id
         content="",
         tool_calls=[
             {
@@ -729,6 +940,9 @@ async def test_background_task_stamps_the_turn_session_as_origin(monkeypatch):
         config={"configurable": {"thread_id": "t1"}},
     )
     assert bg.seen_origin == "sess-BG"
+    # A lone task carries the emitting turn's id as its batch_id (#1766) — the store then
+    # sees batch_size 1 → the unchanged singleton push-resume.
+    assert bg.seen_batch_id == "turn-single-1"
 
 
 # ── task_batch(run_in_background=True) stamps the session + spawns every spec ──
@@ -741,8 +955,17 @@ class _RecordingBatchBG:
     def __init__(self):
         self.spawns: list[dict] = []
 
-    async def spawn(self, *, origin_session, subagent_type, description, prompt, origin_incognito=False):
-        self.spawns.append({"origin": origin_session, "subagent_type": subagent_type, "description": description})
+    async def spawn(
+        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None
+    ):
+        self.spawns.append(
+            {
+                "origin": origin_session,
+                "subagent_type": subagent_type,
+                "description": description,
+                "batch_id": batch_id,
+            }
+        )
         return f"bg-{len(self.spawns)}"
 
 
@@ -756,6 +979,7 @@ async def test_background_batch_stamps_session_and_spawns_all(monkeypatch):
     from graph.config import LangGraphConfig
 
     batch_call = AIMessage(
+        id="turn-batch-1",  # #1766: shared by every spec's job as the fan-out batch key
         content="",
         tool_calls=[
             {
@@ -790,3 +1014,6 @@ async def test_background_batch_stamps_session_and_spawns_all(monkeypatch):
     assert len(bg.spawns) == 2
     assert {s["origin"] for s in bg.spawns} == {"sess-BB"}
     assert {s["description"] for s in bg.spawns} == {"topic a", "topic b"}
+    # Every spec's job shares ONE batch_id — the emitting turn's id (#1766) — so their
+    # completions coalesce into a single push-resume.
+    assert {s["batch_id"] for s in bg.spawns} == {"turn-batch-1"}
