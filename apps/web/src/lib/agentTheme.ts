@@ -1,5 +1,7 @@
 import { applyStoredTheme } from "@protolabsai/ui/theming";
 
+import { resolveThemeToPersist } from "./themeMerge";
+
 // Bridge the per-agent server theme (/api/theme, ADR 0042) to the DS ThemePanel, which is
 // localStorage-backed (key "pl-theme", an opaque {mode, overrides} blob). The host round-trips
 // that blob: GET seeds localStorage + repaints; the panel's edits persist to localStorage; a
@@ -23,13 +25,21 @@ function clearOverrides() {
 /** Apply a server theme blob to the document (+ seed the panel's localStorage). `null`/empty
  *  resets to the design-system defaults. Crossfades via the View Transitions API where
  *  available (`animate`), so switching agents eases between looks — pass `animate: false` for
- *  the initial boot apply (nothing to crossfade from, and the snapshot can disrupt first paint). */
-export function applyAgentTheme(theme: unknown, animate = true) {
+ *  the initial boot apply (nothing to crossfade from, and the snapshot can disrupt first paint).
+ *
+ *  `preservePersisted` (the boot apply, #1762): the user's persisted working copy WINS over the
+ *  incoming agent default — so an unsaved tweak survives a reload and defaults only fill the
+ *  gaps, instead of the default blob clobbering the user's overrides on every mount. On an
+ *  explicit switch/reset (the default) we adopt the incoming theme verbatim (ADR 0042). */
+export function applyAgentTheme(theme: unknown, opts: { animate?: boolean; preservePersisted?: boolean } = {}) {
+  const { animate = true, preservePersisted = false } = opts;
   const apply = () => {
     clearOverrides();
-    if (theme && typeof theme === "object") {
+    // Boot merges persisted user overrides OVER the agent default; switch/reset replaces.
+    const blob = resolveThemeToPersist(theme, currentThemeBlob(), { preservePersisted });
+    if (blob) {
       try {
-        localStorage.setItem(PL_THEME_KEY, JSON.stringify(theme));
+        localStorage.setItem(PL_THEME_KEY, JSON.stringify(blob));
       } catch {
         /* ignore */
       }
