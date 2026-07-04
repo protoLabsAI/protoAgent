@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to roll back. Restore re-saves through the normal save+reload path, which snapshots the
   *current* persona first — so rolling back is itself reversible. (Console version-history UI
   is a follow-up.)
+- **Telemetry is tagged with the active persona revision** (#1691). Each per-turn telemetry
+  row now carries `soul_rev` — a short hash of the `SOUL.md` persona that was live for that
+  turn — so a run can be correlated with a specific soul-history version (which persona was
+  the agent running when it did X?). The same tag rides the realtime `turn.usage` bus event
+  and Langfuse trace metadata. Deliberately **not** a Prometheus label: a content hash is
+  high-cardinality and would blow up the metric series. (`config_io.soul_revision()` computes
+  it; the telemetry-store column is added via a guarded migration, so existing DBs upgrade in
+  place.)
 - **Plugin setup: a "needs setup" cue + guided config for unconfigured plugins**
   (#1719, console). Building on the required-config gate below, an **incomplete**
   plugin (loaded but missing a `required: true` setting) now shows a ⚠️ **"needs

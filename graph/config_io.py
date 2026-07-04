@@ -790,6 +790,15 @@ def read_soul() -> str:
     return ""
 
 
+def soul_revision() -> str:
+    """A short, stable fingerprint (8-char SHA-1) of the CURRENT effective persona (SOUL.md,
+    seed-fallback included) — so a run's telemetry can be tagged with which persona was live
+    (#1691). Empty string when there's no persona text. Matches the content-hash suffix of the
+    soul-history version ids, so a tagged run can be lined up with an archived version."""
+    text = read_soul()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8] if text else ""
+
+
 def write_soul(text: str) -> list[Path]:
     """Write persona text to the instance's live ``SOUL.md`` (mkdir parents).
 

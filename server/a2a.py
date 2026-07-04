@@ -465,6 +465,16 @@ def _record_a2a_telemetry(outcome) -> None:
     except Exception:  # noqa: BLE001 — the Prometheus metric must never break a turn
         pass
 
+    # Which persona (SOUL.md) was live for this turn (#1691), so telemetry can be correlated
+    # with a soul-history version. Deliberately NOT a Prometheus label — a content hash is
+    # high-cardinality and would explode the metric series. Best-effort: never break a turn.
+    try:
+        from graph.config_io import soul_revision
+
+        soul_rev = soul_revision()
+    except Exception:  # noqa: BLE001
+        soul_rev = ""
+
     # Realtime cost/usage on the bus (ADR 0051 Slice 3) — a per-turn HUD can show live
     # spend without polling the telemetry store. Independent of the SQL store.
     try:
@@ -480,6 +490,7 @@ def _record_a2a_telemetry(outcome) -> None:
                 "output_tokens": int(_u.get("output_tokens", 0) or 0),
                 "cost_usd": round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6),
                 "duration_ms": int(getattr(outcome, "duration_ms", 0) or 0),
+                "soul_rev": soul_rev,
             },
         )
     except Exception:  # noqa: BLE001 — best-effort
@@ -520,6 +531,7 @@ def _record_a2a_telemetry(outcome) -> None:
                 "tool_calls": int(outcome.tool_calls),
                 "created_at": created.isoformat(),
                 "ended_at": ended.isoformat(),
+                "soul_rev": soul_rev,
             }
         )
     except Exception:  # noqa: BLE001 — telemetry is best-effort

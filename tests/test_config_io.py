@@ -329,6 +329,28 @@ def test_write_soul_writes_instance_soul(monkeypatch, tmp_path: Path) -> None:
     assert target.read_text() == "hello world"
 
 
+def test_soul_revision_hashes_the_current_persona(monkeypatch, tmp_path: Path) -> None:
+    """soul_revision() is a short SHA-1 of the effective persona — for tagging telemetry."""
+    import hashlib
+
+    from graph import config_io
+
+    home = tmp_path / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "config" / "SOUL.md").write_text("persona text", encoding="utf-8")
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+
+    assert config_io.soul_revision() == hashlib.sha1(b"persona text").hexdigest()[:8]
+
+
+def test_soul_revision_empty_when_no_persona(monkeypatch, tmp_path: Path) -> None:
+    from graph import config_io
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "empty"))
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: tmp_path / "no-seed.md")
+    assert config_io.soul_revision() == ""
+
+
 # ── Gateway model listing ────────────────────────────────────────────────────
 
 
