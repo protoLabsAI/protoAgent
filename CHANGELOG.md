@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-07-04
+
 ### Added
 - **Goal completion contracts** (ADR 0073). A goal can now carry an optional, structured
   *completion contract* — `outcome` (the single required end-state), `constraints` (invariants
