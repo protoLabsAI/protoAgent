@@ -1,5 +1,28 @@
 [
   {
+    "version": "v0.89.0",
+    "date": "2026-07-04",
+    "changes": [
+      "Quick-chat with any fleet agent from the command palette",
+      "SOUL.md keeps a version history — never lose a persona iteration",
+      "Telemetry is tagged with the active persona revision",
+      "Browser-style UI zoom — ⌘/Ctrl + / - / 0",
+      "Plugin setup: a \"needs setup\" cue + guided config for unconfigured plugins",
+      "Plugins declare required config and degrade gracefully when it's missing",
+      "Opt-in plugin auto-update policy",
+      "coder.solve() can run one forced rung, for testing",
+      "Plugins can open a form in the chat, not just reply",
+      "/effort opens a picker in the composer",
+      "Watches honor their per-watch interval_s cadence",
+      "Hot-reloading a plugin refreshes its goal/watch verifier + hook registries",
+      "Plugin smoke tests can assert surface lifecycle wiring",
+      "The plugin loader no longer nags about the prescribed /api/plugins/<id> data router",
+      "A manifest-less ghost dir under plugins/ no longer blocks install/uninstall",
+      "A dropped provider stream reconnects instead of killing the turn",
+      "A locked checkpoint write no longer silently kills a background turn"
+    ]
+  },
+  {
     "version": "v0.88.0",
     "date": "2026-07-03",
     "changes": [

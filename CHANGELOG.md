@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.89.0] - 2026-07-04
+
 ### Added
 - **Quick-chat with any fleet agent from the command palette** (#1733). ⌘K now has an
   **Agents** section listing every other reachable agent in your fleet (with its reachability
