@@ -66,6 +66,7 @@ import { ChatResumeWatch } from "./ChatResumeWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { bootGatePhase } from "./bootGate";
+import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { TenantGuard } from "./TenantGuard";
@@ -530,7 +531,10 @@ export function App() {
       // rather than adding a second rail item.
       .filter((s) => s.id !== "chat")
       .map((s): RailItem => ({ id: s.id, label: s.label, icon: s.icon }));
-    return [...ordered, ...extra, ...ext];
+    // `ext` is appended without a placement check, so a fork surface whose id collides with one
+    // already in `ordered`/`extra` would render a second time — a duplicate rail key that desyncs
+    // the DS sortable rail's index→id mapping. Dedup by id (first occurrence wins). (#1755)
+    return dedupeRailById([...ordered, ...extra, ...ext]);
   }
 
   // Right-click the EMPTY rail background (not an icon) → the "Hidden views" restore menu
