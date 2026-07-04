@@ -306,6 +306,17 @@
   word-break: break-word;
 }
 
+/* Server-initiated turn indicator (#1767): spinner + a muted, italic label naming the
+   trigger (background report / scheduled task / watch), so a self-POSTed turn the browser
+   can't stream reads as "the agent is working" instead of a hung app. */
+.chat-server-turn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
 /* An issued slash command rendered as a distinct USER bubble (#1529): a subtle accent
    tint + monospace body + a small "/" badge, so a command sent to the agent reads as a
    command in history — to operator and agent — not as prose. `.chat-slash-msg` sits ON

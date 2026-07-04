@@ -63,6 +63,7 @@ import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
+import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { bootGatePhase } from "./bootGate";
@@ -805,6 +806,11 @@ export function App() {
       {/* wait/scheduled resumes (ADR 0053, bd-k02): a server-fired resume turn lands in
           the chat thread; surface it live in the open tab instead of on next interaction. */}
       <ChatResumeWatch />
+      {/* Server-initiated turns (#1767): background push-resume / scheduled / watch fires
+          hold the connection open for the whole turn but never stream to the browser —
+          drive the chat typing indicator off turn.started/turn.finished so the app doesn't
+          look hung during its longest turns. */}
+      <ServerTurnWatch />
       {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
           a fork booted on the old port), drop the previous tenant's persisted chat view.
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps

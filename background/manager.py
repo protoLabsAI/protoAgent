@@ -208,6 +208,23 @@ class BackgroundManager:
         except Exception:  # noqa: BLE001 — the event is best-effort
             log.exception("[background] started-event publish failed for %s", job_id)
 
+    def _publish_turn(
+        self, topic: str, *, session_id: str, origin: str, trigger: str, ok: bool | None = None
+    ) -> None:
+        """Emit a turn-lifecycle event (#1767) around a server-initiated self-POST so an
+        open console can render its typing indicator during an otherwise-invisible turn
+        (the push-resume nudge holds the connection open for the WHOLE origin-session
+        turn). Best-effort — a publish failure never disturbs the fire."""
+        if self._publish is None:
+            return
+        data = {"session_id": session_id, "origin": origin, "trigger": trigger}
+        if ok is not None:
+            data["ok"] = ok
+        try:
+            self._publish(topic, data)
+        except Exception:  # noqa: BLE001 — the event is best-effort
+            log.exception("[background] %s publish failed for %s", topic, trigger)
+
     def _publish_completed(
         self, job_id: str, status: str, kind: str, description: str, origin_session: str, text: str
     ) -> None:
@@ -381,9 +398,17 @@ class BackgroundManager:
             f"[background job {job.id} ({job.description}) {verb} — its report notification "
             "is attached to this turn; review it and brief the operator]"
         )
+        # Turn-lifecycle events (#1767): the nudge holds the connection open for the whole
+        # origin-session turn (the agent briefs the operator against the drained report),
+        # which the console can't otherwise see — no typing indicator, no stream. Emit
+        # `turn.started` before and `turn.finished` after so an open origin-session tab
+        # renders its typing indicator ("responding to background reports…") for the turn.
+        session_id = job.origin_session
+        self._publish_turn("turn.started", session_id=session_id, origin="background-resume", trigger=job.id)
+        ok = False
         try:
             await self._send_a2a_message(
-                context_id=job.origin_session,
+                context_id=session_id,
                 text=text,
                 metadata={
                     # NOT "background": the terminal hook routes origin=="background"
@@ -394,6 +419,7 @@ class BackgroundManager:
                     "background_job_id": job.id,
                 },
             )
+            ok = True
             return True
         except Exception as exc:  # noqa: BLE001 — push-resume is best-effort by contract
             log.warning(
@@ -404,6 +430,10 @@ class BackgroundManager:
                 exc,
             )
             return False
+        finally:
+            self._publish_turn(
+                "turn.finished", session_id=session_id, origin="background-resume", trigger=job.id, ok=ok
+            )
 
 
 def _subagent_fence(subagent_type: str) -> list[str]:
