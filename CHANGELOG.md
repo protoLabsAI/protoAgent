@@ -31,6 +31,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a missing workspace or a boot-time spawn failure is logged and skipped, never blocking
   boot or the rest of the roster), and hub-only (a member's own scoped config carries no
   roster, so it no-ops inside a member). Surfaced in Settings ▸ Host as "Autostart members".
+- **Guided goal-creation form** (ADR 0073, Part 2). A console form for setting a goal with its
+  verifier and completion contract, without hand-writing verifier JSON. It's a **two-step wizard**
+  rendered through the same `HitlForm` composer-form seam as `/effort`'s picker: step 1 is the goal
+  + a verifier type from option cards (`command` · `test` · `ci` · `data` · `llm`, default `llm`)
+  with a **type-aware** verification input — only the field the picked verifier actually needs is
+  shown (a shell command, a PR #/branch, or a file + "must contain" substring); step 2 is the
+  optional contract (outcome, constraints/boundaries one-per-line, `stop_when`, max iterations).
+  Two entry points: **`/goal new`** opens it in the chat composer (bare `/goal`, `/goal <text>`,
+  and `/goal clear` still pass through to the server command unchanged), and the **Goals panel's
+  "New goal"** action opens the same form inline. Submits to the operator `POST /api/goals`; a
+  rejected verifier / disabled goal mode surfaces the server's message.
+- **Composer/HITL forms support conditional fields** (`HitlForm`). A form field can declare
+  `showWhen: { field, equals | in }` and renders (and is required-gated) only when a sibling
+  field's answer matches — mirroring the settings `depends_on` convention. So **any** agent
+  `request_user_input` form, not just the goal form, can show the right inputs for the chosen
+  path (the goal form uses it for the type-aware verifier detail).
+- **`/goal {json}` carries the completion contract** (ADR 0073). The chat/programmatic
+  `/goal {"condition": …, "verifier": …, "constraints": […], "boundaries": […], "stop_when": …}`
+  path now accepts the contract fields too (previously API/form-only), so the full contract is
+  settable from chat and exercisable by the goal evals. It's directive prose (no code-exec), so —
+  unlike the verifier — it's not trust-gated.
 
 ## [0.90.0] - 2026-07-04
 

@@ -60,3 +60,10 @@
   margin: 0;
   font-size: 11px;
 }
+
+/* Inline guided goal form (ADR 0073, Part 2) — hosts the shared HitlForm in the panel.
+   HitlForm's own .hitl-card carries the border/padding; this wrapper just adds a little
+   top breathing room below the header so the card doesn't butt against it. */
+.goal-form-host {
+  padding-top: 8px;
+}

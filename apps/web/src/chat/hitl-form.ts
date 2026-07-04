@@ -18,6 +18,11 @@ export type FieldSchema = {
   default?: unknown;
   // Opt a bare `enum` into card rendering (otherwise an enum stays a dropdown).
   "x-display"?: string;
+  // Conditional visibility (mirrors the settings `depends_on` convention): this field
+  // renders only when a sibling field's answer matches. `equals` = strict equality; `in` =
+  // membership; neither = the sibling is truthy. A hidden field is skipped by required-
+  // gating too, so an optional-when-hidden field never blocks Next/Submit.
+  showWhen?: { field: string; equals?: unknown; in?: unknown[] };
 };
 
 export type FieldEntry = [key: string, schema: FieldSchema, required: boolean];
@@ -79,10 +84,27 @@ export function hasValue(schema: FieldSchema, value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
-/** Required field keys in this step that are still empty — non-empty ⇒ block Next/Submit. */
+/** Should this field render, given the current answers? A field with no `showWhen` always
+ *  shows; otherwise its condition must match the sibling field's value. */
+export function isFieldVisible(schema: FieldSchema, values: Record<string, unknown>): boolean {
+  const cond = schema?.showWhen;
+  if (!cond || !cond.field) return true;
+  const v = values[cond.field];
+  if (Array.isArray(cond.in)) return cond.in.some((x) => x === v);
+  if (cond.equals !== undefined) return v === cond.equals;
+  return Boolean(v); // showWhen with neither equals nor in ⇒ sibling is truthy
+}
+
+/** The step's fields that are visible under the current answers (drops `showWhen`-hidden). */
+export function visibleFieldsOf(step: HitlFormStep | undefined, values: Record<string, unknown>): FieldEntry[] {
+  return fieldsOf(step).filter(([, schema]) => isFieldVisible(schema, values));
+}
+
+/** Required field keys in this step that are still empty — non-empty ⇒ block Next/Submit.
+ *  A `showWhen`-hidden field is never "missing" (it isn't asked, so it can't gate). */
 export function missingInStep(step: HitlFormStep | undefined, values: Record<string, unknown>): string[] {
   return fieldsOf(step)
-    .filter(([key, schema, required]) => required && !hasValue(schema, values[key]))
+    .filter(([key, schema, required]) => required && isFieldVisible(schema, values) && !hasValue(schema, values[key]))
     .map(([key]) => key);
 }
 
