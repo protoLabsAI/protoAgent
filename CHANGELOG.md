@@ -67,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `timeout` still overrides. Raising `poll_timeout_s` now lifts the ceiling for both synchronous
   and async peers, matching what the setting says it does. This is what made a delegating fleet
   (a lead + specialist members) actually usable for real work rather than trivial ACKs.
+- **A baked persona is no longer shadowed forever by a stale live `SOUL.md`** (#1782). A member
+  seeded from an archetype bundle bakes its persona into the image, but a leftover live `SOUL.md`
+  in the instance volume shadowed it permanently. Boot now seeds the live SOUL from the baked
+  default when it's absent and heals a shadowing copy, so a declared persona actually takes effect.
 ### Changed
 - **Memory ▸ Injections is legible to non-developers** (ADR 0069 D6/D7). The per-turn record
   was a forensics table of comma-joined raw ids (digest sessions · hot chunks · RAG chunks) —
