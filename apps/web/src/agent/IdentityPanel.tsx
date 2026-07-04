@@ -10,6 +10,7 @@ import { Eye, Pencil, Save } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { Markdown } from "../chat/LazyMarkdown";
+import { SoulHistory } from "./SoulHistory";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 
@@ -57,6 +58,19 @@ export function IdentityPanel() {
     },
     onError: () => toast({ tone: "error", title: "Save failed", message: "Check the server log." }),
   });
+
+  // A version restore re-writes SOUL.md out-of-band (through the same cascade a Save uses), so pull
+  // the fresh config and re-seed the editor to the restored persona. Only re-seed when the field is
+  // clean — an unsaved draft in the textarea shouldn't be clobbered by someone hitting Restore.
+  const handleRestored = async () => {
+    const fresh = await qc.fetchQuery({ queryKey: ["config"], queryFn: () => api.config() });
+    if (!dirty) {
+      setName(fresh.config?.identity?.name || "");
+      setSoul(fresh.soul || "");
+      setEditing(false);
+    }
+    qc.invalidateQueries({ queryKey: queryKeys.runtime });
+  };
 
   return (
     <section className="panel stage-panel">
@@ -113,6 +127,7 @@ export function IdentityPanel() {
                 </div>
               )}
             </div>
+            <SoulHistory onRestored={handleRestored} />
           </>
         )}
       </div>

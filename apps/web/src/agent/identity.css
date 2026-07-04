@@ -45,3 +45,124 @@
   font-size: 12px;
   margin: 0;
 }
+
+/* Persona version history (#1691) — sits below the editor. The editor (.soul-field, flex:1)
+   owns the elastic space; the history keeps its natural height and scrolls its own list, so a
+   long list never pushes the editor off-panel. */
+.soul-history {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.soul-history-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+}
+.soul-history-count {
+  font-variant-numeric: tabular-nums;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+  font-size: 11px;
+  text-align: center;
+}
+.soul-history-empty {
+  font-size: 12px;
+  margin: 0;
+}
+.soul-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+.soul-history-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
+.soul-history-item.is-current {
+  border-color: color-mix(in srgb, var(--accent, var(--fg)) 45%, var(--border));
+}
+.soul-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 6px;
+}
+.soul-history-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--fg);
+  text-align: left;
+  font: inherit;
+}
+.soul-history-toggle > svg { flex-shrink: 0; opacity: 0.6; }
+.soul-history-when {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--fg) 78%, transparent);
+}
+.soul-history-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, var(--fg)) 18%, transparent);
+  color: color-mix(in srgb, var(--accent, var(--fg)) 90%, var(--fg));
+}
+.soul-history-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg) 52%, transparent);
+}
+.soul-history-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.soul-history-body {
+  margin: 0 8px 8px;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+}

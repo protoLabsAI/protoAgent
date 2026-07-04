@@ -33,6 +33,7 @@ import type {
   SetupStatus,
   SettingsGroup,
   SlashCommand,
+  SoulVersion,
   Playbook,
   Subagent,
   ToolInfo,
@@ -957,6 +958,20 @@ export const api = {
 
   soulPreset(name: string) {
     return request<{ name: string; content: string }>(`/api/config/presets/${encodeURIComponent(name)}`);
+  },
+
+  // SOUL.md version history (#1691): every persona save archives the outgoing text.
+  soulHistory() {
+    return request<{ versions: SoulVersion[] }>("/api/config/soul/history");
+  },
+  soulVersion(id: string) {
+    return request<{ id: string; content: string }>(`/api/config/soul/history/${encodeURIComponent(id)}`);
+  },
+  restoreSoulVersion(id: string) {
+    return request<{ ok: boolean; messages: string[]; restored: string }>(
+      `/api/config/soul/history/${encodeURIComponent(id)}/restore`,
+      { method: "POST" },
+    );
   },
 
   models(apiBase: string, apiKey: string) {

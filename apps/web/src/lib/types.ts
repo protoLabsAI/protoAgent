@@ -863,3 +863,13 @@ export type FlagInfo = {
   source: "channel" | "env";
 };
 export type FlagsPayload = { channel: FlagChannel; flags: FlagInfo[] };
+
+// A recorded SOUL.md persona snapshot (#1691). `saved_at` is ISO-8601 UTC (or "" if
+// unparseable); `is_current` marks the one whose text matches the live persona.
+export type SoulVersion = {
+  id: string;
+  saved_at: string;
+  size: number;
+  preview: string;
+  is_current: boolean;
+};
