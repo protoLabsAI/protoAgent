@@ -65,6 +65,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `timeout` still overrides. Raising `poll_timeout_s` now lifts the ceiling for both synchronous
   and async peers, matching what the setting says it does. This is what made a delegating fleet
   (a lead + specialist members) actually usable for real work rather than trivial ACKs.
+### Changed
+- **Memory ▸ Injections is legible to non-developers** (ADR 0069 D6/D7). The per-turn record
+  was a forensics table of comma-joined raw ids (digest sessions · hot chunks · RAG chunks) —
+  meaningless unless you knew the schema. It's now a plain-language table — **when** · **what it
+  used** (e.g. `3 memories · 2 past chats · 4 docs`, derived from the id-array lengths, no backend
+  needed) · **context** (`~N tokens`) — and each row is clickable. A new
+  `GET /api/memory/injections/{id}` resolves that record's ids into their actual content, shown in
+  a detail dialog grouped as **Past conversations** (session titles), **Memories** (heading +
+  snippet), and **Docs** (source + snippet); a chunk that was pruned/deleted renders as
+  "no longer stored" rather than failing. Best-effort throughout — a missing knowledge store or a
+  gone chunk never 500s the dialog.
 
 ## [0.90.0] - 2026-07-04
 

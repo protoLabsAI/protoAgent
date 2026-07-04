@@ -100,6 +100,17 @@ class InjectionLog:
         finally:
             db.close()
 
+    @staticmethod
+    def _decode(row: sqlite3.Row) -> dict:
+        """One row → dict with the JSON id-columns decoded to Python lists."""
+        d = dict(row)
+        for col in _JSON_COLUMNS:
+            try:
+                d[col] = json.loads(d.get(col) or "[]")
+            except (json.JSONDecodeError, TypeError):
+                d[col] = []
+        return d
+
     def recent(self, session_id: str | None = None, limit: int = 50) -> list[dict]:
         """Injection rows, newest first, id-list columns decoded to Python lists.
 
@@ -120,16 +131,24 @@ class InjectionLog:
             return []
         finally:
             db.close()
-        out: list[dict] = []
-        for r in rows:
-            d = dict(r)
-            for col in _JSON_COLUMNS:
-                try:
-                    d[col] = json.loads(d.get(col) or "[]")
-                except (json.JSONDecodeError, TypeError):
-                    d[col] = []
-            out.append(d)
-        return out
+        return [self._decode(r) for r in rows]
+
+    def get(self, record_id: int) -> dict | None:
+        """One injection row by id (JSON id-columns decoded), or None if there is
+        no row with that id. The detail read behind
+        ``GET /api/memory/injections/{record_id}`` — the resolver turns the ids
+        this returns into their referenced content."""
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT * FROM injections WHERE id = ?", (int(record_id),)
+            ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[injection-log] get failed: %s", exc)
+            return None
+        finally:
+            db.close()
+        return self._decode(row) if row is not None else None
 
 
 # ---------------------------------------------------------------------------

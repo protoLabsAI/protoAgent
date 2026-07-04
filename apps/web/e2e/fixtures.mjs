@@ -847,6 +847,33 @@ export const MEMORY_INJECTIONS = [
   },
 ];
 
+// Resolved detail (GET /api/memory/injections/{id}) keyed by record id — the ids
+// above turned into their referenced content for the click-through dialog. Row 7
+// exercises every group (a pruned doc is marked unavailable).
+export const MEMORY_INJECTION_DETAILS = {
+  7: {
+    ts: "2026-06-30T18:05:00+00:00",
+    session_id: "chat-1750000000000-abc123",
+    approx_tokens: 420,
+    past_sessions: [{ id: "sched-hourly-report", title: "send the hourly report" }],
+    memories: [
+      { id: 31, heading: "Operator timezone", snippet: "The operator works in US/Pacific.", unavailable: false },
+      { id: 32, heading: null, snippet: "Weekly report goes out Fridays at 9am.", unavailable: false },
+    ],
+    docs: [{ id: 11, source: null, snippet: null, unavailable: true }],
+  },
+  6: {
+    ts: "2026-06-30T17:01:00+00:00",
+    session_id: "sched-hourly-report",
+    approx_tokens: 120,
+    past_sessions: [],
+    memories: [
+      { id: 31, heading: "Operator timezone", snippet: "The operator works in US/Pacific.", unavailable: false },
+    ],
+    docs: [],
+  },
+};
+
 // Delegate registry (ADR 0025) — types schema + a sample roster for the panel.
 export const DELEGATE_TYPES = {
   types: [

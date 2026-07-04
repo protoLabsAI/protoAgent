@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { Alert } from "@protolabsai/ui/data";
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
-import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Flame, History, Pencil, Syringe, Trash2 } from "lucide-react";
 
@@ -12,8 +12,14 @@ import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
 import { ago, bytes, errMsg } from "../lib/format";
 import { queryKeys } from "../lib/queries";
-import type { MemoryHotChunk, MemorySessionDigest } from "../lib/types";
+import type {
+  MemoryHotChunk,
+  MemoryInjectionDetail,
+  MemoryInjectionRow,
+  MemorySessionDigest,
+} from "../lib/types";
 
+import { injectionSummary } from "./injectionSummary";
 import "./memory.css";
 
 // Memory inspector (ADR 0069 D7) — the audit surface over the memory DELIVERY
@@ -411,60 +417,166 @@ function InjectionsPanel({ filter, setFilter }: { filter: string; setFilter: (v:
   });
   const rows = data?.injections ?? [];
 
-  const idList = (ids: Array<string | number>) =>
-    ids.length ? <code>{ids.join(", ")}</code> : <span className="memory-none">—</span>;
+  // The record whose detail dialog is open (null = closed). The dialog resolves
+  // this record's ids → their actual content on open.
+  const [openRow, setOpenRow] = useState<MemoryInjectionRow | null>(null);
 
   return (
     <>
       <div className="memory-panel-head">
         <p className="memory-panel-hint">
-          The per-turn injection record — which digest sessions, hot chunks, and RAG chunks
-          entered each model call. This is the "why did it say that?" / poisoning-forensics
-          trail.
+          What the agent pulled into memory for each turn — click a row to see exactly what.
         </p>
         <RefreshButton onClick={() => void refetch()} busy={isFetching} />
       </div>
       <Input
         type="search"
-        placeholder="Exact session id (blank = all sessions)…"
+        placeholder="Filter by exact chat/session id (blank = all)…"
         value={input}
         onChange={(e) => setInput(e.target.value)}
         aria-label="filter injections by session id"
       />
-      {error ? <Alert status="error">Couldn't read the injection log — {errMsg(error)}</Alert> : null}
+      {error ? <Alert status="error">Couldn't read the memory record — {errMsg(error)}</Alert> : null}
       {!error && rows.length === 0 ? (
         <Empty
-          title="No injection records"
-          description={filter ? "no recorded turns for that session id." : "records appear as turns run."}
+          title="Nothing here yet"
+          description={
+            filter ? "no turns recorded for that id." : "each turn the agent takes shows up here."
+          }
         />
       ) : (
         <table className="memory-injections">
           <thead>
             <tr>
               <th>when</th>
-              <th>session</th>
-              <th>digest sessions</th>
-              <th>hot chunks</th>
-              <th>RAG chunks</th>
-              <th>~tokens</th>
+              <th>what it used</th>
+              <th>context</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id}>
-                <td title={r.ts}>{ago(r.ts)}</td>
+              <tr
+                key={r.id}
+                className="memory-injections-row"
+                role="button"
+                tabIndex={0}
+                aria-label={`${ago(r.ts)} — used ${injectionSummary(r)}; open details`}
+                onClick={() => setOpenRow(r)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setOpenRow(r);
+                  }
+                }}
+              >
                 <td>
-                  <code>{r.session_id}</code>
+                  {/* DS Tooltip (never HTML title=) surfaces the exact timestamp. */}
+                  <Tooltip label={r.ts}>
+                    <span>{ago(r.ts)}</span>
+                  </Tooltip>
                 </td>
-                <td>{idList(r.digest_session_ids)}</td>
-                <td>{idList(r.hot_chunk_ids)}</td>
-                <td>{idList(r.rag_chunk_ids)}</td>
-                <td>{r.approx_tokens}</td>
+                <td className="memory-injections-what">{injectionSummary(r)}</td>
+                <td className="memory-injections-context">~{r.approx_tokens} tokens</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+      {openRow ? <InjectionDetailDialog row={openRow} onClose={() => setOpenRow(null)} /> : null}
     </>
+  );
+}
+
+// The click-through detail: resolves ONE injection record's ids into the actual
+// items the turn used, grouped (past conversations · memories · docs). Fetches
+// on open (the table itself needs no resolve — its counts are the id arrays).
+function InjectionDetailDialog({
+  row,
+  onClose,
+}: {
+  row: MemoryInjectionRow;
+  onClose: () => void;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: queryKeys.memoryInjectionDetail(row.id),
+    queryFn: () => api.memoryInjectionDetail(row.id),
+  });
+
+  return (
+    <Dialog open onClose={onClose} title="What this turn used" width="min(560px, 94vw)">
+      {/* Time + cost render immediately from the row we already have. */}
+      <p className="memory-detail-meta">
+        {ago(row.ts)} · ~{row.approx_tokens} tokens
+      </p>
+      {isLoading ? (
+        <p className="memory-panel-hint">Loading the details…</p>
+      ) : error ? (
+        <Alert status="error">Couldn't load the details — {errMsg(error)}</Alert>
+      ) : data ? (
+        <InjectionDetailBody detail={data} />
+      ) : null}
+    </Dialog>
+  );
+}
+
+function InjectionDetailBody({ detail }: { detail: MemoryInjectionDetail }) {
+  const isEmpty =
+    detail.past_sessions.length === 0 && detail.memories.length === 0 && detail.docs.length === 0;
+  if (isEmpty) {
+    return <p className="memory-panel-hint">This turn didn't pull in any stored memory.</p>;
+  }
+  return (
+    <div className="memory-detail">
+      {detail.past_sessions.length ? (
+        <section className="memory-detail-group">
+          <h4>Past conversations ({detail.past_sessions.length})</h4>
+          <ul>
+            {detail.past_sessions.map((s) => (
+              <li key={s.id}>
+                <span className="memory-detail-line">{s.title || s.id}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {detail.memories.length ? (
+        <section className="memory-detail-group">
+          <h4>Memories ({detail.memories.length})</h4>
+          <ul>
+            {detail.memories.map((m) => (
+              <li key={m.id}>
+                {m.unavailable ? (
+                  <span className="memory-detail-gone">no longer stored</span>
+                ) : (
+                  <>
+                    {m.heading ? <strong className="memory-detail-heading">{m.heading}</strong> : null}
+                    {m.snippet ? <span className="memory-detail-snippet">{m.snippet}</span> : null}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {detail.docs.length ? (
+        <section className="memory-detail-group">
+          <h4>Docs ({detail.docs.length})</h4>
+          <ul>
+            {detail.docs.map((d) => (
+              <li key={d.id}>
+                {d.unavailable ? (
+                  <span className="memory-detail-gone">no longer stored</span>
+                ) : (
+                  <>
+                    {d.source ? <span className="memory-detail-source">{d.source}</span> : null}
+                    {d.snippet ? <span className="memory-detail-snippet">{d.snippet}</span> : null}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
   );
 }

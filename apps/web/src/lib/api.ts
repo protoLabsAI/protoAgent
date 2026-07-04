@@ -26,6 +26,7 @@ import type {
   PluginUpdate,
   KnowledgeChunk,
   MemoryHotChunk,
+  MemoryInjectionDetail,
   MemoryInjectionRow,
   MemorySessionDigest,
   RuntimeStatus,
@@ -868,6 +869,12 @@ export const api = {
     if (sessionId) q.set("session_id", sessionId);
     q.set("limit", String(limit));
     return request<{ injections: MemoryInjectionRow[] }>(`/api/memory/injections?${q}`);
+  },
+  // One record's ids RESOLVED to their content, grouped for the detail dialog
+  // (past conversations · memories · docs). Chunks that no longer resolve come
+  // back marked `unavailable`.
+  memoryInjectionDetail(id: number) {
+    return request<MemoryInjectionDetail>(`/api/memory/injections/${id}`);
   },
 
   // Chat attachment — extract + TIER a dropped file (FormData: `file` + `session_id`).
