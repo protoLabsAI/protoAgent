@@ -391,3 +391,39 @@ describe("api.backgroundJob / loadBackgroundReport (ADR 0070 D4)", () => {
     expect(calls).toEqual([`/api/background/${JOB}`]); // never reached the list
   });
 });
+
+// ── SOUL.md version history (#1691) ────────────────────────────────────────────
+// The three routes the version-history panel drives: list, fetch-one, restore.
+describe("api soul version history (#1691)", () => {
+  beforeEach(() => window.history.replaceState({}, "", "/app/")); // host window, no slug prefix
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("soulHistory GETs the history list route", async () => {
+    const calls = stubFetch(() => json({ versions: [] }));
+    await expect(api.soulHistory()).resolves.toEqual({ versions: [] });
+    expect(calls).toEqual(["/api/config/soul/history"]);
+  });
+
+  it("soulVersion GETs one version and URL-encodes the id", async () => {
+    const calls = stubFetch(() => json({ id: "a/b", content: "# persona" }));
+    const res = await api.soulVersion("a/b");
+    expect(res.content).toBe("# persona");
+    expect(calls).toEqual(["/api/config/soul/history/a%2Fb"]); // encodeURIComponent, not a path split
+  });
+
+  it("restoreSoulVersion POSTs to the restore route", async () => {
+    const seen: { path: string; method?: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ path: String(input), method: init?.method });
+        return json({ ok: true, messages: ["reloaded"], restored: "20260101T000000.000000Z-abcd1234" });
+      }),
+    );
+    const res = await api.restoreSoulVersion("20260101T000000.000000Z-abcd1234");
+    expect(res.ok).toBe(true);
+    expect(res.messages).toEqual(["reloaded"]);
+    expect(seen[0].path).toBe("/api/config/soul/history/20260101T000000.000000Z-abcd1234/restore");
+    expect(seen[0].method).toBe("POST");
+  });
+});
