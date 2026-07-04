@@ -641,6 +641,10 @@
           "title": "0072 — Fleet seed: declare a team in config (team-via-config)"
         },
         {
+          "path": "adr/0073-goal-completion-contracts.md",
+          "title": "0073 — Goal completion contracts"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

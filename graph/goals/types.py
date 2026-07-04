@@ -48,6 +48,22 @@ class GoalState:
     session_id: str
     condition: str
     verifier: dict = field(default_factory=lambda: {"type": "llm"})
+    # --- completion contract (ADR 0073) -----------------------------------
+    # A structured layer OVER the verifier (the contract's *verification* stays
+    # ``verifier`` — the real, deterministic check). These fields shape the
+    # continuation prompt each drive turn; they never decide DONE (the verifier
+    # does). All default-empty, so a goal set without a contract is unchanged.
+    #   outcome     — the single required end-state, as a human summary
+    #                 (falls back to ``condition`` when empty; see ``resolved_outcome``).
+    #   constraints — invariants the agent must NOT violate/regress.
+    #   boundaries  — the files/dirs/systems in scope (stay inside these).
+    #   stop_when   — a condition under which the agent should PAUSE the drive
+    #                 loop and ask the operator (v1 = prompt-injected; the agent
+    #                 self-parks via the abandon/ask path — no auto-detection).
+    outcome: str = ""
+    constraints: list[str] = field(default_factory=list)
+    boundaries: list[str] = field(default_factory=list)
+    stop_when: str = ""
     status: str = "active"
     # Fresh-context mode (Ralph loop): each continuation turn starts a NEW
     # LangGraph thread so the model sees a clean slate — no accumulated
@@ -72,6 +88,17 @@ class GoalState:
     def active(self) -> bool:
         return self.status == "active"
 
+    @property
+    def resolved_outcome(self) -> str:
+        """The contract's required end-state — ``outcome`` when set, else the
+        ``condition`` (so a contract-less goal still has one)."""
+        return (self.outcome or "").strip() or self.condition
+
+    @property
+    def has_contract(self) -> bool:
+        """True when the goal carries any contract field beyond the bare condition/verifier."""
+        return bool(self.outcome or self.constraints or self.boundaries or self.stop_when)
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -86,6 +113,8 @@ class GoalState:
         vt = self.verifier.get("type", "llm")
         progress = f"iteration {self.iteration}/{self.max_iterations}"
         tag = ", fresh-context" if self.fresh_context else ""
+        if self.has_contract:
+            tag += ", contract"
         base = f"goal [{self.status}] via {vt}: {self.condition!r} ({progress}{tag})"
         if self.last_reason:
             base += f" — {self.last_reason}"

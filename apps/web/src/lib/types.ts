@@ -352,6 +352,14 @@ export type GoalState = {
   condition: string;
   status: string;
   verifier?: { type?: string } & Record<string, unknown>;
+  // Completion contract (ADR 0073) — a structured layer OVER the verifier that shapes
+  // each drive-turn continuation prompt (the verifier still decides DONE). All optional;
+  // absent on contract-less goals. Part 2's goal-creation form sets these; the GoalsPanel
+  // can surface them.
+  outcome?: string; // the single required end-state (human summary; defaults to condition)
+  constraints?: string[]; // invariants that must NOT change/regress
+  boundaries?: string[]; // files/dirs/systems in scope
+  stop_when?: string; // condition under which the agent pauses and asks the operator
   mode?: "drive" | "monitor";
   iteration?: number;
   max_iterations?: number;

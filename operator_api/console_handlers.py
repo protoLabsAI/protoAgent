@@ -385,14 +385,33 @@ async def _operator_goals_set(body: dict) -> dict:
     sid = str(body.get("session_id") or "").strip()
     if not sid:
         return {"ok": False, "error": "session_id is required"}
+    # Optional completion-contract fields (ADR 0073). Backward-compatible: a body
+    # with only {session_id, condition, verifier} still works. A string sent where
+    # a list is expected is coerced to a 1-element list; anything else is ignored
+    # (the controller re-coerces defensively too).
     ok, msg = STATE.goal_controller.set_goal_operator(
         sid,
         body.get("condition"),
         body.get("verifier") or {},
         max_iterations=body.get("max_iterations"),
         no_progress_limit=body.get("no_progress_limit"),
+        outcome=str(body.get("outcome") or ""),
+        constraints=_as_str_list(body.get("constraints")),
+        boundaries=_as_str_list(body.get("boundaries")),
+        stop_when=str(body.get("stop_when") or ""),
     )
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
+
+
+def _as_str_list(value) -> list[str]:
+    """Coerce a JSON-body contract list field to ``list[str]``: a bare string → a
+    1-element list, a list → stringified element-wise (blank entries dropped),
+    anything else (dict/number/None) → ``[]`` (ADR 0073)."""
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return []
 
 
 async def _operator_watches_list() -> dict:

@@ -1102,7 +1102,17 @@ export const api = {
   // the ADR 0066 path ceiling, so this accepts ANY verifier type (unlike the plugin-only SDK
   // path). A rejected verifier / disabled goal mode comes back as HTTP 400 (request() throws,
   // so the caller's onError surfaces the reason); the happy path returns {ok:true, message}.
-  setGoal(body: { session_id: string; condition: string; verifier: unknown }) {
+  // Optional completion-contract fields (ADR 0073) shape the drive-loop continuation
+  // prompt each turn — the verifier still decides DONE. All optional and backward-compatible.
+  setGoal(body: {
+    session_id: string;
+    condition: string;
+    verifier: unknown;
+    outcome?: string;
+    constraints?: string[];
+    boundaries?: string[];
+    stop_when?: string;
+  }) {
     return request<{ ok: boolean; message?: string; error?: string }>("/api/goals", {
       method: "POST",
       body,
