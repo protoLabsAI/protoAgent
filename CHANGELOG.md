@@ -53,6 +53,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settable from chat and exercisable by the goal evals. It's directive prose (no code-exec), so —
   unlike the verifier — it's not trust-gated.
 
+### Fixed
+- **`delegate_to` no longer hard-fails on member turns >60s** (#1778). Hub→member A2A
+  dispatch built its client with a flat 60s timeout on every request — but protoAgent's own
+  A2A server answers `SendMessage` **synchronously**, holding the connection open for the whole
+  delegated turn before returning the final Message. So any non-trivial member turn (tool calls +
+  reasoning) blew the 60s read and the lead silently fell back to answering itself; the 300s poll
+  never engaged because a synchronous peer returns a Message, not a Task envelope. The initial
+  read budget now tracks the delegate's **`poll_timeout_s`** (default 300s) instead of the flat
+  60s — connect stays short (10s) so an unreachable peer still fails fast, and an explicit per-call
+  `timeout` still overrides. Raising `poll_timeout_s` now lifts the ceiling for both synchronous
+  and async peers, matching what the setting says it does. This is what made a delegating fleet
+  (a lead + specialist members) actually usable for real work rather than trivial ACKs.
+
 ## [0.90.0] - 2026-07-04
 
 ### Added

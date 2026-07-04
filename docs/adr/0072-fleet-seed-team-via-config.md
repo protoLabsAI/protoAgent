@@ -147,9 +147,10 @@ lead config seed + fleet seed + N archetype bundles.
 2. **Per-member secrets** — overrides can reference `*_env` / `credentialsEnv`, but a
    team with distinct per-member credentials needs a story for routing secrets to the
    right member's `secrets.yaml` at seed time.
-3. **Delegation cost** — teams multiply delegate traffic; #1778 (the 60s synchronous
-   `SendMessage` timeout) should land first or the team's delegations silently fall
-   back on any non-trivial member turn.
+3. **Delegation cost** — teams multiply delegate traffic. ✅ **Resolved:** #1778 (the flat
+   60s synchronous `SendMessage` timeout that silently dropped any non-trivial member turn)
+   is fixed — the read budget now tracks `poll_timeout_s`, so a delegating team is usable for
+   real work, not just trivial ACKs. Per-member concurrency/rate limits remain a future concern.
 4. **Remote members** — the manifest assumes local (loopback) members. A `url:` escape
    hatch for a member that lives on another host (ADR 0042 remote members) is a natural
    extension but out of scope here.
