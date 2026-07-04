@@ -6,7 +6,6 @@ import {
   BookOpen,
   Boxes,
   CalendarClock,
-  CircleAlert,
   FileText,
   Gauge,
   Inbox,
@@ -57,7 +56,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ComponentType, LazyExoticComponent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
@@ -428,16 +427,6 @@ export function App() {
   }, [bootReady]);
   // Which recovery the boot gate shows (pure precedence — tested in bootGate.test.ts).
   const gatePhase = bootGatePhase({ memberAuthFailed, agentDown, unreachable: agentUnreachable, bootFailed, bootStuck });
-  const [error, setError] = useState("");
-
-  // Clear the stale "Load failed" strip once the engine reports ready. The
-  // graph compile (cold start, finishing setup, or a model change) runs inline
-  // on the server loop and freezes it, so concurrent pollers fail and set the
-  // strip — which is otherwise only cleared by a user action. When `graph_loaded`
-  // flips true the connection is healthy again, so that transient error is moot.
-  useEffect(() => {
-    if (engineReady) setError((prev) => (prev ? "" : prev));
-  }, [engineReady]);
 
   // Adopt the server's default project as the fs working dir if none is set (it
   // seeds the setup wizard's allowed-dirs) once runtime resolves.
@@ -459,6 +448,18 @@ export function App() {
   // Goal completions surface as a toast (goal.achieved / goal.failed on the bus, ADR 0039) so a
   // plain operator notices a terminal goal without writing a plugin hook.
   const toast = useToast();
+
+  // Transient chat/composer errors (attach/image/queue/cancel/rewind) surface as a
+  // toast, not an inline strip — the console toast convention. Global, so an error from
+  // a chat docked on the right/bottom shows too (the old strip only rendered on the left);
+  // an empty string is a no-op (the strip's clear-on-success is moot once toasts auto-dismiss).
+  const onChatError = useCallback(
+    (msg: string) => {
+      if (msg) toast({ tone: "error", message: msg });
+    },
+    [toast],
+  );
+
   useEffect(() => {
     const offDone = onServerEvent("goal.achieved", (d) =>
       toast({ tone: "success", title: "Goal achieved", message: String(d.condition || "the goal") }));
@@ -1046,15 +1047,9 @@ export function App() {
         quickBarIds={quickBar}
         leftContent={
           <>
-            {error ? (
-              <div className="error-strip" role="alert">
-                <CircleAlert size={16} />
-                <span>{error}</span>
-              </div>
-            ) : null}
             {chatRail === "left" || isMobile ? (
               <ChatSlot
-                onError={setError}
+                onError={onChatError}
                 active={(isMobile ? mobileActive : leftActive) === "chat"}
                 pluginView={chatSlotView}
                 enabledPluginIds={enabledPluginIds}
@@ -1070,7 +1065,7 @@ export function App() {
           <>
             {chatRail === "right" ? (
               <ChatSlot
-                onError={setError}
+                onError={onChatError}
                 active={rightActive === "chat"}
                 pluginView={chatSlotView}
                 enabledPluginIds={enabledPluginIds}
@@ -1088,7 +1083,7 @@ export function App() {
                 surface — or back — never tears down an in-flight stream (#613). */}
             {chatRail === "bottom" ? (
               <ChatSlot
-                onError={setError}
+                onError={onChatError}
                 active={bottomActive === "chat"}
                 pluginView={chatSlotView}
                 enabledPluginIds={enabledPluginIds}

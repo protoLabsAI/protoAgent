@@ -606,19 +606,6 @@ select:disabled {
   opacity: 0.55;
 }
 
-.error-strip {
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--error) 14%, transparent);
-  color: var(--error);
-  padding: 8px 10px;
-}
-
 .message-list,
 .issue-list,
 .subagent-list,
