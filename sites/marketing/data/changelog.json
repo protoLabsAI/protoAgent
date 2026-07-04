@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.90.0",
+    "date": "2026-07-04",
+    "changes": [
+      "Background fan-outs report back in ONE briefing, not N",
+      "Career Coach in the plugin catalog",
+      "Server-initiated turns show a \"responding…\" indicator",
+      "Shift over the add-chat button previews incognito",
+      "Chat errors surface as a toast, not an inline banner",
+      "Browser-style UI zoom (⌘/Ctrl + / - / 0)",
+      "A saved theme survives a reload",
+      "Scaffolded plugins that register a subagent or use Knobs pass their own smoke test"
+    ]
+  },
+  {
     "version": "v0.89.0",
     "date": "2026-07-04",
     "changes": [
