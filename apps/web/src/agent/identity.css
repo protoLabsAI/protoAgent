@@ -46,39 +46,15 @@
   margin: 0;
 }
 
-/* Persona version history (#1691) — sits below the editor. The editor (.soul-field, flex:1)
-   owns the elastic space; the history keeps its natural height and scrolls its own list, so a
-   long list never pushes the editor off-panel. */
-.soul-history {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-.soul-history-head {
+/* Persona version history (#1691) — lives behind the "History" trigger in the SOUL header and
+   opens in a dialog. `.soul-head-actions` groups that trigger with the Edit/Preview toggle. */
+.soul-head-actions {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--fg) 62%, transparent);
-}
-.soul-history-count {
-  font-variant-numeric: tabular-nums;
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 10%, transparent);
-  color: var(--fg);
-  font-size: 11px;
-  text-align: center;
+  gap: 6px;
 }
 .soul-history-empty {
-  font-size: 12px;
+  font-size: 13px;
   margin: 0;
 }
 .soul-history-list {
@@ -88,7 +64,10 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 210px;
+  /* Grow with the content so the dialog is sized to its list (no dead space under a short list),
+     but cap at most of the viewport so a long history scrolls inside the dialog rather than
+     pushing it past the screen. The DS dialog itself is content-sized (max-height 100vh). */
+  max-height: 68vh;
   overflow-y: auto;
 }
 .soul-history-item {
