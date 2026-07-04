@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background fan-outs report back in ONE briefing, not N** (#1766). When the agent
+  fans out several background subagents in a single turn (`task_batch(run_in_background=True)`,
+  or several `task(run_in_background=True)`), their completions now coalesce into a single
+  push-resume when the last member finishes — one briefing turn that synthesizes across all
+  the reports, instead of one drip-fed turn per job. Jobs from one turn share a `batch_id`
+  (the emitting turn's id); the coalesced nudge carries a per-status summary
+  (e.g. "completed 6, failed 1"). A straggler safety valve (`BACKGROUND_BATCH_JOIN_TIMEOUT_S`,
+  default 900s) forces a partial briefing if a member hangs so finished reports are never
+  stranded. Lone and plugin-spawned background jobs are unaffected. See ADR 0070 (D5).
 - **Career Coach in the plugin catalog** — the new [`careercoach`](https://github.com/protoLabsAI/careercoach-plugin)
   official plugin (a career coach + job-hunt copilot, and a full-surface showcase: skills, a workflow,
   a subagent crew, tools + a tunable rubric, a dashboard view, and config) now appears in

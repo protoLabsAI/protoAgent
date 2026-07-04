@@ -124,10 +124,18 @@ def _spawn_background_wake(job) -> None:
 
 def _spawn_background_resume(mgr, job) -> None:
     """Schedule the push-resume nudge (ADR 0070 D1) fire-and-forget on the running
-    loop. When the nudge can't be delivered, fall back to the ADR 0050 Phase 2
-    Activity wake (when enabled) so the completion still reaches the agent somewhere;
-    either way ``notified`` is untouched — the report itself always drains into the
-    origin session's next turn, exactly once. No-op off-loop."""
+    loop, batch-aware (#1766). Routes through ``mgr.resume_for_terminal(job)``:
+
+    - a SINGLETON (no batch / batch of one) push-resumes exactly as before;
+    - the LAST member of a fan-out fires ONE coalesced batch nudge (siblings' reports
+      ride the same drained turn);
+    - a non-last member returns ``None`` — HELD, nothing delivered — and we do nothing
+      (no wake, no failure); the last member will deliver for the whole batch.
+
+    On a delivered-vs-not bool (singleton or fired batch), a non-delivery falls back to
+    the ADR 0050 Phase 2 Activity wake (when enabled) so the completion still reaches the
+    agent somewhere. Either way ``notified`` is untouched — the report(s) always drain
+    into the origin session, exactly once. No-op off-loop."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -135,10 +143,12 @@ def _spawn_background_resume(mgr, job) -> None:
 
     async def _go() -> None:
         try:
-            delivered = await mgr.resume_origin(job)
-        except Exception:  # noqa: BLE001 — resume_origin is never-raises by contract; belt and braces
+            delivered = await mgr.resume_for_terminal(job)
+        except Exception:  # noqa: BLE001 — resume_for_terminal is never-raises by contract; belt and braces
             log.exception("[background] push-resume failed for %s", getattr(job, "id", "?"))
             delivered = False
+        if delivered is None:
+            return  # held for still-outstanding batch siblings — the last member delivers
         if not delivered and _background_wake_enabled():
             try:
                 await _background_wake(job)
