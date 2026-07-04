@@ -637,6 +637,10 @@
           "title": "ADR 0071 — Plugin permissions: a trust-and-consent model, not a runtime sandbox"
         },
         {
+          "path": "adr/0072-fleet-seed-team-via-config.md",
+          "title": "0072 — Fleet seed: declare a team in config (team-via-config)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
