@@ -130,10 +130,11 @@ test("an empty card shows the DS Empty with the quick-add as its CTA", async ({ 
   await expect(page.getByTestId("goal-create-submit")).toBeEnabled();
 });
 
-test("the Goals PANEL hosts the same create dialog via its New goal header action", async ({ page }) => {
-  // The other host of the lifted GoalCreateDialog (one form, two hosts): the Goals
-  // panel's header action — the replacement for the old inline <details> form. Tasks/
-  // Schedule panel create flows have their own specs; this covers the Goals panel's.
+test("the Goals PANEL hosts the guided goal form via its New goal header action", async ({ page }) => {
+  // The Goals panel's "New goal" header action opens the guided completion-contract form
+  // (ADR 0073, Part 2) — the SAME goalFormPayload + HitlForm the chat `/goal new` composer
+  // form renders, hosted inline here. (The Work-overview Goals CARD quick-add keeps the
+  // simpler GoalCreateDialog — covered by the "empty card" spec above.)
   let posted: Record<string, unknown> | null = null;
   await page.route("**/api/goals", async (route) => {
     if (route.request().method() === "POST") {
@@ -148,13 +149,17 @@ test("the Goals PANEL hosts the same create dialog via its New goal header actio
   await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
 
   await page.getByTestId("goal-new").click();
-  await expect(page.getByTestId("goal-create-dialog")).toBeVisible();
-  await expect(page.getByTestId("goal-create-submit")).toBeDisabled(); // gated on a condition
-  await page.getByTestId("goal-create-condition").fill("All tests pass twice");
-  await page.getByTestId("goal-create-submit").click();
+  const form = page.getByTestId("goal-form");
+  await expect(form).toBeVisible();
+  const submit = form.getByRole("button", { name: "Submit" });
+  await expect(submit).toBeDisabled(); // gated on the required condition (first textbox)
+  await form.getByRole("textbox").first().fill("All tests pass twice");
+  await expect(submit).toBeEnabled();
+  await submit.click();
 
-  // Same payload/endpoint as the old inline form; success closes the dialog + toasts.
-  await expect(page.getByTestId("goal-create-dialog")).toHaveCount(0);
+  // Operator goal-set payload; success closes the inline form + toasts. The verifier
+  // defaults to llm when no card is picked; the contract fields are omitted when empty.
+  await expect(form).toHaveCount(0);
   await expect(page.locator(".pl-toast__title", { hasText: "Goal set" })).toBeVisible();
   expect(posted).toMatchObject({
     session_id: "operator",

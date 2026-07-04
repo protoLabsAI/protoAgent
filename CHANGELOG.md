@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a missing workspace or a boot-time spawn failure is logged and skipped, never blocking
   boot or the rest of the roster), and hub-only (a member's own scoped config carries no
   roster, so it no-ops inside a member). Surfaced in Settings ▸ Host as "Autostart members".
+- **Guided goal-creation form** (ADR 0073, Part 2). A console form for setting a goal with its
+  verifier and completion contract, without hand-writing verifier JSON. It renders through the
+  same `HitlForm` composer-form seam as `/effort`'s picker: pick a verifier type from option
+  cards (`command` · `test` · `ci` · `data` · `llm`, default `llm`), give its one detail (the
+  shell command, the PR #/branch, or `path :: substring`), and fill the optional contract
+  (outcome, constraints/boundaries one-per-line, `stop_when`, max iterations). Two entry points:
+  **`/goal new`** opens it in the chat composer (bare `/goal`, `/goal <text>`, and `/goal clear`
+  still pass through to the server command unchanged), and the **Goals panel's "New goal"** action
+  opens the same form inline. Submits to the operator `POST /api/goals`; a rejected verifier /
+  disabled goal mode surfaces the server's message.
 
 ## [0.90.0] - 2026-07-04
 

@@ -7,8 +7,10 @@
 
 import { registeredSlashCommands, registerSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
+import { buildGoalSetBody, goalFormPayload } from "./goalForm";
 
 // Local id for the system notes /compact posts (the command manages messages
 // directly, like /clear, so it needs to own the ids it can later replace).
@@ -265,6 +267,59 @@ registerSlashCommand({
       { tone: next ? "warning" : "info" },
     );
     ctx.focusComposer();
+    return true;
+  },
+});
+
+// `/goal new` opens a guided goal-creation form (ADR 0073 completion contracts, Part 2) in
+// the composer — the SAME `HitlForm` + `openForm` seam as `/effort`'s picker, resolved
+// locally (no agent round-trip): on submit it POSTs the operator goal-set. ONLY the `new`
+// subcommand is claimed client-side; bare `/goal` (status), `/goal <text>` (set), and
+// `/goal clear` all fall through (return false) to the SERVER `/goal` control command
+// (`graph/slash_commands.py`), so none of the existing behavior regresses. A client command
+// registered here CLAIMS the `/goal` token in the menu (like `/clear` already does) — its
+// row surfaces the `/goal new` affordance; picking it inserts `/goal ` to edit as before.
+registerSlashCommand({
+  name: "goal",
+  description: "Set/manage this session's goal — /goal new opens a guided form",
+  usage: "/goal new · /goal <text> · /goal clear",
+  run: (ctx) => {
+    const arg = ctx.rest.trim().toLowerCase();
+    if (arg !== "new") return false; // bare/set/clear → server `/goal` unchanged
+    const sid = ctx.sessionId;
+    if (!sid || !ctx.openForm) {
+      // No tab to own the goal, or a host that never wired the composer-form panel: don't
+      // send "/goal new" on to the server (it would set a goal literally named "new").
+      ctx.noteToThread(
+        "Open a chat tab to set a goal here, or use `/goal <text>` to set one inline.",
+        { tone: "info" },
+      );
+      ctx.focusComposer();
+      return true;
+    }
+    ctx.openForm({
+      payload: goalFormPayload(),
+      onSubmit: (answers) => {
+        const body = buildGoalSetBody(
+          sid,
+          typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {},
+        );
+        if (!body) {
+          ctx.noteToThread("A goal needs a condition — nothing was set.", { tone: "warning" });
+          ctx.focusComposer();
+          return;
+        }
+        void api
+          .setGoal(body)
+          .then((res) =>
+            ctx.noteToThread(`**Goal set.** ${res.message ?? ""}`.trim(), { tone: "success" }),
+          )
+          // A rejected verifier / disabled goal mode comes back as HTTP 400 → request() throws.
+          .catch((e) => ctx.noteToThread(`Couldn't set goal: ${errMsg(e)}`, { tone: "danger" }));
+        ctx.focusComposer();
+      },
+      onCancel: ctx.focusComposer,
+    });
     return true;
   },
 });

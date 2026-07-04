@@ -6,7 +6,10 @@ import { SLASH_COMMANDS } from "./fixtures.mjs";
 // (GET /api/chat/commands) and autocompletes them as you type "/name".
 
 // Deterministic client-side commands (ADR 0057) surface FIRST, then the server skills.
-const CLIENT_SLASH = ["/new", "/clear", "/compact", "/effort", "/incognito", "/help", "/bypass"];
+// `/goal` is a client command that claims only `/goal new` (a guided goal form, ADR 0073) —
+// everything else falls through to the SERVER `/goal`, so the token appears in BOTH lists
+// (like `/clear` already does).
+const CLIENT_SLASH = ["/new", "/clear", "/compact", "/effort", "/incognito", "/help", "/bypass", "/goal"];
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
@@ -48,8 +51,11 @@ test("filtering narrows the menu and selecting completes the command", async ({ 
   await composer.fill("/go");
 
   const menu = page.locator(".slash-menu");
-  await expect(menu.locator(".slash-item")).toHaveCount(1);
-  await expect(menu.getByText("/goal", { exact: true })).toBeVisible();
+  // Two `/goal` rows now match "/go": the client command (claims `/goal new`) and the
+  // server `/goal` — client first. Both complete the same way (client `/goal` bare falls
+  // through, inserting `/goal ` to edit).
+  await expect(menu.locator(".slash-item")).toHaveCount(2);
+  await expect(menu.getByText("/goal", { exact: true }).first()).toBeVisible();
 
   // Enter completes the highlighted command into the composer.
   await composer.press("Enter");

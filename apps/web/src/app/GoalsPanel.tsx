@@ -14,6 +14,8 @@ import { Plus, Target, Trash2 } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { HitlForm } from "../chat/HitlForm";
+import { buildGoalSetBody, goalFormPayload, type GoalSetBody } from "../chat/goalForm";
 import { ago, errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -211,12 +213,11 @@ export function GoalCreateDialog({
 export function GoalsPanel() {
   const queryClient = useQueryClient();
   const toast = useToast();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
   const set = useMutation({
-    mutationFn: (body: { session_id: string; condition: string; verifier: unknown }) =>
-      api.setGoal(body),
+    mutationFn: (body: GoalSetBody) => api.setGoal(body),
     onSuccess: (res) => {
-      setDialogOpen(false);
+      setCreating(false);
       toast({ tone: "success", title: "Goal set", message: res.message || "The agent has a new goal." });
     },
     // A rejected verifier / disabled goal mode comes back as HTTP 400 → request() throws here.
@@ -230,17 +231,32 @@ export function GoalsPanel() {
         title="Goals"
         kicker={<>the agent's standing goals · set with <code>/goal</code> in chat</>}
         actions={
-          <Button variant="primary" type="button" onClick={() => setDialogOpen(true)} data-testid="goal-new">
+          <Button variant="primary" type="button" onClick={() => { set.reset(); setCreating(true); }} data-testid="goal-new">
             <Plus size={16} /> New goal
           </Button>
         }
       />
-      <GoalCreateDialog
-        open={dialogOpen}
-        onClose={() => { setDialogOpen(false); set.reset(); }}
-        onCreate={(body) => set.mutate(body)}
-        busy={set.isPending}
-      />
+      {/* Guided goal-creation form (ADR 0073, Part 2) — the SAME `goalFormPayload` +
+          `HitlForm` the chat `/goal new` composer form renders, hosted inline here (the
+          panel isn't a chat tab, so it can't use the `openForm` seam directly). The shared
+          `buildGoalSetBody` mapping assembles the verifier + completion contract. Goals set
+          from the panel target the `operator` session (there's no chat tab to own them). */}
+      {creating && (
+        <div className="goal-form-host" data-testid="goal-form">
+          <HitlForm
+            payload={goalFormPayload()}
+            busy={set.isPending}
+            onSubmit={(answers) => {
+              const body = buildGoalSetBody(
+                "operator",
+                typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {},
+              );
+              if (body) set.mutate(body);
+            }}
+            onCancel={() => { setCreating(false); set.reset(); }}
+          />
+        </div>
+      )}
       <ScrollArea className="goals-list" role="region" aria-label="Goals" tabIndex={0}>
         <QueryErrorResetBoundary>
           {({ reset }: { reset: () => void }) => (

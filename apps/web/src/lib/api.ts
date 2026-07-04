@@ -1112,6 +1112,7 @@ export const api = {
     constraints?: string[];
     boundaries?: string[];
     stop_when?: string;
+    max_iterations?: number;
   }) {
     return request<{ ok: boolean; message?: string; error?: string }>("/api/goals", {
       method: "POST",
