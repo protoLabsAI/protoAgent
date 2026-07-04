@@ -505,6 +505,63 @@ def test_version_skew_flags_prestamp_records_as_unknown(tmp_path, monkeypatch):
     assert warn and "version unknown" in warn
 
 
+# ── autostart roster (ADR 0072 slice) ────────────────────────────────────────
+# A container recreate / host restart kills the detached member processes; the hub
+# (re)starts every configured `fleet.autostart` member on boot so the declared crew
+# comes back up instead of staying down until re-activated by hand.
+
+
+class _Cfg:
+    def __init__(self, roster):
+        self.fleet_autostart = roster
+
+
+def test_autostart_members_reads_config_then_env(monkeypatch):
+    # Live config wins.
+    monkeypatch.setattr(supervisor, "_live_config", lambda: _Cfg(["cindi", "matt"]))
+    assert supervisor.autostart_members() == ["cindi", "matt"]
+
+    # A comma-separated string (hand-edited YAML) is normalised, blanks dropped.
+    monkeypatch.setattr(supervisor, "_live_config", lambda: _Cfg(" a , , b "))
+    assert supervisor.autostart_members() == ["a", "b"]
+
+    # No config → the PROTOAGENT_FLEET_AUTOSTART env fallback (comma-separated).
+    monkeypatch.setattr(supervisor, "_live_config", lambda: None)
+    monkeypatch.setenv("PROTOAGENT_FLEET_AUTOSTART", "x, y ,")
+    assert supervisor.autostart_members() == ["x", "y"]
+
+    # Nothing configured → empty (the common case; boot hook no-ops).
+    monkeypatch.delenv("PROTOAGENT_FLEET_AUTOSTART", raising=False)
+    assert supervisor.autostart_members() == []
+
+
+def test_start_autostart_members_starts_declared(fleet, monkeypatch):
+    manager.create("cindi", port=7891)
+    manager.create("matt", port=7892)
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: ["cindi", "matt"])
+
+    started = supervisor.start_autostart_members()
+    assert set(started) == {"cindi", "matt"}
+    assert supervisor.is_running("cindi") and supervisor.is_running("matt")
+
+
+def test_start_autostart_skips_running_and_missing(fleet, monkeypatch):
+    manager.create("cindi", port=7891)
+    manager.create("matt", port=7892)
+    supervisor.start("cindi")  # already up → must be skipped, not double-spawned
+    # "ghost" has no workspace → skipped with a warning, never raises.
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: ["cindi", "ghost", "matt"])
+
+    started = supervisor.start_autostart_members()
+    assert started == ["matt"]  # only the down, existing member is (re)started
+    assert supervisor.is_running("matt")
+
+
+def test_start_autostart_no_roster_is_noop(fleet, monkeypatch):
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: [])
+    assert supervisor.start_autostart_members() == []
+
+
 def test_reconcile_on_boot_stamps_and_returns_previous(tmp_path, monkeypatch):
     import infra.paths as paths_mod
 

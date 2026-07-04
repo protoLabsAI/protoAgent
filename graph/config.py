@@ -712,6 +712,11 @@ class LangGraphConfig:
     fleet_warm_grace_seconds: int = (
         0  # spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE
     )
+    # Member ids/names (re)started at hub boot (ADR 0072 autostart slice) — a container
+    # recreate/host restart kills the detached member processes, and without this the
+    # declared crew stays down until re-activated by hand. env: PROTOAGENT_FLEET_AUTOSTART
+    # (comma-separated). See graph/fleet/supervisor.start_autostart_members.
+    fleet_autostart: list[str] = field(default_factory=list)
 
     # Operator-console directory allowlist — the extra directories the
     # React console's tasks/notes APIs may read and write. The protoAgent
@@ -1018,6 +1023,13 @@ class LangGraphConfig:
             fleet_max_warm=warm.get("max", _env_default("PROTOAGENT_FLEET_MAX_WARM", cls.fleet_max_warm, int)),
             fleet_warm_grace_seconds=warm.get(
                 "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)
+            ),
+            fleet_autostart=list(
+                fleet.get(
+                    "autostart",
+                    [s.strip() for s in os.environ.get("PROTOAGENT_FLEET_AUTOSTART", "").split(",") if s.strip()],
+                )
+                or []
             ),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),

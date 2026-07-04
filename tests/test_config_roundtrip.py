@@ -99,6 +99,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_enabled": True,
     "filesystem_projects": [],
     "filesystem_run_requires_approval": True,
+    "fleet_autostart": [],
     "fleet_max_warm": 0,
     "fleet_port_base": 7870,
     "fleet_warm_grace_seconds": 0,

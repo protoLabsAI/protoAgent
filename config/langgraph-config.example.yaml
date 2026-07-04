@@ -320,3 +320,5 @@ fleet:
   warm:
     max: 0                  # warm-agent cap (0 = unlimited)
     grace_seconds: 0        # spare agents touched within N seconds from LRU eviction
+  autostart: []             # member ids/names the hub (re)starts on boot (survives container recreate);
+                            # e.g. [cindi, matt]. Env: PROTOAGENT_FLEET_AUTOSTART (comma-separated)
