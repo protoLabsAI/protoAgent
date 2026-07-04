@@ -227,3 +227,100 @@ def test_test_model_with_form_key_does_not_clear_breaker(monkeypatch):
     resp = _client().post("/api/config/test-model", json={"api_key": "candidate"}).json()
     assert resp["ok"] is True
     assert store.reset_calls == 0
+
+
+# ── SOUL.md version history (#1691) ───────────────────────────────────────────
+
+
+def test_soul_history_lists_versions(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module(
+            "graph.config_io",
+            list_soul_versions=lambda: [{"id": "v1", "saved_at": "t", "size": 3, "preview": "abc"}],
+        ),
+    )
+    body = _client().get("/api/config/soul/history").json()
+    assert body == {"versions": [{"id": "v1", "saved_at": "t", "size": 3, "preview": "abc"}]}
+
+
+def test_soul_history_get_one_ok(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module("graph.config_io", read_soul_version=lambda vid: "the persona" if vid == "v1" else None),
+    )
+    body = _client().get("/api/config/soul/history/v1").json()
+    assert body == {"id": "v1", "content": "the persona"}
+
+
+def test_soul_history_get_one_404_for_unknown(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module("graph.config_io", read_soul_version=lambda vid: None),
+    )
+    resp = _client().get("/api/config/soul/history/nope")
+    assert resp.status_code == 404
+
+
+def test_soul_history_restore_reapplies_through_the_save_path(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module(
+            "graph.config_io",
+            read_soul_version=lambda vid: "restored persona",
+            read_soul=lambda: "a different current persona",  # not current → really restores
+        ),
+    )
+    calls = {}
+
+    def _fake_apply(config=None, soul=None):
+        calls["soul"] = soul
+        return True, ["SOUL saved (1 path)"]
+
+    import operator_api.config_routes as cr
+
+    monkeypatch.setattr(cr, "_apply_settings_changes", _fake_apply)
+    body = _client().post("/api/config/soul/history/v1/restore").json()
+    assert body["ok"] is True and body["restored"] == "v1"
+    # Restore re-saves the archived text through the tested save+reload path (which snapshots
+    # the current persona first, so a roll-back is itself reversible).
+    assert calls["soul"] == "restored persona"
+
+
+def test_soul_history_restore_current_version_is_a_noop(monkeypatch):
+    # Restoring the version that's already live skips the expensive graph recompile.
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module(
+            "graph.config_io",
+            read_soul_version=lambda vid: "live persona",
+            read_soul=lambda: "live persona",  # already current
+        ),
+    )
+    applied = {"called": False}
+
+    def _fake_apply(config=None, soul=None):
+        applied["called"] = True
+        return True, []
+
+    import operator_api.config_routes as cr
+
+    monkeypatch.setattr(cr, "_apply_settings_changes", _fake_apply)
+    body = _client().post("/api/config/soul/history/v1/restore").json()
+    assert body["ok"] is True and "already the current persona" in body["messages"]
+    assert applied["called"] is False  # no recompile for a no-op restore
+
+
+def test_soul_history_restore_404_for_unknown(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module("graph.config_io", read_soul_version=lambda vid: None, read_soul=lambda: ""),
+    )
+    resp = _client().post("/api/config/soul/history/nope/restore")
+    assert resp.status_code == 404

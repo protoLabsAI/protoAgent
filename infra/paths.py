@@ -583,6 +583,12 @@ class InstancePaths:
         return self.config_dir / "SOUL.md"
 
     @property
+    def soul_history_dir(self) -> Path:
+        """Timestamped snapshots of prior ``SOUL.md`` versions (#1691) — every persona save
+        archives the outgoing text here so prompt iterations can be reviewed and restored."""
+        return self.config_dir / "soul-history"
+
+    @property
     def plugins_dir(self) -> Path:
         raw = os.environ.get("PROTOAGENT_PLUGINS_DIR", "").strip()
         return Path(raw).expanduser() if raw else self.instance_root / "plugins"
@@ -638,6 +644,7 @@ class InstancePaths:
                 "setup_marker": str(self.setup_marker),
                 "theme_json": str(self.theme_json),
                 "soul_path": str(self.soul_path),
+                "soul_history_dir": str(self.soul_history_dir),
                 "plugins_dir": str(self.plugins_dir),
                 "plugins_lock": str(self.plugins_lock),
                 "workspace_dir": str(self.workspace_dir),
