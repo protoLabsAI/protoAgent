@@ -14,6 +14,7 @@ import { chatStore } from "../chat/chat-store";
 import { toggleLatestToolBlock } from "../chat/toolCollapse";
 import { useUI } from "../state/uiStore";
 import { registerKeybinding } from "../ext/keybindingRegistry";
+import { zoomIn, zoomOut, zoomReset } from "../view/zoom";
 import { useKbIntents } from "./intents";
 
 function switchByOffset(delta: number): void {
@@ -121,6 +122,38 @@ registerKeybinding({
   scope: "chat",
   allowInInput: true,
   run: () => toggleLatestToolBlock(),
+});
+
+// ── View (global) ─────────────────────────────────────────────────────────────────────
+// Browser-style page zoom for the whole console (#1711). The Tauri desktop WebView has no
+// native zoom, so this is the only way to scale the UI there; in a plain browser it shadows
+// the native ⌘/Ctrl +/-/0 for these combos (the host preventDefaults matched binds), like the
+// other bindings above that override browser shortcuts — rebindable in Settings ▸ Keyboard.
+// `mod+=` is the no-shift zoom-in key (same physical key as +); `allowInInput` so it works
+// while the composer is focused (the common case).
+registerKeybinding({
+  id: "view.zoom.in",
+  label: "Zoom in",
+  group: "View",
+  defaultKeys: "mod+=",
+  allowInInput: true,
+  run: () => zoomIn(),
+});
+registerKeybinding({
+  id: "view.zoom.out",
+  label: "Zoom out",
+  group: "View",
+  defaultKeys: "mod+-",
+  allowInInput: true,
+  run: () => zoomOut(),
+});
+registerKeybinding({
+  id: "view.zoom.reset",
+  label: "Reset zoom",
+  group: "View",
+  defaultKeys: "mod+0",
+  allowInInput: true,
+  run: () => zoomReset(),
 });
 
 // ── Panels (global toggles) ──────────────────────────────────────────────────────────

@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   high-cardinality and would blow up the metric series. (`config_io.soul_revision()` computes
   it; the telemetry-store column is added via a guarded migration, so existing DBs upgrade in
   place.)
+- **Browser-style UI zoom — `⌘/Ctrl` `+` / `-` / `0`** (#1711, console). Scales the whole
+  console up or down (50%–200%, in 10% steps) and persists the choice. The Tauri desktop
+  WebView has no native browser zoom, so this is the only way to size the UI there; in a
+  browser it shadows the native zoom for those combos, like the other shortcuts that override
+  browser defaults. All three are listed and rebindable in **Settings ▸ Keyboard** (group
+  "View"). Applied before first paint, so a saved zoom doesn't flash in at 100%.
 - **Plugin setup: a "needs setup" cue + guided config for unconfigured plugins**
   (#1719, console). Building on the required-config gate below, an **incomplete**
   plugin (loaded but missing a `required: true` setting) now shows a ⚠️ **"needs
