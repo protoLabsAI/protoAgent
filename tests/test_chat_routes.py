@@ -316,6 +316,25 @@ def test_openai_models_and_completion(monkeypatch):
     assert comp["model"] == "protoagent"
 
 
+def test_openai_completions_threads_incognito(monkeypatch):
+    # /v1 must expose incognito (ADR 0069) like /api/chat + A2A do, so a programmatic
+    # caller (eval/benchmark harness) can run a turn with no memory injection.
+    import operator_api.chat_routes as cr
+
+    seen: list[bool] = []
+
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
+        seen.append(incognito)
+        return [{"role": "assistant", "content": "ok"}]
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(cr, "chat", _fake_chat)
+
+    c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]})
+    c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}], "incognito": True})
+    assert seen == [False, True]  # default off (unchanged); opt-in honored
+
+
 def test_openai_streaming(monkeypatch):
     c = _client(monkeypatch)
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "yo"}], "stream": True})

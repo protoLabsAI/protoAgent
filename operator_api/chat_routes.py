@@ -275,7 +275,14 @@ def register_chat_routes(app, ui: str) -> None:
         req_model = (req.get("model") or "").strip()
         model = req_model if req_model and req_model != agent_name() else None
 
-        result = await chat(prompt, session_id, model=model)
+        # Incognito (ADR 0069): opt-in per request via an `incognito` field (OpenAI
+        # clients pass it through `extra_body`). Off by default — unchanged behavior —
+        # so a programmatic caller (e.g. an eval/benchmark harness) can run a turn with
+        # no memory injection, persistence, or harvest, for reproducible, uncontaminated
+        # runs. A2A and /api/chat already expose this; /v1 was the gap.
+        incognito = bool(req.get("incognito", False))
+
+        result = await chat(prompt, session_id, model=model, incognito=incognito)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         content = "\n\n".join(parts)
         created = int(time.time())
