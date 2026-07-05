@@ -74,7 +74,7 @@ def operator_mcp_server_spec(config) -> dict:
     every tool. There is no "enable tools for ACP" step: ``operator_mcp.tools`` is an
     optional *restriction* (a named allowlist), not a requirement. Empty/unset ⇒ ``"*"``
     (everything, minus the redundant code-exec tool the coding agent already has — see
-    ``server.operator_mcp._STAR_EXCLUDE``)."""
+    ``runtime.operator_mcp_tools._STAR_EXCLUDE``)."""
     configured = list(getattr(config, "operator_mcp_tools", None) or [])
     allow = configured or ["*"]  # empty ⇒ full toolset, parity with the native runtime
     # ACP's stdio MCP-server schema wants env as an array of {name, value} (not a dict).
