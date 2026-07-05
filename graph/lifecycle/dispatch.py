@@ -81,7 +81,20 @@ def _publish(event: str, payload: dict) -> None:
 
 async def _post_webhook(url: str, event: str, payload: dict) -> None:
     """POST the event to a webhook (async, short timeout). Isolated — a slow/broken
-    endpoint must never stall boot or a turn."""
+    endpoint must never stall boot or a turn.
+
+    The URL is operator-configured, but it still passes through the egress guard
+    (``security.egress`` — the same one ``fetch_url`` and the operator ``api_base`` use):
+    a configured ``egress.allowed_hosts`` allowlist is enforced, and ``allow_private=True``
+    permits LAN/tailnet peers (an operator may point a hook at a local automation) while
+    still refusing link-local / cloud-metadata / reserved addresses. A blocked host is
+    logged and skipped, not raised."""
+    from security import egress
+
+    blocked = egress.check_url(url, allow_private=True, block_unresolvable=False)
+    if blocked:
+        log.warning("[lifecycle] %s webhook to %s skipped by egress guard — %s", event, url, blocked)
+        return
     try:
         import httpx
 
