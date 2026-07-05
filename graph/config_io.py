@@ -442,6 +442,10 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     _deep_merge(
         d,
         {
+            # System lifecycle reactions (ADR 0074) — a top-level list of
+            # {event, prompt?, webhook?, session?} dicts, so it round-trips here (like
+            # filesystem.projects / mcp.servers) rather than through the string_list FIELDS.
+            "lifecycle_hooks": list(config.lifecycle_hooks),
             # background_keep is an operational knob (not a settings-schema field),
             # so emit it here for round-trip completeness like the breaker knobs.
             "checkpoint": {

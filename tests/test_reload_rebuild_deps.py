@@ -143,6 +143,7 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
             mcp_servers=[], tools=[], tool_plugins={}, skill_dirs=[], meta=[],
             chat_commands={}, subagents=[], middleware=[], late_tool_factories=[], routers=[],
             goal_verifiers={"demo:brand_new": _new_verifier}, goal_hooks=[], watch_hooks=[],
+            lifecycle_hooks=[],
         ),
     )
     # Let the graph rebuild SUCCEED so the commit block (with the registry refresh) runs.

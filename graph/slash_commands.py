@@ -168,11 +168,14 @@ def slash_kind(name: str) -> str | None:
     goal > plugin chat command > workflow > subagent > user-facing skill. Returns
     ``None`` for an unknown token. (Plugin commands/workflows/subagents match the
     bare name or its slug; skills match a slug.) ``/issue`` is no longer core — the
-    github plugin owns it, so it resolves as a ``plugin_command``."""
+    github plugin owns it, so it resolves as a ``plugin_command``. ``lifecycle`` is a
+    reserved read-only core command (ADR 0074), like ``goal``."""
     if not name:
         return None
     if name == "goal" or slugify_slash(name) == "goal":
         return "goal"
+    if name == "lifecycle" or slugify_slash(name) == "lifecycle":
+        return "lifecycle"
     if find_plugin_chat_command(name) is not None:
         return "plugin_command"
     if STATE.workflow_registry is not None and STATE.workflow_registry.get(name) is not None:

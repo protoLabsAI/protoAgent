@@ -35,6 +35,7 @@ class PluginLoadResult:
     goal_verifiers: dict = field(default_factory=dict)  # name -> verifier fn (ADR 0028)
     goal_hooks: list = field(default_factory=list)  # {on_achieved, on_failed} (ADR 0028)
     watch_hooks: list = field(default_factory=list)  # {on_met, on_expired, on_stalled} (ADR 0067)
+    lifecycle_hooks: list = field(default_factory=list)  # {on_app_loaded, on_agent_active, on_system_wake} (ADR 0074)
     knowledge_stores: dict = field(default_factory=dict)  # name -> backend factory (ADR 0031)
     embedders: dict = field(default_factory=dict)  # name -> embed_fn factory (ADR 0031)
     a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
@@ -538,6 +539,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             result.goal_verifiers[name] = fn
         result.goal_hooks.extend(registry.goal_hooks)  # ADR 0028 D4
         result.watch_hooks.extend(registry.watch_hooks)  # ADR 0067
+        result.lifecycle_hooks.extend(registry.lifecycle_hooks)  # ADR 0074
         for name, factory in registry.knowledge_stores.items():  # ADR 0031
             if name in result.knowledge_stores:
                 log.warning("[plugins] %s: knowledge backend %s collides — skipped", manifest.id, name)

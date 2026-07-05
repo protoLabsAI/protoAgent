@@ -1406,11 +1406,13 @@ def _apply_plugin_registries(plugins) -> None:
     caller already holds the config-write lock (init runs once at boot, uncontended)."""
     from graph.goals import hooks as _goal_hooks
     from graph.goals import verifiers as _goal_verifiers
+    from graph.lifecycle import hooks as _lifecycle_hooks
     from graph.watches import hooks as _watch_hooks
 
     _goal_verifiers.set_plugin_verifiers(plugins.goal_verifiers)  # ADR 0028
     _goal_hooks.set_goal_hooks(plugins.goal_hooks)
     _watch_hooks.set_watch_hooks(plugins.watch_hooks)  # ADR 0067
+    _lifecycle_hooks.set_lifecycle_hooks(plugins.lifecycle_hooks)  # ADR 0074
 
 
 @_serialized_config_write

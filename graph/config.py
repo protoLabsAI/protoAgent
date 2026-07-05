@@ -718,6 +718,16 @@ class LangGraphConfig:
     # (comma-separated). See graph/fleet/supervisor.start_autostart_members.
     fleet_autostart: list[str] = field(default_factory=list)
 
+    # System lifecycle reactions (ADR 0074) — a top-level ``lifecycle_hooks:`` YAML list
+    # of ``{event, prompt?, webhook?, session?}`` entries the runtime runs when a system
+    # lifecycle event fires. ``event`` is one of ``app_loaded`` / ``agent_active`` /
+    # ``system_wake``; ``prompt`` enqueues a follow-up turn (in ``session``, or the event's
+    # own session for agent_active); ``webhook`` POSTs the event. **Opt-in**: empty ⇒ NOTHING
+    # fires beyond the ADR 0039 bus broadcast (plugins can still react via the bus / a
+    # ``register_lifecycle_hook`` hook). List of dicts, so it round-trips via config_io.py §B
+    # (like ``filesystem_projects`` / ``mcp_servers``), not the string_list-typed FIELDS.
+    lifecycle_hooks: list[dict] = field(default_factory=list)
+
     # Operator-console directory allowlist — the extra directories the
     # React console's tasks/notes APIs may read and write. The protoAgent
     # repo root is always allowed implicitly (it's the default project);
@@ -1031,6 +1041,9 @@ class LangGraphConfig:
                 )
                 or []
             ),
+            # System lifecycle reactions (ADR 0074) — top-level ``lifecycle_hooks:`` list.
+            # Opt-in: absent/empty ⇒ [] ⇒ nothing fires beyond the bus broadcast.
+            lifecycle_hooks=list(data.get("lifecycle_hooks", []) or []),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),

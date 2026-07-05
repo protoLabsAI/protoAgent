@@ -123,6 +123,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_hot_write_confirm": False,
     "knowledge_middleware": True,
     "knowledge_top_k": 5,
+    "lifecycle_hooks": [],
     "knowledge_vector_k": 20,
     "knowledge_rrf_k": 60,
     "knowledge_min_score": 0.0,
@@ -275,6 +276,7 @@ def test_config_to_dict_shape_and_redaction():
 # identity_org, knowledge_scope and skills_scope were all missing from round-trip coverage.)
 _LEGACY_EMITTED_ATTRS = {
     "researcher",  # subagents.researcher (a SubagentDef)
+    "lifecycle_hooks",  # top-level lifecycle_hooks list (ADR 0074) — a list of dicts, config_io.py §B
     "filesystem_projects",  # filesystem.projects (registry of {name,path,write} dicts)
     "checkpoint_background_keep",
     "knowledge_db_path",

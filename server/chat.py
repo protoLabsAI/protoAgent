@@ -1138,6 +1138,47 @@ def seconds_since_last_turn() -> float:
     return max(0.0, time.monotonic() - _LAST_TURN_MONOTONIC)
 
 
+def _lifecycle_command_reply(message: str) -> str | None:
+    """If ``message`` is the core ``/lifecycle`` command (ADR 0074), return its read-only
+    listing — the three lifecycle events plus the currently-configured config reactions and
+    registered plugin hooks. Else ``None`` (fall through). Reserved like ``/goal``, so no
+    plugin/workflow/skill can shadow it; listing only (the config file is the source of
+    truth for v1 — no runtime mutation)."""
+    name, _rest = _parse_slash_command(message)
+    if not name or _slash_kind(name) != "lifecycle":
+        return None
+    from graph.lifecycle import describe
+
+    return describe()
+
+
+def _note_agent_active(session_id: str) -> None:
+    """Emit the ``agent.active`` lifecycle event (ADR 0074) when the agent goes idle →
+    active — the FIRST turn since boot, or the first turn after an idle gap (debounced by
+    ``graph.lifecycle.should_emit_active`` so a busy session doesn't broadcast every turn).
+
+    Fire-and-forget on the running loop; best-effort so it can never break a turn.
+    ``STATE.last_activity_ts`` is updated every turn regardless of whether we emit."""
+    from graph.lifecycle import fire, should_emit_active
+
+    now = time.time()
+    last = STATE.last_activity_ts
+    STATE.last_activity_ts = now
+    emit, idle_seconds, previous_state = should_emit_active(now, last)
+    if not emit:
+        return
+    payload = {
+        "ts": now,
+        "session_id": session_id,
+        "idle_seconds": idle_seconds,
+        "previous_state": previous_state,
+    }
+    try:
+        asyncio.create_task(fire("agent_active", payload))
+    except Exception:  # noqa: BLE001 — a lifecycle emit must never break a turn
+        log.debug("[lifecycle] agent.active emit failed", exc_info=True)
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -1151,6 +1192,7 @@ async def _chat_langgraph_stream(
     lifetime — including early ``aclose()`` and errors — then delegate. Keeps the
     public name/signature so every caller (A2A executor, console) is unchanged."""
     _turn_started()
+    _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
         async for _ev in _chat_langgraph_stream_impl(
             message,
@@ -1227,6 +1269,13 @@ async def _chat_langgraph_stream_impl(
                 if reply is not None:
                     yield ("done", reply)
                     return
+
+            # Core /lifecycle command (ADR 0074) — read-only listing of the lifecycle
+            # events + configured reactions + registered hooks. Reserved like /goal.
+            lc_reply = _lifecycle_command_reply(message)
+            if lc_reply is not None:
+                yield ("done", lc_reply)
+                return
 
             # Plugin-registered chat control command (/<name> …) short-circuits the
             # turn with the plugin's reply — user-only, like /goal (e.g. the github
@@ -1533,6 +1582,7 @@ async def _chat_langgraph(
     """Idle-beacon wrapper (#1720): mark a turn in flight for the call's lifetime,
     then delegate. Keeps the public name/signature for every caller."""
     _turn_started()
+    _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
         return await _chat_langgraph_impl(
             message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume
@@ -1574,6 +1624,11 @@ async def _chat_langgraph_impl(
                 reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
                 if reply is not None:
                     return [{"role": "assistant", "content": reply}]
+
+            # Core /lifecycle command (ADR 0074) — read-only listing. Reserved like /goal.
+            lc_reply = _lifecycle_command_reply(message)
+            if lc_reply is not None:
+                return [{"role": "assistant", "content": lc_reply}]
 
             # Plugin-registered chat control command (/<name> …) short-circuits —
             # user-only, like /goal (e.g. the github plugin's /issue). No plugin

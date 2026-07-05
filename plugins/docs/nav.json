@@ -54,6 +54,10 @@
           "title": "Watches"
         },
         {
+          "path": "guides/lifecycle-events.md",
+          "title": "System lifecycle events"
+        },
+        {
           "path": "guides/file-github-issues.md",
           "title": "File GitHub issues (/issue)"
         },
@@ -643,6 +647,10 @@
         {
           "path": "adr/0073-goal-completion-contracts.md",
           "title": "0073 — Goal completion contracts"
+        },
+        {
+          "path": "adr/0074-system-lifecycle-events.md",
+          "title": "0074 — System lifecycle events"
         },
         {
           "path": "adr/index.md",
