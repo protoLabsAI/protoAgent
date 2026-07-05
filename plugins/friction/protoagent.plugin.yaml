@@ -11,6 +11,6 @@ enabled: false
 requires_env: []
 capabilities:
   network: []
-  filesystem: read   # appends a JSONL ledger under the instance data dir
+  filesystem: scoped   # appends a JSONL ledger under the instance data dir
 emits: []
 subscribes: []
