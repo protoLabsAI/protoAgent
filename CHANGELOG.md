@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`plugin install` of a PRIVATE GitHub repo now works on the default git path.** A runtime
+  install of a private repo (a private plugin or bundle — e.g. a team-member archetype)
+  failed with `could not read Username for 'https://github.com'`: in a container with only a
+  token env (no ssh key, no credential helper), `git clone` got no credential, and only the
+  git-less **archive** fetch (`PROTOAGENT_PLUGIN_FETCH=archive`) authenticated. The clone path
+  now hands `git` a GitHub auth header (`http.extraheader`) for `https://github.com/` URLs when
+  `GITHUB_TOKEN` / `GH_TOKEN` is set — so private installs work without the archive workaround.
+  Delivered via `GIT_CONFIG_*` env, so the token is **not** in argv (no `ps` leak) and **not**
+  written to the clone's `.git/config` (never lands on disk); scoped to `github.com` so it never
+  rides a redirect off-host. SSH / non-github / no-token are unchanged (git's own auth applies).
+
 ## [0.92.0] - 2026-07-05
 
 ### Added
