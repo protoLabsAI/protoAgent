@@ -130,7 +130,7 @@ a `fleet.json` registry. Because each agent's chat history is scoped to its own
 checkpoints, a **stopped agent's session resumes** when you restart it — and a **running**
 one keeps its background work (schedules, an in-flight loop) going while you're elsewhere.
 
-## Deploying a team — config-as-code (`fleet.autostart`)
+## Deploying a team — config-as-code (`fleet.autostart`) {#deploying-a-team}
 
 The commands above are **imperative** — you create members and start them by hand. That's
 fine at the console, but a team you *deploy* (a lead plus the specialist members it delegates
@@ -152,6 +152,13 @@ fleet:
 version-reconcile: **idempotent** (an already-running member is skipped), **best-effort** (a
 missing workspace or a failed spawn is logged and skipped — never blocks boot), and **hub-only**
 (a member's own scoped config carries no roster, so it no-ops inside a member).
+
+> Autostart restarts the member **process**; it does not by itself resume the **work** that
+> process was doing. A member whose job is a long-running background loop (a trading engine, a
+> poller) needs its *plugin* to resume that loop when it boots — see
+> [surfaces that resume across reloads](./plugins.md#surface-resume). The two compose: autostart
+> brings the agent back, the surface pattern brings its work back, and a host restart recovers
+> the whole crew with no manual steps.
 
 **2. Bake the lead + personas as seeds.** The lead's own config and persona seed from
 `PROTOAGENT_SEED_CONFIG` and `PROTOAGENT_SEED_SOUL` on first boot (seed-not-force — operator

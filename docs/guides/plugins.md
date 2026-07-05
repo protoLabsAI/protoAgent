@@ -97,6 +97,45 @@ def register(registry):
     registry.register_thread_id_resolver(lambda md, sid: f"proj:{md.get('project')}:{sid}")
 ```
 
+#### Surfaces that resume their work across reloads {#surface-resume}
+
+A surface's `start` runs on every server boot **and** after a plugin reload; `stop` runs on
+shutdown/reload; `reload(cfg)` runs on a config save. So a surface that manages ongoing
+background work — a trading loop, a poller, a long-running job — has a subtle obligation: a
+reload/restart is **not** "the operator turned it off," so the surface must *resume* that work
+rather than leave it stopped. Restarting the process alone doesn't bring the *work* back;
+[`fleet.autostart`](/guides/fleet#deploying-a-team) restarts the **agent**, this pattern
+restarts what it was **doing**. The recipe:
+
+1. **Persist the operator's INTENT, not the run state.** When the operator starts the work,
+   write a durable flag (`wanted: true`); when they *deliberately* stop it, clear the flag.
+   Module-level state resets on reload, so the flag lives on disk — a small JSON in the
+   per-agent config dir (`PROTOAGENT_CONFIG_DIR`), the same store your watch/plan state uses.
+2. **Distinguish a lifecycle stop from an operator stop.** The surface `stop` hook
+   (shutdown/reload) must halt the task **without** clearing the intent — a reload isn't a
+   decision. Only the operator's own stop clears it. (A single `stop_ops()` that both halts
+   *and* clears would make every reload read as "turned off," and it would never resume.)
+3. **Resume in `start` when the intent stands.** The `start` hook reads the flag and
+   re-launches the work if it was wanted; otherwise it stays idle.
+
+```python
+async def _start():                       # runs on boot AND after a reload
+    if _intended():                       # persisted flag — survived the module reset
+        _resume_work()                    # re-launch what the operator had running
+
+async def _stop():                        # runs on shutdown/reload
+    _lifecycle_halt()                     # stop the task, KEEP the intent (not an operator stop)
+```
+
+**Safety rule — the clear direction must fail *safe*.** The failure modes are asymmetric: a
+lost *start*-write leaves the flag absent → no resume → safe; a lost *stop*-write leaves it
+`true` → a reload would **resurrect deliberately-stopped work** → not safe. So verify the clear
+landed (read it back), and if it genuinely can't persist, make that **loud** rather than
+silent — never let a write failure resume work the operator turned off. protoTrader's
+SpaceTraders plugin is the worked example: `st_autopilot_start` persists `autopilot_wanted`, a
+`lifecycle_stop()` halts the trading engine on reload while keeping the flag, and the surface
+`start` resumes it — so a host restart brings the *trading* back, not just the process.
+
 ### Managed MCP servers — `register_mcp_server`
 
 A plugin can ship a **managed MCP server** the agent connects to, instead of

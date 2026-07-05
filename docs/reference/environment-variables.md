@@ -42,6 +42,7 @@ The hub spawns local fleet members as detached `--ui none` processes on their ow
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `PROTOAGENT_FLEET_AUTOSTART` | (unset) | Comma-separated member ids or display names the hub **(re)starts on boot** (ADR 0072) — a container recreate or host restart kills the members' detached processes and `fleet.json` keeps now-dead pids, so without this a declared crew stays down until re-activated by hand. The config key `fleet.autostart: [id, …]` is the durable form; this env var is the Docker/headless fallback. Idempotent (already-running members skipped), best-effort (a missing workspace is logged and skipped), and hub-only. Pairs with the config-as-code deploy pattern — see the [fleet guide](../guides/fleet.md#deploying-a-team). |
 | `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` | (unset) | By default the hub **spins its local members down when it shuts down** ("host down → fleet down" — keeps a rebuilt hub from leaving members running stale code; sessions resume from their `instance.id`-scoped checkpoints on the next switch, so it stops processes, not work). Set `1`/`true` to keep members running across a hub restart — for genuinely long-running detached agents. |
 | `PROTOAGENT_FLEET_MAX_WARM` | `0` | Keep-N-warm cap: at most this many members stay running; switching to another resumes it and evicts the least-recently-active beyond the cap (`0`/unset = unlimited). |
 | `PROTOAGENT_FLEET_WARM_GRACE` | `0` | Seconds a just-active member is spared from keep-warm eviction (may be mid background turn); `0` = pure LRU. |
