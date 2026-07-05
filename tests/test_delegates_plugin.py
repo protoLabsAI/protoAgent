@@ -245,6 +245,73 @@ async def test_delegate_to_unknown_and_empty(monkeypatch):
     assert "empty" in (await tool.ainvoke({"target": "opus", "query": "  "})).lower()
 
 
+# ── delegate_to background=True (ADR 0050) ─────────────────────────────────────
+
+
+class _FakeBgManager:
+    """Records spawn_work calls; returns a fixed job id WITHOUT running the work — so the
+    test asserts the detach happened, not the delegate dispatch."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def spawn_work(self, **kwargs):
+        self.calls.append(kwargs)
+        return "job-abc123"
+
+
+async def test_delegate_to_background_spawns_detached_job(monkeypatch):
+    r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
+    tool = r.tools[0]
+    # Wire a fake BackgroundManager onto the runtime state the tool reaches for.
+    import runtime.state as rs
+
+    fake = _FakeBgManager()
+    monkeypatch.setattr(rs.STATE, "background_mgr", fake, raising=False)
+    # dispatch must NOT run inline — the fake spawn_work never calls work.
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _unexpected_dispatch)
+
+    out = await tool.ainvoke({"target": "opus", "query": "build the thing", "background": True})
+    assert "job-abc123" in out and "background" in out.lower()
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["kind"] == "delegate"
+    assert "opus" in call["description"] and call["detail"] == "build the thing"
+    # The queued work, when awaited, dispatches to the delegate.
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _fake_dispatch)
+    assert await call["work"]() == "dispatched:build the thing"
+
+
+async def test_delegate_to_background_unknown_fails_fast(monkeypatch):
+    r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
+    tool = r.tools[0]
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "background_mgr", _FakeBgManager(), raising=False)
+    out = await tool.ainvoke({"target": "nope", "query": "hi", "background": True})
+    assert "unknown delegate" in out  # no orphan job for a bad target
+
+
+async def test_delegate_to_background_falls_back_inline_without_manager(monkeypatch):
+    r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
+    tool = r.tools[0]
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "background_mgr", None, raising=False)
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _fake_dispatch)
+    # No manager → background degrades to a normal inline dispatch, never worse than sync.
+    out = await tool.ainvoke({"target": "opus", "query": "quick q", "background": True})
+    assert out == "dispatched:quick q"
+
+
+async def _fake_dispatch(self, name, query):
+    return f"dispatched:{query}"
+
+
+async def _unexpected_dispatch(self, name, query):
+    raise AssertionError("dispatch must not run inline when a background job is spawned")
+
+
 # ── dispatch with fakes ───────────────────────────────────────────────────────
 
 
