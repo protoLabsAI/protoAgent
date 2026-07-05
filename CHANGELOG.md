@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.93.0] - 2026-07-05
 
 ### Added
+- **`delegate_to(background=True)` — detached delegations (ADR 0050).** `delegate_to` was
+  synchronous — it held the caller's turn open until the delegate replied, so handing a
+  minutes-long job to a delegate (a coding-agent building a PR, a deep-research run) blocked
+  the caller, kept an HTTP client open in front of it, and couldn't fan out several at once.
+  Passing `background=True` detaches the delegation: it returns immediately with a job id and
+  settles back through the background-work channel (ADR 0050) when the delegate finishes — so
+  a caller can hand off slow work, or several delegations at once, without blocking its turn.
 - **`protoagent model` — point at a local LLM in one line (ADR 0075, slice 4).** protoAgent's
   model is just OpenAI-compatible config (the LiteLLM gateway is the default, not a lock-in), so
   `protoagent model use --base-url http://127.0.0.1:8080/v1 --model qwen2.5` writes the endpoint +
