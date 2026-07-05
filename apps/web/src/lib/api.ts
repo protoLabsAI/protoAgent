@@ -847,6 +847,24 @@ export const api = {
     }>("/api/knowledge/ingest", form);
   },
 
+  // Dry-run an ingest (#1801) — extract + count chunks for a file/URL/text WITHOUT
+  // persisting anything, so the upload dialog can show what's about to be ingested
+  // (chunk count, token estimate, a text snippet) and gate it behind a Confirm.
+  // Same FormData shape as `ingestKnowledge` minus `domain` (chosen at confirm time).
+  previewKnowledgeIngest(form: FormData) {
+    return requestForm<{
+      enabled: boolean;
+      chunks: number;
+      chars: number;
+      approx_tokens: number;
+      title: string | null;
+      source_type: string;
+      source: string;
+      snippet: string;
+      truncated: boolean;
+    }>("/api/knowledge/ingest/preview", form);
+  },
+
   // --- Memory inspector (ADR 0069 D7) — the delivery-layer audit surface -----
   // Session summaries: the files behind the <prior_sessions> digest.
   memorySessions() {

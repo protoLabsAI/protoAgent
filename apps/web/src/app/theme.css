@@ -1920,6 +1920,24 @@ textarea {
 }
 .knowledge-ingest-note { color: var(--fg-muted); font-size: 12px; align-self: center; }
 
+/* Ingest preview (dry-run gate, #1801) — shown in place of the drop-zone once a
+   source is picked; Confirm ingests, Cancel returns to selection. */
+.knowledge-ingest-preview { display: flex; flex-direction: column; gap: 10px; }
+.knowledge-ingest-preview-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.knowledge-ingest-preview-source {
+  font-size: 12px; color: var(--fg-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.knowledge-ingest-preview-snippet {
+  margin: 0; padding: 10px 12px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 8px;
+  background: var(--pl-color-bg-inset);
+  font-size: 12px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow-y: auto;
+}
+
 /* ── Delegates panel (ADR 0025) — moved to src/settings/delegates.css (#832). ── */
 
 /* Plugin-contributed console views (ADR 0026) — optional subnav above, iframe fills. */

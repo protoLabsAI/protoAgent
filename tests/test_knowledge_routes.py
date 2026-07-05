@@ -377,6 +377,77 @@ def test_ingest_audio_without_transcribe_model_returns_501(monkeypatch):
     assert c.post("/api/knowledge/ingest", files=files).status_code == 501
 
 
+# ── ingest preview (/api/knowledge/ingest/preview) — dry-run, persists nothing ─
+def test_ingest_preview_text_persists_nothing(monkeypatch):
+    ks = _IngestKS()
+    c = _client(monkeypatch, knowledge=ks)
+    body = c.post(
+        "/api/knowledge/ingest/preview", data={"text": "a pasted note body", "title": "My Note"}
+    ).json()
+    assert body["enabled"] is True
+    assert body["chunks"] == 1 and body["chars"] == len("a pasted note body")
+    assert body["approx_tokens"] >= 1
+    assert body["source_type"] == "text" and body["title"] == "My Note"
+    assert body["snippet"] == "a pasted note body" and body["truncated"] is False
+    # The whole point: preview writes nothing to the store.
+    assert ks.docs == []
+
+
+def test_ingest_preview_file_upload_no_persist(monkeypatch):
+    ks = _IngestKS()
+    c = _client(monkeypatch, knowledge=ks)
+    files = {"file": ("notes.md", b"# Heading\n\nsome body text", "text/markdown")}
+    body = c.post("/api/knowledge/ingest/preview", files=files).json()
+    assert body["enabled"] is True and body["source_type"] == "markdown"
+    assert body["source"] == "notes.md" and "some body text" in body["snippet"]
+    assert ks.docs == []
+
+
+def test_ingest_preview_url_no_persist(monkeypatch):
+    import ingestion
+    from ingestion import ExtractResult
+
+    monkeypatch.setattr(
+        ingestion,
+        "extract_url",
+        lambda u, **kw: ExtractResult(text="fetched article body", title="Article", source_type="html"),
+    )
+    ks = _IngestKS()
+    c = _client(monkeypatch, knowledge=ks)
+    body = c.post("/api/knowledge/ingest/preview", data={"url": "https://example.com/post"}).json()
+    assert body["enabled"] is True and body["source_type"] == "html"
+    assert body["source"] == "https://example.com/post" and body["title"] == "Article"
+    assert ks.docs == []
+
+
+def test_ingest_preview_counts_multiple_chunks(monkeypatch):
+    """A long document previews the same multi-chunk count ingestion would produce
+    (chunker defaults when the store double exposes no knobs)."""
+    ks = _IngestKS()
+    c = _client(monkeypatch, knowledge=ks)
+    long_text = " ".join(f"word{i}" for i in range(1200))  # well over the 1200-char default
+    body = c.post("/api/knowledge/ingest/preview", data={"text": long_text}).json()
+    assert body["chunks"] > 1
+    assert body["truncated"] is True and len(body["snippet"]) == 1500
+    assert ks.docs == []
+
+
+def test_ingest_preview_requires_a_source(monkeypatch):
+    c = _client(monkeypatch, knowledge=_IngestKS())
+    assert c.post("/api/knowledge/ingest/preview", data={}).status_code == 400
+
+
+def test_ingest_preview_unsupported_type_returns_415(monkeypatch):
+    c = _client(monkeypatch, knowledge=_IngestKS())
+    files = {"file": ("blob.bin", b"\x00\x01\x02\x03", "application/octet-stream")}
+    assert c.post("/api/knowledge/ingest/preview", files=files).status_code == 415
+
+
+def test_ingest_preview_disabled_when_store_off(monkeypatch):
+    c = _client(monkeypatch)  # no knowledge store
+    assert c.post("/api/knowledge/ingest/preview", data={"text": "x"}).json() == {"enabled": False}
+
+
 # ── chat attachments (/api/knowledge/attach) — tiered, session-scoped ─────────
 import types as _types  # noqa: E402
 

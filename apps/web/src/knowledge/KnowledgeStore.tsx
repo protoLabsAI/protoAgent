@@ -97,6 +97,10 @@ const INGEST_ACCEPT =
   ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac," +
   ".mp4,.mov,.mkv,.webm,.avi,.m4v";
 
+// The source a preview is holding, so Confirm can re-send the exact same thing.
+type PendingSource = { kind: "file"; file: File } | { kind: "url"; url: string };
+type IngestPreview = Awaited<ReturnType<typeof api.previewKnowledgeIngest>>;
+
 function IngestForm({
   onDone,
   onError,
@@ -110,34 +114,128 @@ function IngestForm({
   const [domain, setDomain] = useState("general");
   const [drag, setDrag] = useState(false);
   const [note, setNote] = useState("");
+  // Preview gate (#1801): picking a source runs a no-persist dry-run; the result
+  // is held here and shown in-place until the operator Confirms (ingest) or
+  // Cancels. `pending` is the source Confirm re-sends; `title` is editable here.
+  const [pending, setPending] = useState<PendingSource | null>(null);
+  const [preview, setPreview] = useState<IngestPreview | null>(null);
+  const [title, setTitle] = useState("");
+
+  function formFor(src: PendingSource): FormData {
+    const f = new FormData();
+    if (src.kind === "file") f.append("file", src.file);
+    else f.append("url", src.url);
+    return f;
+  }
+
+  function resetPreview() {
+    setPending(null);
+    setPreview(null);
+    setTitle("");
+  }
+
+  const previewMut = useMutation({
+    mutationFn: (src: PendingSource) => api.previewKnowledgeIngest(formFor(src)),
+    onSuccess: (r, src) => {
+      setPending(src);
+      setPreview(r);
+      setTitle(r.title ?? "");
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
 
   const ingest = useMutation({
-    mutationFn: (form: FormData) => {
-      form.set("domain", domain.trim() || "general");
-      return api.ingestKnowledge(form);
+    // Confirm re-sends the source to /ingest (extraction reruns there, preserving
+    // each source's real provenance — a PDF stays a PDF, not "pasted text").
+    mutationFn: (src: PendingSource) => {
+      const f = formFor(src);
+      f.set("domain", domain.trim() || "general");
+      if (title.trim()) f.set("title", title.trim());
+      return api.ingestKnowledge(f);
     },
     onSuccess: (r) => {
       setNote(`Added ${r.chunks} chunk${r.chunks === 1 ? "" : "s"}${r.title ? ` from “${r.title}”` : ""}.`);
       setUrl("");
+      resetPreview();
       onDone();
     },
     onError: (e) => onError(errMsg(e)),
   });
-  const busy = ingest.isPending;
 
-  function ingestFile(file: File) {
-    const f = new FormData();
-    f.append("file", file);
+  const busy = previewMut.isPending || ingest.isPending;
+
+  function previewFile(file: File) {
     setNote("");
-    ingest.mutate(f);
+    previewMut.mutate({ kind: "file", file });
+  }
+  function previewUrl() {
+    if (!url.trim()) return;
+    setNote("");
+    previewMut.mutate({ kind: "url", url: url.trim() });
   }
 
-  function ingestUrl() {
-    if (!url.trim()) return;
-    const f = new FormData();
-    f.append("url", url.trim());
-    setNote("");
-    ingest.mutate(f);
+  // Confirm step — the dry-run result held in-place; nothing is ingested until
+  // the operator clicks Confirm (or Cancel goes back to source selection).
+  if (pending && preview) {
+    const srcLabel = pending.kind === "file" ? pending.file.name : pending.url;
+    const sizeKb = pending.kind === "file" ? `${(pending.file.size / 1024).toFixed(1)} KB` : null;
+    const chunkLabel = `${preview.chunks} chunk${preview.chunks === 1 ? "" : "s"}`;
+    return (
+      <div className="knowledge-chunk-form">
+        <div className="knowledge-ingest-preview">
+          <div className="knowledge-ingest-preview-meta">
+            <Badge status="neutral">{preview.source_type}</Badge>
+            <Badge status="success">{chunkLabel}</Badge>
+            <Badge status="neutral">~{preview.approx_tokens.toLocaleString()} tokens</Badge>
+            {sizeKb ? <Badge status="neutral">{sizeKb}</Badge> : null}
+          </div>
+          <div className="knowledge-ingest-preview-source" title={srcLabel}>
+            {srcLabel}
+          </div>
+          <pre className="knowledge-ingest-preview-snippet" aria-label="content preview">
+            {preview.snippet}
+            {preview.truncated ? "\n…" : ""}
+          </pre>
+          <div className="knowledge-chunk-form-row">
+            <Input
+              type="text"
+              placeholder="title (optional)"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              aria-label="ingest title"
+              disabled={busy}
+            />
+            <Input
+              type="text"
+              placeholder="domain"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              aria-label="ingest domain"
+              style={{ maxWidth: 160 }}
+              disabled={busy}
+            />
+          </div>
+          <div className="knowledge-chunk-form-row">
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              disabled={busy || preview.chunks === 0}
+              onClick={() => ingest.mutate(pending)}
+            >
+              {ingest.isPending
+                ? "Ingesting…"
+                : preview.chunks === 0
+                  ? "Nothing to ingest"
+                  : `Confirm — ingest ${chunkLabel}`}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={resetPreview} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -150,7 +248,7 @@ function IngestForm({
           e.preventDefault();
           setDrag(false);
           const file = e.dataTransfer.files?.[0];
-          if (file) ingestFile(file);
+          if (file) previewFile(file);
         }}
       >
         <FileUp size={18} />
@@ -165,7 +263,7 @@ function IngestForm({
               disabled={busy}
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) ingestFile(file);
+                if (file) previewFile(file);
                 e.target.value = "";
               }}
             />
@@ -179,23 +277,14 @@ function IngestForm({
           placeholder="…or paste a web / YouTube URL"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") ingestUrl(); }}
+          onKeyDown={(e) => { if (e.key === "Enter") previewUrl(); }}
           aria-label="source url"
-          disabled={busy}
-        />
-        <Input
-          type="text"
-          placeholder="domain"
-          value={domain}
-          onChange={(e) => setDomain(e.target.value)}
-          aria-label="ingest domain"
-          style={{ maxWidth: 160 }}
           disabled={busy}
         />
       </div>
       <div className="knowledge-chunk-form-row">
-        <Button type="button" variant="primary" size="sm" disabled={busy || !url.trim()} onClick={ingestUrl}>
-          {busy ? "Importing…" : "Import URL"}
+        <Button type="button" variant="primary" size="sm" disabled={busy || !url.trim()} onClick={previewUrl}>
+          {previewMut.isPending ? "Reading…" : "Preview URL"}
         </Button>
         <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={busy}>
           Close
