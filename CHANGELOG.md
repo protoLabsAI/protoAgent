@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without hand-rolled markup. The `rendering-artifacts` skill + README list the full set.
 
 ### Fixed
+- **The plugin update-CHECK now authenticates private repos too, not just install.** #1805 taught the
+  clone/install path to auth private github over a token, but the update-availability check
+  (`check_updates` → `git ls-remote`) still ran unauthenticated — so a **private** plugin showed
+  **"check failed"** in the Plugins panel (couldn't reach the repo to see if a newer release exists),
+  even though the plugin itself installed + ran fine. Both `_ls_remote_sha` and `_ls_remote_tags` now
+  pass the same scoped `_git_auth_env` (Basic `x-access-token` over `GIT_CONFIG_*` env — off-argv,
+  off-disk, github-scoped) when `GITHUB_TOKEN`/`GH_TOKEN` is set. Public/no-token/ssh unchanged.
 - **The operator MCP no longer hands a foreign client HITL tools that hang it (ADR 0075).** `ask_human`
   and `request_user_input` pause the turn via a LangGraph interrupt only the lead-turn runner resumes;
   exposed over a stdio/HTTP MCP (Claude Desktop, Cursor) they had no runner to resume them and hung the
