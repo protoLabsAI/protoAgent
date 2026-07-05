@@ -178,3 +178,59 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
     .getByRole("button", { name: /Remove from this fleet/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);
 });
+
+// ── Command-palette fleet toggle (#1769) ───────────────────────────────────────────
+// Toggle a local, non-host member on/off straight from ⌘K — no Settings dive. The
+// picker lists togglable members with their live process state; picking one flips it and
+// toasts. Reuses this file's per-spec fleet scope (beforeEach resets to baseline).
+
+// The DS palette morphs views with a popLayout cross-fade, so the exiting root list lingers
+// in the DOM for a beat next to the entering sub-view. A sub-view row's accessible name is
+// "<name> <state>" (e.g. "ava on") — and the sub-view states ("on"/"off") never collide with
+// the root quick-chat's hints ("switch"/"stopped"/"unreachable"), so keying every assertion
+// on the exact "<name> <state>" name sidesteps the transient overlap entirely.
+async function openToggleFleet(page) {
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+  // A reopen momentarily re-morphs the last sub-view back to the root view (the DS palette
+  // resets its stack on open), so the sub-view's search box lingers next to the root one for a
+  // beat — wait for it to leave before filling, or `.pl-cmdk-commands__input` is ambiguous.
+  await expect(page.getByPlaceholder("Toggle a fleet agent on/off…")).toHaveCount(0);
+  // Filter the root list to the toggle command, then enter its submorph.
+  await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Toggle Fleet Agent");
+  await page.getByRole("option", { name: "Toggle Fleet Agent" }).click();
+  await expect(page.locator(".pl-cmdk__title")).toHaveText("Toggle Fleet Agent"); // in the sub-view
+}
+
+const row = (page, name, state) => page.getByRole("option", { name: `${name} ${state}`, exact: true });
+
+test("⌘K → Toggle Fleet Agent lists non-host members with state and flips one", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openToggleFleet(page);
+
+  // Local members are listed with their live process state; the host (main) never is.
+  await expect(row(page, "ava", "on")).toBeVisible(); // running in baseline
+  await expect(row(page, "roxy", "off")).toBeVisible(); // stopped, still listed
+  await expect(page.getByRole("option", { name: /^main\b/ })).toHaveCount(0); // host excluded
+
+  // Toggle ava off — the palette closes, a toast confirms, and the roster flips.
+  await row(page, "ava", "on").click();
+  await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
+  await expect(page.locator(".pl-toast", { hasText: "Stopping ava" })).toBeVisible();
+
+  // Reopen the picker: ava now reads "off" (its running state flipped on the invalidated poll).
+  await openToggleFleet(page);
+  await expect(row(page, "ava", "off")).toBeVisible();
+});
+
+test("⌘K → Toggle Fleet Agent starts a stopped member", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openToggleFleet(page);
+
+  await expect(row(page, "roxy", "off")).toBeVisible(); // stopped in baseline
+  await row(page, "roxy", "off").click();
+  await expect(page.locator(".pl-toast", { hasText: "Starting roxy" })).toBeVisible();
+
+  await openToggleFleet(page);
+  await expect(row(page, "roxy", "on")).toBeVisible();
+});

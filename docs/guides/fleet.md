@@ -183,7 +183,10 @@ navigate to it; "+ New agent" runs the archetype picker. A plugin view served by
 that opens a **WebSocket** (e.g. `agent_browser`'s live viewport) works through the hub too:
 the slug proxy forwards WS upgrades, not just HTTP/SSE ([#883](https://github.com/protoLabsAI/protoAgent/issues/883), shipped v0.35.0). Settings → Agents is the fleet manager
 (create / start / stop / rename / remove), and **Discover** finds other protoAgents on the
-box, the LAN (mDNS) and your **tailnet** (via the Tailscale CLI).
+box, the LAN (mDNS) and your **tailnet** (via the Tailscale CLI). To flip a local member
+on or off without opening Settings, press **⌘K → Toggle Fleet Agent** and pick it from the
+picker (the host and remote members are never listed) — see
+[command palette](./command-palette.md).
 
 **Fleet settings are hub-only.** The topbar dropdown's **Fleet settings** item is enabled
 on the host window (and on a standalone instance — that's where you create your first

@@ -12,14 +12,16 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type { Command, PaletteRegistry, PaletteView } from "@protolabsai/ui/command-palette";
+import { useToast } from "@protolabsai/ui/overlays";
 import { useUI } from "../state/uiStore";
 import type { View } from "../lib/viewRegistry";
 import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
-import { useQuery } from "@tanstack/react-query";
-import { agentHref, currentSlug } from "../lib/api";
-import { fleetQuery } from "../lib/queries";
-import { fleetPaletteEntries, markAgentOpened, readAgentRecency } from "./fleetPalette";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { agentHref, api, currentSlug } from "../lib/api";
+import { errMsg } from "../lib/format";
+import { fleetQuery, queryKeys } from "../lib/queries";
+import { fleetPaletteEntries, markAgentOpened, readAgentRecency, togglableFleetAgents } from "./fleetPalette";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -178,6 +180,9 @@ export function usePaletteRegistry(
 ): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
+  // Stable across renders — closed over by the fleet-toggle command's `run` (#1769).
+  const toast = useToast();
+  const qc = useQueryClient();
 
   // The live fleet roster (polled) → a "Quick-chat with any fleet agent" section (#1733). Works
   // in both the console window and the desktop launcher (both sit under QueryClientProvider).
@@ -291,7 +296,52 @@ export function usePaletteRegistry(
       };
     });
     const offPlugins = pluginCommands.length ? registry.registerCommands(pluginCommands) : undefined;
-    // Commands group: `Open ▸` (morphs to the built-in surfaces) + the deep-link actions.
+    // Fleet on/off (#1769): a `Toggle Fleet Agent ▸` submorph listing every LOCAL, non-host
+    // member with its live process state as a hint chip ("on"/"off"). ON/OFF isn't a persisted
+    // flag — it's `FleetAgent.running`: picking a stopped agent starts it, a running one stops
+    // it, then we invalidate the roster (so its dot + this list's hint flip on the next poll)
+    // and toast the outcome. The row for the agent THIS window is proxied to is disabled
+    // ("current") so the operator can't kill their own console from here.
+    const focused = currentSlug();
+    const toggleCommands: Command[] = togglableFleetAgents(agents).map((a) => {
+      const on = a.running;
+      const isCurrent = a.id === focused;
+      return {
+        id: `fleet-toggle:${a.id}`,
+        label: a.name,
+        hint: isCurrent ? "current" : on ? "on" : "off",
+        group: "Agents",
+        keywords: ["fleet", "agent", "toggle", on ? "disable" : "enable", on ? "stop" : "start", a.name],
+        disabled: isCurrent, // can't stop the agent serving this very window
+        run: (c) => {
+          c.close();
+          const action = on ? api.stopAgent(a.name) : api.startAgent(a.name);
+          action
+            .then(() => {
+              qc.invalidateQueries({ queryKey: queryKeys.fleet });
+              toast({
+                tone: "success",
+                title: on ? `Stopping ${a.name}…` : `Starting ${a.name}…`,
+                message: on ? `${a.name} is going offline.` : `${a.name} is coming online.`,
+              });
+            })
+            .catch((e) => toast({ tone: "error", title: "Couldn't toggle agent", message: errMsg(e) }));
+        },
+      };
+    });
+    const offToggleView = registry.registerViews([
+      {
+        ...commandsView({
+          commands: toggleCommands,
+          placeholder: "Toggle a fleet agent on/off…",
+          emptyLabel: "No fleet agents to toggle",
+        }),
+        id: "fleet-toggle",
+        title: "Toggle Fleet Agent",
+      },
+    ]);
+    // Commands group: `Open ▸` (morphs to the built-in surfaces), `Toggle Fleet Agent ▸`, and
+    // the deep-link actions.
     const openCommand: Command = {
       id: "open",
       label: "Open…",
@@ -300,11 +350,24 @@ export function usePaletteRegistry(
       keywords: ["open", "go to", "surface", "view", "navigate", "switch", "panel"],
       run: (c) => c.enter("open"),
     };
-    const offCommands = registry.registerCommands([openCommand, ...registeredPaletteCommands().map(toDsCommand)]);
+    const toggleCommand: Command = {
+      id: "fleet:toggle",
+      label: "Toggle Fleet Agent",
+      hint: "on / off",
+      group: "Commands",
+      keywords: ["fleet", "agent", "toggle", "enable", "disable", "start", "stop", "on", "off"],
+      run: (c) => c.enter("fleet-toggle"),
+    };
+    const offCommands = registry.registerCommands([
+      openCommand,
+      toggleCommand,
+      ...registeredPaletteCommands().map(toDsCommand),
+    ]);
     return () => {
       offChat?.();
       offFleet?.();
       offPlugins?.();
+      offToggleView();
       offCommands();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

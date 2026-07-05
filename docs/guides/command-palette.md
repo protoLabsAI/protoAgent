@@ -10,6 +10,11 @@ hunting through rails and menus ([ADR 0057](/adr/0057-command-palette)).
   Settings, plugin rail views) is a "go to" command, listed first.
 - **Deep links** — jump straight to Activity/Inbox, Plugins → Discover/Install, or a
   specific Settings tab.
+- **Toggle a fleet agent** — **Toggle Fleet Agent** opens a picker of the local,
+  non-host fleet members with their live on/off state; picking one brings it online (or
+  takes it offline) and confirms with a toast — no Settings dive. The host is never
+  listed (stopping it would kill the session), and the agent this window is proxied to is
+  disabled ("current") so you can't stop your own console out from under yourself.
 - **Inline chat** — start typing a question and the palette morphs into a quick chat
   with the focused agent (its own thread, persisted locally) — handy for a one-off ask
   without leaving what you're doing.
