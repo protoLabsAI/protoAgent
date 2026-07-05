@@ -84,10 +84,14 @@ give protoAgent a first-class terminal identity. Five decisions:
   zeros today), and publish a machine-readable **operation catalog** the three surfaces derive
   from. Ship one release of deprecation aliases, then delete. *Locked: do it now, complete it.*
 - **D5 — Fast local-LLM onboarding + "use in app".** `protoagent setup` discovers running
-  local providers; a `protoagent model` verb group manages the model; and an **"Open in
-  protoAgent"** deep-link lets Ollama's / HuggingFace's "use in app" action hand a model
-  straight to protoAgent. *Locked: ship both `uv tool`/`pipx` and a zero-Python frozen-binary
-  `curl | sh` install path.*
+  local providers; a `protoagent model` verb group manages the model; and protoAgent registers
+  as a **HuggingFace "Use this model" local-app** so a HF model card hands a model straight to
+  it. *Revised after research (2026-07-05): for an agent runtime the "use in app" contract is a
+  **CLI snippet via a PR to `huggingface.js` `local-apps.ts`**, NOT a `protoagent://` deep-link
+  — protoAgent maps onto the existing `hermes-agent`/`openclaw`/`pi` pattern (which are the
+  Hermes/OpenClaw competitors, already registered on the same cards). A deep-link is only for a
+  GUI loader (optional, secondary). Locked: ship both `uv tool`/`pipx` and a zero-Python
+  frozen-binary `curl | sh` install path.*
 
 ## Design details
 
@@ -167,15 +171,27 @@ one-liner, not new model plumbing:
 - **Discovery** — `protoagent setup` (and `protoagent model discover`) probe well-known local
   endpoints — Ollama (`http://localhost:11434/v1`, `/api/tags`), LM Studio (`:1234/v1`), vLLM /
   HF TGI (`/v1/models`) — and list the models each serves (mirrors proto's `modelDiscovery`).
-- **`protoagent model` verbs** — `list` (configured + discovered), `use <id>` (set
-  `api_base` + `model_name` + a placeholder key via the config op; no gateway required),
-  `add`/`remove` (named endpoints), `pull <name>` (shell out to `ollama pull` when present).
-- **"Use in app" handoff** — register an **`protoagent://model/add?...`** URL scheme (desktop
-  app: OS URL handler; CLI: a documented `protoagent model use …` one-liner and a small local
-  `POST /api/config/model` used by a web "Open in protoAgent" button). Ollama's / HuggingFace's
-  "use in app" targets that: click a model on ollama.com or a HF model card → protoAgent opens
-  pre-pointed at it → `protoagent up`. The deep-link **payload contract** (endpoint, model id,
-  optional key env) is the piece that needs its own small design (see Open questions).
+- **`protoagent model` verbs** — `list` (configured + discovered), **`use`** (the load-bearing
+  one: `protoagent model use --base-url http://127.0.0.1:8080/v1 --model <id>` sets `api_base` +
+  `model_name` + a placeholder key via the config op, non-interactively, no gateway required),
+  `add`/`remove` (named endpoints), `pull <name>` (shell out to `ollama pull` when present). Must
+  tolerate the HF quant-tag placeholder `:{{QUANT_TAG}}` (default to a sensible quant).
+- **"Use in app" handoff — a HuggingFace local-app registration, not a deep-link** *(research
+  2026-07-05)*. protoAgent is an OpenAI-compatible **agent runtime**, so it registers exactly
+  like `hermes-agent`/`openclaw`/`pi`: a ~20-line PR to **`packages/tasks/src/local-apps.ts`** in
+  `huggingface/huggingface.js`, gated on `isToolCallingLocalAgentModel` (GGUF/MLX + `conversational`
+  + a tools chat-template), emitting a 3-step **snippet** (not a `deeplink`): (1) `getLocalServerStep`
+  starts llama.cpp/MLX on `:8080/v1`, (2) `protoagent model use --base-url http://127.0.0.1:8080/v1
+  --model ${modelId}`, (3) `protoagent` to launch. Once merged it shows on every compatible model
+  card's "Use this model" dropdown. **Ollama** offers no such registry — it's OpenAI-API-only
+  (`:11434/v1`), reached by the same `protoagent model use`. A `protoagent://` deep-link is only
+  worth adding if we ship a GUI to foreground (optional, secondary). The prereqs the snippet needs
+  are exactly this ADR's PR1 (installable command) + D5 (`model use` one-liner).
+- **Leverage the HF quant reputation, not social clout.** Two compounding surfaces: (A) the
+  registry PR puts protoAgent on *other* people's compatible cards; (B) — works today, no HF
+  dependency — the team's own published **quant model cards** carry a "Run with protoAgent" snippet
+  and `conversational` + tools-template metadata, so they auto-surface protoAgent the moment the PR
+  merges. Converts at the moment of intent (a user on the card about to run the model).
 
 ### F. Install / distribution
 
@@ -223,9 +239,12 @@ Install/distribution (F) rides PR1 (binary + `uv tool`) and PR4 (the `install.sh
 
 ## Open questions
 
-1. **Deep-link payload contract (D5).** What exactly does `protoagent://model/add` carry, and
-   how do Ollama / HuggingFace register protoAgent as a "use in app" target (a submitted app
-   entry vs. a user-registered URL scheme)? Needs a short design + likely outreach.
+1. **HF local-app PR — acceptance + gate choice (D5).** *(Resolved mechanism, open on execution.)*
+   The registration is a PR to `huggingface.js` `local-apps.ts` (review ≈ 1–2 wk, no formal bar,
+   GGUF/MLX is the ticket). Open: use the narrow `isToolCallingLocalAgentModel` gate (the honest
+   agent-runtime precedent — reviewers will steer here) vs. the broad `isLlamaCppGgufModel` (all
+   ~45K GGUF cards, but over-reaching draws a change request)? And do we also ship a GUI
+   `protoagent://` deep-link, or snippet-only like the other three agent runtimes (snippet-only)?
 2. **CLI ↔ running-server vs on-disk ops.** Some ops act on disk (plugin install), some need a
    live server (fleet status, hot config). Does the CLL auto-boot a transient server for
    live-only ops, or require `protoagent up` first? (Lean: disk ops work headless; live ops
