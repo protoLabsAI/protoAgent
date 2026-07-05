@@ -40,6 +40,8 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "config": ("graph.config_explain", "run_config_cli"),
     "model": ("graph.model_cli", "run_model_cli"),
     "operations": ("ops.cli", "run_operations_cli"),
+    # `knowledge` lives in server/ (not graph/**) — it boots the instance's stores standalone.
+    "knowledge": ("server.knowledge_cli", "run_knowledge_cli"),
 }
 
 _FORWARD_HELP = {
@@ -50,6 +52,7 @@ _FORWARD_HELP = {
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
+    "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
 }
 
 _LIFECYCLE_HELP = {
