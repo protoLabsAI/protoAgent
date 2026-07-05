@@ -89,10 +89,11 @@ def live_plugins_dir() -> Path:
     return instance_paths().plugins_dir
 
 
-def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> str:
+def _git(*args: str, cwd: Path | None = None, timeout: float | None = None, env: dict | None = None) -> str:
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd else None,
+        env=env,  # None ⇒ inherit os.environ (default); a dict carries scoped auth (see _git_auth_env)
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -202,6 +203,38 @@ def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
     }
 
 
+def _git_auth_env(url: str) -> dict[str, str]:
+    """Env that hands ``git`` a GitHub auth header for an ``https://github.com/`` URL when a
+    ``GITHUB_TOKEN`` / ``GH_TOKEN`` is set — so a runtime ``plugin install`` of a **private**
+    repo works on the DEFAULT git path (the "git handles private auth" design intent), not only
+    the archive path. Without it a plain ``git clone`` of a private HTTPS repo in a container
+    (no ssh key, no credential helper — just the token env) fails with
+    ``could not read Username for 'https://github.com'``.
+
+    Delivered via ``GIT_CONFIG_*`` env, deliberately:
+    - **not argv** → the token never shows up in ``ps`` (unlike ``-c http.extraheader=…``),
+    - **not the clone's ``.git/config``** → env-config is per-command, so the token never lands
+      on disk in the cloned repo,
+    - **scoped** to ``http.https://github.com/.extraheader`` → the header never rides a redirect
+      to a non-github host.
+
+    SSH / ``git@`` / non-github / no-token → ``{}`` (git's own auth — ssh keys, credential
+    helpers — applies unchanged)."""
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if not token or not url.startswith("https://github.com/"):
+        return {}
+    import base64
+
+    # GitHub accepts Basic ``x-access-token:<token>`` for git-over-HTTPS (the pattern
+    # actions/checkout uses); the archive path uses a Bearer header for the API/codeload.
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
+    }
+
+
 def _clone(url: str, ref: str | None, dest: Path) -> str:
     """Clone ``url`` at ``ref`` into ``dest``; return the resolved commit SHA.
 
@@ -219,16 +252,21 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     it's a no-op for the file:// and remote cases."""
     if url.startswith("/"):
         url = Path(url).resolve().as_uri()
+    # Authenticate a private github HTTPS clone with the token env (scoped, off-argv, off-disk).
+    # ``None`` for local/ssh/non-github/no-token ⇒ git inherits os.environ unchanged. Only the
+    # network op (clone) needs it; checkout/rev-parse are local.
+    auth = _git_auth_env(url)
+    clone_env = {**os.environ, **auth} if auth else None
     if ref and _SHA_RE.match(ref):
         # A specific commit: full clone (shallow can't reliably check out an
         # arbitrary SHA), then check it out.
-        _git("clone", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
+        _git("clone", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S, env=clone_env)
         _git("checkout", ref, cwd=dest)
     elif ref:
         # A tag or branch: shallow clone of just that ref.
-        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S)
+        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S, env=clone_env)
     else:
-        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S)
+        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S, env=clone_env)
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
@@ -237,8 +275,9 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
 # already discovers + importlib-loads plugins from the live root in frozen mode.
 # So the only gap is *fetching* the code: download a GitHub archive tarball over
 # HTTPS (the bundled httpx) and extract it — an on-disk result identical to a
-# shallow clone. `git` stays the path on a dev/server box (history, ssh, private
-# auth); the archive path is preferred when git is absent or we're frozen.
+# shallow clone. `git` stays the path on a dev/server box (history, ssh, and
+# private auth — over ssh keys / credential helpers, or a github HTTPS token via
+# `_git_auth_env`); the archive path is preferred when git is absent or we're frozen.
 
 _GH_RE = re.compile(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$")
 

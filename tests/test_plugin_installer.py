@@ -430,3 +430,77 @@ def test_install_bundle_member_missing_url_errors(env):
     _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
     with pytest.raises(installer.InstallError):
         installer.install(str(repo))
+
+
+# ── private-repo clone auth (github HTTPS token) ──────────────────────────────
+# A runtime `plugin install` of a PRIVATE github repo used to fail on the default git
+# path ("could not read Username for 'https://github.com'") — git got no credential in a
+# container with only a token env. `_git_auth_env` hands git a scoped http.extraheader via
+# GIT_CONFIG_* so the private clone authenticates, off-argv and off-.git/config.
+
+
+def test_git_auth_env_github_https_with_token(monkeypatch):
+    import base64
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    e = installer._git_auth_env("https://github.com/org/repo")
+    assert e["GIT_CONFIG_COUNT"] == "1"
+    assert e["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    scheme, b64 = e["GIT_CONFIG_VALUE_0"].removeprefix("Authorization: ").split()
+    assert scheme == "Basic"
+    assert base64.b64decode(b64).decode() == "x-access-token:tok"
+
+
+def test_git_auth_env_prefers_github_token_over_gh_token(monkeypatch):
+    import base64
+
+    monkeypatch.setenv("GITHUB_TOKEN", "gh")
+    monkeypatch.setenv("GH_TOKEN", "alt")
+    e = installer._git_auth_env("https://github.com/o/r")
+    assert base64.b64decode(e["GIT_CONFIG_VALUE_0"].split()[-1]).decode() == "x-access-token:gh"
+
+
+def test_git_auth_env_empty_for_ssh_nongithub_or_no_token(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    assert installer._git_auth_env("git@github.com:o/r.git") == {}       # ssh → git's own auth
+    assert installer._git_auth_env("https://gitlab.com/o/r") == {}       # non-github
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    assert installer._git_auth_env("https://github.com/o/r") == {}       # no token
+
+
+def test_clone_authenticates_private_github_via_scoped_env(monkeypatch, tmp_path):
+    """_clone passes the auth env to the network `clone` (not to local checkout/rev-parse),
+    the token never appears in argv, and the header is scoped to github.com HTTPS."""
+    import base64
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "s3cr3t")
+    calls = []
+
+    def fake_git(*args, cwd=None, timeout=None, env=None):
+        calls.append({"args": args, "env": env})
+        return "b" * 40  # stands in for `rev-parse HEAD`
+
+    monkeypatch.setattr(installer, "_git", fake_git)
+    installer._clone("https://github.com/protoLabsAI/frontend-bundle", None, tmp_path / "dest")
+
+    clone = next(c for c in calls if c["args"][0] == "clone")
+    env = clone["env"]
+    assert env and env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    assert base64.b64decode(env["GIT_CONFIG_VALUE_0"].split()[-1]).decode() == "x-access-token:s3cr3t"
+    assert not any("s3cr3t" in str(a) for a in clone["args"])  # off-argv: no `ps` leak
+    rev = next(c for c in calls if c["args"][0] == "rev-parse")
+    assert rev["env"] is None  # local op inherits os.environ, no auth injected
+
+
+def test_clone_no_auth_env_without_token(monkeypatch, tmp_path):
+    """No token → clone runs with env=None (git's own auth), unchanged behavior."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    calls = []
+    monkeypatch.setattr(installer, "_git", lambda *a, cwd=None, timeout=None, env=None: calls.append({"args": a, "env": env}) or "b" * 40)
+    installer._clone("https://github.com/o/r", None, tmp_path / "dest")
+    clone = next(c for c in calls if c["args"][0] == "clone")
+    assert clone["env"] is None
