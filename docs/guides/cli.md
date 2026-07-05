@@ -57,6 +57,23 @@ then exits:
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` | Print this instance's id, both roots, every resolved path, and the config cascade with provenance. | [0047](../adr/0047-layered-settings-cascade.md) |
 
+### Point at a local model
+
+`protoagent model` points protoAgent at any OpenAI-compatible endpoint — the gateway
+is the default, not a lock-in, so a local Ollama / LM Studio / llama.cpp / vLLM server
+is one line:
+
+```bash
+protoagent model discover                                   # probe :11434 / :1234 / :8080
+protoagent model use --base-url http://127.0.0.1:8080/v1 --model qwen2.5
+protoagent up
+```
+
+`model use` writes the endpoint + model to your live config (a local endpoint ignores
+the key; a placeholder is set so the client constructs — use `--key` or `secrets.yaml`
+for a real gateway key). This one-liner is also the copy-paste target for HuggingFace's
+"Use this model" local-app snippet — a HF model card hands the model id straight to it.
+
 ## Examples
 
 ```bash
@@ -64,6 +81,9 @@ then exits:
 protoagent up --port 7870
 protoagent status
 protoagent config explain
+
+# Point at a local LLM
+protoagent model use --base-url http://127.0.0.1:11434/v1 --model llama3.2
 
 # Install a plugin, then reload isn't needed for a fresh boot
 protoagent plugin install https://github.com/protoLabsAI/careercoach-plugin
@@ -74,6 +94,5 @@ protoagent down
 
 ## Roadmap
 
-Later slices of ADR 0075 add `protoagent model` (point at a local Ollama / HF /
-LM Studio / vLLM endpoint in one command) and a shared operation layer so every
-verb here has a matching MCP tool and REST endpoint. See the ADR for the plan.
+Later slices of ADR 0075 add a shared operation layer so every verb here has a matching
+MCP tool and REST endpoint. See the ADR for the plan.
