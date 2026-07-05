@@ -562,6 +562,18 @@ def test_start_autostart_no_roster_is_noop(fleet, monkeypatch):
     assert supervisor.start_autostart_members() == []
 
 
+def test_start_autostart_is_hub_only_even_with_inherited_env(fleet, monkeypatch):
+    # A member inherits the hub's PROTOAGENT_FLEET_AUTOSTART, so the roster is non-empty
+    # inside a member too. Acting on it would scan the member's own (empty) workspaces root
+    # and warn "no workspace <id> — skipping" for every id. It must bail before that.
+    manager.create("cindi", port=7891)
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: ["cindi", "matt"])
+    monkeypatch.setattr(supervisor.manager, "is_workspace_member", lambda: True)
+
+    assert supervisor.start_autostart_members() == []
+    assert not supervisor.is_running("cindi")  # nothing spawned inside a member
+
+
 def test_reconcile_on_boot_stamps_and_returns_previous(tmp_path, monkeypatch):
     import infra.paths as paths_mod
 
