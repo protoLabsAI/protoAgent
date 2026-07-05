@@ -102,7 +102,10 @@ async function ecosystemPlugins() {
           (t: string) => !['protoagent', 'protoagent-plugin', 'protoagent-bundle'].includes(t),
         );
         return {
-          id: r.name,
+          // The ecosystem repo convention is `<id>-plugin`, but editorial overrides in
+          // plugins.json are keyed by the bare plugin id. Strip the suffix so a scraped
+          // card folds onto its override instead of rendering a duplicate (#1772).
+          id: r.name.replace(/-plugin$/, ''),
           name: r.name,
           tagline: String(r.description || (isBundle ? 'A protoAgent plugin bundle.' : 'A protoAgent plugin.')).trim(),
           // Bundles are kept in their OWN group; plugins auto-group by domain topic.
