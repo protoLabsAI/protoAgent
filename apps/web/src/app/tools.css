@@ -52,6 +52,25 @@
   opacity: 0.65;
 }
 
+/* Deep-link highlight (#1803): a chat tool card's "Manage" lands on this panel with the row
+   filtered + scrolled into view; a brief accent pulse points the eye at it in a long list.
+   Self-clearing (JS drops the class at ~2.6s); the prefilled search keeps the row in view. */
+.tools-row--target {
+  border-radius: 6px;
+  animation: tools-row-target-pulse 2.6s ease-out;
+}
+@keyframes tools-row-target-pulse {
+  0%,
+  25% {
+    background: color-mix(in srgb, var(--accent, #7c8cff) 22%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #7c8cff) 45%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
 /* Contextual settings chips above the search (mirrors .mcp-browse-row). */
 .tools-config-row {
   display: flex;

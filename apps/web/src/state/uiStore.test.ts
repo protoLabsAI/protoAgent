@@ -344,3 +344,26 @@ describe("migrateUiState — v13 hidden bucket", () => {
     expect(out.railOrder.hidden).toEqual(["knowledge"]);
   });
 });
+
+// openToolSettings (#1803): a chat tool card's "Manage" deep-links to Capabilities ▸ Tools,
+// focused on the tool. One atomic action sets the one-shot target AND opens the settings
+// overlay on the Tools section — the Tools panel consumes `toolsTarget` on mount.
+describe("openToolSettings", () => {
+  it("targets the tool and opens the Tools settings section", () => {
+    useUI.setState({ toolsTarget: null, globalSettingsOpen: false, globalSettingsSection: undefined });
+    useUI.getState().openToolSettings("run_command");
+    const s = useUI.getState();
+    expect(s.toolsTarget).toBe("run_command");
+    expect(s.globalSettingsOpen).toBe(true);
+    expect(s.globalSettingsSection).toBe("tools");
+  });
+
+  it("setToolsTarget clears the one-shot after the panel consumes it", () => {
+    useUI.getState().openToolSettings("web_search");
+    expect(useUI.getState().toolsTarget).toBe("web_search");
+    useUI.getState().setToolsTarget(null);
+    expect(useUI.getState().toolsTarget).toBeNull();
+    // Consuming the target does NOT reopen/close the overlay — it's independent.
+    expect(useUI.getState().globalSettingsOpen).toBe(true);
+  });
+});

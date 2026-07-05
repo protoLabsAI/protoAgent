@@ -60,6 +60,10 @@ type UIState = {
   // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
   // and asks the fleet panel to open the new-agent picker on mount, then clears it.
   fleetStartNew: boolean;
+  // One-shot: a chat tool card's "Manage" deep-link (#1803) routes to Capabilities ▸ Tools
+  // carrying the tool name, so the Tools panel filters + highlights that row on mount, then
+  // clears it. Ephemeral (partialized out) — it accompanies the also-ephemeral settings overlay.
+  toolsTarget: string | null;
   // Global settings overlay (the Global home; opened from the header drawer or a
   // command-palette deep-link). EPHEMERAL — partialized out of persistence so a refresh
   // never reopens it. The section deep-links a Global section (e.g. "telemetry").
@@ -127,6 +131,9 @@ type UIState = {
   setPluginsTab: (t: PluginsTab) => void;
   setSettingsSection: (s: string) => void;
   setFleetStartNew: (b: boolean) => void;
+  setToolsTarget: (name: string | null) => void;
+  // Deep-link a chat tool card → Capabilities ▸ Tools, focused on that tool (#1803).
+  openToolSettings: (name: string) => void;
   setRightCollapsed: (b: boolean) => void;
   setLeftCollapsed: (b: boolean) => void;
   setRightWidth: (w: number) => void;
@@ -316,6 +323,7 @@ export const useUI = create<UIState>()(
       // Box section, so it can't be the universal default (a fleet member has no Box group).
       settingsSection: "identity",
       fleetStartNew: false,
+      toolsTarget: null,
       globalSettingsOpen: false,
       globalSettingsSection: undefined,
       openGlobalSettings: (section) => set({ globalSettingsOpen: true, globalSettingsSection: section }),
@@ -446,6 +454,12 @@ export const useUI = create<UIState>()(
       setPluginsTab: (pluginsTab) => set({ pluginsTab }),
       setSettingsSection: (settingsSection) => set({ settingsSection }),
       setFleetStartNew: (fleetStartNew) => set({ fleetStartNew }),
+      setToolsTarget: (toolsTarget) => set({ toolsTarget }),
+      // Land on Capabilities ▸ Tools with the panel focused on this tool (#1803): set the
+      // one-shot target AND open the settings overlay on the Tools section in one atomic set
+      // (mirrors openGlobalSettings's body — the store creator exposes only `set`).
+      openToolSettings: (name) =>
+        set({ toolsTarget: name, globalSettingsOpen: true, globalSettingsSection: "tools" }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
       setLeftCollapsed: (leftCollapsed) => set({ leftCollapsed }),
       // The DS AppShell is a CONTROLLED width: during a divider drag it streams transient
@@ -489,7 +503,7 @@ export const useUI = create<UIState>()(
       // (the Global settings overlay, the per-plugin Configure dialog, the pending
       // rail-menu Update/Uninstall action, and the per-session background-delivery set
       // (#1640) — a view's page re-requests it on every load).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, ...rest }) => rest,
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, ...rest }) => rest,
     },
   ),
 );

@@ -169,6 +169,29 @@
   flex: none;
 }
 
+/* "Manage" deep-link to Tools settings (#1803) — icon-only, in the same header actions slot.
+   Quiet (muted, borderless) so it never competes with the tool's status; accent-toned on
+   hover to read as an intentional jump-to-settings affordance. */
+.tool-manage-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  width: auto;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+  opacity: 0.7;
+}
+.tool-manage-btn:hover {
+  color: var(--accent, #7c8cff);
+  background: color-mix(in srgb, var(--accent, #7c8cff) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #7c8cff) 28%, transparent);
+  opacity: 1;
+}
+.tool-manage-btn svg {
+  flex: none;
+}
+
 /* Defensive: an ACP coding agent can report a long/unbroken tool NAME (e.g. a verbose
    MCP tool title). Let the header shrink + the name wrap so it can never force the card
    wider than the chat panel — the args/source live in the expandable body, not here. */

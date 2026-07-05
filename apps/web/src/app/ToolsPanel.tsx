@@ -2,7 +2,7 @@ import "./tools.css";
 
 import { Input, Switch } from "@protolabsai/ui/forms";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { TerminalSquare } from "lucide-react";
 
@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
+import { useUI } from "../state/uiStore";
 import { StagePanel } from "./ErrorBoundary";
 
 // Runtime → Tools: the live tool inventory the lead agent + subagents can call.
@@ -37,6 +38,31 @@ function ToolsBody() {
   const [q, setQ] = useState("");
   const queryClient = useQueryClient();
   const toast = useToast();
+
+  // Deep-link from a chat tool card's "Manage" (#1803): the target tool name arrives as a
+  // one-shot in the UI store. Prefill the search with it — that both filters to the tool and
+  // auto-expands its group (the AccordionItem's defaultOpen keys off a non-empty query) — then
+  // highlight the row and consume the one-shot so a later manual search isn't hijacked.
+  const toolsTarget = useUI((s) => s.toolsTarget);
+  const setToolsTarget = useUI((s) => s.setToolsTarget);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toolsTarget) return;
+    setQ(toolsTarget);
+    setHighlight(toolsTarget);
+    setToolsTarget(null);
+  }, [toolsTarget, setToolsTarget]);
+  // The highlight is a momentary "here it is" cue, not a persistent selection — drop it after
+  // it's drawn the eye (the prefilled search stays, so the row remains in view).
+  useEffect(() => {
+    if (!highlight) return;
+    const t = setTimeout(() => setHighlight(null), 2600);
+    return () => clearTimeout(t);
+  }, [highlight]);
+  // Scroll the just-highlighted row into view once it mounts (the search remounts the sections).
+  const scrollToTarget = (el: HTMLDivElement | null) => {
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
 
   // Per-row on/off = editing the tools.disabled denylist — the same config the YAML /
   // central-settings route writes, enforced over the FULL assembled set (#1612), so a
@@ -176,7 +202,11 @@ function ToolsBody() {
                 >
                   <div className="tools-list">
                     {items.map((t) => (
-                      <div className={`tools-row${t.enabled ? "" : " tools-row--off"}`} key={t.name}>
+                      <div
+                        className={`tools-row${t.enabled ? "" : " tools-row--off"}${t.name === highlight ? " tools-row--target" : ""}`}
+                        key={t.name}
+                        ref={t.name === highlight ? scrollToTarget : undefined}
+                      >
                         <div className="tools-row-main">
                           <code className="tools-name">{t.name}</code>
                           {t.description ? <span className="tools-desc">{t.description}</span> : null}
