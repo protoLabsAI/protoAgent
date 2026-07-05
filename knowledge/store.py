@@ -36,7 +36,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +89,10 @@ class Chunk:
     namespace: str | None = None
     invalidated_at: str | None = None
     epoch: str | None = None
+    # Why the row was invalidated: NULL = auto-supersession audit history (ADR 0069
+    # D9, kept forever); ``_BULK_DELETE_REASON`` = a reversible bulk delete-by-source
+    # (#1770) that the grace sweep may eventually reap.
+    invalidation_reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -253,6 +257,14 @@ def _has_fts5(db: sqlite3.Connection) -> bool:
         return False
 
 
+# Discriminator stamped on ``invalidation_reason`` by :meth:`KnowledgeStore.invalidate_by_source`
+# (the #1770 bulk soft-delete). It's what lets :meth:`KnowledgeStore.purge_invalidated`
+# reap ONLY bulk-deleted ingests once they age past the grace window, while leaving
+# auto-supersession audit rows (ADR 0069 D9, which stamp ``invalidated_at`` with a NULL
+# reason and are kept forever) untouched. Both paths set ``invalidated_at``, so without
+# this marker they'd be indistinguishable and the sweep would wipe supersession history.
+_BULK_DELETE_REASON = "source_delete"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,11 +278,13 @@ CREATE TABLE IF NOT EXISTS chunks (
     epoch         TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
-    invalidated_at TEXT
+    invalidated_at TEXT,
+    invalidation_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
 CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at);
+CREATE INDEX IF NOT EXISTS idx_chunks_source     ON chunks(source);
 
 CREATE TABLE IF NOT EXISTS _kb_meta (
     key   TEXT PRIMARY KEY,
@@ -384,6 +398,18 @@ class KnowledgeStore:
                 db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_invalidated_at ON chunks(invalidated_at)")
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] invalidated_at migration skipped: %s", exc)
+            # Migration: add the invalidation_reason column (#1770 — bulk soft delete).
+            # Same additive+nullable pattern. NULL means "invalidated but kept for audit"
+            # (auto-supersession, ADR 0069 D9); ``_BULK_DELETE_REASON`` marks a bulk
+            # delete-by-source so the grace sweep reaps only those. Rows soft-deleted on a
+            # pre-migration build carry a NULL reason and are therefore preserved by the
+            # sweep — the safe (never-lose-audit-history) default.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "invalidation_reason" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN invalidation_reason TEXT")
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] invalidation_reason migration skipped: %s", exc)
             # Migration: add the epoch column (#1634 — knowledge lifecycle). Same
             # additive+nullable pattern; an epoch tag ("2026-06-29") scopes a chunk
             # to one era of a resettable world, so a wipe is a new tag rather than
@@ -1087,6 +1113,119 @@ class KnowledgeStore:
             return int(cur.rowcount)
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] purge_domain failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    # ── bulk delete-by-source lifecycle (#1770) ─────────────────────────────
+    # Deleting a whole ingest one chunk at a time is impractical, so the console
+    # groups chunks by source and bulk-deletes them. It's a SOFT delete: the rows
+    # are invalidated (drop out of search/list/hot-memory at once, ADR 0069 D9) but
+    # survive a grace window so an Undo — restore_by_source — can bring them back.
+    # purge_invalidated is the sweep that eventually makes the removal permanent.
+
+    def invalidate_by_source(self, source: str) -> int:
+        """SOFT-delete every VALID chunk sharing ``source`` — stamp
+        ``invalidated_at`` so the whole ingest leaves recall at once while the rows
+        survive for a grace window. Backs the console's bulk "delete all chunks
+        from this source" (#1770); reversible via :meth:`restore_by_source`, made
+        permanent by :meth:`purge_invalidated`. Empty/whitespace ``source`` is a
+        no-op (0) — never an ``invalidated_at = everything`` sweep. Returns the
+        count newly invalidated (already-invalidated rows aren't recounted).
+
+        Stamps ``invalidation_reason = _BULK_DELETE_REASON`` alongside
+        ``invalidated_at`` so :meth:`purge_invalidated` can tell a reapable bulk
+        soft-delete apart from an auto-supersession audit row (ADR 0069 D9), which
+        leaves the reason NULL and is kept forever."""
+        if not source or not source.strip():
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            now = _now_iso()
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
+                "WHERE source = ? AND invalidated_at IS NULL",
+                (now, _BULK_DELETE_REASON, now, source),
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] invalidate_by_source failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def restore_by_source(self, source: str) -> int:
+        """Clear ``invalidated_at`` on every BULK-SOFT-DELETED chunk sharing
+        ``source`` — the inverse of :meth:`invalidate_by_source`, backing the
+        console's Undo toast (#1770). Only rows still present (not yet swept by
+        :meth:`purge_invalidated`) can be restored. Empty ``source`` is a no-op.
+        Returns the count restored.
+
+        Scoped to ``invalidation_reason = _BULK_DELETE_REASON`` so an Undo can only
+        resurrect what THIS feature soft-deleted — never an auto-supersession audit
+        row (ADR 0069 D9) that happens to share the ``source`` string. Clears the
+        reason marker on the way back out."""
+        if not source or not source.strip():
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL, updated_at = ? "
+                "WHERE source = ? AND invalidation_reason = ?",
+                (_now_iso(), source, _BULK_DELETE_REASON),
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] restore_by_source failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def _invalidated_cutoff(self, older_than_seconds: int) -> str:
+        """The ``invalidated_at`` boundary for :meth:`purge_invalidated`: rows
+        stamped at or before this UTC-ISO instant are past the grace window. Shared
+        with the hybrid override so both delete under ONE cutoff (no orphan-vector
+        window from a second ``now()``)."""
+        return (datetime.now(UTC) - timedelta(seconds=max(0, int(older_than_seconds)))).isoformat()
+
+    def purge_invalidated(self, older_than_seconds: int = 0, *, _cutoff: str | None = None) -> int:
+        """HARD-delete BULK-SOFT-DELETED chunks whose ``invalidated_at`` is at or
+        older than ``older_than_seconds`` ago — the grace sweep that makes a bulk
+        delete-by-source (#1770) eventually permanent.
+
+        Reaps ONLY rows stamped ``invalidation_reason = _BULK_DELETE_REASON`` by
+        :meth:`invalidate_by_source`. Auto-supersession rows (ADR 0069 D9, which set
+        ``invalidated_at`` with a NULL reason) are deliberately excluded and kept
+        forever as audit history — the ``include_invalidated`` escape hatch stays
+        populated. Without this reason filter the sweep would silently wipe that
+        supersession history on the first bulk delete.
+
+        ``older_than_seconds<=0`` purges every bulk-soft-deleted row now. Returns the
+        count removed.
+
+        The FTS delete trigger keeps ``chunks_fts`` in sync; a hybrid store
+        overrides this to drop the side-table vectors first (no FK cascade).
+        ``_cutoff`` is an internal seam for that override to share one boundary."""
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
+            cur = db.execute(
+                "DELETE FROM chunks "
+                "WHERE invalidated_at IS NOT NULL AND invalidated_at <= ? AND invalidation_reason = ?",
+                (cutoff, _BULK_DELETE_REASON),
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] purge_invalidated failed: %s", exc)
             return 0
         finally:
             db.close()

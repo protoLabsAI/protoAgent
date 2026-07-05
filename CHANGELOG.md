@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Bulk delete-by-source in the Knowledge view** (#1770). Ingesting an article,
+  transcript, or batch of docs can leave dozens or hundreds of chunks that used to be
+  removable only one at a time. A source with several loaded chunks now collapses into a
+  group whose trash button deletes the **whole ingest** in one action — a counted
+  confirmation dialog ("Delete all N chunks from …?"), then an **Undo** toast. The delete
+  is a *reversible soft delete*: `POST /api/knowledge/delete-by-source` stamps
+  `invalidated_at` on every matching chunk (`invalidate_by_source`) so they leave recall
+  immediately but survive a grace window; `POST /api/knowledge/restore-by-source`
+  (`restore_by_source`, the Undo) brings them back verbatim. Past the recovery window they
+  are hard-swept by a new `purge_invalidated(older_than_seconds)` grace sweep (run
+  opportunistically on the next bulk delete; the hybrid store drops the side-table vectors
+  too). Per-chunk delete is unchanged. On a layered store the lifecycle targets the
+  **private** tier only, like `purge_domain`.
+
 ## [0.91.0] - 2026-07-04
 
 ### Added

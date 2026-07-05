@@ -66,6 +66,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | POST | `/api/knowledge/ingest` | [Ingest](/guides/ingestion) a file / URL / text |
 | POST | `/api/knowledge/attach` | Attach a chat upload (tiered inline-vs-index) |
 | POST · PUT · DELETE | `/api/knowledge/chunks[/{id}]` | Add / edit / delete a chunk |
+| POST | `/api/knowledge/delete-by-source` · `/api/knowledge/restore-by-source` | Bulk soft-delete / restore every chunk from one ingest (reversible, grace-swept) |
 | GET | `/api/playbooks` · `/api/playbooks/{id}` | List / fetch skills ("playbooks") |
 | POST · PUT · DELETE | `/api/playbooks[/{id}]` | Create / edit / delete a skill |
 | POST | `/api/playbooks/{id}/promote` | Promote a private skill into the commons |

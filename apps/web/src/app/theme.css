@@ -1870,12 +1870,17 @@ textarea {
 /* Collapsible source groups in the Knowledge Base (#1575). A group is a plain
    list item holding a full-width header button + (when open) a nested card list. */
 .kb-group { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+/* Toggle + a bulk delete-by-source button sit side by side (#1770); the toggle
+   flexes to fill, the trash button is a fixed sibling at the end. */
+.kb-group-header-row { display: flex; align-items: center; gap: 4px; }
 .kb-group-header {
+  flex: 1; min-width: 0;
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--bg-raised); color: var(--fg); cursor: pointer; text-align: left;
 }
 .kb-group-header:hover { border-color: var(--border-strong); }
+.kb-group-delete { flex: none; }
 .kb-group-caret { flex: none; color: var(--fg-muted); transition: transform 0.12s ease; }
 .kb-group-title {
   flex: 1; min-width: 0; font-size: 13px; font-weight: 600;

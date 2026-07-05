@@ -104,6 +104,10 @@ let playbooks = clonePlaybooks();
 // knowledge test resets via POST /api/__test__/knowledge/reset.
 const cloneKnowledge = () => JSON.parse(JSON.stringify(KNOWLEDGE_CHUNKS));
 let knowledgeChunks = cloneKnowledge();
+// Bulk delete-by-source (#1770) is a reversible SOFT delete: matching chunks move
+// to this staging area (out of the search response) so an Undo / restore-by-source
+// can move them back. Reset with the knowledge fixture.
+let knowledgeInvalidated = [];
 
 // Memory inspector (ADR 0069 D7) — sessions + hot chunks are MUTATED by the delete
 // specs, so serve working copies each memory test resets via
@@ -571,6 +575,7 @@ const server = createServer(async (req, res) => {
     }
     if (pathname === "/api/__test__/knowledge/reset" && req.method === "POST") {
       knowledgeChunks = cloneKnowledge();
+      knowledgeInvalidated = [];
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/memory/reset" && req.method === "POST") {
@@ -637,6 +642,24 @@ const server = createServer(async (req, res) => {
       const i = knowledgeChunks.findIndex((x) => x.id === id);
       if (i >= 0) knowledgeChunks.splice(i, 1);
       return sendJson(res, { enabled: true, deleted: i >= 0 });
+    }
+    if (pathname === "/api/knowledge/delete-by-source" && req.method === "POST") {
+      // Bulk soft delete (#1770): move every chunk of this source to the staging
+      // area so it leaves the list, but restore-by-source can bring it back.
+      const source = String(body.source || "").trim();
+      if (!source) return sendJson(res, { detail: "source is required" }, 400);
+      const moved = knowledgeChunks.filter((c) => c.source === source);
+      knowledgeChunks = knowledgeChunks.filter((c) => c.source !== source);
+      knowledgeInvalidated.push(...moved);
+      return sendJson(res, { enabled: true, deleted: moved.length });
+    }
+    if (pathname === "/api/knowledge/restore-by-source" && req.method === "POST") {
+      const source = String(body.source || "").trim();
+      if (!source) return sendJson(res, { detail: "source is required" }, 400);
+      const back = knowledgeInvalidated.filter((c) => c.source === source);
+      knowledgeInvalidated = knowledgeInvalidated.filter((c) => c.source !== source);
+      knowledgeChunks.push(...back);
+      return sendJson(res, { enabled: true, restored: back.length });
     }
     if (pathname === "/api/settings") {
       // ADR 0047: a layer-aware save — "agent" (per-agent leaf, default) or "host"
