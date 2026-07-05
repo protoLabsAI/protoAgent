@@ -556,6 +556,24 @@ class _KnowledgeIngestError(Exception):
     the inline path returns it; a background work job settles ``failed`` with it."""
 
 
+def _tool_ingest_message(exc) -> str:
+    """Render an ``ops.knowledge.IngestError`` in the tool's voice (the model reads it) —
+    preserving the wording the ``knowledge_ingest`` tool has always returned per failure kind."""
+    kind = getattr(exc, "kind", "extraction")
+    detail = getattr(exc, "detail", str(exc))
+    if kind == "not_found":
+        return detail  # already "No such file: … — pass an http(s) URL or an existing local file path."
+    if kind == "missing_dependency":
+        return f"Can't ingest that source — a required dependency or model isn't available: {detail}"
+    if kind == "unsupported":
+        return f"Unsupported source type: {detail}"
+    if kind == "empty":
+        return "Nothing ingested — no text could be extracted from that source."
+    if kind == "no_source":
+        return "Error: provide a URL or a local file path to ingest."
+    return f"Extraction failed: {detail}"
+
+
 # A small local text/Markdown file ingests inline (instant); everything else — any URL
 # fetch, PDF, or audio/video transcription — goes to a background job (ADR 0050) so it
 # never blocks the chat turn.
@@ -675,74 +693,24 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         return f"Stored chunk {chunk_id} in {domain!r}."
 
     async def _do_ingest(src: str, dom: str, title: str | None, is_url: bool) -> str:
-        """Run the ingestion pipeline for one source and store it; return a one-line
-        summary. Raises ``_KnowledgeIngestError`` (legible message) on an expected
-        failure. Shared by the inline path and the background work job."""
-        import asyncio
-        from pathlib import Path
+        """Ingest one source via the shared ``ops.knowledge.ingest`` op and return a
+        one-line summary. Raises ``_KnowledgeIngestError`` (legible message) on an expected
+        failure — the inline path returns it, the background work job settles ``failed``
+        with it. Extraction + store now live in the op (ADR 0075 D2); this is the tool
+        adapter (source shaping + tool-worded errors)."""
+        from ops import OpContext
+        from ops.knowledge import IngestError, IngestSource, ingest
 
-        from ingestion import (
-            MissingDependency,
-            UnsupportedSource,
-            extract_bytes,
-            extract_url,
-        )
-        from knowledge import add_document
-
-        # Gateway STT/vision for media — None if no model is configured, which makes
-        # audio/video/image raise a clean "not configured" error while text/URL/PDF/
-        # YouTube paths are unaffected.
-        transcribe = describe = None
-        if graph_config is not None:
-            try:
-                from graph.llm import create_describe_image_fn, create_transcribe_fn
-
-                transcribe = create_transcribe_fn(graph_config)
-                describe = create_describe_image_fn(graph_config)
-            except Exception:  # noqa: BLE001 — media stays optional; text/URL unaffected
-                pass
-
+        source = IngestSource.from_url(src) if is_url else IngestSource.from_path(src)
         try:
-            if is_url:
-                result = await asyncio.to_thread(extract_url, src, transcribe=transcribe)
-                origin = src
-            else:
-                path = Path(src).expanduser()
-                if not path.is_file():
-                    raise _KnowledgeIngestError(
-                        f"No such file: {src} — pass an http(s) URL or an existing local file path."
-                    )
-                data = await asyncio.to_thread(path.read_bytes)
-                result = await asyncio.to_thread(
-                    extract_bytes, path.name, data, None, transcribe=transcribe, describe=describe
-                )
-                origin = str(path)
-        except MissingDependency as exc:
-            raise _KnowledgeIngestError(
-                f"Can't ingest that source — a required dependency or model isn't available: {exc}"
-            ) from exc
-        except UnsupportedSource as exc:
-            raise _KnowledgeIngestError(f"Unsupported source type: {exc}") from exc
-        except _KnowledgeIngestError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — surface extraction failure, never crash
-            raise _KnowledgeIngestError(f"Extraction failed: {exc}") from exc
-
-        heading = (title or "").strip() or result.title or None
-        ids = await asyncio.to_thread(
-            lambda: add_document(
-                knowledge_store,
-                result.text,
-                domain=dom,
-                heading=heading,
-                source=origin,
-                source_type=result.source_type,
+            result = await ingest(
+                source, domain=dom, title=title, ctx=OpContext(knowledge_store=knowledge_store, graph_config=graph_config)
             )
-        )
-        if not ids:
-            raise _KnowledgeIngestError("Nothing ingested — no text could be extracted from that source.")
-        label = heading or origin
-        return f"Ingested {label!r} ({result.source_type}, {len(result.text)} chars) → {len(ids)} chunk(s) in {dom!r}."
+        except IngestError as exc:
+            raise _KnowledgeIngestError(_tool_ingest_message(exc)) from exc
+
+        label = result.title or result.source
+        return f"Ingested {label!r} ({result.source_type}, {result.chars} chars) → {result.chunks} chunk(s) in {dom!r}."
 
     @tool
     async def knowledge_ingest(

@@ -89,6 +89,7 @@ packages = [
   "knowledge",
   "observability",
   "operator_api",
+  "ops",
   "runtime",
   "scheduler",
   "security",
@@ -124,6 +125,7 @@ root_packages = [
   "knowledge",
   "observability",
   "operator_api",
+  "ops",
   "runtime",
   "scheduler",
   "security",
@@ -164,7 +166,7 @@ name = "infra packages do not import server or operator_api"
 type = "forbidden"
 source_modules = [
   "a2a_impl", "events", "infra", "ingestion", "knowledge", "observability",
-  "runtime", "scheduler", "security", "tools",
+  "ops", "runtime", "scheduler", "security", "tools",
 ]
 forbidden_modules = ["server", "operator_api"]
 

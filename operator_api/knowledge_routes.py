@@ -114,40 +114,44 @@ def _knowledge_row(d: dict) -> dict:
 _PREVIEW_SNIPPET_CHARS = 1500
 
 
-async def _extract_source(file, url: str, text: str, title: str):
-    """Shared extraction half of ingest + preview (#1801): turn a
-    (file | url | pasted text) source into an ``ExtractResult`` via the ingestion
-    engine (ADR 0021), off the event loop.
+# Extraction + store live in ``ops.knowledge`` now (ADR 0075 D2) — the same op the agent's
+# ``knowledge_ingest`` tool calls, ending the double-glue. These helpers are the REST adapter:
+# multipart form → an ``IngestSource``, and the op's typed ``IngestError`` → an HTTP status.
+_INGEST_STATUS = {
+    "missing_dependency": 501,
+    "unsupported": 415,
+    "no_source": 400,
+    "not_found": 400,
+    "extraction": 400,
+    "empty": 400,
+}
 
-    Returns ``(result, source_label)``, or ``(None, "")`` when no source was
-    given. Raises the engine's typed errors (``MissingDependency`` /
-    ``UnsupportedSource`` / …) for the caller to map to a status code. Extraction
-    NEVER persists, so ``/ingest`` (which then embeds) and ``/ingest/preview``
-    (which only counts) share exactly this step. Inputs are assumed already
-    stripped by the caller."""
-    from ingestion import ExtractResult, extract_bytes, extract_url
 
-    # Gateway STT for audio/video (None if no transcribe_model configured →
-    # audio/video raise a clean "not configured" error; text/pdf unaffected).
-    transcribe = None
-    try:
-        from graph.llm import create_transcribe_fn
-
-        transcribe = create_transcribe_fn(STATE.graph_config) if STATE.graph_config else None
-    except Exception as exc:  # noqa: BLE001 — transcription stays optional
-        log.warning("[knowledge] transcribe fn unavailable: %s", exc)
+async def _source_from_form(file, url: str, text: str, title: str):
+    """A (file | url | pasted text) multipart form → an ``ops.knowledge.IngestSource``, or
+    ``None`` when no source was given. Inputs are assumed already stripped by the caller."""
+    from ops.knowledge import IngestSource
 
     if file is not None:
-        data = await file.read()
-        result = await asyncio.to_thread(
-            extract_bytes, file.filename or "upload", data, file.content_type, transcribe=transcribe
-        )
-        return result, (file.filename or "upload")
+        return IngestSource.from_upload(await file.read(), file.filename or "upload", file.content_type)
     if url:
-        return await asyncio.to_thread(extract_url, url, transcribe=transcribe), url
+        return IngestSource.from_url(url)
     if text:
-        return ExtractResult(text=text, title=title or None, source_type="text"), "console"
-    return None, ""
+        return IngestSource.from_text(text, title=title or None, label="console")
+    return None
+
+
+def _ingest_error_response(exc):
+    """Map an ``ops.knowledge.IngestError`` to the console's ``{detail}`` + status."""
+    if exc.kind == "extraction":
+        detail = f"extraction failed: {exc.detail}"
+    elif exc.kind == "empty":
+        detail = "nothing ingested (no text after extraction)"
+    elif exc.kind == "no_source":
+        detail = "provide a file, url, or text"
+    else:
+        detail = exc.detail
+    return JSONResponse({"detail": detail}, status_code=_INGEST_STATUS.get(exc.kind, 400))
 
 
 def register_knowledge_routes(app) -> None:
@@ -493,45 +497,29 @@ def register_knowledge_routes(app) -> None:
         contextually enriches + embeds it (ADR 0021) — so a whole PDF, article, or
         recording becomes per-passage recall, not one diluted chunk. Multipart so
         a file upload and the URL/text fields share one endpoint. Extraction +
-        embedding run off the event loop. Returns the created chunk ids."""
+        store run in ``ops.knowledge.ingest`` (the same op the agent tool calls).
+        Returns the created chunk ids."""
         if STATE.knowledge_store is None:
             return {"enabled": False, "ids": []}
-        from ingestion import MissingDependency, UnsupportedSource
-        from knowledge import add_document
+        from ops import OpContext
+        from ops.knowledge import IngestError, ingest
 
-        url, text, title = url.strip(), text.strip(), title.strip()
-        try:
-            result, source = await _extract_source(file, url, text, title)
-        except MissingDependency as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=501)
-        except UnsupportedSource as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=415)
-        except Exception as exc:  # noqa: BLE001 — surface extraction failure, never 500
-            log.warning("[knowledge] ingest extraction failed: %s", exc)
-            return JSONResponse({"detail": f"extraction failed: {exc}"}, status_code=400)
-        if result is None:
+        source = await _source_from_form(file, url.strip(), text.strip(), title.strip())
+        if source is None:
             return JSONResponse({"detail": "provide a file, url, or text"}, status_code=400)
-
-        heading = title or result.title or None
-        ids = await asyncio.to_thread(
-            lambda: add_document(
-                STATE.knowledge_store,
-                result.text,
-                domain=(domain.strip() or "general"),
-                heading=heading,
-                source=source,
-                source_type=result.source_type,
+        try:
+            result = await ingest(
+                source, domain=(domain.strip() or "general"), title=(title.strip() or None), ctx=OpContext.from_state()
             )
-        )
-        if not ids:
-            return JSONResponse({"detail": "nothing ingested (no text after extraction)"}, status_code=400)
+        except IngestError as exc:
+            return _ingest_error_response(exc)
         return {
             "enabled": True,
-            "ids": ids,
-            "chunks": len(ids),
-            "title": heading,
+            "ids": result.ids,
+            "chunks": result.chunks,
+            "title": result.title,
             "source_type": result.source_type,
-            "chars": len(result.text),
+            "chars": result.chars,
         }
 
     @app.post("/api/knowledge/ingest/preview")
@@ -548,52 +536,35 @@ def register_knowledge_routes(app) -> None:
         the file will split into, an approximate token count, and a text snippet —
         so the operator can verify the right content (and that extraction worked)
         lands in the right bucket before committing. Runs the *same* extraction as
-        ``/ingest`` (ADR 0021) but stops before ``add_document``: it writes zero
-        rows and skips embedding + LLM enrichment entirely. Chunk count uses the
-        live store's chunk knobs, so the preview matches what ingestion will
-        actually produce. Confirm re-POSTs to ``/ingest`` (extraction reruns there,
-        which preserves each source's real provenance)."""
+        ``/ingest`` (via ``ops.knowledge.ingest_preview``) but stops before
+        ``add_document``: it writes zero rows and skips embedding + LLM enrichment
+        entirely. Chunk count uses the live store's chunk knobs, so the preview
+        matches what ingestion will actually produce. Confirm re-POSTs to
+        ``/ingest`` (extraction reruns there, preserving real provenance)."""
         if STATE.knowledge_store is None:
             return {"enabled": False}
-        from ingestion import MissingDependency, UnsupportedSource
-        from knowledge.chunking import chunk_text
+        from ops import OpContext
+        from ops.knowledge import IngestError, ingest_preview
 
-        url, text, title = url.strip(), text.strip(), title.strip()
-        try:
-            result, source = await _extract_source(file, url, text, title)
-        except MissingDependency as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=501)
-        except UnsupportedSource as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=415)
-        except Exception as exc:  # noqa: BLE001 — surface extraction failure, never 500
-            log.warning("[knowledge] ingest preview extraction failed: %s", exc)
-            return JSONResponse({"detail": f"extraction failed: {exc}"}, status_code=400)
-        if result is None:
+        source = await _source_from_form(file, url.strip(), text.strip(), title.strip())
+        if source is None:
             return JSONResponse({"detail": "provide a file, url, or text"}, status_code=400)
-
-        # Count chunks with the live store's knobs so the preview matches production
-        # ingestion exactly; fall back to the chunker defaults for a store (e.g. a
-        # plugin backend) that doesn't expose them. chunk_text is pure — no I/O, no
-        # LLM enrichment (enrichment only prepends a context line; it never changes
-        # the count), so the previewed number is exact.
-        store = STATE.knowledge_store
-        chunks = chunk_text(
-            result.text,
-            max_chars=getattr(store, "_chunk_max_chars", 1200),
-            overlap_chars=getattr(store, "_chunk_overlap_chars", 150),
-            min_chars=getattr(store, "_chunk_min_chars", 200),
-        )
-        snippet = result.text[:_PREVIEW_SNIPPET_CHARS]
+        try:
+            preview = await ingest_preview(
+                source, title=(title.strip() or None), ctx=OpContext.from_state(), snippet_chars=_PREVIEW_SNIPPET_CHARS
+            )
+        except IngestError as exc:
+            return _ingest_error_response(exc)
         return {
             "enabled": True,
-            "chunks": len(chunks),
-            "chars": len(result.text),
-            "approx_tokens": max(1, len(result.text) // 4),  # house heuristic (graph.middleware.*)
-            "title": title or result.title or None,
-            "source_type": result.source_type,
-            "source": source,
-            "snippet": snippet,
-            "truncated": len(result.text) > len(snippet),
+            "chunks": preview.chunks,
+            "chars": preview.chars,
+            "approx_tokens": preview.approx_tokens,
+            "title": preview.title,
+            "source_type": preview.source_type,
+            "source": preview.source,
+            "snippet": preview.snippet,
+            "truncated": preview.truncated,
         }
 
     @app.post("/api/knowledge/attach")
