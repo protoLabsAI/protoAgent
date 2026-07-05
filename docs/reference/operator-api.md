@@ -109,6 +109,7 @@ record.
 | POST | `/api/config/models` · `/api/config/test-model` | List gateway models / test the connection |
 | GET | `/api/settings/schema` | Settings UI schema |
 | POST | `/api/settings` · `/api/settings/reset` | Apply / reset settings |
+| GET | `/api/operations` | The ops-layer catalog — every operation (name, read/write, summary); mirrors `protoagent operations` (ADR 0075 D2) |
 
 ## Fleet & agents
 
