@@ -1,0 +1,12 @@
+protoAgent
+Copyright (c) 2026 protoLabs
+
+This product is licensed under the MIT License (see the LICENSE file).
+
+This product includes third-party open-source software. Each such component
+remains under its own license; the full inventory of bundled and build-time
+dependencies, with their versions and licenses, is generated into
+THIRD_PARTY_LICENSES.md (rebuild it with `uv run python scripts/gen_attribution.py`).
+
+First-party plugins bundled under plugins/ carry their own LICENSE file
+(also MIT) where present.

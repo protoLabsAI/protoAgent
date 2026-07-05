@@ -309,3 +309,9 @@ This is a template repo — bugs and improvements to the shared
 runtime (the `server/` package, `graph/agent.py`, extension
 support, release pipeline) land here. Domain-specific agent logic
 lives in the fork, not here.
+
+## License
+
+protoAgent is released under the [MIT License](./LICENSE) — fork it,
+build on it, ship it. Bundled first-party plugins carry their own
+`LICENSE` (also MIT).

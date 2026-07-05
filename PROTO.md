@@ -75,6 +75,7 @@ before the PR, not after. CI is the merge gate; a red PR is wasted cycles.
 |------|---------|
 | Lint | `ruff check .` (pinned `ruff==0.15.10`) |
 | Import contracts | `lint-imports` (pinned `import-linter==2.11`) |
+| Attribution in sync | `python scripts/gen_attribution.py --check` (regenerate with `uv sync && uv run python scripts/gen_attribution.py` after a dep bump) |
 | Python tests | `python -m pytest tests/ -q` |
 | Lean-image smoke | `python scripts/live_smoke.py` |
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
