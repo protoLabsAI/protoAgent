@@ -249,12 +249,6 @@ def test_healthz_503_when_graph_none(monkeypatch):
     assert r.status_code == 503 and r.json()["ok"] is False
 
 
-def test_goal_disabled_when_no_controller(monkeypatch):
-    c = _client(monkeypatch, goal=None)
-    assert c.get("/api/goal/s1").json() == {"enabled": False, "goal": None}
-    assert c.delete("/api/goal/s1").json() == {"enabled": False, "cleared": False}
-
-
 def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     # Full HTTP lifecycle of the steer endpoints: POST queues, GET peeks, DELETE
     # cancels a still-queued message, and a second DELETE reports too-late.

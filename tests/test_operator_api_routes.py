@@ -173,6 +173,26 @@ def test_goals_list_and_clear() -> None:
     assert seen["id"] == "s1"
 
 
+def test_goal_single_status_under_plural(monkeypatch) -> None:
+    # GET /api/goals/{session_id} replaces the retired singular /api/goal/{session_id}
+    # (D4 dedupe). It reads the controller directly, so it degrades when goals are off.
+    import runtime.state as rs
+
+    client = _goals_client(goals=[])
+
+    monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
+    assert client.get("/api/goals/s1").json() == {"enabled": False, "goal": None}
+
+    class _Store:
+        def get(self, sid):
+            return type("G", (), {"to_dict": lambda self: {"session_id": "s1", "status": "active"}})() if sid == "s1" else None
+
+    monkeypatch.setattr(rs.STATE, "goal_controller", type("C", (), {"store": _Store()})(), raising=False)
+    body = client.get("/api/goals/s1").json()
+    assert body["enabled"] is True and body["goal"]["status"] == "active"
+    assert client.get("/api/goals/other").json() == {"enabled": True, "goal": None}
+
+
 def test_goals_routes_absent_when_not_wired() -> None:
     app = FastAPI()
     register_operator_routes(

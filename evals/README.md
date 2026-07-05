@@ -144,7 +144,7 @@ after the case.
 Prefer deterministic `command` verifiers (`"true"` → achieved, `"false"` with
 `"max_iterations": 1` → exhausted) so the outcome is independent of model
 competence and needs no host file I/O. `expected_goal_status` is checked
-against `GET /api/goal/{session}`; `expected_patterns` against the reply.
+against `GET /api/goals/{session}`; `expected_patterns` against the reply.
 
 ## Why side-effect verification
 

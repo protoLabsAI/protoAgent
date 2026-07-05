@@ -33,9 +33,9 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/goals` · `/api/goal/{session_id}` | List goals / get a session's goal |
+| GET | `/api/goals` · `/api/goals/{session_id}` | List goals / get a session's goal |
 | POST | `/api/goals` | Set a goal |
-| DELETE | `/api/goals/{session_id}` · `/api/goal/{session_id}` | Clear a goal |
+| DELETE | `/api/goals/{session_id}` | Clear a goal |
 
 ## Subagents & tools
 

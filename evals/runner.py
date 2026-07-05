@@ -345,7 +345,7 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
         model competence.
       - ``prompt``: the trigger message that runs the goal loop.
       - ``expected_goal_status``: ``achieved`` / ``exhausted`` / ``unachievable``
-        — checked against ``GET /api/goal/{session}``.
+        — checked against ``GET /api/goals/{session}``.
       - ``expected_patterns``: substrings that must appear in the reply (the
         goal footer, e.g. ``goal achieved``).
 

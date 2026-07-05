@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   className contract over the DS classes the theme already ships — so prototypes match the live theme
   without hand-rolled markup. The `rendering-artifacts` skill + README list the full set.
 
+### Changed
+- **BREAKING: the goal API is only under the plural `/api/goals*` now (ADR 0075 D4).** The
+  duplicate singular routes `GET`/`DELETE /api/goal/{session_id}` are removed; use
+  `GET /api/goals` (list), `GET /api/goals/{session_id}` (one), `DELETE /api/goals/{session_id}`
+  (clear). The console already used the plural, so this only affects external callers that hit the
+  singular. (The `memory`/`knowledge` split is intentional domain separation — the RAG chunk API
+  stays `/api/knowledge/*` — so it was NOT renamed.)
+
 ### Fixed
 - **The plugin update-CHECK now authenticates private repos too, not just install.** #1805 taught the
   clone/install path to auth private github over a token, but the update-availability check
