@@ -707,7 +707,12 @@ class LangGraphConfig:
     fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
     discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
     discovery_port_max: int = 7910
-    discovery_mdns: bool = True  # advertise + browse the _protoagent._tcp mDNS channel
+    # Off by default (#1802) — an agent should not announce itself on the LAN unless
+    # the operator opts in. mDNS advertises this agent (and browses siblings) on the
+    # _protoagent._tcp channel; default-off keeps a fleet quiet on the network
+    # (privacy/security). Local-fleet enumeration is disk-based, so the console is
+    # unaffected; set fleet.discovery.mdns: true to restore LAN auto-discovery.
+    discovery_mdns: bool = False  # advertise + browse the _protoagent._tcp mDNS channel
     fleet_max_warm: int = 0  # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
     fleet_warm_grace_seconds: int = (
         0  # spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE

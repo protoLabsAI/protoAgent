@@ -764,8 +764,10 @@ FIELDS: list[Field] = [
         "bool",
         "Discovery",
         "Advertise + browse the _protoagent._tcp mDNS/Bonjour channel so LAN siblings "
-        "find each other automatically. Off = no mDNS (tailnet + manual register still "
-        "work); useful where multicast is noisy or blocked.",
+        "find each other automatically. Off by default (#1802) — an agent stays quiet on "
+        "the network unless you opt in (privacy/security). On = this agent announces itself "
+        "and discovers siblings on the LAN; tailnet + manual register work either way, and "
+        "the local fleet console is unaffected (it enumerates from disk, not mDNS).",
         scope="host",
     ),
     Field(

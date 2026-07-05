@@ -90,8 +90,10 @@ def _cfg():
 
 
 def _mdns_enabled() -> bool:
+    # Default OFF (#1802): mDNS advertise/browse is opt-in — no live config (CLI/test
+    # context) also means quiet, so an agent never announces itself on the LAN by default.
     cfg = _cfg()
-    return bool(getattr(cfg, "discovery_mdns", True)) if cfg is not None else True
+    return bool(getattr(cfg, "discovery_mdns", False)) if cfg is not None else False
 
 
 def _config_port_range() -> tuple[int, int]:
