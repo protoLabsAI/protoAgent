@@ -49,6 +49,13 @@ dependencies = [
   "markdown-it-py>=3.0",
 ]
 
+# The `protoagent` command (ADR 0075 D1) — the terminal control plane: install /
+# manage / run the runtime. `uv tool install protoagent` or `pipx install protoagent`
+# put it on PATH; the frozen desktop binary exposes the same tree. Chatting is
+# `proto`'s job (the A2A client), so there's no chat entrypoint here.
+[project.scripts]
+protoagent = "server.cli:main"
+
 [build-system]
 # Needed so `pip install -e .` / `uv pip install -e .` can build the project and
 # route through the dependency table above. This is a flat-layout application

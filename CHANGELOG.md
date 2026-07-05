@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tools: `read-only` (reads/queries only), `full` (everything), or unset (deny-by-default, unchanged).
   A profile unions with any explicitly-named `tools`. **`PROTOAGENT_MCP_TRUST=full`** forces full for a
   trusted/headless box. (The middle `safe-operator` tier lands with the ops layer, ADR 0075 D2.)
+- **A first-class `protoagent` command — the terminal control plane (ADR 0075, slice 1).**
+  `python -m server <sub>` was the only way to install/manage a runtime, and its subcommands
+  were hidden `if sys.argv[1] == …` branches invisible to `--help`. There's now an installable
+  **`protoagent`** command (`uv tool install protoagent` / `pipx install protoagent`, or
+  `uv run protoagent`) with a discoverable tree: management (`plugin` / `workspace` / `fleet` /
+  `skills` / `config`, re-parented verbatim) plus lifecycle — `serve` (foreground), **`up`**
+  (detached + boot-watch + pidfile), **`down`**, **`status`**, and `setup`. Both front doors
+  route through one shared dispatcher (`server/cli.py::dispatch`), so `python -m server <sub>`
+  keeps working and the two can't drift. Chatting stays `proto`'s job (the A2A client); this is
+  a control plane. See [the CLI guide](docs/guides/cli.md).
 - **React artifacts get a full design-system component set (`@pl/ui`), not just 9 primitives.**
   The `plugin-kit.css` injected into every artifact already styles ~90 `.pl-*` components, but
   `@pl/ui` only exposed **9** ergonomic React wrappers (Button/Card/Badge/Alert/Tag/Kbd/Input/Stat/Icon)
