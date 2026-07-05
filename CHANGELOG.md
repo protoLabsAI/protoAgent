@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Desktop `system.wake` lifecycle event** (#1653 follow-up, ADR 0074). The desktop shell now
+  emits the third lifecycle event: when its window returns to the foreground it POSTs `system.wake`
+  to the sidecar's `/api/events/publish`, which broadcasts it on the event bus so `lifecycle_hooks`
+  reactions (resume interrupted work, refresh state, check the inbox) fire on wake. Debounced (once
+  per 60 s) so an alt-tab doesn't spam it; the boot focus is suppressed. Rounds out `app.loaded` +
+  `agent.active`. (Foreground-focus is the v1 signal; true OS sleep/wake would need native power
+  observers — a later lift.)
 - **System lifecycle events** (#1653, ADR 0074). The agent now broadcasts its own lifecycle
   transitions on the [event bus](docs/guides/lifecycle-events.md) (ADR 0039): `app.loaded` when
   boot finishes (graph + scheduler + surfaces + fleet-autostart up) and `agent.active` when it

@@ -1,5 +1,6 @@
 use std::net::TcpListener;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -205,6 +206,45 @@ struct SidecarProcess(Mutex<Option<CommandChild>>);
 /// Set when the app is tearing down — a sidecar `Terminated` event during shutdown
 /// is the clean kill, not a crash to alert on.
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Holds the sidecar port + a throttle clock for the `system.wake` lifecycle event
+/// (ADR 0074). The window's `Focused(true)` fires on every alt-tab, so `last_wake`
+/// debounces it down to "came back after being away".
+struct WakeSignal {
+    port: u16,
+    last_wake: Mutex<Instant>,
+}
+
+/// Debounced `system.wake` (ADR 0074): the desktop window regained focus (a proxy for
+/// the shell coming back to the foreground). Emitted at most once per `WAKE_THROTTLE` so
+/// a quick tab-flick doesn't spam it. Best-effort, fire-and-forget: POST `system.wake` to
+/// the sidecar's `/api/events/publish`, which broadcasts it on the event bus (ADR 0039) so
+/// lifecycle hooks / config reactions can respond. A dead/booting sidecar just logs.
+fn maybe_signal_wake<R: Runtime>(app: &AppHandle<R>) {
+    const WAKE_THROTTLE: Duration = Duration::from_secs(60);
+    let Some(state) = app.try_state::<WakeSignal>() else {
+        return;
+    };
+    // Take the throttle decision under the lock, then drop it before the await.
+    {
+        let mut last = state.last_wake.lock().unwrap();
+        if last.elapsed() < WAKE_THROTTLE {
+            return;
+        }
+        *last = Instant::now();
+    }
+    let port = state.port;
+    tauri::async_runtime::spawn(async move {
+        let url = format!("http://127.0.0.1:{port}/api/events/publish");
+        let body = serde_json::json!({
+            "topic": "system.wake",
+            "data": { "previous_state": "background", "source": "desktop" },
+        });
+        if let Err(e) = reqwest::Client::new().post(&url).json(&body).send().await {
+            log::debug!("desktop: system.wake POST failed (sidecar down/booting?): {e}");
+        }
+    });
+}
 
 /// A blocking, user-visible "the server didn't come up / died" alert with the log
 /// location — a launch that silently shows a dead console is undebuggable from the
@@ -793,6 +833,13 @@ pub fn run() {
                 );
             }
             spawn_sidecar(app.handle(), port);
+            // Seed the wake-signal state (ADR 0074). last_wake starts "now" so the
+            // window's own boot Focused(true) is inside the throttle and doesn't fire a
+            // redundant system.wake right after app.loaded.
+            app.manage(WakeSignal {
+                port,
+                last_wake: Mutex::new(Instant::now()),
+            });
             let app_url = || WebviewUrl::App(format!("index.html?__apiPort={port}").into());
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
@@ -903,6 +950,8 @@ pub fn run() {
             // polling); sync_hotkeys is a no-op when everything is registered.
             if let RunEvent::WindowEvent { event: WindowEvent::Focused(true), .. } = &event {
                 sync_hotkeys(app_handle);
+                // System woke to the foreground (ADR 0074) — debounced system.wake.
+                maybe_signal_wake(app_handle);
             }
             // Tear the bundled server down with the app rather than orphaning it.
             if let RunEvent::Exit = event {
