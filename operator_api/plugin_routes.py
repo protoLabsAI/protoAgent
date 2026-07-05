@@ -56,27 +56,10 @@ def _install_no_enable() -> bool:
     return os.environ.get("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "").strip().lower() in ("1", "true", "yes")
 
 
-def _enabled_ids_from_summary(summary: dict) -> list[str]:
-    """The plugin id(s) to enable for an install summary: a single plugin → its id; a
-    bundle → its declared ``enabled`` set (else every installed member)."""
-    if "bundle" in summary:
-        suggested = [str(x) for x in (summary.get("enabled") or [])]
-        members = [str(s["id"]) for s in (summary.get("installed") or []) if s.get("id")]
-        return suggested or members
-    pid = summary.get("id")
-    return [str(pid)] if pid else []
-
-
-def _installed_ids_from_summary(summary: dict) -> list[str]:
-    """The plugin id(s) whose CODE this install just placed on disk — for a bundle,
-    its fetched members only (``builtin`` members aren't fetched, so they can't have
-    been replaced under a live mount)."""
-    if "bundle" in summary:
-        return [str(s["id"]) for s in (summary.get("installed") or []) if s.get("id")]
-    pid = summary.get("id")
-    return [str(pid)] if pid else []
-
-
+# The install summary → enabled/installed-id parsing moved into ``ops.plugins`` (ADR 0075
+# D2) with the install_and_activate op; ``_has_surface`` / ``_mounted_router_ids`` stay here
+# — they read the LIVE app (mount registry + plugin meta), a REST-surface concern the enable
+# and update routes also use.
 def _has_surface(meta: dict | None) -> bool:
     """True when the plugin contributed a view / router / background surface — the
     contributions FastAPI can't unmount or swap in place (restart territory)."""
@@ -190,79 +173,53 @@ def register_plugin_routes(app) -> None:
             raise HTTPException(status_code=400, detail="url is required")
         ref = str(body.get("ref", "")).strip() or None
         force = bool(body.get("force"))
+
+        # Snapshot the live app BEFORE the op reloads: which just-(re)installed plugins are
+        # already LIVE — a mounted router (mount registry; survives disable) or a loaded
+        # view/router/surface (meta). For those the reload can't deliver fresh routes (the
+        # re-registered router is dropped for the mounted one — FastAPI can't swap in place,
+        # #942), so the OLD code keeps serving → restart. Install (git clone) doesn't touch
+        # the live registry/meta — only the reload does — so this pre-op snapshot is exact.
+        mounted_before = _mounted_router_ids()
+        prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
+
+        from ops import OpContext
+        from ops.plugins import install_and_activate
+
+        # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default): installing IS
+        # the consent (the console flashes a one-time "this runs code" confirm for unofficial
+        # sources first). The op adds it to plugins.enabled + hot-reloads via _apply_settings_
+        # changes — the live-agent rebuild this REST adapter injects. Opt out with
+        # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (strict install ≠ enable).
+        from server.agent_init import _apply_settings_changes
+
         try:
-            # git clone + dep work is blocking — offload so it can't stall the
-            # event loop (and with it every chat/A2A/scheduler request) (#DoS).
-            summary = await asyncio.to_thread(
-                installer.install, url, ref, force=force, by="console", allow=_sources_allowlist()
+            result = await install_and_activate(
+                url,
+                ref,
+                force=force,
+                by="console",
+                allow=_sources_allowlist(),
+                activate=not _install_no_enable(),
+                ctx=OpContext.from_state(),
+                apply_settings=lambda updates: _apply_settings_changes(config=updates),
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default posture):
-        # installing IS the consent — the console flashes a one-time "this runs code"
-        # confirm for unofficial sources first. Add the plugin (or every bundle member)
-        # to plugins.enabled and hot-reload, so its tools / views / surfaces go live with
-        # NO separate enable step and NO restart (the router hot-mounts, #822). Opt out
-        # with PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (back to strict install ≠ enable).
-        ids = _enabled_ids_from_summary(summary)
-        # Snapshot BEFORE the reload: which just-(re)installed plugins were already
-        # LIVE — a mounted router (mount registry; survives disable) or a loaded
-        # view/router/surface (meta). For those, the reload can't deliver the fresh
-        # routes: the re-registered router is dropped in favour of the mounted one
-        # (FastAPI can't swap in place), so the OLD code keeps serving (#942).
-        fresh = _installed_ids_from_summary(summary)
-        mounted = _mounted_router_ids()
-        prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
-        stale_after_reload = [pid for pid in fresh if pid in mounted or _has_surface(prev_meta.get(pid))]
-        # Same parity for code the reload CAN swap: drop each re-installed plugin's
-        # module subtree so tools/middleware re-exec from the fresh checkout (the
-        # update route's multi-file fix; a first install is a no-op here).
-        for pid in fresh:
-            _purge_plugin_modules(pid)
-
-        enabled_now: list[str] = []
-        reloaded = False
-        enable_error: str | None = None
-        if ids and not _install_no_enable():
-            cfg = STATE.graph_config
-            enabled = list(getattr(cfg, "plugins_enabled", []) or [])
-            disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p not in ids]
-            for pid in ids:
-                if pid not in enabled:
-                    enabled.append(pid)
-            from server.agent_init import _apply_settings_changes
-
-            config_updates: dict = {"plugins": {"enabled": enabled, "disabled": disabled}}
-            # Seed the bundle's recommended per-plugin config defaults (#1350) — same trust
-            # gate as auto-enable. Defaults only: reduce against the current YAML config so an
-            # operator value (or a key they've already set) is never clobbered.
-            bundle_config = summary.get("config") if "bundle" in summary else None
-            if bundle_config:
-                from graph.config_io import config_yaml_path, load_yaml_doc
-                from graph.plugins.installer import bundle_config_overlay
-
-                current = load_yaml_doc(config_yaml_path())
-                overlay = bundle_config_overlay(bundle_config, current if isinstance(current, dict) else {})
-                config_updates.update(overlay)
-
-            ok, messages = _apply_settings_changes(config=config_updates)
-            if ok:
-                reloaded, enabled_now = True, ids
-            else:
-                # The install itself succeeded (code is on disk + locked); surface the
-                # enable-reload failure without 500ing — it can be enabled manually.
-                enable_error = "; ".join(messages) or "reload failed"
-                log.warning("[plugins] installed %s but auto-enable reload failed: %s", ids, enable_error)
-
+        stale_after_reload = [
+            pid for pid in result.installed_ids if pid in mounted_before or _has_surface(prev_meta.get(pid))
+        ]
+        if result.enable_error:
+            log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
         return {
-            "installed": summary,
-            "enabled": enabled_now,  # the ids now live
-            "reloaded": reloaded,
+            "installed": result.summary,
+            "enabled": result.enabled,  # the ids now live
+            "reloaded": result.reloaded,
             # A FIRST install hot-mounts fully live (#822); a force re-install over a
             # live router serves stale routes until restart (#942).
             "restart_recommended": bool(stale_after_reload),
-            "enable_error": enable_error,
+            "enable_error": result.enable_error,
         }
 
     @app.post("/api/plugins/{plugin_id}/enabled")
