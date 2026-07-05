@@ -89,6 +89,15 @@ jobs:
         run: |
           pip install import-linter==2.11
           lint-imports
+      - name: Third-party attribution in sync
+        # THIRD_PARTY_LICENSES.md is generated from uv.lock + package-lock.json
+        # by scripts/gen_attribution.py. This gate re-derives the dependency
+        # inventory from those committed lockfiles and fails if the manifest
+        # drifted — i.e. someone bumped a dep without regenerating attribution.
+        # Reads only committed files (stdlib-only, no `uv sync` / `npm ci`), so
+        # it's fast and can't flake on platform differences. To fix a failure:
+        # `uv sync && uv run python scripts/gen_attribution.py`.
+        run: python scripts/gen_attribution.py --check
 
   tests:
     name: Python tests
