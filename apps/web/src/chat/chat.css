@@ -280,14 +280,15 @@
 
 /* Incognito cue (#1744): while Shift is held, the DS TabBar's add "+" becomes the incognito
    EyeOff glyph — a Shift+click there opens a new incognito chat (#1697), matching the EyeOff
-   that incognito tabs and the composer chip already wear. Unlike the per-tab delete trash this
-   is NOT :hover-scoped — the "+" is a single button, so it flips the instant Shift goes down.
-   Swap the DS + svg for an EyeOff outline (stroke masked, tinted via currentColor); the
-   Shift+click handler is unchanged, this only adds the visual cue. */
-.chat-tabbar-wrap--incognito .pl-tabbar__add svg {
+   that incognito tabs and the composer chip already wear. :hover-scoped (#1809) so the swap
+   reveals only while pointing at the "+", exactly like the per-tab quick-delete trash above —
+   a Shift held elsewhere no longer flips it unprompted. Swap the DS + svg for an EyeOff outline
+   (stroke masked, tinted via currentColor); the Shift+click handler is unchanged (Shift+click
+   still opens incognito regardless of hover), this only narrows the visual cue. */
+.chat-tabbar-wrap--incognito .pl-tabbar__add:hover svg {
   display: none;
 }
-.chat-tabbar-wrap--incognito .pl-tabbar__add::after {
+.chat-tabbar-wrap--incognito .pl-tabbar__add:hover::after {
   content: "";
   display: inline-block;
   width: 14px;
