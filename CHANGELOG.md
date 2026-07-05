@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Operator-MCP profiles + an env override, so "operate over MCP" is safe by default (ADR 0075, slice 2).**
+  The operator MCP server can now take a curated **`operator_mcp.profile`** instead of enumerating
+  tools: `read-only` (reads/queries only), `full` (everything), or unset (deny-by-default, unchanged).
+  A profile unions with any explicitly-named `tools`. **`PROTOAGENT_MCP_TRUST=full`** forces full for a
+  trusted/headless box. (The middle `safe-operator` tier lands with the ops layer, ADR 0075 D2.)
 - **React artifacts get a full design-system component set (`@pl/ui`), not just 9 primitives.**
   The `plugin-kit.css` injected into every artifact already styles ~90 `.pl-*` components, but
   `@pl/ui` only exposed **9** ergonomic React wrappers (Button/Card/Badge/Alert/Tag/Kbd/Input/Stat/Icon)
@@ -26,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without hand-rolled markup. The `rendering-artifacts` skill + README list the full set.
 
 ### Fixed
+- **The operator MCP no longer hands a foreign client HITL tools that hang it (ADR 0075).** `ask_human`
+  and `request_user_input` pause the turn via a LangGraph interrupt only the lead-turn runner resumes;
+  exposed over a stdio/HTTP MCP (Claude Desktop, Cursor) they had no runner to resume them and hung the
+  client. They're now hard-excluded from the operator MCP — even under `"*"` or when named explicitly.
 - **`plugin install` of a PRIVATE GitHub repo now works on the default git path.** A runtime
   install of a private repo (a private plugin or bundle — e.g. a team-member archetype)
   failed with `could not read Username for 'https://github.com'`: in a container with only a

@@ -595,6 +595,12 @@ class LangGraphConfig:
     # exposed (empty = none). Served standalone via ``python -m server.operator_mcp``.
     operator_mcp_enabled: bool = False
     operator_mcp_tools: list[str] = field(default_factory=list)
+    # Curated profile preset over the allowlist (ADR 0075 D3): "" (default) = use
+    # ``operator_mcp_tools`` verbatim (deny-by-default); "read-only" = reads/queries
+    # only; "full" = everything (≡ "*"). A profile UNIONs with any explicit names.
+    # env PROTOAGENT_MCP_TRUST=full forces "full" (vouch for the client). The safe
+    # middle tier "safe-operator" arrives with the ops layer (ADR 0075 D2).
+    operator_mcp_profile: str = ""
 
     # Agent runtime (ADR 0033) — which brain executes a turn. "native" = the built-in
     # LangGraph loop (default). "acp:<agent>" (e.g. "acp:codex", "acp:claude") = an
@@ -1007,6 +1013,7 @@ class LangGraphConfig:
             mcp_scope=mcp.get("scope", cls.mcp_scope),
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
+            operator_mcp_profile=str(operator_mcp.get("profile", "") or "").strip(),
             agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
             developer_channel=str((data.get("developer", {}) or {}).get("channel", cls.developer_channel) or "prod"),
             acp_agents=dict(acp.get("agents", {}) or {}),
