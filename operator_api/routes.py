@@ -454,6 +454,18 @@ def register_operator_routes(
             except Exception as exc:
                 raise _http_error(exc) from exc
 
+    # One session's goal status under the canonical plural shape (D4 dedupe, ADR 0075)
+    # — replaces the retired singular `/api/goal/{session_id}`. Reads the controller
+    # directly, so it degrades to {enabled: False} when goals are off; no injected fn.
+    @app.get("/api/goals/{session_id}")
+    async def _goal_status(session_id: str):
+        from runtime.state import STATE
+
+        if STATE.goal_controller is None:
+            return {"enabled": False, "goal": None}
+        state = STATE.goal_controller.store.get(session_id)
+        return {"enabled": True, "goal": state.to_dict() if state else None}
+
     # Programmatic goal-set (ADR 0028 D3) — accepts ONLY a `plugin` verifier;
     # command/test/ci/data stay operator-only (/goal). 400 on a rejected verifier.
     if goal_set is not None:

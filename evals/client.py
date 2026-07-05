@@ -328,19 +328,19 @@ class AgentClient:
     # ── goal mode ─────────────────────────────────────────────────────────────
 
     async def get_goal(self, session_id: str) -> dict:
-        """GET ``/api/goal/{session_id}`` → ``{enabled, goal}`` (goal is the
+        """GET ``/api/goals/{session_id}`` → ``{enabled, goal}`` (goal is the
         full persisted state dict, or None when no goal is set)."""
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{self.base_url}/api/goal/{session_id}", headers=self.headers)
+            r = await client.get(f"{self.base_url}/api/goals/{session_id}", headers=self.headers)
             r.raise_for_status()
             return r.json()
 
     async def clear_goal(self, session_id: str) -> dict:
-        """DELETE ``/api/goal/{session_id}`` → ``{enabled, cleared}``."""
+        """DELETE ``/api/goals/{session_id}`` → ``{enabled, cleared}``."""
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.request(
                 "DELETE",
-                f"{self.base_url}/api/goal/{session_id}",
+                f"{self.base_url}/api/goals/{session_id}",
                 headers=self.headers,
             )
             r.raise_for_status()

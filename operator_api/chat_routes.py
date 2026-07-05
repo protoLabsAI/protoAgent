@@ -217,22 +217,10 @@ def register_chat_routes(app, ui: str) -> None:
         cancelled = delegations.cancel(session_id, delegation_id)
         return {"cancelled": cancelled, "running": delegations.running(session_id)}
 
-    # --- Goal mode API ------------------------------------------------------
-    # Programmatic status/clear for a session's goal (setting is done via the
-    # `/goal ...` control message through chat/A2A). Returns 404-style payloads
-    # as plain JSON to keep the surface dependency-free.
-    @app.get("/api/goal/{session_id}")
-    async def _api_goal_status(session_id: str):
-        if STATE.goal_controller is None:
-            return {"enabled": False, "goal": None}
-        state = STATE.goal_controller.store.get(session_id)
-        return {"enabled": True, "goal": state.to_dict() if state else None}
-
-    @app.delete("/api/goal/{session_id}")
-    async def _api_goal_clear(session_id: str):
-        if STATE.goal_controller is None:
-            return {"enabled": False, "cleared": False}
-        return {"enabled": True, "cleared": STATE.goal_controller.store.clear(session_id)}
+    # Goal-mode read/clear moved to the canonical plural `/api/goals*` in
+    # operator_api/routes.py (D4 dedupe, ADR 0075): `GET /api/goals` (list),
+    # `GET /api/goals/{session_id}` (one), `DELETE /api/goals/{session_id}` (clear).
+    # The singular `/api/goal/{session_id}` duplicates were retired here.
 
     # --- Health / readiness (ADR 0010) -------------------------------------
     # Reflects whether the graph actually compiled — the only readiness signal
