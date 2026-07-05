@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **React artifacts get a full design-system component set (`@pl/ui`), not just 9 primitives.**
+  The `plugin-kit.css` injected into every artifact already styles ~90 `.pl-*` components, but
+  `@pl/ui` only exposed **9** ergonomic React wrappers (Button/Card/Badge/Alert/Tag/Kbd/Input/Stat/Icon)
+  — so rendering a real *layout* meant hand-writing `className="pl-appshell …"` strings. `@pl/ui` now
+  ships **~55 wrappers** across the vocabulary an agent needs to prototype layouts + components:
+  `AppShell` · `Header` · `SideNav`/`SideNavItem` · `Container`/`Section`/`Panel`/`Grid`/`Row`/`Hero`/`Divider`
+  (layout); `Tabs`/`Tab` · `Segmented` · `Menu`/`MenuItem` (nav); `Table` · `Board` · `Stats` · `Steps`/`Step`
+  · `Progress` · `Accordion` · `Avatar` · `Empty` (data); `Dialog` · `Drawer` · `Callout` · `Tip` (overlays);
+  `Field` · `Textarea` · `Select` · `Switch` · `Checkbox` (forms); and `Heading`/`Lead`/`Eyebrow`/`Prose`
+  · `IconButton`/`Link`/`Dot`/`Spinner`/`Skeleton` (type + primitives). Each is a thin, correct
+  className contract over the DS classes the theme already ships — so prototypes match the live theme
+  without hand-rolled markup. The `rendering-artifacts` skill + README list the full set.
+
 ### Fixed
 - **`plugin install` of a PRIVATE GitHub repo now works on the default git path.** A runtime
   install of a private repo (a private plugin or bundle — e.g. a team-member archetype)
