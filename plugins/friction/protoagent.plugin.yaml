@@ -1,0 +1,16 @@
+id: friction
+name: Friction Log
+version: 0.1.0
+description: >
+  The agent records its own friction — missing or awkward tools, confusing errors,
+  wrong paths it recognizes — alongside auto-captured tool errors and escape-hatch
+  reaches. One ledger, split into harness vs model friction, so the improvement
+  backlog writes itself from real use. A self-report pattern in the spirit of
+  NousResearch/hermes-agent. Bundled example — opt in via plugins.enabled.
+enabled: false
+requires_env: []
+capabilities:
+  network: []
+  filesystem: scoped   # appends a JSONL ledger under the instance data dir
+emits: []
+subscribes: []
