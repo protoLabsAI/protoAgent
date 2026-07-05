@@ -38,6 +38,7 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "skills": ("graph.skills.cli", "run_skills_cli"),
     "fleet": ("graph.fleet.cli", "run_fleet_cli"),
     "config": ("graph.config_explain", "run_config_cli"),
+    "model": ("graph.model_cli", "run_model_cli"),
 }
 
 _FORWARD_HELP = {
@@ -46,6 +47,7 @@ _FORWARD_HELP = {
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
     "fleet": "Start / stop / list fleet MEMBER agents as background processes (ADR 0042)",
     "config": "Explain this instance's identity, paths, and config cascade (ADR 0047)",
+    "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
 }
 
 _LIFECYCLE_HELP = {

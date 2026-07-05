@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`protoagent model` — point at a local LLM in one line (ADR 0075, slice 4).** protoAgent's
+  model is just OpenAI-compatible config (the LiteLLM gateway is the default, not a lock-in), so
+  `protoagent model use --base-url http://127.0.0.1:8080/v1 --model qwen2.5` writes the endpoint +
+  model to the live config non-interactively, and `protoagent model discover` probes the usual
+  local ports (Ollama :11434, LM Studio :1234, llama.cpp/vLLM :8080). That one-liner is the
+  copy-paste target for HuggingFace's "Use this model" local-app snippet (the hermes-agent /
+  openclaw / pi agent-runtime pattern) — it even tolerates HF's `:{{QUANT_TAG}}` placeholder.
 - **Operator-MCP profiles + an env override, so "operate over MCP" is safe by default (ADR 0075, slice 2).**
   The operator MCP server can now take a curated **`operator_mcp.profile`** instead of enumerating
   tools: `read-only` (reads/queries only), `full` (everything), or unset (deny-by-default, unchanged).
