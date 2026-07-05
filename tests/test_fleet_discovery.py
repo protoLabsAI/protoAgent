@@ -24,6 +24,10 @@ def _reset_zc(monkeypatch):
     monkeypatch.setattr(discovery, "_info", None)
     monkeypatch.setattr(discovery, "_peer_cache", {})  # fresh boot-sweep cache per test
     monkeypatch.setattr(discovery, "_sweep_task", None)
+    # mDNS is opt-in / off by default (#1802). These tests exercise the advertise +
+    # browse machinery, so they assume the operator turned it on; the default-off
+    # bail is covered explicitly by test_advertise_skips_when_mdns_disabled.
+    monkeypatch.setattr(discovery, "_mdns_enabled", lambda: True)
 
 
 class _FakeZeroconf:
@@ -58,6 +62,14 @@ def test_advertise_registers_off_loop(fake_zeroconf):
     discovery.advertise("alpha", 7871)  # idempotent — second call is a no-op
     discovery.stop_advertise()
     assert discovery._zc is None and discovery._info is None
+
+
+def test_advertise_skips_when_mdns_disabled(fake_zeroconf, monkeypatch):
+    """Default-off (#1802): with fleet.discovery.mdns disabled, advertise() bails
+    before touching zeroconf — an agent never announces itself on the network."""
+    monkeypatch.setattr(discovery, "_mdns_enabled", lambda: False)
+    discovery.advertise("alpha", 7871)
+    assert discovery._zc is None  # never registered a service
 
 
 def test_advertise_refuses_on_event_loop(fake_zeroconf, caplog):
