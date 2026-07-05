@@ -55,7 +55,9 @@ then exits:
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent fleet up` · `down` · `ls` | Run fleet **member** agents as background processes. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
-| `protoagent config explain` | Print this instance's id, both roots, every resolved path, and the config cascade with provenance. | [0047](../adr/0047-layered-settings-cascade.md) |
+| `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent operations` | List the operations on the shared ops layer — name, read/write, one-line summary. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 
 ### Point at a local model
 
@@ -87,6 +89,11 @@ protoagent model use --base-url http://127.0.0.1:11434/v1 --model llama3.2
 
 # Install a plugin, then reload isn't needed for a fresh boot
 protoagent plugin install https://github.com/protoLabsAI/careercoach-plugin
+
+# Edit config headless, ingest a doc, list what operations exist
+protoagent config set fleet.mdns.enabled=false
+protoagent knowledge ingest https://example.com/post --domain research
+protoagent operations
 
 # Stop it
 protoagent down
