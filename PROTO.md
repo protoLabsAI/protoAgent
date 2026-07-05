@@ -11,9 +11,15 @@ TypeScript is the console.
 
 ## Run it
 
-- **Server:** `python -m server` (never `python server.py` — single-file launch
-  was retired in ADR 0023 and CI fails on it). Console is served from
-  `apps/web/dist`; `/healthz` is the readiness probe.
+- **Server:** `protoagent serve` — or `python -m server`, the module form the
+  frozen sidecar uses (never `python server.py`; single-file launch was retired in
+  ADR 0023 and CI fails on it). The **`protoagent`** command (ADR 0075) is the
+  discoverable front door: `protoagent --help` lists the management subcommands
+  (`plugin` / `workspace` / `fleet` / `skills` / `config`) plus lifecycle
+  (`up` / `down` / `status` / `serve` / `setup`); `protoagent up` runs the instance
+  detached and `protoagent status` reports it. Both front doors route through the
+  same dispatcher (`server/cli.py::dispatch`), so `python -m server <sub>` keeps
+  working. Console is served from `apps/web/dist`; `/healthz` is the readiness probe.
 - **Isolated dev instance (don't stomp prod data):** `scripts/dev.sh` runs a
   sandboxed instance via `PROTOAGENT_INSTANCE=dev` (ADR 0065 two-tier paths) on
   `:7871` — its whole root is `~/.protoagent/dev/` (config + every store under it),
@@ -43,8 +49,8 @@ TypeScript is the console.
   `--keep-secrets` (keep gateway creds), `--include-dev`, `--force` (stop a bound
   server first). *(Reset-script rewrite for the ADR-0065 single-subtree layout is a
   follow-up; see [the env-vars gotcha](#house-rules--gotchas-that-bite).)*
-- **See where state lives:** `python -m server config explain` (or
-  `GET /api/config/explain`) prints this instance's id, both roots (box + instance),
+- **See where state lives:** `protoagent config explain` (or `python -m server
+  config explain`, or `GET /api/config/explain`) prints this instance's id, both roots (box + instance),
   every resolved path, and the per-field settings cascade with provenance (secrets
   redacted) — the way to answer "where is my config / where did my key go".
 - **Python deps:** managed with `uv` (`pyproject.toml [project.dependencies]` is

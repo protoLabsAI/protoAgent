@@ -299,46 +299,18 @@ def _main():
     # fails CERTIFICATE_VERIFY_FAILED in the desktop app. No-op in a source checkout.
     _ensure_ca_bundle_env()
 
-    # Plugin management subcommand (ADR 0027): `python -m server plugin install
-    # <git-url>` (+ list/uninstall/sync). Handled before the server argparse —
-    # it fetches code to disk and exits, never starting the server.
-    if len(sys.argv) > 1 and sys.argv[1] == "plugin":
-        from graph.plugins.cli import run_plugin_cli
+    # Management + lifecycle subcommands (ADR 0075 D1) — `plugin` / `workspace` /
+    # `skills` / `fleet` / `config` (act on disk/DBs and exit) plus `up`/`down`/
+    # `status`. Routed through the SINGLE shared dispatcher so `python -m server
+    # <sub>` and the `protoagent` command can never drift; `dispatch` returns an exit
+    # code when it handled the args, or None to fall through to the server boot below
+    # (a bare invocation / server flags). The `protoagent` front door adds `--help`
+    # discoverability, `serve`, and `setup` on top of this same dispatcher.
+    from server.cli import dispatch
 
-        raise SystemExit(run_plugin_cli(sys.argv[2:]))
-
-    # Workspace management subcommand (ADR 0041): `python -m server workspace
-    # new/ls/run/rm` — named, isolated agents on one host. `new`/`ls`/`rm` act on
-    # disk and exit; `run` execs the normal server with the workspace's config dir +
-    # instance + port wired in (so the dispatch below runs unchanged for it).
-    if len(sys.argv) > 1 and sys.argv[1] == "workspace":
-        from graph.workspaces.cli import run_workspace_cli
-
-        raise SystemExit(run_workspace_cli(sys.argv[2:]))
-
-    # Skills subcommand (ADR 0041 slice 3): `python -m server skills ls|promote <name>`
-    # — inspect/curate the layered (commons ∪ private) skill library. Acts on the DBs
-    # and exits.
-    if len(sys.argv) > 1 and sys.argv[1] == "skills":
-        from graph.skills.cli import run_skills_cli
-
-        raise SystemExit(run_skills_cli(sys.argv[2:]))
-
-    # Fleet subcommand (ADR 0042 slice 1): `python -m server fleet up|down|ls` —
-    # run workspace agents as persistent background processes (start/stop/status).
-    if len(sys.argv) > 1 and sys.argv[1] == "fleet":
-        from graph.fleet.cli import run_fleet_cli
-
-        raise SystemExit(run_fleet_cli(sys.argv[2:]))
-
-    # Config subcommand: `python -m server config explain` — a read-only diagnostic
-    # that prints this instance's identity, both roots, every resolved path, and the
-    # per-field cascade provenance (the "where did my config/key go?" answer). Acts
-    # on disk + the env, then exits; never starts the server.
-    if len(sys.argv) > 1 and sys.argv[1] == "config":
-        from graph.config_explain import run_config_cli
-
-        raise SystemExit(run_config_cli(sys.argv[2:]))
+    _sub_code = dispatch(sys.argv[1:])
+    if _sub_code is not None:
+        raise SystemExit(_sub_code)
 
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
