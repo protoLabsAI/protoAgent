@@ -60,6 +60,29 @@ async def test_get_disk_config_when_no_agent(monkeypatch):
     assert await get_config(ctx=None) == {"disk": 1}
 
 
+async def test_get_config_normalizes_ruamel_to_plain(monkeypatch):
+    """Regression: load_yaml_doc returns a ruamel CommentedMap (a dict subclass), which
+    PyYAML's safe_dump can't represent — `protoagent config get` crashed on it. get_config
+    must hand back PLAIN types."""
+    import io
+
+    import pytest
+
+    yaml_rt = pytest.importorskip("ruamel.yaml")
+    import graph.config_io as cio
+
+    cm = yaml_rt.YAML(typ="rt").load(io.StringIO("server:\n  port: 7870\nlist:\n  - a\n  - b\n"))
+    assert type(cm) is not dict  # it IS a CommentedMap — the thing that broke
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: "cfg.yaml")
+    monkeypatch.setattr(cio, "load_yaml_doc", lambda p=None: cm)
+
+    result = await get_config(ctx=None)
+    assert type(result) is dict and result == {"server": {"port": 7870}, "list": ["a", "b"]}
+    import yaml
+
+    yaml.safe_dump(result)  # must NOT raise RepresenterError
+
+
 def test_config_ops_registered_with_metadata():
     reg = registry()
     assert reg["config.set"].mutates is True  # full-profile only

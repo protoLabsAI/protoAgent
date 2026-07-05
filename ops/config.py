@@ -73,4 +73,13 @@ async def get_config(*, ctx: OpContext | None = None) -> dict:
     from graph.config_io import config_yaml_path, load_yaml_doc
 
     doc = load_yaml_doc(config_yaml_path())
-    return doc if isinstance(doc, dict) else {}
+    if not isinstance(doc, dict):
+        return {}
+    # load_yaml_doc returns a ruamel CommentedMap (comment-preserving) when ruamel is
+    # installed — a dict subclass PyYAML's safe_dump can't represent (RepresenterError).
+    # Normalize to plain types so every consumer (`protoagent config get`'s YAML dump, JSON,
+    # an API caller) gets a clean dict. JSON round-trip is exact for config (plain scalars /
+    # lists / maps); default=str is a belt-and-braces fallback for any exotic ruamel scalar.
+    import json
+
+    return json.loads(json.dumps(doc, default=str))
