@@ -678,3 +678,125 @@ class TestBackgroundByIdRoute:
     def test_disabled_manager_is_404(self, monkeypatch):
         client = self._client(monkeypatch, None)
         assert client.get("/api/background/bg-abcdefabcdef").status_code == 404
+
+
+# ── #1808: dismiss is a soft flag — the report outlives the disposable worker ─
+
+
+class TestDismissRetainsReport:
+    """Dismissing a finished job hides it from the panel but retains its row + report,
+    so the chat report card can still open the FULL report by id afterwards (#1808)."""
+
+    def _client(self, monkeypatch, mgr):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from operator_api.routes import register_operator_routes
+        from runtime.state import STATE
+
+        app = FastAPI()
+
+        async def _run(_payload):
+            return ""
+
+        register_operator_routes(
+            app, runtime_status=lambda: {}, subagent_list=lambda: [],
+            subagent_run=_run, subagent_batch=_run,
+        )
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+        return TestClient(app)
+
+    def _finished(self, store, session="chat-42", result="the FULL report " * 500):
+        jid = store.create(
+            agent_name="a", origin_session=session, subagent_type="researcher", description="dig", prompt="p"
+        )
+        store.mark_complete(jid, "completed", result)
+        return jid
+
+    # ── store level ──────────────────────────────────────────────────────────
+    def test_dismiss_hides_from_list_but_retains_row(self, tmp_path):
+        s = _store(tmp_path)
+        jid = self._finished(s)
+        assert s.dismiss(jid) is True
+        assert [j.id for j in s.list()] == []  # gone from the panel
+        job = s.get(jid)  # but the row + full report are retained
+        assert job is not None and job.dismissed is True
+        assert job.result.startswith("the FULL report")
+        assert [j.id for j in s.list(include_dismissed=True)] == [jid]
+
+    def test_double_dismiss_reports_false(self, tmp_path):
+        s = _store(tmp_path)
+        jid = self._finished(s)
+        assert s.dismiss(jid) is True
+        assert s.dismiss(jid) is False  # already dismissed
+
+    def test_dismiss_finished_is_bulk_and_spares_running(self, tmp_path):
+        s = _store(tmp_path)
+        done1, done2 = self._finished(s), self._finished(s)
+        running = s.create(
+            agent_name="a", origin_session="chat-42", subagent_type="researcher", description="live", prompt="p"
+        )
+        assert s.dismiss_finished() == 2
+        remaining = {j.id for j in s.list()}
+        assert remaining == {running}  # only the running job still shows
+        assert s.get(done1) is not None and s.get(done2) is not None  # both retained
+
+    def test_dismiss_running_job_is_noop(self, tmp_path):
+        s = _store(tmp_path)
+        running = s.create(
+            agent_name="a", origin_session="chat-42", subagent_type="researcher", description="live", prompt="p"
+        )
+        assert s.dismiss(running) is False
+        assert [j.id for j in s.list()] == [running]  # still shown; cancel, don't dismiss
+
+    def test_migration_adds_dismissed_column_to_legacy_db(self, tmp_path):
+        """A pre-#1808 DB (no dismissed column) migrates in place; legacy rows read
+        dismissed=False and remain dismissable."""
+        db_path = tmp_path / "jobs.db"
+        db = sqlite3.connect(str(db_path))
+        db.execute(
+            """
+            CREATE TABLE background_jobs (
+                id TEXT PRIMARY KEY, agent_name TEXT NOT NULL, origin_session TEXT NOT NULL,
+                subagent_type TEXT NOT NULL, description TEXT NOT NULL, prompt TEXT NOT NULL,
+                status TEXT NOT NULL, result TEXT, notified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, completed_at TEXT, a2a_task_id TEXT
+            )
+            """
+        )
+        db.execute(
+            "INSERT INTO background_jobs (id, agent_name, origin_session, subagent_type, description, "
+            "prompt, status, result, notified, created_at, completed_at, a2a_task_id) "
+            "VALUES ('bg-aaaaaaaaaaaa', 'a', 's1', 'researcher', 'd', 'p', 'completed', 'r', 0, 't', 't', '')"
+        )
+        db.commit()
+        db.close()
+
+        s = BackgroundStore(str(db_path))
+        legacy = s.get("bg-aaaaaaaaaaaa")
+        assert legacy is not None and legacy.dismissed is False
+        assert s.dismiss("bg-aaaaaaaaaaaa") is True
+        assert [j.id for j in s.list()] == []
+
+    # ── route level: the actual #1808 bug — Open report after dismiss ──────────
+    def test_open_report_survives_dismiss(self, tmp_path, monkeypatch):
+        mgr = _manager(tmp_path)
+        jid = self._finished(mgr.store)
+        client = self._client(monkeypatch, mgr)
+
+        # Dismiss it from the panel (the console's "×").
+        assert client.request("DELETE", f"/api/background/{jid}").json() == {"ok": True, "deleted": True}
+        # Gone from the panel listing…
+        assert client.get("/api/background").json()["jobs"] == []
+        # …but "Open report" (by-id) still returns the FULL report — the bug this fixes.
+        body = client.get(f"/api/background/{jid}").json()
+        assert body["id"] == jid and body["result"].startswith("the FULL report")
+        assert body["dismissed"] is True
+
+    def test_clear_survives_for_open_report(self, tmp_path, monkeypatch):
+        mgr = _manager(tmp_path)
+        jid = self._finished(mgr.store)
+        client = self._client(monkeypatch, mgr)
+        assert client.post("/api/background/clear").json() == {"ok": True, "cleared": 1}
+        assert client.get("/api/background").json()["jobs"] == []
+        assert client.get(f"/api/background/{jid}").status_code == 200

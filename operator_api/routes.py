@@ -255,8 +255,10 @@ def register_operator_routes(
     async def _background_job(job_id: str):
         """One background job's full row by id (ADR 0070 D4) — the console report
         card fetches this instead of list-and-filter, and it carries the FULL result
-        (the ``background.completed`` bus event only carries a preview). Job ids are
-        strictly ``bg-<12 hex>`` (background/store.py), so anything else is rejected
+        (the ``background.completed`` bus event only carries a preview). Still resolves
+        after the job is dismissed from the panel (#1808): dismiss is a soft flag, so the
+        row + report are retained and the card can always reopen the full report. Job ids
+        are strictly ``bg-<12 hex>`` (background/store.py), so anything else is rejected
         before it reaches the store."""
         import re as _re
 
@@ -290,30 +292,34 @@ def register_operator_routes(
 
     @app.delete("/api/background/{job_id}")
     async def _background_delete(job_id: str):
-        """Delete a FINISHED background job's entry (housekeeping). Running jobs are kept —
-        cancel them first. Returns ``{ok, deleted}``."""
+        """Dismiss a FINISHED background job from the panel (#1808). A SOFT dismiss, not a
+        hard delete: the row + report are retained so the chat report card can still open the
+        full report by id (ADR 0070 — the report outlives the disposable worker). Running jobs
+        are kept — cancel them first. Returns ``{ok, deleted}`` (``deleted`` = a row was
+        newly dismissed; the key is kept for API compatibility)."""
         from runtime.state import STATE
 
         mgr = getattr(STATE, "background_mgr", None)
         if mgr is None:
             return {"ok": False, "detail": "Background jobs are not available."}
         try:
-            deleted = await asyncio.to_thread(mgr.store.delete, job_id)
-            return {"ok": True, "deleted": bool(deleted)}
+            dismissed = await asyncio.to_thread(mgr.store.dismiss, job_id)
+            return {"ok": True, "deleted": bool(dismissed)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @app.post("/api/background/clear")
     async def _background_clear(session: str = ""):
-        """Delete all FINISHED background jobs (optionally scoped to an originating
-        ``session``). Running jobs are kept. Returns ``{ok, cleared}``."""
+        """Dismiss all FINISHED background jobs from the panel (#1808), optionally scoped to an
+        originating ``session``. Soft, like the single dismiss — rows + reports are retained so
+        they stay openable by id. Running jobs are kept. Returns ``{ok, cleared}``."""
         from runtime.state import STATE
 
         mgr = getattr(STATE, "background_mgr", None)
         if mgr is None:
             return {"ok": False, "detail": "Background jobs are not available."}
         try:
-            cleared = await asyncio.to_thread(mgr.store.clear_finished, session or None)
+            cleared = await asyncio.to_thread(mgr.store.dismiss_finished, session or None)
             return {"ok": True, "cleared": int(cleared)}
         except Exception as exc:
             raise _http_error(exc) from exc

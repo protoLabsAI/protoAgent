@@ -102,38 +102,41 @@ class TestStore:
         assert {j.status for j in s.list(status="completed")} == {"completed"}
         assert len(s.list()) == 2
 
-    def test_delete_removes_a_finished_job(self, tmp_path):
+    def test_dismiss_hides_a_finished_job_but_retains_it(self, tmp_path):
+        # #1808: dismiss is a SOFT flag — the job drops out of the panel listing but its row
+        # (and report) are retained, so the chat card can still open the full report by id.
         s = _store(tmp_path)
         jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(jid, "completed", "done")
-        assert s.delete(jid) is True
-        assert s.get(jid) is None
-        assert s.delete(jid) is False  # already gone — idempotent
+        assert s.dismiss(jid) is True
+        assert s.get(jid) is not None and s.get(jid).dismissed is True  # retained
+        assert {j.id for j in s.list()} == set()  # but hidden from the panel
+        assert s.dismiss(jid) is False  # already dismissed — idempotent
 
-    def test_delete_keeps_a_running_job(self, tmp_path):
+    def test_dismiss_keeps_a_running_job(self, tmp_path):
         s = _store(tmp_path)
         jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
-        assert s.delete(jid) is False  # running jobs are kept — cancel first
-        assert s.get(jid) is not None
+        assert s.dismiss(jid) is False  # running jobs are kept — cancel first
+        assert {j.id for j in s.list()} == {jid}  # still shown
 
-    def test_clear_finished_removes_only_finished(self, tmp_path):
+    def test_dismiss_finished_hides_only_finished(self, tmp_path):
         s = _store(tmp_path)
         done = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(done, "completed", "r")
         run = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
-        assert s.clear_finished() == 1
-        assert s.get(done) is None
-        assert s.get(run) is not None  # running kept
+        assert s.dismiss_finished() == 1
+        assert {j.id for j in s.list()} == {run}  # finished hidden, running kept
+        assert s.get(done) is not None  # retained, just hidden
 
-    def test_clear_finished_is_session_scoped(self, tmp_path):
+    def test_dismiss_finished_is_session_scoped(self, tmp_path):
         s = _store(tmp_path)
         a = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         b = s.create(agent_name="a", origin_session="s2", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(a, "completed", "ra")
         s.mark_complete(b, "completed", "rb")
-        assert s.clear_finished("s1") == 1
-        assert s.get(a) is None
-        assert s.get(b) is not None
+        assert s.dismiss_finished("s1") == 1
+        assert {j.id for j in s.list()} == {b}  # only s2 still shown
+        assert s.get(a) is not None  # a retained, just hidden
 
     # ── fan-out batches (#1766) ───────────────────────────────────────────────
 
