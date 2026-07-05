@@ -84,7 +84,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "compaction_keep_messages": 20,
     "compaction_model": "",
     "compaction_trigger": "fraction:0.8",
-    "discovery_mdns": True,
+    "discovery_mdns": False,
     "discovery_port_max": 7910,
     "discovery_port_min": 7860,
     "egress_allowed_hosts": [],

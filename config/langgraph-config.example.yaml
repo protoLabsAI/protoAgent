@@ -316,7 +316,7 @@ fleet:
   discovery:
     port_min: 7860          # LAN/tailnet discovery scan window (inclusive)
     port_max: 7910
-    mdns: true              # advertise + browse the _protoagent._tcp mDNS channel
+    mdns: false             # opt-in (#1802): advertise + browse _protoagent._tcp on the LAN. Off = stay quiet on the network
   warm:
     max: 0                  # warm-agent cap (0 = unlimited)
     grace_seconds: 0        # spare agents touched within N seconds from LRU eviction

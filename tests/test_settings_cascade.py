@@ -457,7 +457,7 @@ def test_d8_app_defaults_when_nothing_set(monkeypatch):
     assert cfg.bind_host == "127.0.0.1"
     assert cfg.fleet_port_base == 7870
     assert (cfg.discovery_port_min, cfg.discovery_port_max) == (7860, 7910)
-    assert cfg.discovery_mdns is True
+    assert cfg.discovery_mdns is False  # opt-in / off by default (#1802)
     assert cfg.fleet_max_warm == 0
     assert cfg.fleet_warm_grace_seconds == 0
 
