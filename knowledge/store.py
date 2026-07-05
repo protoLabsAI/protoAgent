@@ -36,7 +36,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -271,6 +271,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
 CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at);
+CREATE INDEX IF NOT EXISTS idx_chunks_source     ON chunks(source);
 
 CREATE TABLE IF NOT EXISTS _kb_meta (
     key   TEXT PRIMARY KEY,
@@ -1087,6 +1088,101 @@ class KnowledgeStore:
             return int(cur.rowcount)
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] purge_domain failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    # ── bulk delete-by-source lifecycle (#1770) ─────────────────────────────
+    # Deleting a whole ingest one chunk at a time is impractical, so the console
+    # groups chunks by source and bulk-deletes them. It's a SOFT delete: the rows
+    # are invalidated (drop out of search/list/hot-memory at once, ADR 0069 D9) but
+    # survive a grace window so an Undo — restore_by_source — can bring them back.
+    # purge_invalidated is the sweep that eventually makes the removal permanent.
+
+    def invalidate_by_source(self, source: str) -> int:
+        """SOFT-delete every VALID chunk sharing ``source`` — stamp
+        ``invalidated_at`` so the whole ingest leaves recall at once while the rows
+        survive for a grace window. Backs the console's bulk "delete all chunks
+        from this source" (#1770); reversible via :meth:`restore_by_source`, made
+        permanent by :meth:`purge_invalidated`. Empty/whitespace ``source`` is a
+        no-op (0) — never an ``invalidated_at = everything`` sweep. Returns the
+        count newly invalidated (already-invalidated rows aren't recounted)."""
+        if not source or not source.strip():
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            now = _now_iso()
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = ?, updated_at = ? WHERE source = ? AND invalidated_at IS NULL",
+                (now, now, source),
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] invalidate_by_source failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def restore_by_source(self, source: str) -> int:
+        """Clear ``invalidated_at`` on every INVALIDATED chunk sharing ``source``
+        — the inverse of :meth:`invalidate_by_source`, backing the console's Undo
+        toast (#1770). Only rows still present (not yet swept by
+        :meth:`purge_invalidated`) can be restored. Empty ``source`` is a no-op.
+        Returns the count restored."""
+        if not source or not source.strip():
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = NULL, updated_at = ? "
+                "WHERE source = ? AND invalidated_at IS NOT NULL",
+                (_now_iso(), source),
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] restore_by_source failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def _invalidated_cutoff(self, older_than_seconds: int) -> str:
+        """The ``invalidated_at`` boundary for :meth:`purge_invalidated`: rows
+        stamped at or before this UTC-ISO instant are past the grace window. Shared
+        with the hybrid override so both delete under ONE cutoff (no orphan-vector
+        window from a second ``now()``)."""
+        return (datetime.now(UTC) - timedelta(seconds=max(0, int(older_than_seconds)))).isoformat()
+
+    def purge_invalidated(self, older_than_seconds: int = 0, *, _cutoff: str | None = None) -> int:
+        """HARD-delete soft-deleted chunks whose ``invalidated_at`` is at or older
+        than ``older_than_seconds`` ago — the grace sweep that makes a bulk soft
+        delete (#1770) eventually permanent. Rows invalidated by
+        :meth:`invalidate_by_source` (or auto-supersession, ADR 0069 D9) that have
+        aged past the recovery period are removed outright.
+        ``older_than_seconds<=0`` purges every invalidated row now. Returns the
+        count removed.
+
+        The FTS delete trigger keeps ``chunks_fts`` in sync; a hybrid store
+        overrides this to drop the side-table vectors first (no FK cascade).
+        ``_cutoff`` is an internal seam for that override to share one boundary."""
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
+            cur = db.execute(
+                "DELETE FROM chunks WHERE invalidated_at IS NOT NULL AND invalidated_at <= ?",
+                (cutoff,),
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] purge_invalidated failed: %s", exc)
             return 0
         finally:
             db.close()

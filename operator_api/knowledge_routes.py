@@ -23,6 +23,14 @@ from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
 
+# Recovery window for the reversible bulk delete-by-source (#1770). A bulk delete
+# only SOFT-deletes (invalidates) the chunks; they survive this long so the Undo
+# toast / restore-by-source can bring them back. There's no scheduler hook for
+# knowledge here, so the sweep runs OPPORTUNISTICALLY at the top of the next bulk
+# delete — anything invalidated longer ago than this is then hard-purged. 24h is a
+# generous recovery period for an operator who deleted the wrong ingest.
+_INVALIDATED_GRACE_SECONDS = 24 * 3600
+
 
 # ── Playbooks (skills) helpers ────────────────────────────────────────────────
 # Operator-authored skills are persisted as real SKILL.md files under the writable
@@ -637,3 +645,62 @@ def register_knowledge_routes(app) -> None:
             return {"enabled": False, "deleted": False}
         deleted = await asyncio.to_thread(STATE.knowledge_store.delete_by_id, chunk_id)
         return {"enabled": True, "deleted": bool(deleted)}
+
+    # --- Bulk delete-by-source (reversible soft delete, #1770) ---------------
+    # Removing a whole ingest (an article / transcript / doc = dozens of chunks,
+    # all sharing one ``source``) one chunk at a time is impractical. These two
+    # routes bulk-delete/restore a source. The delete is SOFT — it invalidates the
+    # rows (they leave recall immediately) but keeps them for a grace window, so the
+    # console's Undo toast (restore-by-source) can bring them back. Past the window
+    # they're hard-swept by ``purge_invalidated``. Both methods are optional store
+    # capabilities (getattr-guarded): a plugin backend without them degrades to a
+    # 0-count no-op instead of 500ing. On a layered store the lifecycle delegates to
+    # the PRIVATE tier (the commons is curated via forget only), same as purge_domain.
+
+    @app.post("/api/knowledge/delete-by-source")
+    async def _api_knowledge_delete_by_source(body: dict | None = None):
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "deleted": 0}
+        source = str((body or {}).get("source", "")).strip()
+        if not source:
+            return JSONResponse({"detail": "source is required"}, status_code=400)
+        invalidate = getattr(store, "invalidate_by_source", None)
+        if invalidate is None:
+            return {"enabled": True, "deleted": 0, "error": "this knowledge backend can't bulk-delete by source"}
+        # Opportunistic grace sweep: no scheduler owns knowledge here, so each bulk
+        # delete first hard-purges anything invalidated past the recovery window —
+        # that's what makes the "permanent removal" of AC4 real. Best-effort; a
+        # sweep failure must never block the delete the operator actually asked for.
+        purge = getattr(store, "purge_invalidated", None)
+        if purge is not None:
+            try:
+                swept = await asyncio.to_thread(purge, _INVALIDATED_GRACE_SECONDS)
+                if swept:
+                    log.info("[knowledge] swept %d past-grace invalidated chunk(s)", swept)
+            except Exception:  # noqa: BLE001 — the sweep is opportunistic, never fatal
+                log.exception("[knowledge] purge_invalidated sweep failed")
+        try:
+            deleted = await asyncio.to_thread(invalidate, source)
+        except Exception as exc:  # noqa: BLE001 — never 500 the console
+            log.exception("[knowledge] delete-by-source failed")
+            return {"enabled": True, "deleted": 0, "error": str(exc)}
+        return {"enabled": True, "deleted": int(deleted)}
+
+    @app.post("/api/knowledge/restore-by-source")
+    async def _api_knowledge_restore_by_source(body: dict | None = None):
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "restored": 0}
+        source = str((body or {}).get("source", "")).strip()
+        if not source:
+            return JSONResponse({"detail": "source is required"}, status_code=400)
+        restore = getattr(store, "restore_by_source", None)
+        if restore is None:
+            return {"enabled": True, "restored": 0, "error": "this knowledge backend can't restore by source"}
+        try:
+            restored = await asyncio.to_thread(restore, source)
+        except Exception as exc:  # noqa: BLE001 — never 500 the console
+            log.exception("[knowledge] restore-by-source failed")
+            return {"enabled": True, "restored": 0, "error": str(exc)}
+        return {"enabled": True, "restored": int(restored)}

@@ -322,6 +322,27 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().purge_domain(domain, before=cutoff)
 
+    def purge_invalidated(self, older_than_seconds: int = 0, *, _cutoff: str | None = None) -> int:
+        """Sweep past-grace soft-deleted chunks AND their vectors (#1770) — the
+        :meth:`delete_by_namespace` / :meth:`purge_domain` pattern: no FK cascade
+        on the side table, so the vectors go first under the SAME cutoff (shared
+        via ``_cutoff`` so a swept chunk can't linger as a vector-only hit)."""
+        cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
+        db = self._get_db()
+        if db is not None:
+            try:
+                db.execute(
+                    "DELETE FROM chunk_vectors WHERE chunk_id IN "
+                    "(SELECT id FROM chunks WHERE invalidated_at IS NOT NULL AND invalidated_at <= ?)",
+                    (cutoff,),
+                )
+                db.commit()
+            except sqlite3.DatabaseError as exc:
+                log.warning("[knowledge] purge_invalidated vectors failed: %s", exc)
+            finally:
+                db.close()
+        return super().purge_invalidated(older_than_seconds, _cutoff=cutoff)
+
     def _vector_search(
         self,
         query_vec: list[float],

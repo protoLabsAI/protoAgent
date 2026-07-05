@@ -818,6 +818,22 @@ export const api = {
       { method: "POST" },
     );
   },
+  // Bulk delete-by-source (#1770) — remove a whole ingest (all chunks sharing one
+  // `source`) in one call. It's a reversible SOFT delete: the chunks leave recall
+  // immediately but survive a grace window, so `restoreKnowledgeBySource` (the Undo
+  // toast) can bring them back. `deleted` is the count invalidated.
+  deleteKnowledgeBySource(source: string) {
+    return request<{ enabled: boolean; deleted: number; error?: string }>(
+      "/api/knowledge/delete-by-source",
+      { method: "POST", body: { source } },
+    );
+  },
+  restoreKnowledgeBySource(source: string) {
+    return request<{ enabled: boolean; restored: number; error?: string }>(
+      "/api/knowledge/restore-by-source",
+      { method: "POST", body: { source } },
+    );
+  },
   // Document ingestion engine — extract a file/URL/YouTube into the KB (chunked,
   // enriched, embedded). FormData carries `file` OR `url` OR `text`, plus `domain`.
   ingestKnowledge(form: FormData) {

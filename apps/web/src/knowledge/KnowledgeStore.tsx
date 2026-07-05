@@ -15,6 +15,10 @@ import { knowledgeQuery, queryKeys } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
+// The shape every knowledge list/search query caches — reused for optimistic
+// bulk-delete cache surgery (#1770) without re-declaring the response fields.
+type KnowledgeSearchData = Awaited<ReturnType<typeof api.knowledgeSearch>>;
+
 // Knowledge → Store (ADR 0020) — a searchable window onto the agent's knowledge
 // base (knowledge/store.py, FTS5): findings, daily-log entries, harvested
 // sessions, operator notes. The same store KnowledgeMiddleware queries before
@@ -235,6 +239,8 @@ export function KnowledgeStore() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [pendingDelete, setPendingDelete] = useState<KnowledgeChunk | null>(null);
   const [forgetPending, setForgetPending] = useState<KnowledgeChunk | null>(null);
+  // Bulk delete-by-source (#1770): the group awaiting a confirm (source + count).
+  const [pendingSourceDelete, setPendingSourceDelete] = useState<{ source: string; count: number } | null>(null);
 
   const save = useMutation({
     mutationFn: () => (editingId !== null ? api.updateKnowledgeChunk(editingId, draft) : api.addKnowledgeChunk(draft)),
@@ -251,6 +257,58 @@ export function KnowledgeStore() {
     mutationFn: (id: number) => api.deleteKnowledgeChunk(id),
     onSuccess: () => invalidate(),
     onError: (e) => onError(errMsg(e)),
+  });
+
+  // Bulk delete-by-source (#1770) — remove a whole ingest at once. It's a reversible
+  // SOFT delete, so restore just re-validates the same rows. The restore mutation is
+  // declared first because the delete's success toast embeds an Undo that calls it.
+  const restoreBySource = useMutation({
+    mutationFn: (source: string) => api.restoreKnowledgeBySource(source),
+    onSuccess: (r) => {
+      if (r.error) { onError(r.error); return; }
+      invalidate();
+    },
+    onError: (e) => onError(errMsg(e)),
+  });
+
+  const delBySource = useMutation({
+    mutationFn: ({ source }: { source: string; count: number }) => api.deleteKnowledgeBySource(source),
+    // Optimistically drop the group from every knowledge list cache so it vanishes
+    // instantly; snapshot for rollback if the server rejects it.
+    onMutate: async ({ source }) => {
+      await qc.cancelQueries({ queryKey: queryKeys.knowledge });
+      const prev = qc.getQueriesData<KnowledgeSearchData>({ queryKey: queryKeys.knowledge });
+      qc.setQueriesData<KnowledgeSearchData>({ queryKey: queryKeys.knowledge }, (old) =>
+        old ? { ...old, results: old.results.filter((c) => c.source !== source) } : old,
+      );
+      return { prev };
+    },
+    onSuccess: (r, { source, count }, ctx) => {
+      if (r.error) {
+        for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data); // rollback
+        onError(r.error);
+        return;
+      }
+      invalidate();
+      const n = r.deleted || count;
+      toast({
+        tone: "success",
+        title: "Knowledge",
+        duration: 10000, // long enough to catch the Undo
+        message: (
+          <span>
+            Deleted {n} chunk{n === 1 ? "" : "s"} from “{source}”.{" "}
+            <Button variant="ghost" size="sm" onClick={() => restoreBySource.mutate(source)}>
+              Undo
+            </Button>
+          </span>
+        ),
+      });
+    },
+    onError: (e, _vars, ctx) => {
+      for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data); // rollback
+      onError(errMsg(e));
+    },
   });
 
   // Share a private chunk into the shared commons (ADR 0041 / bd-2wu).
@@ -559,21 +617,44 @@ export function KnowledgeStore() {
                 const st = members.find((m) => m.source_type)?.source_type;
                 return (
                   <li key={`grp:${src}`} className="kb-group">
-                    <button
-                      type="button"
-                      className="kb-group-header"
-                      aria-expanded={open}
-                      onClick={() => toggleGroup(src)}
-                    >
-                      <ChevronRight
-                        size={14}
-                        className="kb-group-caret"
-                        style={{ transform: open ? "rotate(90deg)" : undefined }}
-                      />
-                      <span className="kb-group-title" title={src}>{src}</span>
-                      {st ? <Badge status="neutral">{st}</Badge> : null}
-                      <Badge status="neutral">{members.length} chunks</Badge>
-                    </button>
+                    {/* Toggle + a bulk-delete button are SIBLINGS (a button can't nest
+                        inside the header button). Bulk delete a whole ingest at once
+                        (#1770): Shift+click skips the confirm, like the per-chunk path. */}
+                    <div className="kb-group-header-row">
+                      <button
+                        type="button"
+                        className="kb-group-header"
+                        aria-expanded={open}
+                        onClick={() => toggleGroup(src)}
+                      >
+                        <ChevronRight
+                          size={14}
+                          className="kb-group-caret"
+                          style={{ transform: open ? "rotate(90deg)" : undefined }}
+                        />
+                        <span className="kb-group-title" title={src}>{src}</span>
+                        {st ? <Badge status="neutral">{st}</Badge> : null}
+                        <Badge status="neutral">{members.length} chunks</Badge>
+                      </button>
+                      <Button
+                        icon
+                        variant="ghost"
+                        type="button"
+                        className={`kb-group-delete${shiftDel ? " knowledge-del-armed" : ""}`}
+                        title={
+                          shiftDel
+                            ? `Delete all ${members.length} chunks now — Shift skips the confirmation`
+                            : `Delete all ${members.length} chunks from this source`
+                        }
+                        aria-label={`delete all chunks from ${src}`}
+                        onClick={(e) => {
+                          if (e.shiftKey) delBySource.mutate({ source: src, count: members.length });
+                          else setPendingSourceDelete({ source: src, count: members.length });
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </Button>
+                    </div>
                     {open ? (
                       <ul className="playbook-list kb-group-body">{members.map(renderCard)}</ul>
                     ) : null}
@@ -598,6 +679,22 @@ export function KnowledgeStore() {
       >
         {pendingDelete
           ? `"${pendingDelete.heading || pendingDelete.preview.slice(0, 80)}" will be removed from the knowledge base — the agent will no longer recall it. This can't be undone.`
+          : undefined}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={pendingSourceDelete !== null}
+        title="Delete all chunks from this source?"
+        confirmLabel="Delete chunks"
+        destructive
+        onConfirm={() => {
+          if (pendingSourceDelete) delBySource.mutate(pendingSourceDelete);
+          setPendingSourceDelete(null);
+        }}
+        onClose={() => setPendingSourceDelete(null)}
+      >
+        {pendingSourceDelete
+          ? `Delete all ${pendingSourceDelete.count} chunk${pendingSourceDelete.count === 1 ? "" : "s"} from “${pendingSourceDelete.source}”? The agent will stop recalling them. You can undo this from the toast.`
           : undefined}
       </ConfirmDialog>
 

@@ -215,6 +215,15 @@ D9) instead of judging it with a model at write time:
 - **Operator deletes stay hard deletes.** `forget_memory` and the memory
   inspector's DELETE routes remove rows outright — explicit operator intent
   beats history-keeping. Supersession is only for the *automatic* write paths.
+- **Bulk delete-by-source is a *reversible* soft delete** (#1770). In the console's
+  Knowledge view, a source with several loaded chunks collapses into a group; its
+  trash button deletes the **whole ingest** at once (a counted confirm, then an Undo
+  toast). Under the hood this stamps `invalidated_at` on every chunk of that source
+  (`invalidate_by_source`), so they leave recall immediately but survive a **grace
+  window** — `restore_by_source` (the Undo) brings them back verbatim. Past the
+  window they're hard-swept by `purge_invalidated`, run opportunistically on the next
+  bulk delete. This is the one operator delete that's *not* immediately permanent —
+  by design, so a mistaken cleanup is recoverable.
 
 ### Plugin knowledge lifecycle
 
