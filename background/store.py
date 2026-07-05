@@ -45,6 +45,12 @@ class BackgroundJob:
     # turn), so the completions coalesce into ONE push-resume when the last member settles
     # instead of N drip-fed briefings. ``None`` for a lone / plugin spawn (a singleton).
     batch_id: str | None = None
+    # Dismissed from the console Background-agents panel (#1808). A soft flag, NOT a delete:
+    # the row (and its ``result``) is retained so the chat's report card can still open the
+    # FULL report by id after the worker is dismissed — the report is the deliverable and
+    # outlives the disposable worker (ADR 0070). ``list`` hides dismissed jobs from the panel;
+    # ``get`` still returns them, so ``GET /api/background/{id}`` keeps working.
+    dismissed: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +67,7 @@ class BackgroundJob:
             "a2a_task_id": self.a2a_task_id,
             "origin_incognito": self.origin_incognito,
             "batch_id": self.batch_id,
+            "dismissed": self.dismissed,
         }
 
 
@@ -81,6 +88,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         a2a_task_id=(row["a2a_task_id"] if "a2a_task_id" in keys else "") or "",
         origin_incognito=bool(row["origin_incognito"] if "origin_incognito" in keys else 0),
         batch_id=(row["batch_id"] if "batch_id" in keys else None) or None,
+        dismissed=bool(row["dismissed"] if "dismissed" in keys else 0),
     )
 
 
@@ -116,7 +124,8 @@ class BackgroundStore:
                     completed_at   TEXT,
                     a2a_task_id    TEXT,
                     origin_incognito INTEGER NOT NULL DEFAULT 0,
-                    batch_id       TEXT
+                    batch_id       TEXT,
+                    dismissed      INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -130,6 +139,9 @@ class BackgroundStore:
             # Migrate a pre-#1766 DB: fan-out batch key (existing rows are unbatched → NULL).
             if "batch_id" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN batch_id TEXT")
+            # Migrate a pre-#1808 DB: soft-dismiss flag (existing rows are undismissed → 0).
+            if "dismissed" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -333,6 +345,7 @@ class BackgroundStore:
         origin_session: str | None = None,
         status: str | None = None,
         limit: int = 100,
+        include_dismissed: bool = False,
     ) -> list[BackgroundJob]:
         clauses, params = [], []
         if origin_session is not None:
@@ -341,6 +354,10 @@ class BackgroundStore:
         if status is not None:
             clauses.append("status = ?")
             params.append(status)
+        # Dismissed jobs (#1808) drop out of the panel listing but stay in the DB — their
+        # report is still openable by id. Pass include_dismissed to see them anyway.
+        if not include_dismissed:
+            clauses.append("dismissed = 0")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(int(limit))
         db = self._connect()
@@ -353,27 +370,34 @@ class BackgroundStore:
         finally:
             db.close()
 
-    def delete(self, job_id: str) -> bool:
-        """Delete a finished job's row (housekeeping). A running job is left alone —
-        cancel it first. Returns ``True`` if a row was removed."""
+    def dismiss(self, job_id: str) -> bool:
+        """Dismiss a finished job from the panel (#1808) — a SOFT flag, not a delete. The row
+        and its ``result`` are retained so the chat report card can still open the full report
+        by id after the worker is gone (ADR 0070: the report outlives the disposable worker).
+        A running job is left alone — cancel it first. Returns ``True`` if a row was dismissed
+        (already-dismissed rows don't count, so a double-dismiss reports ``False``)."""
         db = self._connect()
         try:
-            cur = db.execute("DELETE FROM background_jobs WHERE id = ? AND status != 'running'", (job_id,))
+            cur = db.execute(
+                "UPDATE background_jobs SET dismissed = 1 WHERE id = ? AND status != 'running' AND dismissed = 0",
+                (job_id,),
+            )
             db.commit()
             return cur.rowcount > 0
         finally:
             db.close()
 
-    def clear_finished(self, origin_session: str | None = None) -> int:
-        """Delete all finished (non-running) jobs, optionally scoped to one originating
-        session. Running jobs are kept. Returns the number removed."""
-        clauses, params = ["status != 'running'"], []
+    def dismiss_finished(self, origin_session: str | None = None) -> int:
+        """Dismiss all finished (non-running) jobs from the panel (#1808), optionally scoped to
+        one originating session. Soft, like ``dismiss`` — rows are retained so their reports stay
+        openable by id. Running jobs are kept. Returns the number newly dismissed."""
+        clauses, params = ["status != 'running'", "dismissed = 0"], []
         if origin_session is not None:
             clauses.append("origin_session = ?")
             params.append(origin_session)
         db = self._connect()
         try:
-            cur = db.execute(f"DELETE FROM background_jobs WHERE {' AND '.join(clauses)}", params)
+            cur = db.execute(f"UPDATE background_jobs SET dismissed = 1 WHERE {' AND '.join(clauses)}", params)
             db.commit()
             return cur.rowcount
         finally:
