@@ -136,6 +136,44 @@ async def test_config_reactions_dispatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_webhook_reaction_respects_egress_guard(monkeypatch):
+    """A lifecycle webhook runs through security.egress (like fetch_url / the operator
+    api_base): a link-local / cloud-metadata host is skipped (SSRF defense), a normal host
+    is POSTed. Guards against a compromised/typo'd config steering a hook at 169.254.169.254."""
+    posted: list[str] = []
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kwargs):
+            posted.append(url)
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeClient)
+
+    # No allowlist ⇒ exercise the default SSRF-guard branch deterministically.
+    from security import egress
+
+    saved = egress.allowed_hosts()
+    egress.set_allowed_hosts([])
+    try:
+        # Link-local / cloud-metadata — blocked even with allow_private=True → never POSTed.
+        await lc_dispatch._post_webhook("http://169.254.169.254/hook", "app_loaded", {"ts": 1.0})
+        assert posted == []
+        # A normal (unresolvable-in-CI) host passes (block_unresolvable=False) → POSTed.
+        await lc_dispatch._post_webhook("https://hooks.example.test/x", "system_wake", {"ts": 1.0})
+        assert posted == ["https://hooks.example.test/x"]
+    finally:
+        egress.set_allowed_hosts(saved)
+
+
+@pytest.mark.asyncio
 async def test_fire_emits_lifecycle_event_on_the_bus(monkeypatch):
     """fire() broadcasts the dot-namespaced topic on the event bus (ADR 0039) so ANY
     plugin/console can react — no lifecycle_hook required. Mirrors the goal-bus test."""

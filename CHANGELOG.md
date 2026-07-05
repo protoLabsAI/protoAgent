@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscription); and an operator-facing **config reaction** — a top-level `lifecycle_hooks:` list
   of `{event, prompt?, webhook?, session?}` entries in `langgraph-config.yaml` that enqueue a
   follow-up turn (`run_in_session`) or POST a webhook. Empty by default ⇒ nothing fires beyond the
-  broadcast. A read-only `/lifecycle` chat command lists the events, configured reactions, and
+  broadcast. Webhook reactions pass through the same egress guard as `fetch_url` (LAN/tailnet
+  peers allowed, cloud-metadata/reserved refused, and any `egress.allowed_hosts` allowlist
+  enforced). A read-only `/lifecycle` chat command lists the events, configured reactions, and
   registered hooks.
 - **Bulk delete-by-source in the Knowledge view** (#1770). Ingesting an article,
   transcript, or batch of docs can leave dozens or hundreds of chunks that used to be
