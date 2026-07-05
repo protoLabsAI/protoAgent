@@ -653,6 +653,10 @@
           "title": "0074 — System lifecycle events"
         },
         {
+          "path": "adr/0075-external-interfaces-cli-mcp-api.md",
+          "title": "0075 — External interfaces: a first-class `protoagent` CLI + tightened MCP / API / model onboarding"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
