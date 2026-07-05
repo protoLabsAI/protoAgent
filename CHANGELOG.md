@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.93.1] - 2026-07-05
+
 ### Added
 - **Supervisor `on_crash` bounded retry — `RetryAfter` + `on_crash_max_attempts` (#1823).** The
   plugin-SDK `supervise()` primitive called `on_crash` **at most once per crash streak**, then
