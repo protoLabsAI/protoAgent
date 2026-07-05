@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.91.0] - 2026-07-04
 
 ### Added
+- **Toggle fleet agents from the command palette** (#1769). Bringing a fleet member online or
+  taking it offline used to mean diving several clicks into Settings. A new **"Toggle Fleet
+  Agent"** command in the ⌘K palette opens a picker of your local fleet members, each with its
+  live on/off state, and selecting one starts or stops it (`POST /api/fleet/{name}/start|stop`)
+  with a confirmation toast. The host agent and remote members are never listed (they can't be
+  controlled from here), and the agent whose console this window is viewing is shown disabled so
+  you can't stop your own session out from under yourself.
 - **Goal completion contracts** (ADR 0073). A goal can now carry an optional, structured
   *completion contract* — `outcome` (the single required end-state), `constraints` (invariants
   the agent must not violate/regress), `boundaries` (files/dirs/systems in scope), and
