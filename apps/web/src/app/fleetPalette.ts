@@ -68,3 +68,17 @@ export function fleetPaletteEntries(
         a.label.localeCompare(b.label), // then alphabetical
     );
 }
+
+/** The fleet agents whose live process can be toggled on/off from the palette (#1769).
+ *  ON/OFF is the live process state (`FleetAgent.running`), not a persisted flag: "on" =
+ *  `POST /api/fleet/<name>/start`, "off" = `POST /api/fleet/<name>/stop`. Only LOCAL,
+ *  non-host members qualify — the SAME gate FleetManagerPanel uses to show Start/Stop:
+ *   • the host serves this console, so stopping it would kill the session — never listed;
+ *   • a REMOTE member has no local process here (its `/start|/stop` 400s) — excluded too.
+ *  Sorted stably by display name so the picker order is deterministic across polls. */
+export function togglableFleetAgents(agents: FleetAgent[]): FleetAgent[] {
+  return agents
+    .filter((a) => !a.host && !a.remote)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+}

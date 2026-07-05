@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { fleetPaletteEntries, markAgentOpened, readAgentRecency } from "./fleetPalette";
+import { fleetPaletteEntries, markAgentOpened, readAgentRecency, togglableFleetAgents } from "./fleetPalette";
 import type { FleetAgent } from "../lib/types";
 
 function agent(over: Partial<FleetAgent>): FleetAgent {
@@ -41,6 +41,52 @@ describe("fleetPaletteEntries (#1733)", () => {
     const [only] = fleetPaletteEntries([agent({ name: "r", id: "r", remote: true, running: true })], "me");
     expect(only.disabled).toBe(false);
     expect(only.hint).toBe("remote · switch");
+  });
+});
+
+describe("togglableFleetAgents (#1769)", () => {
+  it("excludes the host — it serves this console and can't be stopped from itself", () => {
+    const agents = [
+      agent({ name: "main", id: "main", host: true }),
+      agent({ name: "ava", id: "ava" }),
+    ];
+    const out = togglableFleetAgents(agents);
+    expect(out.map((a) => a.name)).toEqual(["ava"]);
+    expect(out.find((a) => a.host)).toBeUndefined();
+  });
+
+  it("excludes remotes — they have no local process to start/stop from here", () => {
+    const agents = [
+      agent({ name: "ava", id: "ava" }),
+      agent({ name: "remy", id: "remy", remote: true, running: true }),
+    ];
+    expect(togglableFleetAgents(agents).map((a) => a.name)).toEqual(["ava"]);
+  });
+
+  it("lists both running and stopped local members (on/off is live process state)", () => {
+    const agents = [
+      agent({ name: "up", id: "up", running: true }),
+      agent({ name: "down", id: "down", running: false, pid: null }),
+    ];
+    const out = togglableFleetAgents(agents);
+    expect(out.map((a) => a.name)).toEqual(["down", "up"]); // both present, name-sorted
+    expect(out.map((a) => a.running)).toEqual([false, true]);
+  });
+
+  it("sorts stably by display name", () => {
+    const agents = [
+      agent({ name: "zed", id: "zed" }),
+      agent({ name: "ava", id: "ava" }),
+      agent({ name: "bob", id: "bob" }),
+    ];
+    expect(togglableFleetAgents(agents).map((a) => a.name)).toEqual(["ava", "bob", "zed"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const agents = [agent({ name: "zed", id: "zed" }), agent({ name: "ava", id: "ava" })];
+    const snapshot = agents.map((a) => a.name);
+    togglableFleetAgents(agents);
+    expect(agents.map((a) => a.name)).toEqual(snapshot);
   });
 });
 
