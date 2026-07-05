@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.92.0",
+    "date": "2026-07-05",
+    "changes": [
+      "System lifecycle events",
+      "Bulk delete-by-source in the Knowledge view",
+      "web_search (DuckDuckGo) failed with CERTIFICATE_VERIFY_FAILED in the desktop app."
+    ]
+  },
+  {
     "version": "v0.91.0",
     "date": "2026-07-04",
     "changes": [
