@@ -126,8 +126,10 @@ These are the failures that actually recur — read them before you edit.
 
 - **Import layering (enforced by `lint-imports`).** `graph/` and the infra
   packages (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/
-  events/ scheduler/ runtime/`) must **never** import `server/` or
-  `operator_api/`; `operator_api/` must never import `server/`. The
+  events/ scheduler/ runtime/ ops/`) must **never** import `server/` or
+  `operator_api/`; `operator_api/` must never import `server/`. (`ops/` is the
+  ADR 0075 D2 shared-operation layer — one op wrapping a core, called by the CLI,
+  REST, and MCP adapters; being neutral is what lets all three import it.) The
   `ignore_imports` lists in `pyproject.toml [tool.importlinter]` are a
   **burndown list** of grandfathered violations — remove entries, never add to
   them. import-linter sees function-level (lazy) imports too, so you can't hide
