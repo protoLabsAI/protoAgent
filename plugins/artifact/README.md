@@ -54,16 +54,19 @@ same-origin `vendor/` modules — no network):
 
 | Specifier | What |
 |---|---|
-| `@pl/ui` | protoLabs **design-system** wrappers that match the console theme: `Button` · `Card` · `Stat` · `Badge` · `Alert` · `Tag` · `Kbd` · `Input` · `Icon` (lucide by `name`). |
+| `@pl/ui` | protoLabs **design-system** wrappers that match the console theme — enough to prototype real **layouts** + **components**, not just widgets. Layout: `AppShell` · `Header` · `SideNav`/`SideNavItem` · `Container` · `Section` · `Panel` · `Grid` · `Row` · `Hero` · `Divider`. Nav: `Tabs`/`Tab` · `Segmented`/`SegmentedButton` · `Menu`/`MenuItem`/`MenuSeparator`. Data: `Table` · `Board` · `Stats`/`Stat` · `Steps`/`Step` · `Progress` · `Accordion`/`AccordionItem` · `Avatar` · `Empty`. Overlays: `Dialog` · `Drawer` · `Callout` · `Tip`. Forms: `Field` · `Input` · `Textarea` · `Select` · `Switch` · `Checkbox`. Primitives/type: `Button` · `IconButton` · `Card` · `Badge` · `Tag` · `Kbd` · `Link` · `Dot` · `Spinner` · `Skeleton` · `Alert` · `Heading` · `Eyebrow` · `Lead` · `Prose` · `Icon` (lucide by `name`). |
 | `chart.js` | `import { Chart } from 'chart.js'` (controllers pre-registered) — quick charts onto a `<canvas>`. |
 | `d3` | `import * as d3 from 'd3'` — bespoke data-driven SVG. |
 | `lucide` | the raw icon library (if not using `@pl/ui`'s `Icon`). |
 | `react`, `react-dom/client` | resolve to the same React the UMD globals use (one shared instance). |
 
-The design system ships only `.tsx` source (no browser ESM build), so `@pl/ui` is a small set of
-**authored** wrappers over the DS `.pl-*` classes. Those classes and the `--pl-*` tokens are injected
-into every `html` / `react` / `markdown` artifact (via the host-served `/_ds/plugin-kit.css`), so even
-plain elements (`className="pl-btn pl-btn--primary"`) follow the live theme.
+The design system ships only `.tsx` source (no browser ESM build), so `@pl/ui` is a set of
+**authored** wrappers over the DS `.pl-*` classes — mirroring the class contracts of the ~90
+components the injected `plugin-kit.css` already styles, so a React artifact can compose real
+layouts + components rather than hand-rolling class strings. Those classes and the `--pl-*` tokens
+are injected into every `html` / `react` / `markdown` artifact (via the host-served
+`/_ds/plugin-kit.css`), so even plain elements (`className="pl-btn pl-btn--primary"`) follow the
+live theme — reach for a raw element with `className="pl-…"` for any component `@pl/ui` doesn't wrap.
 
 ## Configuration
 

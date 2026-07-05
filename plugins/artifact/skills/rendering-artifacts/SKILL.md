@@ -35,9 +35,27 @@ the user files to wire up themselves — not what they asked for when they want 
 
 `react` artifacts may `import` (ES modules) from this curated, fully-offline set — no network:
 
-- **`@pl/ui`** — protoLabs design-system component wrappers that match the console theme:
-  `Button` · `Card` · `Stat` · `Badge` · `Alert` · `Tag` · `Kbd` · `Input` · `Icon` (a
-  [lucide](https://lucide.dev) icon by `name`, e.g. `<Icon name="rocket" />`).
+- **`@pl/ui`** — protoLabs design-system component wrappers that match the console theme.
+  Enough to prototype real **layouts** and **components**, not just widgets:
+  - *Layout / structure* — `AppShell` (`{header, sidebar, aside}`) · `Header` (`{name, org, actions}`)
+    · `SideNav` + `SideNavItem` (`{icon, active}`) · `Container` · `Section` · `Panel` · `Grid`
+    (`{cols, gap, auto}`) · `Row` (`{label, desc, status}`) · `Hero` (`{cta}`) · `Divider`
+  - *Navigation* — `Tabs` + `Tab` (`{active, icon}`) · `Segmented` + `SegmentedButton` ·
+    `Menu` + `MenuItem` (`{icon, destructive}`) + `MenuSeparator`
+  - *Data / content* — `Table` · `Board` · `Stats` + `Stat` (`{value, label}`) · `Steps` + `Step`
+    (`{num, title}`) · `Progress` (`{value, max, variant}`) · `Accordion` + `AccordionItem`
+    (`{title, open}`) · `Avatar` (`{src}`) · `Empty` (`{icon, title, desc, action}`)
+  - *Overlays* — `Dialog` (`{title, onClose, footer}`) · `Drawer` (`{side, title, footer}`) ·
+    `Callout` (`{variant, title}`) · `Tip`
+  - *Forms* — `Field` (`{label, hint}`) · `Input` · `Textarea` · `Select` · `Switch` (`{label}`) ·
+    `Checkbox` (`{label}`)
+  - *Primitives / type* — `Button` (`{variant, size}`) · `IconButton` · `Card` · `Badge` · `Tag` ·
+    `Kbd` · `Link` · `Dot` (`{variant, pulse}`) · `Spinner` · `Skeleton` · `Alert` · `Heading`
+    (`{as}`) · `Eyebrow` · `Lead` · `Prose` · `Icon` (a [lucide](https://lucide.dev) icon by
+    `name`, e.g. `<Icon name="rocket" />`)
+
+  Prefer these over hand-rolled markup so a prototype matches the live theme; drop to a raw
+  element with `className="pl-…"` for anything not wrapped here.
 - **`chart.js`** — `import { Chart } from 'chart.js'` (controllers pre-registered) for quick
   bar/line/pie/etc. charts onto a `<canvas>`.
 - **`d3`** — `import * as d3 from 'd3'` for bespoke/data-driven SVG visualisations.
