@@ -755,6 +755,13 @@ def start_autostart_members() -> list[str]:
     Members are started sequentially (each ``start`` briefly boot-watches the child); call
     off the event loop (the boot hook does via ``asyncio.to_thread``).
     """
+    # Hub-only — enforced, not merely "by construction". A member inherits the hub's
+    # PROTOAGENT_FLEET_AUTOSTART env, so autostart_members() returns a NON-empty roster
+    # inside a member too (the config-carries-no-roster guarantee only covers the config
+    # source, not the env fallback). Acting on it there scans the member's own empty
+    # workspaces root and logs a spurious "no workspace <id> — skipping" for every id.
+    if manager.is_workspace_member():
+        return []
     roster = autostart_members()
     if not roster:
         return []
