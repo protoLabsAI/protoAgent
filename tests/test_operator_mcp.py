@@ -25,6 +25,18 @@ def _bare_state(monkeypatch):
     monkeypatch.setattr(STATE, "plugin_tools", [], raising=False)
 
 
+def test_resolver_lives_in_runtime_and_is_reexported():
+    """The allowlist/profile resolution moved to runtime/ (ADR 0075 D2) so operator_api can
+    import it without breaking the import-layering contract; server.operator_mcp re-exports
+    the same objects for existing callers."""
+    import runtime.operator_mcp_tools as rt
+    import server.operator_mcp as sm
+
+    assert sm.operator_tools is rt.operator_tools
+    assert sm.resolve_allow is rt.resolve_allow
+    assert sm.resolve_exposed_names is rt.resolve_exposed_names
+
+
 def test_allowlist_filters_to_named_tools():
     names = {t.name for t in operator_tools(_cfg(["calculator", "current_time"]))}
     assert names == {"calculator", "current_time"}

@@ -131,6 +131,7 @@ record.
 | DELETE | `/api/plugins/{id}` | Uninstall |
 | POST | `/api/mcp/servers` · `/api/mcp/servers/import` | Add / import an MCP server |
 | DELETE | `/api/mcp/servers/{name}` | Remove an MCP server |
+| GET | `/api/mcp/catalog` · `/api/mcp/exposed` | Curated server catalog / operator-MCP tools this instance exposes (effective allowlist + profile) |
 
 ## Telemetry & theme
 

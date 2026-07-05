@@ -206,6 +206,59 @@ def test_forget_unknown_is_404(monkeypatch, tmp_path):
     assert _client().post("/api/mcp/servers/nope/forget").status_code == 404
 
 
+# ── GET /api/mcp/exposed — discovery of the operator-MCP tool surface (ADR 0075 D2/D3) ──
+
+
+def _wire_exposed(monkeypatch, *, tools=None, profile=""):
+    """Point STATE at a bare config + null stores, so resolve_exposed_names runs the real
+    allowlist/profile resolver against just the keyless core tools."""
+    from graph.config import LangGraphConfig
+    import runtime.state as rs
+
+    cfg = LangGraphConfig()
+    cfg.operator_mcp_tools = list(tools or [])
+    cfg.operator_mcp_profile = profile
+    cfg.goal_enabled = False
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
+        monkeypatch.setattr(rs.STATE, attr, None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+
+
+def test_exposed_lists_allowlisted_tools(monkeypatch):
+    _wire_exposed(monkeypatch, tools=["calculator", "current_time"])
+    body = _client().get("/api/mcp/exposed").json()
+    assert body["tools"] == ["calculator", "current_time"]  # sorted
+    assert body["count"] == 2
+    assert body["profile"] is None and body["star"] is False and body["trust_override"] is False
+
+
+def test_exposed_empty_allowlist_is_nothing(monkeypatch):
+    _wire_exposed(monkeypatch, tools=[])
+    body = _client().get("/api/mcp/exposed").json()
+    assert body["tools"] == [] and body["count"] == 0
+
+
+def test_exposed_read_only_profile_leaks_no_writes(monkeypatch):
+    from runtime.operator_mcp_tools import _READ_ONLY_TOOLS
+
+    _wire_exposed(monkeypatch, profile="read-only")
+    body = _client().get("/api/mcp/exposed").json()
+    assert body["profile"] == "read-only" and body["star"] is False
+    assert set(body["tools"]) <= set(_READ_ONLY_TOOLS)  # only the curated read set
+    assert {"calculator", "current_time"} <= set(body["tools"])
+
+
+def test_exposed_trust_override_forces_star(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_MCP_TRUST", "full")
+    _wire_exposed(monkeypatch, tools=[])  # empty allowlist would normally expose nothing
+    body = _client().get("/api/mcp/exposed").json()
+    assert body["star"] is True and body["trust_override"] is True
+    assert "calculator" in body["tools"]
+    assert "execute_code" not in body["tools"]  # star-excluded
+    assert "ask_human" not in body["tools"]  # never exposed over MCP
+
+
 def test_mcp_catalog_is_bundled_in_the_desktop_sidecar():
     """The frozen desktop app reads config/mcp-catalog.json from the bundle; if the
     sidecar build forgets it, the picker shows "no servers match". Guard the

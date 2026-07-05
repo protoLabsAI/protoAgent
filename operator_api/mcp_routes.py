@@ -9,6 +9,7 @@ gitignored, so ``env`` values stay local.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import HTTPException
 
@@ -187,6 +188,27 @@ def register_mcp_routes(app) -> None:
             nm = str(tmpl.get("name") or e.get("id") or "").strip().lower()
             out.append({**e, "installed": bool(nm) and nm in configured})
         return {"servers": out}
+
+    @app.get("/api/mcp/exposed")
+    async def _exposed():
+        """The tools THIS instance's operator MCP would expose to a foreign MCP client
+        (Claude Desktop, Cursor, an ACP brain) — the effective set after the
+        ``operator_mcp_profile`` + ``operator_mcp_tools`` allowlist + ``PROTOAGENT_MCP_TRUST``
+        resolve. Previously introspectable only by reading the sidecar's boot logs
+        (ADR 0075 D2/D3). Read-only; behind the standard operator-API auth gate."""
+        from runtime.operator_mcp_tools import resolve_allow, resolve_exposed_names
+
+        cfg = STATE.graph_config
+        allow = resolve_allow(cfg)
+        names = resolve_exposed_names(cfg)
+        profile = str(getattr(cfg, "operator_mcp_profile", "") or "").strip() or None
+        return {
+            "tools": sorted(names),
+            "count": len(names),
+            "profile": profile,
+            "star": "*" in allow,
+            "trust_override": os.environ.get("PROTOAGENT_MCP_TRUST", "").strip().lower() == "full",
+        }
 
     @app.delete("/api/mcp/servers/{name}")
     async def _remove(name: str):
