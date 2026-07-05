@@ -135,7 +135,9 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # schema's top-level keys, plus two legacy sections config_io §B emits that have no
     # FIELDS entry (subagents.researcher and the plugins.* knobs). Deriving from FIELDS
     # means a new field doesn't require re-typing the section list here.
-    _LEGACY_SECTIONS = {"subagents", "plugins"}
+    # lifecycle_hooks (ADR 0074) is a top-level list emitted by config_io §B (like the
+    # subagents/plugins knobs), not a FIELDS-typed field — so it joins the legacy set.
+    _LEGACY_SECTIONS = {"subagents", "plugins", "lifecycle_hooks"}
     assert set(d.keys()) == {f.key.split(".", 1)[0] for f in FIELDS} | _LEGACY_SECTIONS
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature

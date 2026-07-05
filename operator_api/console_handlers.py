@@ -658,5 +658,15 @@ def _operator_chat_commands() -> dict:
                 "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
             }
         )
+    # /lifecycle (ADR 0074) — read-only listing of the system lifecycle events + their
+    # configured reactions and registered plugin hooks (a core control command, like /goal).
+    commands.append(
+        {
+            "name": "lifecycle",
+            "kind": "control",
+            "description": "List the system lifecycle events and their configured reactions + plugin hooks.",
+            "usage": "/lifecycle",
+        }
+    )
     commands.extend(resolve_slash_commands())
     return {"commands": commands}

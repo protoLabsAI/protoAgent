@@ -273,6 +273,7 @@ class FakeRegistry:
         self.verifiers: dict = {}
         self.goal_hooks: list = []
         self.watch_hooks: list = []
+        self.lifecycle_hooks: list = []
         self.knowledge_stores: dict = {}
         self.embedders: dict = {}
         self.chat_commands: dict = {}  # slugified token -> handler
@@ -349,6 +350,9 @@ class FakeRegistry:
 
     def register_watch_hook(self, *, on_met=None, on_expired=None, on_stalled=None) -> None:
         self.watch_hooks.append((on_met, on_expired, on_stalled))
+
+    def register_lifecycle_hook(self, *, on_app_loaded=None, on_agent_active=None, on_system_wake=None) -> None:
+        self.lifecycle_hooks.append((on_app_loaded, on_agent_active, on_system_wake))
 
     def register_knowledge_store(self, name: str, factory) -> None:
         self.knowledge_stores[name] = factory

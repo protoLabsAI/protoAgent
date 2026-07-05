@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **System lifecycle events** (#1653, ADR 0074). The agent now broadcasts its own lifecycle
+  transitions on the [event bus](docs/guides/lifecycle-events.md) (ADR 0039): `app.loaded` when
+  boot finishes (graph + scheduler + surfaces + fleet-autostart up) and `agent.active` when it
+  goes idle → active (the first turn since boot, or the first after an idle gap — **debounced**,
+  not every turn). `system.wake` (desktop shell wake) is **reserved**: the bus, hook seam, and
+  config accept it now; the Tauri emit is a follow-up. Every payload carries a `ts` and the
+  `previous_state`. Two opt-in ways to react, both error-isolated (a bad hook/webhook/prompt can
+  never break boot or a turn): a **plugin hook** — `registry.register_lifecycle_hook(on_app_loaded
+  / on_agent_active / on_system_wake=…)` (or a plain `registry.on("app.loaded", …)` bus
+  subscription); and an operator-facing **config reaction** — a top-level `lifecycle_hooks:` list
+  of `{event, prompt?, webhook?, session?}` entries in `langgraph-config.yaml` that enqueue a
+  follow-up turn (`run_in_session`) or POST a webhook. Empty by default ⇒ nothing fires beyond the
+  broadcast. A read-only `/lifecycle` chat command lists the events, configured reactions, and
+  registered hooks.
 - **Bulk delete-by-source in the Knowledge view** (#1770). Ingesting an article,
   transcript, or batch of docs can leave dozens or hundreds of chunks that used to be
   removable only one at a time. A source with several loaded chunks now collapses into a

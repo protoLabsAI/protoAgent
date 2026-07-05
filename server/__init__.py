@@ -609,6 +609,26 @@ def _main():
         except Exception:
             log.exception("[fleet] boot version reconcile failed")
 
+        # System lifecycle: app.loaded (ADR 0074). Boot is done — graph compiled, scheduler
+        # + surfaces + fleet autostart up — so broadcast it on the bus, fire plugin
+        # lifecycle hooks, and run any configured `lifecycle_hooks` reactions (opt-in; empty
+        # config ⇒ just the broadcast). Fire-and-forget on the loop so a webhook/prompt
+        # reaction never stalls the last step of boot; the dispatcher isolates every failure.
+        try:
+            import time as _time
+
+            from graph import lifecycle as _lifecycle
+
+            payload = {
+                "ts": _time.time(),
+                "agent": agent_name(),
+                "port": getattr(STATE, "active_port", None),
+                "previous_state": "boot",
+            }
+            asyncio.create_task(_lifecycle.fire("app_loaded", payload))
+        except Exception:
+            log.exception("[lifecycle] app.loaded emit failed")
+
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
         # Drop the co-location heartbeat (#706). Best-effort.
