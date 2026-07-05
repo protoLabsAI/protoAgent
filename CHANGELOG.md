@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Supervisor `on_crash` bounded retry — `RetryAfter` + `on_crash_max_attempts` (#1823).** The
+  plugin-SDK `supervise()` primitive called `on_crash` **at most once per crash streak**, then
+  blind-re-kicked a doomed runner: a fault that re-crashes faster than the watchdog interval (e.g.
+  an API that 503s until a backend rebuilds) never got its recovery re-run, so a plugin had to
+  hand-roll a multi-minute *blocking* retry inside `on_crash` (blocking the watchdog). `on_crash`
+  may now return **`RetryAfter(seconds)`** ("not fixed yet — wait and call me again"), and a new
+  **`on_crash_max_attempts`** (default **1**, unchanged) re-invokes it on repeated crashes with the
+  retry cadence kept *in the watchdog* (observable via `status()`, cancellable) — and bounds the
+  previously-unbounded re-kick loop. Fully backward-compatible: `on_crash -> bool` and the default
+  are byte-identical. `RetryAfter` is exported on `graph.sdk`.
+
 ## [0.93.0] - 2026-07-05
 
 ### Added

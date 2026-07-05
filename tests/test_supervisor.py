@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 
 from graph.sdk import supervise as sdk_supervise  # re-exported on the plugin SDK surface
-from graph.supervisor import Supervisor, supervise
+from graph.supervisor import RetryAfter, Supervisor, supervise
 
 
 def test_supervise_is_exported_on_the_sdk():
@@ -95,6 +95,109 @@ async def test_unrecoverable_crash_clears_want_running():
     assert sv.status()["want_running"] is False
     assert not sv.running()
     await sv.aclose()
+
+
+# ── on_crash bounded retry + RetryAfter (#1823) ───────────────────────────────
+
+
+async def test_default_one_shot_preserved_on_repeated_crashes():
+    """Backward-compat: with the default (max_attempts=1), on_crash still fires at most once
+    per down-streak even when the runner keeps re-crashing fast — then blind-re-kicks."""
+    on_crash_calls = 0
+
+    async def work():
+        raise ValueError("always boom")
+
+    def on_crash(_r):
+        nonlocal on_crash_calls
+        on_crash_calls += 1
+        return True  # handled → re-kick (but the runner keeps crashing)
+
+    sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash)  # default max_attempts=1
+    sv.start()
+    await asyncio.sleep(0.2)  # many crash / re-kick cycles
+    assert on_crash_calls == 1  # one-shot latch preserved
+    assert sv.status()["want_running"] is True  # blind re-kick continues (historical behavior)
+    await sv.aclose()
+
+
+async def test_bounded_retry_reinvokes_on_crash_then_stops():
+    """max_attempts>1 re-invokes on_crash on each fast re-crash, up to the bound, then STOPS
+    (instead of the old unbounded blind re-kick)."""
+    on_crash_calls = 0
+
+    async def work():
+        raise ValueError("always boom")
+
+    def on_crash(_r):
+        nonlocal on_crash_calls
+        on_crash_calls += 1
+        return True
+
+    sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash, on_crash_max_attempts=3)
+    sv.start()
+    await asyncio.sleep(0.3)
+    assert on_crash_calls == 3  # re-invoked on each re-crash, up to the bound
+    assert sv.status()["want_running"] is False  # exhausted → stopped, not a blind loop
+    assert not sv.running()
+    await sv.aclose()
+
+
+async def test_retry_after_polls_without_rekick_then_recovers():
+    """The SpaceTraders case: on_crash returns RetryAfter to poll a slow recovery — the
+    supervisor waits + re-invokes WITHOUT re-kicking, then re-kicks once on_crash returns True."""
+    work_calls = 0
+    seen = []  # (result, work_calls at the time) per on_crash invocation
+
+    async def work():
+        nonlocal work_calls
+        work_calls += 1
+        if work_calls == 1:
+            raise ValueError("boom")
+        await asyncio.sleep(0.5)  # the recovered run stays alive
+        return "ok"
+
+    def on_crash(result):
+        seen.append((result, work_calls))
+        if len(seen) < 3:
+            return RetryAfter(0.01)  # not fixed yet — poll again, no re-kick
+        return True  # recovered → re-kick
+
+    sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash, on_crash_max_attempts=5)
+    sv.start()
+    await asyncio.sleep(0.25)
+    assert len(seen) == 3  # polled 3× (2× RetryAfter + 1× True)
+    assert [wc for (_r, wc) in seen] == [1, 1, 1]  # runner NOT re-kicked during polling
+    assert work_calls >= 2  # re-kicked only after True → work ran again
+    assert sv.running()  # recovered and alive
+    await sv.aclose()
+
+
+async def test_retry_after_exhausted_stops():
+    """RetryAfter forever, bounded by max_attempts → stop when the budget is spent."""
+    calls = 0
+
+    async def work():
+        raise ValueError("boom")
+
+    def on_crash(_r):
+        nonlocal calls
+        calls += 1
+        return RetryAfter(0.01)  # never recovers
+
+    sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash, on_crash_max_attempts=2)
+    sv.start()
+    await asyncio.sleep(0.2)
+    assert calls == 2  # polled up to the bound
+    assert sv.status()["want_running"] is False  # exhausted → stop
+    await sv.aclose()
+
+
+def test_retry_after_exported_on_sdk():
+    from graph.sdk import RetryAfter as sdk_ra
+
+    assert sdk_ra is RetryAfter
+    assert RetryAfter(1.5).seconds == 1.5
 
 
 async def test_stall_is_detected_and_restarted():
