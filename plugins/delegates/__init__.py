@@ -15,8 +15,10 @@ until then), so the gate is the delegate, not a plugin toggle.
 from __future__ import annotations
 
 import logging
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from .adapters import DelegateError
 from .registry import DelegateRegistry
@@ -28,21 +30,39 @@ def _build_delegate_to(registry: DelegateRegistry):
     listing = registry.listing()
 
     @tool
-    async def delegate_to(target: str, query: str) -> str:
+    async def delegate_to(
+        target: str,
+        query: str,
+        background: bool = False,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
         """Hand a question or task to one of your configured delegates and return its reply.
 
         Use this to reach beyond your own context: ask a fleet **agent**, consult
         another **model endpoint**, or hand a repo-scoped coding job to a **coding
         agent**. Pick the delegate whose description best fits the task.
 
+        By default this WAITS for the delegate's reply (fine for a quick consult).
+        For a LONG delegation — a coding agent building a PR, a deep-research run —
+        set ``background=True``: the delegation runs detached, you get a job handle
+        back immediately, and the delegate's reply is delivered to you when it
+        finishes (you don't hold your turn open waiting). In-flight background jobs
+        are tracked in the background panel (``GET /api/background``). Prefer
+        ``background=True`` whenever the delegate might take minutes, or when you
+        want to fan out several delegations without blocking on each.
+
         Args:
             target: the delegate name (see the available list in this tool's
                 description).
             query: the full, self-contained question or instruction — the delegate
                 does not see this conversation, so restate what it needs.
+            background: run the delegation detached and get the reply back on
+                completion, instead of waiting inline (default False).
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
+        if background:
+            return await _spawn_background_delegation(registry, target, query, state)
         try:
             return await registry.dispatch(target, query)
         except DelegateError as exc:
@@ -53,6 +73,56 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+async def _spawn_background_delegation(registry: DelegateRegistry, target: str, query: str, state: Any) -> str:
+    """Run a delegation as a detached background job (ADR 0050): return a handle now and
+    drain the delegate's reply back into the spawning session on completion — the same
+    durable store + concurrency cap + drain-on-next-turn notification that
+    ``task(run_in_background=True)`` uses, so a slow delegate (a coding agent building a
+    PR) never holds the caller's turn open.
+
+    Degrades gracefully: an unknown target fails fast (no orphan job), and if no
+    ``BackgroundManager`` is wired (a lean/CLI/test context) it falls back to a plain
+    inline dispatch so ``background=True`` is never worse than the synchronous path.
+    """
+    if registry.get(target) is None:
+        return f"Error: unknown delegate {target!r}. Available: {registry.listing() or '(none)'}."
+
+    try:
+        from runtime.state import STATE
+
+        mgr = getattr(STATE, "background_mgr", None)
+    except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
+        mgr = None
+    if mgr is None:
+        return await registry.dispatch(target, query)
+
+    try:
+        from tools.lg_tools import _session_id_from
+
+        # Injected graph state, not the tracing contextvar (empty in a tool body) — the
+        # session id is what the completion drains back to (ADR 0050).
+        session = _session_id_from(state) or ""
+    except Exception:  # noqa: BLE001 — best-effort; job still runs, drain is degraded
+        session = ""
+
+    async def _work() -> str:
+        return await registry.dispatch(target, query)
+
+    snippet = " ".join(query.split())[:80]
+    job_id = await mgr.spawn_work(
+        origin_session=session,
+        kind="delegate",
+        description=f"delegate → {target}: {snippet}",
+        detail=query,
+        work=_work,
+    )
+    return (
+        f"Started a background delegation to {target!r} (job `{job_id}`). It runs detached — "
+        f"its reply comes back to me when it finishes, so I don't need to wait. In-flight "
+        f"background jobs are listed in the background panel (GET /api/background)."
+    )
 
 
 def _build_list_agents(registry: DelegateRegistry):
