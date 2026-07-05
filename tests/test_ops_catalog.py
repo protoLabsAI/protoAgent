@@ -75,6 +75,24 @@ def test_config_cli_get_reads_disk(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"server": {"port": 7870}}
 
 
+def test_config_cli_get_yaml_renders_from_ruamel(monkeypatch, capsys):
+    """Regression: `protoagent config get` (default YAML, no --json) crashed with
+    yaml.representer.RepresenterError when the on-disk doc loaded as a ruamel CommentedMap."""
+    import io
+
+    import pytest
+
+    yaml_rt = pytest.importorskip("ruamel.yaml")
+    import graph.config_io as cio
+    from graph.config_explain import run_config_cli
+
+    cm = yaml_rt.YAML(typ="rt").load(io.StringIO("server:\n  port: 7870\n"))
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: "cfg.yaml")
+    monkeypatch.setattr(cio, "load_yaml_doc", lambda p=None: cm)
+    assert run_config_cli(["get"]) == 0  # was exit 1 + a traceback
+    assert "port: 7870" in capsys.readouterr().out
+
+
 def test_config_cli_set_rejects_bad_pair(capsys):
     from graph.config_explain import run_config_cli
 
