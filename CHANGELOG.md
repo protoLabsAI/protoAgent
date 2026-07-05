@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.92.0] - 2026-07-05
+
 ### Added
 - **System lifecycle events** (#1653, ADR 0074). The agent now broadcasts its own lifecycle
   transitions on the [event bus](docs/guides/lifecycle-events.md) (ADR 0039): `app.loaded` when
