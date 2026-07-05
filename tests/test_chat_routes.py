@@ -102,6 +102,51 @@ def test_openai_completion_honors_model_override(monkeypatch):
     assert comp2["choices"][0]["message"]["content"] == "echo:yo"
 
 
+def _sse_data(text):
+    """Parse an SSE body into its JSON `data:` frames (dropping the `[DONE]` sentinel)."""
+    out = []
+    for line in text.splitlines():
+        if line.startswith("data: ") and not line.strip().endswith("[DONE]"):
+            out.append(json.loads(line[len("data: ") :]))
+    return out
+
+
+def test_openai_completion_reports_real_usage(monkeypatch):
+    # ADR 0075 D4: /v1 usage is no longer stubbed — it reflects the turn's token accounting
+    # attached by server.chat (summed over lead + goal continuations + subagents).
+    reply = [{"role": "assistant", "content": "hi", "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}}]
+    c = _client(monkeypatch, chat_reply=reply)
+    body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}).json()
+    assert body["usage"] == {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
+
+
+def test_openai_completion_usage_defaults_to_zero(monkeypatch):
+    # A short-circuit / older reply carries no usage → zeros, as before (no crash).
+    c = _client(monkeypatch)
+    body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}).json()
+    assert body["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def test_openai_streaming_usage_only_when_opted_in(monkeypatch):
+    reply = [{"role": "assistant", "content": "hi", "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}}]
+
+    # stream_options.include_usage → a final chunk with empty choices carrying usage.
+    c = _client(monkeypatch, chat_reply=reply)
+    r = c.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}], "stream": True, "stream_options": {"include_usage": True}},
+    )
+    frames = _sse_data(r.text)
+    usage_frames = [f for f in frames if "usage" in f]
+    assert usage_frames and usage_frames[-1]["usage"] == {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+    assert usage_frames[-1]["choices"] == []
+
+    # Default (no opt-in) → OpenAI omits usage from the stream.
+    c2 = _client(monkeypatch, chat_reply=reply)
+    r2 = c2.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
+    assert not any("usage" in f for f in _sse_data(r2.text))
+
+
 def test_delete_session_harvest_is_opt_in(monkeypatch):
     # Deleting a chat must NOT silently copy it into the knowledge base: the
     # route defaults harvest=False and forwards the dialog checkbox explicitly.

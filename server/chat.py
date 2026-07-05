@@ -1571,6 +1571,22 @@ async def rewind_session(
     return {**result, "message": _rewind_message(result)}
 
 
+def _sum_usage(per_model: dict[str, Any]) -> dict[str, int]:
+    """Fold LangChain's per-model ``usage_metadata`` (``{input,output,total}_tokens``) into
+    the OpenAI ``usage`` shape, summed across every model call in the turn — the lead model
+    plus any aux/fallback/subagent calls. Powers the /v1 OpenAI-compat ``usage`` field
+    (ADR 0075 D4); ``/api/chat`` ignores the extra key. ``total`` falls back to
+    prompt+completion for gateways that omit it."""
+    prompt = sum(int((u or {}).get("input_tokens", 0) or 0) for u in per_model.values())
+    completion = sum(int((u or {}).get("output_tokens", 0) or 0) for u in per_model.values())
+    total = sum(int((u or {}).get("total_tokens", 0) or 0) for u in per_model.values())
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total or (prompt + completion),
+    }
+
+
 async def _chat_langgraph(
     message: str,
     session_id: str,
@@ -1601,6 +1617,7 @@ async def _chat_langgraph_impl(
 ) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
     from langchain_core.messages import HumanMessage, AIMessage
 
     from graph.goals.goal_turn import goal_turn
@@ -1661,7 +1678,17 @@ async def _chat_langgraph_impl(
             # streaming `a2a:{session_id}` ones, so the SAME session reached via
             # both APIs split into two histories. Old `chat:*` checkpoints orphan
             # once on upgrade — non-streaming chat is short-lived, so harmless.
-            config = {"configurable": {"thread_id": _resolve_thread_id(None, session_id)}}
+            # Aggregate token usage across every model call this turn — the initial invoke,
+            # each goal continuation, and any nested subagents (LangChain propagates config
+            # callbacks into nested ainvokes). Read back at the end and attached to the
+            # returned assistant dict; /api/chat ignores the extra key, the /v1 OpenAI-compat
+            # handler reads it for `usage` (ADR 0075 D4). Mirrors the streaming path's
+            # per-call usage accounting, which sums `on_chat_model_end` events for the turn.
+            usage_cb = UsageMetadataCallbackHandler()
+            config = {
+                "configurable": {"thread_id": _resolve_thread_id(None, session_id)},
+                "callbacks": [usage_cb],
+            }
 
             def _last_ai(result) -> str:
                 for msg in reversed(result.get("messages", [])):
@@ -1727,7 +1754,13 @@ async def _chat_langgraph_impl(
                     # continues the thread (the checkpointer kept the history).
                     payload = _interrupt_payload(interrupt_val)
                     question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
-                    return [{"role": "assistant", "content": f"🙋 **Input needed:** {question}"}]
+                    return [
+                        {
+                            "role": "assistant",
+                            "content": f"🙋 **Input needed:** {question}",
+                            "usage": _sum_usage(usage_cb.usage_metadata),
+                        }
+                    ]
 
             # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
             # to the last tool result so the caller gets a signal, not a blank.
@@ -1763,7 +1796,9 @@ async def _chat_langgraph_impl(
                                     "session_id": session_id,
                                     **_state_extra,
                                 },
-                                config=cont_config,
+                                # Fresh-context iterations get a scoped config without the
+                                # turn's callbacks — re-attach usage_cb so their tokens count.
+                                config={**cont_config, "callbacks": [usage_cb]},
                             )
                     nxt = extract_output(_last_ai(result))
                     if nxt:
@@ -1771,7 +1806,7 @@ async def _chat_langgraph_impl(
                 if note:
                     response = f"{response}\n\n---\n{note}"
 
-            return [{"role": "assistant", "content": response}]
+            return [{"role": "assistant", "content": response, "usage": _sum_usage(usage_cb.usage_metadata)}]
         except Exception as e:
             from graph.llm import RETRYABLE_STREAM_ERRORS
 

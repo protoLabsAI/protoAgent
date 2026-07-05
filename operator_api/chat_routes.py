@@ -276,7 +276,21 @@ def register_chat_routes(app, ui: str) -> None:
         created = int(time.time())
         completion_id = f"{agent_name()}-{session_id}"
 
+        # Real token usage, summed from the assistant turn(s) (server.chat._sum_usage
+        # already folds every model call — lead + goal continuations + subagents — into the
+        # OpenAI `{prompt,completion,total}_tokens` shape). Absent (a short-circuit / older
+        # reply) ⇒ zeros, same as before (ADR 0075 D4).
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        for _m in result:
+            _u = _m.get("usage")
+            if isinstance(_u, dict):
+                for _k in usage:
+                    usage[_k] += int(_u.get(_k, 0) or 0)
+
         if stream:
+            # OpenAI streams usage only when the client opts in, in a final chunk with
+            # empty `choices` (stream_options.include_usage).
+            include_usage = bool((req.get("stream_options") or {}).get("include_usage"))
 
             async def _stream():
                 chunk = {
@@ -297,6 +311,16 @@ def register_chat_routes(app, ui: str) -> None:
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 }
                 yield f"data: {json.dumps(done_chunk)}\n\n"
+                if include_usage:
+                    usage_chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": agent_name(),
+                        "choices": [],
+                        "usage": usage,
+                    }
+                    yield f"data: {json.dumps(usage_chunk)}\n\n"
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(_stream(), media_type="text/event-stream")
@@ -313,7 +337,7 @@ def register_chat_routes(app, ui: str) -> None:
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "usage": usage,
         }
 
     @app.get("/v1/models")

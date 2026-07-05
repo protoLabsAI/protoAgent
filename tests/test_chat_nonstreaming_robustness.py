@@ -88,6 +88,46 @@ async def test_ask_human_interrupt_surfaces_the_question(monkeypatch):
     assert "Input needed" in content and "timezone" in content.lower()
 
 
+def test_sum_usage_folds_models_to_openai_shape():
+    from server.chat import _sum_usage
+
+    per_model = {
+        "lead": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+        "aux": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+    }
+    assert _sum_usage(per_model) == {"prompt_tokens": 13, "completion_tokens": 5, "total_tokens": 18}
+
+
+def test_sum_usage_empty_and_total_fallback():
+    from server.chat import _sum_usage
+
+    assert _sum_usage({}) == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    # gateway omitted total_tokens → derived from prompt + completion
+    assert _sum_usage({"m": {"input_tokens": 5, "output_tokens": 2}})["total_tokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_usage_metadata_is_summed_and_attached(monkeypatch):
+    """A model turn attaches the OpenAI-shaped `usage` to the assistant dict (ADR 0075 D4).
+    The fake model reports usage_metadata + model_name, which reaches the turn's
+    UsageMetadataCallbackHandler through the real graph; _sum_usage folds it."""
+    from server.chat import chat
+
+    _install_graph(
+        monkeypatch,
+        [
+            AIMessage(
+                content="the answer",
+                usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+                response_metadata={"model_name": "test-model"},
+            ),
+        ],
+    )
+    out = await chat("hello", "sessU")
+    assert out[0]["content"] == "the answer"
+    assert out[0]["usage"] == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+
+
 @pytest.mark.asyncio
 async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     from server.chat import chat
