@@ -113,3 +113,67 @@ def test_star_plus_explicit_name_still_includes_it(monkeypatch):
     monkeypatch.setattr(STATE, "plugin_tools", [execute_code], raising=False)
     names = {t.name for t in operator_tools(_cfg(["*", "execute_code"]))}
     assert "execute_code" in names  # naming it explicitly overrides the wildcard exclusion
+
+
+# ── HITL hard-exclusion (ADR 0075 D3 — a real bug: these HANG a foreign MCP client) ──
+
+
+def test_hitl_tools_never_exposed_even_via_star():
+    # ask_human / request_user_input are in the keyless core, so "*" would grab them —
+    # but they pause the turn via a LangGraph interrupt only the lead runner resumes.
+    names = {t.name for t in operator_tools(_cfg(["*"]))}
+    assert "ask_human" not in names and "request_user_input" not in names
+
+
+def test_hitl_tools_never_exposed_even_when_named():
+    names = {t.name for t in operator_tools(_cfg(["ask_human", "request_user_input", "calculator"]))}
+    assert names == {"calculator"}  # the HITL names are dropped, hard
+
+
+# ── profile presets (ADR 0075 D3) ──
+
+
+def _cfg_profile(profile, tools=()):
+    c = _cfg(list(tools))
+    c.operator_mcp_profile = profile
+    return c
+
+
+def test_profile_read_only_exposes_reads_not_writes():
+    names = {t.name for t in operator_tools(_cfg_profile("read-only"))}
+    assert "current_time" in names and "load_skill" in names  # reads/queries
+    assert "web_search" in names
+    # writes are absent (no memory_ingest / write_note in the read-only set)
+    assert "memory_ingest" not in names and "write_note" not in names
+
+
+def test_profile_full_is_wildcard(monkeypatch):
+    from langchain_core.tools import tool
+
+    @tool
+    def plugin_thing(x: str) -> str:
+        """a plugin tool"""
+        return x
+
+    monkeypatch.setattr(STATE, "plugin_tools", [plugin_thing], raising=False)
+    names = {t.name for t in operator_tools(_cfg_profile("full"))}
+    assert "plugin_thing" in names and "calculator" in names  # everything
+    assert "ask_human" not in names  # …still minus the HITL hard-exclusion
+
+
+def test_profile_unions_with_explicit_names():
+    # read-only + an explicitly-named write tool → both
+    names = {t.name for t in operator_tools(_cfg_profile("read-only", tools=["show_component"]))}
+    assert "current_time" in names and "show_component" in names
+
+
+def test_unknown_profile_falls_back_to_allowlist():
+    names = {t.name for t in operator_tools(_cfg_profile("bogus", tools=["calculator"]))}
+    assert names == {"calculator"}  # unknown profile ignored, explicit names honored
+
+
+def test_env_trust_full_overrides_deny_default(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_MCP_TRUST", "full")
+    names = {t.name for t in operator_tools(_cfg([]))}  # empty allowlist would be deny-all
+    assert "calculator" in names and "current_time" in names  # env forces full
+    assert "ask_human" not in names  # HITL still hard-excluded

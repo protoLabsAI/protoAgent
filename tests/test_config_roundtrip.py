@@ -152,6 +152,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "operator_project_dir": "",
     "operator_mcp_enabled": False,
     "operator_mcp_tools": [],
+    "operator_mcp_profile": "",
     "plugins_autoupdate_interval_hours": 6,
     "plugins_dir": "",
     "plugins_disabled": [],
