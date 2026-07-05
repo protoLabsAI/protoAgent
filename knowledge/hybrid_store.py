@@ -30,7 +30,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-from knowledge.store import KnowledgeStore, _namespace_clause, _normalize_before
+from knowledge.store import _BULK_DELETE_REASON, KnowledgeStore, _namespace_clause, _normalize_before
 
 log = logging.getLogger(__name__)
 
@@ -323,18 +323,22 @@ class HybridKnowledgeStore(KnowledgeStore):
         return super().purge_domain(domain, before=cutoff)
 
     def purge_invalidated(self, older_than_seconds: int = 0, *, _cutoff: str | None = None) -> int:
-        """Sweep past-grace soft-deleted chunks AND their vectors (#1770) — the
+        """Sweep past-grace bulk-soft-deleted chunks AND their vectors (#1770) — the
         :meth:`delete_by_namespace` / :meth:`purge_domain` pattern: no FK cascade
         on the side table, so the vectors go first under the SAME cutoff (shared
-        via ``_cutoff`` so a swept chunk can't linger as a vector-only hit)."""
+        via ``_cutoff`` so a swept chunk can't linger as a vector-only hit).
+
+        Mirrors the base's ``invalidation_reason`` filter so only bulk delete-by-source
+        vectors are dropped — auto-supersession audit rows (ADR 0069 D9) keep theirs."""
         cutoff = _cutoff if _cutoff is not None else self._invalidated_cutoff(older_than_seconds)
         db = self._get_db()
         if db is not None:
             try:
                 db.execute(
                     "DELETE FROM chunk_vectors WHERE chunk_id IN "
-                    "(SELECT id FROM chunks WHERE invalidated_at IS NOT NULL AND invalidated_at <= ?)",
-                    (cutoff,),
+                    "(SELECT id FROM chunks WHERE invalidated_at IS NOT NULL "
+                    "AND invalidated_at <= ? AND invalidation_reason = ?)",
+                    (cutoff, _BULK_DELETE_REASON),
                 )
                 db.commit()
             except sqlite3.DatabaseError as exc:

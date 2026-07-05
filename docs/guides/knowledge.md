@@ -223,7 +223,10 @@ D9) instead of judging it with a model at write time:
   window** — `restore_by_source` (the Undo) brings them back verbatim. Past the
   window they're hard-swept by `purge_invalidated`, run opportunistically on the next
   bulk delete. This is the one operator delete that's *not* immediately permanent —
-  by design, so a mistaken cleanup is recoverable.
+  by design, so a mistaken cleanup is recoverable. The soft delete carries an
+  `invalidation_reason` marker so the sweep reaps **only** these bulk delete-by-source
+  rows — auto-supersession audit history (above), which stamps `invalidated_at` with
+  no reason, is never touched and stays reachable via `include_invalidated`.
 
 ### Plugin knowledge lifecycle
 

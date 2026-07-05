@@ -296,6 +296,42 @@ def test_purge_invalidated_never_touches_valid_rows(tmp_path):
     assert len(store.list_chunks()) == 1
 
 
+def test_purge_invalidated_preserves_supersession_audit_history(tmp_path):
+    # Regression guard: the grace sweep must reap ONLY bulk delete-by-source
+    # soft-deletes, never auto-supersession audit rows (ADR 0069 D9). Both stamp
+    # invalidated_at, so an undiscriminated sweep would silently wipe supersession
+    # history the moment bulk-delete is first used.
+    store = KnowledgeStore(tmp_path / "kb.db")
+    superseded = store.add_chunk("old fact, superseded", domain="fact", source="thread-1")
+    assert store.invalidate_chunk(superseded)  # ADR 0069 D9 — NULL invalidation_reason
+    bulk = store.add_chunk("bad ingest", domain="media", source="bad-article")
+    assert store.invalidate_by_source("bad-article") == 1  # #1770 — reason stamped
+
+    # Age BOTH well past the grace window.
+    _set_invalidated(store.path, superseded, "2026-01-01T00:00:00+00:00")
+    _set_invalidated(store.path, bulk, "2026-01-01T00:00:00+00:00")
+
+    # Even at zero grace the sweep removes only the bulk soft-delete…
+    assert store.purge_invalidated(0) == 1
+    surviving = {c.id for c in store.list_chunks(include_invalidated=True)}
+    assert bulk not in surviving  # the bulk-deleted ingest is gone
+    assert superseded in surviving  # the supersession audit row is kept forever
+
+
+def test_restore_by_source_never_resurrects_supersession_row(tmp_path):
+    # An Undo (restore_by_source) must only re-validate what the bulk delete
+    # soft-deleted — never an auto-supersession row that happens to share the source.
+    store = KnowledgeStore(tmp_path / "kb.db")
+    superseded = store.add_chunk("superseded fact", domain="fact", source="shared")
+    assert store.invalidate_chunk(superseded)  # NULL reason, stays invalidated
+    store.add_chunk("bulk ingest chunk", domain="media", source="shared")
+    assert store.invalidate_by_source("shared") == 1  # only the valid (non-superseded) row
+
+    assert store.restore_by_source("shared") == 1  # only the bulk row comes back
+    still_invalid = {c.id for c in store.list_chunks(include_invalidated=True) if c.invalidated_at}
+    assert still_invalid == {superseded}  # the audit row is untouched by the Undo
+
+
 def test_hybrid_purge_invalidated_clears_vectors(tmp_path):
     path = tmp_path / "kb.db"
     store = HybridKnowledgeStore(path, embed_fn=_const_embed)
@@ -308,6 +344,22 @@ def test_hybrid_purge_invalidated_clears_vectors(tmp_path):
     n = db.execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (cid,)).fetchone()[0]
     db.close()
     assert n == 0  # no orphan vector left behind for a swept chunk
+
+
+def test_hybrid_purge_invalidated_keeps_supersession_vectors(tmp_path):
+    # The hybrid override must mirror the base's reason filter — a superseded
+    # (ADR 0069 D9) chunk's vector is audit history and survives the sweep.
+    path = tmp_path / "kb.db"
+    store = HybridKnowledgeStore(path, embed_fn=_const_embed)
+    cid = store.add_chunk("superseded vector chunk", domain="fact", source="s")
+    assert store.invalidate_chunk(cid)  # NULL reason
+    _set_invalidated(path, cid, "2026-01-01T00:00:00+00:00")
+
+    assert store.purge_invalidated(0) == 0  # nothing bulk-deleted to reap
+    db = sqlite3.connect(str(path))
+    n = db.execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (cid,)).fetchone()[0]
+    db.close()
+    assert n == 1  # the supersession vector is preserved
 
 
 def test_layered_bulk_source_targets_private_never_commons(tmp_path):
