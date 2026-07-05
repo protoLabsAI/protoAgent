@@ -164,6 +164,60 @@ The subprocess **inherits protoAgent's environment** (plus any per-delegate `env
 above. Run protoAgent under an account whose ambient credentials you're willing to lend
 the coding agent, or scope the `workdir` to a throwaway checkout.
 
+### In a container, wired to a gateway
+
+The setup above assumes the coder binary is already on `PATH` — true for a local run,
+but a **containerized** protoAgent starts from a bare image with no coder and no model
+credentials. Two things to add to your **deploy** (not the template — this is your
+Dockerfile + entrypoint, `COPY . /opt/protoagent/` already ships your config):
+
+**1. Bake the coder into the image.** For `proto` (a Node CLI), that's Node + one
+`npm i -g`; the other adapters install the same way (`@agentclientprotocol/claude-agent-acp`,
+`@zed-industries/codex-acp`, …):
+
+```dockerfile
+ARG PROTOCLI_VERSION=latest
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "@protolabsai/proto@${PROTOCLI_VERSION}" \
+    && proto --version   # fail the build if it didn't land
+```
+
+**2. Point the coder at your gateway, not a cloud key.** A CLI coder normally wants its
+own provider API key. To reuse the **same OpenAI-compatible gateway** protoAgent already
+uses — one key, one bill, local models available — write the coder's config at
+**entrypoint** rather than baking it: the sandbox `$HOME` is typically a tmpfs mount that
+would shadow a baked file, and writing at start keeps it idempotent and env-tunable.
+`proto` reads `~/.proto/settings.json`; the shape differs per CLI but the idea is the same
+(base URL → your gateway, key from an env var):
+
+```sh
+# entrypoint.sh — before `exec … python -m server`
+if command -v proto >/dev/null 2>&1; then
+    GATEWAY_URL="${CODER_GATEWAY_URL:-http://gateway:4000/v1}"
+    mkdir -p "$HOME/.proto"
+    cat > "$HOME/.proto/settings.json" <<JSON
+{ "modelProviders": { "openai": [
+    { "id": "my/coder-model", "baseUrl": "${GATEWAY_URL}", "envKey": "OPENAI_API_KEY" }
+  ] },
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "my/coder-model" } }
+JSON
+fi
+```
+
+Because the ACP child **inherits protoAgent's environment** (see above), `OPENAI_API_KEY`
+— the gateway key protoAgent already has — flows straight through, and so does anything
+else the coder needs from its shell (e.g. a `GH_TOKEN` so it can `git push` / `gh pr
+create` from its `workdir`). No second secret store.
+
+> The `workdir` still has to be a real, writable checkout of the repo the coder edits —
+> provision it however you like (bake a clone, or `git clone` it at entrypoint with a
+> token). A neat trick to keep the token out of the persisted `.git/config`: set it via a
+> global `url.<https://x-access-token:$TOK@github.com/>.insteadOf` rewrite in the tmpfs
+> `$HOME` — written fresh each boot, never stored in the volume.
+
 ## How it works
 
 ```
