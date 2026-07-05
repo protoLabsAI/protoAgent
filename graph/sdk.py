@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 # Re-export the supervised background-task helper as part of the consumption surface, so a
 # plugin writes `from graph.sdk import supervise` for a self-perpetuating, watchdog-backed
 # engine instead of hand-rolling task/restart machinery (graph/supervisor.py is host-free).
-from graph.supervisor import Supervisor, supervise  # noqa: F401
+from graph.supervisor import RetryAfter, Supervisor, supervise  # noqa: F401
 
 # Re-export the telemetry + decision-log kit, so a plugin writes
 # `from graph.sdk import DecisionLog, telemetry, render_html` for a standard observability
