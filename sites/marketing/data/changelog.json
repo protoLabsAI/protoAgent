@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.93.0",
+    "date": "2026-07-05",
+    "changes": [
+      "protoagent model — point at a local LLM in one line.",
+      "Operator-MCP profiles + an env override, so \"operate over MCP\" is safe by default.",
+      "A first-class protoagent command — the terminal control plane.",
+      "React artifacts get a full design-system component set (@pl/ui), not just 9 primitives.",
+      "The shared ops/ layer — one operation, three projections.",
+      "GET /api/mcp/exposed — see which tools the operator MCP would hand a foreign client.",
+      "BREAKING: the goal API is only under the plural /api/goals* now.",
+      "/v1/chat/completions reports real token usage now, not zeros.",
+      "The plugin update-CHECK now authenticates private repos too, not just install.",
+      "The operator MCP no longer hands a foreign client HITL tools that hang it.",
+      "plugin install of a PRIVATE GitHub repo now works on the default git path."
+    ]
+  },
+  {
     "version": "v0.92.0",
     "date": "2026-07-05",
     "changes": [

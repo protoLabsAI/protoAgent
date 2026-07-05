@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.93.0] - 2026-07-05
+
 ### Added
 - **`protoagent model` — point at a local LLM in one line (ADR 0075, slice 4).** protoAgent's
   model is just OpenAI-compatible config (the LiteLLM gateway is the default, not a lock-in), so
