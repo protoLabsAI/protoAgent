@@ -504,3 +504,50 @@ def test_clone_no_auth_env_without_token(monkeypatch, tmp_path):
     installer._clone("https://github.com/o/r", None, tmp_path / "dest")
     clone = next(c for c in calls if c["args"][0] == "clone")
     assert clone["env"] is None
+
+
+# ── private-repo auth for the update CHECK (ls-remote), not just install (#1805 follow-up) ──
+# check_updates ls-remotes each plugin's repo; for a PRIVATE repo the plain ls-remote failed
+# auth → "check failed" in the panel even though the plugin works. Same _git_auth_env, applied
+# to the update-check path.
+
+
+def test_ls_remote_sha_authenticates_private_github(monkeypatch):
+    import base64
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "s3cr3t")
+    cap = {}
+
+    def fake_git(*args, cwd=None, timeout=None, env=None):
+        cap["args"], cap["env"] = args, env
+        return "abc1230000000000000000000000000000000000\trefs/heads/main"
+
+    monkeypatch.setattr(installer, "_git", fake_git)
+    installer._lsremote_cache.clear()
+    installer._ls_remote_sha("https://github.com/protoLabsAI/private-plugin", "main")
+
+    assert cap["args"][0] == "ls-remote"
+    env = cap["env"]
+    assert env and env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    assert base64.b64decode(env["GIT_CONFIG_VALUE_0"].split()[-1]).decode() == "x-access-token:s3cr3t"
+
+
+def test_ls_remote_tags_authenticates_private_github(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    cap = {}
+    monkeypatch.setattr(installer, "_git", lambda *a, cwd=None, timeout=None, env=None: (cap.update(args=a, env=env) or "sha\trefs/tags/v0.1.0"))
+    installer._lstags_cache.clear()
+    installer._ls_remote_tags("https://github.com/protoLabsAI/private-plugin")
+    assert cap["env"] and cap["env"]["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+
+
+def test_ls_remote_no_auth_env_without_token(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    cap = {}
+    monkeypatch.setattr(installer, "_git", lambda *a, cwd=None, timeout=None, env=None: (cap.update(env=env) or "sha\tHEAD"))
+    installer._lsremote_cache.clear()
+    installer._ls_remote_sha("https://github.com/protoLabsAI/public-plugin", "")
+    assert cap["env"] is None  # no token → plain env, unchanged behavior

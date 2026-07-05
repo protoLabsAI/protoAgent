@@ -864,7 +864,11 @@ def _ls_remote_sha(source_url: str, ref: str) -> str:
     # `<ref>^{}` too and prefer it; branches/HEAD/lightweight tags simply don't
     # match the peeled refspec and fall back to the bare line.
     refspecs = [ref, ref + "^{}"] if ref else ["HEAD"]
-    out = _git("ls-remote", source_url, *refspecs, timeout=_LSREMOTE_TIMEOUT_S)
+    # Authenticate the update-check for a PRIVATE github repo (#1805 parity — that fix covered
+    # the clone/install path; a plain `git ls-remote` of a private repo still failed auth here,
+    # surfacing as "check failed" in the plugins panel). Scoped/off-argv/off-disk via GIT_CONFIG_*.
+    _auth = _git_auth_env(source_url)
+    out = _git("ls-remote", source_url, *refspecs, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None)
     sha = peeled = ""
     for line in out.splitlines():
         parts = line.split("\t")
@@ -910,7 +914,8 @@ def _ls_remote_tags(source_url: str) -> dict[str, str]:
     hit = _lstags_cache.get(source_url)
     if hit is not None and (now - hit[0]) < _LSREMOTE_TTL_S:
         return hit[1]
-    out = _git("ls-remote", "--tags", source_url, timeout=_LSREMOTE_TIMEOUT_S)
+    _auth = _git_auth_env(source_url)  # authenticate the update-check for a private github repo (#1805 parity)
+    out = _git("ls-remote", "--tags", source_url, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None)
     tags: dict[str, str] = {}
     for line in out.splitlines():
         parts = line.split("\t")
