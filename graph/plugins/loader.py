@@ -568,13 +568,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         result.meta.append(entry)
         log.info(
             "[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "
-            "%d surface(s), %d subagent(s), %d mcp server(s), %d chat command(s)",
+            "%d surface(s), %d subagent(s), %d middleware, %d mcp server(s), %d chat command(s)",
             manifest.id,
             len(kept),
             len(registry.skill_dirs),
             len(registry.routers),
             len(registry.surfaces),
             len(registry.subagents),
+            len(registry.middleware),
             len(registry.mcp_servers),
             len(registry.chat_commands),
         )
