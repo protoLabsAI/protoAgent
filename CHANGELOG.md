@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The operator MCP server can now take a curated **`operator_mcp.profile`** instead of enumerating
   tools: `read-only` (reads/queries only), `full` (everything), or unset (deny-by-default, unchanged).
   A profile unions with any explicitly-named `tools`. **`PROTOAGENT_MCP_TRUST=full`** forces full for a
-  trusted/headless box. (The middle `safe-operator` tier lands with the ops layer, ADR 0075 D2.)
+  trusted/headless box. (The ops layer has since landed; the middle `safe-operator` tier still needs
+  the admin ops exposed as MCP-callable tools first — a follow-up.)
 - **A first-class `protoagent` command — the terminal control plane (ADR 0075, slice 1).**
   `python -m server <sub>` was the only way to install/manage a runtime, and its subcommands
   were hidden `if sys.argv[1] == …` branches invisible to `--help`. There's now an installable
@@ -46,6 +47,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   · `IconButton`/`Link`/`Dot`/`Spinner`/`Skeleton` (type + primitives). Each is a thin, correct
   className contract over the DS classes the theme already ships — so prototypes match the live theme
   without hand-rolled markup. The `rendering-artifacts` skill + README list the full set.
+- **The shared `ops/` layer — one operation, three projections (ADR 0075, slice 2).** The admin
+  operations were each re-implemented per surface: `knowledge_ingest` had its extract→store glue
+  duplicated across the agent tool and the `/api/knowledge/ingest` route; the plugin-install
+  auto-enable/hot-reload dance was REST-only, so a CLI or MCP install couldn't run it. There's now
+  an **`ops/`** package — one function per operation (`knowledge.ingest` · `plugins.install_and_activate`
+  · `config.set`/`get` · `fleet.up`/`down`/`status`), each registered with read/write metadata, that
+  the agent tool, the REST route, and the CLI all call. New surfaces on top of it: **`GET /api/operations`**
+  (the catalog — every op, its read/write bit, a one-liner) and **`protoagent` CLI verbs** —
+  `operations` (list the catalog), `config get` / `config set key=value` (edit `config.yaml` headless,
+  JSON-typed dotted keys), and `knowledge ingest <url|file>` (ingest from the terminal). The terminal
+  "apply config + rebuild the live agent" step is injected, so an op never imports the server and a
+  headless CLI can run it disk-only. `ops/` is a neutral infra package the import contracts enforce.
+- **`GET /api/mcp/exposed` — see which tools the operator MCP would hand a foreign client (ADR 0075,
+  slice 2).** The exposed set (after the profile + `operator_mcp.tools` allowlist + `PROTOAGENT_MCP_TRUST`
+  resolve) was introspectable only by reading the sidecar's boot logs; a route now returns it —
+  `{tools, count, profile, star, trust_override}` — so the console can show, and explain, the surface.
 
 ### Changed
 - **BREAKING: the goal API is only under the plural `/api/goals*` now (ADR 0075 D4).** The
@@ -54,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (clear). The console already used the plural, so this only affects external callers that hit the
   singular. (The `memory`/`knowledge` split is intentional domain separation — the RAG chunk API
   stays `/api/knowledge/*` — so it was NOT renamed.)
+- **`/v1/chat/completions` reports real token usage now, not zeros (ADR 0075 D4).** The
+  OpenAI-compatible endpoint stubbed `usage` to `{0, 0, 0}`; it now reflects the turn's actual
+  token accounting — summed across the initial model call, every goal-continuation iteration, and
+  nested subagents (the same numbers the A2A cost-v1 artifact reports) — so OpenAI-SDK clients and
+  cost tooling see true prompt/completion/total counts. Streaming includes usage only when the
+  client opts in via `stream_options.include_usage` (a final chunk with empty `choices`).
 
 ### Fixed
 - **The plugin update-CHECK now authenticates private repos too, not just install.** #1805 taught the

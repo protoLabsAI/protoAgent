@@ -1,7 +1,15 @@
 # 0075 — External interfaces: a first-class `protoagent` CLI + tightened MCP / API / model onboarding
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-05
+- Implementation: D1 CLI (#1816), D3 MCP profiles + HITL-hang fix (#1817), D5 `protoagent model`
+  (#1821), D4 goal-API dedupe (#1822) · real `/v1` usage (#1825), and **D2 the shared `ops/` layer**
+  — `GET /api/mcp/exposed` + resolver extraction (#1824), the `ops/` package + `knowledge.ingest`
+  (#1826), `plugins.install_and_activate` (#1827), `config` + `fleet` ops (#1828), the
+  `GET /api/operations` catalog + `protoagent operations`/`config get·set` CLI (#1830), and
+  `protoagent knowledge ingest` (#1831) — are shipped. Remaining: the `safe-operator` MCP profile
+  (needs the admin ops exposed as MCP tools + the ADR 0071 consent gate) and the D5 HuggingFace
+  local-app registration (external PR).
 - Builds on: ADR 0033 (ACP runtime + operator MCP server), 0027 (plugin CLI + installer),
   0041 (workspace CLI + tiered stores), 0042 (fleet CLI + supervisor), 0047 (settings
   cascade + `config explain`), 0019 (managed / consumed MCP), 0066 (federation token +
