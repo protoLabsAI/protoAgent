@@ -1,6 +1,6 @@
 [project]
 name = "protoagent"
-version = "0.93.0"
+version = "0.93.1"
 description = "protoAgent — LangGraph + A2A template for spawning protoLabs agents"
 license = "MIT"
 license-files = ["LICENSE"]

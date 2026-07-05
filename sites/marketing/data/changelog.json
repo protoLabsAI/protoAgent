@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.93.1",
+    "date": "2026-07-05",
+    "changes": [
+      "Supervisor on_crash bounded retry — RetryAfter + on_crash_max_attempts (#1823)."
+    ]
+  },
+  {
     "version": "v0.93.0",
     "date": "2026-07-05",
     "changes": [
