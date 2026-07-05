@@ -3,7 +3,7 @@
 `protoagent` is the terminal control plane for a protoAgent runtime — install,
 run, and manage an instance without touching the console. It's the discoverable
 front door that replaces the bare `python -m server <subcommand>` invocation
-(ADR [0075](../adr/0075-external-interfaces-cli-mcp-api.md)).
+(ADR 0075 — added in a follow-up).
 
 > Chatting with an agent is a separate job — that's what [`proto`](https://github.com/protoLabsAI/protoCLI)
 > (the A2A terminal client) is for. `protoagent` runs and manages the runtime;
