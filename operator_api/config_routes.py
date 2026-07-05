@@ -272,11 +272,18 @@ def register_config_routes(app) -> None:
         ok, err = validate_flat(req.updates)
         if not ok:
             return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
-        # Offload off the event loop (#497) — a model change recompiles the graph.
-        ok, messages = await asyncio.to_thread(
-            _apply_settings_changes, config=nest_updates(req.updates), layer=req.layer
+        # Validation + restart-key reporting are this surface's; the apply itself goes through
+        # the shared config.set op (ADR 0075 D2). The op offloads the graph recompile off the
+        # event loop (#497); the live applier is the same _apply_settings_changes as before.
+        from ops import OpContext
+        from ops.config import set_config
+
+        result = await set_config(
+            nest_updates(req.updates),
+            ctx=OpContext.from_state(),
+            apply_settings=lambda u: _apply_settings_changes(config=u, layer=req.layer),
         )
-        return {"ok": ok, "messages": messages, "restart_required": restart_keys(req.updates)}
+        return {"ok": result.ok, "messages": result.messages, "restart_required": restart_keys(req.updates)}
 
     @app.post("/api/settings/reset")
     async def _api_reset_settings(req: SettingsResetRequest):
