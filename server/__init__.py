@@ -756,6 +756,11 @@ def _main():
     # (ADR 0023 phase 3).
     register_config_routes(fastapi_app)
 
+    # GET /api/operations — the ops-layer catalog (ADR 0075 D2), derived from ops.registry().
+    from operator_api.operations_routes import register_operations_routes
+
+    register_operations_routes(fastapi_app)
+
     # OpenAI-compatible /v1/chat/completions + /v1/models are registered above
     # by register_chat_routes (operator_api/chat_routes.py, ADR 0023 phase 3).
 

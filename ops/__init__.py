@@ -77,3 +77,21 @@ def op(*, name: str, mutates: bool, summary: str) -> Callable:
 def registry() -> dict[str, OpSpec]:
     """A copy of the registered ops, keyed by name — the source for the catalog + profile."""
     return dict(_REGISTRY)
+
+
+# Every op module — importing one runs its `@op` decorators, which is what populates the
+# registry. They're imported lazily elsewhere (a tool / route pulls in just the module it
+# needs), so nothing guarantees the WHOLE registry is loaded. `load_all()` forces it, for the
+# `GET /api/operations` catalog + `protoagent operations` + the safe-operator profile, which
+# must see every op, not just the ones some surface happened to import.
+_OP_MODULES = ("ops.knowledge", "ops.plugins", "ops.config", "ops.fleet")
+
+
+def load_all() -> dict[str, OpSpec]:
+    """Import every op module so the registry is complete, then return it. Idempotent — a
+    re-import is a cheap no-op. Call before reading :func:`registry` for a full enumeration."""
+    import importlib
+
+    for mod in _OP_MODULES:
+        importlib.import_module(mod)
+    return registry()

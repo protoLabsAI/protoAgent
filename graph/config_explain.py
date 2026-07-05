@@ -120,15 +120,38 @@ def render_config_explain(data: dict) -> str:
     return "\n".join(lines)
 
 
-def run_config_cli(argv: list[str]) -> int:
-    """``python -m server config <action>`` dispatch. Today the one action is
-    ``explain`` (read-only); ``--json`` emits the raw payload for scripting."""
-    import argparse
+def _parse_set_pairs(pairs: list[str]) -> dict:
+    """``["a.b=1", "x=true"]`` → a flat dotted map with JSON-typed values (so ``8080``/
+    ``true`` become an int/bool; a bare word stays a string). ``nest_updates`` then nests it."""
     import json
 
+    flat: dict = {}
+    for p in pairs:
+        if "=" not in p:
+            raise ValueError(f"expected key=value, got {p!r}")
+        key, val = p.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"empty key in {p!r}")
+        try:
+            flat[key] = json.loads(val)
+        except ValueError:
+            flat[key] = val  # a bare string
+    return flat
+
+
+def run_config_cli(argv: list[str]) -> int:
+    """``protoagent config <action>`` dispatch: ``explain`` (read-only diagnostic),
+    ``get`` (print config.yaml), ``set key=value …`` (write config.yaml on disk, via the
+    shared ``ops.config.set`` op). ``--json`` on explain/get emits the raw payload."""
+    import argparse
+    import asyncio
+    import json
+    import sys
+
     parser = argparse.ArgumentParser(
-        prog="python -m server config",
-        description="Inspect this instance's config resolution (read-only diagnostic).",
+        prog="protoagent config",
+        description="Inspect and edit this instance's config.",
     )
     sub = parser.add_subparsers(dest="action", required=True)
     ep = sub.add_parser(
@@ -136,13 +159,43 @@ def run_config_cli(argv: list[str]) -> int:
         help="print this instance's identity, roots, every resolved path, and per-field cascade provenance",
     )
     ep.add_argument("--json", action="store_true", help="emit the raw payload as JSON instead of the human table")
+    gp = sub.add_parser("get", help="print the on-disk config.yaml")
+    gp.add_argument("--json", action="store_true", help="emit JSON instead of YAML")
+    sp = sub.add_parser("set", help="write config keys to config.yaml on disk (dotted key=value, JSON-typed)")
+    sp.add_argument("pairs", nargs="+", metavar="key=value", help="e.g. fleet.mdns.enabled=false server.port=7871")
     args = parser.parse_args(argv)
 
     if args.action == "explain":
         data = build_config_explain()
-        if args.json:
-            print(json.dumps(data, indent=2))
-        else:
-            print(render_config_explain(data))
+        print(json.dumps(data, indent=2) if args.json else render_config_explain(data))
         return 0
+
+    if args.action == "get":
+        from ops.config import get_config
+
+        cfg = asyncio.run(get_config(ctx=None))  # ctx=None ⇒ read the on-disk doc
+        if args.json:
+            print(json.dumps(cfg, indent=2))
+        else:
+            import yaml
+
+            print(yaml.safe_dump(cfg, sort_keys=False).rstrip())
+        return 0
+
+    if args.action == "set":
+        from graph.settings_schema import nest_updates
+        from ops.config import set_config
+
+        try:
+            flat = _parse_set_pairs(args.pairs)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        result = asyncio.run(set_config(nest_updates(flat), apply_settings=None))  # disk-only
+        for m in result.messages:
+            print(m)
+        if not result.reloaded:
+            print("(written to disk — restart / reload a running server to apply)", file=sys.stderr)
+        return 0 if result.ok else 1
+
     return 2  # unreachable: argparse rejects an unknown action first
