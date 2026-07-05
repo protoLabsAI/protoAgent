@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too). Per-chunk delete is unchanged. On a layered store the lifecycle targets the
   **private** tier only, like `purge_domain`.
 
+### Fixed
+- **`web_search` (DuckDuckGo) failed with `CERTIFICATE_VERIFY_FAILED` in the desktop app.**
+  `ddgs` verifies TLS over OpenSSL via its `primp` backend, whose OS trust-store discovery
+  doesn't resolve inside the PyInstaller onefile sidecar — so DuckDuckGo search failed cert
+  verification even though httpx calls (the model gateway, GitHub) worked. The frozen sidecar
+  now exports `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` to the bundled
+  `certifi` bundle at startup (frozen-only, and never overriding an operator's explicit value),
+  so every agent's `web_search` works in the desktop build.
+
 ## [0.91.0] - 2026-07-04
 
 ### Added

@@ -87,6 +87,34 @@ def _bundle_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _ensure_ca_bundle_env() -> None:
+    """Point native TLS clients at the bundled CA certificates when frozen.
+
+    In a PyInstaller onefile build (the desktop sidecar) the OS trust-store
+    discovery a native TLS client relies on doesn't resolve — so ``ddgs`` (the
+    ``web_search`` backend, which verifies over OpenSSL via ``primp``) fails with
+    ``CERTIFICATE_VERIFY_FAILED``, even though ``httpx`` calls work (httpx loads
+    ``certifi.where()`` directly). Export ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` /
+    ``CURL_CA_BUNDLE`` to the bundled ``certifi`` bundle so OpenSSL-backed clients
+    verify against it.
+
+    Frozen-only, ``setdefault`` so an operator's explicit override always wins, and a
+    no-op in a source checkout (system discovery already works there). Must run before
+    the first outbound TLS request."""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        import certifi
+
+        ca = certifi.where()
+    except Exception:  # noqa: BLE001 — a missing/broken certifi must never block boot
+        return
+    if not ca or not os.path.exists(ca):
+        return
+    for var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        os.environ.setdefault(var, ca)
+
+
 def _resolve_operator_project_root() -> str:
     """The operator console's default project root (+ its always-allowed dir).
 
@@ -266,6 +294,10 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 
 
 def _main():
+    # Frozen sidecar TLS: point native clients (primp → ddgs → web_search) at the
+    # bundled certifi CA bundle before any outbound request, else DuckDuckGo search
+    # fails CERTIFICATE_VERIFY_FAILED in the desktop app. No-op in a source checkout.
+    _ensure_ca_bundle_env()
 
     # Plugin management subcommand (ADR 0027): `python -m server plugin install
     # <git-url>` (+ list/uninstall/sync). Handled before the server argparse —
