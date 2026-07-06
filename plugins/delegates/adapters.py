@@ -642,7 +642,12 @@ class AcpAdapter(Adapter):
         from plugins.coding_agent import git_harness as harness
 
         iid = (item_id or "").strip() or harness.derive_item_id(query)
-        branch = harness.mint_branch(d.branch_prefix or d.name, query, iid)
+        # Name the work, not the wrapper: infer a conventional-commit title from the task
+        # (project_board wraps features in a coder preamble whose first line is boilerplate,
+        # which the deterministic first-line slug would otherwise bake into the branch/PR).
+        # Best-effort — falls back to the deterministic title. Uniqueness is the id suffix.
+        title = (await harness.infer_title(query)) or harness.title_from(query)
+        branch = harness.mint_branch(d.branch_prefix or d.name, title, iid)
         holder = harness.claim(iid, d.name)
         if holder is not None:
             return (
@@ -651,7 +656,7 @@ class AcpAdapter(Adapter):
             )
         try:
             workdir = os.path.expanduser(d.workdir)
-            existing = await harness.preflight_pr(workdir, branch)
+            existing = await harness.preflight_pr(workdir, iid)
             if existing:
                 return f"An open PR already exists for item `{iid}` (branch `{branch}`): {existing} — not dispatching a duplicate."
             prep = await harness.prepare(workdir, base=d.base_branch, branch=branch)
@@ -659,7 +664,7 @@ class AcpAdapter(Adapter):
                 return f"Error: managed-git setup for {d.name!r} failed: {prep.error}"
             reply = await self._prompt(d, query + harness.edit_only_directive(branch), timeout=timeout)
             outcome = await harness.finish(
-                workdir, base=d.base_branch, branch=branch, item_id=iid, title=harness.title_from(query)
+                workdir, base=d.base_branch, branch=branch, item_id=iid, title=title
             )
             notes = "".join(f"\n- note: {n}" for n in prep.notes)
             return f"{reply}\n\n{outcome.render()}{notes}"
