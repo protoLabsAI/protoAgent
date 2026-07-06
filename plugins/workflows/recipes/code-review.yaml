@@ -126,7 +126,9 @@ steps:
       ones marked as such, re-rank, and produce the deliverable: the prose
       brief first (overall risk, fix-first item, what the panel disagreed on,
       what verification changed), then the canonical fenced findings JSON as
-      the FINAL block of your reply.
+      the FINAL block of your reply. Carry every surviving finding's `verdict`
+      and `note` fields into that final JSON verbatim — a reprint that drops
+      them erases the verify pass for downstream parsers.
 
       {{steps.verify.output}}
 output: "{{steps.report.output}}"
