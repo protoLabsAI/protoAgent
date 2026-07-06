@@ -1,16 +1,17 @@
 id: craft
 name: Craft
-version: 0.2.0
+version: 0.3.0
 # user_only skills (withheld from agent retrieval, slash-only) landed 2026-06;
 # first host release carrying them is 0.85.0.
 min_protoagent_version: "0.85.0"
 description: >-
   Engineering rituals as skills: /grill (relentless plan interview), /standup
   (operational status report), /code-review (adversarial review-workflow
-  driver, ADR 0077), /writing-skills (the skill-authoring discipline), and
-  adr-authoring (the house ADR/plan-doc conventions — agent-retrievable, so
-  agent-authored ADRs meet the bar) — plus a skill_writer subagent that drafts
-  SKILL.md skills to that discipline. Prompt-only: no tools, routes, network,
+  driver, ADR 0077), /due-diligence (adopt/build/defer verdict via the
+  due-diligence workflow), /writing-skills (the skill-authoring discipline),
+  and adr-authoring (the house ADR/plan-doc conventions — agent-retrievable,
+  so agent-authored ADRs meet the bar) — plus a skill_writer subagent that
+  drafts SKILL.md skills to that discipline. Prompt-only: no tools, routes, network,
   or filesystem access. The grilling, code-review, and skill-authoring
   material is adapted from mattpocock/skills (MIT).
 # First-party and ON by default, like artifact/notes/docs — pure prompt content,

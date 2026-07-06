@@ -1,0 +1,121 @@
+# Due diligence with adversarial review (delivery-loop plan M2). A re-authoring
+# of deep-research for DECISIONS about code: the same adversarial spine
+# (gather → antagonist ∥ verify → synthesis), plus the gather angle research
+# never had — a codebase map of what our own code already does about the thing
+# being evaluated. The synthesis is a verdict document, not a survey: it must
+# end on adopt / build / defer with conditions.
+#
+#   run_workflow("due-diligence", {"question": "Should we adopt X for Y?"})
+#   run_workflow("due-diligence", {"question": "…", "context": "affects graph/ + the a2a_impl surface"})
+#
+# Callable headlessly — the board DESIGN gate (plan M6) runs it on large/
+# architectural features before mark_ready.
+name: due-diligence
+description: >-
+  Evidence-based validation of a technology/architecture choice — codebase map
+  and external research in parallel, then antagonist and claim-verifier in
+  parallel, then a cited synthesis ending in an explicit adopt/build/defer
+  verdict with conditions.
+version: 1
+inputs:
+  - name: question
+    description: The decision under diligence ("should we adopt/build/change …?").
+    required: true
+  - name: context
+    description: Optional scope hints — which project/repo/subsystems are affected.
+    default: ""
+steps:
+  - id: map_codebase
+    subagent: codebase-mapper
+    prompt: |
+      Map the internal evidence for this due-diligence question (context:
+      {{inputs.context}}):
+
+      {{inputs.question}}
+
+      Current state, integration points, constraints (deps/patterns/ADRs —
+      cite prior decisions on this ground), and the build-vs-adopt gap, with
+      file citations. Internal evidence only.
+
+  - id: research
+    subagent: researcher
+    prompt: |
+      Research the EXTERNAL evidence for this due-diligence question (depth:
+      deep):
+
+      {{inputs.question}}
+
+      Cover: the leading options and their maturity/maintenance reality,
+      adoption + community health, known failure modes and practitioner
+      criticism (seek community/code sources — HN, Reddit, GitHub issues — not
+      just marketing), migration/integration cost signals, and credible
+      alternatives including "do nothing". Numbered citations.
+
+  - id: antagonist
+    subagent: antagonist
+    depends_on: [map_codebase, research]
+    prompt: |
+      Adversarially review this due-diligence evidence on:
+      "{{inputs.question}}". Steelman the strongest case AGAINST the direction
+      the evidence leans, attack unsupported claims, and hunt disconfirming
+      evidence (failed adoptions, "considered harmful", maintainer burnout,
+      lock-in stories). Also attack the INTERNAL evidence: does the codebase
+      map actually support the integration story, or is it thinner than it
+      reads?
+
+      ## Codebase map (internal)
+      {{steps.map_codebase.output}}
+
+      ## External research
+      {{steps.research.output}}
+
+  - id: verify
+    subagent: verifier
+    depends_on: [map_codebase, research]
+    prompt: |
+      Verify the material claims in this due-diligence evidence on
+      "{{inputs.question}}" — the ones the verdict would hinge on (maturity,
+      maintenance, compatibility, performance, licensing). Check external
+      claims against sources; where an internal claim cites a file, spot-check
+      it if you can. Verification table + the line for the synthesizer.
+
+      ## Codebase map (internal)
+      {{steps.map_codebase.output}}
+
+      ## External research
+      {{steps.research.output}}
+
+  - id: synthesize
+    subagent: synthesizer
+    depends_on: [map_codebase, research, antagonist, verify]
+    prompt: |
+      Write the due-diligence verdict document for: {{inputs.question}}
+
+      This is a DECISION document, not a survey. Structure:
+      - Bottom line first, then the evidence (internal + external, numbered
+        [N] citations carried through), a "## Counterpoints & risks" section
+        that answers the antagonist, and dropped/qualified claims per the
+        verifier.
+      - End with an explicit verdict block:
+
+        **Verdict: adopt | build | defer**
+        - Rationale: (2-4 lines, hedged by what survived adversarial review)
+        - Conditions: (what must hold / be proven for this verdict; what would
+          flip it)
+        - Revisit when: (the concrete trigger)
+
+      An "it depends" answer is a **defer** with sharp conditions — never omit
+      the verdict block. Earned Confidence per the usual rules.
+
+      ## Codebase map (internal)
+      {{steps.map_codebase.output}}
+
+      ## External research
+      {{steps.research.output}}
+
+      ## Opposition memo (antagonist)
+      {{steps.antagonist.output}}
+
+      ## Claim verification (verifier)
+      {{steps.verify.output}}
+output: "{{steps.synthesize.output}}"
