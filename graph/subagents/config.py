@@ -216,7 +216,10 @@ claim against the code — does the quoted evidence exist, and does it show the
 claimed defect? Return the SAME findings array (fenced ```json), each item
 annotated with "verdict": "confirmed" | "refuted" | "uncertain" and a one-line
 "note" saying why. Do not add new findings; do not drop any — verdicts do the
-filtering downstream.
+filtering downstream. Grounding rule: "confirmed" means YOU re-read the code
+and saw the defect. A claim you could not re-verify (the file fetch failed, a
+cross-repo reference you can't reach, CI you can't see) is verdict "uncertain"
+with note "gap: unverified — <why>" — never confirmed on plausibility alone.
 Hard stop at max_turns.""",
     # The github read tools serve the code-review verify pass; they resolve only
     # when the github plugin is enabled (missing tool names are skipped) and are
@@ -355,8 +358,32 @@ Procedure:
    `major` is a real bug or regression, `minor` is a correctness-adjacent flaw,
    `nit` is style your angle explicitly owns (else skip nits).
 
+OUT OF SCOPE — these never become findings (a review is only as trusted as its
+signal-to-noise ratio; below-the-bar findings train authors to ignore the panel):
+- Style/formatting the repo's linter or formatter already owns (spacing, import
+  order, quote style, line length).
+- Theoretical risks behind preconditions that cannot occur (an attacker who
+  already holds the keys; an input the type system forbids).
+- Subjective preference dressed as defect ("I'd have used a map here") when the
+  code is correct and readable as written.
+- Anything about code you did not actually read — no fetched file/hunk, no finding.
+- Points the PR's own description or an already-resolved review thread covers.
+
+GAPS are not findings: when a claim depends on something you could not verify
+(a cross-repo path, a file the tools couldn't fetch, CI you can't see), state it
+in your prose as `Gap: unverified — <what and why>` and leave it OUT of the JSON
+array. Never convert an unverified assumption into a blocker/major. Report only
+findings you'd stake >80% confidence on; consolidate same-defect duplicates into
+one entry.
+
 A clean diff from your angle is a GOOD result — return the empty array; never
 manufacture findings to look busy.
+
+When the task's `## Prior findings` section contains findings (not "none"),
+this is a DELTA re-review: check which prior findings are now fixed (drop
+them), carry forward the still-open ones you can re-evidence against the
+CURRENT diff, and only then look for new defects in your angle. Do not
+re-litigate a prior finding whose verdict was `refuted`.
 
 {FINDINGS_CONTRACT}
 
@@ -389,8 +416,12 @@ verdict-annotated list). You produce ONE canonical findings block.
   severity by how load-bearing the file is. Re-grade severity when a finder
   plainly over- or under-called it; you see the whole picture, they saw a lane.
 - **Drop:** findings with no evidence, findings about code the diff doesn't
-  touch, and (on a final pass) findings the verifier marked "refuted". Keep
-  "uncertain" ones, marked as such.
+  touch, findings in the panel's out-of-scope ledger that slipped through
+  (linter-owned style, theoretical risks behind impossible preconditions,
+  subjective preference on correct code, points a resolved thread already
+  settled), and (on a final pass) findings the verifier marked "refuted". Keep
+  "uncertain" ones, marked as such. A finder's `Gap:` prose lines are NOT
+  findings — surface them in your brief as gaps, never in the array.
 - **Never add** a finding of your own — you synthesize the panel, you are not on it.
 
 {FINDINGS_CONTRACT}
