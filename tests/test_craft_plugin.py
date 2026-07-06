@@ -20,6 +20,11 @@ ROOT = Path("plugins/craft")
 
 EXPECTED_SLASHES = {"grill", "standup", "code-review", "writing-skills"}
 
+# Agent-retrievable bundled skills (no user_only/slash): guidance the AGENT pulls
+# while doing the work — adr-authoring exists precisely so agent-authored ADRs
+# meet the house bar (plan M3), so hiding it from retrieval would defeat it.
+EXPECTED_AGENT_SKILLS = {"adr-authoring"}
+
 
 def _skill_files() -> list[Path]:
     return sorted(ROOT.glob("skills/*/SKILL.md"))
@@ -54,20 +59,27 @@ def test_register_contributes_skills_and_subagent():
 
 def test_bundled_skills_are_loader_valid_and_user_only():
     files = _skill_files()
-    assert len(files) == 4, f"expected 4 bundled skills, found {[str(f) for f in files]}"
+    expected_count = len(EXPECTED_SLASHES) + len(EXPECTED_AGENT_SKILLS)
+    assert len(files) == expected_count, f"unexpected bundled skills: {[str(f) for f in files]}"
 
     seen = {}
+    agent_skills = set()
     for path in files:
         artifact = parse_skill_md(path)
         assert artifact is not None, f"{path} failed to parse"
+        assert artifact.prompt_template, f"{path} has an empty body"
+        if artifact.name in EXPECTED_AGENT_SKILLS:
+            assert not artifact.user_only, f"{path} must be agent-retrievable"
+            agent_skills.add(artifact.name)
+            continue
         assert artifact.user_only, f"{path} must be user_only (slash-only rituals)"
         assert artifact.user_facing, f"{path}: user_only implies user_facing"
         assert artifact.slash, f"{path} must pin an explicit slash token"
-        assert artifact.prompt_template, f"{path} has an empty body"
         seen[artifact.slash] = artifact.name
 
     assert set(seen) == EXPECTED_SLASHES
-    assert len(seen) == len(files), "slash tokens must be unique"
+    assert agent_skills == EXPECTED_AGENT_SKILLS
+    assert len(seen) == len(files) - len(agent_skills), "slash tokens must be unique"
 
 
 def test_slash_tokens_not_shadowed_by_core_subagents():
