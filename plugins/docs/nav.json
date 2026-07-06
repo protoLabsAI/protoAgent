@@ -657,6 +657,10 @@
           "title": "0075 — External interfaces: a first-class `protoagent` CLI + tightened MCP / API / model onboarding"
         },
         {
+          "path": "adr/0076-managed-git-acp-delegates.md",
+          "title": "0076 — Managed git for `acp` delegates: framework-owned branch/commit/push/PR"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
