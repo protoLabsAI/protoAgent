@@ -362,7 +362,10 @@ manufacture findings to look busy.
 
 Hard stop at max_turns: return what you have (partial findings beat none).""",
     tools=["github_pr_diff", "github_get_commit_diff", "github_read_file", "github_get_pr"],
-    max_turns=15,
+    # 25, not 15: on the first live acceptance run (PR #1847, a 6-file diff) two of
+    # four finders hit the 15-turn recursion limit mid-read — a finder that re-fetches
+    # a truncated diff and reads 2-3 surrounding files legitimately spends ~20 turns.
+    max_turns=25,
     # Per-invocation review verdicts are context-specific — never distill to a skill.
     allow_skill_emission=False,
 )
