@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 
+from graph.middleware.redaction import PATTERNS as _REDACTION_PATTERNS
 from tools.gh_cli import run_gh
 from tools.shell import ShellResult, run_command
 
@@ -120,27 +122,36 @@ _FALLBACK_IDENTITY = {
 # the coder force-added any of it.
 _SCRATCH_DIRS = (".proto/", ".worktrees/", ".claude/", "node_modules/")
 
+# Reuse the maintained token-shape patterns from the audit-log redactor — one place
+# to harden when providers change token formats. Only the token-SHAPED patterns:
+# the redactor's contextual ones (bearer_token, generic_api_key, env_var_assignment,
+# client_secret) match ordinary code (`API_KEY = os.environ[...]`) and would
+# false-positive-block legitimate commits.
+_TOKEN_PATTERN_NAMES = (
+    "openai_key",
+    "google_oauth",
+    "google_api_key",
+    "github_token",
+    "slack_token",
+    "aws_access_key",
+    "discord_token",
+)
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
-    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id"),
-    (re.compile(r"\bghp_[A-Za-z0-9]{36}\b"), "GitHub token"),
-    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b"), "GitHub fine-grained token"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "Slack token"),
-    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "Google API key"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b"), "github fine-grained token"),
+    *((_REDACTION_PATTERNS[n], n.replace("_", " ")) for n in _TOKEN_PATTERN_NAMES if n in _REDACTION_PATTERNS),
 ]
 
 
 async def _git(workdir: str, *args: str, env: dict[str, str] | None = None, timeout: float = 60.0) -> ShellResult:
     """Run one git command in ``workdir``, retrying on shared-.git lock contention."""
-    res = ShellResult(1, "", "", error="git never ran")
-    for attempt in range(3):
+    for attempt in range(2):
         res = await run_command(["git", *args], cwd=workdir, env=env, timeout=timeout)
         blob = f"{res.stderr} {res.error or ''}".lower()
-        if not res.ok and any(m in blob for m in _LOCK_MARKERS) and attempt < 2:
-            await asyncio.sleep(0.4 * (2**attempt))
-            continue
-        return res
-    return res
+        if res.ok or not any(m in blob for m in _LOCK_MARKERS):
+            return res
+        await asyncio.sleep(0.4 * (2**attempt))
+    return await run_command(["git", *args], cwd=workdir, env=env, timeout=timeout)
 
 
 async def _count(workdir: str, spec: str) -> int | None:
@@ -274,6 +285,7 @@ class GitOutcome:
     item_id: str
     base: str
     stranded_on_base: bool = False
+    blocked_reason: str = ""  # non-base refusal (detached HEAD, unresolvable base, …)
     no_changes: bool = False
     coder_did_git: str = ""  # "" | "committed" | "pushed"
     committed: bool = False
@@ -294,6 +306,8 @@ class GitOutcome:
                 f"- BLOCKED: the coder left HEAD on `{self.base}` — nothing was committed. The edits "
                 "are recoverable in the worktree. Do NOT report this item as done."
             )
+        elif self.blocked_reason:
+            lines.append(f"- BLOCKED: {self.blocked_reason} Do NOT report this item as done.")
         elif self.blocked_secrets:
             lines.append("- BLOCKED: commit refused, possible secrets in the diff: " + "; ".join(self.blocked_secrets))
         elif self.no_changes:
@@ -334,6 +348,13 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
         out.stranded_on_base = True
         out.errors.append(f"work left uncommitted in {workdir} — recover or re-run")
         return out
+    if head_branch == "HEAD" or not head_branch:
+        # Detached HEAD (a crashed rebase/bisect, or the coder checked out a sha) —
+        # `--abbrev-ref` returns the literal string "HEAD". Publishing would push a
+        # branch named "HEAD"; refuse and leave the work recoverable instead.
+        out.blocked_reason = "the worktree is in detached-HEAD state — nothing was committed or pushed."
+        out.errors.append(f"work (if any) left in {workdir} — reattach the branch and re-run")
+        return out
     if head_branch and head_branch != branch:
         # The coder moved HEAD to its own branch despite the directive. Publishing what
         # it committed beats publishing an empty ref — adopt its branch, note the drift.
@@ -354,7 +375,8 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
             out.errors.append(f"unstaged scratch paths: {', '.join(scratch[:5])}{'…' if len(scratch) > 5 else ''}")
 
     # Secret scan on what would be committed — the harness commit is the one reliable
-    # interception point.
+    # interception point. The same diff text answers "is anything staged?" (its
+    # emptiness), so no separate `--quiet` probe.
     diff = await _git(workdir, "diff", "--cached", timeout=120)
     if diff.ok:
         found = _scan_added_lines(diff.stdout)
@@ -362,9 +384,13 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
             await _git(workdir, "reset", "-q")
             out.blocked_secrets = found
             return out
-
-    staged_check = await _git(workdir, "diff", "--cached", "--quiet")
-    have_staged = staged_check.error is None and staged_check.returncode != 0
+        have_staged = bool(diff.stdout.strip())
+    else:
+        # Diff unreadable — fall back to the exit-code probe. `--quiet` exits 1 for
+        # "staged changes present"; any OTHER nonzero (128 = corrupt index, …) is an
+        # error, not a yes.
+        staged_check = await _git(workdir, "diff", "--cached", "--quiet")
+        have_staged = staged_check.error is None and staged_check.returncode == 1
 
     if have_staged:
         commit = await _git(workdir, "commit", "--no-verify", "-m", f"{title}\n\nItem ID: {item_id}", env=env)
@@ -378,15 +404,27 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
         await _git(workdir, "fetch", "origin", branch)  # best-effort; remote may not exist yet
         remote_exists = (await _git(workdir, "rev-parse", "--verify", "--quiet", f"origin/{branch}")).ok
         local_ahead_base = await _count(workdir, f"origin/{base}..HEAD")
-        local_unpushed = await _count(workdir, f"origin/{branch}..HEAD") if remote_exists else local_ahead_base
-        remote_ahead_base = await _count(workdir, f"origin/{base}..origin/{branch}") if remote_exists else 0
-        if local_ahead_base and local_unpushed:
+        if local_ahead_base is None:
+            # _count contract: None = UNKNOWN (origin/<base> unresolvable), never 0.
+            # Claiming no_changes here would strand committed work behind an honest-
+            # looking "nothing to publish" — refuse loudly instead.
+            out.blocked_reason = f"origin/{base} is unresolvable — cannot tell whether the coder committed work."
+            out.errors.append(f"fetch origin/{base} and re-run; work (if any) is intact in {workdir}")
+            return out
+        local_unpushed = await _count(workdir, f"origin/{branch}..HEAD") if remote_exists else None
+        remote_ahead_base = (await _count(workdir, f"origin/{base}..origin/{branch}") or 0) if remote_exists else 0
+        if local_ahead_base and (local_unpushed is None or local_unpushed):
+            # Unknown unpushed-count ⇒ assume unpushed: re-pushing is idempotent,
+            # stranding is not.
             out.coder_did_git = "committed"
             out.committed = True
         elif remote_ahead_base:
-            out.coder_did_git = "pushed"
             sha = await _git(workdir, "rev-parse", f"origin/{branch}")
-            out.pushed, out.pushed_sha = True, (sha.stdout.strip() if sha.ok else "")
+            if not (sha.ok and sha.stdout.strip()):
+                out.blocked_reason = f"origin/{branch} is ahead of base but its sha is unresolvable."
+                return out
+            out.coder_did_git = "pushed"
+            out.pushed, out.pushed_sha = True, sha.stdout.strip()
         else:
             out.no_changes = True
             return out
@@ -410,7 +448,14 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
         head_sha = await _git(workdir, "rev-parse", "HEAD")
         out.commit_sha = head_sha.stdout.strip() if head_sha.ok else ""
         if not push.ok:
-            out.errors.append(f"push failed: {(push.stderr or push.error or '?')[:300]}")
+            blob = f"{push.stdout} {push.stderr}".lower()
+            if "stale info" in blob or "rejected" in blob:
+                out.errors.append(
+                    f"push refused: the remote branch moved since our fetch (a concurrent writer?) — "
+                    f"not overwriting it. Inspect origin/{branch} and re-run."
+                )
+            else:
+                out.errors.append(f"push failed: {(push.stderr or push.error or '?')[:300]}")
             return out
         # Verify the remote actually has our HEAD — "committed locally" never counts
         # as done (the industry's #1 false-success mode).
@@ -428,38 +473,39 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
 
 
 async def _push_with_retry(workdir: str, branch: str, lease: bool) -> ShellResult:
-    """Push with bounded backoff. ``--force-with-lease`` only after a successful
-    rebase (rewritten history); never bare ``--force``."""
+    """Push with bounded backoff on infrastructure failures. ``--force-with-lease``
+    only after a successful rebase (rewritten history); never bare ``--force``.
+
+    A lease REJECTION ("stale info") is deliberately NOT retried: fetching the branch
+    and re-pushing would move the lease baseline to the concurrent writer's tip and
+    the retry would silently overwrite their commits — the exact accident the lease
+    exists to prevent. It surfaces as a push failure for the operator to resolve."""
     args = ["push", *(["--force-with-lease"] if lease else []), "-u", "origin", branch]
-    res = ShellResult(1, "", "", error="push never ran")
-    for attempt in range(3):
+    for attempt in range(2):
         res = await _git(workdir, *args, timeout=120)
         if res.ok:
             return res
         blob = f"{res.stdout} {res.stderr} {res.error or ''}".lower()
-        transient = any(m in blob for m in ("stale info", "cannot lock ref", "could not resolve host", "index.lock"))
-        if transient and attempt < 2:
-            await _git(workdir, "fetch", "origin", branch)
-            await asyncio.sleep(0.5 * (2**attempt))
-            continue
-        return res
-    return res
+        transient = any(
+            m in blob for m in ("cannot lock ref", "could not resolve host", "unable to access", "connection")
+        )
+        if not transient:
+            return res
+        await asyncio.sleep(0.5 * (2**attempt))
+    return await _git(workdir, *args, timeout=120)
 
 
 # ── PR layer (idempotent) ─────────────────────────────────────────────────────
 
 
-async def preflight_pr(workdir: str, branch: str) -> str:
-    """URL of an already-open PR for ``branch``, or "". Run BEFORE dispatching the
-    coder: it catches restarts and the created-a-PR-but-crashed case across process
-    lifetimes, which the in-memory claim registry can't."""
+async def _pr_url_for(workdir: str, branch: str, *, state: str) -> str:
+    """URL of the newest PR for ``branch`` in ``state`` (gh's open/closed/merged/all),
+    or ""."""
     rc, stdout, _ = await run_gh(
-        ["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--limit", "1"],
+        ["pr", "list", "--head", branch, "--state", state, "--json", "url", "--limit", "1"],
         cwd=workdir,
     )
     if rc == 0 and stdout.strip():
-        import json
-
         try:
             rows = json.loads(stdout)
             if rows:
@@ -467,6 +513,13 @@ async def preflight_pr(workdir: str, branch: str) -> str:
         except ValueError:
             pass
     return ""
+
+
+async def preflight_pr(workdir: str, branch: str) -> str:
+    """URL of an already-open PR for ``branch``, or "". Run BEFORE dispatching the
+    coder: it catches restarts and the created-a-PR-but-crashed case across process
+    lifetimes, which the in-memory claim registry can't."""
+    return await _pr_url_for(workdir, branch, state="open")
 
 
 async def _open_pr(workdir: str, out: GitOutcome, *, title: str) -> None:
@@ -491,18 +544,8 @@ async def _open_pr(workdir: str, out: GitOutcome, *, title: str) -> None:
         out.pr_url, out.pr_state = url, "created"
         return
     if "already exists" in stderr.lower():
-        rc2, stdout2, _ = await run_gh(
-            ["pr", "list", "--head", out.branch, "--state", "all", "--json", "url", "--limit", "1"],
-            cwd=workdir,
-        )
-        if rc2 == 0 and stdout2.strip():
-            import json
-
-            try:
-                rows = json.loads(stdout2)
-                if rows:
-                    out.pr_url, out.pr_state = str(rows[0].get("url", "")), "existing"
-                    return
-            except ValueError:
-                pass
+        url = await _pr_url_for(workdir, out.branch, state="all")
+        if url:
+            out.pr_url, out.pr_state = url, "existing"
+            return
     out.errors.append(f"gh pr create failed: {stderr[:300] or '(no stderr)'}")

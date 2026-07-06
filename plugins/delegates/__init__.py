@@ -66,10 +66,14 @@ def _build_delegate_to(registry: DelegateRegistry):
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
+        # Normalize identity ONCE at the tool boundary: whitespace-padded ids must not
+        # hash/claim differently from their trimmed twin (that would silently defeat
+        # the one-PR-per-item dedup).
+        item_id = str(item_id or "").strip()
         if background:
             return await _spawn_background_delegation(registry, target, query, state, item_id=item_id)
         try:
-            return await registry.dispatch(target, query, item_id=item_id.strip() or None)
+            return await registry.dispatch(target, query, item_id=item_id or None)
         except DelegateError as exc:
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001 — surface as a tool error string
@@ -103,7 +107,7 @@ async def _spawn_background_delegation(
     except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
         mgr = None
     if mgr is None:
-        return await registry.dispatch(target, query, item_id=item_id.strip() or None)
+        return await registry.dispatch(target, query, item_id=item_id or None)
 
     try:
         from tools.lg_tools import _session_id_from
@@ -118,7 +122,7 @@ async def _spawn_background_delegation(
         # item_id rides into the dispatch itself, so the managed-git claim/dedup
         # applies identically to background and foreground fan-out (one registry,
         # one event loop).
-        return await registry.dispatch(target, query, item_id=item_id.strip() or None)
+        return await registry.dispatch(target, query, item_id=item_id or None)
 
     snippet = " ".join(query.split())[:80]
     job_id = await mgr.spawn_work(

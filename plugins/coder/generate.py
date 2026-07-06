@@ -88,11 +88,15 @@ def make_delegate_generator(delegate_name: str, *, solution_name: str = "solutio
                 f"(an openai model endpoint, or an acp coder). Available: {available}"
             )
         prompt = _prompt(task, solution_name=solution_name, feedback=feedback)
+        # raw=True: the reply is candidate CODE for the ladder to select from, not a
+        # change to publish — bypass a manage_git delegate's branch/commit/PR lifecycle
+        # (ADR 0076), which would otherwise open a real PR per best-of-k attempt and
+        # dedup attempts 2..k into "PR already exists" refusal strings.
         if d.type in _STATEFUL_TYPES:
             async with _lock_for(delegate_name):  # serialize concurrent best-of-k on one session
-                reply = await reg.dispatch(delegate_name, prompt)
+                reply = await reg.dispatch(delegate_name, prompt, raw=True)
         else:
-            reply = await reg.dispatch(delegate_name, prompt)
+            reply = await reg.dispatch(delegate_name, prompt, raw=True)
         return extract_code(reply)
 
     return generate

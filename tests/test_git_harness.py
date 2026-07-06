@@ -221,6 +221,86 @@ async def test_finish_blocks_secrets(repo, monkeypatch):
     assert (await _git(repo, "rev-list", "--count", "origin/main..HEAD")) == "0"
 
 
+async def test_finish_detached_head_refuses(repo, monkeypatch):
+    _fake_gh(monkeypatch, {"pr list": (0, "[]", "")})
+    await harness.prepare(str(repo), base="main", branch="t/detach-abc1234")
+    await _git(repo, "checkout", "--detach")
+    (repo / "adrift.txt").write_text("edited while detached\n")
+
+    out = await harness.finish(str(repo), base="main", branch="t/detach-abc1234", item_id="abc1234", title="Adrift")
+    assert out.blocked_reason and "detached" in out.blocked_reason
+    assert not out.committed and not out.pushed
+    assert "BLOCKED" in out.render()
+    # No branch literally named HEAD was minted or pushed.
+    res = await run_command(["git", "rev-parse", "--verify", "refs/heads/HEAD"], cwd=str(repo))
+    assert res.returncode != 0
+
+
+async def test_finish_unresolvable_base_blocks_instead_of_no_changes(repo, monkeypatch):
+    """_count contract: None = unknown, never 0 — committed work must not be
+    reported as 'no changes to publish'."""
+    _fake_gh(monkeypatch, {"pr list": (0, "[]", "")})
+    await harness.prepare(str(repo), base="main", branch="t/ghost-abc1234")
+    (repo / "real-work.txt").write_text("committed by the coder\n")
+    await _git(repo, "add", "-A")
+    await _git(repo, "commit", "-m", "coder work")
+
+    out = await harness.finish(str(repo), base="ghost", branch="t/ghost-abc1234", item_id="abc1234", title="Ghost")
+    assert not out.no_changes
+    assert out.blocked_reason and "unresolvable" in out.blocked_reason
+    assert not out.pushed
+
+
+async def test_push_lease_rejection_never_clobbers_concurrent_writer(repo, tmp_path, monkeypatch):
+    """A lease rejection must surface as a failure — never fetch-and-force over a
+    concurrent writer's commits."""
+    _fake_gh(monkeypatch, {"pr list": (0, "[]", "")})
+    branch = "t/race-abc1234"
+    await harness.prepare(str(repo), base="main", branch=branch)
+    (repo / "ours.txt").write_text("our work\n")
+
+    # A concurrent writer pushes to the same branch first, from a second clone.
+    other = tmp_path / "other"
+    origin_url = (await _git(repo, "remote", "get-url", "origin")).strip()
+    assert (await run_command(["git", "clone", origin_url, str(other)])).ok
+    await _git(other, "config", "user.email", "rival@example.com")
+    await _git(other, "config", "user.name", "Rival")
+    await _git(other, "checkout", "-b", branch, "origin/main")
+    (other / "theirs.txt").write_text("their work\n")
+    await _git(other, "add", "-A")
+    await _git(other, "commit", "-m", "concurrent work")
+    await _git(other, "push", "-u", "origin", branch)
+    their_sha = await _git(other, "rev-parse", "HEAD")
+
+    out = await harness.finish(str(repo), base="main", branch=branch, item_id="abc1234", title="Race")
+    assert not out.pushed
+    assert any("refused" in e or "failed" in e for e in out.errors)
+    # The concurrent writer's commit survived on the remote.
+    remote_sha = (await _git(repo, "ls-remote", "origin", f"refs/heads/{branch}")).split()[0]
+    assert remote_sha == their_sha
+
+
+async def test_registry_raw_dispatch_bypasses_managed_git(repo, monkeypatch):
+    """The coder ladder (ADR 0064) consumes replies as candidate code — raw=True must
+    skip branch/commit/PR and the claim."""
+    from plugins.delegates.adapters import AcpAdapter
+    from plugins.delegates.registry import DelegateRegistry
+
+    async def fake_prompt(self, d, query, *, timeout=None):
+        return "```python\nprint('candidate')\n```"
+
+    monkeypatch.setattr(AcpAdapter, "_prompt", fake_prompt)
+    reg = DelegateRegistry(
+        [{"name": "c1", "type": "acp", "command": "fake", "workdir": str(repo), "manage_git": "true"}]
+    )
+    reply = await reg.dispatch("c1", "same prompt", raw=True)
+    assert "candidate" in reply and "[managed git]" not in reply
+    assert await _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"  # no branch minted
+    # And a second identical raw dispatch is NOT deduped away (best-of-k stays k).
+    reply2 = await reg.dispatch("c1", "same prompt", raw=True)
+    assert "candidate" in reply2 and "already being built" not in reply2
+
+
 async def test_finish_reuses_existing_pr(repo, monkeypatch):
     _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/3"}]', "")})
     await harness.prepare(str(repo), base="main", branch="t/reuse-abc1234")
