@@ -175,3 +175,51 @@ def test_registry_loads_and_lists(tmp_path):
     assert reg.names() == ["wf"]
     assert reg.get("wf")["description"] == "d"
     assert reg.list()[0]["name"] == "wf"
+
+
+def test_register_sees_plugin_workflow_dirs_added_after_load(tmp_path, monkeypatch):
+    """Installed-plugin recipe dirs are only complete on STATE.plugin_workflow_dirs
+    AFTER the full plugin load — the workflows plugin registers earlier (in-tree
+    plugins load first), so an eager scan would permanently miss them (the ADR 0027
+    bundle promise). The registry must resolve lazily: a dir that lands on STATE
+    after register() shows up on the next access, without a reload."""
+    from types import SimpleNamespace
+
+    import plugins.workflows as wf
+    import runtime.state as rs
+
+    writable = tmp_path / "writable"
+    monkeypatch.setattr(wf.sdk, "config", lambda: SimpleNamespace(workflow_dir=str(writable)))
+    monkeypatch.setattr(wf.sdk, "subagent_types", lambda: {"researcher"})
+    monkeypatch.setattr(rs.STATE, "workflow_registry", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "workflow_run", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_workflow_dirs", [], raising=False)
+
+    class _Reg:
+        workflow_dirs: list = []
+
+        def register_tools(self, tools):
+            pass
+
+        def register_workflow_dir(self, d):
+            pass
+
+        def register_router(self, router, prefix=None):
+            pass
+
+    wf.register(_Reg())
+    baseline = {s["name"] for s in rs.STATE.workflow_registry.list()}
+    assert "late" not in baseline
+
+    # A git-installed plugin's workflows/ dir lands on STATE after this plugin loaded.
+    late_dir = tmp_path / "late-plugin" / "workflows"
+    late_dir.mkdir(parents=True)
+    (late_dir / "late.yaml").write_text(
+        "name: late\ndescription: from an installed plugin\nsteps:\n"
+        "  - id: a\n    subagent: researcher\n    prompt: p\n",
+        encoding="utf-8",
+    )
+    rs.STATE.plugin_workflow_dirs = [str(late_dir)]
+
+    names = {s["name"] for s in rs.STATE.workflow_registry.list()}
+    assert "late" in names  # no reload, no re-register — the proxy rescanned
