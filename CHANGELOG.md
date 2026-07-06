@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Findings `source` attribution — non-LLM panel members (ADR 0078 B2, #1864).** The ADR 0077
+  `Finding` schema gains an optional `source` field naming the producing engine (e.g.
+  `"protopatch"`; empty = an LLM panel finder), preserved through parse/`to_dict` round-trips and
+  shown in the markdown rendering. `FINDINGS_CONTRACT` pins the preserve-verbatim rule; the
+  review-synthesizer treats tool-sourced findings as full panel members (same dedup/re-grade/drop
+  rules, cross-engine merges keep the attribution) and the verifier applies the same skeptical
+  verify to them. Enables the pr-reviewer plugin's protoPatch structural finder to join the
+  review panel with its findings attributed end-to-end.
+
 ## [0.94.0] - 2026-07-06
 
 ## [0.93.1] - 2026-07-05
