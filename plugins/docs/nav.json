@@ -661,6 +661,10 @@
           "title": "0076 — Managed git for `acp` delegates: framework-owned branch/commit/push/PR"
         },
         {
+          "path": "adr/0077-adversarial-code-review-workflow.md",
+          "title": "0077 — Adversarial code-review workflow + the findings convention"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

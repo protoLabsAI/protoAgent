@@ -1,60 +1,61 @@
 ---
 name: code-review
 description: >-
-  /code-review — review a diff along two independent axes, Standards (does it
-  follow the repo's conventions?) and Spec (does it do what was asked?), in
-  parallel subagents whose findings are never merged.
+  /code-review — adversarial PR review via the code-review workflow: four
+  parallel finder angles, dedup, an evidence-checking verify pass, and a
+  findings report. Falls back to a two-axis inline review when the workflow
+  isn't available.
 user_only: true
 slash: code-review
 ---
 
-# Code Review — two axes
+# Code Review — adversarial panel
 
-A change can follow every convention and still build the wrong thing, or do
-exactly what was asked while trashing the codebase's rules. Review both axes
-**separately** so neither masks the other.
+Drive the `code-review` workflow (ADR 0077): four review-finders read the diff
+in parallel (correctness / removed behavior / cross-file / conventions), a
+synthesizer dedups and ranks, a verifier re-reads the diff and
+confirms/refutes each finding, and the refuted ones are dropped. You gather
+the inputs, run it, and present the outcome — you do not review inline.
 
-## 1. Pin the diff
+## 1. Pin the PR
 
-Get a concrete diff before anything else:
+The workflow reviews a **pull request** (it reads via `github_pr_diff`):
 
-- With shell/git access: `git diff <fixed-point>...HEAD` (three-dot, against
-  the merge-base). Confirm the ref resolves and the diff is non-empty — a bad
-  ref should fail here, not inside two subagents.
-- Without git access: ask the user to paste the diff or point at a PR you can
-  fetch with the tools you have.
+- Given a PR number or URL → extract the number, and the `owner/name` repo if
+  it differs from the configured default.
+- Given a branch or "my current changes" → find its PR (`github_get_pr` /
+  `gh pr view`). No PR yet → say so and offer the fallback below.
+- Given only a commit SHA → the finders can use `github_get_commit_diff`;
+  pass the SHA as `pr` only if there is no PR, and say the verify pass will
+  anchor to the commit.
 
-## 2. Find the two source documents
+## 2. Run the workflow
 
-- **Spec source** — the originating ask: a tasks-board entry, an active goal,
-  an issue/PRD the user names, or the conversation itself. If none exists,
-  the Spec axis reports "no spec available" instead of inventing one.
-- **Standards sources** — whatever the repo documents about how code should
-  be written (contributor docs, agent instructions, ADRs near the touched
-  code). On top of these, the Standards axis always carries a smell baseline:
-  mysterious names, duplicated logic, data clumps, primitive obsession,
-  shotgun surgery, speculative generality, message chains. Documented repo
-  standards override the baseline; baseline hits are judgement calls, never
-  hard violations; skip anything tooling already enforces.
+```
+run_workflow("code-review", {"pr": "<number>", "repo": "<owner/name or omit>"})
+```
 
-## 3. Run both axes in parallel
+It is slow-ish (6 subagent steps, 4 in parallel) — tell the user it's running.
 
-One `task_batch`, two delegations (`subagent_type: verifier` suits both;
-unknown types are skipped, so use a registered one), each given the diff plus
-only its own source documents:
+## 3. Present the outcome
 
-- **Standards brief**: report every documented-standard violation (cite the
-  rule) and any baseline smell (name it, quote the hunk), distinguishing hard
-  violations from judgement calls. Under 400 words.
-- **Spec brief**: report (a) requirements missing or partial, (b) behavior
-  nobody asked for, (c) requirements that look implemented but wrong —
-  quoting the spec line for each. Under 400 words.
+The output ends with the canonical fenced findings JSON
+(`graph/review/findings.py` schema — file, line, severity, category, claim,
+evidence, verdict). Present the prose brief, then the findings **grouped by
+severity, worst first**, keeping each finding's verdict visible ("confirmed"
+vs "uncertain" — the reader weighs them differently). A clean review is a
+result, not a failure: say the panel found nothing and name the angles it
+covered. Don't re-litigate individual findings — the verify pass already did;
+if the user disputes one, offer to re-run the verifier on just that claim.
 
-## 4. Aggregate without merging
+## Fallback — workflow unavailable
 
-Present the two reports under `## Standards` and `## Spec`, lightly cleaned.
-Do **not** merge or rerank findings across axes — a clean axis must be
-visibly clean, and a noisy one must not bury the other. Close with one line
-per axis: finding count and the worst item within that axis.
-
-*(Adapted from mattpocock/skills `code-review`, MIT.)*
+If `run_workflow` or the github tools aren't available (plugin disabled, no
+`gh` auth), run the lightweight two-axis review inline instead: pin a concrete
+diff (`git diff <fixed-point>...HEAD`, three-dot), then two parallel
+delegations (`subagent_type: verifier`) — a **Standards** brief (documented
+repo conventions + baseline smells: mysterious names, duplicated logic, data
+clumps, shotgun surgery) and a **Spec** brief (missing/partial requirements,
+unrequested behavior, implemented-but-wrong) — and present the two reports
+under `## Standards` / `## Spec` without merging them, one closing line per
+axis. *(Adapted from mattpocock/skills `code-review`, MIT.)*
