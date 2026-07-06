@@ -665,6 +665,10 @@
           "title": "0077 — Adversarial code-review workflow + the findings convention"
         },
         {
+          "path": "adr/0078-fleet-pr-review-qa-tier.md",
+          "title": "0078 — Fleet PR review as a protoAgent tier: harvest Quinn, keep the panel"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
