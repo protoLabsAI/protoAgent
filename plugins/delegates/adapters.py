@@ -86,6 +86,12 @@ class Delegate:
     allow_kinds: list[str] = field(default_factory=list)
     deny_kinds: list[str] = field(default_factory=list)
     confirm: bool = False
+    # acp managed git (ADR 0076): the framework owns branch/commit/push/PR; the
+    # coder edits files only. Off by default — non-worktree setups keep the old
+    # coder-owns-git mode.
+    manage_git: bool = False
+    base_branch: str = "main"
+    branch_prefix: str = ""  # empty ⇒ the delegate's name
 
 
 def _secret(raw: dict, value_key: str, env_key: str) -> str:
@@ -515,6 +521,29 @@ class AcpAdapter(Adapter):
                 help="Ask the operator before each call.",
             ),
             FieldSpec("timeout_s", "Timeout (s)", "number", default=600),
+            FieldSpec(
+                "manage_git",
+                "Managed git",
+                "select",
+                options=["false", "true"],
+                default="false",
+                help="Framework owns branch/commit/push/PR (ADR 0076); the coder only edits "
+                "files. Needs workdir to be a git checkout with an `origin` remote.",
+            ),
+            FieldSpec(
+                "base_branch",
+                "Base branch",
+                "text",
+                placeholder="main",
+                help="Managed git: branches are cut from fresh origin/<base> and PRs target it.",
+            ),
+            FieldSpec(
+                "branch_prefix",
+                "Branch prefix",
+                "text",
+                placeholder="(delegate name)",
+                help="Managed git: branch names are <prefix>/<slug>-<id7>. Empty ⇒ the delegate's name.",
+            ),
         ]
 
     def parse(self, raw: dict) -> Delegate:
@@ -543,6 +572,9 @@ class AcpAdapter(Adapter):
         d.allow_kinds = [str(k).lower() for k in (raw.get("allow_kinds") or [])]
         d.deny_kinds = [str(k).lower() for k in (raw.get("deny_kinds") or [])]
         d.confirm = str(raw.get("confirm", "")).strip().lower() in ("1", "true", "yes")
+        d.manage_git = str(raw.get("manage_git", "")).strip().lower() in ("1", "true", "yes")
+        d.base_branch = str(raw.get("base_branch") or "main").strip() or "main"
+        d.branch_prefix = str(raw.get("branch_prefix", "")).strip()
         return d
 
     @staticmethod
@@ -563,7 +595,12 @@ class AcpAdapter(Adapter):
             "deny_kinds": d.deny_kinds,
         }
 
-    async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
+    async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None) -> str:
+        if d.manage_git:
+            return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id)
+        return await self._prompt(d, query, timeout=timeout)
+
+    async def _prompt(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
         # Reuse the ADR 0024 ACP client + by-kind permission policy.
         from plugins.coding_agent import _client_for, _drop_client, _make_permission
         from plugins.coding_agent.acp_client import AcpError
@@ -584,6 +621,41 @@ class AcpAdapter(Adapter):
             raise
         except AcpError as exc:
             raise DelegateError(str(exc))
+
+    async def _dispatch_managed(
+        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+    ) -> str:
+        """Managed-git dispatch (ADR 0076): claim → PR pre-flight → branch setup →
+        edit-only coder run → framework-owned commit/rebase/push/PR. The claim dedups
+        in-flight duplicates (fan-out of one item); the PR pre-flight dedups across
+        restarts. On a coder failure the worktree keeps its edits and a re-run's
+        idempotent lifecycle adopts them."""
+        from plugins.coding_agent import git_harness as harness
+
+        iid = (item_id or "").strip() or harness.derive_item_id(query)
+        branch = harness.mint_branch(d.branch_prefix or d.name, query, iid)
+        holder = harness.claim(iid, d.name)
+        if holder is not None:
+            return (
+                f"Item `{iid}` is already being built by {holder!r} (branch `{branch}`) — not "
+                "dispatching a duplicate. Wait for the in-flight run instead of re-fanning this item."
+            )
+        try:
+            workdir = os.path.expanduser(d.workdir)
+            existing = await harness.preflight_pr(workdir, branch)
+            if existing:
+                return f"An open PR already exists for item `{iid}` (branch `{branch}`): {existing} — not dispatching a duplicate."
+            prep = await harness.prepare(workdir, base=d.base_branch, branch=branch)
+            if prep.error:
+                return f"Error: managed-git setup for {d.name!r} failed: {prep.error}"
+            reply = await self._prompt(d, query + harness.edit_only_directive(branch), timeout=timeout)
+            outcome = await harness.finish(
+                workdir, base=d.base_branch, branch=branch, item_id=iid, title=harness.title_from(query)
+            )
+            notes = "".join(f"\n- note: {n}" for n in prep.notes)
+            return f"{reply}\n\n{outcome.render()}{notes}"
+        finally:
+            harness.release(iid)
 
     async def teardown(self, d: Delegate) -> bool:
         """Evict + terminate the cached ACP subprocess for this delegate.

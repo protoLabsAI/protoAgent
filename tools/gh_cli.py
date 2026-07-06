@@ -25,11 +25,12 @@ def _resolve_token() -> str | None:
     return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
 
 
-async def run_gh(args: list[str], timeout: int = _COMMAND_TIMEOUT) -> tuple[int, str, str]:
+async def run_gh(args: list[str], timeout: int = _COMMAND_TIMEOUT, cwd: str | None = None) -> tuple[int, str, str]:
     """Run a ``gh`` command, returning ``(returncode, stdout, stderr)``.
 
     Times out (killing the process), and reports a clean error when ``gh``
-    isn't installed instead of raising.
+    isn't installed instead of raising. ``cwd`` scopes repo-relative commands
+    (``gh pr …``) to a checkout, the way ``gh`` resolves the target repo.
     """
     env = os.environ.copy()
     token = _resolve_token()
@@ -44,6 +45,7 @@ async def run_gh(args: list[str], timeout: int = _COMMAND_TIMEOUT) -> tuple[int,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            cwd=cwd,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return (

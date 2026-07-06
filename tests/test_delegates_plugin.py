@@ -68,6 +68,24 @@ def test_acp_parse_ok_and_requires_command_workdir():
         ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": "proto"})  # no workdir
 
 
+def test_acp_parse_manage_git_fields():
+    # Managed git (ADR 0076): off by default; fields parse with sane fallbacks.
+    d = ADAPTERS["acp"].parse({"name": "c", "type": "acp", "command": "proto", "workdir": "/tmp"})
+    assert d.manage_git is False and d.base_branch == "main" and d.branch_prefix == ""
+    d = ADAPTERS["acp"].parse(
+        {
+            "name": "c",
+            "type": "acp",
+            "command": "proto",
+            "workdir": "/tmp",
+            "manage_git": "true",
+            "base_branch": "  develop ",
+            "branch_prefix": "wt-1",
+        }
+    )
+    assert d.manage_git is True and d.base_branch == "develop" and d.branch_prefix == "wt-1"
+
+
 def test_acp_parse_claude_code_alias():
     # `claude-code` is a convenience alias for the claude-agent-acp adapter (#1116):
     # the operator's intuitive name maps to the real binary, with no launch args.
@@ -304,11 +322,11 @@ async def test_delegate_to_background_falls_back_inline_without_manager(monkeypa
     assert out == "dispatched:quick q"
 
 
-async def _fake_dispatch(self, name, query):
+async def _fake_dispatch(self, name, query, *, item_id=None):
     return f"dispatched:{query}"
 
 
-async def _unexpected_dispatch(self, name, query):
+async def _unexpected_dispatch(self, name, query, *, item_id=None):
     raise AssertionError("dispatch must not run inline when a background job is spawned")
 
 
