@@ -86,6 +86,7 @@ Ship it, isolate it, fence it in, and watch it.
 | Guide | When to read |
 |---|---|
 | [Deploy via GHCR](/guides/deploy) | You're ready to ship and want auto-deploy wired up |
+| [Deploy on Proxmox (reusable LXC template)](/guides/deploy-proxmox) | You run Proxmox and want a clone-in-seconds template for test/fleet instances |
 | [Releasing](/guides/releasing) | You're cutting a versioned release (semver bump → image → GitHub release) |
 | [Run multiple instances](/guides/multi-instance) | You want several scoped agents (data isolation) on one host |
 | [Sandboxing & egress](/guides/sandboxing) | You want to fence the filesystem + outbound network |

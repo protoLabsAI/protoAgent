@@ -148,6 +148,7 @@ export default defineConfig({
           items: [
             { text: "Deploy via GHCR", link: "/guides/deploy" },
             { text: "Deploy in Docker (seed + UI override)", link: "/guides/deploy-docker" },
+            { text: "Deploy on Proxmox (reusable LXC template)", link: "/guides/deploy-proxmox" },
             { text: "Releasing", link: "/guides/releasing" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Sandboxing & egress", link: "/guides/sandboxing" },
