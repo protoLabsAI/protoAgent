@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Installed-plugin workflow recipes were silently invisible (#1867).** The in-tree `workflows`
+  plugin scanned recipe dirs eagerly at register time — before instance-installed plugins had
+  loaded — so a git-installed plugin's `workflows/` dir (the ADR 0027 bundle promise) never
+  reached the registry, at boot or reload. The registry now resolves lazily (rebuilt when the
+  plugin-dir set changes) behind a live proxy on `STATE.workflow_registry`, so boot ordering,
+  `enable_plugin` hot installs, and config reloads all pick up plugin recipes.
+
 ## [0.95.0] - 2026-07-06
 
 ### Added
