@@ -67,8 +67,17 @@ async def run_subagent(
     Pulls the config + knowledge store + scheduler from runtime state, so a plugin
     tool only supplies the subagent + prompt. This is the capability the workflows
     plugin's engine injects as its per-step ``run_step``.
+
+    ``extra_tools`` defaults to the host's plugin + MCP tools (the same set the
+    lead graph and the console fan-out expose) — a subagent whose allowlist names
+    a plugin tool (the review-finder's ``github_pr_diff``, a finance backtester)
+    must see it here too, or every SDK-driven workflow step silently degrades to
+    "No tools available". Pass an explicit list (even ``[]``) to override.
     """
     from graph.agent import run_manual_subagent
+
+    if extra_tools is None:
+        extra_tools = list(getattr(STATE, "plugin_tools", None) or []) + list(getattr(STATE, "mcp_tools", None) or [])
 
     return await run_manual_subagent(
         STATE.graph_config,
