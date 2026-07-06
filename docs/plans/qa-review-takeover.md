@@ -80,7 +80,21 @@ message); self-review guard (author == token identity ⇒ refuse). Write-gated l
 **Accept:** unit tests prove a blocking verdict is impossible against pending CI and
 against the agent's own PR.
 
-**B2 — protoPatch as a first-class panel member** `protoAgent` + `pr-reviewer-plugin` [M]
+**B2 — protoPatch as a first-class panel member** `protoAgent` + `pr-reviewer-plugin` [M, SHIPPED 2026-07-06]
+Shipped as protoAgent #1864 (findings `source` attribution, released v0.95.0) + the new
+[pr-reviewer-plugin](https://github.com/protoLabsAI/pr-reviewer-plugin) repo (v0.1.0:
+`protopatch_review` tool, `structural-finder` seat, `code-review-structural` recipe).
+Acceptance passed live 2026-07-06 on a seeded fixture PR (pr-reviewer-plugin#1): the
+full run's final block carried 2 verify-confirmed `source: protopatch` findings
+(including the planted lock-removal race, independently flagged by the engine AND an
+LLM finder — the cross-engine merge kept the attribution); the starved run (1s budget,
+cold state) degraded to exactly the prescribed Gap line + a four-finder review with no
+failed step. Two core fixes fell out: #1867 (installed-plugin workflow recipes were
+silently invisible — lazy registry) and #1868 (the report pass now carries verify
+verdicts into the final JSON). One deliberate deviation from the sketch below: the
+tool reads findings from the clawpatch state dir (`ci --json` emits counts only) and
+confines them to the PR's changed files; unchanged-head re-reviews reuse the persisted
+state in <1s — Quinn's prior-review flow for free.
 protoPatch (our `clawpatch` CLI, npm-published, protolabs/smart via gateway) is a big
 part of Quinn's strength — the cross-file/systemic engine a diff pass can't match. It
 joins OUR pipeline as a **fifth, non-LLM finder**, not an optional garnish:
