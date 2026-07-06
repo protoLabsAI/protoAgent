@@ -171,15 +171,25 @@ def parse_findings(text: str) -> list[Finding]:
 
     Picks the candidate JSON array with the most finding-shaped items (models
     sometimes echo an earlier step's list before their own — the fuller list is
-    the deliverable; ties → the LAST one, the reply's conclusion). An explicit
-    empty array parses as [] (a clean review), as does text with no array at all
-    — callers that must distinguish should check for the fence themselves.
+    the deliverable). Among arrays of EQUAL length, the one carrying the most
+    verdicts wins — the verify pass annotates the same findings with
+    confirmed/refuted/uncertain, and the final report often reprints the plain
+    (verdict-less) list alongside it; a bare last-wins tie-break would drop the
+    computed verdicts from the rendered report depending on print order. Genuine
+    ties (same length, same verdict count) → the LAST one, the reply's
+    conclusion. An explicit empty array parses as [] (a clean review), as does
+    text with no array at all — callers that must distinguish should check for
+    the fence themselves.
     """
     best: list[Finding] = []
+    best_key = (-1, -1)
     for arr in _candidate_arrays(text):
         findings = [f for item in arr if isinstance(item, dict) and (f := _coerce(item))]
-        if len(findings) >= len(best):
-            best = findings
+        # (finding count, verdict count): count picks the deliverable, verdict
+        # count keeps the verify pass's annotations on an equal-length tie.
+        key = (len(findings), sum(1 for f in findings if f.verdict))
+        if key >= best_key:
+            best, best_key = findings, key
     return best
 
 
