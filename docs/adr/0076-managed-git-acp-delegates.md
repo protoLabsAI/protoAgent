@@ -61,8 +61,8 @@ converges on one claim (see D5) instead of N branches. protoMaker's caged-LLM na
 deliberately not ported — its own validation doesn't enforce the ID suffix; uniqueness
 was always the deterministic path.
 
-**D3 — Pre-run setup (harness, in the delegate's `workdir`):** `git fetch origin
-<base>`; `git checkout -B <branch> origin/<base>` (never HEAD); a reused branch with 0
+**D3 — Pre-run setup (harness, in the delegate's `workdir`):** fetch the base, then
+`git checkout -B <branch> origin/<base>` (never HEAD); a reused branch with 0
 commits ahead of base is hard-reset to `origin/<base>`; scratch dirs (`.proto/`, …)
 seeded into `.git/info/exclude`; committer identity injected (env + local config —
 containers often have none). The ACP prompt gains an edit-only directive ("do NOT
