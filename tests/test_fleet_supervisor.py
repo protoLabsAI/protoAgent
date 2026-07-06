@@ -661,3 +661,62 @@ def test_host_entry_member_flag(fleet, monkeypatch):
     monkeypatch.setattr(manager, "is_workspace_member", lambda: True)
     host = next(a for a in supervisor.status() if a.get("host"))
     assert host["member"] is True
+
+
+def _env_capturing_fleet(tmp_path, monkeypatch):
+    """Like the ``fleet`` fixture but captures the env passed to Popen, so a test can
+    assert what the spawned child inherits."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    alive: set[int] = set()
+    captured: dict = {}
+    monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
+
+    class FakeProc:
+        returncode = None
+
+        def __init__(self, *a, **k):
+            self.pid = 99001
+            alive.add(99001)
+            captured["env"] = k.get("env", {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
+    return captured
+
+
+def test_spawned_member_runs_open_on_loopback(tmp_path, monkeypatch):
+    """A hub-spawned member must NOT inherit the hub's inbound A2A_AUTH_TOKEN — else it
+    would require a bearer that a token-free local dispatch (the portfolio PM) never sends,
+    making a spawned team unreachable by its own PM (the 401). It runs open on loopback."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "hub-inbound-secret")
+    manager.create("beta", port=7891)
+
+    supervisor.start("beta")
+
+    assert "A2A_AUTH_TOKEN" not in captured["env"]  # stripped
+    assert captured["env"].get("PROTOAGENT_ALLOW_OPEN") == "1"
+
+
+def test_spawned_member_keeps_explicit_workspace_token(tmp_path, monkeypatch):
+    """If the workspace's OWN run_exec env sets A2A_AUTH_TOKEN, that's an explicit per-team
+    token and must be preserved (only the INHERITED hub token is stripped)."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "hub-inbound-secret")
+    manager.create("gamma", port=7892)
+
+    real_run_exec = manager.run_exec
+
+    def run_exec_with_token(wid, extra):
+        env, argv = real_run_exec(wid, extra)
+        env["A2A_AUTH_TOKEN"] = "team-own-token"
+        return env, argv
+
+    monkeypatch.setattr(supervisor.manager, "run_exec", run_exec_with_token)
+    supervisor.start("gamma")
+
+    assert captured["env"].get("A2A_AUTH_TOKEN") == "team-own-token"  # explicit token wins

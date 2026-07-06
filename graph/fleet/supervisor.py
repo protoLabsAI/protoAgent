@@ -188,6 +188,16 @@ def start(ident: str) -> dict:
 
         env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
+        # A hub-spawned member binds loopback and is reached in-process — the fleet proxy
+        # attaches the hub's own token, and the portfolio PM treats a local board as
+        # tokenless. But the child inherits the hub's INBOUND ``A2A_AUTH_TOKEN`` here, which
+        # would make it REQUIRE a bearer that a token-free local dispatch never sends → 401
+        # (a spawned team is unreachable by its own PM). So a spawned member runs OPEN on
+        # loopback unless its own workspace env set a token explicitly. Loopback-only, so
+        # open is safe; ``PROTOAGENT_ALLOW_OPEN`` covers the case it binds a non-loopback host.
+        if "A2A_AUTH_TOKEN" not in env:
+            full_env.pop("A2A_AUTH_TOKEN", None)
+            full_env.setdefault("PROTOAGENT_ALLOW_OPEN", "1")
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_offset = log_path.stat().st_size if log_path.exists() else 0
