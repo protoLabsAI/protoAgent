@@ -34,6 +34,7 @@ def _build_delegate_to(registry: DelegateRegistry):
         target: str,
         query: str,
         background: bool = False,
+        item_id: str = "",
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Hand a question or task to one of your configured delegates and return its reply.
@@ -58,13 +59,17 @@ def _build_delegate_to(registry: DelegateRegistry):
                 does not see this conversation, so restate what it needs.
             background: run the delegation detached and get the reply back on
                 completion, instead of waiting inline (default False).
+            item_id: stable work-item id for a coding task on a managed-git coding
+                agent — one PR per id, and a second dispatch of an in-flight id is
+                refused instead of duplicating the work. Use the issue/board id when
+                there is one; leave empty to derive one from the query text.
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
         if background:
-            return await _spawn_background_delegation(registry, target, query, state)
+            return await _spawn_background_delegation(registry, target, query, state, item_id=item_id)
         try:
-            return await registry.dispatch(target, query)
+            return await registry.dispatch(target, query, item_id=item_id.strip() or None)
         except DelegateError as exc:
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001 — surface as a tool error string
@@ -75,7 +80,9 @@ def _build_delegate_to(registry: DelegateRegistry):
     return delegate_to
 
 
-async def _spawn_background_delegation(registry: DelegateRegistry, target: str, query: str, state: Any) -> str:
+async def _spawn_background_delegation(
+    registry: DelegateRegistry, target: str, query: str, state: Any, *, item_id: str = ""
+) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
     durable store + concurrency cap + drain-on-next-turn notification that
@@ -96,7 +103,7 @@ async def _spawn_background_delegation(registry: DelegateRegistry, target: str, 
     except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
         mgr = None
     if mgr is None:
-        return await registry.dispatch(target, query)
+        return await registry.dispatch(target, query, item_id=item_id.strip() or None)
 
     try:
         from tools.lg_tools import _session_id_from
@@ -108,7 +115,10 @@ async def _spawn_background_delegation(registry: DelegateRegistry, target: str, 
         session = ""
 
     async def _work() -> str:
-        return await registry.dispatch(target, query)
+        # item_id rides into the dispatch itself, so the managed-git claim/dedup
+        # applies identically to background and foreground fan-out (one registry,
+        # one event loop).
+        return await registry.dispatch(target, query, item_id=item_id.strip() or None)
 
     snippet = " ".join(query.split())[:80]
     job_id = await mgr.spawn_work(

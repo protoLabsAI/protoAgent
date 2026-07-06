@@ -63,9 +63,12 @@ class DelegateRegistry:
             for d in self._items.values()
         ]
 
-    async def dispatch(self, name: str, query: str) -> str:
+    async def dispatch(self, name: str, query: str, *, item_id: str | None = None) -> str:
         d = self._items.get(name)
         if d is None:
             raise DelegateError(f"unknown delegate {name!r}. Configured: {', '.join(self._items) or '(none)'}.")
         adapter = ADAPTERS[d.type]
+        if d.type == "acp":
+            # Only the acp adapter understands work-item identity (managed git, ADR 0076).
+            return await adapter.dispatch(d, query, item_id=item_id)
         return await adapter.dispatch(d, query)

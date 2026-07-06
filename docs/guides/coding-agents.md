@@ -209,8 +209,9 @@ fi
 
 Because the ACP child **inherits protoAgent's environment** (see above), `OPENAI_API_KEY`
 — the gateway key protoAgent already has — flows straight through, and so does anything
-else the coder needs from its shell (e.g. a `GH_TOKEN` so it can `git push` / `gh pr
-create` from its `workdir`). No second secret store.
+else the coder needs from its shell (e.g. a `GH_TOKEN` for `git push` / `gh pr create`
+from its `workdir` — run by the coder itself in the default mode, or by the framework's
+git harness under `manage_git: true`, §Managed git below). No second secret store.
 
 > The `workdir` still has to be a real, writable checkout of the repo the coder edits —
 > provision it however you like (bake a clone, or `git clone` it at entrypoint with a
@@ -242,22 +243,65 @@ done
 **2. Declare one coder per worktree** — same binary, distinct `workdir`:
 
 ```yaml
-coding_agent:
-  agents:
-    - { name: coder-1, command: proto, args: ["--acp"], workdir: /work/wt-1 }
-    - { name: coder-2, command: proto, args: ["--acp"], workdir: /work/wt-2 }
-    - { name: coder-3, command: proto, args: ["--acp"], workdir: /work/wt-3 }
+delegates:
+  - { name: coder-1, type: acp, command: proto, args: ["--acp"], workdir: /work/wt-1, manage_git: true }
+  - { name: coder-2, type: acp, command: proto, args: ["--acp"], workdir: /work/wt-2, manage_git: true }
+  - { name: coder-3, type: acp, command: proto, args: ["--acp"], workdir: /work/wt-3, manage_git: true }
 ```
 
-**3. Fan out.** The agent issues several `code_with(coder-N, …)` calls in one turn (the tool
-node runs a turn's tool calls concurrently), or several `delegate_to(…, background=True)`
-calls — each lands on a free coder in its own worktree. The pool size is the cap; extra work
-queues. Tell each coder to branch off `origin/main` (`git checkout -b <task> origin/main`) so
-parallel branches never share a checkout.
+**3. Fan out.** The agent issues several `delegate_to(coder-N, …)` calls in one turn (the
+tool node runs a turn's tool calls concurrently), or several `delegate_to(…,
+background=True)` calls — each lands on a free coder in its own worktree. The pool size is
+the cap; extra work queues.
 
 Two caveats worth planning for: worktrees don't share `node_modules`/build caches (install
 per-worktree, or share a package store), and two parallel PRs that touch the same file will
 conflict at *merge* time (normal parallel-dev friction — rebase the loser), not at build time.
+
+### Managed git: the framework owns branch/commit/push/PR (ADR 0076)
+
+By default the coder owns its own git lifecycle — fine for a single supervised coder in a
+disposable checkout. At pool scale it is the reliability ceiling: coders invent colliding
+branch names (linked worktrees refuse the same branch twice), report "done" without ever
+pushing, open duplicate PRs when one item is fanned to several coders, and `git add -A`
+their scratch into the diff. Every one of those is a *deterministic* step an LLM was asked
+to perform.
+
+`manage_git: true` on an `acp` delegate moves the whole lifecycle into the framework
+(`plugins/coding_agent/git_harness.py`); the coder is told to **edit files and run tests
+only**. Per dispatch, the harness:
+
+1. derives a stable **work-item id** — `delegate_to(…, item_id="issue-42")`, or a hash of
+   the query text when omitted — and **claims** it: a second dispatch of an in-flight item
+   (any coder) is refused instead of duplicated, and an already-open PR for the item's
+   branch short-circuits before the coder even runs;
+2. mints the branch deterministically (`<branch_prefix>/<slug>-<id7>`, prefix defaults to
+   the delegate name) and cuts it from **fresh `origin/<base_branch>`** — never local HEAD;
+3. after the coder finishes: refuses to commit on the base branch (work stays recoverable
+   in the worktree — no completion theater), scans the diff for secrets, commits on the
+   coder's behalf, rebases onto fresh base (a conflict is reported and pushed as-is, not
+   fatal), pushes with `--force-with-lease`, **verifies the remote SHA actually moved**,
+   and opens the PR idempotently (re-runs reuse the existing PR).
+
+The lifecycle is idempotent to a coder that did partial git anyway (its commits are
+adopted, not duplicated), and the run's outcome — branch, verified push, PR URL, or the
+exact reason nothing was published — is appended to the coder's reply.
+
+```yaml
+delegates:
+  - name: coder-1
+    type: acp
+    command: proto
+    args: ["--acp"]
+    workdir: /work/wt-1
+    manage_git: true       # framework-owned git lifecycle
+    base_branch: main      # branches cut from origin/<base>; PRs target it
+    # branch_prefix: wt-1  # optional; defaults to the delegate name
+```
+
+The PR step needs `gh` on PATH and a `GH_TOKEN`/`GITHUB_TOKEN` (the same container env as
+above). Without them the branch is still pushed and verified — the reply just reports the
+PR step's failure instead of a URL.
 
 ## How it works
 
