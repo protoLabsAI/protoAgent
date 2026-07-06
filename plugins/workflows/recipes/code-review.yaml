@@ -25,6 +25,13 @@ inputs:
   - name: repo
     description: Repository as owner/name (omit to use the configured default repo).
     default: ""
+  - name: prior_findings
+    description: >-
+      Findings JSON from a previous review of this PR (optional). When present,
+      finders run a DELTA re-review: drop what's fixed, carry forward what's
+      still open, then look for new defects. GitHub-native review memory
+      (ADR 0078 D5) — the caller recalls, the panel re-evaluates.
+    default: "(none — first review of this PR)"
 steps:
   - id: find_correctness
     subagent: review-finder
@@ -34,6 +41,9 @@ steps:
       off-by-ones, broken edge cases, error-handling gaps, races, wrong
       conditionals, unhandled None/empty/failure paths — does this code do what
       it claims under all inputs it will actually see?
+
+      ## Prior findings
+      {{inputs.prior_findings}}
 
   - id: find_removed_behavior
     subagent: review-finder
@@ -45,6 +55,9 @@ steps:
       conditions, deleted call sites, semantics changed without the callers
       changing. Regressions hide on the minus side of the diff.
 
+      ## Prior findings
+      {{inputs.prior_findings}}
+
   - id: find_crossfile
     subagent: review-finder
     prompt: |
@@ -54,6 +67,9 @@ steps:
       consumers, config keys renamed on one side only, docs/tests contradicting
       the new behavior. Use github_read_file on the files the diff touches
       indirectly — this angle is exactly the one a hunk-by-hunk read misses.
+
+      ## Prior findings
+      {{inputs.prior_findings}}
 
   - id: find_conventions
     subagent: review-finder
@@ -65,6 +81,9 @@ steps:
       lies, duplicated logic, dead/debug code left in, missing or weakened
       tests for changed behavior, secrets or scratch files in the diff.
       Severity honestly — most convention findings are minor/nit.
+
+      ## Prior findings
+      {{inputs.prior_findings}}
 
   - id: synthesize
     subagent: review-synthesizer

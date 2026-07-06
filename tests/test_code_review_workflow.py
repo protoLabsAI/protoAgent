@@ -74,3 +74,36 @@ def test_recipe_shape_four_finders_then_synthesize_verify_report():
 
 def test_recipe_output_is_the_final_report():
     assert _recipe()["output"].strip() == "{{steps.report.output}}"
+
+
+# ── the noise ledger + delta re-review (ADR 0078 Phase A1) ────────────────────
+
+
+def test_finder_carries_the_noise_ledger_and_gap_rule():
+    p = SUBAGENT_REGISTRY["review-finder"].system_prompt
+    assert "OUT OF SCOPE" in p and "linter or formatter already owns" in p
+    assert "Gap: unverified" in p  # unverifiable claims are Gaps, never severities
+    assert "80% confidence" in p
+    assert "DELTA re-review" in p
+
+
+def test_verifier_grounding_rule_never_confirms_on_plausibility():
+    p = SUBAGENT_REGISTRY["verifier"].system_prompt
+    assert "gap: unverified" in p
+    assert "never confirmed on plausibility alone" in p
+
+
+def test_synthesizer_filters_ledger_slippage_and_gap_lines():
+    p = SUBAGENT_REGISTRY["review-synthesizer"].system_prompt
+    assert "out-of-scope ledger" in p
+    assert "never in the array" in p  # Gap prose lines stay out of the findings JSON
+
+
+def test_recipe_declares_prior_findings_and_threads_it_into_every_finder():
+    r = _recipe()
+    prior = next(i for i in r["inputs"] if i["name"] == "prior_findings")
+    assert prior["default"].startswith("(none")  # empty state is explicit, not a blank section
+    finders = [s for s in r["steps"] if s["subagent"] == "review-finder"]
+    assert len(finders) == 4
+    for s in finders:
+        assert "{{inputs.prior_findings}}" in s["prompt"], s["id"]
