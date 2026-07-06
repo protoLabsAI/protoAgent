@@ -218,6 +218,47 @@ create` from its `workdir`). No second secret store.
 > global `url.<https://x-access-token:$TOK@github.com/>.insteadOf` rewrite in the tmpfs
 > `$HOME` — written fresh each boot, never stored in the volume.
 
+### Parallel builds: a worktree-backed coder pool
+
+One coder in one `workdir` is **sequential** — a second `code_with`/`delegate_to` into the
+same directory while the first is mid-edit will collide (shared working tree + index +
+branch). An orchestrator that wants to build several independent things at once (a lead
+fanning issues out to a crew) needs each concurrent coder in its **own** working tree.
+
+The clean way is a **pool of coders over git worktrees**: linked worktrees share one clone's
+`.git` object store but have an isolated working dir, index, and checked-out branch — exactly
+the isolation concurrent coders need, without N full clones.
+
+**1. Provision the worktrees at entrypoint** (cap `N` = your concurrency budget):
+
+```sh
+git clone https://github.com/you/repo /work/repo         # the base clone (on main)
+for i in $(seq 1 "${CODER_POOL:-3}"); do
+    git -C /work/repo worktree add --force -B "pool-$i" "/work/wt-$i" origin/main
+done
+# recreate them fresh each boot — worktrees hold no state you keep (coders push to origin)
+```
+
+**2. Declare one coder per worktree** — same binary, distinct `workdir`:
+
+```yaml
+coding_agent:
+  agents:
+    - { name: coder-1, command: proto, args: ["--acp"], workdir: /work/wt-1 }
+    - { name: coder-2, command: proto, args: ["--acp"], workdir: /work/wt-2 }
+    - { name: coder-3, command: proto, args: ["--acp"], workdir: /work/wt-3 }
+```
+
+**3. Fan out.** The agent issues several `code_with(coder-N, …)` calls in one turn (the tool
+node runs a turn's tool calls concurrently), or several `delegate_to(…, background=True)`
+calls — each lands on a free coder in its own worktree. The pool size is the cap; extra work
+queues. Tell each coder to branch off `origin/main` (`git checkout -b <task> origin/main`) so
+parallel branches never share a checkout.
+
+Two caveats worth planning for: worktrees don't share `node_modules`/build caches (install
+per-worktree, or share a package store), and two parallel PRs that touch the same file will
+conflict at *merge* time (normal parallel-dev friction — rebase the loser), not at build time.
+
 ## How it works
 
 ```
