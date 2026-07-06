@@ -50,6 +50,19 @@ def test_parse_prefers_the_fuller_array():
     assert len(parse_findings(text)) == 2
 
 
+def test_parse_keeps_verdicts_when_a_plain_copy_is_reprinted_last():
+    # The verify pass annotates the findings; the final report reprints the plain
+    # (verdict-less) list AFTER the annotated one. Both are the same length, so a
+    # bare last-wins tie-break would surface the plain copy and drop the computed
+    # verdicts from the rendered report. The richer (verdict-bearing) list wins.
+    annotated = json.dumps([{**_ITEM, "verdict": "confirmed", "note": "reproduced"}])
+    plain = json.dumps([_ITEM])
+    text = f"Verifier said:\n```json\n{annotated}\n```\nFinal list:\n```json\n{plain}\n```"
+    found = parse_findings(text)
+    assert len(found) == 1
+    assert found[0].verdict == "confirmed"
+
+
 def test_parse_empty_array_and_no_array_return_empty():
     assert parse_findings("Clean review.\n```json\n[]\n```") == []
     assert parse_findings("No JSON here at all.") == []
