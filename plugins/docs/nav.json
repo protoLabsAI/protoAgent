@@ -200,6 +200,10 @@
           "title": "Deploy in Docker (seed + UI override)"
         },
         {
+          "path": "guides/deploy-proxmox.md",
+          "title": "Deploy on Proxmox (reusable LXC template)"
+        },
+        {
           "path": "guides/releasing.md",
           "title": "Releasing"
         },
