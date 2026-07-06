@@ -18,7 +18,7 @@ from graph.skills.loader import parse_skill_md
 
 ROOT = Path("plugins/craft")
 
-EXPECTED_SLASHES = {"grill", "standup", "code-review", "writing-skills"}
+EXPECTED_SLASHES = {"grill", "standup", "code-review", "writing-skills", "due-diligence"}
 
 # Agent-retrievable bundled skills (no user_only/slash): guidance the AGENT pulls
 # while doing the work — adr-authoring exists precisely so agent-authored ADRs

@@ -263,6 +263,63 @@ Output the report directly.""",
 )
 
 
+# ── Due-diligence workflow role ───────────────────────────────────────────────
+# The gather angle deep-research never had: what does OUR code already do about
+# the thing being evaluated? Used by the `due-diligence` workflow in parallel
+# with external research; the synthesis weighs BOTH before an adopt/build/defer
+# verdict. Read-only by construction (fs read tools + github read tools).
+
+CODEBASE_MAPPER_CONFIG = SubagentConfig(
+    name="codebase-mapper",
+    description=(
+        "Maps how the registered codebase(s) relate to a question under "
+        "evaluation: existing implementations, integration points, constraints "
+        "(deps, patterns, ADRs), and the size of the build-vs-adopt gap. "
+        "Read-only. Used by the due-diligence workflow as the internal-evidence "
+        "gather stage."
+    ),
+    system_prompt="""You are protoAgent's codebase-mapper. Given a question under
+due diligence ("should we adopt X / build Y / change Z?"), you produce the
+INTERNAL half of the evidence: what the code that would be affected actually
+looks like today. External research is someone else's job — never search the
+web; read code.
+
+Procedure:
+1. ``list_projects`` to see the registered codebases; pick the relevant one(s)
+   from the question/context. For a library/repo being EVALUATED (not
+   registered locally), read it over ``github_repo_contents`` /
+   ``github_read_file`` instead.
+2. Locate the touchpoints: ``search_files``/``find_files`` for the domain terms,
+   then ``read_file`` the hits that matter. Check the repo's ADRs/docs for
+   PRIOR decisions on this ground — a due-diligence answer that contradicts an
+   accepted ADR must say so explicitly.
+3. Map, with file:line citations:
+   - **Current state** — what exists that does (or approximates) the thing.
+   - **Integration points** — where an adoption would plug in; which contracts
+     it must honor.
+   - **Constraints** — deps it must coexist with, patterns/ADRs it must follow,
+     tests that pin current behavior.
+   - **Gap** — what building it ourselves would actually take vs adopting.
+
+Report only what you READ — no recommendations, no external claims; flag
+anything you could not locate as unknown rather than guessing. Keep it tight
+(~400 words + citations). Hard stop at max_turns: return the partial map,
+marked partial.""",
+    tools=[
+        "current_time",
+        "list_projects",
+        "list_dir",
+        "read_file",
+        "find_files",
+        "search_files",
+        "github_read_file",
+        "github_repo_contents",
+        "memory_recall",
+    ],
+    max_turns=25,
+)
+
+
 # ── Code-review workflow roles (ADR 0077) ─────────────────────────────────────
 # The finder/synthesizer stages of the `code-review` workflow. Like the
 # deep-research roles, they are separate agents so nobody grades their own
@@ -502,6 +559,7 @@ SUBAGENT_REGISTRY: dict[str, SubagentConfig] = {
     "antagonist": ANTAGONIST_CONFIG,
     "verifier": VERIFIER_CONFIG,
     "synthesizer": SYNTHESIZER_CONFIG,
+    "codebase-mapper": CODEBASE_MAPPER_CONFIG,
     "review-finder": REVIEW_FINDER_CONFIG,
     "review-synthesizer": REVIEW_SYNTHESIZER_CONFIG,
     "dream": DREAM_CONFIG,
