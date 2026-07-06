@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.95.0",
+    "date": "2026-07-06",
+    "changes": [
+      "Findings source attribution — non-LLM panel members."
+    ]
+  },
+  {
     "version": "v0.93.1",
     "date": "2026-07-05",
     "changes": [
