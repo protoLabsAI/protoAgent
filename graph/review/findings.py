@@ -60,7 +60,13 @@ Rules: `line` is the NEW-file line number (0 if not line-anchored). `claim` stat
 a defect, not a description of the code. `evidence` must quote or concretely
 reference the diff — a finding you cannot evidence does not go in the list. No
 findings → an empty array `[]`. Prose around the fence is fine (your reasoning);
-the fenced array is the deliverable."""
+the fenced array is the deliverable.
+
+Items may additionally carry a `source` field naming the engine that produced
+the finding (e.g. `"protopatch"` for the structural analysis pass; absent means
+an LLM panel finder). When an input finding carries `source`, preserve it
+verbatim on that finding through every merge/verify/report pass — never strip
+it, never invent one."""
 
 
 @dataclass
@@ -71,15 +77,15 @@ class Finding:
     category: str = ""
     claim: str = ""
     evidence: str = ""
+    source: str = ""  # producing engine ("protopatch", …); "" = an LLM panel finder
     verdict: str = ""  # "" until a verify pass sets confirmed/refuted/uncertain
     note: str = field(default="")  # verifier's one-line justification, optional
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        if not d["verdict"]:
-            d.pop("verdict")
-        if not d["note"]:
-            d.pop("note")
+        for optional in ("source", "verdict", "note"):
+            if not d[optional]:
+                d.pop(optional)
         return d
 
 
@@ -106,6 +112,7 @@ def _coerce(item: dict) -> Finding | None:
         category=str(item.get("category") or "").strip().lower(),
         claim=claim,
         evidence=str(item.get("evidence") or "").strip(),
+        source=str(item.get("source") or "").strip().lower(),
         verdict=verdict,
         note=str(item.get("note") or "").strip(),
     )
@@ -210,7 +217,8 @@ def render_findings_markdown(findings: list[Finding], *, title: str = "Review fi
         for f in by_sev[sev]:
             loc = f"`{f.file}:{f.line}`" if f.file and f.line else (f"`{f.file}`" if f.file else "(no file)")
             verdict = f" — **{f.verdict}**" if f.verdict else ""
-            cat = f" _[{f.category}]_" if f.category else ""
+            tag = " · ".join(x for x in (f.category, f.source) if x)
+            cat = f" _[{tag}]_" if tag else ""
             lines.append(f"- {loc}{cat}{verdict}: {f.claim}")
             if f.evidence:
                 lines.append(f"  - evidence: {f.evidence}")

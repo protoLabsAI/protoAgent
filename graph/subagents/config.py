@@ -216,7 +216,8 @@ claim against the code — does the quoted evidence exist, and does it show the
 claimed defect? Return the SAME findings array (fenced ```json), each item
 annotated with "verdict": "confirmed" | "refuted" | "uncertain" and a one-line
 "note" saying why. Do not add new findings; do not drop any — verdicts do the
-filtering downstream. Grounding rule: "confirmed" means YOU re-read the code
+filtering downstream. Preserve every field an item came with (including
+"source" — tool-sourced findings get the same skeptical verify, not a pass). Grounding rule: "confirmed" means YOU re-read the code
 and saw the defect. A claim you could not re-verify (the file fetch failed, a
 cross-repo reference you can't reach, CI you can't see) is verdict "uncertain"
 with note "gap: unverified — <why>" — never confirmed on plausibility alone.
@@ -412,6 +413,13 @@ verdict-annotated list). You produce ONE canonical findings block.
   defect are ONE finding — keep the clearer claim, the stronger evidence, and
   the HIGHER severity. Note angle agreement in the claim when it strengthens it
   ("flagged by both correctness and cross-file review").
+- **Tool-sourced findings are full panel members.** A findings list may come
+  from a non-LLM engine (its items carry a `source` field, e.g. "protopatch").
+  Merge, dedup, re-grade, and drop them by exactly the same rules as the LLM
+  finders' — no deference, no discount. When a tool-sourced finding merges with
+  an LLM finding, the survivor keeps the `source` field (agreement across
+  engines is strong evidence — note it in the claim). Preserve `source` on
+  every item that has one; never invent it on one that doesn't.
 - **Rank:** order the array blocker → major → minor → nit, and within a
   severity by how load-bearing the file is. Re-grade severity when a finder
   plainly over- or under-called it; you see the whole picture, they saw a lane.

@@ -100,10 +100,31 @@ def test_contract_snippet_names_every_schema_field():
         assert f'"{field_name}"' in FINDINGS_CONTRACT
 
 
+def test_contract_documents_source_preservation():
+    assert "`source`" in FINDINGS_CONTRACT and "protopatch" in FINDINGS_CONTRACT
+
+
 def test_to_dict_round_trips_through_parse():
     f = Finding(file="a.py", line=3, severity="blocker", category="security", claim="X", evidence="Y")
     [back] = parse_findings(json.dumps([f.to_dict()]))
     assert back == f
+
+
+def test_source_round_trips_and_is_omitted_when_empty():
+    f = Finding(file="a.py", line=3, severity="major", category="bug", claim="X", evidence="Y", source="protopatch")
+    d = f.to_dict()
+    assert d["source"] == "protopatch"
+    [back] = parse_findings(json.dumps([d]))
+    assert back == f
+    # An LLM panel finding has no source — the key stays out of the dict.
+    assert "source" not in Finding(claim="X").to_dict()
+
+
+def test_source_is_normalized_and_defaults_empty():
+    [f] = parse_findings(json.dumps([{**_ITEM, "source": "  ProtoPatch "}]))
+    assert f.source == "protopatch"
+    [g] = parse_findings(json.dumps([_ITEM]))
+    assert g.source == ""
 
 
 # ── render: the human-facing report ───────────────────────────────────────────
@@ -121,3 +142,10 @@ def test_render_groups_by_severity_and_shows_verdicts():
 
 def test_render_empty_says_clean():
     assert "clean" in render_findings_markdown([]).lower()
+
+
+def test_render_shows_source_alongside_category():
+    md = render_findings_markdown(
+        [Finding(file="a.py", line=1, severity="major", category="concurrency", claim="Race.", source="protopatch")]
+    )
+    assert "_[concurrency · protopatch]_" in md
