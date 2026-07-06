@@ -1,6 +1,8 @@
 # 0078 — Fleet PR review as a protoAgent tier: harvest Quinn, keep the panel
 
-- Status: Proposed
+- Status: Accepted (2026-07-06 — Phases A/B/B2/C shipped and accepted live; D built,
+  shadow data collection is the standing posture; stage-2/3 promotion stays a per-repo
+  operator decision earned by the three-way eval)
 - Date: 2026-07-06
 - Builds on: ADR 0077 (the adversarial review workflow + findings convention — the
   engine this operationalizes), ADR 0025 (delegates spine), ADR 0042 (bundle

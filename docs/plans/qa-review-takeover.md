@@ -1,7 +1,9 @@
 # QA review takeover — harvest Quinn, ship a QA-engineer tier
 
 - Date: 2026-07-06
-- Status: Active (Phase A in flight)
+- Status: Executed (all phases shipped 2026-07-06; ADR 0078 Accepted. Standing:
+  shadow-mode data collection toward the D stage-1 three-way report; stage-2/3
+  promotion is per-repo and operator-gated)
 - ADR: [`0078`](../adr/0078-fleet-pr-review-qa-tier.md)
 - Predecessor program: [`codified-delivery-loop.md`](./codified-delivery-loop.md) (M1/M5
   built the review engine this program operationalizes)
@@ -114,7 +116,22 @@ joins OUR pipeline as a **fifth, non-LLM finder**, not an optional garnish:
 protoPatch-sourced findings (category preserved, source attributed), and a protoPatch
 timeout degrades to the four-finder review with a Gap noted.
 
-**C — the reviewer machinery** `pr-reviewer-plugin` (new) [L]
+**C — the reviewer machinery** `pr-reviewer-plugin` [L, SHIPPED 2026-07-06]
+Shipped as pr-reviewer-plugin v0.2.0/v0.2.1 (PRs #3/#5). Acceptance passed live on
+the dev instance: HMAC webhook (bad sig 403, unconfigured secret fails closed),
+typed drops observed live (`bad-signature`, `pr-not-eligible` ×closed+draft,
+`in-flight`) with the rest unit-pinned, structural trigger computed server-side
+("4 files changed (> 3)" → structural recipe; empty reasons → lite), FAIL verdict
+posted with the machine marker, unchanged-head reaffirm in one API call, verify
+verdicts+notes carried into the posted body, and the full green path on a scratch
+repo: review → PASS (56.1s lite — at Quinn's latency floor) → the 3-minute sweep
+promoted autonomously (APPROVE + native auto-merge armed, base=main only). Two live
+lessons folded in: Quinn's org-wide seat preempted promotion on protoLabsAI repos
+BOTH times — the single-owner rule (`promotion_owner: false` default) is not
+theoretical — and an honest WARN initially held promotion forever, so v0.2.1
+restored her exact semantics (latest clear PASS/WARN verdict promotes on green;
+latest FAIL holds).
+<details><summary>Original scope (as planned)</summary>
 Webhook route (HMAC) → chokepoint (30s cooldown per repo/PR/SHA, in-flight map, typed
 drops) → dispatch: structural trigger picks full-panel vs lite recipe; run via
 `STATE.workflow_run`; verdict mapping (findings → PASS/WARN/FAIL → review action);
@@ -126,8 +143,17 @@ every unknown); prior-review recall off the posted verdict body; protoPatch clie
 verdict mix, per-finding resolution — ws-91a answered).
 **Accept:** an end-to-end dry run on a test repo: webhook → review → COMMENT → CI green
 → deterministic APPROVE → auto-merge armed, with every drop/skip typed and logged.
+</details>
 
-**D — the agent: shadow → second formal layer** `qaEngineer` bundle (new) [M]
+**D — the agent: shadow → second formal layer** `qaEngineer` bundle [M, BUILT 2026-07-06 — shadow data collection is the standing stage]
+Shipped as the qaEngineer bundle v0.1.0 (github-plugin v0.2.0 + pr-reviewer-plugin
+pinned; archetype "QA Engineer"; persona "Vera" ported from quinn.yaml — verdict
+system, three-layer verification, 80% bar, self-restriction, shadow discipline;
+`shadow_mode: true` default). Bundle install verified end-to-end (members pinned at
+release tags, builtin recognized, config suggestions printed). Stage-1 acceptance
+(the ≥2-repo/≥2-week three-way report) is calendar-gated data collection — the eval
+substrate ships in the plugin (`GET /api/plugins/pr-reviewer/eval` + three-way
+rows); stages 2-3 remain per-repo operator decisions the data earns.
 Bundle pins + archetype + persona port. Three stages, each gated on data:
 1. **Shadow** (`shadow_mode: true`): COMMENT-only on the same PRs Quinn and CodeRabbit
    review. The eval compares all three streams per PR — findings we caught that they
