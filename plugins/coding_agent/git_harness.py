@@ -61,10 +61,61 @@ def mint_branch(prefix: str, task: str, item_id: str) -> str:
 
 
 def title_from(task: str) -> str:
-    """PR/commit title: the task's first non-empty line, collapsed, capped."""
+    """PR/commit title: the task's first non-empty line, collapsed, capped. The
+    deterministic fallback for ``infer_title`` — fine when the caller's first line IS the
+    intent, wrong when the task is wrapped in a coder preamble (see ``infer_title``)."""
     first_line = next((ln for ln in task.strip().splitlines() if ln.strip()), "automated change")
     title = " ".join(first_line.split())
     return title[:72].rstrip() if len(title) > 72 else title
+
+
+_TITLE_PROMPT = (
+    "You write ONE conventional-commit title summarizing the coding task below "
+    "(e.g. `fix: guard null user`, `feat: add compare view`, `chore: bump deps`). "
+    "Output ONLY the title: one line, no quotes, no body, <= 70 chars. IGNORE any "
+    "boilerplate wrapped around the task — 'you are implementing one feature', "
+    "working-directory notes, git/tooling rules; title the ACTUAL change the task asks for."
+)
+
+
+async def infer_title(task: str, config=None) -> str | None:
+    """Infer a concise conventional-commit title from a task via the cheap aux model, so
+    the branch slug + PR title describe the WORK — not whatever boilerplate preamble a
+    caller wrapped the task in (project_board's coder prompt starts "You are implementing
+    ONE feature in this repository…", which the naive first-line heuristic slugged into the
+    branch/title). Best-effort: returns None on any failure so callers fall back to the
+    deterministic ``title_from``. Uniqueness never depends on this — the branch's ``-<id7>``
+    item-id suffix is what dedups (``preflight_pr``), so an inferred slug is free to vary."""
+    task = (task or "").strip()
+    if not task:
+        return None
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from graph.agent import _resolve_aux_model
+        from graph.llm import create_llm
+
+        if config is None:
+            from runtime.state import STATE
+
+            config = getattr(STATE, "graph_config", None)
+        if config is None:
+            return None
+        llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
+        resp = await llm.ainvoke(
+            [SystemMessage(content=_TITLE_PROMPT), HumanMessage(content=task[:4000])]
+        )
+        raw = str(getattr(resp, "content", "") or "").strip()
+        # Reject a chatty reply BEFORE collapsing whitespace (join-on-split would hide the
+        # newline) — a real title is one short line; anything multi-line/long is the model
+        # ignoring "one line", so fall back rather than slug a paragraph into a branch.
+        if not raw or "\n" in raw or len(raw) > 100:
+            return None
+        title = " ".join(raw.split()).strip("\"'`").strip()
+        return title[:72].rstrip() or None
+    except Exception:  # noqa: BLE001 — inference is best-effort; the deterministic fallback covers it
+        log.debug("[managed-git] title inference failed; using deterministic first-line", exc_info=True)
+        return None
 
 
 def edit_only_directive(branch: str) -> str:
@@ -515,11 +566,32 @@ async def _pr_url_for(workdir: str, branch: str, *, state: str) -> str:
     return ""
 
 
-async def preflight_pr(workdir: str, branch: str) -> str:
-    """URL of an already-open PR for ``branch``, or "". Run BEFORE dispatching the
-    coder: it catches restarts and the created-a-PR-but-crashed case across process
-    lifetimes, which the in-memory claim registry can't."""
-    return await _pr_url_for(workdir, branch, state="open")
+async def _pr_url_by_item(workdir: str, item_id: str, *, state: str) -> str:
+    """URL of a PR whose head branch carries this item's ``-<id7>`` suffix, or "".
+    Dedup keys on the STABLE item id, not the (possibly inferred, run-to-run varying)
+    slug — so a re-run that names the branch differently still finds the prior PR."""
+    suffix = f"-{item_id[-7:]}"
+    rc, stdout, _ = await run_gh(
+        ["pr", "list", "--state", state, "--json", "url,headRefName", "--limit", "50"],
+        cwd=workdir,
+    )
+    if rc == 0 and stdout.strip():
+        try:
+            for row in json.loads(stdout):
+                if str(row.get("headRefName", "")).endswith(suffix):
+                    return str(row.get("url", ""))
+        except ValueError:
+            pass
+    return ""
+
+
+async def preflight_pr(workdir: str, item_id: str) -> str:
+    """URL of an already-open PR for this ITEM (matched by its stable ``-<id7>`` branch
+    suffix), or "". Run BEFORE dispatching the coder: it catches restarts and the
+    created-a-PR-but-crashed case across process lifetimes, which the in-memory claim
+    registry can't — and keying on the item id (not the slug) makes it robust even when
+    the slug was inferred differently on the re-run."""
+    return await _pr_url_by_item(workdir, item_id, state="open")
 
 
 async def _open_pr(workdir: str, out: GitOutcome, *, title: str) -> None:
@@ -529,7 +601,7 @@ async def _open_pr(workdir: str, out: GitOutcome, *, title: str) -> None:
     if ahead == 0:
         out.pr_state = "skipped-no-commits"
         return
-    existing = await preflight_pr(workdir, out.branch)
+    existing = await preflight_pr(workdir, out.item_id)
     if existing:
         out.pr_url, out.pr_state = existing, "existing"
         return

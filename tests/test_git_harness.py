@@ -302,7 +302,8 @@ async def test_registry_raw_dispatch_bypasses_managed_git(repo, monkeypatch):
 
 
 async def test_finish_reuses_existing_pr(repo, monkeypatch):
-    _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/3"}]', "")})
+    # dedup matches the item's -<id7> suffix, so the open PR must carry it on its head branch.
+    _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/3", "headRefName": "t/reuse-abc1234"}]', "")})
     await harness.prepare(str(repo), base="main", branch="t/reuse-abc1234")
     (repo / "again.txt").write_text("re-run\n")
 
@@ -368,7 +369,9 @@ async def test_managed_dispatch_dedups_inflight_item(repo, monkeypatch):
 async def test_managed_dispatch_preflight_returns_existing_pr(repo, monkeypatch):
     from plugins.delegates.adapters import AcpAdapter
 
-    _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/11"}]', "")})
+    # An open PR whose head branch carries item-43's suffix — a DIFFERENT slug than this
+    # run would mint, proving dedup keys on the item id, not the slug.
+    _fake_gh(monkeypatch, {"pr list": (0, '[{"url": "https://github.com/x/y/pull/11", "headRefName": "coder-1/some-other-slug-item-43"}]', "")})
 
     async def must_not_run(self, d, query, *, timeout=None):
         raise AssertionError("coder must not be dispatched when an open PR exists")
@@ -390,3 +393,67 @@ async def test_unmanaged_dispatch_untouched(repo, monkeypatch):
     reply = await AcpAdapter().dispatch(d, "just a task")
     assert reply == "plain: just a task"
     assert await _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+# ── name inference + item-id-suffix dedup (ADR 0076 follow-up) ─────────────────
+
+
+async def test_preflight_pr_matches_by_item_id_suffix(repo, monkeypatch):
+    """Dedup keys on the stable `-<id7>` item suffix, NOT the slug — so an open PR is
+    found even if the re-run's inferred slug differs from the original."""
+    iid = "abc123def456"  # 12-char id (like derive_item_id); last7 -> "3def456"
+    prs = [
+        {"url": "https://gh/pr/1", "headRefName": "proto/some-other-work-9999999"},
+        {"url": "https://gh/pr/2", "headRefName": "proto/a-totally-different-slug-3def456"},
+    ]
+    import json as _json
+
+    _fake_gh(monkeypatch, {"pr list": (0, _json.dumps(prs), "")})
+    assert await harness.preflight_pr(str(repo), iid) == "https://gh/pr/2"
+
+    # No branch carrying this item's suffix -> no match (fresh dispatch proceeds).
+    _fake_gh(monkeypatch, {"pr list": (0, _json.dumps(prs[:1]), "")})
+    assert await harness.preflight_pr(str(repo), iid) == ""
+
+
+async def test_infer_title_falls_back_to_none_without_model():
+    """No config + no runtime STATE -> None, so the caller uses the deterministic title."""
+    assert await harness.infer_title("fix the thing", config=None) in (None,)  # STATE absent in unit ctx
+
+
+async def test_infer_title_cleans_model_output(monkeypatch):
+    """A chatty/quoted model reply is collapsed to one capped line; the coder preamble
+    the task is wrapped in must NOT end up in the title (the model is told to ignore it)."""
+    import graph.agent
+    import graph.llm
+
+    class _Msg:
+        def __init__(self, c):
+            self.content = c
+
+    class _LLM:
+        async def ainvoke(self, _msgs):
+            return _Msg('  "fix: guard null user"  ')
+
+    monkeypatch.setattr(graph.agent, "_resolve_aux_model", lambda cfg, x: "aux")
+    monkeypatch.setattr(graph.llm, "create_llm", lambda cfg, model_name=None: _LLM())
+
+    task = "You are implementing ONE feature in this repository.\n\nActually: guard the null user."
+    assert await harness.infer_title(task, config={}) == "fix: guard null user"
+
+
+async def test_infer_title_rejects_multiline_reply(monkeypatch):
+    """A model that ignores 'one line' is rejected (fall back), not slugged into a branch."""
+    import graph.agent
+    import graph.llm
+
+    class _Msg:
+        content = "fix: a thing\nand a whole paragraph of explanation that should never be a branch name"
+
+    class _LLM:
+        async def ainvoke(self, _msgs):
+            return _Msg()
+
+    monkeypatch.setattr(graph.agent, "_resolve_aux_model", lambda cfg, x: "aux")
+    monkeypatch.setattr(graph.llm, "create_llm", lambda cfg, model_name=None: _LLM())
+    assert await harness.infer_title("do the thing", config={}) is None
