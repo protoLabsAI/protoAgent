@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.95.0] - 2026-07-06
+
 ### Added
 - **Findings `source` attribution — non-LLM panel members (ADR 0078 B2, #1864).** The ADR 0077
   `Finding` schema gains an optional `source` field naming the producing engine (e.g.
