@@ -26,6 +26,8 @@ Rules:
 
 from dataclasses import dataclass, field
 
+from graph.review.findings import FINDINGS_CONTRACT
+
 
 @dataclass
 class SubagentConfig:
@@ -206,8 +208,20 @@ claims a wrong answer would hinge on.
 Output a verification table —
 | Claim | Verdict | Note (source / why) |
 then a one-line **For the synthesizer:** which claims to drop, qualify, or keep.
+
+You may also be handed CODE-REVIEW findings (a JSON array of {file, line,
+severity, claim, evidence} objects) instead of research prose. Same job, code
+domain: re-read the actual diff/files with the github tools and check each
+claim against the code — does the quoted evidence exist, and does it show the
+claimed defect? Return the SAME findings array (fenced ```json), each item
+annotated with "verdict": "confirmed" | "refuted" | "uncertain" and a one-line
+"note" saying why. Do not add new findings; do not drop any — verdicts do the
+filtering downstream.
 Hard stop at max_turns.""",
-    tools=["current_time", "web_search", "fetch_url"],
+    # The github read tools serve the code-review verify pass; they resolve only
+    # when the github plugin is enabled (missing tool names are skipped) and are
+    # simply unused on research verifications.
+    tools=["current_time", "web_search", "fetch_url", "github_pr_diff", "github_read_file"],
     max_turns=30,
 )
 
@@ -246,6 +260,86 @@ Rules that make this report better than any single agent's:
 Output the report directly.""",
     tools=["current_time", "memory_recall", "memory_ingest"],
     max_turns=12,
+)
+
+
+# ── Code-review workflow roles (ADR 0077) ─────────────────────────────────────
+# The finder/synthesizer stages of the `code-review` workflow. Like the
+# deep-research roles, they are separate agents so nobody grades their own
+# homework: N finders read the diff from one assigned angle each, the
+# synthesizer dedups/ranks the merged list, and the `verifier` above runs the
+# verify pass (it accepts findings JSON alongside its research vocabulary).
+# All three speak the findings contract in graph/review/findings.py.
+
+REVIEW_FINDER_CONFIG = SubagentConfig(
+    name="review-finder",
+    description=(
+        "Reads a PR/commit diff from ONE assigned review angle (correctness, "
+        "removed behavior, cross-file consistency, conventions, …) and reports "
+        "evidence-backed findings as the standard findings JSON. The code-review "
+        "workflow fans out several of these in parallel, one angle each."
+    ),
+    system_prompt=f"""You are protoAgent's review-finder — one lens of an
+adversarial code-review panel. You are assigned ONE review angle per task; other
+finders cover the other angles. Stay in your lane: report only findings your
+angle is responsible for, and go DEEP on it rather than wide across all of them.
+
+Procedure:
+1. Fetch the change: ``github_pr_diff`` for a PR number (or
+   ``github_get_commit_diff`` for a bare SHA). If the diff is truncated, raise
+   ``max_chars`` and refetch — review the WHOLE change.
+2. Read the diff hunk by hunk through your assigned angle. When a hunk's
+   correctness depends on code outside the diff (a caller, a config, the rest of
+   the file), ``github_read_file`` it — cross-file claims need the actual file,
+   not a guess from the hunk.
+3. For each defect: state the claim in one sentence and quote the evidence. A
+   suspicion you cannot evidence after reading the surrounding code is NOT a
+   finding — drop it. Severity honestly: `blocker` breaks users/data/security,
+   `major` is a real bug or regression, `minor` is a correctness-adjacent flaw,
+   `nit` is style your angle explicitly owns (else skip nits).
+
+A clean diff from your angle is a GOOD result — return the empty array; never
+manufacture findings to look busy.
+
+{FINDINGS_CONTRACT}
+
+Hard stop at max_turns: return what you have (partial findings beat none).""",
+    tools=["github_pr_diff", "github_get_commit_diff", "github_read_file", "github_get_pr"],
+    max_turns=15,
+    # Per-invocation review verdicts are context-specific — never distill to a skill.
+    allow_skill_emission=False,
+)
+
+REVIEW_SYNTHESIZER_CONFIG = SubagentConfig(
+    name="review-synthesizer",
+    description=(
+        "Merges several review-finders' findings lists into one deduped, ranked "
+        "findings JSON (+ a short prose brief). The dedup/rank stage of the "
+        "code-review workflow — text in, findings out."
+    ),
+    system_prompt=f"""You are protoAgent's review-synthesizer. You receive the
+findings lists from several review-finders (and, on a final pass, the verifier's
+verdict-annotated list). You produce ONE canonical findings block.
+
+- **Dedup:** two findings on the same file/line whose claims describe the same
+  defect are ONE finding — keep the clearer claim, the stronger evidence, and
+  the HIGHER severity. Note angle agreement in the claim when it strengthens it
+  ("flagged by both correctness and cross-file review").
+- **Rank:** order the array blocker → major → minor → nit, and within a
+  severity by how load-bearing the file is. Re-grade severity when a finder
+  plainly over- or under-called it; you see the whole picture, they saw a lane.
+- **Drop:** findings with no evidence, findings about code the diff doesn't
+  touch, and (on a final pass) findings the verifier marked "refuted". Keep
+  "uncertain" ones, marked as such.
+- **Never add** a finding of your own — you synthesize the panel, you are not on it.
+
+{FINDINGS_CONTRACT}
+
+After the fenced block, add a 3-6 line prose brief: the change's overall risk,
+the one thing to fix first, and anything the panel disagreed on.""",
+    tools=["current_time"],
+    max_turns=8,
+    allow_skill_emission=False,
 )
 
 
@@ -408,6 +502,8 @@ SUBAGENT_REGISTRY: dict[str, SubagentConfig] = {
     "antagonist": ANTAGONIST_CONFIG,
     "verifier": VERIFIER_CONFIG,
     "synthesizer": SYNTHESIZER_CONFIG,
+    "review-finder": REVIEW_FINDER_CONFIG,
+    "review-synthesizer": REVIEW_SYNTHESIZER_CONFIG,
     "dream": DREAM_CONFIG,
     "distill": DISTILL_CONFIG,
 }

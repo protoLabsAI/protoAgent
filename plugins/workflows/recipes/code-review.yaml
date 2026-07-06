@@ -1,0 +1,113 @@
+# Adversarial code review (ADR 0077). Four review-finders read the PR diff in
+# parallel, ONE angle each; the synthesizer dedups/ranks the merged list; the
+# verifier re-reads the diff and confirms/refutes each finding (one pass over the
+# merged list — per-finding fan-out needs a data-driven engine primitive the DAG
+# doesn't have; deferred, see the plan's Parked list); a final synthesis drops
+# refuted findings and renders the deliverable.
+#
+#   run_workflow("code-review", {"pr": "1846"})                    # default repo
+#   run_workflow("code-review", {"pr": "69", "repo": "owner/name"})
+#
+# Needs the github plugin enabled (the finders/verifier read via github_pr_diff /
+# github_read_file). All steps speak the findings contract in
+# graph/review/findings.py — the final output ends with one fenced JSON findings
+# array, so programmatic callers (the board review gate) parse_findings() it.
+name: code-review
+description: >-
+  Adversarial PR review — four parallel finders (correctness, removed behavior,
+  cross-file, conventions), dedup/rank, an evidence-checking verify pass, and a
+  final findings block. Output ends with the canonical fenced findings JSON.
+version: 1
+inputs:
+  - name: pr
+    description: The pull-request number to review.
+    required: true
+  - name: repo
+    description: Repository as owner/name (omit to use the configured default repo).
+    default: ""
+steps:
+  - id: find_correctness
+    subagent: review-finder
+    prompt: |
+      Review PR #{{inputs.pr}} (repo: "{{inputs.repo}}" — empty means the
+      default repo). Your assigned angle: **correctness**. Logic errors,
+      off-by-ones, broken edge cases, error-handling gaps, races, wrong
+      conditionals, unhandled None/empty/failure paths — does this code do what
+      it claims under all inputs it will actually see?
+
+  - id: find_removed_behavior
+    subagent: review-finder
+    prompt: |
+      Review PR #{{inputs.pr}} (repo: "{{inputs.repo}}" — empty means the
+      default repo). Your assigned angle: **removed or changed behavior**. Read
+      the DELETED and rewritten lines: what did the old code do that the new
+      code silently doesn't? Dropped guards, lost fallbacks, narrowed
+      conditions, deleted call sites, semantics changed without the callers
+      changing. Regressions hide on the minus side of the diff.
+
+  - id: find_crossfile
+    subagent: review-finder
+    prompt: |
+      Review PR #{{inputs.pr}} (repo: "{{inputs.repo}}" — empty means the
+      default repo). Your assigned angle: **cross-file consistency**. Signatures
+      changed but callers not updated, contracts/schemas drifting from their
+      consumers, config keys renamed on one side only, docs/tests contradicting
+      the new behavior. Use github_read_file on the files the diff touches
+      indirectly — this angle is exactly the one a hunk-by-hunk read misses.
+
+  - id: find_conventions
+    subagent: review-finder
+    prompt: |
+      Review PR #{{inputs.pr}} (repo: "{{inputs.repo}}" — empty means the
+      default repo). Your assigned angle: **conventions and hygiene**. The
+      repo's own documented rules first (read its CLAUDE.md / PROTO.md /
+      contributor docs with github_read_file if present), then: naming that
+      lies, duplicated logic, dead/debug code left in, missing or weakened
+      tests for changed behavior, secrets or scratch files in the diff.
+      Severity honestly — most convention findings are minor/nit.
+
+  - id: synthesize
+    subagent: review-synthesizer
+    depends_on: [find_correctness, find_removed_behavior, find_crossfile, find_conventions]
+    prompt: |
+      Merge these four review-finder reports on PR #{{inputs.pr}} into one
+      deduped, ranked findings block (your standard procedure).
+
+      ## Correctness finder
+      {{steps.find_correctness.output}}
+
+      ## Removed-behavior finder
+      {{steps.find_removed_behavior.output}}
+
+      ## Cross-file finder
+      {{steps.find_crossfile.output}}
+
+      ## Conventions finder
+      {{steps.find_conventions.output}}
+
+  - id: verify
+    subagent: verifier
+    depends_on: [synthesize]
+    prompt: |
+      Verify these code-review findings against PR #{{inputs.pr}} (repo:
+      "{{inputs.repo}}" — empty means the default repo). Re-read the actual
+      diff with github_pr_diff (and github_read_file where a claim depends on
+      surrounding code); annotate every finding with verdict
+      confirmed/refuted/uncertain + a one-line note. Return the same fenced
+      findings array, annotated.
+
+      {{steps.synthesize.output}}
+
+  - id: report
+    subagent: review-synthesizer
+    depends_on: [verify]
+    prompt: |
+      Final pass for the review of PR #{{inputs.pr}}: the verifier has
+      annotated the findings below. Drop the "refuted" ones, keep "uncertain"
+      ones marked as such, re-rank, and produce the deliverable: the prose
+      brief first (overall risk, fix-first item, what the panel disagreed on,
+      what verification changed), then the canonical fenced findings JSON as
+      the FINAL block of your reply.
+
+      {{steps.verify.output}}
+output: "{{steps.report.output}}"
