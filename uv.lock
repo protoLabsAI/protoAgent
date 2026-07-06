@@ -1539,7 +1539,7 @@ wheels = [
 
 [[package]]
 name = "protoagent"
-version = "0.94.0"
+version = "0.95.0"
 source = { virtual = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["fastapi", "http-server", "sqlite"] },

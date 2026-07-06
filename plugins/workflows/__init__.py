@@ -84,18 +84,39 @@ async def _safe(cb: Callable[[dict], Awaitable[None]], event: dict) -> None:
 
 
 def register(registry: Any) -> None:
-    # Other enabled plugins' recipe dirs are collected on the shared registry (ADR 0027).
-    reg = _build_registry(getattr(registry, "workflow_dirs", None))
+    # Other plugins' recipe dirs are NOT knowable here: every plugin gets its own
+    # PluginRegistry, and this in-tree plugin registers before the instance-installed
+    # ones, so the accumulated dir list (STATE.plugin_workflow_dirs) is only complete
+    # AFTER the full load — an eager scan would permanently miss every git-installed
+    # plugin's workflows/ dir (the ADR 0027 bundle promise). Resolve lazily instead:
+    # every access goes through _reg(), which rebuilds the WorkflowRegistry whenever
+    # the plugin-dir set changed (first use after boot, hot install, config reload).
+    # Rescanning a handful of YAML files is cheap; staleness here is silent data loss.
+    from runtime.state import STATE
+
+    _cache: dict[str, Any] = {"dirs": None, "reg": None}
+
+    def _reg() -> WorkflowRegistry:
+        dirs = tuple(str(d) for d in (getattr(STATE, "plugin_workflow_dirs", None) or ()))
+        if _cache["reg"] is None or dirs != _cache["dirs"]:
+            _cache["dirs"] = dirs
+            _cache["reg"] = _build_registry(list(dirs))
+        return _cache["reg"]
+
+    class _LiveRegistry:
+        """What STATE.workflow_registry publishes — a thin proxy so consumers that
+        grabbed it once (chat slash-command, console) always see the current scan."""
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(_reg(), name)
 
     # Publish the registry + a runner onto runtime state so core surfaces that predate
     # the plugin (the chat `/<recipe>` slash-command) can use workflows WITHOUT importing
     # this plugin — both are None when the plugin is disabled, which gates those paths.
-    from runtime.state import STATE
-
     async def _run(name: str, inputs: dict | None = None, on_step=None) -> dict:
-        return await _execute(reg, name, inputs or {}, on_step)
+        return await _execute(_reg(), name, inputs or {}, on_step)
 
-    STATE.workflow_registry = reg
+    STATE.workflow_registry = _LiveRegistry()
     STATE.workflow_run = _run
 
     @tool
@@ -111,7 +132,7 @@ def register(registry: Any) -> None:
             inputs: Mapping of the workflow's declared inputs to values.
         """
         if not name.strip():
-            summaries = reg.list()
+            summaries = _reg().list()
             if not summaries:
                 return "No workflows are available."
             lines = ["Available workflows:"]
@@ -120,7 +141,7 @@ def register(registry: Any) -> None:
                 lines.append(f"- {s['name']}: {s['description']} (inputs: {', '.join(req) or 'none required'})")
             return "\n".join(lines)
         try:
-            result = await _execute(reg, name, inputs or {})
+            result = await _execute(_reg(), name, inputs or {})
         except ValueError as exc:
             return f"Workflow {name!r}: {exc}"
         return result["output"]
@@ -155,7 +176,7 @@ def register(registry: Any) -> None:
         if errs:
             return "Cannot save — the workflow is invalid: " + "; ".join(errs)
         try:
-            path = reg.save(recipe)
+            path = _reg().save(recipe)
         except Exception as exc:  # noqa: BLE001 — readable tool error
             return f"Error saving workflow: {exc}"
         return f"Saved workflow {name!r} ({len(steps)} step(s)) to {path}. Run it with run_workflow({name!r}, ...)."
@@ -170,12 +191,12 @@ def register(registry: Any) -> None:
 
     @router.get("/list")
     async def _list() -> dict:
-        return {"workflows": reg.list()}
+        return {"workflows": _reg().list()}
 
     @router.post("/{name}/run")
-    async def _run(name: str, body: dict = Body(default={})) -> dict:
+    async def _run_route(name: str, body: dict = Body(default={})) -> dict:
         try:
-            return await _execute(reg, name, (body or {}).get("inputs") or {})
+            return await _execute(_reg(), name, (body or {}).get("inputs") or {})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -184,11 +205,11 @@ def register(registry: Any) -> None:
         errs = validate_recipe(body, known_subagents=sdk.subagent_types())
         if errs:
             raise HTTPException(status_code=400, detail="invalid recipe: " + "; ".join(errs))
-        path = reg.save(body)
+        path = _reg().save(body)
         return {"saved": True, "name": body.get("name"), "path": path}
 
     @router.delete("/{name}")
     async def _delete(name: str) -> dict:
-        return {"deleted": reg.delete(name)}
+        return {"deleted": _reg().delete(name)}
 
     registry.register_router(router, prefix="/api/plugins/workflows")
