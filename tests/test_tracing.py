@@ -225,6 +225,194 @@ def test_score_current_trace_delegates_to_client():
     )
 
 
+# ── Fleet tracing: caller trace join (a2a.trace → trace_context) ─────────────
+
+_TID = "a" * 32  # valid W3C trace id (32 hex)
+_SID = "b" * 16  # valid W3C span id (16 hex)
+
+
+@pytest.mark.asyncio
+async def test_trace_session_joins_caller_trace_context():
+    """When metadata carries caller_trace_id/caller_span_id (the a2a.trace ids
+    an upstream agent sent), the session span JOINS that trace via Langfuse's
+    trace_context — and current_trace_id() reports the JOINED id so audit
+    records + downstream propagation carry the fleet trace."""
+    tracing = _reload_tracing()
+    fake, span, _child = _enable_with_fake_client(tracing)
+    span.trace_id = _TID  # the SDK reports the joined trace id on the span
+
+    async with tracing.trace_session(
+        "s-1", name="a2a-stream", metadata={"caller_trace_id": _TID, "caller_span_id": _SID}
+    ):
+        assert tracing.current_trace_id() == _TID
+
+    kwargs = fake.start_as_current_observation.call_args.kwargs
+    assert kwargs["trace_context"] == {"trace_id": _TID, "parent_span_id": _SID}
+    # The metadata stamping is KEPT (operators cross-reference by it too)
+    assert kwargs["metadata"]["caller_trace_id"] == _TID
+    assert kwargs["metadata"]["caller_span_id"] == _SID
+
+
+@pytest.mark.asyncio
+async def test_trace_session_join_without_span_id_still_joins_trace():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+
+    async with tracing.trace_session("s-1", metadata={"caller_trace_id": _TID}):
+        pass
+
+    kwargs = fake.start_as_current_observation.call_args.kwargs
+    assert kwargs["trace_context"] == {"trace_id": _TID}
+
+
+@pytest.mark.asyncio
+async def test_trace_session_malformed_caller_ids_fall_back_to_fresh_trace():
+    """Malformed caller ids must never crash a turn or feed the SDK a bogus
+    W3C context — the session degrades to a fresh trace."""
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+
+    async with tracing.trace_session(
+        "s-1", metadata={"caller_trace_id": "not-a-trace-id", "caller_span_id": "zz"}
+    ) as span:
+        assert span is not None  # the session still traces — freshly
+        assert tracing.current_trace_id() == "trace-abc"
+
+    kwargs = fake.start_as_current_observation.call_args.kwargs
+    assert kwargs["trace_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_trace_session_join_with_malformed_span_id_keeps_trace_id_only():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+
+    async with tracing.trace_session("s-1", metadata={"caller_trace_id": _TID, "caller_span_id": "junk"}):
+        pass
+
+    kwargs = fake.start_as_current_observation.call_args.kwargs
+    assert kwargs["trace_context"] == {"trace_id": _TID}
+
+
+# ── current_trace_context (outbound propagation helper) ──────────────────────
+
+
+def test_disabled_current_trace_context_is_none():
+    tracing = _reload_tracing()
+    assert tracing.current_trace_context() is None
+
+
+def test_current_trace_context_shape_from_sdk():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+    fake.get_current_trace_id.return_value = _TID
+    fake.get_current_observation_id.return_value = _SID
+    assert tracing.current_trace_context() == {"trace_id": _TID, "span_id": _SID}
+
+
+def test_current_trace_context_without_current_span_has_trace_id_only():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+    fake.get_current_trace_id.return_value = _TID
+    fake.get_current_observation_id.return_value = None
+    assert tracing.current_trace_context() == {"trace_id": _TID}
+
+
+def test_current_trace_context_none_when_no_active_trace():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+    fake.get_current_trace_id.return_value = None
+    fake.get_current_observation_id.return_value = None
+    assert tracing.current_trace_context() is None
+
+
+def test_current_trace_context_falls_back_to_contextvar_when_sdk_errors():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+    fake.get_current_trace_id.side_effect = RuntimeError("otel misery")
+    fake.get_current_observation_id.side_effect = RuntimeError("otel misery")
+    token = tracing._trace_id_ctx.set(_TID)
+    try:
+        assert tracing.current_trace_context() == {"trace_id": _TID}
+    finally:
+        tracing._trace_id_ctx.reset(token)
+
+
+# ── trace_span (boundary spans, e.g. subagent:<type>) ────────────────────────
+
+
+def test_disabled_trace_span_is_noop():
+    tracing = _reload_tracing()
+    with tracing.trace_span("subagent:worker") as span:
+        assert span is None
+
+
+def test_trace_span_opens_and_closes_child_observation():
+    tracing = _reload_tracing()
+    fake, span, _child = _enable_with_fake_client(tracing)
+
+    with tracing.trace_span("subagent:worker", metadata={"description": "d"}, as_type="agent") as s:
+        assert s is span
+
+    kwargs = fake.start_as_current_observation.call_args.kwargs
+    assert kwargs["name"] == "subagent:worker"
+    assert kwargs["as_type"] == "agent"
+    assert kwargs["metadata"] == {"description": "d"}
+    cm = fake.start_as_current_observation.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+
+
+def test_trace_span_body_exception_propagates_but_span_closes():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+
+    with pytest.raises(RuntimeError):
+        with tracing.trace_span("subagent:worker"):
+            raise RuntimeError("subagent exploded")
+
+    cm = fake.start_as_current_observation.return_value
+    cm.__exit__.assert_called_once()
+
+
+def test_trace_span_sdk_error_yields_none_and_body_runs():
+    tracing = _reload_tracing()
+    fake = MagicMock()
+    fake.start_as_current_observation.side_effect = RuntimeError("langfuse down")
+    tracing._langfuse = fake
+    tracing._enabled = True
+
+    ran = False
+    with tracing.trace_span("subagent:worker") as span:
+        assert span is None
+        ran = True
+    assert ran
+
+
+# ── shutdown flush wiring ─────────────────────────────────────────────────────
+
+
+def test_flush_delegates_to_client_and_swallows_errors():
+    tracing = _reload_tracing()
+    fake, _span, _child = _enable_with_fake_client(tracing)
+    tracing.flush()
+    fake.flush.assert_called_once()
+    fake.flush.side_effect = RuntimeError("exporter down")
+    tracing.flush()  # must not raise
+
+
+def test_server_shutdown_hook_flushes_tracing():
+    """Wiring lock: the server shutdown hook must flush buffered observations
+    so spans survive process exit (server/__init__.py is only importable inside
+    a full boot, so we lock the source contract)."""
+    from pathlib import Path
+
+    src = (Path(__file__).parents[1] / "server" / "__init__.py").read_text()
+    hook = src.split('@fastapi_app.on_event("shutdown")', 1)[1]
+    hook = hook.split("register_chat_routes", 1)[0]  # the hook body ends before route registration
+    assert "tracing.flush" in hook, "shutdown hook no longer flushes Langfuse tracing"
+
+
 def test_no_legacy_shims_exist():
     """Greenfield guarantee — start_trace / end_trace / trace_llm_call were
     removed. Their return would silently break the nesting contract by

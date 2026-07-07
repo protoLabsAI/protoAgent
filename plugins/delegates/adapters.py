@@ -320,6 +320,33 @@ class A2aAdapter(Adapter):
             return data.get("result") or {}
 
         poll_timeout = d.poll_timeout_s if d.poll_timeout_s and d.poll_timeout_s > 0 else 300.0
+        # Fleet tracing: when this dispatch runs inside a traced turn, hand the
+        # peer our Langfuse trace context as ``a2a.trace`` metadata — the shape
+        # a2a_impl/executor._extract_caller_trace reads on the receiving side
+        # (camelCase traceId/spanId, threaded into trace_session as
+        # caller_trace_id/caller_span_id → the peer JOINS our trace). Attached at
+        # BOTH request level (preferred by the receiver's metadata merge) and
+        # message level (fallback for peers whose SDK drops request metadata).
+        # Absent when tracing is off — the request is byte-identical to before.
+        send_params: dict = {
+            "message": {
+                "role": "ROLE_USER",
+                "parts": [{"text": query}],
+                "messageId": str(uuid.uuid4()),
+            }
+        }
+        try:
+            from observability import tracing
+
+            tctx = tracing.current_trace_context()
+        except Exception:  # noqa: BLE001 — tracing must never break a dispatch
+            tctx = None
+        if tctx:
+            wire = {"traceId": tctx["trace_id"]}
+            if tctx.get("span_id"):
+                wire["spanId"] = tctx["span_id"]
+            send_params["metadata"] = {"a2a.trace": wire}
+            send_params["message"]["metadata"] = {"a2a.trace": wire}
         # A2A 1.0 (a2a-sdk >=1.0): JSON-RPC `SendMessage` / `GetTask`, the ROLE_USER
         # enum, and a `result.task` envelope. (`message/send` + lowercase `user` is
         # the v0.3 legacy dialect, which 1.0 servers reject with -32601.)
@@ -333,17 +360,7 @@ class A2aAdapter(Adapter):
         # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
         read_budget = timeout if timeout is not None else poll_timeout
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
-            result = await _rpc(
-                client,
-                "SendMessage",
-                {
-                    "message": {
-                        "role": "ROLE_USER",
-                        "parts": [{"text": query}],
-                        "messageId": str(uuid.uuid4()),
-                    }
-                },
-            )
+            result = await _rpc(client, "SendMessage", send_params)
             text = _extract_text(result)
             if text:
                 return text
