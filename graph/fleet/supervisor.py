@@ -213,6 +213,17 @@ def start(ident: str) -> dict:
             hub_public_url = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
             if hub_public_url:
                 full_env["A2A_PUBLIC_URL"] = f"{hub_public_url}/agents/{wid}"
+        # AGENT_NAME namespaces several subsystems that read os.environ directly rather
+        # than the resolved config identity: Prometheus metric prefixes
+        # (observability/metrics.py), trace tags (observability/tracing.py,
+        # graph/middleware/trace_context.py), scheduler storage
+        # (scheduler/local.py — a real collision risk when members share a storage
+        # path), and the ``<AGENT_NAME>_API_KEY`` lookup (server/agent_init.py,
+        # evals/client.py). full_env otherwise inherits the hub's AGENT_NAME from
+        # os.environ, so a member runs every one of those under the HUB's name. An
+        # explicit per-workspace value still wins (mirrors the pair above).
+        if "AGENT_NAME" not in env:
+            full_env["AGENT_NAME"] = name
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_offset = log_path.stat().st_size if log_path.exists() else 0
