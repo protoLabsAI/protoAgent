@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Hermes is a first-class agent runtime** (#1889). `protoagent hermes` is a one-command preset
+  that points the runtime at NousResearch Hermes over the ADR 0033 ACP seam; `protoagent runtime
+  use`/`list` switch between runtimes, seeding is directional-never-clobber (an existing Hermes
+  install wins on a fresh instance), and a new `docs/guides/hermes.md` walks the setup. Hardened
+  for real use (#1891): the non-streaming `/v1` path switches runtimes too, the operator-MCP
+  child env pins the resolved `PROTOAGENT_HOME` (so a member's writes can't leak to the default
+  box), ACP turns serialize per-thread, and the usage frame carries real
+  `context_used`/`context_window` tokens from the ACP `usage_update`.
 - **Fleet-wide distributed Langfuse tracing.** A hub→member delegation now renders as ONE
   Langfuse trace instead of disconnected per-agent fragments. Four seams: (1) `trace_session`
   JOINS a caller's trace when the inbound A2A metadata carries `a2a.trace` ids (Langfuse
@@ -25,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool/LLM observations nest under one node — without touching the max_turns salvage path.
   The server shutdown hook now also flushes buffered observations so spans survive process
   exit. Everything is a no-op when Langfuse isn't configured.
+
+### Changed
+- **`filesystem.allow_run` defaults OFF on the headless tier** (#1888). The shell-exec tool's
+  default is now resolved from the UI tier: off under `--ui none`/headless (fleet members, eval
+  sweeps, any server with no interactive approval surface), on otherwise (desktop/console, where
+  the HITL approval gate already fences it). An explicit config value always wins. Closes the
+  footgun where a headless deployment silently permitted unattended `run`.
 
 ### Fixed
 - **A fleet member's plugin views 401'd through a token-gated hub** (#1890). A view page is
@@ -44,6 +59,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values and salvages the partial transcript with an explicit hard-stop marker (`Gap`, never a
   fabricated verdict); genuine failures still raise. The review-finder budget also moves 25→40
   (protoContent-sized cross-file reads legitimately exceed 25).
+- **Fleet members no longer inherit the hub's identity.** A hub-spawned member ran under the
+  hub's `AGENT_NAME` (#1886 — colliding metric prefixes, trace tags, scheduler storage, and the
+  `<AGENT>_API_KEY` lookup), loaded the hub's placeholder SOUL/persona instead of its own
+  (#1882), and advertised the hub's root A2A URL on its agent card — so a peer that discovered
+  the member dialed the hub instead (#1881 — members now self-advertise their `/agents/<slug>`
+  tenant path). An explicit per-workspace value still wins in every case.
+- **An agent tracing to its own Langfuse project now produces a whole trace** (#1893). When a
+  fleet agent points at a dedicated Langfuse project (separate from the gateway's), the LLM
+  generations landed in the gateway's project, leaving the agent's trace an empty wrapper.
+  `TraceContextMiddleware` now also emits a lightweight generation node (model + tokens + cost,
+  no prompt/completion payload) into the agent's own project, so its trace stands alone; the
+  full IO stays in the gateway project, joinable by `trace_id`.
+- **A background knowledge-ingest job now wakes the agent when it finishes** (#1887). A
+  `spawn_work`-based background job (what `knowledge_ingest` uses) settled through a completion
+  hook that only did the Activity-thread wake and never made the ADR 0070 resume-into-origin-
+  session decision — so an ingest kicked off from chat completed silently. The hook now ports
+  that resume decision; the identical silent drop for `delegate_to`'s background dispatch is
+  fixed as a bonus (shared path).
+- **Quieter plugin hot-reload logs** (#1885). A routine reload re-mounting the same plugin
+  routers hit the same "already mounted" branch as a genuine duplicate-prefix collision, logging
+  a spurious dup warning on every reload. A per-call `seen` set now distinguishes a cross-call
+  re-mount (DEBUG) from a real same-call collision (still WARNING).
 
 ## [0.95.1] - 2026-07-07
 
