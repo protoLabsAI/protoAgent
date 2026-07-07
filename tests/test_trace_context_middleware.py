@@ -136,3 +136,98 @@ async def test_awrap_model_call_passes_stamped_request_to_handler(monkeypatch, m
 
     assert await mw.awrap_model_call(_FakeRequest(_FakeModel()), handler) == "resp"
     assert seen["req"].model.extra_body["metadata"]["existing_trace_id"] == _TID
+
+
+# ─── Fleet generation node (whole-trace in the agent's OWN project) ──────────
+# The gateway logs the full-detail generation into ITS project; when the agent
+# runs in a different (fleet) project, the middleware also emits a lightweight
+# model+usage+cost generation into the agent's project so its trace is whole.
+
+
+class _Resp:
+    """ModelResponse stand-in: carries .result (list[BaseMessage])."""
+
+    def __init__(self, result):
+        self.result = result
+
+
+def _ai(usage=None, model="gw/model"):
+    from langchain_core.messages import AIMessage
+
+    return AIMessage(
+        content="ok",
+        usage_metadata=usage,
+        response_metadata=({"model_name": model} if model else {}),
+    )
+
+
+def test_emit_fleet_generation_records_model_usage_cost(monkeypatch, mw):
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    monkeypatch.setenv("AGENT_NAME", "vera")
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+
+    mw._emit_fleet_generation(
+        _Resp([_ai(usage={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})]),
+        1234,
+    )
+
+    assert seen["name"] == "vera-turn"
+    assert seen["model"] == "gw/model"
+    assert seen["usage"]["input_tokens"] == 100
+    assert seen["duration_ms"] == 1234
+    assert seen["cost_usd"] >= 0.0
+
+
+def test_emit_handles_bare_aimessage_response(monkeypatch, mw):
+    """The contract allows the handler to return an AIMessage directly."""
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    calls = []
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: calls.append(kw))
+
+    mw._emit_fleet_generation(_ai(usage={"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}), 0)
+
+    assert calls and calls[0]["model"] == "gw/model"
+
+
+def test_emit_noop_when_tracing_disabled(monkeypatch, mw):
+    monkeypatch.setattr(tracing, "is_enabled", lambda: False)
+    calls = []
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: calls.append(kw))
+
+    mw._emit_fleet_generation(
+        _Resp([_ai(usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})]), 0
+    )
+
+    assert not calls
+
+
+def test_emit_never_raises_on_garbage_or_sink_blowup(monkeypatch, mw):
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+
+    def _boom(**kw):
+        raise RuntimeError("otel misery")
+
+    monkeypatch.setattr(tracing, "trace_generation", _boom)
+    # garbage response (no .result / no usage) → nothing to emit, no raise
+    mw._emit_fleet_generation(object(), 0)
+    # valid response but the sink throws → still swallowed
+    mw._emit_fleet_generation(
+        _Resp([_ai(usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})]), 0
+    )
+
+
+async def test_awrap_emits_generation_and_returns_response(monkeypatch, mw):
+    _set_ctx(monkeypatch, {"trace_id": _TID})
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    calls = []
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: calls.append(kw))
+    resp = _Resp([_ai(usage={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12})])
+
+    async def handler(request):
+        return resp
+
+    out = await mw.awrap_model_call(_FakeRequest(_FakeModel()), handler)
+
+    assert out is resp  # response passes through untouched
+    assert calls and calls[0]["usage"]["output_tokens"] == 2
