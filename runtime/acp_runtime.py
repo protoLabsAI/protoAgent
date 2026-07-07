@@ -83,12 +83,31 @@ def operator_mcp_server_spec(config) -> dict:
     repo_root = str(_REPO_ROOT)
     pythonpath = repo_root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
     env: list[dict] = [{"name": "PYTHONPATH", "value": pythonpath}]
+    # Pin the child to THIS instance's resolved root. The ACP agent spawns the MCP
+    # server with the spec env REPLACING the environment, so anything not listed here
+    # is lost — forwarding only PROTOAGENT_INSTANCE let a PROTOAGENT_HOME-scoped
+    # instance's child boot the DEFAULT stores and write another instance's data
+    # (found live: a smoke agent's task_create landed in the operator's prod board).
+    # The resolved instance_root wins over any env/auto-scope derivation in the child.
+    try:
+        from infra.paths import instance_paths
+
+        env.append({"name": "PROTOAGENT_HOME", "value": str(instance_paths().instance_root)})
+    except Exception:  # noqa: BLE001 — path resolution must never block the mount
+        log.warning("[acp-runtime] could not resolve instance root for the operator MCP env", exc_info=True)
+    box = os.environ.get("PROTOAGENT_BOX_ROOT")
+    if box:
+        env.append({"name": "PROTOAGENT_BOX_ROOT", "value": box})  # host-layer fidelity in the child
     inst = os.environ.get("PROTOAGENT_INSTANCE")
     if inst:
         env.append({"name": "PROTOAGENT_INSTANCE", "value": inst})  # share this instance's data
     # Pass the resolved allowlist to the child explicitly — the spawned server otherwise
     # reads operator_mcp.tools from YAML, which wouldn't carry the "*" default.
     env.append({"name": "OPERATOR_MCP_TOOLS", "value": ",".join(allow)})
+    # Frozen desktop sidecar: sys.executable IS the server entrypoint and rejects
+    # `-m server.operator_mcp` argv (#1603's class) — use the dispatch verb instead.
+    if getattr(sys, "frozen", False):
+        return {"name": "protoagent-operator", "command": sys.executable, "args": ["operator-mcp"], "env": env}
     return {
         "name": "protoagent-operator",
         "command": sys.executable,
@@ -229,6 +248,12 @@ class AcpRuntime:
         )
         self._context.after_turn(user=message, response=answer)
         return answer
+
+    def last_usage(self) -> dict | None:
+        """Latest ACP-native context pressure ({used, size} tokens) the agent reported
+        via ``usage_update`` — None when the agent hasn't sent one (most coding agents
+        don't; hermes-acp does after each response)."""
+        return getattr(self._client, "last_usage", None)
 
     async def close(self) -> None:
         if self._client is not None and hasattr(self._client, "close"):

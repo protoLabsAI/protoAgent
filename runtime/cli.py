@@ -262,6 +262,27 @@ def _bootstrap_hermes() -> None:
 # ── subcommands ──────────────────────────────────────────────────────────────
 
 
+def _running_server_port() -> int | None:
+    """Port of a live server for THIS instance, else None — the `protoagent up`
+    pidfile + a port probe. Replicates server.cli's tiny check; can't import it
+    here (runtime/ must not import server/, ADR 0023 layering)."""
+    import json
+    import socket
+
+    from infra.paths import instance_paths
+
+    try:
+        rec = json.loads((instance_paths().instance_root / "server.pid").read_text(encoding="utf-8"))
+        port = int(rec.get("port") or 0)
+    except (OSError, ValueError, TypeError):
+        return None
+    if not port:
+        return None
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        return port if s.connect_ex(("127.0.0.1", port)) == 0 else None
+
+
 def _known_runtimes(config=None) -> list[str]:
     from runtime.acp_agents import acp_runtime_options
 
@@ -292,7 +313,12 @@ def _cmd_use(args) -> int:
     doc["agent_runtime"] = target
     save_yaml_doc(doc)
     print(f"runtime: now {target}")
-    print("Start it with:  protoagent up   (console: http://127.0.0.1:7870)")
+    port = _running_server_port()
+    if port:
+        # The switch only applies on boot — a live server keeps the old runtime.
+        print(f"Server on :{port} is still on the previous runtime — restart:  protoagent down && protoagent up")
+    else:
+        print("Start it with:  protoagent up   (console: http://127.0.0.1:7870)")
     return 0
 
 
