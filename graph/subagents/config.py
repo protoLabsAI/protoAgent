@@ -390,10 +390,11 @@ re-litigate a prior finding whose verdict was `refuted`.
 
 Hard stop at max_turns: return what you have (partial findings beat none).""",
     tools=["github_pr_diff", "github_get_commit_diff", "github_read_file", "github_get_pr"],
-    # 25, not 15: on the first live acceptance run (PR #1847, a 6-file diff) two of
-    # four finders hit the 15-turn recursion limit mid-read — a finder that re-fetches
-    # a truncated diff and reads 2-3 surrounding files legitimately spends ~20 turns.
-    max_turns=25,
+    # 40: bumped twice on live evidence — 15→25 (#1858: a 6-file protoAgent diff),
+    # 25→40 (ADR 0078 shadow reviews on protoContent hit 25 mid-read). The limit is
+    # now a soft budget (run_subagent salvages partial output at the recursion
+    # limit), so headroom costs nothing when unused.
+    max_turns=40,
     # Per-invocation review verdicts are context-specific — never distill to a skill.
     allow_skill_emission=False,
 )

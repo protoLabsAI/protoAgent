@@ -334,10 +334,25 @@ async def _run_subagent(
         sub_run_config["metadata"] = {"parent_task_id": parent_task_id}
 
     try:
-        result = await subagent.ainvoke(
-            {"messages": [{"role": "user", "content": prompt}]},
-            config=sub_run_config,
-        )
+        # Stream values (not ainvoke) so the last state survives a recursion-limit
+        # stop: every subagent prompt promises "hard stop at max_turns: return what
+        # you have", but ainvoke() RAISES GraphRecursionError and loses the run —
+        # a finder that read one file too many failed its whole panel step (seen
+        # live: ADR 0078 shadow reviews on protoContent, GRAPH_RECURSION_LIMIT).
+        # max_turns is a budget, not a bomb: on the limit, salvage the transcript.
+        from langgraph.errors import GraphRecursionError
+
+        result: dict[str, Any] = {}
+        hard_stop = False
+        try:
+            async for state in subagent.astream(
+                {"messages": [{"role": "user", "content": prompt}]},
+                config=sub_run_config,
+                stream_mode="values",
+            ):
+                result = state
+        except GraphRecursionError:
+            hard_stop = True
 
         messages = result.get("messages", [])
 
@@ -353,11 +368,21 @@ async def _run_subagent(
                 break
 
         if body is None:
+            if hard_stop:
+                return (
+                    f"[{subagent_type} hard-stopped at max_turns: {description}] -- no salvageable "
+                    "output; treat this lane as a Gap, not a verdict."
+                )
             return f"[{subagent_type} completed: {description}] -- no output produced."
 
         if truncate is not None and len(body) > truncate:
             body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
 
+        if hard_stop:
+            return (
+                f"[{subagent_type} hard-stopped at max_turns: {description} — PARTIAL output; "
+                f"unverified remainder is a Gap]\n\n{body}"
+            )
         return f"[{subagent_type} completed: {description}]\n\n{body}"
     except Exception as e:
         # Surface a hard subagent failure as a tool ERROR (X) rather than a green
