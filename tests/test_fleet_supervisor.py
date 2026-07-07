@@ -720,3 +720,60 @@ def test_spawned_member_keeps_explicit_workspace_token(tmp_path, monkeypatch):
     supervisor.start("gamma")
 
     assert captured["env"].get("A2A_AUTH_TOKEN") == "team-own-token"  # explicit token wins
+
+
+def test_member_advertises_a2a_tenant_url(tmp_path, monkeypatch):
+    """A2A URL-based multi-tenancy: a hub-spawned member's A2A_PUBLIC_URL is the hub's
+    public URL + its ``/agents/<id>`` tenant sub-path — so its agent-card interface url
+    (``_a2a_card_url`` = ``{A2A_PUBLIC_URL}/a2a``) resolves to the member's own proxied
+    route, not the hub root that every member would otherwise collide on."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("A2A_PUBLIC_URL", "http://ava:7871")
+    manager.create("delta", port=7893)
+
+    r = supervisor.start("delta")
+
+    assert captured["env"]["A2A_PUBLIC_URL"] == f"http://ava:7871/agents/{r['id']}"
+
+
+def test_member_tenant_url_strips_hub_trailing_slash(tmp_path, monkeypatch):
+    """A trailing slash on the hub's public URL doesn't double up in the tenant path."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("A2A_PUBLIC_URL", "http://ava:7871/")
+    manager.create("eta", port=7896)
+
+    r = supervisor.start("eta")
+
+    assert captured["env"]["A2A_PUBLIC_URL"] == f"http://ava:7871/agents/{r['id']}"
+
+
+def test_member_tenant_url_noop_without_hub_public_url(tmp_path, monkeypatch):
+    """No hub A2A_PUBLIC_URL (local/desktop run) → nothing injected; the member falls back
+    to advertising its bound loopback port, which is already per-member."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.delenv("A2A_PUBLIC_URL", raising=False)
+    manager.create("epsilon", port=7894)
+
+    supervisor.start("epsilon")
+
+    assert "A2A_PUBLIC_URL" not in captured["env"]
+
+
+def test_member_tenant_url_respects_explicit_workspace_override(tmp_path, monkeypatch):
+    """If the workspace's own run_exec env sets A2A_PUBLIC_URL, that explicit value is kept
+    (only the INHERITED hub root is rewritten to the tenant path)."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("A2A_PUBLIC_URL", "http://ava:7871")
+    manager.create("zeta", port=7895)
+
+    real_run_exec = manager.run_exec
+
+    def run_exec_with_url(wid, extra):
+        env, argv = real_run_exec(wid, extra)
+        env["A2A_PUBLIC_URL"] = "http://custom:9999/base"
+        return env, argv
+
+    monkeypatch.setattr(supervisor.manager, "run_exec", run_exec_with_url)
+    supervisor.start("zeta")
+
+    assert captured["env"]["A2A_PUBLIC_URL"] == "http://custom:9999/base"  # explicit wins

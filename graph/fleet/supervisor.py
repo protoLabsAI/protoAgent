@@ -198,6 +198,21 @@ def start(ident: str) -> dict:
         if "A2A_AUTH_TOKEN" not in env:
             full_env.pop("A2A_AUTH_TOKEN", None)
             full_env.setdefault("PROTOAGENT_ALLOW_OPEN", "1")
+        # A2A URL-based multi-tenancy (A2A spec — Multi-Tenancy § URL-based routing). The
+        # hub reverse-proxies ``/agents/<slug>/*`` to this member (ADR 0042), so the member's
+        # reachable A2A endpoint is the hub's tenant SUB-PATH, not the hub root. But the child
+        # inherits the hub's ``A2A_PUBLIC_URL`` here, so its agent-card's interface ``url``
+        # (``_a2a_card_url`` = ``{A2A_PUBLIC_URL}/a2a``) would advertise the hub root — a peer
+        # that DISCOVERS the member's card would dial the hub (→ the hub agent) instead of the
+        # member, and every member's card would collide on the same URL. Point the member's
+        # advertised public URL at its own tenant path so its card is self-consistent and
+        # directly dial-able (``{hub}/agents/<wid>/a2a``). Respect an explicit per-workspace
+        # override (mirrors the token rule above); no-op when the hub itself has no public URL
+        # (local/desktop runs advertise the bound loopback port, already per-member).
+        if "A2A_PUBLIC_URL" not in env:
+            hub_public_url = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
+            if hub_public_url:
+                full_env["A2A_PUBLIC_URL"] = f"{hub_public_url}/agents/{wid}"
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_offset = log_path.stat().st_size if log_path.exists() else 0

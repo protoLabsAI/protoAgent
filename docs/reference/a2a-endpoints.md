@@ -11,6 +11,19 @@ Every endpoint the A2A handler exposes. Served on port 7870 by default.
 
 Both paths return identical content. Serving both is a spec compatibility hedge — early A2A clients (including older `@a2a-js/sdk` versions) probed different paths.
 
+## Fleet multi-tenancy (`/agents/<slug>/…`)
+
+A **hub** instance (one running a fleet of workspace members — [ADR 0042](/adr/0042-fleet-supervisor-unified-console)) hosts each member as an independently-addressable A2A **tenant** under a URL prefix, implementing the [A2A URL-based routing](https://a2a-protocol.org/latest/topics/multi-tenancy/) pattern. The hub reverse-proxies `/agents/<slug>/*` to the member's own server, so every path in this reference is reachable per-member:
+
+| Path | Reaches |
+|---|---|
+| `GET /agents/<slug>/.well-known/agent-card.json` | the **member's** card |
+| `POST /agents/<slug>/a2a` | the **member's** JSON-RPC endpoint (its task queue) |
+
+`<slug>` is the member's workspace id (e.g. `matt-7689`); `host` targets the hub itself. Routing to a member is pure transport — **the hub agent's own reasoning loop is not invoked** — so dispatching to a member's tenant path is a *direct* call, not a `delegate_to` through the hub agent.
+
+Because a member self-advertises this tenant URL in its card (see [`supportedInterfaces`](/reference/agent-card#supportedinterfaces)), a peer that **discovers** the member's card routes to it correctly with no special client logic — the spec's "read the card, follow its URL" contract. The single auth boundary is the hub's token: a caller presents the **hub's** `A2A_AUTH_TOKEN` to `/agents/<slug>/a2a`, and the proxy forwards to the (loopback-bound) member behind it.
+
 ## JSON-RPC methods (POST /a2a)
 
 All methods use JSON-RPC 2.0 envelopes:
