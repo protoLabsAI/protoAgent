@@ -1061,6 +1061,37 @@ def _build_inbox_store(config):
         return None
 
 
+def _on_work_terminal(job) -> None:
+    """Deliver a deterministic ``spawn_work`` job's completion (``knowledge_ingest``,
+    ``delegate_to``) the SAME way the A2A terminal hook delivers a subagent-turn job
+    (``server.a2a._handle_background_terminal``, ADR 0050 Phase 2 / ADR 0070 D1):
+    push-resume the job's ORIGIN session when the D1 guards allow it (not disabled,
+    not canceled, has a real chat origin, not incognito), so the origin agent runs a
+    turn there and briefs the operator; fall back to the Activity-thread idle-wake
+    otherwise. Module-level (not a nested closure) so it's independently testable.
+
+    Before this, a ``spawn_work`` job only ever fired the Activity-thread wake — never
+    a turn in the chat session that actually requested it — so a promise like
+    ``knowledge_ingest``'s "I'll report back when it's ready" never fired (#1840).
+    Lazy import keeps the manager off ``server`` and avoids a server.a2a ↔ agent_init
+    import cycle. Best-effort — never raises into the manager's terminal callback."""
+    try:
+        from server.a2a import (
+            _background_wake_enabled,
+            _should_auto_resume,
+            _spawn_background_resume,
+            _spawn_background_wake,
+        )
+
+        mgr = getattr(STATE, "background_mgr", None)
+        if mgr is not None and _should_auto_resume(job):
+            _spawn_background_resume(mgr, job)
+        elif _background_wake_enabled():
+            _spawn_background_wake(job)
+    except Exception:  # noqa: BLE001 — the wake/resume is best-effort
+        log.exception("[background] work-job terminal hook failed for %s", getattr(job, "id", "?"))
+
+
 def _build_background_manager(config):
     """Background subagent manager (ADR 0050). Fires detached jobs as self-POSTed A2A
     turns, so it derives the invoke URL + auth exactly like ``_build_scheduler`` (so a
@@ -1106,18 +1137,6 @@ def _build_background_manager(config):
         publish = _event_bus.publish
     except Exception:  # noqa: BLE001
         publish = None
-
-    def _on_work_terminal(job) -> None:
-        """Give a deterministic ``spawn_work`` job the SAME idle-wake the A2A terminal
-        hook gives a subagent-turn job (ADR 0050 Phase 2). Lazy import keeps the
-        manager off ``server`` and avoids a server.a2a ↔ agent_init cycle."""
-        try:
-            from server.a2a import _background_wake_enabled, _spawn_background_wake
-
-            if _background_wake_enabled():
-                _spawn_background_wake(job)
-        except Exception:  # noqa: BLE001 — the wake is best-effort
-            log.exception("[background] work-job terminal hook failed for %s", getattr(job, "id", "?"))
 
     try:
         return BackgroundManager(
