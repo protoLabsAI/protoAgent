@@ -58,6 +58,8 @@ then exits:
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent operations` | List the operations on the shared ops layer — name, read/write, one-line summary. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent runtime use <rt>` · `list` | Select the agent runtime — `native` (LangGraph) or an ACP agent. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
+| `protoagent hermes` | One-command **Hermes preset** — wrap protoAgent around your existing `~/.hermes` agent ([guide](hermes.md)). | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 
 ### Point at a local model
 

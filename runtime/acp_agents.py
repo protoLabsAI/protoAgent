@@ -20,6 +20,9 @@ ACP_AGENT_CATALOG: list[dict] = [
     {"id": "gemini", "label": "Gemini CLI", "command": "gemini", "args": ["--experimental-acp"]},
     {"id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"]},
     {"id": "copilot", "label": "Copilot CLI", "command": "copilot", "args": ["--acp"]},
+    # Not a coding agent: NousResearch's personal agent, whose in-tree ACP adapter makes it
+    # a full protoAgent brain. Install/preset: `protoagent hermes` (runtime/cli.py).
+    {"id": "hermes", "label": "Hermes Agent", "command": "hermes-acp", "args": []},
 ]
 
 
