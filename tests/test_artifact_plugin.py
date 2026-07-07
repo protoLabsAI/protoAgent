@@ -745,3 +745,18 @@ def test_check_artifact_waits_for_a_live_render(monkeypatch, tmp_path):
     art._write_store(store)
     art._LAST_POLL_TS = 0
     assert "rendered cleanly" in art.check_artifact.invoke({"artifact_id": aid})
+
+
+def test_live_theme_repush_is_wired(monkeypatch, tmp_path):
+    """App-theme switches re-theme the NESTED artifact frame in place (#1872): base()
+    bakes tokens in as literals at render time, so without a push the frame kept the
+    stale palette. The shell observes the kit's token rewrite on the root element and
+    postMessages fresh tokens; the SHIM applies them without a re-srcdoc (interactive
+    artifact state survives)."""
+    html = _load(monkeypatch, tmp_path)._SHELL_HTML
+    # frame side: the SHIM handles the theme message and updates :root vars in place.
+    assert 'protoArtifact:theme' in html
+    assert 'st.setProperty(k,String(m.tokens[k]))' in html
+    # shell side: observe the kit re-theme + re-push after a fresh srcdoc load.
+    assert "new MutationObserver(pushTheme).observe(document.documentElement" in html
+    assert '$frame.addEventListener("load", pushTheme)' in html

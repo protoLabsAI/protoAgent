@@ -813,7 +813,17 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   // works from the sandbox; the shell validates e.source and calls the bearer-gated
   // endpoint. ask() rejects if the operator hasn't enabled it (ARTIFACT_ASK_ENABLED).
   var SHIM = '<script>(function(){var s=0,w={};'
-    + 'window.addEventListener("message",function(e){var m=e.data||{};if(m.type!=="protoArtifact:result")return;'
+    + 'window.addEventListener("message",function(e){var m=e.data||{};'
+    // Live re-theme (#1872): base() bakes the tokens in as literals at render time,
+    // so a later app-theme switch left the frame in the stale palette. The shell
+    // pushes fresh tokens; update :root + html/body in place (no re-render, so
+    // interactive artifact state survives).
+    + 'if(m.type==="protoArtifact:theme"&&m.tokens){var st=document.documentElement.style;'
+    + 'for(var k in m.tokens){if(k.indexOf("--pl-")===0)st.setProperty(k,String(m.tokens[k]));}'
+    + 'var bg=m.tokens["--pl-color-bg"],fg=m.tokens["--pl-color-fg"];'
+    + 'if(bg){st.background=bg;if(document.body)document.body.style.background=bg;}'
+    + 'if(fg&&document.body)document.body.style.color=fg;return;}'
+    + 'if(m.type!=="protoArtifact:result")return;'
     + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(new Error(m.error)):p.resolve(m.text);});'
     + 'window.protoArtifact={ask:function(prompt){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
     + 'parent.postMessage({type:"protoArtifact:ask",id:id,prompt:String(prompt)},"*");'
@@ -1016,6 +1026,23 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     var key=a.id+"@"+vi;  // re-srcdoc only when the shown version actually changes
     if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; $frame.srcdoc=srcdoc(a.kind, v.code); $frame.style.display="block"; }
   }
+
+  // Live re-theme (#1872): base() bakes the theme tokens into the srcdoc as literal
+  // colors, so an app-theme switch after render left the artifact in the stale
+  // palette. The DS plugin-kit re-themes THIS page by rewriting the --pl-* tokens on
+  // the root element; observe that and push the fresh tokens into the frame (the
+  // SHIM applies them in place — no re-srcdoc, so interactive artifact state survives).
+  function pushTheme(){
+    if(!$frame || !$frame.contentWindow || $frame.style.display==="none") return;
+    var cs=getComputedStyle(document.documentElement);
+    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
+    var tokens={"--pl-color-bg":tok("--pl-color-bg","#0a0a0c"),"--pl-color-fg":tok("--pl-color-fg","#ededed"),
+                "--pl-color-accent":tok("--pl-color-accent","#9b87f2"),"--pl-color-border":tok("--pl-color-border","rgba(255,255,255,.08)")};
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:tokens},"*"); }catch(_){}
+  }
+  new MutationObserver(pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:["style","class","data-theme"]});
+  // A theme switch can race a render — re-push once the fresh srcdoc has loaded.
+  $frame.addEventListener("load", pushTheme);
 
   $art.addEventListener("change", function(e){
     selId=e.target.value; selVer=null; followNewest=(selId===(curId||(arts[0]&&arts[0].id)));
