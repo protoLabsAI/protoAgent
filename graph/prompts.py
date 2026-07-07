@@ -54,11 +54,28 @@ def build_system_prompt(
     """
     parts = []
 
-    # 1. Identity — prefer the runtime workspace (entrypoint.sh copies
-    # config/SOUL.md to /sandbox/SOUL.md at container start). Fall back
-    # to the repo source so local `python -m server` runs without a
-    # /sandbox mount still pick up persona edits made via the drawer.
-    soul = _read_file(f"{workspace}/SOUL.md")
+    # 1. Identity — the instance's OWN persona. Prefer the canonical live SOUL:
+    # ``instance_paths().soul_path`` = ``<instance_root>/config/SOUL.md`` — the path
+    # ``config_io.read_soul``/``write_soul`` use and the persona drawer edits, and
+    # PROTOAGENT_HOME-aware. This is what makes a FLEET MEMBER load ITS OWN persona:
+    # a member is spawned directly by the supervisor (not via entrypoint.sh, which
+    # only the primary runs to copy config/SOUL.md → /sandbox/SOUL.md), and it
+    # inherits the hub's default ``workspace`` (/sandbox), so the legacy
+    # ``{workspace}/SOUL.md`` read below resolved the HUB's file — a placeholder for
+    # the member — leaving it with NO identity (it then collapses onto whatever the
+    # injected team context foregrounds — the hub agent). Reading the instance's own
+    # config/SOUL.md fixes members and also gives the primary its real persona
+    # regardless of the entrypoint copy. Fall back to the legacy runtime copy
+    # (``{workspace}/SOUL.md``), then the repo/bundle default.
+    soul = ""
+    try:
+        from infra.paths import instance_paths
+
+        soul = _read_file(instance_paths().soul_path)
+    except Exception:  # noqa: BLE001 — path resolution must never break prompt building
+        soul = ""
+    if not soul:
+        soul = _read_file(f"{workspace}/SOUL.md")
     if not soul:
         soul = _read_file(Path(__file__).parent.parent / "config" / "SOUL.md")
     if soul:
