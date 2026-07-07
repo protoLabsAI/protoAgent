@@ -84,6 +84,18 @@ async def _settle_bg_tasks() -> None:
         await asyncio.sleep(0.01)
 
 
+async def _settle_work_job(store: BackgroundStore, job_id: str, tries: int = 400):
+    """Poll a ``spawn_work`` job (mirrors tests/test_background_work.py) until it
+    leaves ``running`` — a work job settles synchronously inside its own task, no
+    self-POST round trip to wait on."""
+    for _ in range(tries):
+        j = store.get(job_id)
+        if j is not None and j.status != "running":
+            return j
+        await asyncio.sleep(0.005)
+    raise AssertionError(f"job {job_id} never settled")
+
+
 def _outcome(job_id: str, state: str = "completed", text: str = "the report"):
     from a2a_impl.executor import TurnOutcome
 
@@ -469,6 +481,117 @@ class TestReportIndexing:
 
         assert trust_tier("background_report") == 2
         assert trust_label("background_report") == "agent"
+
+
+# ── #1840: spawn_work jobs (knowledge_ingest, delegate_to) push-resume too ────
+
+
+class TestWorkJobTerminalResume:
+    """``spawn_work`` (``knowledge_ingest``'s background path, ``delegate_to``) settles
+    through ``BackgroundManager._run_work`` -> its ``on_terminal`` hook
+    (``server.agent_init._on_work_terminal``) -- a DIFFERENT completion path than the
+    A2A terminal hook covered by ``TestTerminalHookResume`` (that one only fires for
+    ``spawn`` subagent-TURN jobs). Before #1840, ``_on_work_terminal`` only ever fired
+    the Activity-thread idle-wake, never the ADR 0070 D1 push-resume into the ORIGIN
+    chat session -- so ``knowledge_ingest``'s "I'll report back when it's ready"
+    promise never produced a follow-up turn. These mirror TestTerminalHookResume's
+    checks for this second completion path."""
+
+    def _wire(self, tmp_path, monkeypatch):
+        import server.a2a as a2a
+        from runtime.state import STATE
+        from server import agent_init
+
+        mgr = BackgroundManager(
+            agent_name="a",
+            invoke_url="http://127.0.0.1:7870",
+            store=_store(tmp_path),
+            on_terminal=agent_init._on_work_terminal,
+        )
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+        resumes: list = []
+        wakes: list = []
+        monkeypatch.setattr(a2a, "_spawn_background_resume", lambda _mgr, job: resumes.append(job.id))
+        monkeypatch.setattr(a2a, "_spawn_background_wake", lambda job: wakes.append(job.id))
+        return mgr, resumes, wakes
+
+    async def test_ingest_completion_pushes_resume_into_origin_session(self, tmp_path, monkeypatch, hook_env):
+        """The #1840 repro: a knowledge_ingest background job finishing must push a
+        retrigger into the ORIGIN chat session, not just the Activity-thread wake."""
+        mgr, resumes, wakes = self._wire(tmp_path, monkeypatch)
+
+        async def work():
+            return "Ingested 'YouTube video' (youtube, 20490 chars) -> 18 chunk(s) in 'general'."
+
+        job_id = await mgr.spawn_work(
+            origin_session="chat-42", kind="ingest", description="Ingest YouTube video", work=work
+        )
+        job = await _settle_work_job(mgr.store, job_id)
+
+        assert job.status == "completed"
+        assert resumes == [job_id]
+        assert wakes == []  # the resume turn IS the reaction -- never both
+
+    async def test_disabled_config_falls_back_to_wake(self, tmp_path, monkeypatch, hook_env):
+        from graph.config import LangGraphConfig
+        from runtime.state import STATE
+
+        mgr, resumes, wakes = self._wire(tmp_path, monkeypatch)
+        monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(background_auto_resume=False), raising=False)
+
+        async def work():
+            return "done"
+
+        job_id = await mgr.spawn_work(origin_session="chat-42", kind="ingest", description="Ingest x", work=work)
+        await _settle_work_job(mgr.store, job_id)
+
+        assert resumes == []
+        assert wakes == [job_id]
+
+    async def test_background_origin_never_resumes(self, tmp_path, monkeypatch, hook_env):
+        """No resume chains: a spawn_work job spawned from a background turn (e.g. a
+        subagent that itself calls knowledge_ingest) must not nudge the worker context."""
+        mgr, resumes, wakes = self._wire(tmp_path, monkeypatch)
+
+        async def work():
+            return "done"
+
+        job_id = await mgr.spawn_work(
+            origin_session="background:bg-parentparent", kind="ingest", description="chained", work=work
+        )
+        await _settle_work_job(mgr.store, job_id)
+
+        assert resumes == []
+        assert wakes == [job_id]
+
+    async def test_incognito_origin_never_resumes(self, tmp_path, monkeypatch, hook_env):
+        mgr, resumes, wakes = self._wire(tmp_path, monkeypatch)
+
+        async def work():
+            return "done"
+
+        job_id = await mgr.spawn_work(
+            origin_session="chat-42", kind="ingest", description="d", work=work, origin_incognito=True
+        )
+        await _settle_work_job(mgr.store, job_id)
+
+        assert resumes == []
+
+    async def test_delegate_to_background_completion_also_resumes(self, tmp_path, monkeypatch, hook_env):
+        """The same ``spawn_work`` completion path backs ``delegate_to``'s background
+        dispatch (plugins/delegates) -- the fix isn't ingest-specific."""
+        mgr, resumes, wakes = self._wire(tmp_path, monkeypatch)
+
+        async def work():
+            return "delegate replied"
+
+        job_id = await mgr.spawn_work(
+            origin_session="chat-7", kind="delegate", description="delegate -> foo: bar", work=work
+        )
+        await _settle_work_job(mgr.store, job_id)
+
+        assert resumes == [job_id]
+        assert wakes == []
 
 
 # ── D2: the drain notification's pointer line ────────────────────────────────
