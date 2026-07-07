@@ -777,3 +777,36 @@ def test_member_tenant_url_respects_explicit_workspace_override(tmp_path, monkey
     supervisor.start("zeta")
 
     assert captured["env"]["A2A_PUBLIC_URL"] == "http://custom:9999/base"  # explicit wins
+
+
+def test_spawned_member_gets_own_agent_name(tmp_path, monkeypatch):
+    """A hub-spawned member must NOT inherit the hub's AGENT_NAME — else it runs under the
+    hub's name in every AGENT_NAME-namespaced subsystem (metrics prefix, trace tags,
+    scheduler storage, ``<AGENT_NAME>_API_KEY`` lookups). It gets its own workspace name."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENT_NAME", "jon")
+    manager.create("theta", port=7897)
+
+    supervisor.start("theta")
+
+    assert captured["env"]["AGENT_NAME"] == "theta"
+
+
+def test_spawned_member_agent_name_respects_explicit_workspace_override(tmp_path, monkeypatch):
+    """If the workspace's own run_exec env sets AGENT_NAME, that explicit value is kept
+    (mirrors the A2A_AUTH_TOKEN / A2A_PUBLIC_URL override rule)."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENT_NAME", "jon")
+    manager.create("iota", port=7898)
+
+    real_run_exec = manager.run_exec
+
+    def run_exec_with_name(wid, extra):
+        env, argv = real_run_exec(wid, extra)
+        env["AGENT_NAME"] = "custom-name"
+        return env, argv
+
+    monkeypatch.setattr(supervisor.manager, "run_exec", run_exec_with_name)
+    supervisor.start("iota")
+
+    assert captured["env"]["AGENT_NAME"] == "custom-name"  # explicit wins
