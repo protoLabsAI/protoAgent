@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   examples) hit Method-not-found on `/a2a`. The route now mounts with `enable_v0_3_compat=True`,
   serving both vocabularies on the same endpoint, and the live smoke pins the compat adapter so a
   future SDK bump can't silently drop it. Found live on the v0.95.0 local test pass.
+- **Artifact panel kept the stale palette after an app-theme switch (#1872).** The artifact
+  shell bakes the `--pl-*` tokens into the sandboxed frame as literal colors at render time, so
+  a later theme toggle re-skinned the console but not the artifact. The shell now observes the
+  plugin-kit's token rewrite on the root element and pushes fresh tokens into the frame, where
+  the injected shim applies them in place — no re-render, so interactive artifact state survives.
 - **Installed-plugin workflow recipes were silently invisible (#1867).** The in-tree `workflows`
   plugin scanned recipe dirs eagerly at register time — before instance-installed plugins had
   loaded — so a git-installed plugin's `workflows/` dir (the ADR 0027 bundle promise) never
