@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.95.1] - 2026-07-07
+
 ### Fixed
 - **A2A producer tasks GC'd while pending at turn end (#1713).** a2a-sdk 1.1.0's turn
   teardown drops the last strong reference to the still-pending `producer:<task_id>` asyncio

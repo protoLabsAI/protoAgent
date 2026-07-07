@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.95.1",
+    "date": "2026-07-07",
+    "changes": [
+      "A2A producer tasks GC'd while pending at turn end (#1713).",
+      "Classic A2A message/send got -32601 Method not found (#1854).",
+      "Artifact panel kept the stale palette after an app-theme switch (#1872).",
+      "Installed-plugin workflow recipes were silently invisible (#1867)."
+    ]
+  },
+  {
     "version": "v0.95.0",
     "date": "2026-07-06",
     "changes": [
