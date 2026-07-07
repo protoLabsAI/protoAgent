@@ -86,6 +86,12 @@ prefix); everything the page *fetches* (your data) goes through gated `/api/plug
 authed with the bearer the console hands you over the [init handshake](#the-init-handshake-bearer--theme).
 The page is public chrome; its data is not.
 
+This holds **through the fleet proxy** too (#1890): when the console views a member, the page loads
+at `/agents/<slug>/plugins/<id>/…` and a token-gated hub defers the public decision to the *member's*
+own auth-exempt list (served on `/.well-known/protoagent/public-paths`, TTL-cached). You don't have
+to do anything — your view's page path is auto-exempted from the manifest on the instance that runs
+the plugin, and the hub honors that instance's list.
+
 ## Claim the chat slot (`slot: "chat"`)
 
 The chat surface is a **slot** (ADR 0045): your view can *replace* the built-in chat panel instead of

@@ -1644,6 +1644,13 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # Without this a plugin update/enable that ships a new verifier leaves the watch/goal
         # controllers resolving it as "unknown" until a full restart.
         _apply_plugin_registries(new_plugins)
+        # Re-push the auth-exempt public prefixes too (#1890 — same rule as #1752: any
+        # init-time registry wiring must re-apply on reload). Without this a hot-enabled
+        # plugin's view page stays 401 under a token gate until a full restart.
+        STATE.plugin_public_paths = new_plugins.public_paths
+        from a2a_impl import auth as _a2a_auth
+
+        _a2a_auth.set_public_prefixes(new_plugins.public_paths)
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")

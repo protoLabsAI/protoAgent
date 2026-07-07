@@ -166,6 +166,46 @@ async def test_forward_to_delegates_to_target_when_running(monkeypatch):
     assert seen == {"base": "http://127.0.0.1:7001", "path": "api/chat", "extra": {}}
 
 
+async def test_forward_to_member_public_drops_stored_remote_bearer(monkeypatch):
+    """#1890: a request the hub admitted off the MEMBER's public list arrived anonymous —
+    forwarding it must NOT lend the remote's stored bearer to an unauthenticated caller."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        proxy, "_target_for_slug", lambda slug: ("http://remote:7870", {"authorization": "Bearer sekrit"})
+    )
+    seen = {}
+
+    async def fake_fwd(base, request, path, extra=None):
+        seen.update(extra=extra)
+        return "OK"
+
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
+    req = FakeRequest()
+    req.state = SimpleNamespace(member_public=True)
+    assert await proxy.forward_to("matt", req, "plugins/content/view") == "OK"
+    assert seen["extra"] == {}
+
+
+async def test_forward_to_authed_request_keeps_stored_remote_bearer(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        proxy, "_target_for_slug", lambda slug: ("http://remote:7870", {"authorization": "Bearer sekrit"})
+    )
+    seen = {}
+
+    async def fake_fwd(base, request, path, extra=None):
+        seen.update(extra=extra)
+        return "OK"
+
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
+    req = FakeRequest()
+    req.state = SimpleNamespace()  # no member_public stamp — normal authed traffic
+    assert await proxy.forward_to("matt", req, "api/chat") == "OK"
+    assert seen["extra"] == {"authorization": "Bearer sekrit"}
+
+
 # --- _forward_to_base -----------------------------------------------------
 
 

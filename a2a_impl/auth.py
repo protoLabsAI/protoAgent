@@ -112,6 +112,34 @@ def set_public_prefixes(prefixes) -> None:
         logger.info("[a2a] %d plugin-declared auth-exempt path(s): %s", len(cleaned), ", ".join(cleaned))
 
 
+def public_prefixes() -> list[str]:
+    """The live plugin-declared auth-exempt prefixes (post-validation) — exactly what
+    ``_is_public`` enforces. Served on the public-paths well-known endpoint so a fleet
+    hub can defer its public decision to this member (#1890)."""
+    return list(_PLUGIN_PUBLIC)
+
+
+# Fleet-proxied member view pages (#1890). A member's plugin view page is public
+# *chrome* on the member itself (see ``set_public_prefixes``) — but the console
+# iframes it through the hub as ``/agents/<slug>/plugins/<id>/…``, a plain
+# navigation that cannot carry the operator bearer, and the hub's own public list
+# is built from the HUB's manifests (the member may run plugins the hub doesn't).
+# The member is the authority on what it serves anonymously, so the hub defers:
+# for a slug-prefixed path inside a plugin namespace, an injected async resolver
+# ``(slug, rest) -> bool`` answers "would the member serve this anonymously?"
+# (graph/fleet/member_public.py — fetched from the member's public-paths endpoint,
+# TTL-cached, fail-closed). Injected from the server bootstrap so this module
+# stays host-free.
+_MEMBER_PUBLIC: list = [None]
+
+_AGENTS_RE = re.compile(r"^/agents/([^/]+)(/.+)$")
+
+
+def set_member_public_resolver(fn) -> None:
+    """Install the async ``(slug, rest) -> bool`` member-public resolver (None = off)."""
+    _MEMBER_PUBLIC[0] = fn
+
+
 def _metrics_public() -> bool:
     """Whether ``/metrics`` is reachable without auth.
 
@@ -266,6 +294,26 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # Public allowlist — pass without auth.
         if _is_public(path):
             return await call_next(request)
+
+        # Fleet-proxied member-public paths (#1890): ``/agents/<slug>/<rest>`` where
+        # ``<rest>`` sits inside a plugin namespace defers to the MEMBER's own public
+        # list — its view pages are public chrome THERE, and the iframe navigation
+        # cannot carry a bearer. Consulted only when a credential actually gates this
+        # hub (open mode passes below anyway) and only for the plugin namespace —
+        # never ``/agents/<slug>/api/…``. ``request.state.member_public`` tells the
+        # fleet proxy NOT to lend a stored remote bearer to this request.
+        resolver = _MEMBER_PUBLIC[0]
+        if resolver is not None and (_BEARER[0] is not None or _API_KEY[0]):
+            m = _AGENTS_RE.match(path)
+            if m and _PLUGIN_NS_RE.match(m.group(2)):
+                try:
+                    member_public = await resolver(m.group(1), m.group(2))
+                except Exception:  # noqa: BLE001 — resolver trouble = fail closed to normal auth
+                    logger.exception("[a2a] member-public resolver failed for %s", path)
+                    member_public = False
+                if member_public:
+                    request.state.member_public = True
+                    return await call_next(request)
 
         # SSE endpoint: accept either a valid query-string token OR a bearer header.
         # The query token is for browser EventSource clients that cannot send headers.
