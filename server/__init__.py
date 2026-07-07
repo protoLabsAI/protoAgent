@@ -377,6 +377,10 @@ def _main():
     if ui == "full":  # the Gradio tier was removed; 'full' is now an alias for console.
         log.warning("--ui full / PROTOAGENT_UI=full is deprecated (the Gradio UI was removed) — using console.")
         ui = "console"
+    # Mirror the FINAL resolved tier into the env: graph/config.py's tier-aware
+    # defaults (e.g. filesystem.allow_run, #1849) read PROTOAGENT_UI directly, and
+    # need this value whether it came from --ui, PROTOAGENT_UI, or --headless.
+    os.environ["PROTOAGENT_UI"] = ui
 
     # `--setup` one-shot: complete setup headlessly and exit.
     if args.setup:
