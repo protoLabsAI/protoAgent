@@ -63,6 +63,22 @@ def test_remount_skipped_new_added(app):
     assert STATE.plugin_router_keys == {("a", "/api/a"), ("b", "/api/b")}
 
 
+def test_remount_is_silent_no_op(app, caplog):
+    # #1878: re-passing the SAME router on a reload (the routine case — every
+    # reload rebuilds the full router list from scratch) must NOT warn. Only a
+    # genuine intra-batch duplicate (two distinct routers, one prefix) should.
+    first = {"plugin_id": "a", "router": _router("a"), "prefix": "/api/a"}
+    _mount_plugin_routers([first])
+
+    with caplog.at_level("WARNING", logger="server.agent_init"):
+        _mount_plugin_routers([first])
+    assert "registered a second router" not in caplog.text
+
+    with caplog.at_level("WARNING", logger="server.agent_init"):
+        _mount_plugin_routers([first, {"plugin_id": "a", "router": _router("a2"), "prefix": "/api/a"}])
+    assert "registered a second router" in caplog.text
+
+
 def test_view_route_resolves_after_enable(app):
     # The P0 fix: enabling a view-contributing plugin hot-mounts the router that serves
     # its view page — so /api/plugins/<id>/view 200s immediately, no restart, no 404.
