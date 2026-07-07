@@ -1353,23 +1353,38 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
         return
     from graph.plugins.registry import _prefix_conforms
 
+    # Every call re-passes the full live router list (boot AND each reload rebuilds
+    # it from scratch), so most "key already in plugin_router_keys" hits are just
+    # the routine hot-reload no-op — not a misconfiguration. Only warn when the
+    # SAME key shows up twice within THIS call: that's a plugin genuinely handing
+    # us two distinct routers for one prefix (the projectBoard /board 404 case).
+    seen_this_call: set[tuple[str, str]] = set()
     for r in routers:
         plugin_id = r.get("plugin_id", "")
         prefix = r.get("prefix") or ""
         key = (plugin_id, prefix)
         if key in STATE.plugin_router_keys:
-            # A plugin registered a SECOND router at the SAME prefix — the first
-            # already won the slot, so this one is silently dropped and its routes
-            # never serve (projectBoard's /board 404'd for exactly this reason).
-            # Mount distinct prefixes for distinct route groups (e.g. a public
-            # /plugins/<id> view router + a gated /api/plugins/<id> data router).
-            log.warning(
-                "[plugins] %s registered a second router at prefix %s — dropped "
-                "(its routes won't be served; mount each router at a distinct prefix)",
-                plugin_id,
-                prefix or "/",
-            )
+            if key in seen_this_call:
+                # A plugin registered a SECOND router at the SAME prefix — the first
+                # already won the slot, so this one is silently dropped and its routes
+                # never serve (projectBoard's /board 404'd for exactly this reason).
+                # Mount distinct prefixes for distinct route groups (e.g. a public
+                # /plugins/<id> view router + a gated /api/plugins/<id> data router).
+                log.warning(
+                    "[plugins] %s registered a second router at prefix %s — dropped "
+                    "(its routes won't be served; mount each router at a distinct prefix)",
+                    plugin_id,
+                    prefix or "/",
+                )
+            else:
+                seen_this_call.add(key)
+                log.debug(
+                    "[plugins] %s: router at %s already mounted — hot-reload no-op",
+                    plugin_id,
+                    prefix or "/",
+                )
             continue
+        seen_this_call.add(key)
         # Warn for non-conforming prefixes (#870 plugin prefix enforcement).
         # The two canonical prefixes are /plugins/<id>/... (public view) and
         # /api/plugins/<id>/... (bearer-gated data router) — the documented
