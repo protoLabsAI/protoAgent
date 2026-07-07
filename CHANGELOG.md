@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.96.0] - 2026-07-07
+
 ### Added
 - **Hermes is a first-class agent runtime** (#1889). `protoagent hermes` is a one-command preset
   that points the runtime at NousResearch Hermes over the ADR 0033 ACP seam; `protoagent runtime

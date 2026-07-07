@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.96.0",
+    "date": "2026-07-07",
+    "changes": [
+      "Hermes is a first-class agent runtime",
+      "Fleet-wide distributed Langfuse tracing.",
+      "filesystem.allow_run defaults OFF on the headless tier",
+      "A fleet member's plugin views 401'd through a token-gated hub",
+      "A subagent hitting max_turns failed its whole delegation (GRAPH_RECURSION_LIMIT).",
+      "Fleet members no longer inherit the hub's identity.",
+      "An agent tracing to its own Langfuse project now produces a whole trace",
+      "A background knowledge-ingest job now wakes the agent when it finishes",
+      "Quieter plugin hot-reload logs"
+    ]
+  },
+  {
     "version": "v0.95.1",
     "date": "2026-07-07",
     "changes": [
