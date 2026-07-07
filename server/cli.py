@@ -39,6 +39,9 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "fleet": ("graph.fleet.cli", "run_fleet_cli"),
     "config": ("graph.config_explain", "run_config_cli"),
     "model": ("graph.model_cli", "run_model_cli"),
+    "runtime": ("runtime.cli", "run_runtime_cli"),
+    # `hermes` = sugar for `runtime use hermes` — the one-command preset for Hermes users.
+    "hermes": ("runtime.cli", "run_hermes_cli"),
     "operations": ("ops.cli", "run_operations_cli"),
     # `knowledge` lives in server/ (not graph/**) — it boots the instance's stores standalone.
     "knowledge": ("server.knowledge_cli", "run_knowledge_cli"),
@@ -51,6 +54,8 @@ _FORWARD_HELP = {
     "fleet": "Start / stop / list fleet MEMBER agents as background processes (ADR 0042)",
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
+    "runtime": "Select the agent runtime — native (LangGraph) or an ACP agent (ADR 0033)",
+    "hermes": "One-command Hermes preset: wrap protoAgent around your existing ~/.hermes agent",
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
     "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
 }
