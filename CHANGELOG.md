@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A subagent hitting `max_turns` failed its whole delegation (GRAPH_RECURSION_LIMIT).** Every
+  subagent prompt promises "hard stop at max_turns: return what you have," but the runner's
+  `ainvoke` raised at the recursion limit and lost the run — seen live when one review-finder
+  reading one file too many exhausted an entire ADR 0078 shadow panel. The runner now streams
+  values and salvages the partial transcript with an explicit hard-stop marker (`Gap`, never a
+  fabricated verdict); genuine failures still raise. The review-finder budget also moves 25→40
+  (protoContent-sized cross-file reads legitimately exceed 25).
+
 ## [0.95.1] - 2026-07-07
 
 ### Fixed
