@@ -776,6 +776,7 @@ def _main():
 
     from a2a_impl import auth
     from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
+    from a2a_impl.registry import harden_active_task_registry
     from a2a_impl.stores import (
         build_a2a_stores,
         build_push_sender,
@@ -885,15 +886,26 @@ def _main():
         push_config_store=push_config_store,
         push_sender=build_push_sender(push_config_store, _a2a_push_client),
     )
+    # a2a-sdk 1.1.0 GC's a turn's still-pending `producer:<task_id>` task at teardown
+    # (upstream a2a-python#1123; #1713) — 'Task was destroyed but it is pending!' at
+    # every turn completion under load. Swap in a registry whose cleanup owns the
+    # producer/consumer tasks for their lifetime: strong-ref'd and awaited (grace to
+    # flush) or cancelled+awaited before the last reference drops. Remove once the
+    # SDK ships the fix and the pin moves past 1.1.0 (see a2a_impl/registry.py).
+    harden_active_task_registry(a2a_request_handler)
     add_a2a_routes_to_fastapi(
         fastapi_app,
         # ``agent_card_routes`` (server.a2a) serves the same well-known card as
         # a2a-sdk's ``create_agent_card_routes`` plus a proto-free protocolVersion
         # hint, so a delegating peer can pre-check version compatibility (ADR 0051).
         agent_card_routes=agent_card_routes(a2a_card),
-        jsonrpc_routes=create_jsonrpc_routes(a2a_request_handler, rpc_url="/a2a"),
+        # enable_v0_3_compat: a2a-sdk 1.1.0 renamed the JSON-RPC methods; without the
+        # compat adapter every classic client (`message/send` — the fleet's delegate
+        # spine, our own docs' curl examples) gets -32601 Method not found (#1854).
+        # Both vocabularies serve on the same endpoint until the fleet migrates.
+        jsonrpc_routes=create_jsonrpc_routes(a2a_request_handler, rpc_url="/a2a", enable_v0_3_compat=True),
     )
-    log.info("[a2a] a2a-sdk routes mounted (JSON-RPC at /a2a, card at /.well-known/agent-card.json)")
+    log.info("[a2a] a2a-sdk routes mounted (JSON-RPC at /a2a + v0.3 compat, card at /.well-known/agent-card.json)")
 
     # --- Prometheus metrics -------------------------------------------------
     if metrics.is_enabled():
