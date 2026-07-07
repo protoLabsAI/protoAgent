@@ -128,6 +128,7 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         import a2a_impl.auth as _a2a_auth
 
         monkeypatch.setattr(_a2a_auth, "set_bearer_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_public_prefixes", lambda *a, **k: None)
     except ImportError:
         pass
 
@@ -142,8 +143,8 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         lambda *a, **k: SimpleNamespace(
             mcp_servers=[], tools=[], tool_plugins={}, skill_dirs=[], meta=[],
             chat_commands={}, subagents=[], middleware=[], late_tool_factories=[], routers=[],
-            goal_verifiers={"demo:brand_new": _new_verifier}, goal_hooks=[], watch_hooks=[],
-            lifecycle_hooks=[],
+            public_paths=[], goal_verifiers={"demo:brand_new": _new_verifier}, goal_hooks=[],
+            watch_hooks=[], lifecycle_hooks=[],
         ),
     )
     # Let the graph rebuild SUCCEED so the commit block (with the registry refresh) runs.

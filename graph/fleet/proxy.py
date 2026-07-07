@@ -121,6 +121,12 @@ async def forward_to(slug: str, request, path: str):
     if target is None:
         return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
     base, extra = target
+    # A request the hub admitted off the MEMBER's public list (#1890 — the auth
+    # middleware stamps ``member_public``) arrived anonymous; forward it anonymous.
+    # Attaching the stored remote bearer would lend an unauthenticated caller the
+    # remote's credential (same rule as the remote-WS refusal in forward_ws).
+    if extra and getattr(getattr(request, "state", None), "member_public", False):
+        extra = {k: v for k, v in extra.items() if k.lower() != "authorization"}
     return await _forward_to_base(base, request, path, extra)
 
 

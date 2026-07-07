@@ -27,11 +27,13 @@ def _reset_guard():
     auth._FEDERATION[0] = None
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
+    auth._MEMBER_PUBLIC[0] = None
     yield
     auth._BEARER[0] = None
     auth._FEDERATION[0] = None
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
+    auth._MEMBER_PUBLIC[0] = None
 
 
 def _client() -> TestClient:
@@ -609,3 +611,105 @@ def test_requires_operator_classification(path, operator):
 )
 def test_is_public(path, expected):
     assert auth._is_public(path) is expected
+
+
+# ── member-public deferral for fleet-proxied view pages (#1890) ───────────────
+#
+# A member's plugin view page is public chrome on the MEMBER; through the hub it
+# lives at /agents/<slug>/plugins/<id>/… — a path the hub's own public list can't
+# know. The middleware defers those to an injected resolver (the member's own
+# public list) and stamps request.state.member_public so the proxy forwards the
+# request anonymous instead of lending the stored remote bearer.
+
+
+def _member_client() -> TestClient:
+    def echo_state(r):
+        return PlainTextResponse(str(getattr(r.state, "member_public", False)))
+
+    app = Starlette(routes=[Route("/agents/{slug}/{rest:path}", echo_state, methods=["GET"])])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_member_public_view_page_passes_without_bearer():
+    auth.configure(bearer_token="hub-secret", api_key="", allowed_origins_raw="")
+    calls = []
+
+    async def resolver(slug, rest):
+        calls.append((slug, rest))
+        return True
+
+    auth.set_member_public_resolver(resolver)
+    res = _member_client().get("/agents/matt/plugins/content/view")
+    assert res.status_code == 200
+    assert res.text == "True"  # request.state.member_public stamped for the proxy
+    assert calls == [("matt", "/plugins/content/view")]
+
+
+def test_member_public_false_falls_through_to_401():
+    auth.configure(bearer_token="hub-secret", api_key="", allowed_origins_raw="")
+
+    async def resolver(slug, rest):
+        return False
+
+    auth.set_member_public_resolver(resolver)
+    res = _member_client().get("/agents/matt/plugins/content/secret")
+    assert res.status_code == 401
+
+
+def test_member_public_not_consulted_outside_plugin_namespace():
+    auth.configure(bearer_token="hub-secret", api_key="", allowed_origins_raw="")
+
+    async def resolver(slug, rest):  # pragma: no cover — must not be reached
+        raise AssertionError("resolver consulted for a non-plugin-namespace path")
+
+    auth.set_member_public_resolver(resolver)
+    c = _member_client()
+    # Operator API through the proxy stays fully gated.
+    assert c.get("/agents/matt/api/chat/sessions").status_code == 401
+    # No trailing slash after the plugin id = not inside a plugin namespace
+    # (the shape that keeps core /api/plugins/<verb> routes out of reach).
+    assert c.get("/agents/matt/api/plugins/install").status_code == 401
+
+
+def test_member_public_not_consulted_in_open_mode():
+    auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
+
+    async def resolver(slug, rest):  # pragma: no cover — must not be reached
+        raise AssertionError("resolver consulted in open mode")
+
+    auth.set_member_public_resolver(resolver)
+    res = _member_client().get("/agents/matt/plugins/content/view")
+    assert res.status_code == 200  # open mode passes anyway
+    assert res.text == "False"  # and is NOT stamped member_public
+
+
+def test_member_public_resolver_error_fails_closed():
+    auth.configure(bearer_token="hub-secret", api_key="", allowed_origins_raw="")
+
+    async def resolver(slug, rest):
+        raise RuntimeError("member probe blew up")
+
+    auth.set_member_public_resolver(resolver)
+    assert _member_client().get("/agents/matt/plugins/content/view").status_code == 401
+
+
+def test_member_public_bearer_caller_still_passes_gated_paths():
+    auth.configure(bearer_token="hub-secret", api_key="", allowed_origins_raw="")
+
+    async def resolver(slug, rest):
+        return False
+
+    auth.set_member_public_resolver(resolver)
+    res = _member_client().get(
+        "/agents/matt/plugins/content/view", headers={"Authorization": "Bearer hub-secret"}
+    )
+    assert res.status_code == 200  # the console's probe (bearer attached) is unaffected
+    assert res.text == "False"
+
+
+def test_public_prefixes_getter_reflects_live_list():
+    auth.set_public_prefixes(["/plugins/content/view", "/api/plugins/content/hook/", "/api/config"])
+    assert auth.public_prefixes() == ["/plugins/content/view", "/api/plugins/content/hook/"]
+    auth.set_public_prefixes([])
+    assert auth.public_prefixes() == []

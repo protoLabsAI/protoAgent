@@ -822,6 +822,21 @@ def _main():
         federation_token=((STATE.graph_config.federation_token if STATE.graph_config else "") or None),
     )
 
+    # Member-public deferral for the fleet proxy (#1890): a member's plugin view
+    # pages are public chrome on the MEMBER, but through the hub they live at
+    # /agents/<slug>/… — a prefix the hub's own public list can't know (the member
+    # may run plugins the hub doesn't). Every instance serves its live auth-exempt
+    # list on a public /.well-known endpoint (the listed paths are anonymously
+    # reachable by definition, so the list discloses nothing new), and the hub's
+    # auth gate defers slug-prefixed plugin-namespace paths to that list.
+    from graph.fleet import member_public as _member_public
+
+    auth.set_member_public_resolver(_member_public.is_member_public)
+
+    @fastapi_app.get(_member_public.WELL_KNOWN_PATH, include_in_schema=False)
+    async def _plugin_public_paths():
+        return {"public_paths": auth.public_prefixes()}
+
     # Short-lived SSE token endpoint (Part 3 of auth inversion): the React
     # console fetches a 30s HMAC token here (bearer-gated under /api/) and
     # passes it to ``EventSource("/api/events?token=...")``. Server-to-server

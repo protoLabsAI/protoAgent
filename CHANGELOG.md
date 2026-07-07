@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit. Everything is a no-op when Langfuse isn't configured.
 
 ### Fixed
+- **A fleet member's plugin views 401'd through a token-gated hub** (#1890). A view page is
+  auth-exempt public chrome on the instance that serves it, but through the hub it lives at
+  `/agents/<slug>/plugins/<id>/…` — a prefix the hub's public list can't know (the member may
+  run plugins the hub doesn't). The hub now defers the public decision to the MEMBER: every
+  instance serves its live auth-exempt prefix list on `/.well-known/protoagent/public-paths`,
+  the hub checks slug-prefixed plugin-namespace paths against it (TTL-cached, fail-closed),
+  and the proxy forwards such requests anonymously — never lending a stored remote bearer to
+  an unauthenticated caller. Bonus (same #1752 rule): hot-reload now re-applies plugin public
+  prefixes to the live auth gate, so a hot-enabled plugin's view no longer stays 401 until a
+  restart.
 - **A subagent hitting `max_turns` failed its whole delegation (GRAPH_RECURSION_LIMIT).** Every
   subagent prompt promises "hard stop at max_turns: return what you have," but the runner's
   `ainvoke` raised at the recursion limit and lost the run — seen live when one review-finder
