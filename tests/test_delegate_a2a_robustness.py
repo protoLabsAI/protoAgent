@@ -185,3 +185,87 @@ def test_explicit_timeout_overrides_read_budget(patched):
 
     assert asyncio.run(A.dispatch(d, "hi", timeout=25)) == "ok"
     assert cap["timeout"].read == 25.0
+
+
+# ── fleet tracing: outbound a2a.trace propagation ──────────────────────────────
+
+
+class _BodyCaptureClient(_FakeClient):
+    """A _FakeClient that also records every posted JSON-RPC body."""
+
+    bodies: list  # class attr replaced per-install
+
+    async def post(self, url, json=None, headers=None):
+        type(self).bodies.append(json)
+        return await super().post(url, json=json, headers=headers)
+
+
+def _install_capture_client(monkeypatch, **kw):
+    class _C(_BodyCaptureClient):
+        bodies = []
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **client_kw: _C(**kw, **client_kw))
+    return _C.bodies
+
+
+_TID = "a" * 32
+_SID = "b" * 16
+
+# Patch the SAME module object dispatch resolves via `from observability import
+# tracing` (the package attribute — stable even if a sibling test swapped the
+# sys.modules entry).
+from observability import tracing as _tracing  # noqa: E402
+
+
+def test_dispatch_attaches_a2a_trace_when_tracing_active(patched):
+    """When a traced turn dispatches to a peer, the SendMessage carries our
+    Langfuse trace context as ``a2a.trace`` metadata — camelCase traceId/spanId,
+    the exact shape a2a_impl/executor._extract_caller_trace reads — at BOTH
+    request level (preferred) and message level (fallback)."""
+    patched.setattr(_tracing, "current_trace_context", lambda: {"trace_id": _TID, "span_id": _SID})
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    bodies = _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+    send = next(b for b in bodies if b.get("method") == "SendMessage")
+    wire = {"traceId": _TID, "spanId": _SID}
+    assert send["params"]["metadata"] == {"a2a.trace": wire}
+    assert send["params"]["message"]["metadata"] == {"a2a.trace": wire}
+
+
+def test_dispatch_attaches_trace_id_only_when_no_current_span(patched):
+    patched.setattr(_tracing, "current_trace_context", lambda: {"trace_id": _TID})
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    bodies = _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+    send = next(b for b in bodies if b.get("method") == "SendMessage")
+    assert send["params"]["metadata"] == {"a2a.trace": {"traceId": _TID}}
+
+
+def test_dispatch_sends_no_trace_metadata_when_tracing_inactive(patched):
+    """Tracing off ⇒ the request is unchanged — no metadata keys at all."""
+    patched.setattr(_tracing, "current_trace_context", lambda: None)
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    bodies = _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+    send = next(b for b in bodies if b.get("method") == "SendMessage")
+    assert "metadata" not in send["params"]
+    assert "metadata" not in send["params"]["message"]
+
+
+def test_dispatch_survives_tracing_helper_blowup(patched):
+    """A tracing failure must never break a dispatch."""
+
+    def _boom():
+        raise RuntimeError("tracing exploded")
+
+    patched.setattr(_tracing, "current_trace_context", _boom)
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"

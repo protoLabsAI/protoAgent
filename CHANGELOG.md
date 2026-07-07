@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fleet-wide distributed Langfuse tracing.** A hub→member delegation now renders as ONE
+  Langfuse trace instead of disconnected per-agent fragments. Four seams: (1) `trace_session`
+  JOINS a caller's trace when the inbound A2A metadata carries `a2a.trace` ids (Langfuse
+  `trace_context`; malformed ids degrade to a fresh trace), (2) the a2a delegate adapter now
+  SENDS `a2a.trace` (`traceId`/`spanId`) on outbound `SendMessage` when a trace is active —
+  via the new `tracing.current_trace_context()` helper, (3) the new `TraceContextMiddleware`
+  stamps `existing_trace_id`/`parent_observation_id`/`generation_name` onto each gateway LLM
+  call's `extra_body.metadata`, so the LiteLLM gateway's own Langfuse callback lands its
+  generations (with token/cost detail) inside the agent's trace, and (4) `_run_subagent` wraps
+  each delegation in a `subagent:<type>` boundary span (`tracing.trace_span`) so subagent
+  tool/LLM observations nest under one node — without touching the max_turns salvage path.
+  The server shutdown hook now also flushes buffered observations so spans survive process
+  exit. Everything is a no-op when Langfuse isn't configured.
+
 ### Fixed
 - **A subagent hitting `max_turns` failed its whole delegation (GRAPH_RECURSION_LIMIT).** Every
   subagent prompt promises "hard stop at max_turns: return what you have," but the runner's

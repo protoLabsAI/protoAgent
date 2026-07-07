@@ -75,6 +75,17 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
         )
     )
 
+    # Fleet tracing: stamp the active Langfuse trace context onto each gateway
+    # LLM call (extra_body.metadata existing_trace_id/parent_observation_id) so
+    # the gateway's own Langfuse callback lands its generations in OUR trace.
+    # Inside ModelOverride (it must stamp the ACTUAL per-tab model) and inside
+    # PromptCache (whose locked [ModelOverride, PromptCache] wrapper order and
+    # caching decisions stay untouched — this only copies extra_body). No-op
+    # when tracing is disabled.
+    from graph.middleware.trace_context import TraceContextMiddleware
+
+    middleware.append(TraceContextMiddleware())
+
     # Enforcement gate first (outermost) so disallowed/rate-limited tool
     # calls are blocked before any execution. Opt-in via config.
     if config.enforcement_enabled and (config.enforcement_disallowed_tools or config.enforcement_rate_limits):
@@ -303,7 +314,11 @@ async def _run_subagent(
     # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/
     # rate-limited tool is blocked inside a delegation. (Per-instance limiter: each
     # subagent run gets its own window — a per-delegation cap, not a shared budget.)
-    sub_middleware = [AuditMiddleware()]
+    # TraceContextMiddleware mirrors the lead chain too: the subagent's gateway LLM
+    # calls join the SAME Langfuse trace (nested under the subagent boundary span).
+    from graph.middleware.trace_context import TraceContextMiddleware
+
+    sub_middleware = [TraceContextMiddleware(), AuditMiddleware()]
     if getattr(config, "enforcement_enabled", False) and (
         config.enforcement_disallowed_tools or config.enforcement_rate_limits
     ):
@@ -342,17 +357,28 @@ async def _run_subagent(
         # max_turns is a budget, not a bomb: on the limit, salvage the transcript.
         from langgraph.errors import GraphRecursionError
 
+        from observability import tracing
+
         result: dict[str, Any] = {}
         hard_stop = False
-        try:
-            async for state in subagent.astream(
-                {"messages": [{"role": "user", "content": prompt}]},
-                config=sub_run_config,
-                stream_mode="values",
-            ):
-                result = state
-        except GraphRecursionError:
-            hard_stop = True
+        # Boundary span (fleet tracing): the subagent's tool/LLM observations
+        # nest under one `subagent:<type>` node in the current trace instead of
+        # scattering across the session span. No-op when tracing is disabled;
+        # exceptions (incl. GraphRecursionError salvage) pass through unchanged.
+        with tracing.trace_span(
+            f"subagent:{subagent_type}",
+            metadata={"description": description, "parent_task_id": parent_task_id or ""},
+            as_type="agent",
+        ):
+            try:
+                async for state in subagent.astream(
+                    {"messages": [{"role": "user", "content": prompt}]},
+                    config=sub_run_config,
+                    stream_mode="values",
+                ):
+                    result = state
+            except GraphRecursionError:
+                hard_stop = True
 
         messages = result.get("messages", [])
 

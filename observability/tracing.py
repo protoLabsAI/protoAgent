@@ -40,10 +40,17 @@ import contextlib
 import contextvars
 import logging
 import os
-from typing import Any, AsyncIterator
+import re
+from typing import Any, AsyncIterator, Iterator
 
 _langfuse = None
 _enabled = False
+
+# W3C/OTel id shapes (what Langfuse v3+/v4 uses on the wire). A caller's ids
+# must match these to be JOINable — anything else falls back to a fresh trace
+# rather than crashing the turn or poisoning the SDK with a bogus context.
+_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_SPAN_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 # Silence the harmless "Failed to detach context" error emitted by
@@ -117,6 +124,57 @@ def current_session_id() -> str:
     return _session_id_ctx.get()
 
 
+def current_trace_context() -> dict | None:
+    """The active trace context as ``{"trace_id": ..., "span_id": ...}``, or None.
+
+    Used to PROPAGATE the trace across process boundaries — outbound A2A
+    dispatches attach it as ``a2a.trace`` metadata (the receiver's
+    ``trace_session`` joins it via ``trace_context``), and the gateway
+    trace-join middleware stamps it onto LLM request metadata so LiteLLM's
+    Langfuse callback lands generations in the SAME trace.
+
+    ``span_id`` is the current observation (present only when the SDK exposes
+    one); ``trace_id`` alone is still a valid, joinable context. Returns None
+    when tracing is disabled or no trace is active — callers skip propagation.
+    """
+    if not _enabled or _langfuse is None:
+        return None
+    trace_id = ""
+    try:
+        trace_id = _langfuse.get_current_trace_id() or ""
+    except Exception:  # noqa: BLE001 — propagation is best-effort
+        pass
+    trace_id = trace_id or _trace_id_ctx.get()
+    if not trace_id:
+        return None
+    ctx: dict = {"trace_id": trace_id}
+    try:
+        span_id = _langfuse.get_current_observation_id()
+        if span_id:
+            ctx["span_id"] = span_id
+    except Exception:  # noqa: BLE001
+        pass
+    return ctx
+
+
+def _caller_trace_context(metadata: dict | None) -> dict | None:
+    """Build a Langfuse ``trace_context`` from ``caller_trace_id`` /
+    ``caller_span_id`` metadata (the ids an A2A caller sent as ``a2a.trace``).
+
+    Malformed ids → None (fresh trace) — never let a bad caller id crash a
+    turn or feed the SDK an invalid W3C context."""
+    if not metadata:
+        return None
+    trace_id = str(metadata.get("caller_trace_id") or "").strip().lower()
+    if not _TRACE_ID_RE.match(trace_id):
+        return None
+    ctx: dict = {"trace_id": trace_id}
+    span_id = str(metadata.get("caller_span_id") or "").strip().lower()
+    if _SPAN_ID_RE.match(span_id):
+        ctx["parent_span_id"] = span_id
+    return ctx
+
+
 @contextlib.asynccontextmanager
 async def trace_session(
     session_id: str,
@@ -143,6 +201,13 @@ async def trace_session(
     ``session_id`` is threaded into both the metadata and the Langfuse
     contextvar so audit records created inside the scope can be cross-
     referenced to the trace.
+
+    Fleet tracing: when ``metadata`` carries ``caller_trace_id`` (and
+    optionally ``caller_span_id``) — the ids an upstream agent sent as
+    ``a2a.trace`` — the session span JOINS that trace via Langfuse's
+    ``trace_context`` instead of opening a fresh one, so a hub→member
+    delegation renders as ONE distributed trace. The ids are still stamped
+    into the span metadata; malformed ids degrade to a fresh trace.
     """
     # Always set session_id so AuditMiddleware can read it even when
     # Langfuse is disabled.
@@ -166,7 +231,9 @@ async def trace_session(
     ctx = None
     token = None
     try:
+        trace_context = _caller_trace_context(metadata)
         ctx = _langfuse.start_as_current_observation(
+            trace_context=trace_context,
             name=name,
             metadata={
                 **(metadata or {}),
@@ -175,7 +242,13 @@ async def trace_session(
             },
         )
         span = ctx.__enter__()
-        trace_id = getattr(span, "trace_id", "") or getattr(span, "id", "")
+        # Joined session: the span reports the CALLER's trace id — that's what
+        # audit records and downstream propagation must carry.
+        trace_id = (
+            getattr(span, "trace_id", "")
+            or (trace_context or {}).get("trace_id", "")
+            or getattr(span, "id", "")
+        )
         token = _trace_id_ctx.set(trace_id)
         yield span
     except Exception as e:
@@ -195,6 +268,50 @@ async def trace_session(
             try:
                 ctx.__exit__(None, None, None)
             except Exception:
+                pass
+
+
+@contextlib.contextmanager
+def trace_span(
+    name: str,
+    metadata: dict | None = None,
+    as_type: str = "span",
+) -> Iterator[Any]:
+    """Open a child observation in the CURRENT trace for the duration of the block.
+
+    Used for boundary spans — e.g. ``subagent:<type>`` around a subagent run so
+    the subagent's tool/LLM observations nest under one node instead of
+    scattering across the session span. Nests under whatever observation is
+    current (the ``trace_session`` root, or an outer ``trace_span``).
+
+    Contract mirrors ``trace_session``: the block ALWAYS runs; when tracing is
+    disabled or the SDK errors on setup, it yields None and proceeds. A body
+    exception propagates unchanged (the span still closes) — tracing never
+    alters control flow.
+    """
+    if not _enabled or _langfuse is None:
+        yield None
+        return
+
+    ctx = None
+    span = None
+    try:
+        ctx = _langfuse.start_as_current_observation(
+            name=name,
+            as_type=as_type,
+            metadata=metadata or {},
+        )
+        span = ctx.__enter__()
+    except Exception as e:  # noqa: BLE001 — never fail the wrapped work for tracing
+        print(f"[tracing] trace_span({name}) error: {e}")
+        ctx = None
+    try:
+        yield span
+    finally:
+        if ctx is not None:
+            try:
+                ctx.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
                 pass
 
 

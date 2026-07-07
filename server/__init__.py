@@ -698,6 +698,14 @@ def _main():
             await _a2a_push_client.aclose()
         except Exception:
             log.exception("[a2a] push client close failed")
+        # Flush buffered Langfuse observations LAST (after every surface above
+        # has stopped emitting) so in-flight spans survive process exit instead
+        # of dying in the SDK's batch buffer. Off the loop — flush() blocks on
+        # the exporter. Best-effort, like everything else in this hook.
+        try:
+            await asyncio.to_thread(tracing.flush)
+        except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
+            log.exception("[tracing] flush on shutdown failed")
 
     # Chat / goal / health / OpenAI-compat HTTP surface. Extracted to
     # operator_api/chat_routes.py (ADR 0023 phase 3); ``ui`` is passed in
