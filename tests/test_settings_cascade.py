@@ -557,3 +557,37 @@ def test_d8_manager_port_base_reads_live_config(monkeypatch):
 
     monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
     assert manager._port_base() == 8200
+
+
+# ── #1849: filesystem.allow_run defaults OFF on the headless UI tier ───────────
+# run_command's HITL approval gate assumes an operator is watching to approve it;
+# on a headless (PROTOAGENT_UI=none) instance there's no one to approve, so a
+# pending interrupt() wedges the turn forever. The UNSET default is now tier-aware
+# (resolved from PROTOAGENT_UI, mirrored there by server/__init__ from --ui); an
+# explicit ``filesystem.allow_run`` in config always wins regardless of tier.
+
+
+def _ui_env_clear(monkeypatch):
+    monkeypatch.delenv("PROTOAGENT_UI", raising=False)
+
+
+def test_allow_run_defaults_true_on_interactive_tier(monkeypatch):
+    _ui_env_clear(monkeypatch)
+    assert LangGraphConfig.from_dict({}).filesystem_allow_run is True
+
+
+def test_allow_run_defaults_false_on_headless_tier(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_UI", "none")
+    assert LangGraphConfig.from_dict({}).filesystem_allow_run is False
+
+
+def test_allow_run_explicit_true_wins_on_headless_tier(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_UI", "none")
+    cfg = LangGraphConfig.from_dict({"filesystem": {"allow_run": True}})
+    assert cfg.filesystem_allow_run is True
+
+
+def test_allow_run_explicit_false_wins_on_interactive_tier(monkeypatch):
+    _ui_env_clear(monkeypatch)
+    cfg = LangGraphConfig.from_dict({"filesystem": {"allow_run": False}})
+    assert cfg.filesystem_allow_run is False

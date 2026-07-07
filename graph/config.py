@@ -141,6 +141,21 @@ def _env_default(name: str, default, cast=str):
         return default
 
 
+def _default_filesystem_allow_run() -> bool:
+    """Tier-aware app-default for ``filesystem.allow_run`` (#1849). ``run_command``
+    is HITL-gated (``run_requires_approval``) — safe when an operator is watching to
+    approve each call, but on a headless/A2A-only instance there's no one to click
+    approve, so the pending ``interrupt()`` checkpoints the turn forever and every
+    later message queues behind it. Default stays ON for an interactive tier
+    (someone's presumably watching); default OFF for the 'none' (headless) UI tier.
+    Reads ``PROTOAGENT_UI`` directly rather than via ``_env_default`` because this is
+    a derived boolean, not a passthrough value — ``server/__init__`` mirrors the
+    FINAL resolved tier there once, whether it came from ``--ui``, ``PROTOAGENT_UI``,
+    or the deprecated ``--headless`` alias. An explicit ``filesystem.allow_run`` in
+    config always wins over this default regardless of tier."""
+    return os.environ.get("PROTOAGENT_UI", "").strip().lower() != "none"
+
+
 def _host_scoped_fields():
     """The host-scoped (ADR 0047 ``scope=="host"``) settings fields — the single
     source for both the host-layer filter and the shadow check, so they can't drift."""
@@ -759,11 +774,15 @@ class LangGraphConfig:
     # under the workspace root (``..``/symlink escapes refused). A capable, safe
     # first run: the agent can actually work with files, but only inside the fence.
     # ``projects`` entries: ``{name, path, write: true|false}`` register extra dirs.
-    # ``allow_run`` adds the dual-use ``run_command`` power tool. ON by default
-    # now that it's gated: run_command (like execute_code) is fenced cwd but
-    # arbitrary argv (not a real sandbox), so each call pauses for HITL approval
-    # (``run_requires_approval``) — the operator sees the command + approves. A
-    # fork can drop the gate inside a hardened container / trusted autonomous run.
+    # ``allow_run`` adds the dual-use ``run_command`` power tool. Gated: run_command
+    # (like execute_code) is fenced cwd but arbitrary argv (not a real sandbox), so
+    # each call pauses for HITL approval (``run_requires_approval``) — the operator
+    # sees the command + approves. This dataclass default (True) is what a directly
+    # constructed config gets; ``from_dict``/``from_yaml`` resolve an UNSET value
+    # through ``_default_filesystem_allow_run()`` instead, which flips to False on a
+    # headless instance — no operator means a pending approval wedges the turn
+    # forever (#1849). Explicit config always wins either way. A fork can also drop
+    # the approval gate itself inside a hardened container / trusted autonomous run.
     filesystem_enabled: bool = True
     filesystem_allow_run: bool = True
     filesystem_run_requires_approval: bool = True
@@ -1059,7 +1078,7 @@ class LangGraphConfig:
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
-            filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),
+            filesystem_allow_run=data.get("filesystem", {}).get("allow_run", _default_filesystem_allow_run()),
             filesystem_run_requires_approval=data.get("filesystem", {}).get(
                 "run_requires_approval", cls.filesystem_run_requires_approval
             ),
