@@ -227,3 +227,21 @@ def test_no_uv_prints_manual_instructions_and_continues(monkeypatch, tmp_path, c
     assert run_hermes_cli([]) == 0
     assert "uv tool install" in capsys.readouterr().err
     assert yaml.safe_load(cfg.read_text())["agent_runtime"] == "acp:hermes"  # flip still lands
+
+
+# ── restart hint ─────────────────────────────────────────────────────────────
+
+
+def test_use_hints_restart_when_server_running(monkeypatch, tmp_path, capsys):
+    _patch_instance(monkeypatch, tmp_path)
+    monkeypatch.setattr(runtime_cli, "_running_server_port", lambda: 7870)
+    assert run_runtime_cli(["use", "native"]) == 0
+    out = capsys.readouterr().out
+    assert "protoagent down && protoagent up" in out  # live server keeps the old runtime
+
+
+def test_use_hints_up_when_stopped(monkeypatch, tmp_path, capsys):
+    _patch_instance(monkeypatch, tmp_path)
+    monkeypatch.setattr(runtime_cli, "_running_server_port", lambda: None)
+    run_runtime_cli(["use", "native"])
+    assert "protoagent up" in capsys.readouterr().out

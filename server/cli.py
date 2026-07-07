@@ -45,6 +45,10 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "operations": ("ops.cli", "run_operations_cli"),
     # `knowledge` lives in server/ (not graph/**) — it boots the instance's stores standalone.
     "knowledge": ("server.knowledge_cli", "run_knowledge_cli"),
+    # Internal daemon verb: serve the operator tools over MCP stdio. The ACP runtime
+    # launches this in the frozen desktop sidecar, where `-m server.operator_mcp`
+    # isn't a valid argv (the frozen entrypoint IS `-m server` — see #1603).
+    "operator-mcp": ("server.operator_mcp", "main"),
 }
 
 _FORWARD_HELP = {
@@ -58,6 +62,7 @@ _FORWARD_HELP = {
     "hermes": "One-command Hermes preset: wrap protoAgent around your existing ~/.hermes agent",
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
     "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
+    "operator-mcp": "Serve the operator tools over MCP stdio (internal — mounted into ACP runtimes)",
 }
 
 _LIFECYCLE_HELP = {

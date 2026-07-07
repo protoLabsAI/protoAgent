@@ -118,3 +118,11 @@ def test_help_lists_every_command(capsys):
     out = capsys.readouterr().out
     for name in ("serve", "up", "down", "status", "setup", "plugin", "workspace", "skills", "fleet", "config"):
         assert name in out
+
+
+def test_operator_mcp_verb_is_routed():
+    # The frozen desktop sidecar launches the ACP runtime's operator MCP server as
+    # `<binary> operator-mcp` (it can't take `-m server.operator_mcp`) — the verb
+    # must stay routable and documented.
+    assert cli._FORWARD["operator-mcp"] == ("server.operator_mcp", "main")
+    assert "operator-mcp" in cli._FORWARD_HELP

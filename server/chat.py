@@ -259,20 +259,54 @@ async def _acp_drive_turn(rt, message: str):
     # Attribute the turn to the ACP agent in telemetry — gateway tokens/cost are 0 (the
     # external agent's own subscription meters its usage). The acp:<agent> model label is
     # the honest signal that this turn wasn't gateway-metered.
-    yield (
-        "usage",
-        {
-            "model": f"acp:{rt.agent}",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "cost_usd": 0.0,
-        },
-    )
+    usage_frame = {
+        "model": f"acp:{rt.agent}",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cost_usd": 0.0,
+    }
+    # Context pressure is a different axis than billing: when the agent reports
+    # ACP-native usage_update ({used, size} tokens — hermes-acp does), surface it as
+    # context_* fields so the console can render a context indicator, tokens/cost
+    # stay 0 (estimates must not pollute cost telemetry).
+    ctx = rt.last_usage() if hasattr(rt, "last_usage") else None
+    if isinstance(ctx, dict) and ctx.get("size"):
+        usage_frame["context_used_tokens"] = int(ctx.get("used") or 0)
+        usage_frame["context_window_tokens"] = int(ctx.get("size") or 0)
+    yield ("usage", usage_frame)
     # The answer already streamed as text deltas; `done` finalizes (executor appends only
     # meta when text was streamed, so no duplication).
     yield ("done", answer)
+
+
+async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, Any]]:
+    """The non-streaming shape of the ACP runtime switch: drive the turn, collect the
+    frames, and return the single assistant message the non-streaming callers expect.
+    ``usage`` is translated to the OpenAI shape the /v1 handler sums (ADR 0075 D4)."""
+    tid = _resolve_thread_id(None, session_id)
+    rt = await _acp_acquire(tid)
+    answer, usage, error = "", None, None
+    try:
+        # Same serialization as the streaming switch: one prompt per ACP session.
+        async with _thread_lock(tid):
+            async for kind, payload in _acp_drive_turn(rt, message):
+                if kind == "done":
+                    answer = payload or answer
+                elif kind == "usage" and isinstance(payload, dict):
+                    _in = int(payload.get("input_tokens", 0) or 0)
+                    _out = int(payload.get("output_tokens", 0) or 0)
+                    usage = {"prompt_tokens": _in, "completion_tokens": _out, "total_tokens": _in + _out}
+                elif kind == "error":
+                    error = payload
+    finally:
+        await _acp_release(tid)
+    content = error or answer or "_(The agent ended the turn without a textual reply.)_"
+    out: dict[str, Any] = {"role": "assistant", "content": content}
+    if usage is not None:
+        out["usage"] = usage
+    return [out]
 
 
 def _setup_required_message() -> list[dict[str, Any]]:
@@ -1382,8 +1416,13 @@ async def _chat_langgraph_stream_impl(
                 # idle TTL); registry mutation is serialized by _ACP_LOCK. See _acp_acquire.
                 rt = await _acp_acquire(_acp_tid)
                 try:
-                    async for frame in _acp_drive_turn(rt, message):
-                        yield frame
+                    # One prompt at a time per ACP session — AcpClient forbids concurrent
+                    # prompts on an instance (a session is a single conversation), and the
+                    # refcount above only guards eviction. Same per-thread lock the native
+                    # turns hold, so compact/rewind on this thread are excluded too.
+                    async with _thread_lock(_acp_tid):
+                        async for frame in _acp_drive_turn(rt, message):
+                            yield frame
                 finally:
                     await _acp_release(_acp_tid)
                 return
@@ -1672,6 +1711,16 @@ async def _chat_langgraph_impl(
             parsed_skill = _parse_skill_command(message)
             if parsed_skill is not None:
                 message = _skill_directive(*parsed_skill)
+
+            # Non-native runtime (ADR 0033) — same switch as the streaming driver, same
+            # position (after the control-plane short-circuits). Without it, an acp:*
+            # config silently ran this surface (OpenAI-compat /v1, the desktop /api/chat
+            # fallback, internal self-prompts) on the native loop — which a gateway-less
+            # ACP-only setup (e.g. the Hermes preset) can't serve at all.
+            from runtime.acp_runtime import is_acp_runtime
+
+            if is_acp_runtime(STATE.graph_config):
+                return await _acp_turn_collected(session_id, message)
 
             # Same thread-id resolution as the streaming path (ADR 0069 D4): the
             # non-streaming turns used to key `chat:{session_id}` apart from the

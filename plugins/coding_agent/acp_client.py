@@ -285,6 +285,9 @@ class AcpClient:
 
         self._proc: asyncio.subprocess.Process | None = None
         self._session_id: str | None = None
+        # Latest ACP-native context pressure ({used, size} tokens) from a
+        # ``usage_update`` session update — None until the agent sends one.
+        self.last_usage: dict | None = None
         # Captured from the `initialize` response (was previously discarded).
         self._auth_methods: list[dict] = []
         self._agent_capabilities: dict = {}
@@ -564,8 +567,17 @@ class AcpClient:
                         "status": status,
                     }
                 )
+        elif kind == "usage_update":
+            # ACP-native context pressure — {used, size} in tokens (e.g. hermes-acp sends
+            # one after each response; Zed drives its context ring off it). This is NOT
+            # billable usage (the agent's own provider meters that) — recorded so the
+            # runtime's usage frame can surface context_* fields without faking cost.
+            try:
+                self.last_usage = {"used": int(update.get("used") or 0), "size": int(update.get("size") or 0)}
+            except (TypeError, ValueError):
+                logger.debug("[acp/%s] unparseable usage_update %r", self.name, update)
         elif kind:
-            # plan / current_mode_update / available_commands_update / usage_update —
+            # plan / current_mode_update / available_commands_update —
             # not surfaced yet, but logged so they're visibly dropped, not silent.
             logger.debug("[acp/%s] unhandled session update %r", self.name, kind)
 

@@ -537,3 +537,144 @@ def test_adapters_derived_from_canonical_catalog():
     assert ACP_MODEL_OPTIONS == acp_runtime_options() == [f"acp:{a['id']}" for a in acp_agent_catalog()]
     # claude maps to the current adapter (the deprecated @zed-industries one is gone).
     assert "@agentclientprotocol/claude-agent-acp" in _ACP_ADAPTERS["claude"]["args"]
+
+
+# ── hardening: non-streaming switch, usage_update, frozen spawn ────────────────
+
+
+async def test_acp_turn_collected_returns_single_message_with_usage(monkeypatch):
+    """The non-streaming ACP path folds the frame stream into the one assistant
+    message the /api/chat + OpenAI-compat callers expect, usage in OpenAI shape."""
+    chat = _chat_module()
+
+    async def fake_drive(rt, message):
+        yield ("text", "hel")
+        yield ("text", "lo")
+        yield ("usage", {"model": "acp:mock", "input_tokens": 7, "output_tokens": 3, "cost_usd": 0.0})
+        yield ("done", "hello")
+
+    rt = _MockRuntime()
+
+    async def fake_acquire(tid):
+        return rt
+
+    async def fake_release(tid):
+        return None
+
+    monkeypatch.setattr(chat, "_acp_acquire", fake_acquire)
+    monkeypatch.setattr(chat, "_acp_release", fake_release)
+    monkeypatch.setattr(chat, "_acp_drive_turn", fake_drive)
+    out = await chat._acp_turn_collected("s1", "hi")
+    assert out == [
+        {
+            "role": "assistant",
+            "content": "hello",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+        }
+    ]
+
+
+async def test_acp_turn_collected_surfaces_error(monkeypatch):
+    chat = _chat_module()
+
+    async def fake_drive(rt, message):
+        yield ("error", "ACP runtime (mock) failed: boom")
+
+    async def fake_acquire(tid):
+        return _MockRuntime()
+
+    async def fake_release(tid):
+        return None
+
+    monkeypatch.setattr(chat, "_acp_acquire", fake_acquire)
+    monkeypatch.setattr(chat, "_acp_release", fake_release)
+    monkeypatch.setattr(chat, "_acp_drive_turn", fake_drive)
+    out = await chat._acp_turn_collected("s1", "hi")
+    assert "boom" in out[0]["content"] and "usage" not in out[0]
+
+
+async def test_nonstreaming_impl_routes_to_acp(monkeypatch):
+    """`_chat_langgraph_impl` (OpenAI-compat /v1, desktop /api/chat fallback) must honor
+    agent_runtime — it used to run the native loop under an acp:* config."""
+    import types as _types
+
+    chat = _chat_module()
+    from runtime.state import STATE
+
+    monkeypatch.setattr(
+        STATE,
+        "graph_config",
+        _types.SimpleNamespace(agent_runtime="acp:codex", operator_mcp_tools=[], acp_agents={}),
+        raising=False,
+    )
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    sentinel = [{"role": "assistant", "content": "via-acp"}]
+
+    async def fake_collected(session_id, message):
+        return sentinel
+
+    monkeypatch.setattr(chat, "_acp_turn_collected", fake_collected)
+    out = await chat._chat_langgraph_impl("plain message", "sess-x")
+    assert out is sentinel  # switched before any graph/native-path work
+
+
+async def test_acp_client_records_usage_update():
+    """ACP-native usage_update ({used, size} context pressure) is recorded, not dropped."""
+    from plugins.coding_agent.acp_client import AcpClient
+
+    client = AcpClient("noop", cwd="/tmp", name="t")
+    assert client.last_usage is None
+    await client._handle_update({"update": {"sessionUpdate": "usage_update", "used": 1234, "size": 128000}})
+    assert client.last_usage == {"used": 1234, "size": 128000}
+
+
+async def test_drive_turn_usage_frame_carries_context_pressure(monkeypatch):
+    """When the runtime reports usage_update data, the usage frame carries context_*
+    fields — tokens/cost stay 0 (estimates must not pollute cost telemetry)."""
+    chat = _chat_module()
+
+    class _Rt(_MockRuntime):
+        async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
+            return "done-text"
+
+        def last_usage(self):
+            return {"used": 123, "size": 1000}
+
+    frames = [f async for f in chat._acp_drive_turn(_Rt(), "m")]
+    usage = next(p for k, p in frames if k == "usage")
+    assert usage["context_used_tokens"] == 123 and usage["context_window_tokens"] == 1000
+    assert usage["input_tokens"] == 0 and usage["cost_usd"] == 0.0
+    assert ("done", "done-text") in frames
+
+
+def test_operator_mcp_spec_is_frozen_aware(monkeypatch):
+    """Frozen desktop sidecar: sys.executable IS the server entrypoint — the spec must
+    use the `operator-mcp` dispatch verb, not `-m server.operator_mcp` (#1603's class)."""
+    import sys as _sys
+    import types as _types
+
+    from runtime.acp_runtime import operator_mcp_server_spec
+
+    cfg = _types.SimpleNamespace(operator_mcp_tools=[])
+    spec = operator_mcp_server_spec(cfg)
+    assert spec["args"][:2] == ["-m", "server.operator_mcp"]  # source checkout: unchanged
+
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    frozen_spec = operator_mcp_server_spec(cfg)
+    assert frozen_spec["args"] == ["operator-mcp"]
+    assert frozen_spec["command"] == _sys.executable
+
+
+def test_operator_mcp_spec_pins_resolved_instance_root(monkeypatch, tmp_path):
+    """The MCP child's env REPLACES the environment (the ACP agent spawns it that way),
+    so the spec must carry the resolved instance root — forwarding only
+    PROTOAGENT_INSTANCE let a PROTOAGENT_HOME-scoped instance write DEFAULT-instance
+    data (found live: a smoke agent's task landed on the operator's prod board)."""
+    import types as _types
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "scoped-home"))
+    from runtime.acp_runtime import operator_mcp_server_spec
+
+    spec = operator_mcp_server_spec(_types.SimpleNamespace(operator_mcp_tools=[]))
+    env = {e["name"]: e["value"] for e in spec["env"]}
+    assert env["PROTOAGENT_HOME"] == str(tmp_path / "scoped-home")
