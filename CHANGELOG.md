@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A2A producer tasks GC'd while pending at turn end (#1713).** a2a-sdk 1.1.0's turn
+  teardown drops the last strong reference to the still-pending `producer:<task_id>` asyncio
+  task without cancelling or awaiting it, so cyclic GC destroys it — `ERROR asyncio Task was
+  destroyed but it is pending!` at `ActiveTask._run_producer`, 103× in production logs,
+  clustering at turn completions (upstream a2aproject/a2a-python#1123). Until the SDK fix
+  ships, the A2A mount now swaps in `OwnedProducerActiveTaskRegistry` (`a2a_impl/registry.py`):
+  its cleanup path owns the producer/consumer tasks for their lifetime — strong-referenced and
+  awaited (short grace to flush) or cancelled+awaited before the `ActiveTask` is dropped, so
+  pending work completes or fails loudly instead of being silently destroyed. Degrades to a
+  logged warning + stock behavior if an a2a-sdk upgrade moves the internals.
+- **Classic A2A `message/send` got `-32601 Method not found` (#1854).** a2a-sdk 1.1.0 renamed the
+  JSON-RPC methods; every v0.3-vocabulary client (the fleet's delegate spine, documented curl
+  examples) hit Method-not-found on `/a2a`. The route now mounts with `enable_v0_3_compat=True`,
+  serving both vocabularies on the same endpoint, and the live smoke pins the compat adapter so a
+  future SDK bump can't silently drop it. Found live on the v0.95.0 local test pass.
 - **Installed-plugin workflow recipes were silently invisible (#1867).** The in-tree `workflows`
   plugin scanned recipe dirs eagerly at register time — before instance-installed plugins had
   loaded — so a git-installed plugin's `workflows/` dir (the ADR 0027 bundle promise) never

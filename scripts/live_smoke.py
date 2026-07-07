@@ -152,6 +152,38 @@ def main() -> int:
         terminal = "COMPLETED" in raw or "live smoke ok" in raw or '"artifact' in raw.lower()
         assert terminal, f"no terminal/answer frame; first 600 chars: {raw[:600]!r}"
         print("ok: A2A SendStreamingMessage turn decoded + reached a terminal frame")
+
+        # Classic v0.3 vocabulary on the SAME endpoint (#1854): a2a-sdk 1.1.0
+        # renamed the JSON-RPC methods, and without enable_v0_3_compat the whole
+        # fleet's `message/send` clients got -32601. Pin that the compat adapter
+        # stays mounted — the method must DISPATCH (any real turn outcome is
+        # fine; a -32601 error means the adapter fell off).
+        legacy = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "smoke-v03",
+                "method": "message/send",
+                "params": {
+                    "message": {
+                        "role": "user",
+                        "parts": [{"kind": "text", "text": "ping"}],
+                        "messageId": "m2",
+                        "contextId": "smoke-v03",
+                    }
+                },
+            }
+        ).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{agent_port}/a2a",
+            data=legacy,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as r:
+            legacy_raw = r.read().decode("utf-8", "replace")
+        assert "-32601" not in legacy_raw and "Method not found" not in legacy_raw, (
+            f"classic message/send got Method-not-found — v0.3 compat is off (#1854): {legacy_raw[:300]!r}"
+        )
+        print("ok: classic v0.3 message/send still dispatches (compat adapter mounted)")
         print("\nLIVE SMOKE PASSED ✓")
         return 0
     except Exception as e:  # noqa: BLE001 — smoke must report, not traceback-crash

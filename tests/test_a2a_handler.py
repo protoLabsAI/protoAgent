@@ -38,6 +38,7 @@ from google.protobuf.json_format import MessageToDict
 
 import protolabs_a2a as pa
 from a2a_impl.executor import _CONTEXT_MIME, ProtoAgentExecutor, TurnOutcome, set_terminal_hook
+from a2a_impl.registry import OwnedProducerActiveTaskRegistry, harden_active_task_registry
 
 A2A_HEADERS = {"A2A-Version": "1.0"}
 
@@ -194,7 +195,12 @@ def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
+    # Mirror production wiring (#1713): every test turn runs through the
+    # owned-producer registry, exactly like server/__init__.py mounts it.
+    assert harden_active_task_registry(handler)
+    _HANDLERS.append(handler)
     app = FastAPI()
+    app.state.a2a_handler = handler
     if bearer is not None or api_key or allowed_origins is not None:
         from a2a_impl import auth
 
@@ -249,6 +255,29 @@ def _clear_terminal_hook():
     set_terminal_hook(None)
     yield
     set_terminal_hook(None)
+
+
+# Handlers built by _build_app during the current test — drained at teardown so
+# their retire-then-remove cleanup tasks (#1713) finish inside the test's event
+# loop instead of being destroyed pending when pytest closes it.
+_HANDLERS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _fast_retire(monkeypatch):
+    """Shrink the producer flush grace so teardown drains stay fast in tests."""
+    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
+
+
+@pytest.fixture(autouse=True)
+async def _drain_a2a_cleanup():
+    yield
+    for handler in _HANDLERS:
+        reg = getattr(handler, "_active_task_registry", None)
+        tasks = set(getattr(reg, "_cleanup_tasks", ()) or ())
+        if tasks:
+            await asyncio.wait(tasks, timeout=5)
+    _HANDLERS.clear()
 
 
 @pytest.mark.asyncio
@@ -938,3 +967,138 @@ def test_extract_image_parts_empty_when_no_message():
     from a2a_impl.executor import _extract_image_parts
 
     assert _extract_image_parts(_t.SimpleNamespace(message=None)) == []
+
+
+# ── a2a_impl.registry: producer-task ownership at turn teardown (#1713) ───────
+# a2a-sdk 1.1.0's ActiveTask teardown drops the last strong reference to the
+# still-pending `producer:<task_id>` task without cancelling or awaiting it, so
+# cyclic GC destroys it ("Task was destroyed but it is pending!"). The hardened
+# registry must own the producer/consumer tasks for their lifetime: awaited
+# (grace to flush) or cancelled+awaited before the ActiveTask is dropped.
+
+
+def _hardened_registry() -> OwnedProducerActiveTaskRegistry:
+    from a2a.server.tasks import InMemoryTaskStore as _Store
+
+    return OwnedProducerActiveTaskRegistry(agent_executor=None, task_store=_Store())
+
+
+async def test_harden_swaps_registry_preserving_wiring():
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("done", "ok")
+
+    app = _build_app(stream)
+    handler = app.state.a2a_handler
+    reg = handler._active_task_registry
+    assert isinstance(reg, OwnedProducerActiveTaskRegistry)
+    # Same executor/store the stock registry was built with — only the cleanup
+    # behavior changes.
+    assert reg._agent_executor is handler.agent_executor
+    assert reg._task_store is handler.task_store
+
+
+def test_harden_degrades_gracefully_on_moved_internals():
+    """If an a2a-sdk upgrade moves _active_task_registry, hardening must warn and
+    no-op — never crash the mount."""
+
+    class _NotAHandler:
+        pass
+
+    assert harden_active_task_registry(_NotAHandler()) is False
+
+
+async def test_cleanup_retires_stuck_producer_instead_of_dropping_it():
+    """A producer parked forever (the active_task.py:566 close-join hang) is
+    cancelled and awaited by the cleanup path — not left pending for the GC."""
+    import types as _t
+
+    reg = _hardened_registry()
+    hang = asyncio.Event()
+
+    async def _stuck():
+        await hang.wait()
+
+    async def _done():
+        return None
+
+    stub = _t.SimpleNamespace(
+        task_id="t-1713",
+        _producer_task=asyncio.create_task(_stuck(), name="producer:t-1713"),
+        _consumer_task=asyncio.create_task(_done(), name="consumer:t-1713"),
+    )
+    reg._active_tasks["t-1713"] = stub
+
+    reg._on_active_task_cleanup(stub)
+
+    async with asyncio.timeout(10):
+        while reg._cleanup_tasks or "t-1713" in reg._active_tasks:
+            await asyncio.sleep(0.005)
+
+    assert stub._producer_task.done()
+    assert stub._producer_task.cancelled()  # stuck → cancelled+awaited, not dropped
+    assert stub._consumer_task.done()
+    assert await reg.get("t-1713") is None  # still removed from the registry
+
+
+async def test_cleanup_lets_flushing_producer_finish_without_cancel():
+    """A producer that completes within the grace window flushes naturally —
+    awaited to completion, never cancelled."""
+    import types as _t
+
+    reg = _hardened_registry()
+    flushed = asyncio.Event()
+
+    async def _flushing():
+        await asyncio.sleep(0)  # one loop iteration, like a completing queue-join
+        flushed.set()
+
+    stub = _t.SimpleNamespace(
+        task_id="t-flush",
+        _producer_task=asyncio.create_task(_flushing(), name="producer:t-flush"),
+        _consumer_task=None,  # start()-failure path leaves these unset — must not crash
+    )
+    reg._active_tasks["t-flush"] = stub
+
+    reg._on_active_task_cleanup(stub)
+
+    async with asyncio.timeout(10):
+        while reg._cleanup_tasks or "t-flush" in reg._active_tasks:
+            await asyncio.sleep(0.005)
+
+    assert flushed.is_set()
+    assert stub._producer_task.done()
+    assert not stub._producer_task.cancelled()
+
+
+async def test_turn_teardown_retires_real_producer_task(monkeypatch):
+    """End-to-end through the real SDK: after a SendMessage turn completes, the
+    ActiveTask's producer/consumer tasks are done (retired) by the time the
+    registry drops it — the exact guarantee whose absence caused #1713."""
+    retired = []
+    orig = OwnedProducerActiveTaskRegistry._retire_and_remove
+
+    async def spy(self, active_task):
+        await orig(self, active_task)
+        retired.append(active_task)
+
+    monkeypatch.setattr(OwnedProducerActiveTaskRegistry, "_retire_and_remove", spy)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "hello ")
+        yield ("done", "hello world")
+
+    app = _build_app(stream)
+    reg = app.state.a2a_handler._active_task_registry
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+        assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+
+    # Wait for the turn's retire-then-remove cleanup to run.
+    async with asyncio.timeout(10):
+        while not retired or reg._cleanup_tasks or reg._active_tasks:
+            await asyncio.sleep(0.005)
+
+    for active in retired:
+        assert active._producer_task is not None and active._producer_task.done()
+        assert active._consumer_task is not None and active._consumer_task.done()
