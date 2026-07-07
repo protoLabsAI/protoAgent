@@ -75,6 +75,10 @@ One sentence. Used by planners and human consumers alike — write it for both a
 
 A2A 1.0 lists transports here (rather than a single top-level `url`). The template advertises one entry: `{url, protocolBinding: "JSONRPC", protocolVersion: "1.0"}`. The `url` must end with `/a2a` (the JSON-RPC endpoint, not the server root) — clients that strip the path and POST to `/` get a 405 from FastAPI.
 
+The `url` is built by `_a2a_card_url()` as `{A2A_PUBLIC_URL}/a2a` (falling back to the bound loopback port when `A2A_PUBLIC_URL` is unset — correct for same-host local/desktop runs). **Set `A2A_PUBLIC_URL` to your externally-reachable address on any deployed agent**, and set `a2a.require_routable_url` to refuse boot rather than silently advertise a loopback URL no remote peer can dial.
+
+**Fleet members** ([ADR 0042](/adr/0042-fleet-supervisor-unified-console)) get this for free: the supervisor spawns each member with `A2A_PUBLIC_URL = {hub_public_url}/agents/<slug>`, so a member's card advertises its own [tenant sub-path](/reference/a2a-endpoints#fleet-multi-tenancy-agents-slug) (`…/agents/<slug>/a2a`) — the [A2A URL-based routing](https://a2a-protocol.org/latest/topics/multi-tenancy/) contract — instead of inheriting the hub root (which every member would otherwise collide on, misrouting card-based discovery to the hub agent).
+
 ### `version`
 
 Your agent's version, not the A2A spec version. Semver is conventional.

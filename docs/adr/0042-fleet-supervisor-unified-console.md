@@ -97,6 +97,23 @@ browser only ever talks to the hub (same-origin), so no per-agent CORS/token spr
 > because the hub's auth middleware validates the proxied stream *before* forwarding — a
 > member-signed token 401'd at the hub for every non-host member on a bearer-gated hub.
 
+> **Amendment — A2A URL-based multi-tenancy:** the slug proxy makes each member an
+> independently-addressable **A2A tenant** at `/agents/<slug>/a2a`, which is exactly the
+> [A2A URL-based routing](https://a2a-protocol.org/latest/topics/multi-tenancy/) pattern —
+> one hub server, many agents, each at its own URL prefix. For a peer to *discover* and
+> route to a member correctly, the member's agent card must advertise **its own** tenant
+> URL, not the hub root. Previously a member inherited the hub's `A2A_PUBLIC_URL`, so its
+> card advertised the hub root (`{hub}/a2a`): every member's card collided on one URL, and a
+> card-based dispatch landed on the **hub agent** instead of the member (the "wasted hub
+> route" — jon's LLM brokering a message meant for matt). Fix: the supervisor spawns each
+> member with `A2A_PUBLIC_URL = {hub_public_url}/agents/<slug>`, so `_a2a_card_url()` yields
+> `{hub}/agents/<slug>/a2a` — the member's own proxied route. A member is now a first-class,
+> discoverable A2A tenant reachable *directly* (transport-only proxy; the hub agent's loop is
+> never invoked), while still living in the hub process — no separate container or port. The
+> hub token remains the single auth boundary in front of all tenants. See
+> [A2A endpoints § Fleet multi-tenancy](/reference/a2a-endpoints#fleet-multi-tenancy-agents-slug)
+> and [Agent card § supportedInterfaces](/reference/agent-card#supportedinterfaces).
+
 ### D. Session continuity (≈ free)
 Each agent's checkpoints/goals/memory are already `instance.id`-scoped (ADR 0004/0041) —
 so switching back loads that agent's thread, and it survives stop→restart (resume from
