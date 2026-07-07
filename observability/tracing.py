@@ -359,6 +359,65 @@ def trace_tool_call(
         return None
 
 
+def trace_generation(
+    name: str,
+    model: str = "",
+    usage: dict | None = None,
+    cost_usd: float = 0.0,
+    duration_ms: int = 0,
+    session_id: str = "",
+) -> Any:
+    """Log a completed LLM generation as a child observation in the CURRENT trace.
+
+    Why this exists — fleet tracing across TWO Langfuse projects. The LiteLLM
+    gateway logs the FULL-fidelity generation (prompt + completion) into its
+    OWN project via its success callback; ``TraceContextMiddleware`` joins it
+    to the active ``trace_id``. That's ideal when the agent and the gateway
+    share a project. But when an agent runs in a DIFFERENT project than the
+    gateway — a dedicated fleet project — that generation lands in the
+    gateway's project, leaving the agent's own trace with a HOLE where its
+    model call should be (only the structural spans remain). This emits a
+    lightweight generation — model + token usage + cost, NO prompt/completion
+    payload — into the AGENT's project so its trace is whole. The heavy IO
+    stays in the gateway project; the two are joinable by ``trace_id``.
+
+    Mirrors ``trace_tool_call``: ``start_observation`` + ``end`` so it nests
+    under the current session span without becoming the parent. No-op /
+    swallow-all when tracing is disabled or the SDK errors — never alters the
+    turn.
+    """
+    if not _enabled or _langfuse is None:
+        return None
+    try:
+        usage_details = None
+        if usage:
+            candidates = {
+                "input": usage.get("input_tokens"),
+                "output": usage.get("output_tokens"),
+                "total": usage.get("total_tokens"),
+            }
+            usage_details = {k: int(v) for k, v in candidates.items() if v} or None
+        span = _langfuse.start_observation(
+            name=name,
+            as_type="generation",
+            model=model or None,
+            usage_details=usage_details,
+            cost_details=({"total": float(cost_usd)} if cost_usd else None),
+            metadata={
+                "session_id": session_id,
+                "trace_id": _trace_id_ctx.get(),
+                "duration_ms": duration_ms,
+                # Full prompt/completion IO is logged by the gateway's LiteLLM
+                # callback into the gateway Langfuse project (joined by trace_id).
+                "detail_in": "gateway_project",
+            },
+        )
+        span.end()
+        return span
+    except Exception:
+        return None
+
+
 def score_current_trace(name: str, value: float, comment: str = "") -> None:
     """Attach a numeric score to the currently-active trace.
 
