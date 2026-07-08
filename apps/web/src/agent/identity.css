@@ -68,6 +68,7 @@
      but cap at most of the viewport so a long history scrolls inside the dialog rather than
      pushing it past the screen. The DS dialog itself is content-sized (max-height 100vh). */
   max-height: 68vh;
+  max-height: 68dvh;
   overflow-y: auto;
 }
 .soul-history-item {
