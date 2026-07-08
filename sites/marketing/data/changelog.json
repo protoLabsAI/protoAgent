@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.97.0",
+    "date": "2026-07-08",
+    "changes": [
+      "Fleet trace export → the agent-fleet flywheel (the \"Observe\" seam, #1897).",
+      "Fleet-trace sink + PII redaction (scripts/sync_fleet_traces.sh, scripts/redact_fleet_traces.py).",
+      "Portable per-rig setup (scripts/setup_fleet_tracing.sh).",
+      "Bigger touch targets on phones.",
+      "Docs reader is a master-detail flow on phones.",
+      "Settings collapses to a single column on phones.",
+      "Modals/overlays use dvh on mobile.",
+      "Mobile viewport correctness for the console."
+    ]
+  },
+  {
     "version": "v0.96.0",
     "date": "2026-07-07",
     "changes": [

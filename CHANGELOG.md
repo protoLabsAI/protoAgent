@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.97.0] - 2026-07-08
+
 ### Added
 - **Fleet trace export → the agent-fleet flywheel (the "Observe" seam, #1897).** Agents can
   now emit one per-turn **trajectory** row (OpenAI chat format — messages incl. `tool_calls`,
