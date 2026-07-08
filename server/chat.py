@@ -934,9 +934,26 @@ _AUTONOMOUS_HITL_SENTINEL = (
 _MAX_AUTONOMOUS_AUTOANSWERS = 3
 
 
+def _truthy(value) -> bool:
+    """Coerce a metadata value to bool. JSON-RPC callers may send the flag as a real bool,
+    a string ("true"/"1"), or an int — bare bool("false") is a footgun, so treat strings
+    by their content."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _is_autonomous(request_metadata: dict | None) -> bool:
-    """Whether this turn runs with no operator watching (see _AUTONOMOUS_ORIGINS)."""
-    return ((request_metadata or {}).get("origin") or "").strip().lower() in _AUTONOMOUS_ORIGINS
+    """Whether this turn runs with no operator watching (see _AUTONOMOUS_ORIGINS).
+
+    Headless-first (#1911): a fleet-to-fleet A2A caller with no human in the loop can also
+    DECLARE the turn unattended by setting ``unattended: true`` in the request metadata,
+    which takes the same no-deadlock path as the internal autonomous origins. Undeclared
+    plain A2A stays operator-attended (an approval interrupt still parks for a human)."""
+    md = request_metadata or {}
+    if _truthy(md.get("unattended")):
+        return True
+    return ((md.get("origin") or "").strip().lower()) in _AUTONOMOUS_ORIGINS
 
 
 def _is_hitl_resume(request_metadata: dict | None) -> bool:
@@ -1015,7 +1032,14 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
         _fence = None
     # When a goal is already active, the whole turn is goal-driven (suppress cross-session
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
-    goal_active = STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
+    _goal_state = STATE.goal_controller.active_goal(session_id) if STATE.goal_controller is not None else None
+    goal_active = _goal_state is not None
+    # Kickoff injection (#1910): on the FIRST goal-driven turn (iteration 0, not a HITL resume)
+    # rewrite the message to carry the goal condition, so the agent begins on the goal instead
+    # of asking "what goal?" — the raw user text is folded into the kickoff prompt. Re-invoke
+    # iterations already get the goal via the continuation prompt, so gate on iteration 0.
+    if goal_active and not resume and _goal_state.iteration == 0:
+        message = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=message)
 
     # One graph turn (model tokens accumulated silently; A2A consumers get progress from
     # tool_start/tool_end). Final text is extracted once via extract_output().
@@ -1025,7 +1049,11 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # An autonomous turn (no operator watching) must never deadlock on a HITL pause: when one
     # of these turns hits input_required we resume the graph with a "no operator" sentinel and
     # run another pass, up to a cap, instead of parking the task forever (see _AUTONOMOUS_*).
-    _autonomous = _is_autonomous(request_metadata)
+    # A goal-driven turn is autonomous BY DEFINITION (#1911): a goal is an explicit opt-in to
+    # self-drive, so it must take the no-deadlock path and never park on a HITL interrupt even
+    # over plain (undeclared) A2A — otherwise the first "what goal?" ask parks the task and the
+    # drive loop below never runs (the #1910 deadlock). Non-goal turns are unchanged.
+    _autonomous = _is_autonomous(request_metadata) or goal_active
     _resume_value = (message if resume else None)
     _auto_answers = 0
     with goal_turn(goal_active):
@@ -1301,8 +1329,17 @@ async def _chat_langgraph_stream_impl(
             if STATE.goal_controller is not None:
                 reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
                 if reply is not None:
-                    yield ("done", reply)
-                    return
+                    gs = STATE.goal_controller.active_goal(session_id)
+                    if STATE.goal_controller.is_set_ack(reply) and gs is not None:
+                        # /goal SET kicks the drive immediately (#1910): surface the ack as a
+                        # status frame, then fall through into a goal-driven turn instead of
+                        # short-circuiting here and waiting for a separate inbound message. The
+                        # goal condition is injected at the kickoff below (iteration 0), which
+                        # also covers a plain message arriving on an already-active goal.
+                        yield ("tool_start", f"🎯 {reply}")
+                    else:
+                        yield ("done", reply)
+                        return
 
             # Core /lifecycle command (ADR 0074) — read-only listing of the lifecycle
             # events + configured reactions + registered hooks. Reserved like /goal.
@@ -1675,10 +1712,16 @@ async def _chat_langgraph_impl(
         metadata={"message_preview": message[:100], "soul_rev": soul_revision()},
     ):
         try:
-            # Goal control messages short-circuit (set / status / clear).
+            # Goal control messages short-circuit (status / clear) — but a /goal SET kicks the
+            # drive immediately (#1910) rather than returning just the ack: fall through into a
+            # goal-driven turn (the condition is injected at the kickoff below). The ack is
+            # folded into the turn's terminal goal note, so the caller still sees it.
             if STATE.goal_controller is not None:
                 reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
-                if reply is not None:
+                if reply is not None and not (
+                    STATE.goal_controller.is_set_ack(reply)
+                    and STATE.goal_controller.active_goal(session_id) is not None
+                ):
                     return [{"role": "assistant", "content": reply}]
 
             # Core /lifecycle command (ADR 0074) — read-only listing. Reserved like /goal.
@@ -1747,9 +1790,10 @@ async def _chat_langgraph_impl(
 
             # When a goal is already active, the whole turn is goal-driven —
             # suppress cross-session prior_sessions on the initial turn too.
-            goal_active = (
-                STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
+            _goal_state = (
+                STATE.goal_controller.active_goal(session_id) if STATE.goal_controller is not None else None
             )
+            goal_active = _goal_state is not None
             # Sharing the streaming thread means sharing its serialization contract:
             # every other writer to `a2a:{sid}` (the streaming turn driver,
             # compact_session, rewind_session) holds the per-thread lock — an
@@ -1780,13 +1824,38 @@ async def _chat_langgraph_impl(
 
                     graph_input = Command(resume=await _resume_payload(config, message))
                 else:
+                    _msg = message
+                    # Kickoff injection (#1910), same as the streaming path: the first
+                    # goal-driven turn (iteration 0) carries the goal condition so the agent
+                    # begins on the goal instead of asking "what goal?".
+                    if goal_active and _goal_state.iteration == 0:
+                        _msg = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=message)
                     graph_input = {
-                        "messages": [HumanMessage(content=message)],
+                        "messages": [HumanMessage(content=_msg)],
                         "session_id": session_id,
                         **_state_extra,
                     }
                 with goal_turn(goal_active):
                     result = await STATE.graph.ainvoke(graph_input, config=config)
+                    # Headless-first parity (#1911): a goal-driven turn is autonomous, so if it
+                    # parks on a HITL interrupt there's no operator here to answer — resume with
+                    # the no-operator sentinel and re-run (bounded) instead of echoing the ask
+                    # and stalling the drive. Non-goal turns are untouched (they still echo).
+                    if goal_active:
+                        from langgraph.types import Command
+
+                        _auto = 0
+                        while _auto < _MAX_AUTONOMOUS_AUTOANSWERS:
+                            if await _pending_interrupt_value(config) is None:
+                                break
+                            _auto += 1
+                            result = await STATE.graph.ainvoke(
+                                Command(resume=_AUTONOMOUS_HITL_SENTINEL), config=config
+                            )
+                        if await _pending_interrupt_value(config) is not None:
+                            # Budget spent, still parked → clear the dangling interrupt so the
+                            # checkpoint isn't stranded; the drive loop below continues on the text.
+                            await _clear_pending_interrupt(config)
             raw = _last_ai(result)
             response = extract_output(raw)
 
