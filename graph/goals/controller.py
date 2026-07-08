@@ -29,6 +29,10 @@ log = logging.getLogger(__name__)
 
 CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 
+# The exact prefix a successful ``/goal`` SET replies with. The chat runners match on it
+# to decide whether to KICK an initial goal-driven turn (#1910) — see ``is_set_ack``.
+SET_ACK_PREFIX = "Goal set. "
+
 
 def _coerce_str_list(value) -> list[str]:
     """Normalize a contract list field (``constraints``/``boundaries``) to ``list[str]``.
@@ -124,7 +128,48 @@ class GoalController:
             stop_when=contract.get("stop_when", ""),
         )
         self._store.set(state)
-        return f"Goal set. {state.status_line()}"
+        return f"{SET_ACK_PREFIX}{state.status_line()}"
+
+    @staticmethod
+    def is_set_ack(reply: str | None) -> bool:
+        """True when a ``parse_control`` reply is the ack for a *successful* goal SET
+        (as opposed to a status / clear / parse-error reply). The chat runners use this to
+        decide whether to KICK an initial goal-driven turn (#1910): a SET should drive the
+        agent immediately, whereas /goal status or /goal clear just reply and stop."""
+        return isinstance(reply, str) and reply.startswith(SET_ACK_PREFIX)
+
+    def kickoff_prompt(self, state: GoalState, user_message: str = "") -> str:
+        """The initial goal-driven turn's prompt (#1910). The re-invoke iterations receive
+        the goal via ``_continuation``; the *first* turn had nothing — it fell through to a
+        bare user message, so the agent never learned its own active goal and asked
+        "what goal?", parking at INPUT_REQUIRED before the drive loop could run. This
+        injects the goal condition (and completion contract, if any) so the agent BEGINS on
+        turn 1. Mirrors the continuation framing for iteration 0 (no verifier result yet)."""
+        if state.fresh_context:
+            lead = (
+                f"[goal kickoff — 0/{state.max_iterations}, fresh context]\n"
+                f"Goal: {state.condition}\n\n"
+                "Take ONE concrete step toward the goal now. Record your running plan by "
+                "calling the `update_goal_plan` tool (it is persisted for the next "
+                "iteration). If you determine the goal is impossible or out of scope, call "
+                "the `abandon_goal` tool with a reason and stop."
+            )
+        else:
+            lead = (
+                f"[goal kickoff — 0/{state.max_iterations}]\n"
+                f"You have an active goal for this session: {state.condition}\n\n"
+                "Begin working toward it now — take concrete action; do not ask which goal "
+                "it is. If it is impossible or out of scope, call the `abandon_goal` tool "
+                "with a reason and stop."
+            )
+        contract = self._contract_prompt(state)
+        body = f"{lead}\n\n{contract}" if contract else lead
+        # A plain inbound message that arrived alongside an already-active goal (not a
+        # /goal command) is folded in so the operator's words aren't lost.
+        extra = (user_message or "").strip()
+        if extra and not extra.lower().startswith("/goal"):
+            body = f"{body}\n\nThe operator also said: {extra}"
+        return body
 
     @staticmethod
     def _chat_verifier_allowed(verifier: dict) -> bool:
