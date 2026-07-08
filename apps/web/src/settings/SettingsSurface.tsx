@@ -12,6 +12,7 @@ import { isHostConsole } from "../lib/api";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
+import { useIsMobile } from "../lib/useIsMobile";
 import { useUI } from "../state/uiStore";
 import { DelegatesSection } from "./DelegatesSection";
 import { FleetSurface } from "./FleetSurface";
@@ -105,6 +106,9 @@ const CONSOLE_SECTIONS: Section[] = [
 // command). The Box group is gated to the host console.
 export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
   const onHost = isHostConsole();
+  // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
+  // the SideNav to its DS <select> (mobile only — the desktop rail is deliberately a tablist).
+  const isMobile = useIsMobile();
   const persistedSection = useUI((s) => s.settingsSection);
   const setSection = useUI((s) => s.setSettingsSection);
 
@@ -137,7 +141,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
 
   return (
     <div className="settings-shell">
-      <SideNav ariaLabel="Settings sections" groups={groups} active={active.id} onSelect={(id) => setSection(id)} />
+      <SideNav responsive={isMobile} ariaLabel="Settings sections" groups={groups} active={active.id} onSelect={(id) => setSection(id)} />
       <div className="settings-content">
         {active.render()}
       </div>

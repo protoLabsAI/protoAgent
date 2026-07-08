@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Settings collapses to a single column on phones.** The Settings surface/overlay is a
+  200px SideNav rail + content pane; on a ~360px phone overlay that left the content pane a
+  ~130px sliver (labels wrapped a word per line, inputs clipped). On mobile the SideNav now
+  renders `responsive` so it collapses to its DS `<select>` (a full-width section dropdown on
+  top) and the shell stacks to one column, giving the content the full width. Desktop is
+  unchanged — the rail is still a vertical tablist (the `responsive` prop is gated on
+  `useIsMobile`, and the mobile shell CSS is viewport-scoped).
 - **Modals/overlays use `dvh` on mobile.** Every tall dialog height (the full-screen
   DocumentViewer reader, the Settings overlay, the theme-quick + MCP-catalog +
   plugin-widget dialogs, the background-jobs list, the SOUL history, the crash screen)
