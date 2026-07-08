@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fleet trace export → the agent-fleet flywheel (the "Observe" seam, #1897).** Agents can
+  now emit one per-turn **trajectory** row (OpenAI chat format — messages incl. `tool_calls`,
+  the in-context `tools`, a verifiable `reward` from the terminal state, and the OODA signal:
+  `loop_shape` + the durable goal-plan `orient` snapshot) to `<instance>/fleet-traces/` for
+  downstream training-data collection. **Off by default**; enable per instance via the
+  **Settings ▸ Telemetry ▸ "Fleet trace export"** toggle or the `PROTOAGENT_FLEET_TRACE_EXPORT`
+  env var (which overrides the toggle in both directions and can point at an explicit path).
+  Best-effort at the single terminal chokepoint — never affects a turn — and honors the
+  incognito gate. Governed by ADR 0006.
+- **Fleet-trace sink + PII redaction (`scripts/sync_fleet_traces.sh`, `scripts/redact_fleet_traces.py`).**
+  A daily sync ships dumps to a shared dataset dir, **redacting first** — hybrid regex
+  (keys/tokens/JWTs/emails/phones) + the `openai/privacy-filter` model (names/addresses) —
+  so raw content never enters the corpus. Fail-closed; irreversible masking; stamps
+  `meta.redacted`.
+- **Portable per-rig setup (`scripts/setup_fleet_tracing.sh`).** One command wires a dev
+  laptop or desktop rig to ship its trace dumps to the lab box over the tailnet (launchd on
+  macOS, cron on Linux), with the redaction boundary kept on the receiving box.
+
 ### Fixed
 - **Bigger touch targets on phones.** The DS icon button is 30px (26px `--sm`) — below the
   ~44px touch guideline, and a dense surface like Memory has ~90 of them (per-row edit/delete).
