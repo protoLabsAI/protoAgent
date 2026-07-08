@@ -94,6 +94,34 @@
   .settings-content .setting-input { max-width: none; }
 }
 
+/* Phones: the two-column shell can't fit a 200px rail + readable content in a ~360px
+   overlay, so stack it — the SideNav (rendered `responsive` on mobile, see
+   SettingsSurface) becomes a full-width <select> on top, content fills the width below.
+   The DS collapse is a 15rem container query on the rail's own width; the stacked rail is
+   full-width (> 15rem) so that query never fires — force the <select> by viewport instead. */
+@media (max-width: 767px) {
+  .settings-shell {
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 0;
+  }
+  .settings-shell > .pl-sidenav-wrap {
+    flex: 0 0 auto;
+    width: 100%;
+    overflow: visible;
+    padding-right: 0;
+    padding-bottom: 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-shell > .pl-sidenav-wrap--responsive > .pl-sidenav {
+    display: none;
+  }
+  .settings-shell > .pl-sidenav-wrap--responsive > .pl-sidenav__select {
+    display: block;
+  }
+}
+
 /* Collapsible field groups (DS Accordion, 0.29). Drop the default muted panel
    tint so field labels render at full contrast, and let the dirty-count badge sit
    inline in the trigger title. */
