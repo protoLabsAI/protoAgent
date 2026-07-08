@@ -1,0 +1,21 @@
+id: orgchart
+name: Org Chart
+version: 0.1.0
+description: >-
+  Live diagram of the agent fleet — every agent a node, a directed edge wherever one
+  agent can delegate to another. Crawls outward from this agent's delegates (using the
+  peer tokens it already holds), enriched with each peer's public card + health.
+# Off by default; enable per-instance via plugins.enabled: [orgchart] (or set true here).
+enabled: false
+
+# One console rail item → an iframe of the self-contained view page. `Network` is a
+# lucide icon in the curated instant-render set. `path` is the PUBLIC page route the
+# plugin serves (auto auth-exempt); the data it fetches is the GATED /api route.
+views:
+  - { id: orgchart, label: "Org Chart", icon: Network, path: /plugins/orgchart/view }
+
+# Declarative transparency only (not enforced): the crawl reaches peer agents over the
+# fleet/tailnet to read their cards, health, and delegate lists.
+capabilities:
+  network: ["fleet peers (A2A cards, /healthz, /api/delegates)"]
+  filesystem: none
