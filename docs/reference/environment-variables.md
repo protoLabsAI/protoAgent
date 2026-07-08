@@ -128,8 +128,9 @@ The bundled scheduler is enabled by default. See [Schedule future work](/guides/
 | `LANGFUSE_PUBLIC_KEY` | Langfuse project public key |
 | `LANGFUSE_SECRET_KEY` | Langfuse project secret key |
 | `LANGFUSE_HOST` | Langfuse host URL (e.g. `https://langfuse.company.com`). Falls back to `LANGFUSE_URL`, then `http://host.docker.internal:3001`. |
+| `PROTOAGENT_FLEET_TRACE_EXPORT` | Fleet trace export (the flywheel Observe, #1897). Unset → off (or the `telemetry.fleet_trace_export` config toggle decides). `1`/`on` → on at `<instance>/fleet-traces/`; a path → on there; `0`/`off` → hard-off, overriding the config toggle. See [Observability ▸ Fleet trace export](/guides/observability#fleet-trace-export-the-flywheel-observe). |
 
-If both keys are unset, tracing is disabled and every helper in `tracing.py` becomes a no-op.
+If both Langfuse keys are unset, distributed tracing is disabled and every helper in `tracing.py` becomes a no-op. Fleet trace export is independent — it needs no Langfuse.
 
 ## Logging
 
