@@ -60,25 +60,47 @@ _FALSE = {"", "0", "false", "no", "off"}
 _tool_schema_cache: list[dict] | None = None
 
 
-def init() -> None:
-    """Enable export if ``PROTOAGENT_FLEET_TRACE_EXPORT`` is set. Idempotent."""
+def init(config_enabled: bool = False) -> None:
+    """Enable export from the env var and/or the config toggle. Idempotent.
+
+    Enablement precedence — the env is the override in BOTH directions, the
+    config toggle (``telemetry.fleet_trace_export``, surfaced in Settings so the
+    desktop app can flip it) is the fallback:
+
+    * ``PROTOAGENT_FLEET_TRACE_EXPORT`` = ``0``/``off``  → disabled (even if the
+      config toggle is on)
+    * = ``1``/truthy                                     → enabled, default path
+    * = ``<path>``                                       → enabled, that path
+    * unset, ``config_enabled=True``                     → enabled, default path
+    * unset, ``config_enabled=False``                    → disabled
+
+    Called after the config loads so ``config_enabled`` is known; env-only
+    deployments (fleet containers, systemd) still work with no config.
+    """
     global _enabled, _base_dir
 
     raw = os.environ.get("PROTOAGENT_FLEET_TRACE_EXPORT", "").strip()
-    if raw.lower() in _FALSE:
+    raw_l = raw.lower()
+    env_set = raw != ""
+
+    if env_set and raw_l in _FALSE:  # explicit off in the env — hard override
+        print("[trace_export] fleet trace export disabled (env override).")
+        return
+    if not env_set and not config_enabled:
         print("[trace_export] fleet trace export disabled.")
         return
 
     try:
-        if raw.lower() in _TRUE:
+        if env_set and raw_l not in _TRUE:  # the env carried an explicit path
+            _base_dir = Path(raw).expanduser()
+        else:  # env truthy, or enabled via the config toggle → default location
             from infra.paths import instance_paths
 
             _base_dir = instance_paths().store("fleet-traces")
-        else:
-            _base_dir = Path(raw).expanduser()
         _base_dir.mkdir(parents=True, exist_ok=True)
         _enabled = True
-        print(f"[trace_export] fleet trace export -> {_base_dir}")
+        src = "env" if env_set else "config"
+        print(f"[trace_export] fleet trace export -> {_base_dir} (via {src})")
     except Exception as e:  # noqa: BLE001 — never fail boot for an export sink
         print(f"[trace_export] init failed: {e}. Export disabled.")
 

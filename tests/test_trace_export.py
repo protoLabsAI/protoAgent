@@ -166,6 +166,41 @@ def test_ooda_label_from_goal_plan(tmp_path, monkeypatch):
     assert "step one" in row["meta"]["orient"]
 
 
+def test_config_toggle_enables_without_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("PROTOAGENT_FLEET_TRACE_EXPORT", raising=False)
+
+    class _Paths:
+        def store(self, name):
+            return tmp_path / name
+
+    import infra.paths
+
+    monkeypatch.setattr(infra.paths, "instance_paths", lambda: _Paths())
+    trace_export.init(config_enabled=True)
+    assert trace_export.is_enabled()
+    trace_export.export_turn(_Outcome(), checkpointer=_Checkpointer(_MESSAGES), graph_config=_Cfg())
+    files = list((tmp_path / "fleet-traces").glob("*.jsonl"))
+    assert len(files) == 1
+
+
+def test_env_off_overrides_config_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_FLEET_TRACE_EXPORT", "0")
+    trace_export.init(config_enabled=True)  # env off wins
+    assert not trace_export.is_enabled()
+
+
+def test_env_path_wins_over_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_FLEET_TRACE_EXPORT", str(tmp_path))
+    trace_export.init(config_enabled=False)  # env path enables regardless of config
+    assert trace_export.is_enabled()
+
+
+def test_disabled_when_neither_env_nor_config(monkeypatch):
+    monkeypatch.delenv("PROTOAGENT_FLEET_TRACE_EXPORT", raising=False)
+    trace_export.init(config_enabled=False)
+    assert not trace_export.is_enabled()
+
+
 def test_export_never_raises_on_bad_checkpointer(tmp_path, monkeypatch):
     _enable(tmp_path, monkeypatch)
 

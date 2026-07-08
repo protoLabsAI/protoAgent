@@ -411,11 +411,11 @@ def _main():
     # Initialize observability
     from observability import tracing
     from observability import metrics
-    from observability import trace_export
 
     tracing.init()
     metrics.init()
-    trace_export.init()  # fleet trace export → lab (the flywheel Observe, #1897)
+    # trace_export.init() runs later (after config loads) so it can honor the
+    # telemetry.fleet_trace_export toggle, not just the env var.
 
     _init_langgraph_agent(headless_setup=headless_setup)
 
@@ -798,6 +798,13 @@ def _main():
     )
 
     STATE.telemetry_store = _build_telemetry_store(STATE.graph_config)
+
+    # Fleet trace export → lab (the flywheel Observe, #1897). Init here (not in the
+    # early observability block) so it can honor the telemetry.fleet_trace_export
+    # config toggle — the env var still overrides in both directions.
+    from observability import trace_export
+
+    trace_export.init(config_enabled=getattr(STATE.graph_config, "fleet_trace_export_enabled", False))
 
     # ADR 0003 / 0006: record telemetry + surface Activity output on terminal.
     set_terminal_hook(_a2a_terminal)
