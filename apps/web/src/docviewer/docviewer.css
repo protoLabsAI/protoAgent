@@ -3,7 +3,9 @@
    full-screen read instead of a short centered modal. */
 .doc-viewer.pl-dialog {
   height: min(90vh, 1000px);
+  height: min(90dvh, 1000px); /* dvh: the reader must not spill under mobile browser chrome */
   max-height: 96vh;
+  max-height: 96dvh;
   display: flex;
   flex-direction: column;
 }

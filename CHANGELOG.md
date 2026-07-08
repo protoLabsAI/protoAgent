@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Modals/overlays use `dvh` on mobile.** Every tall dialog height (the full-screen
+  DocumentViewer reader, the Settings overlay, the theme-quick + MCP-catalog +
+  plugin-widget dialogs, the background-jobs list, the SOUL history, the crash screen)
+  now uses the dynamic viewport (`Ndvh`, falling back to `Nvh`) so the mobile browser
+  URL bar can't clip the top/bottom of a near-full-height overlay. Also removes the last
+  of the dead pre-DS mobile shell CSS (`.workspace.mobile` / `.mobile-bar` / `.mobile-tab`
+  / `.mobile-drawer*` — ~95 lines, superseded by the DS `.pl-mobilenav` + `AppDrawer`).
 - **Mobile viewport correctness for the console.** On phones (the DS single-pane shell,
   ≤767px) the active surface no longer strands a slab of dead canvas below it — the chat
   composer was floating mid-screen because the DS `.pl-appshell__mobile-stage` lays its

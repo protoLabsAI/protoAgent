@@ -17,6 +17,7 @@
    element). */
 .pl-dialog.quick-setting-dialog {
   max-height: min(72vh, 620px);
+  max-height: min(72dvh, 620px);
 }
 .quick-setting-body {
   display: flex;
@@ -112,6 +113,7 @@
 .settings-overlay .pl-dialog__body {
   padding: 0;
   height: 80vh;
+  height: 80dvh; /* dvh so the overlay fits the visible viewport on mobile */
   overflow: hidden;
   /* Flex column so the shell (.settings-shell { flex: 1 }) fills the 80vh — without
      a flex parent the shell collapses to content height and the panel/rail don't
@@ -122,6 +124,7 @@
 .theme-quick-dialog .pl-dialog__body {
   padding: 0;
   max-height: 80vh;
+  max-height: 80dvh;
   min-height: 50vh;
   overflow-y: auto;
 }
