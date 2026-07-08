@@ -143,13 +143,15 @@ def register(registry) -> None:
 # css+js loaded slug-aware (rule 4), gated data via the kit's authed apiFetch (rules 2+3).
 # Markdown is rendered SERVER-SIDE (/doc returns HTML) — no CDN, offline/frozen-safe.
 _VIEW_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>window.__base = location.pathname.split("/plugins/")[0];
 document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.css">');</script>
 <style>
   *{box-sizing:border-box} html,body{margin:0;height:100%;color:var(--pl-color-fg);background:var(--pl-color-bg-raised);font:14px/1.55 system-ui,-apple-system,sans-serif}
-  #app{display:flex;height:100vh}
+  #app{display:flex;height:100vh;height:100dvh}
   #nav{width:280px;flex:none;border-right:1px solid var(--pl-color-border);overflow:auto;padding:8px}
   #reader{flex:1;overflow:auto;padding:16px 26px}
+  #back{display:none;align-items:center;gap:8px;flex:none;padding:11px 14px;border:none;border-bottom:1px solid var(--pl-color-border);background:var(--pl-color-bg-inset);color:inherit;font:inherit;font-size:14px;text-align:left;cursor:pointer}
   .q{width:100%;padding:6px 8px;border:1px solid var(--pl-color-border);border-radius:6px;background:var(--pl-color-bg-inset);color:inherit;margin-bottom:8px;font:inherit}
   .sec{font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.6;margin:12px 4px 4px}
   .grp{font-weight:600;font-size:12px;opacity:.8;margin:7px 4px 2px}
@@ -164,9 +166,21 @@ document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.cs
   .md table{border-collapse:collapse;margin:8px 0} .md th,.md td{border:1px solid var(--pl-color-border);padding:5px 9px;text-align:left}
   .md a{color:var(--pl-color-accent,#818cf8)} .md blockquote{border-left:3px solid var(--pl-color-border);margin:8px 0;padding:2px 12px;opacity:.85}
   body.mode-search #app{flex-direction:column} body.mode-search #nav{width:auto;border-right:none;border-bottom:1px solid var(--pl-color-border);max-height:48%}
+  /* Phones: master-detail. The list fills the screen; tapping a doc swaps to the reader
+     (body.reading) with a back bar — no cramped side-by-side sliver. */
+  @media (max-width:767px){
+    #app{flex-direction:column}
+    #nav,body.mode-search #nav{width:auto;flex:1 1 auto;max-height:none;border-right:none;border-bottom:none;overflow:auto}
+    #reader{display:none;padding:14px 16px}
+    #back{display:none}
+    body.reading #nav{display:none}
+    body.reading #reader{display:block;flex:1 1 auto}
+    body.reading #back{display:flex}
+  }
 </style></head>
 <body>
 <div id="app">
+  <button id="back" type="button" aria-label="Back to the doc list">← All docs</button>
   <aside id="nav"><input id="q" class="q" placeholder="Search docs…" autofocus><div id="list"></div></aside>
   <main id="reader"><div class="empty">Select a doc from the list.</div></main>
 </div>
@@ -175,7 +189,10 @@ const base = window.__base;
 let kit; try { kit = await import(base+"/_ds/plugin-kit.js"); } catch(e){ kit = { initPluginView(){}, apiFetch:(p,i)=>fetch(base+p,i) }; }
 kit.initPluginView(()=>{});
 if (new URLSearchParams(location.search).get("mode")==="search") document.body.classList.add("mode-search");
-const $list=document.getElementById("list"), $reader=document.getElementById("reader"), $q=document.getElementById("q");
+const $list=document.getElementById("list"), $reader=document.getElementById("reader"), $q=document.getElementById("q"), $back=document.getElementById("back");
+// On phones the view is master-detail: opening a doc swaps the list out for the reader.
+const isPhone=()=>matchMedia("(max-width:767px)").matches;
+$back.onclick=()=>{ document.body.classList.remove("reading"); $reader.scrollTop=0; };
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 async function api(p){ try{ const r=await kit.apiFetch("/api/plugins/docs"+p); return r.ok?await r.json():null; }catch(e){ return null; } }
 const LIVE_DOCS="https://agent.protolabs.studio/docs/";  // Cloudflare build folds the docs in here (config.mts)
@@ -207,6 +224,7 @@ function scrollToAnchor(anchor){ if(!anchor){ $reader.scrollTop=0; return; } con
 async function fetchDoc(path){ return api("/doc?path="+encodeURIComponent(path)); }
 function renderDoc(path, d, anchor){
   currentPath=path;
+  if(isPhone()) document.body.classList.add("reading");  // swap list → reader on phones
   $reader.innerHTML='<article class="md">'+d.html+'</article>';
   addHeadingIds();
   [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
