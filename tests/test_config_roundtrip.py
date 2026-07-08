@@ -101,6 +101,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_run_requires_approval": True,
     "fleet_autostart": [],
     "fleet_max_warm": 0,
+    "fleet_trace_export_enabled": False,
     "fleet_port_base": 7870,
     "fleet_warm_grace_seconds": 0,
     "goal_enabled": True,

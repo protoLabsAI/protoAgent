@@ -519,6 +519,12 @@ class LangGraphConfig:
     # Retention guardrail (ADR 0006) — turns older than this are pruned by the
     # periodic maintenance loop so the store can't grow unbounded. 0 = keep forever.
     telemetry_retention_days: int = 90
+    # Fleet trace export (ADR 0006 / #1897) — write one per-turn trajectory JSONL
+    # row (OpenAI chat format) to ``<instance>/fleet-traces/`` for the agent-fleet
+    # flywheel. OFF by default; ``PROTOAGENT_FLEET_TRACE_EXPORT`` env overrides in
+    # both directions (and can point at an explicit path). Dumps stay on the
+    # machine until shipped (scripts/setup_fleet_tracing.sh).
+    fleet_trace_export_enabled: bool = False
     # Inbox/Activity retention — delivered inbox items and activity log entries
     # are pruned by the same maintenance loop. 0 = keep forever.
     inbox_retention_days: int = 90
@@ -975,6 +981,7 @@ class LangGraphConfig:
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
             telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
+            fleet_trace_export_enabled=data.get("telemetry", {}).get("fleet_trace_export", cls.fleet_trace_export_enabled),
             inbox_retention_days=data.get("inbox", {}).get("retention_days", cls.inbox_retention_days),
             activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get(

@@ -605,6 +605,17 @@ FIELDS: list[Field] = [
     Field("middleware.enforcement", "enforcement_enabled", "Tool enforcement", "bool", "Middleware", ui_hidden=True),
     # ── Telemetry (local cost/latency store, ADR 0006) ───────────────────────
     Field(
+        "telemetry.fleet_trace_export",
+        "fleet_trace_export_enabled",
+        "Fleet trace export",
+        "bool",
+        "Telemetry",
+        "Write one per-turn trajectory row (OpenAI chat format) to <instance>/fleet-traces/ "
+        "for the agent-fleet flywheel. Off by default; dumps stay on this machine until you "
+        "ship them (scripts/setup_fleet_tracing.sh). Env PROTOAGENT_FLEET_TRACE_EXPORT overrides.",
+        restart=True,
+    ),
+    Field(
         "telemetry.enabled",
         "telemetry_enabled",
         "Store telemetry locally",
