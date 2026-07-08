@@ -825,38 +825,14 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
 
     # Background-job control tools (ADR 0051) — only when a background manager exists
     # (so a no-background build doesn't advertise dead controls).
+    #
+    # There is deliberately NO pull/wait tool here (the former ``task_output`` was
+    # removed): its only real capability was blocking-to-wait, which is the exact
+    # anti-pattern to fire-and-forget delegation — agents polled it instead of ending
+    # their turn, producing duplicate, out-of-order delivery. Push (``drain_pending``)
+    # is the sole, exactly-once, in-order delivery path; only cancellation is a tool.
     bg_tools: list[BaseTool] = []
     if background_mgr is not None:
-
-        @tool
-        async def task_output(job_id: str, block: bool = True, timeout: float = 30.0) -> str:
-            """Check a background job's status and result (the ``bg-…`` id from
-            ``task(run_in_background=True)``).
-
-            You normally do NOT need this — you're notified automatically when a job
-            finishes. Use it only when you deliberately want to wait for or inspect a
-            specific job now.
-
-            Args:
-                job_id: the ``bg-…`` job id.
-                block: if True (default), wait until the job finishes or ``timeout``
-                    elapses; if False, return the current state immediately.
-                timeout: max seconds to wait when ``block`` is True (capped at 600).
-            """
-            job = background_mgr.store.get(job_id)
-            if job is None:
-                return f"No background job {job_id}."
-            if block and job.status == "running":
-                cap = max(1.0, min(float(timeout or 0), 600.0))
-                waited = 0.0
-                while job.status == "running" and waited < cap:
-                    await asyncio.sleep(1.0)
-                    waited += 1.0
-                    job = background_mgr.store.get(job_id) or job
-            head = f"Job {job_id} ({job.subagent_type}: {job.description}) — {job.status}"
-            if job.status == "running":
-                return head + " (still running)."
-            return f"{head}.\n\n{job.result or '(no output)'}"
 
         @tool
         async def stop_task(job_id: str) -> str:
@@ -866,7 +842,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             res = await background_mgr.cancel(job_id)
             return res.get("detail", "Done.")
 
-        bg_tools = [task_output, stop_task]
+        bg_tools = [stop_task]
 
     # Declarative multi-step workflows (ADR 0002) are now an opt-in plugin
     # (plugins/workflows) — its run_workflow/save_workflow tools come in via the

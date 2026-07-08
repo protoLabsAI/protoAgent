@@ -242,8 +242,11 @@ def _build_subagent_section() -> str:
             "immediately with a job id and the result is delivered back to you automatically on a",
             "later turn, so the conversation stays live instead of freezing on a multi-minute",
             "delegation. Use foreground (the default) only when you need the result to finish your",
-            "current reply. Once you background a task, do NOT poll it or spawn a duplicate — you",
-            "will be notified when it completes.",
+            "current reply. This is a general discipline for ANY background delegation (the",
+            "`task` subagent tool AND, e.g., a fleet `delegate_to`): once you background the",
+            "work, END your turn — do NOT try to wait/poll for it or spawn a duplicate. Each",
+            "result is delivered back to you automatically on a later turn; synthesize the",
+            "replies when they arrive (on a fan-out, wait for ALL of them first).",
         ]
     )
 

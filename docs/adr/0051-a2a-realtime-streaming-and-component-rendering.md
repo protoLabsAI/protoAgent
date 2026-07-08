@@ -59,6 +59,10 @@ Expose the realtime stream of any turn through a small **executor progress/lifec
 3. **`stop_task(job_id)`** — looks up the recorded A2A task_id and self-POSTs a real
    `CancelTask`; marks the job `canceled`. **`task_output(job_id, block, timeout)`** — reads
    the durable registry, optionally awaiting a terminal state (the cc-2.18 ergonomic).
+   > **Correction (later):** `task_output` was **removed** — its blocking-to-wait behavior was
+   > an attractive nuisance that defeated fire-and-forget (agents polled it instead of yielding,
+   > racing the push path into duplicate/out-of-order delivery). Push (`drain_pending`) is now
+   > the sole delivery path; `stop_task` is retained for cancellation. See ADR 0050.
 4. **Foreground→auto-background.** A synchronous `task` delegation that exceeds a time budget
    transparently detaches to the background (returns a job id), so a long inline subagent run
    stops freezing the turn — the direct cure for the audited melt-down.

@@ -151,7 +151,6 @@ _TOOL_CATEGORY = {
     # Delegation (subagents)
     "task": "Delegation",
     "task_batch": "Delegation",
-    "task_output": "Delegation",
     "stop_task": "Delegation",
     # Workflows
     "run_workflow": "Workflows",
