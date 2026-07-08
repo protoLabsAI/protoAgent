@@ -707,7 +707,11 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
     assert "contextId" not in body["params"]  # moved onto the message
     msg = body["params"]["message"]
     assert msg["role"] == "ROLE_USER"  # not "user"
-    assert msg["parts"] == [{"text": "do the thing"}]  # not [{"kind":"text",...}]
+    # A2A 1.0 part shape ({text}, not {kind:text}); the prompt now carries a wake-framing
+    # header (ADR 0079) so the agent orients on why it's awake, then the original prompt.
+    assert len(msg["parts"]) == 1 and set(msg["parts"][0]) == {"text"}
+    assert msg["parts"][0]["text"].endswith("do the thing")
+    assert "Autonomous wake — scheduled run" in msg["parts"][0]["text"]
     assert msg["contextId"] == ACTIVITY_CONTEXT
     assert msg["metadata"]["scheduler_job_id"] == job.id
     assert msg["metadata"]["origin"] == "scheduler"

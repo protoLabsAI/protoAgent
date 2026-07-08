@@ -661,6 +661,22 @@ class LocalScheduler:
         origin = job.id if job.id.startswith("watch-") else "scheduler"
         self._publish_turn("turn.started", session_id=session_id, origin=origin, trigger=job.id)
 
+        # Wake-framing (ADR 0079): a scheduled/watch fire delivered a bare prompt, so the agent
+        # had no idea WHY it was awake (a cron sweep? a watch trip? a wait resume?). Prepend a
+        # one-line "why you're awake" header and point it at <working_state> so it orients before
+        # acting, and set a distinct `watch` origin so a watch reaction is no longer masquerading
+        # as an ordinary scheduler fire (server._AUTONOMOUS_ORIGINS recognizes both).
+        is_watch = job.id.startswith("watch-")
+        is_wait = job.id.startswith("wait:")
+        fire_origin = "watch" if is_watch else "scheduler"
+        if is_watch:
+            wake_header = "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]"
+        elif is_wait:
+            wake_header = "[Autonomous wake — a wait you scheduled has elapsed. Continue:]"
+        else:
+            wake_header = "[Autonomous wake — scheduled run. Orient from <working_state>, then:]"
+        wake_prompt = f"{wake_header}\n\n{job.prompt}"
+
         message_id = str(uuid.uuid4())
         body = {
             "jsonrpc": "2.0",
@@ -669,7 +685,7 @@ class LocalScheduler:
             "params": {
                 "message": {
                     "role": "ROLE_USER",
-                    "parts": [{"text": job.prompt}],
+                    "parts": [{"text": wake_prompt}],
                     "messageId": message_id,
                     # Fire into the job's own context when set (ADR 0053 — the
                     # `wait` tool stamps the originating chat session so a resume
@@ -678,11 +694,12 @@ class LocalScheduler:
                     # somewhere visible/continuable instead of a throwaway context.
                     "contextId": session_id,
                     # Scheduler bookkeeping for this fire (origin + job id) —
-                    # informational; the handler doesn't require these keys.
+                    # informational; the handler doesn't require these keys. `origin`
+                    # is `watch` for a watch reaction, else `scheduler` (ADR 0079).
                     "metadata": {
                         "scheduler_job_id": job.id,
                         "scheduler_kind": "local",
-                        "origin": "scheduler",
+                        "origin": fire_origin,
                     },
                 },
             },

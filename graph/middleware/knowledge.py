@@ -31,6 +31,14 @@ log = logging.getLogger(__name__)
 # per-turn disk I/O.
 _PRIOR_SESSIONS_TTL_S = 60.0
 
+# <working_state> caps (ADR 0079) — the agent's own live commitments injected every turn so
+# it OBSERVES its durable state without polling. Bounded so a big plan / long board can't blow
+# the context budget.
+_WS_PLAN_CAP = 1500
+_WS_TASK_CAP = 12
+_WS_WATCH_CAP = 10
+_WS_SCHED_CAP = 10
+
 # Untrusted-reference framing for every auto-injected memory part (ADR 0069
 # D2): the prior-sessions digest, hot memory, and RAG hits can be stale or
 # carry third-party/ingested text (OWASP ASI06 memory poisoning), so the model
@@ -185,6 +193,87 @@ class KnowledgeMiddleware(AgentMiddleware):
     # Middleware hooks
     # ---------------------------------------------------------------------------
 
+    def _working_state_block(self, state) -> str:
+        """The agent's own live commitments — active goal + plan(orient), open tasks, active
+        watches, pending schedules — rendered as one compact ``<working_state>`` block so the
+        agent OBSERVES its durable state every turn instead of having to poll for it (ADR 0079,
+        the "Observe" step). This is the agent's OWN operational state (trusted — unlike recalled
+        memory), so it sits OUTSIDE the ``<injected_memory>`` envelope. Best-effort: every read is
+        guarded so a store hiccup skips its section and never breaks the turn."""
+        from runtime.state import STATE
+
+        session_id = state.get("session_id", "") or ""
+        if not session_id:
+            try:
+                from observability import tracing
+
+                session_id = tracing.current_session_id() or ""
+            except Exception:  # noqa: BLE001
+                session_id = ""
+
+        sections: list[str] = []
+
+        # Active goal + its plan (the durable orient world-model).
+        try:
+            gc = STATE.goal_controller
+            goal = gc.active_goal(session_id) if (gc is not None and session_id) else None
+            if goal is not None:
+                head = f"GOAL [{goal.status}] (iteration {goal.iteration}/{goal.max_iterations}): {goal.condition}"
+                plan = (gc._store.read_plan(session_id) or "").strip()
+                if plan:
+                    if len(plan) > _WS_PLAN_CAP:
+                        plan = plan[:_WS_PLAN_CAP] + " …[truncated]"
+                    head += f"\nPlan (your orient — keep it current with update_goal_plan):\n{plan}"
+                else:
+                    head += "\n(no plan recorded yet — record one with update_goal_plan)"
+                sections.append(head)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("[working_state] goal read failed: %s", exc)
+
+        # Open tasks — the goal's backlog / multi-step decomposition.
+        try:
+            ts = STATE.tasks_store
+            if ts is not None:
+                items = list(ts.list(include_closed=False))[:_WS_TASK_CAP]
+                if items:
+                    lines = "\n".join(
+                        f"- [{i['status']}] {i['id']} (p{i['priority']}) {i['title']}" for i in items
+                    )
+                    sections.append(f"OPEN TASKS:\n{lines}")
+        except Exception as exc:  # noqa: BLE001
+            log.debug("[working_state] task read failed: %s", exc)
+
+        # Active watches — external conditions you're supervising out-of-band.
+        try:
+            wc = STATE.watch_controller
+            if wc is not None:
+                watches = [w for w in wc.list_watches() if getattr(w, "status", "") == "active"][:_WS_WATCH_CAP]
+                if watches:
+                    sections.append("ACTIVE WATCHES:\n" + "\n".join(f"- {w.status_line()}" for w in watches))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("[working_state] watch read failed: %s", exc)
+
+        # Pending schedules — future turns you've queued.
+        try:
+            sched = STATE.scheduler
+            if sched is not None:
+                jobs = list(sched.list_jobs())[:_WS_SCHED_CAP]
+                if jobs:
+                    lines = "\n".join(
+                        f"- {j.id} next={j.next_fire or '?'}: {(j.prompt or '')[:60]}" for j in jobs
+                    )
+                    sections.append(f"PENDING SCHEDULES:\n{lines}")
+        except Exception as exc:  # noqa: BLE001
+            log.debug("[working_state] schedule read failed: %s", exc)
+
+        if not sections:
+            return ""
+        return (
+            "<working_state>\n"
+            "Your live commitments — OBSERVE these before acting, and keep them current as you work "
+            "(this is your own state, not recalled memory).\n\n" + "\n\n".join(sections) + "\n</working_state>"
+        )
+
     def before_model(self, state, runtime) -> dict | None:
         """Query knowledge store with last user message, inject context.
 
@@ -282,6 +371,14 @@ class KnowledgeMiddleware(AgentMiddleware):
             self._record_injection(state, memory_parts, digest_ids, hot_ids, rag_ids)
         if skill_block:
             parts.append(skill_block)
+
+        # The agent's own live commitments (ADR 0079 — the "Observe" step). Always injected,
+        # even on goal turns and incognito threads: this is operational state the agent must
+        # see to self-manage, not recalled memory, so the goal_turn/incognito suppressions above
+        # don't apply. Empty-safe (returns "" when nothing is active).
+        working_state = self._working_state_block(state)
+        if working_state:
+            parts.append(working_state)
 
         if not parts:
             return None

@@ -677,6 +677,10 @@
           "title": "0078 — Fleet PR review as a protoAgent tier: harvest Quinn, keep the panel"
         },
         {
+          "path": "adr/0079-autonomous-operating-model.md",
+          "title": "0079 — Autonomous operating model (goals · tasks · scheduling · watches → one OODA loop)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

@@ -33,6 +33,16 @@ CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 # to decide whether to KICK an initial goal-driven turn (#1910) — see ``is_set_ack``.
 SET_ACK_PREFIX = "Goal set. "
 
+# Appended to every kickoff + continuation prompt (ADR 0079): point the drive loop at the full
+# toolkit so it composes goals with tasks/watches/scheduling instead of spinning. The system
+# prompt carries the full operating model; this is the goal-loop-specific reminder.
+_DRIVE_TACTIC = (
+    "Decompose this into `task_create` items and drive them down. If your next step waits on "
+    "async or delegated work (a build, a peer agent, CI, a review), set a `create_watch` on that "
+    "condition (or a `schedule_task`) and END the turn — you'll be resumed when it's ready. Don't "
+    "spin polling to the iteration cap."
+)
+
 
 def _coerce_str_list(value) -> list[str]:
     """Normalize a contract list field (``constraints``/``boundaries``) to ``list[str]``.
@@ -159,11 +169,13 @@ class GoalController:
                 f"[goal kickoff — 0/{state.max_iterations}]\n"
                 f"You have an active goal for this session: {state.condition}\n\n"
                 "Begin working toward it now — take concrete action; do not ask which goal "
-                "it is. If it is impossible or out of scope, call the `abandon_goal` tool "
-                "with a reason and stop."
+                "it is. Record your running plan by calling the `update_goal_plan` tool (it "
+                "is persisted and fed back to you each iteration). If it is impossible or out "
+                "of scope, call the `abandon_goal` tool with a reason and stop."
             )
         contract = self._contract_prompt(state)
         body = f"{lead}\n\n{contract}" if contract else lead
+        body = f"{body}\n\n{_DRIVE_TACTIC}"
         # A plain inbound message that arrived alongside an already-active goal (not a
         # /goal command) is folded in so the operator's words aren't lost.
         extra = (user_message or "").strip()
@@ -279,21 +291,18 @@ class GoalController:
     # --- agent goal-loop tools (retired the <goal_plan>/<goal_unachievable> XML) ---
 
     def record_plan(self, session_id: str, plan: str) -> tuple[bool, str]:
-        """Persist the agent's running plan for its active goal — called by the
-        ``update_goal_plan`` tool DURING a turn (replaces the old ``<goal_plan>`` tag).
-        Fresh-context goals write the durable plan artifact; same-session goals carry it
-        on the goal state. The next continuation prompt feeds it back. Returns (ok, msg)."""
+        """Persist the agent's running plan (its "orient" world-model) for the active goal —
+        called by the ``update_goal_plan`` tool DURING a turn. Writes the durable ``GoalStore``
+        plan artifact for EVERY goal (ADR 0079 — no fresh-context fork), so the next continuation
+        prompt feeds it back and the trace ``orient``/``loop_shape`` signal sees it uniformly.
+        Returns (ok, msg)."""
         state = self.active_goal(session_id)
         if state is None:
             return (False, "no active goal for this session.")
         plan = (plan or "").strip()
         if not plan:
             return (False, "a plan is required.")
-        if state.fresh_context:
-            self._store.write_plan(state.session_id, plan)
-        else:
-            state.checklist = plan
-            self._store.set(state)
+        self._store.write_plan(state.session_id, plan)
         return (True, "plan recorded.")
 
     def request_abandon(self, session_id: str, reason: str) -> tuple[bool, str]:
@@ -458,7 +467,8 @@ class GoalController:
         # unchanged from before contracts existed (backward-compat).
         base = self._continuation_base(state, result)
         contract = self._contract_prompt(state)
-        return f"{base}\n\n{contract}" if contract else base
+        body = f"{base}\n\n{contract}" if contract else base
+        return f"{body}\n\n{_DRIVE_TACTIC}"
 
     @staticmethod
     def _verifier_summary(verifier: dict) -> str:
@@ -536,7 +546,7 @@ class GoalController:
             )
         evidence = (result.evidence or "").strip()
         evidence_block = f"\nEvidence:\n{evidence}\n" if evidence else "\n"
-        plan_block = state.checklist.strip() or "(no plan yet — create one)"
+        plan_block = self._store.read_plan(state.session_id).strip() or "(no plan yet — create one)"
         vtype = state.verifier.get("type", "llm")
         return (
             f"[goal continuation {state.iteration}/{state.max_iterations}]\n"

@@ -164,7 +164,10 @@ async def test_met_enqueues_followup_turn_in_session(tmp_path, monkeypatch):
     )
     assert await c.evaluate(w.id) == "met"
     assert added and added[0]["context_id"] == "sess-7"  # follow-up turn fired into the target session
-    assert added[0]["prompt"] == "Run the smoke test."
+    # The reaction carries the creator's run_prompt AND what tripped (condition), so the agent
+    # orients on wake instead of getting a bare instruction (ADR 0079 wake-framing).
+    assert "Run the smoke test." in added[0]["prompt"]
+    assert "deploy done" in added[0]["prompt"]
 
 
 def test_clear(tmp_path):

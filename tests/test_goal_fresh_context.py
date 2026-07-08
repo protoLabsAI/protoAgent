@@ -29,6 +29,26 @@ def test_plan_round_trip(tmp_path):
     assert store.read_plan("s1") == "- [x] step one\n- [ ] step two"
 
 
+@pytest.mark.parametrize("fresh", [False, True])
+def test_record_plan_persists_durable_artifact_for_every_goal(tmp_path, fresh):
+    """ADR 0079 root fix: record_plan writes the durable .plan.md for BOTH default
+    (same-session) and fresh-context goals — so read_plan (and therefore the trace
+    ``orient``/``loop_shape`` OODA signal) is populated for the DEFAULT goal, which was
+    previously always empty → mislabelled ``react``."""
+    c = _ctrl(tmp_path)
+    ok, _ = c.set_goal_operator("sess", "make it green", {"type": "llm"})
+    assert ok
+    gs = c.active_goal("sess")
+    gs.fresh_context = fresh
+    c._store.set(gs)
+
+    assert c._store.read_plan("sess") == ""  # no plan yet → would label react
+    ok, _ = c.record_plan("sess", "- [ ] step 1\n- [ ] step 2")
+    assert ok
+    # The durable artifact the exporter's `orient` reads is now populated → ooda.
+    assert "step 1" in c._store.read_plan("sess")
+
+
 def test_read_plan_absent_returns_empty(tmp_path):
     assert GoalStore(tmp_path).read_plan("never-written") == ""
 
@@ -116,12 +136,14 @@ def test_default_continuation_stays_same_session(tmp_path):
     state = GoalState(
         session_id="s",
         condition="make it green",
-        checklist="- [ ] do the work",
         iteration=1,
         max_iterations=8,
     )
+    c._store.set(state)
+    # Plan lives in the unified durable artifact for default goals too (ADR 0079).
+    c._store.write_plan("s", "- [ ] do the work")
     result = VerifyResult(met=False, reason="nope", evidence="")
     prompt = c._continuation(state, result)
     assert "fresh context" not in prompt  # default path: same-session continuity
     assert "Current plan" in prompt  # the existing template
-    assert "do the work" in prompt  # seeded from in-memory checklist, not disk
+    assert "do the work" in prompt  # read back from the durable plan artifact
