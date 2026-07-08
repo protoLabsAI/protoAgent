@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Docs reader is a master-detail flow on phones.** The `plugins/docs` reader view kept its
+  desktop two-pane (280px tree | reader) on phones, crushing the reader into a ~90px sliver
+  ("Select a doc from the list." wrapped a word per line). It's now master-detail: the doc
+  tree fills the screen, tapping a doc swaps to the full-width reader with a "← All docs" back
+  bar, and back returns to the list. Also adds the missing `<meta viewport>` to the iframe
+  page and switches its `#app` height to `100dvh`. Desktop is unchanged (two-pane, no back).
 - **Settings collapses to a single column on phones.** The Settings surface/overlay is a
   200px SideNav rail + content pane; on a ~360px phone overlay that left the content pane a
   ~130px sliver (labels wrapped a word per line, inputs clipped). On mobile the SideNav now
