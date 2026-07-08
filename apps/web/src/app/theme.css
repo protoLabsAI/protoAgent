@@ -679,6 +679,19 @@ select:disabled {
   padding: var(--pl-space-6, 24px);
 }
 
+/* Auth gate scrim (#1921) — the AuthGate is a BLOCKING modal (no onClose; see
+   AuthGate.tsx). While a 401 stands, everything behind it is dead, so the scrim must
+   fully obscure that dead UI rather than let it peek through. The shared DS
+   `--pl-color-overlay` is a light, translucent wash (~0.35 alpha in dark) that suits
+   normal dismissible dialogs — darkening it globally would harm those, so we scope a
+   near-opaque black to the auth dialog only. `className="auth-dialog"` lands on the
+   inner `.pl-dialog`; `:has()` selects the scrim that wraps it (the DS uses the same
+   `:has()` pattern for drawer alignment). Fully opaque near-black (not a high-alpha
+   wash) so even bright content behind it can't bleed through. */
+.pl-overlay:has(.auth-dialog) {
+  background: rgb(8, 8, 12);
+}
+
 /* Toast top-right anchoring now comes from the DS prop (`<ToastProvider position="top-right">`,
    @protolabsai/ui ≥ 0.49) — the `.pl-toast-stack` override that used to live here is retired. */
 
