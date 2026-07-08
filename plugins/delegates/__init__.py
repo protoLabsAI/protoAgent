@@ -43,14 +43,21 @@ def _build_delegate_to(registry: DelegateRegistry):
         another **model endpoint**, or hand a repo-scoped coding job to a **coding
         agent**. Pick the delegate whose description best fits the task.
 
-        By default this WAITS for the delegate's reply (fine for a quick consult).
-        For a LONG delegation — a coding agent building a PR, a deep-research run —
-        set ``background=True``: the delegation runs detached, you get a job handle
-        back immediately, and the delegate's reply is delivered to you when it
-        finishes (you don't hold your turn open waiting). In-flight background jobs
-        are tracked in the background panel (``GET /api/background``). Prefer
-        ``background=True`` whenever the delegate might take minutes, or when you
-        want to fan out several delegations without blocking on each.
+        **Strongly prefer ``background=True``** for a goal-driven fan-out, for
+        reaching multiple delegates, or for any delegation that may take more than a
+        couple of seconds. Foreground (the default) is only for a single quick consult
+        whose answer you need to finish the current reply. A background delegation runs
+        detached: you get a job handle back immediately, and the delegate's reply is
+        delivered to you automatically on a later turn (you don't hold your turn open
+        waiting). In-flight background jobs are tracked in the background panel
+        (``GET /api/background``).
+
+        **After you start a background delegation, END YOUR TURN.** Do NOT try to wait
+        or poll for it, and do NOT re-delegate the same work — each delegate's reply
+        comes back to you automatically on a later turn; synthesize once the replies
+        arrive. **When you fan out to several delegates, wait until you have received
+        ALL of their replies before you synthesize — don't synthesize on the first one
+        back.**
 
         Args:
             target: the delegate name (see the available list in this tool's
@@ -134,8 +141,10 @@ async def _spawn_background_delegation(
     )
     return (
         f"Started a background delegation to {target!r} (job `{job_id}`). It runs detached — "
-        f"its reply comes back to me when it finishes, so I don't need to wait. In-flight "
-        f"background jobs are listed in the background panel (GET /api/background)."
+        f"its reply comes back to me automatically on a later turn, so I should END my turn "
+        f"now and NOT wait or re-delegate this. If I fanned out to several delegates, I'll "
+        f"hold off synthesizing until ALL their replies are back. In-flight background jobs "
+        f"are listed in the background panel (GET /api/background)."
     )
 
 

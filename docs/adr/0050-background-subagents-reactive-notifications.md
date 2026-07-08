@@ -177,6 +177,13 @@ the thing to check first when it lands.)
   long synchronous delegation transparently detaches and becomes killable — the direct cure for
   the audited incident.
 
+  > **Correction (later):** `task_output` was **removed**. Its only real capability was
+  > blocking-to-wait, which proved to be an attractive nuisance that defeated fire-and-forget:
+  > agents polled it to sit on a background delegation instead of ending their turn, causing
+  > duplicate, out-of-order delivery (a pull path racing the push path). The push path
+  > (`drain_pending`) is now the **sole**, exactly-once, in-order delivery mechanism; only
+  > `stop_task` (cancellation) is retained as a control tool.
+
 ### Follow-up — background batch + concurrency cap (shipped)
 - **`task_batch(run_in_background=True)`** fans a whole batch out detached: every spec spawns as
   its own background job and the call returns immediately with the job ids, instead of blocking

@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **`task_output` background-job tool (ADR 0050/0051 correction).** The pull/blocking-wait
+  tool proved to be an attractive nuisance that defeated fire-and-forget delegation — agents
+  polled it to sit on a background delegation (or fleet `delegate_to` fan-out) instead of
+  ending their turn, which raced the push path and produced duplicate, out-of-order delivery
+  (delegate reports arriving *after* the agent had already synthesized). Push (`drain_pending`)
+  is now the **sole**, exactly-once, in-order delivery path; `stop_task` is retained for
+  cancellation.
+
+### Changed
+- **Fleet delegation biases to fire-and-forget.** The `delegate_to` tool and the shared
+  background-delegation prompt now strongly steer toward `background=True` (goal fan-outs,
+  reaching multiple delegates, anything more than a quick consult), tell the agent to END its
+  turn after backgrounding rather than wait/poll, and — on a fan-out — to hold synthesis until
+  ALL delegate replies are back.
+
 ## [0.97.0] - 2026-07-08
 
 ### Added
