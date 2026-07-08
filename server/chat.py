@@ -920,7 +920,7 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
 # "background-resume" is the ADR 0070 push-resume nudge — server-fired like the rest
 # (the manager discards the A2A response), so a briefing turn that asks a question
 # must auto-answer, not park.
-_AUTONOMOUS_ORIGINS = frozenset({"scheduler", "inbox", "webhook", "background", "background-resume"})
+_AUTONOMOUS_ORIGINS = frozenset({"scheduler", "watch", "inbox", "webhook", "background", "background-resume"})
 
 # What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
 # finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps

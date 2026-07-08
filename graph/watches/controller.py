@@ -261,7 +261,14 @@ class WatchController:
             try:
                 from graph.sdk import run_in_session
 
-                run_in_session(watch.run_session, watch.run_prompt, job_id=f"watch-{watch.id}")
+                # Carry WHAT tripped into the reaction (ADR 0079): prefix the creator's run_prompt
+                # with the watch condition + the verifier's evidence so the agent orients on wake
+                # instead of receiving a bare instruction with no context.
+                context = f"Watch `{watch.id}` tripped: {watch.condition}."
+                if (watch.last_evidence or "").strip():
+                    context += f"\nEvidence: {watch.last_evidence.strip()}"
+                reaction_prompt = f"{context}\n\n{watch.run_prompt}"
+                run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
 
