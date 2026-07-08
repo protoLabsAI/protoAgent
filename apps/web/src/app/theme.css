@@ -1739,6 +1739,15 @@ textarea {
     bottom: 0;
     background: var(--bg-panel);
   }
+
+  /* Touch ergonomics: the DS icon button is 30px (26px in --sm) — below the ~44px
+     touch guideline, and there are ~90 of them on a dense surface (Memory row
+     edit/delete). Bump the hit area to 40px on phones; the 16px glyph stays centered,
+     so nothing looks bigger than it should, taps just land. */
+  .pl-btn--icon {
+    min-width: 40px;
+    min-height: 40px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

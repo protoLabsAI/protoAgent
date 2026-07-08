@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Bigger touch targets on phones.** The DS icon button is 30px (26px `--sm`) — below the
+  ~44px touch guideline, and a dense surface like Memory has ~90 of them (per-row edit/delete).
+  On ≤767px icon buttons now get a 40px min hit area (the 16px glyph stays centered, so nothing
+  looks bigger — taps just land). Verified across Chat, Knowledge, and Memory with no crowding
+  or overflow.
 - **Docs reader is a master-detail flow on phones.** The `plugins/docs` reader view kept its
   desktop two-pane (280px tree | reader) on phones, crushing the reader into a ~90px sliver
   ("Select a doc from the list." wrapped a word per line). It's now master-detail: the doc
