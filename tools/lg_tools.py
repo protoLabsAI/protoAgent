@@ -1135,12 +1135,24 @@ def _build_task_tools(tasks_store) -> list:
     in-process planning/task surface. Returns a list."""
 
     @tool
-    def task_create(title: str, description: str = "", priority: int = 2, issue_type: str = "task") -> str:
+    def task_create(
+        title: str,
+        description: str = "",
+        priority: int = 2,
+        issue_type: str = "task",
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
         """Track a task/issue on your tasks board — your planning surface for
         multi-step work. ``priority`` 0=highest…3=low; ``issue_type`` is one of
         task|bug|feature|chore|epic. Returns the new issue id."""
+        # Attribute the task to the session/goal that motivated it (ADR 0079) so a goal's
+        # backlog is queryable; from injected graph state (current_session_id() is empty in a
+        # tool body). Empty when there's no session context — an instance-global task, as before.
+        session_id = _session_id_from(state) or ""
         try:
-            i = tasks_store.create(title, description=description, priority=priority, issue_type=issue_type)
+            i = tasks_store.create(
+                title, description=description, priority=priority, issue_type=issue_type, session_id=session_id
+            )
         except ValueError as exc:
             return f"Error: {exc}"
         return f"Created {i['id']}: {i['title']} ({i['issue_type']}, p{i['priority']})"
