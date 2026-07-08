@@ -956,6 +956,33 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
     return ((md.get("origin") or "").strip().lower()) in _AUTONOMOUS_ORIGINS
 
 
+def _awaiting_self_resume(session_id: str) -> bool:
+    """Async handoff (ADR 0079): True when the agent has queued a trigger that will resume THIS
+    session later — an active watch whose reaction fires here, or a pending scheduled/wait job
+    targeting this context. The goal drive loop PAUSES (leaves the goal active, ends the turn)
+    when one exists instead of spinning its continuation loop to the iteration cap; the trigger's
+    eventual fire re-enters the session and — the goal still being active — resumes the drive.
+    Best-effort: any read failure just means "not awaiting" (fall through to the normal loop)."""
+    if not session_id:
+        return False
+    try:
+        wc = STATE.watch_controller
+        if wc is not None and any(
+            getattr(w, "status", "") == "active" and getattr(w, "run_session", "") == session_id
+            for w in wc.list_watches()
+        ):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        sched = STATE.scheduler
+        if sched is not None and any(getattr(j, "context_id", None) == session_id for j in sched.list_jobs()):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _is_hitl_resume(request_metadata: dict | None) -> bool:
     """Whether this message IS the operator's answer to the pending HITL pause.
 
@@ -1129,6 +1156,12 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
             note = decision.note
             yield ("tool_start", f"🎯 {decision.note}")
             if decision.action == "done":
+                break
+            if _awaiting_self_resume(session_id):
+                # The agent handed off to a watch/schedule that resumes this session — pause the
+                # drive (goal stays active) rather than spinning; the trigger's fire continues it.
+                note = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
+                yield ("tool_start", f"🎯 {note}")
                 break
             # Fresh-context goals get a scoped per-iteration thread; same-session reuse
             # `config`. Shared helper keeps the streaming + non-streaming loops in lockstep.
@@ -1897,6 +1930,12 @@ async def _chat_langgraph_impl(
                         break
                     note = decision.note
                     if decision.action == "done":
+                        break
+                    if _awaiting_self_resume(session_id):
+                        # Async handoff (ADR 0079) — mirror the streaming path: the agent queued a
+                        # watch/schedule that resumes this session, so pause the drive instead of
+                        # spinning; the trigger's fire continues the goal.
+                        note = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
                         break
                     # Fresh-context goals get a scoped per-iteration thread; same-session
                     # reuse `config`. Same shared helper as the streaming path (no drift).

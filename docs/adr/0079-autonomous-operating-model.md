@@ -117,3 +117,13 @@ The agent runs an **OODA loop** over that state:
 - **Rollout:** staged P0→P4 (plan-store unification → Observe injection → doctrine → composition →
   trace verification), each independently tested, one PR, gates green, dev-validated before any
   fleet roll.
+
+### Deferred (safe follow-up)
+
+- **Durable task→goal attribution** (a `session_id`/`goal_id` column on the task board) is
+  deferred to its own change. The task board is instance-global and holds live prod data, so its
+  schema migration is verified separately rather than folded into this PR. The composition itself
+  is already delivered behaviorally: `<working_state>` surfaces the goal and the open tasks
+  together every turn, and the doctrine + goal-drive tactic instruct the agent to decompose the
+  goal into `task_create` items — so goals and tasks compose in the loop today; only the durable
+  back-reference (for console filtering/attribution) waits.
