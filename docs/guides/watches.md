@@ -54,6 +54,18 @@ N consecutive **unchanged**-evidence checks fire `on_stalled` once per stall epi
 ending the watch. The console **Watches** panel lists every watch with its status, and toasts on
 met/expired.
 
+**Wake-framing (ADR 0079).** The reaction turn doesn't arrive as a bare `run_prompt`. The
+scheduler prepends a *why-you're-awake* header (`[Autonomous wake — a watch you set has tripped.
+Orient from <working_state>, then:]`) and the watch controller prefixes the tripping
+**condition** and the verifier's **evidence** — so the agent orients on wake instead of acting
+blind. The evidence is load-bearing: an agent that can't re-read the source can still act on the
+value the watch surfaced (e.g. a release tag carried in `Evidence:`).
+
+**Yield-and-resume with a goal (ADR 0079).** A watch is how an [active goal](/guides/goal-mode)
+hands off async work: the goal drive **pauses** while a watch on the goal's `run_session` is
+live, and the watch's met-reaction **resumes** that same session — the goal's verifier re-runs on
+the resumed turn, so the loop closes without the agent spinning.
+
 ## Watch vs goal — which?
 
 | | Goal (drive) | Watch |
