@@ -81,10 +81,18 @@ class TaskStore:
                     created_at   TEXT NOT NULL,
                     updated_at   TEXT NOT NULL,
                     closed_at    TEXT,
-                    close_reason TEXT
+                    close_reason TEXT,
+                    session_id   TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
+            # Attribution to the goal/session that motivated a task (ADR 0079). Guarded
+            # migration for boards created before the column existed — ADD COLUMN is
+            # non-destructive (existing rows get the '' default), so live prod boards
+            # upgrade cleanly on first open.
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(issues)").fetchall()}
+            if "session_id" not in cols:
+                self._conn.execute("ALTER TABLE issues ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
             self._conn.commit()
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -121,6 +129,7 @@ class TaskStore:
         priority: int = 2,
         issue_type: str = "task",
         assignee: str = "",
+        session_id: str = "",
     ) -> dict[str, Any]:
         title = (title or "").strip()
         if not title:
@@ -130,7 +139,7 @@ class TaskStore:
             issue_id = self._next_id()
             self._conn.execute(
                 "INSERT INTO issues (id, title, description, status, priority, issue_type, "
-                "assignee, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                "assignee, created_at, updated_at, session_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     issue_id,
                     title,
@@ -141,17 +150,24 @@ class TaskStore:
                     assignee or "",
                     now,
                     now,
+                    session_id or "",
                 ),
             )
             self._conn.commit()
             _publish("task.changed", {"id": issue_id, "action": "created"})
             return dict(self._row(issue_id))
 
-    def list(self, *, include_closed: bool = True) -> list[dict[str, Any]]:
-        if include_closed:
-            rows = self._conn.execute("SELECT * FROM issues ORDER BY created_at").fetchall()
-        else:
-            rows = self._conn.execute("SELECT * FROM issues WHERE status != 'closed' ORDER BY created_at").fetchall()
+    def list(self, *, include_closed: bool = True, session_id: str | None = None) -> list[dict[str, Any]]:
+        where: list[str] = []
+        params: list[Any] = []
+        if not include_closed:
+            where.append("status != 'closed'")
+        if session_id is not None:
+            # Scope to the goal/session that motivated the task (ADR 0079).
+            where.append("session_id = ?")
+            params.append(session_id)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        rows = self._conn.execute(f"SELECT * FROM issues{clause} ORDER BY created_at", params).fetchall()
         return [dict(r) for r in rows]
 
     def get(self, issue_id: str) -> dict[str, Any] | None:

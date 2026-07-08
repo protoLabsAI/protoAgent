@@ -141,3 +141,51 @@ def test_delete_missing_does_not_publish(store, monkeypatch):
     monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
     assert store.delete("bd-404") is False
     assert events == []  # nothing deleted → no event
+
+
+# --- ADR 0079: task→goal/session attribution -------------------------------
+
+
+def test_create_stamps_session_id_and_defaults_empty(store):
+    a = store.create("no session")
+    b = store.create("goal task", session_id="sess-7")
+    assert a["session_id"] == ""
+    assert b["session_id"] == "sess-7"
+
+
+def test_list_filters_by_session(store):
+    store.create("global one")
+    store.create("goal A", session_id="A")
+    store.create("goal A two", session_id="A")
+    store.create("goal B", session_id="B")
+    a_tasks = store.list(session_id="A")
+    assert {t["title"] for t in a_tasks} == {"goal A", "goal A two"}
+    assert len(store.list(session_id="B")) == 1
+    assert len(store.list()) == 4  # unfiltered still returns all
+
+
+def test_session_id_column_migrates_onto_a_legacy_board(tmp_path):
+    """A board created WITHOUT session_id (pre-ADR-0079) gains the column on next open,
+    non-destructively — the guarded ALTER keeps live prod boards loading clean."""
+    import sqlite3
+
+    db = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE issues (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT DEFAULT '', "
+        "status TEXT DEFAULT 'open', priority INTEGER DEFAULT 2, issue_type TEXT DEFAULT 'task', "
+        "assignee TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "closed_at TEXT, close_reason TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO issues (id, title, created_at, updated_at) VALUES ('task-1','old one','t','t')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = TaskStore(db_path=db)  # opens + migrates
+    rows = store.list()
+    assert rows and rows[0]["id"] == "task-1"
+    assert rows[0]["session_id"] == ""  # existing row backfilled to the default
+    # and new session-attributed creates work on the migrated board
+    assert store.create("new", session_id="s9")["session_id"] == "s9"

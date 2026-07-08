@@ -237,7 +237,9 @@ class KnowledgeMiddleware(AgentMiddleware):
                 items = list(ts.list(include_closed=False))[:_WS_TASK_CAP]
                 if items:
                     lines = "\n".join(
-                        f"- [{i['status']}] {i['id']} (p{i['priority']}) {i['title']}" for i in items
+                        f"- [{i['status']}] {i['id']} (p{i['priority']}) {i['title']}"
+                        + (" ← this goal" if session_id and i.get("session_id") == session_id else "")
+                        for i in items
                     )
                     sections.append(f"OPEN TASKS:\n{lines}")
         except Exception as exc:  # noqa: BLE001
