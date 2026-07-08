@@ -3,6 +3,39 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 
 const repo = 'https://github.com/protoLabsAI/protoAgent';
 
+const valueProps = [
+  'A2A-native fleet orchestration',
+  'Plugin-extensible platform',
+  'Local-first & model-agnostic',
+];
+
+const inAction = [
+  {
+    title: 'Chase a goal autonomously',
+    caption:
+      'A SpaceTraders agent runs an OODA loop on the scheduler — observe every 20 min, escalate to a strategist subagent hourly — grinding toward a standing goal of 1,000,000 credits. The goal verifier checks the outcome, not the model\'s self-report.',
+    evidence: 'docs/guides/goal-mode.md · docs/adr/0028-plugin-goal-verifiers.md',
+  },
+  {
+    title: 'Orchestrate a fleet over A2A',
+    caption:
+      'A PM agent (Roxy) fans out work across engineering teams over A2A delegate_to — dispatching features, tracking boards, and auto-disposing teams when they finish. Every agent speaks the same open protocol.',
+    evidence: 'plugins/delegates/ · docs/guides/portfolio.md · docs/explanation/a2a-protocol.md',
+  },
+  {
+    title: 'Plugins that bring their own UI',
+    caption:
+      "A plugin adds its own left-rail dashboard — Fleet view, Quant Desk, telemetry panels — that slots into the React console without touching core or rebuilding. One pip install, instant surface.",
+    evidence: 'plugins/ · docs/guides/plugin-views.md · apps/web/',
+  },
+  {
+    title: 'Know what every turn costs',
+    caption:
+      'Per-turn cost, latency (p50/p95), token counts, and cache-hit rates — tracked natively, exportable as CSV, and wired to Langfuse + Prometheus. Cost visibility is core, not an add-on.',
+    evidence: 'docs/explanation/cost-and-trace.md · runtime/state.py · docs/reference/extensions.md',
+  },
+];
+
 const features = [
   {
     title: 'A2A-native, built for fleets',
@@ -46,7 +79,15 @@ const steps = [
         plugins, instead of deleting what you don't. Every agent speaks A2A, so it runs
         solo or as part of a fleet across your machines. Local models, your stack, no bloat.
       </p>
-      <div class="mt-9 flex items-center justify-center gap-3">
+
+      <!-- Value-prop chips -->
+      <div class="mt-6 flex flex-wrap items-center justify-center gap-2">
+        {valueProps.map((vp) => (
+          <span class="rounded-full border border-[var(--color-accent)]/25 bg-[var(--color-accent)]/8 px-3 py-1 text-xs font-medium text-[var(--color-accent-light)]">{vp}</span>
+        ))}
+      </div>
+
+      <div class="mt-8 flex items-center justify-center gap-3">
         <a href="/download" class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition">
           Download for Mac
         </a>
@@ -54,13 +95,32 @@ const steps = [
           View on GitHub
         </a>
       </div>
-      <p class="mt-5 text-xs text-zinc-500">macOS desktop app — signed &amp; notarized. Windows &amp; Linux in testing.</p>
+      <p class="mt-3 text-xs text-zinc-500">
+        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="text-[var(--color-accent-light)] hover:brightness-110">Read the docs →</a>
+        <span class="mx-2">·</span>
+        macOS desktop app — signed &amp; notarized. Windows &amp; Linux in testing.
+      </p>
+    </div>
+  </section>
+
+  <!-- protoAgent in Action -->
+  <section class="mx-auto max-w-6xl px-5 py-16">
+    <h2 class="text-center text-3xl font-bold tracking-tight mb-3">protoAgent in action</h2>
+    <p class="text-center text-zinc-400 mb-12 max-w-2xl mx-auto">The same substrate, wildly different agents. Here's what's running on protoAgent today.</p>
+    <div class="grid gap-5 sm:grid-cols-2">
+      {inAction.map((item) => (
+        <div class="card card-accent p-6">
+          <h3 class="font-semibold text-lg mb-2">{item.title}</h3>
+          <p class="text-sm text-zinc-400 leading-relaxed mb-4">{item.caption}</p>
+          <p class="text-xs text-zinc-500 font-mono">See it in: {item.evidence}</p>
+        </div>
+      ))}
     </div>
   </section>
 
   <!-- Features -->
   <section class="mx-auto max-w-6xl px-5 py-8">
-    <div class="grid gap-5 sm:grid-cols-3">
+    <div class="grid gap-5 sm:grid-cols-2">
       {features.map((f) => (
         <div class="card p-6">
           <h3 class="font-semibold text-lg mb-2">{f.title}</h3>
