@@ -110,6 +110,57 @@ curl localhost:7870/api/telemetry/insights
 Named numeric series a plugin records (`sdk.record_metric` — treasury, net worth, fleet size, #1632) live in their own always-on per-instance `metrics.db`, **not** in this turn-rollup store: they're functional plugin state (history-dependent watch verifiers read them), so the `telemetry.enabled` toggle never affects them. See [Plugins ▸ consumption SDK](/guides/plugins#consumption-sdk).
 :::
 
+## Fleet trace export (the flywheel Observe)
+
+The local stores above answer *"what did this agent cost?"*. **Fleet trace export** answers a different question — *"what does the agent actually do, turn by turn?"* — by writing one **trajectory** row per terminal turn in OpenAI chat format, so a fleet's real production traces can drive downstream training-data collection (the "Observe" step of the self-improving flywheel, ADR 0006 / #1897).
+
+**Off by default.** Turn it on per instance either way:
+
+```yaml
+telemetry:
+  fleet_trace_export: true    # Settings ▸ Telemetry ▸ "Fleet trace export"
+```
+
+```bash
+# Env var — overrides the config toggle in BOTH directions:
+PROTOAGENT_FLEET_TRACE_EXPORT=1              # on, default path
+PROTOAGENT_FLEET_TRACE_EXPORT=0              # off (even if the toggle is on)
+PROTOAGENT_FLEET_TRACE_EXPORT=/data/traces   # on, explicit path
+```
+
+On the desktop app, use the **Settings ▸ Telemetry** toggle — a GUI app doesn't inherit shell env, so the config toggle is the reachable path.
+
+Each row lands in `<instance>/fleet-traces/fleet-traces-YYYYMMDD.jsonl` (append-only, daily-partitioned, instance-scoped) and carries:
+
+```jsonc
+{
+  "id": "fleet__<trace_id>", "source": "protoagent-fleet", "teacher": "<AGENT_NAME>",
+  "messages": [ /* OpenAI chat format, incl. tool_calls + tool results */ ],
+  "tools":    [ /* the in-context OpenAI tool schemas */ ],
+  "verified": true, "reward": 1.0,          // deterministic terminal-state outcome — never an LLM judge
+  "meta": {
+    "loop_shape": "ooda",                   // "ooda" when the goals subsystem was active, else "react"
+    "orient": "<goal-plan snapshot>",       // the durable world-model artifact, when present
+    "trace_id": "…", "session_id": "…", "model": "…", "cost_usd": 0.01, "duration_ms": 1500
+  }
+}
+```
+
+Writing is best-effort (never affects a turn) and honors the incognito gate — an incognito thread is never exported.
+
+### Shipping to a shared dataset (redaction)
+
+Raw dumps stay **on the machine**. To collect them centrally, `scripts/sync_fleet_traces.sh` redacts and forwards on a daily cron:
+
+- **Hybrid redaction before the corpus** — deterministic regex (API keys / tokens / JWTs / emails / phones) **+** the `openai/privacy-filter` model (names, addresses, account numbers). Irreversible masking; structural fields (roles, tool names, ids, schemas) are untouched; `meta.redacted` is stamped. **Fail-closed** — it won't ship raw if the redactor is unavailable.
+- Dest filenames are namespaced `<instance>__…` so many fleet members can't collide.
+
+For a **laptop or desktop rig** off the collection box, `scripts/setup_fleet_tracing.sh` wires a once-daily rsync of that rig's raw dumps to the collection box over your private network (launchd on macOS, cron on Linux); the redaction boundary stays on the receiving box, so the rig needs no model or venv.
+
+::: warning A personal rig's traffic is real data
+Export is per-rig opt-in for a reason: a personal agent's turns contain real content. The redactor masks PII, but decide per rig whether it should contribute at all — the fleet containers are a clear yes; your personal desktop may be a no.
+:::
+
 ## Audit log
 
 Every tool call is written to `/sandbox/audit/audit.jsonl`. One line per call:
