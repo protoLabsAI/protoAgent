@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Mobile viewport correctness for the console.** On phones (the DS single-pane shell,
+  ≤767px) the active surface no longer strands a slab of dead canvas below it — the chat
+  composer was floating mid-screen because the DS `.pl-appshell__mobile-stage` lays its
+  child out in block flow, so a surface panel's `flex: 1 1 0` went inert and it sized to
+  content (a leftover `.stage-panel { height: calc(100vh - 260px) }` from the retired
+  hand-rolled layout pinned it). The mobile stage is now a flex column, so the active
+  `.stage-panel` fills it and scrolls internally, exactly like a desktop dock column.
+  Also: `.app-shell` uses `100dvh` (falling back to `100vh`) so the mobile URL bar can't
+  hide the bottom nav/composer; `index.html` gains `viewport-fit=cover` and the bottom
+  quick-bar pads clear of the iOS home indicator / Android gesture bar via
+  `env(safe-area-inset-bottom)`; and the two dead pre-DS responsive media queries
+  (`.workspace`/`.rail`/`.stage` at 900/720px) are removed, keeping only the live
+  content-grid rules and realigning them to the 767px shell breakpoint.
+
 ## [0.96.0] - 2026-07-07
 
 ### Added
