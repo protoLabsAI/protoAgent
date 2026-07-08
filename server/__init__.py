@@ -411,9 +411,11 @@ def _main():
     # Initialize observability
     from observability import tracing
     from observability import metrics
+    from observability import trace_export
 
     tracing.init()
     metrics.init()
+    trace_export.init()  # fleet trace export → lab (the flywheel Observe, #1897)
 
     _init_langgraph_agent(headless_setup=headless_setup)
 

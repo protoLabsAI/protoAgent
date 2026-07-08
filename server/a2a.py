@@ -547,6 +547,21 @@ def _record_a2a_telemetry(outcome) -> None:
     except Exception:  # noqa: BLE001 — telemetry is best-effort
         log.exception("[telemetry] failed to record turn %s", outcome.task_id)
 
+    # Fleet trace export → lab (the flywheel Observe, #1897). Off unless
+    # PROTOAGENT_FLEET_TRACE_EXPORT is set; best-effort, never touches the turn.
+    try:
+        from observability import trace_export
+
+        if trace_export.is_enabled():
+            trace_export.export_turn(
+                outcome,
+                checkpointer=STATE.checkpointer,
+                graph_config=STATE.graph_config,
+                bound_tools=getattr(STATE.graph, "bound_tools", None),
+            )
+    except Exception:  # noqa: BLE001 — export is best-effort
+        log.exception("[trace_export] failed to export turn %s", outcome.task_id)
+
 
 def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
     """Per-frame progress hook (ADR 0051). Only background turns get a bus push — live
