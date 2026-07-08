@@ -41,8 +41,12 @@ class GoalState:
     ``verifier`` is a free-form spec dict whose ``type`` selects an entry in
     ``graph/goals/verifiers.VERIFIERS`` and whose other keys are that verifier's
     parameters (e.g. ``{"type": "command", "command": "pytest -q"}``).
-    ``checklist`` holds the running plan the agent records with the
-    ``update_goal_plan`` tool, carried forward across iterations.
+
+    The running plan (the "orient" world-model the agent records with the
+    ``update_goal_plan`` tool) is NOT a field here — it lives in the durable
+    ``GoalStore`` plan artifact (``read_plan``/``write_plan``) for EVERY goal, so
+    the continuation loop-back and the trace ``orient``/``loop_shape`` signal see
+    it uniformly (ADR 0079).
     """
 
     session_id: str
@@ -70,7 +74,6 @@ class GoalState:
     # transcript from prior iterations. Durable state (plan artifact) lives
     # on disk. Opt-in only; short goals benefit from transcript continuity.
     fresh_context: bool = False
-    checklist: str = ""
     # Set by the agent's ``abandon_goal`` tool mid-turn; ``evaluate`` finishes the goal
     # ``unachievable`` after the verifier runs (retired the ``<goal_unachievable/>`` tag).
     abandon_reason: str = ""

@@ -139,14 +139,15 @@ async def test_verifier_overrides_giveup(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_checklist_recorded_and_carried(tmp_path):
+async def test_plan_recorded_and_carried(tmp_path):
     # The plan is recorded mid-turn via the update_goal_plan tool (→ record_plan),
-    # persisted, and fed back into the next continuation prompt.
+    # persisted to the durable plan artifact (ADR 0079 — for EVERY goal, not just
+    # fresh-context), and fed back into the next continuation prompt.
     c = _ctrl(tmp_path)
     await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 1"}}', "s")
     c.record_plan("s", "1. do A\n2. do B")
     decision = await c.evaluate("s", last_text="progress")
-    assert "do A" in c.active_goal("s").checklist
+    assert "do A" in c._store.read_plan("s")  # durable plan artifact, unified store
     assert "do A" in decision.message
 
 
