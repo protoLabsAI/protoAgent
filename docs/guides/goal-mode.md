@@ -29,6 +29,8 @@ It's modelled on protocli's goal system but deliberately more rigorous for a lon
 
 The loop wraps graph invocation in `server/chat.py` (both the A2A streaming path and the non-streaming chat path); the graph itself is unchanged.
 
+**Yield instead of spin (ADR 0079).** If the agent's next step waits on async or delegated work — a build, a peer agent, CI, a review — it doesn't have to burn iterations polling. It hands off to a [watch](/guides/watches) or a [schedule](/guides/scheduler) and ends the turn; the drive **pauses** (the goal stays `active`, iterations untouched) and **resumes automatically** when the trigger fires (`⏸ goal paused — handed off to a watch/schedule`). This is what lets a long, delegated goal span time instead of exhausting its budget waiting. Goals, tasks, watches, and schedules compose into one OODA loop over the agent's durable working-state — see [ADR 0079](/adr/0079-autonomous-operating-model).
+
 ## Setting a goal
 
 Send a control message through any channel (A2A, the React console chat, OpenAI-compat):
@@ -131,7 +133,7 @@ Examples:
 
 ## The running plan (`update_goal_plan`)
 
-Continuation prompts ask the agent to keep a running plan and record it each turn by calling the **`update_goal_plan`** tool. The controller persists that plan with the goal state (fresh-context goals write it to a durable plan artifact) and feeds it back into the next continuation — so the agent maintains a coherent plan across iterations instead of re-planning from scratch. To stop early when the goal is impossible or out of scope, the agent calls **`abandon_goal`** with a reason (honoured only after the verifier runs, so a goal the world already satisfies still finishes `achieved`). Both tools are bound whenever goal mode is on and are harmless no-ops outside a goal.
+Continuation prompts ask the agent to keep a running plan and record it each turn by calling the **`update_goal_plan`** tool. The controller persists that plan to a durable plan artifact for **every** goal and feeds it back into the next continuation — so the agent maintains a coherent plan across iterations instead of re-planning from scratch. (ADR 0079 unified this: the plan used to be written durably only for `fresh_context` goals, so a default same-session goal maintained a plan that `read_plan()` never saw.) The plan is injected back each turn as part of the agent's `<working_state>` block, and it doubles as the **`orient`** signal in the [fleet trace export](/adr/0079-autonomous-operating-model): a goal that maintains a real plan emits `loop_shape=ooda` training rows; a goal with no plan is labelled `react`. To stop early when the goal is impossible or out of scope, the agent calls **`abandon_goal`** with a reason (honoured only after the verifier runs, so a goal the world already satisfies still finishes `achieved`). Both tools are bound whenever goal mode is on and are harmless no-ops outside a goal.
 
 ## Configuration
 
@@ -140,3 +142,5 @@ See the [`goal` config block](/reference/configuration#goal). Defaults: machiner
 ## Security
 
 `command` / `test` / `ci` verifiers execute on the server host with the agent's privileges. **Setting a goal is an operator action** — only accept goal specs from trusted callers. If you expose `/goal` to untrusted input, restrict it to `data` / `llm` verifiers or gate goal-setting behind auth.
+
+> **`data`-verifier path must sit inside the agent's writable workspace when the goal is agent-completed over untrusted `/goal`.** The agent's `read_file`/`write_file` tools are rooted at its `workspace` project (`/sandbox/workspace/`) and **cannot reach the parent** — `../x` → *"path escapes project 'workspace'"* — and the shell fallback that could write elsewhere is **declined** for an untrusted caller (no operator present to approve it). So a verifier pointed at `/sandbox/report.md` will never flip: the agent writes to `/sandbox/workspace/report.md` and the verifier reads a path it can't produce. Point the `path` at `/sandbox/workspace/…`. (This is by design — the deterministic verifier, not the agent's own "done" self-report, is the sole arbiter, so a mispathed artifact correctly leaves the goal unverified.)

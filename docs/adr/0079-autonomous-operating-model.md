@@ -126,3 +126,28 @@ instance-global and holds live prod data, so the migration is a **guarded, non-d
 open (covered by a legacy-board migration test). `task_create` stamps the session from injected
 graph state; `list(session_id=…)` scopes to a goal's backlog; `<working_state>` marks a goal's
 own tasks with "← this goal".
+
+### Validation (prod, 2026-07-08)
+
+Shipped in two PRs (`#1915` P0–P3b + nav; `#1917` P3c) and rolled to the four-agent fleet, then
+validated live over real A2A `/goal` drives:
+
+- **frank** — a `data`-verifier goal produced the first-ever `loop_shape=ooda` fleet trace row,
+  confirming Move 1 fixed the 0% OODA-supply finding at the source (the plan is now durable for
+  every goal, so `read_plan()` / the exporter's `orient` sees it).
+- **jon** — the full compose-and-yield path end to end: the agent recorded a plan (orient),
+  `task_create`'d a session-linked task (P3c), **yielded** on an active watch instead of spinning
+  (P3b: `⏸ goal paused — handed off to a watch/schedule`), **woke** on the watch trip with the
+  ADR 0079 framing (`[Autonomous wake …]` + condition + `Evidence:`), acted, and the deterministic
+  verifier flipped the goal to `achieved`. A single verified OODA row (`verified=True`, `reward=1.0`,
+  `reward_semantics="terminal-state verifier"`) spans **both** the kickoff `user` turn and the wake
+  `user` turn — one whole trace.
+
+Two operational notes surfaced and are documented in the guides: (1) for an agent-completed goal
+set over untrusted `/goal`, `data`-verifier `path`s must sit under the agent's writable workspace
+(`/sandbox/workspace/…`), since the agent's file tools are workspace-rooted and its shell fallback
+is declined without an operator — see [Goal mode ▸ Security](/guides/goal-mode#security); (2) the
+watch met-reaction is wake-framed and its `Evidence:` is load-bearing — see
+[Watches ▸ Reacting](/guides/watches#reacting). The verifier-as-sole-arbiter invariant held: an
+agent's optimistic "done" self-report against a mispathed artifact correctly left the goal
+unverified.
