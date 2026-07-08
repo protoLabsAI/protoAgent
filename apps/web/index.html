@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover exposes env(safe-area-inset-*) so the bottom nav / topbar
+         can pad clear of the iOS home indicator + notch in the installed PWA. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#9b87f2" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%protolabs-icon-outline.svg" />

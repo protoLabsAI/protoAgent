@@ -3,7 +3,9 @@
    The shared :root token bridge + resets moved to theme-base.css (loads first). */
 
 .app-shell {
-  height: 100vh;
+  height: 100vh; /* fallback for browsers without dvh */
+  height: 100dvh; /* the dynamic viewport — excludes the mobile URL bar so the bottom
+                     nav/composer never hide under browser chrome */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1685,89 +1687,43 @@ textarea {
 /* The app `.spin` keyframe is retired — busy spinners now come from the DS
    (`<Button loading>` and `<Spinner>`, @protolabsai/ui ≥ 0.50). */
 
-/* Below this width there isn't room for the rail + chat + side panel, so drop
-   to two columns and hide the panel (reachable again by widening / the toggle).
-   Kept under the desktop's 980px min window so the panel stays put there; this
-   mainly affects narrow browser windows. The two-column template here now
-   actually wins because .workspace no longer sets its columns inline. */
-@media (max-width: 900px) {
-  .workspace {
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
+/* ── Mobile shell (≤767px — the DS AppShell single-pane breakpoint, ADR 0035) ────
+   Under 768px the DS collapses to ONE stage + a bottom quick-bar. Its
+   `.pl-appshell__mobile-stage` is a flex ITEM but lays its child out in normal
+   block flow, so a surface panel's `flex: 1 1 0` goes inert and the panel sizes to
+   content — stranding dead canvas below it (the chat composer ends up floating
+   mid-screen). Making the stage a flex column lets the active `.stage-panel` fill
+   it and scroll INTERNALLY, exactly like a desktop dock column.
 
-  .right-panel {
-    display: none;
-  }
-}
+   (The old hand-rolled `.workspace`/`.rail`/`.stage`/`.topbar`/`.right-panel` grid
+   and its `.stage-panel { height: calc(100vh - 260px) }` were removed here — those
+   classes no longer render, and that fixed height was the actual cause of the gap.
+   Kept below: only the content-grid rules whose classes are still live.)
 
-@media (max-width: 720px) {
-  .app-shell {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .topbar {
-    min-height: 56px;
-    align-items: flex-start;
+   Breakpoint note: keep this 767 in lockstep with `useIsMobile` (lib/useIsMobile.ts)
+   and the DS `mobileBreakpoint` (768 ⇒ its query is also ≤767). */
+@media (max-width: 767px) {
+  .pl-appshell__mobile-stage {
+    display: flex;
     flex-direction: column;
-    padding: 10px 12px;
   }
 
-  .topbar-status {
-    width: 100%;
-    overflow-x: auto;
-    padding-bottom: 2px;
+  /* Bottom quick-bar clears the iOS home indicator / Android gesture bar
+     (needs `viewport-fit=cover`, set in index.html). */
+  .pl-mobilenav {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
-  .workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .rail {
-    flex-direction: row;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .rail button {
-    flex: 1 1 0;
-    min-height: 44px;
-  }
-
-  .stage {
-    border-right: 0;
-    padding: 8px;
-    overflow: auto;
-  }
-
-  .stage-panel {
-    height: calc(100vh - 260px);
-    min-height: 420px;
-  }
-
-  .composer,
+  /* Dense content grids collapse to a single column on phones. */
   .subagent-grid,
-  .batch-task-fields,
-  .issue-create,
-  .issue-create-meta,
-  .notes-meta,
   .setup-grid.two,
   .setup-grid.three,
   .setup-grid.model-row {
     grid-template-columns: 1fr;
   }
 
-  .composer textarea {
-    min-height: 76px;
-  }
-
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .message {
-    grid-template-columns: 1fr;
-    gap: 4px;
   }
 
   .setup-overlay {
