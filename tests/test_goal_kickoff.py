@@ -109,3 +109,20 @@ def test_is_autonomous_honors_unattended_and_origins():
     assert not _is_autonomous({"unattended": False})
     assert not _is_autonomous({})
     assert not _is_autonomous(None)
+
+
+# --- ADR 0079: goal drive references tasks/watches/scheduling ---------------
+def test_kickoff_and_continuation_reference_composition(tmp_path):
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+    from graph.goals.types import VerifyResult
+
+    c = GoalController(LangGraphConfig(), GoalStore(tmp_path))
+    c.set_goal_operator("s", "ship it", {"type": "llm"})
+    gs = c.active_goal("s")
+    kick = c.kickoff_prompt(gs)
+    cont = c._continuation(gs, VerifyResult(met=False, reason="not yet", evidence=""))
+    for prompt in (kick, cont):
+        assert "task_create" in prompt
+        assert "create_watch" in prompt or "schedule_task" in prompt
+        assert "END the turn" in prompt  # the async-handoff / don't-spin directive

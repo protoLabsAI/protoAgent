@@ -46,3 +46,27 @@ def test_falls_back_to_workspace_soul_when_no_instance_soul(monkeypatch, tmp_pat
     prompt = build_system_prompt(workspace=str(hub), include_subagents=False)
 
     assert "Legacy runtime persona." in prompt
+
+
+# --- Operating model doctrine (ADR 0079) -----------------------------------
+
+
+def test_operating_model_doctrine_is_always_present():
+    """The autonomous operating model ships in every system prompt (core, not fork-gated):
+    the OODA framing + all four composable primitives + the async-handoff rule."""
+    prompt = build_system_prompt(include_subagents=False)
+    assert "# Operating model" in prompt
+    # the loop
+    for step in ("Observe", "Orient", "Decide", "Act"):
+        assert step in prompt
+    # the four primitives composed (not just listed as isolated tools)
+    for tool in ("set_goal", "task_create", "schedule_task", "create_watch", "update_goal_plan"):
+        assert tool in prompt
+    # the async-handoff rule (the roxy-exhausted fix) + working_state observe
+    assert "Do not spin" in prompt
+    assert "<working_state>" in prompt
+
+
+def test_working_state_block_is_referenced_for_observe():
+    prompt = build_system_prompt(include_subagents=False)
+    assert "working-state" in prompt.lower() or "<working_state>" in prompt

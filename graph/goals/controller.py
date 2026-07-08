@@ -33,6 +33,16 @@ CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 # to decide whether to KICK an initial goal-driven turn (#1910) — see ``is_set_ack``.
 SET_ACK_PREFIX = "Goal set. "
 
+# Appended to every kickoff + continuation prompt (ADR 0079): point the drive loop at the full
+# toolkit so it composes goals with tasks/watches/scheduling instead of spinning. The system
+# prompt carries the full operating model; this is the goal-loop-specific reminder.
+_DRIVE_TACTIC = (
+    "Decompose this into `task_create` items and drive them down. If your next step waits on "
+    "async or delegated work (a build, a peer agent, CI, a review), set a `create_watch` on that "
+    "condition (or a `schedule_task`) and END the turn — you'll be resumed when it's ready. Don't "
+    "spin polling to the iteration cap."
+)
+
 
 def _coerce_str_list(value) -> list[str]:
     """Normalize a contract list field (``constraints``/``boundaries``) to ``list[str]``.
@@ -165,6 +175,7 @@ class GoalController:
             )
         contract = self._contract_prompt(state)
         body = f"{lead}\n\n{contract}" if contract else lead
+        body = f"{body}\n\n{_DRIVE_TACTIC}"
         # A plain inbound message that arrived alongside an already-active goal (not a
         # /goal command) is folded in so the operator's words aren't lost.
         extra = (user_message or "").strip()
@@ -456,7 +467,8 @@ class GoalController:
         # unchanged from before contracts existed (backward-compat).
         base = self._continuation_base(state, result)
         contract = self._contract_prompt(state)
-        return f"{base}\n\n{contract}" if contract else base
+        body = f"{base}\n\n{contract}" if contract else base
+        return f"{body}\n\n{_DRIVE_TACTIC}"
 
     @staticmethod
     def _verifier_summary(verifier: dict) -> str:
