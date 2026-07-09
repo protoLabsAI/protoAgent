@@ -17,9 +17,8 @@ const version = latest.version.replace(/^v/, ''); // 0.62.0
 const tag = latest.version.startsWith('v') ? latest.version : `v${latest.version}`;
 // Stable mac asset name: protoAgent-<bare-version>-aarch64-apple-darwin.dmg
 const dmgUrl = `${repo}/releases/download/${tag}/protoAgent-${version}-aarch64-apple-darwin.dmg`;
-// Stable Windows asset name: protoAgent-<bare-version>-x86_64-pc-windows-msvc-setup.exe
-// (the release workflow's upload name — NOT the local bundle's protoAgent_<v>_x64-setup.exe).
-const winSetupUrl = `${repo}/releases/download/${tag}/protoAgent-${version}-x86_64-pc-windows-msvc-setup.exe`;
+// The Windows build needs further work and testing before we hand it out, so
+// Windows visitors get the notify-me gate below (not a live setup.exe) for now.
 
 const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
 const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
@@ -27,7 +26,7 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
 
 <BaseLayout
   title="Download protoAgent"
-  description="Download protoAgent — the lean, A2A-native operator agent for macOS and Windows. Signed & notarized on macOS. Linux in testing."
+  description="Download protoAgent — the lean, A2A-native operator agent for macOS. Apple Silicon, signed & notarized. Windows and Linux coming soon."
 >
   <!-- Detect the OS before paint so the right block is visible with no flash. -->
   <script is:inline>
@@ -136,92 +135,24 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
       </div>
     </div>
 
-    <!-- ===== Windows ===== -->
-    <div class="dl-os dl-os-windows">
-      <a
-        href={winSetupUrl}
-        class="flex items-center justify-center gap-2.5 w-full py-4 px-6 rounded-xl font-semibold text-[#0a0a0c] text-lg mb-10 bg-[var(--color-accent)] hover:brightness-110 transition"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        Download protoAgent {latest.version} (Windows setup)
-      </a>
-
-      <!-- System requirements -->
-      <div class="card p-5 mb-10">
-        <h3 class="font-semibold mb-3">System requirements</h3>
-        <ul class="space-y-1.5">
-          {[
-            'Windows 10 or 11 (x64)',
-            'WebView2 runtime — preinstalled on Windows 11; the installer fetches it if missing',
-            'A model gateway — connect an OpenAI-compatible endpoint or key in setup',
-          ].map((item) => (
-            <li class="text-zinc-400 text-sm flex items-start gap-2">
-              <span class="text-zinc-600 mt-0.5">—</span>
-              {item}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <!-- Install steps -->
-      <div class="mb-10">
-        <h2 class="text-lg font-semibold mb-5">Installation</h2>
-        <ol class="space-y-4">
-          {[
-            'Download the setup .exe above.',
-            'Run it — if SmartScreen warns, choose “More info” → “Run anyway” (see the note below).',
-            'Launch protoAgent — it starts its own bundled server, nothing else to install.',
-            'The setup wizard connects your model and you’re live.',
-          ].map((step, i) => (
-            <li class="flex gap-4 items-start">
-              <span class="font-mono text-sm w-5 shrink-0 pt-0.5" style="color: var(--color-accent);">{i + 1}</span>
-              <span class="text-zinc-300 text-sm">{step}</span>
-            </li>
-          ))}
-        </ol>
-      </div>
-
-      <!-- Unsigned + beta note -->
-      <div class="border-l-2 pl-4 mb-10" style="border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);">
-        <p class="text-zinc-400 text-sm mb-3">
-          <strong class="text-zinc-200">Heads up:</strong> the Windows build isn’t signed or
-          notarized yet, so SmartScreen shows a warning on first run — in-app updates are
-          cryptographically verified once installed, and code signing is on the roadmap. protoAgent
-          is in <strong class="text-zinc-200">public beta</strong> and updates itself in place;
-          expect frequent releases.
-        </p>
-        <p class="text-zinc-400 text-sm">
-          Prefer a verified binary today? The
-          <strong class="text-zinc-200">macOS build is fully signed &amp; notarized by Apple</strong>,
-          or you can
-          <a href={repo} target="_blank" rel="noopener noreferrer" class="text-zinc-300 hover:text-zinc-100 transition-colors underline underline-offset-2">build from source</a>
-          — see the note at the bottom of this page.
-        </p>
-      </div>
-    </div>
-
-    <!-- ===== Linux / other: not yet downloadable ===== -->
+    <!-- ===== Windows / Linux / other: not yet downloadable ===== -->
     <div class="dl-os dl-os-other">
       <div class="card p-6 mb-10">
-        <h2 class="text-lg font-semibold mb-2">No packaged download for your platform yet</h2>
+        <h2 class="text-lg font-semibold mb-2">The desktop app is macOS-only for now</h2>
         <p class="text-zinc-400 text-sm">
-          The desktop app ships for macOS and Windows today. We build Linux installers on every
-          release but are still testing them before we hand them out. Drop your email below and we’ll
-          tell you the moment your platform is ready — or run protoAgent from source today.
+          Windows and Linux builds are coming soon — we build them on every release but are still
+          testing them before we hand them out. Drop your email below and we’ll tell you the moment
+          your platform is ready — or run protoAgent from source today.
         </p>
       </div>
     </div>
 
     <!-- ===== Mailing list (shown to everyone) ===== -->
     <div class="card p-6 mb-10">
-      <h2 class="text-lg font-semibold mb-1">Get release announcements</h2>
+      <h2 class="text-lg font-semibold mb-1">Get notified about Windows &amp; Linux</h2>
       <p class="text-zinc-400 text-sm mb-5">
-        Linux builds are still in testing. Leave your email and we’ll let you know the moment they
-        ship — plus the occasional big-release note.
+        The desktop app is macOS-only while we finish testing the Windows and Linux builds. Leave
+        your email and we’ll let you know the moment they ship.
       </p>
       <form
         action={subscribeAction}
@@ -275,9 +206,7 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
     :root[data-os='mac'] .dl-os-mac {
       display: block;
     }
-    :root[data-os='windows'] .dl-os-windows {
-      display: block;
-    }
+    :root[data-os='windows'] .dl-os-other,
     :root[data-os='linux'] .dl-os-other,
     :root[data-os='other'] .dl-os-other {
       display: block;
