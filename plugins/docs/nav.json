@@ -220,6 +220,10 @@
           "title": "Sandboxing & egress"
         },
         {
+          "path": "guides/exposing-protoagent.md",
+          "title": "Expose to the world"
+        },
+        {
           "path": "guides/observability.md",
           "title": "Wire Langfuse + Prometheus"
         }

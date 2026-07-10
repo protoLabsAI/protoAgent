@@ -91,6 +91,7 @@ Ship it, isolate it, fence it in, and watch it.
 | [Releasing](/guides/releasing) | You're cutting a versioned release (semver bump → image → GitHub release) |
 | [Run multiple instances](/guides/multi-instance) | You want several scoped agents (data isolation) on one host |
 | [Sandboxing & egress](/guides/sandboxing) | You want to fence the filesystem + outbound network |
+| [Expose to the world](/guides/exposing-protoagent) | You want an agent reachable from the public internet — A2A only, token-gated, console hidden |
 | [Wire Langfuse + Prometheus](/guides/observability) | You need traces and metrics in production |
 
 ## Forks & evals

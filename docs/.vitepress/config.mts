@@ -153,6 +153,7 @@ export default defineConfig({
             { text: "Releasing", link: "/guides/releasing" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Sandboxing & egress", link: "/guides/sandboxing" },
+            { text: "Expose to the world", link: "/guides/exposing-protoagent" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
           ],
         },
