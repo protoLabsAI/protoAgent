@@ -125,6 +125,22 @@ functions/tools) so your plugin still loads + tests host-free. The surface:
   KNOBS = Knobs().define("min_margin", 30, lo=0).preset("trade-max", {"min_margin": 20})
   registry.register_tools(make_knob_tools(KNOBS, prefix="fleet"))
   ```
+- **Hand the user a generated file (image/audio/video)** — `registry.save_media(data, mime, meta=None)` (#1929):
+  persists the bytes (or a source file path) into the core media store and returns a
+  `MediaRef {id, url, path, mime}`. Embed `ref.url` in the tool's returned markdown and the
+  console renders it inline — no plugin-owned route, no UI change. The URL carries a per-file
+  HMAC signature, so inline `<img>` rendering works even on a bearer-gated deployment; files
+  land under the instance data dir and survive restart (`media.retention_days` prunes,
+  `media.public` opts the store public). A `media.saved` bus event fires per save. Pairs with
+  `multimodal_tool_result` below: save for the *user*, envelope for the *model*.
+  ```python
+  @tool
+  async def generate_image(prompt: str) -> str:
+      """Generate an image and show it in chat."""
+      png = await _generate(prompt)                      # bytes
+      ref = registry.save_media(png, "image/png", {"prompt": prompt})
+      return f"![{prompt}]({ref.url})"
+  ```
 - **Return an image the model can SEE** — `multimodal_tool_result(caption, images=[…])` (#1930):
   a tool that just produced an image (a render, a chart, a screenshot) returns this instead of a
   path string. On a vision model (`model.vision: true`) the image rides the ToolMessage as
