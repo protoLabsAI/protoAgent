@@ -179,7 +179,12 @@ export const GOALS = {
 // count, a met-today pulse fragment, and tinted status badges. Times are epoch SECONDS.
 // Mirror the controller's write order: the met path sets `finished_at` and skips the
 // `last_checked` update, so a finished watch's last_checked is the PREVIOUS check.
-// "met today" derives from finished_at on the local day, so keep it near now.
+// "met today" derives from finished_at on the local day of NOW, so a bare `now - 600`
+// lands on YESTERDAY in the first 10 minutes after local midnight and the pulse
+// fragment vanishes (work-overview.spec flaked exactly there) — clamp it into today.
+const NOW_SEC = Math.floor(Date.now() / 1000);
+const TODAY_START_SEC = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
+const MET_AT_SEC = Math.max(NOW_SEC - 600, TODAY_START_SEC);
 export const WATCHES = {
   enabled: true,
   watches: [
@@ -188,15 +193,15 @@ export const WATCHES = {
       condition: "CI is green on main",
       status: "active",
       verifier: { type: "llm" },
-      last_checked: Math.floor(Date.now() / 1000) - 120,
+      last_checked: NOW_SEC - 120,
     },
     {
       id: "watch-2",
       condition: "The staging deploy finishes",
       status: "met",
       verifier: { type: "llm" },
-      last_checked: Math.floor(Date.now() / 1000) - 900,
-      finished_at: Math.floor(Date.now() / 1000) - 600,
+      last_checked: MET_AT_SEC - 300,
+      finished_at: MET_AT_SEC,
     },
     {
       id: "watch-3",
