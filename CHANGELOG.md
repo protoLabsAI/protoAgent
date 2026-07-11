@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.98.0] - 2026-07-11
+
 ### Added
 - **Autonomous operating model — goals · tasks · scheduling · watches as one OODA loop
   (ADR 0079, #1915/#1917).** The four self-direction primitives now compose into a single
