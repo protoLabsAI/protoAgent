@@ -854,6 +854,13 @@ def _main():
     async def _sse_token():
         return {"token": auth.generate_sse_token()}
 
+    # Core media output channel (#1929): ONE route serves every artifact a plugin
+    # tool saved via registry.save_media() — signed-URL / opt-in-public access is
+    # enforced by the auth middleware installed above (see infra/media.py).
+    from server.media import register_media_routes
+
+    register_media_routes(fastapi_app)
+
     a2a_card = _build_agent_card_proto()
     # Deploy-time guard (opt-in): refuse to start if the card would advertise a
     # loopback URL — a deployed agent that does so is silently unreachable to

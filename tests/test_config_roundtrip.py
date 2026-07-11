@@ -140,6 +140,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "llm_max_retries": 2,
     "max_iterations": 50,
     "max_tokens": 32768,
+    "media_public": False,
+    "media_retention_days": 0,
     "mcp_denylist": [],
     "mcp_enabled": False,
     "mcp_scope": "",

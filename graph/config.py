@@ -800,6 +800,16 @@ class LangGraphConfig:
     filesystem_bypass_allowed: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
 
+    # Core media output store (#1929) — tool-generated binary artifacts
+    # (images/audio/video) persisted via ``registry.save_media()`` and served on
+    # ``/media/<file>``. Gated by default: each saved URL carries a per-file HMAC
+    # signature (an inline ``<img>`` can't send a bearer header), so unsigned
+    # requests still hit the default-deny gate. ``public`` opts the whole store
+    # out of the auth gate (explicit exposure); ``retention_days`` prunes files
+    # older than N days on each save (0 = keep forever). See infra/media.py.
+    media_public: bool = False
+    media_retention_days: int = 0
+
     # Egress allowlist (ADR 0008) — deny-by-default outbound-host allowlist
     # enforced in ``fetch_url`` (the model-chosen-host exfil/SSRF vector). Empty
     # = permissive (off). ``*.host`` matches subdomains. Single source of truth
@@ -1093,6 +1103,10 @@ class LangGraphConfig:
                 "bypass_allowed", cls.filesystem_bypass_allowed
             ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
+            media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),
+            media_retention_days=int(
+                (data.get("media", {}) or {}).get("retention_days", cls.media_retention_days) or 0
+            ),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
             security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
             plugin_config=_resolve_plugin_config(data, secrets, config_dir),

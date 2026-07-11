@@ -315,6 +315,22 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                     request.state.member_public = True
                     return await call_next(request)
 
+        # Core media store (#1929): ``/media/<file>`` serves tool-generated artifacts
+        # that the console chat renders as inline ``<img>`` tags — a plain browser
+        # fetch that cannot carry an Authorization header. Each saved URL carries a
+        # per-file HMAC signature minted at save time (``infra/media.py``); a request
+        # passes iff the signature verifies (or the store is explicitly opted public
+        # via ``media.public``). Anything else falls through to the normal bearer /
+        # X-API-Key checks below — default-deny holds.
+        if path.startswith("/media/"):
+            try:
+                from infra.media import request_allowed as _media_allowed
+
+                if _media_allowed(path, request.query_params.get("sig", "")):
+                    return await call_next(request)
+            except Exception:  # noqa: BLE001 — a check failure fails CLOSED to normal auth
+                logger.exception("[a2a] media access check failed for %s", path)
+
         # SSE endpoint: accept either a valid query-string token OR a bearer header.
         # The query token is for browser EventSource clients that cannot send headers.
         if path == "/api/events" or path.endswith("/api/events"):

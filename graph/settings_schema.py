@@ -638,6 +638,26 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # ── Media output store (#1929) ────────────────────────────────────────────
+    Field(
+        "media.public",
+        "media_public",
+        "Serve media without auth",
+        "bool",
+        "Media",
+        "Expose /media/<file> (tool-generated images/audio/video) without any credential. "
+        "Off (default) = each file is reachable only via its signed URL or a bearer — the "
+        "default-deny gate holds. Turn on only when the whole store should be public.",
+    ),
+    Field(
+        "media.retention_days",
+        "media_retention_days",
+        "Media retention (days)",
+        "number",
+        "Media",
+        "Auto-prune generated media files older than this on each new save (0 = keep forever).",
+        minimum=0,
+    ),
     # ── Identity / operator ──────────────────────────────────────────────────
     # `identity.name` stays in FIELDS so it round-trips through the YAML writer AND so it
     # validates/cascades on save, but it's ui_hidden: the dedicated Identity panel (Agent ▸
