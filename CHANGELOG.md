@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Autonomous operating model — goals · tasks · scheduling · watches as one OODA loop
+  (ADR 0079, #1915/#1917).** The four self-direction primitives now compose into a single
+  documented loop (Observe = watches/drains, Orient = the durable goal plan, Decide = the
+  goal turn, Act = tasks/scheduling), with goal turns kicked reliably and **durable
+  task→goal attribution** so a goal's task fan-out is inspectable after the fact.
+- **Media output channel for plugin tools (#1929).** `registry.save_media(bytes|path, mime,
+  meta)` persists a generated image/audio/video into a core-owned instance store and returns
+  a `MediaRef` whose URL one core `GET /media/<file>` route serves — embed it in the tool's
+  returned markdown and the console renders it inline, no plugin route needed. Per-file
+  HMAC-signed URLs work under a bearer gate (and survive token rotation); `media.public` /
+  `media.retention_days` config; a `media.saved` bus event per save.
+- **Multimodal ToolMessage — a tool can return an image the vision model actually sees
+  (#1930).** Opt-in via `graph.sdk.multimodal_tool_result(text, images)`: on a
+  vision-capable model (`model.vision`) the image rides the ToolMessage as content blocks
+  (enabling generate → look → refine loops); text-only models degrade to the caption or the
+  `image_describe_model` path. Capped at 3 images / 2 MiB decoded each; ordinary
+  string-returning tools are untouched.
+- **Reusable gateway HTTP client for plugins (#1931).** `graph.sdk.gateway_client()` — an
+  `httpx.AsyncClient` pre-configured with the configured `api_base`, bearer auth, sane
+  timeouts, and the WAF-allowlisted User-Agent — for OpenAI-compatible endpoints the chat
+  model doesn't cover (`/images/generations|edits`, `/audio/*`). Core's own transcription
+  rides it; call gateway endpoints through this, never a provider backend directly (egress
+  deny, ADR 0008).
+- **orgChart plugin (#1925).** A first-party console rail view rendering the live fleet
+  delegation diagram.
+- **Guide: safely exposing a protoAgent to the world (#1920)** — the lockdown checklist
+  (bearer + 404 posture, A2A-only surface, egress guard) for putting an agent on a public
+  hostname.
+
+### Fixed
+- **Goal turns fire on turn 1 and are headless-safe (#1910/#1911/#1912).** The goal is
+  kicked + injected on the first turn (not the second), and a goal turn no longer assumes a
+  console-attached session.
+- **Console: a completed long tool-call turn could render its reply twice (#1938).** When
+  the stream's terminal canonical frame was lost after a diverged delta accumulation, the
+  bubble settled done-but-wrong with nothing left to correct it. The client now reconciles
+  a settled turn against the durable task whenever the stream closes without an
+  authoritative full-turn text, and the chat store dedupes message entries by id at every
+  boundary — a duplicated reply can neither render nor persist.
+- **Console: the auth dialog is a blocking modal (#1926)** — background scroll/interaction
+  is fenced while credentials are required.
+
 ### Removed
 - **`task_output` background-job tool (ADR 0050/0051 correction).** The pull/blocking-wait
   tool proved to be an attractive nuisance that defeated fire-and-forget delegation — agents
