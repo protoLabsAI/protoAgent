@@ -1176,10 +1176,21 @@ function ChatSessionSlot({
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // Whether the stream delivered an AUTHORITATIVE full-turn text (a replace —
+    // the terminal artifact's append:false canonical re-send, or a terminal task
+    // frame). When the connection drops that frame (a proxy/tailnet blip at turn
+    // end), the settled bubble is only the client's own delta accumulation — any
+    // divergence (a lost or doubly-delivered chunk, #1938) would persist as
+    // done-but-wrong with nothing left to correct it. Track it so the settle path
+    // below can reconcile against the durable task exactly when it's needed.
+    let sawAuthoritativeText = false;
+    let turnTaskId = "";
+
     try {
       await api.streamChat(sent, session.id, {
         signal: controller.signal,
         onTaskId: (id) => {
+          turnTaskId = id;
           setTaskId(id);
           // Persist the task id on the assistant message so a stuck `streaming`
           // turn can be reconciled against the server task after a reload (below).
@@ -1221,6 +1232,7 @@ function ChatSessionSlot({
           );
         },
         onText: (text, append) => {
+          if (!append) sawAuthoritativeText = true;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
@@ -1402,6 +1414,31 @@ function ChatSessionSlot({
         // Marks this message as the answer to the pending HITL interrupt (#1560).
         hitlResume: opts.hitlResume,
       });
+      // The stream closed without the terminal canonical text (#1938): the settled
+      // bubble is only this client's delta accumulation, so reconcile it against
+      // the durable task — the server's artifact is the source of truth and a
+      // straight REPLACE collapses any doubled/lost-chunk divergence. Skipped on
+      // every healthy turn (the terminal frame sets sawAuthoritativeText).
+      if (!sawAuthoritativeText && turnTaskId) {
+        try {
+          const res = await api.getTask(turnTaskId);
+          if (/completed/i.test(res.state) && res.text) {
+            const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+            if (latest) {
+              chatStore.updateMessages(
+                session.id,
+                latest.messages.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: res.text, parts: replaceText(m.parts, res.text, m.content) }
+                    : m,
+                ),
+              );
+            }
+          }
+        } catch {
+          // Best-effort — the settled accumulation stands if the task read fails.
+        }
+      }
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
       void reconcileSteer();
