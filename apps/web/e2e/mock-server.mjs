@@ -365,6 +365,10 @@ async function handleA2AStream(req, res, body) {
     await new Promise((resolve) => req.on("close", resolve));
     return res.end();
   }
+  // A SLOW turn stretches the frame gaps so a spec can interleave real actions
+  // mid-stream (reload a sibling tab, fire the self-heal) — the #1938 repro shape:
+  // a 20–60s image-tool turn, scaled down to CI time.
+  const gap = /SLOW/i.test(prompt) ? 300 : 40;
   for (const frame of frames) {
     // CRLF frame separator — the a2a-sdk emits SSE with `\r\n\r\n`, not `\n\n`.
     // The mock must mirror that so this e2e exercises the real wire shape: an
@@ -372,7 +376,7 @@ async function handleA2AStream(req, res, body) {
     res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
     // Small gap so the "working/tool" frames are observably distinct from the
     // terminal artifact (mirrors real tool latency; lets running→done show).
-    await new Promise((r) => setTimeout(r, 40));
+    await new Promise((r) => setTimeout(r, gap));
   }
   res.end();
 }

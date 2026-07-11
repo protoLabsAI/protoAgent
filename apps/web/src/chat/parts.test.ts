@@ -88,6 +88,20 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
     expect(replaceText(p, "answer\n", "answer")).toEqual([{ kind: "text", text: "answer" }]);
   });
 
+  it("collapses a DOUBLY-delivered stream to a single copy (#1938 shape)", () => {
+    // The answer's deltas arrived twice (a replayed/doubled segment en route) —
+    // the client accumulated "answeranswer". The terminal canonical replace must
+    // land the text exactly once, not keep the doubled accumulation.
+    let p: ChatPart[] | undefined;
+    p = addToolRef(p, "t1");
+    p = appendText(p, "Here's your image. ", true);
+    p = appendText(p, "Here's your image. ", true); // the doubled delivery
+    expect(replaceText(p, "Here's your image.", "Here's your image. Here's your image. ")).toEqual([
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Here's your image." },
+    ]);
+  });
+
   it("rebuilds on divergence: drops EVERY prior text run and lands the canonical text exactly once", () => {
     // Mid-stream frames were lost en route — the client's accumulation is truncated.
     const p: ChatPart[] = [

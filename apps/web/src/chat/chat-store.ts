@@ -125,7 +125,12 @@ export function sanitizePersisted(parsed: unknown): PersistedChatState | null {
   const p = parsed as Partial<PersistedChatState>;
   const sessions = (Array.isArray(p.sessions) ? p.sessions : [])
     .filter(isValidSession)
-    .slice(0, MAX_SESSIONS);
+    .slice(0, MAX_SESSIONS)
+    // A duplicate entry that made it into a persisted blob (#1938) collapses on load.
+    .map((s) => {
+      const messages = dedupeMessages(s.messages);
+      return messages === s.messages ? s : { ...s, messages };
+    });
   if (!sessions.length) return null;
   return {
     version: 1,
@@ -174,6 +179,20 @@ export function mergeSessions(
     seen.add(s.id);
   }
   return out.slice(0, MAX_SESSIONS);
+}
+
+/** Collapse duplicate message entries by id, keeping the LAST occurrence (the
+ *  freshest write wins — a finalize/reconcile rewrite supersedes the copy it was
+ *  derived from). Id-less legacy entries pass through untouched. This is the
+ *  store-boundary guarantee behind #1938: whatever interleaving produced a
+ *  duplicate entry upstream, it can never persist or render. */
+export function dedupeMessages(messages: ChatMessage[]): ChatMessage[] {
+  if (!messages.some((m, i) => m.id && messages.findIndex((o) => o.id === m.id) !== i)) return messages;
+  const lastIndexById = new Map<string, number>();
+  messages.forEach((m, i) => {
+    if (m.id) lastIndexById.set(m.id, i);
+  });
+  return messages.filter((m, i) => !m.id || lastIndexById.get(m.id) === i);
 }
 
 function streamingIds(state: ChatState): Set<string> {
@@ -433,6 +452,7 @@ export const chatStore = {
     // Fires per streamed SSE frame (~24 chars) — debounce the localStorage
     // write. The stream-done path flushes via setSessionStatus right after the
     // final updateMessages, so the terminal state always lands immediately.
+    const deduped = dedupeMessages(messages);
     setState(
       (current) => ({
         ...current,
@@ -440,8 +460,8 @@ export const chatStore = {
           session.id === sessionId
             ? {
                 ...session,
-                title: session.title === "New chat" ? titleFromMessages(messages) : session.title,
-                messages,
+                title: session.title === "New chat" ? titleFromMessages(deduped) : session.title,
+                messages: deduped,
                 updatedAt: Date.now(),
               }
             : session,

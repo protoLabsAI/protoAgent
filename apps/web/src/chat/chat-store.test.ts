@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  dedupeMessages,
   ensureActiveSessions,
   mergeSessions,
   sanitizePersisted,
@@ -8,6 +9,7 @@ import {
   type ChatSession,
   type ChatState,
 } from "./chat-store";
+import type { ChatMessage } from "../lib/types";
 
 // ensureActiveSessions is the LRU that decides which chat sessions stay mounted.
 // Its load-bearing invariant: it must NEVER evict a session that is mid-stream
@@ -335,6 +337,60 @@ describe("mergeSessions", () => {
     const local = Array.from({ length: MAX_SESSIONS }, (_, i) => mkSession(`l${i}`, { createdAt: i }));
     const incoming = [mkSession("extra", { createdAt: 9999 })];
     expect(mergeSessions(local, incoming)).toHaveLength(MAX_SESSIONS);
+  });
+
+  // #1938: two mounts interleaving writes during a long streaming turn. The merge is
+  // whole-session (never message-level), so no interleaving may yield a session whose
+  // messages array carries the same entry twice — the streamed reply renders once.
+  it("interleaved two-tab writes during a streaming turn never duplicate a message entry", () => {
+    const user: ChatMessage = { id: "m-u", role: "user", content: "generate a frog", createdAt: 1, status: "done" };
+    const streamingCopy = mkSession("x", {
+      updatedAt: 100,
+      messages: [user, { id: "m-a", role: "assistant", content: "Here you", createdAt: 2, status: "streaming", taskId: "t1" }],
+    });
+    // The sibling mount reconciled the SAME message to done (higher clock) while
+    // this tab still owns the live stream…
+    const reconciledCopy = mkSession("x", {
+      updatedAt: 200,
+      messages: [user, { id: "m-a", role: "assistant", content: "Here you go — a frog.", createdAt: 2, status: "done", taskId: "t1" }],
+    });
+    const midTurn = mergeSessions([streamingCopy], [reconciledCopy], { streamingIds: new Set(["x"]) });
+    expect(midTurn).toHaveLength(1);
+    expect(midTurn[0].messages.filter((m) => m.id === "m-a")).toHaveLength(1);
+    expect(midTurn[0].messages[1].content).toBe("Here you"); // live stream stays authoritative
+
+    // …then the turn ends (streaming exemption lifted): newest whole-session copy
+    // wins — still exactly one assistant entry, never a stacked pair.
+    const settled = mergeSessions([{ ...streamingCopy, updatedAt: 300, messages: reconciledCopy.messages }], [reconciledCopy]);
+    expect(settled).toHaveLength(1);
+    expect(settled[0].messages.filter((m) => m.id === "m-a")).toHaveLength(1);
+  });
+});
+
+// #1938 defense-in-depth: whatever interleaving produces a duplicated entry upstream,
+// the store boundary (updateMessages / sanitizePersisted on load) collapses it.
+describe("dedupeMessages", () => {
+  const msg = (id: string, content: string): ChatMessage => ({ id, role: "assistant", content, createdAt: 1, status: "done" });
+
+  it("returns the same array when there is nothing to collapse (hot path)", () => {
+    const list = [msg("a", "one"), msg("b", "two")];
+    expect(dedupeMessages(list)).toBe(list);
+  });
+
+  it("collapses a duplicated id keeping the LAST occurrence", () => {
+    const out = dedupeMessages([msg("a", "stale"), msg("b", "mid"), msg("a", "fresh")]);
+    expect(out.map((m) => m.content)).toEqual(["mid", "fresh"]);
+  });
+
+  it("leaves id-less legacy entries untouched even with equal content", () => {
+    const legacy = { role: "assistant", content: "same", createdAt: 1, status: "done" } as ChatMessage;
+    expect(dedupeMessages([legacy, { ...legacy }])).toHaveLength(2);
+  });
+
+  it("collapses persisted duplicates on load via sanitizePersisted", () => {
+    const s = mkSession("a", { messages: [msg("m1", "old copy"), msg("m1", "new copy")] });
+    const out = sanitizePersisted({ sessions: [s], currentSessionId: "a" });
+    expect(out?.sessions[0].messages.map((m) => m.content)).toEqual(["new copy"]);
   });
 });
 
