@@ -41,6 +41,15 @@ from graph.telemetry import DecisionLog, render_html, telemetry  # noqa: F401
 # engine knobs + presets + auto-generated agent tools (graph/knobs.py is host-free).
 from graph.knobs import Knobs, make_knob_tools  # noqa: F401
 
+# Re-export the multimodal tool-result envelope (#1930), so a tool that just produced an
+# image writes `from graph.sdk import multimodal_tool_result` and returns
+# `multimodal_tool_result(caption, images=[{"path": p}])` — on a vision model
+# (`model.vision: true`) the image rides the ToolMessage as content blocks the model SEES;
+# on a text-only model it degrades to the caption (+ the image_describe_model description,
+# when configured). Limits: MAX_IMAGES_PER_RESULT images per result, MAX_IMAGE_BYTES
+# decoded bytes each — over-limit images are dropped with an inline note (graph/multimodal.py).
+from graph.multimodal import MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT, multimodal_tool_result  # noqa: F401
+
 
 def config() -> Any:
     """The live runtime ``LangGraphConfig``."""

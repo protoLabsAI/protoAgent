@@ -125,6 +125,23 @@ functions/tools) so your plugin still loads + tests host-free. The surface:
   KNOBS = Knobs().define("min_margin", 30, lo=0).preset("trade-max", {"min_margin": 20})
   registry.register_tools(make_knob_tools(KNOBS, prefix="fleet"))
   ```
+- **Return an image the model can SEE** — `multimodal_tool_result(caption, images=[…])` (#1930):
+  a tool that just produced an image (a render, a chart, a screenshot) returns this instead of a
+  path string. On a vision model (`model.vision: true`) the image rides the ToolMessage as
+  content blocks the model actually looks at — enabling generate → look → refine loops; on a
+  text-only model it degrades to the caption (plus a description via
+  `knowledge.image_describe_model`, when configured). Each image is `{"path": p}` or
+  `{"b64": data}` + optional `"mime"` (default `image/png`). Limits: `MAX_IMAGES_PER_RESULT`
+  (3) images per result, `MAX_IMAGE_BYTES` (2 MiB) decoded per image — downscale in the tool.
+  ```python
+  from graph.sdk import multimodal_tool_result
+
+  @tool
+  async def render_chart(spec: str) -> str:
+      """Render the chart and show it to the model."""
+      path = _render(spec)
+      return multimodal_tool_result("Rendered chart:", images=[{"path": path}])
+  ```
 - **A self-driving goal loop (OODA)** — `start_goal_loop(…)`: set a monitor goal verified by
   your plugin verifier **and** schedule a recurring tick that drives it until the verifier
   passes — in one call (`stop_goal_loop` to tear down, e.g. from an `on_achieved` hook). Register
