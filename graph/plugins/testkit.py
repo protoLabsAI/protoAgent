@@ -278,6 +278,7 @@ class FakeRegistry:
         self.embedders: dict = {}
         self.chat_commands: dict = {}  # slugified token -> handler
         self.late_tool_factories: list = []
+        self.saved_media: list = []  # (data, mime, meta) — save_media captures (#1929)
         self.handlers: dict = {}  # topic -> [handlers]
         self.emitted: list = []  # (topic, data)
         self.navigations: list = []
@@ -362,6 +363,23 @@ class FakeRegistry:
 
     def register_thread_id_resolver(self, fn) -> None:
         self.thread_id_resolver = fn
+
+    def save_media(self, data, mime: str, meta: dict | None = None):
+        """Capture a media save (#1929) WITHOUT touching the real instance store —
+        stdlib-only, like the rest of the testkit. Returns a MediaRef-shaped
+        namespace (``id``/``url``/``path``/``mime``) so a tool that embeds
+        ``ref.url`` in its returned markdown runs unchanged; assert against
+        ``self.saved_media`` (``(data, mime, meta)`` tuples, in call order)."""
+        import mimetypes
+        import types as _types
+
+        self.saved_media.append((data, mime, meta))
+        media_id = f"fake-media-{len(self.saved_media)}"
+        ext = mimetypes.guess_extension(mime or "") or ".bin"
+        name = f"{media_id}{ext}"
+        return _types.SimpleNamespace(
+            id=media_id, url=f"/media/{name}?sig=fake", path=self.plugin_dir / name, mime=mime
+        )
 
     # bus / nav (no-op capture)
     def emit(self, topic: str, data: dict | None = None) -> None:

@@ -457,3 +457,38 @@ class PluginRegistry:
             log.warning("[plugins] %s: register_late_tool_factory needs a callable, got %r", self.plugin_id, factory)
             return
         self.late_tool_factories.append(factory)
+
+    def save_media(self, data, mime: str, meta: dict | None = None):
+        """Persist a generated binary artifact (image/audio/video/…) into the CORE
+        media store and get back a ``MediaRef {id, url, path, mime}`` (#1929).
+
+        The convention: embed ``ref.url`` in the tool's returned markdown —
+        ``f"![generated image]({ref.url})"`` — and the console chat renders it
+        inline, with **no plugin-owned route and no UI change**. ``data`` is the
+        raw ``bytes`` or a source file path to copy in; ``mime`` drives the file
+        extension and the served content type; ``meta`` is optional provenance
+        (prompt, model, …) kept in a hidden sidecar (this plugin's id is recorded
+        automatically). Files land under the instance data dir
+        (``instance_paths().store("media")``) and survive restart.
+
+        Access: the returned ``url`` carries a per-file HMAC signature, so it
+        renders even under a bearer-gated deployment (an ``<img>`` tag can't send
+        a header) while the store stays default-deny; ``media.public: true``
+        (core config) opts the whole store public, and ``media.retention_days``
+        prunes old files. A ``media.saved`` event is broadcast on the bus.
+        """
+        from infra.media import save_media as _save_media
+
+        m = dict(meta or {})
+        m.setdefault("plugin_id", self.plugin_id)
+        ref = _save_media(data, mime, m)
+        # Host-level topic (like ``ui.navigate``), not namespaced via emit(): every
+        # plugin's saves land on ONE topic a consumer (GC dashboard, gallery view)
+        # can subscribe to; the payload carries the producing plugin's id.
+        if self.host and self.host.publish:
+            self.host.publish(
+                "media.saved", {"id": ref.id, "url": ref.url, "mime": ref.mime, "plugin": self.plugin_id}
+            )
+        else:  # non-server context (tests, headless) — no bus wired
+            log.debug("[plugins] %s: media.saved event dropped — no bus", self.plugin_id)
+        return ref

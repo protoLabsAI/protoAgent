@@ -233,6 +233,17 @@ checkpoint:
   # checkpoints. Needs the knowledge middleware enabled.
   harvest_enabled: true
 
+# Media output store (#1929) — binary artifacts (images/audio/video) plugin
+# tools persist via registry.save_media() and the core /media/<file> route
+# serves. Gated by default: each saved URL carries a per-file HMAC signature so
+# inline chat images render even under a bearer gate, while unsigned requests
+# are denied. Both knobs are optional:
+#   public: true opts the WHOLE store out of the auth gate (explicit exposure).
+#   retention_days prunes files older than N days on each save (0 = keep forever).
+# media:
+#   public: false
+#   retention_days: 0
+
 # Background jobs (ADR 0050/0070) — delegations fired with run_in_background.
 # auto_resume: when a job finishes, immediately run a turn in the session that
 # spawned it so the agent reviews the report and briefs the operator; false
