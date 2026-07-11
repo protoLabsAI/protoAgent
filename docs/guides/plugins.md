@@ -85,6 +85,7 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 | `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
 | `register_chat_command(name, handler)` | A **user-only** `/<name>` chat control command that short-circuits the turn (the generalized `/goal`) — token slugified+lowercased; `goal` reserved; see [publish guide](/guides/plugin-registry) | chat dispatch; first plugin to claim a token wins |
 | `register_late_tool_factory(factory)` | A tool factory that runs **after** the full toolset is assembled — `factory(all_tools, config) → tool \| list \| None`, for meta-tools that must see every other tool | graph build, appended last |
+| `save_media(data, mime, meta=None)` | Persist a generated binary artifact (image/audio/video) into the **core media store** (#1929) → `MediaRef {id, url, path, mime}`. Embed `ref.url` in the tool's returned markdown (`![alt](url)`) and the console renders it inline — no plugin route needed. The URL carries a per-file HMAC signature so it works under a bearer gate; `media.public` / `media.retention_days` (core config) control exposure and pruning; broadcasts `media.saved` on the bus | any time (typically inside a tool) |
 
 ```python
 def register(registry):
@@ -298,6 +299,28 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   async with sdk.gateway_client(timeout=300) as client:
       resp = await client.post("/images/generations", json={"model": m, "prompt": p})
       resp.raise_for_status()
+  ```
+- `multimodal_tool_result(text, images)` — an **opt-in envelope** a tool returns so the
+  model can *see* an image it just produced (#1930): on a vision-capable model
+  (`model.vision: true`) the image rides the ToolMessage as content blocks; on a
+  text-only model it degrades to the caption (described via
+  `knowledge.image_describe_model` when configured). Each image is
+  `{"b64"|"path": …, "mime": …}`; limits `MAX_IMAGES_PER_RESULT` (3) /
+  `MAX_IMAGE_BYTES` (2 MiB decoded) are enforced eagerly — downscale in the tool.
+  Ordinary string-returning tools are untouched. Pairs with `registry.save_media`
+  (#1929): save for the *user* to see inline, envelope for the *model* to see —
+  a generate → look → refine loop uses both.
+
+  ```python
+  from graph.sdk import multimodal_tool_result
+
+  @tool
+  async def render_chart(spec: str) -> str:
+      png = _render(spec)                       # bytes
+      ref = registry.save_media(png, "image/png")   # user sees it inline
+      return multimodal_tool_result(                # model sees it too
+          f"Rendered chart: ![chart]({ref.url})", images=[{"b64": b64encode(png).decode()}]
+      )
   ```
 - `knowledge_search(query, *, k=5, domain=None, epoch=None)` /
   `knowledge_add(content, *, domain="general", heading=None, epoch=None)` — the
