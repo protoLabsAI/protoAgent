@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.98.0",
+    "date": "2026-07-11",
+    "changes": [
+      "Autonomous operating model — goals · tasks · scheduling · watches as one OODA loop.",
+      "Media output channel for plugin tools (#1929).",
+      "Multimodal ToolMessage — a tool can return an image the vision model actually sees (#1930).",
+      "Reusable gateway HTTP client for plugins (#1931).",
+      "orgChart plugin (#1925).",
+      "Guide: safely exposing a protoAgent to the world (#1920)",
+      "Goal turns fire on turn 1 and are headless-safe (#1910/#1911/#1912).",
+      "Console: a completed long tool-call turn could render its reply twice (#1938).",
+      "Console: the auth dialog is a blocking modal (#1926)",
+      "task_output background-job tool.",
+      "Fleet delegation biases to fire-and-forget."
+    ]
+  },
+  {
     "version": "v0.97.0",
     "date": "2026-07-08",
     "changes": [
