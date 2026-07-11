@@ -47,6 +47,31 @@ def config() -> Any:
     return STATE.graph_config
 
 
+def gateway_client(*, timeout: float | None = None) -> Any:
+    """An ``httpx.AsyncClient`` pre-configured for the **model gateway** (#1931):
+    ``base_url`` = the configured ``api_base``, bearer auth, the allowlisted
+    User-Agent (the gateway's WAF 403s default SDK UAs), and a sane timeout.
+
+    For OpenAI-compatible endpoints the chat model doesn't cover —
+    ``/images/generations``, ``/images/edits``, ``/audio/*`` (core's own
+    transcription rides the same client). Request relative paths and use it per
+    call::
+
+        async with sdk.gateway_client(timeout=300) as client:
+            resp = await client.post("/images/generations", json={...})
+            resp.raise_for_status()
+
+    Call gateway endpoints through this — never a provider backend directly: the
+    ``api_base`` host is auto-trusted by the egress guard + OpenShell network
+    policy (ADR 0008); other hosts are not (a private backend IP is denied
+    outright). ``timeout=None`` keeps the factory default."""
+    from graph.config import LangGraphConfig
+    from graph.llm import gateway_client as _factory
+
+    cfg = STATE.graph_config or LangGraphConfig()
+    return _factory(cfg, **({} if timeout is None else {"timeout": timeout}))
+
+
 def subagent_types() -> set[str]:
     """Ids of the configured subagents — for validating/listing recipe steps."""
     from graph.subagents.config import SUBAGENT_REGISTRY

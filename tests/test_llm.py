@@ -1,10 +1,11 @@
 """Tests for LLM kwargs assembly — sampling params + extra_body wiring."""
 
 import httpcore
+import httpx
 import pytest
 
 from graph.config import LangGraphConfig
-from graph.llm import _build_llm_kwargs, _stream_with_reconnect
+from graph.llm import _GATEWAY_UA, _build_llm_kwargs, _stream_with_reconnect, gateway_client, gateway_sync_client
 
 
 def test_defaults_omit_optional_sampling_params():
@@ -138,6 +139,82 @@ def test_create_llm_routes_acp_model_name_to_acp_aux(monkeypatch):
     monkeypatch.setattr(AR, "make_acp_aux_model", _fake)
     out = create_llm(LangGraphConfig(), model_name="acp:claude")
     assert out is sentinel and captured["agent"] == "claude"
+
+
+# --- #1931: the shared gateway HTTP client (api_base + bearer + allowlisted UA) ---
+
+
+async def test_gateway_client_is_preconfigured_for_the_gateway(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = LangGraphConfig(api_base="http://gw.test/v1/", api_key="sk-abc")
+    async with gateway_client(cfg) as client:
+        assert isinstance(client, httpx.AsyncClient)
+        assert str(client.base_url).rstrip("/") == "http://gw.test/v1"  # trailing slash normalized
+        assert client.headers["User-Agent"] == _GATEWAY_UA  # the WAF-allowlisted UA
+        assert client.headers["Authorization"] == "Bearer sk-abc"
+        assert client.timeout.read == 120.0  # sane default, overridable per call
+
+
+async def test_gateway_client_posts_extra_endpoints_with_zero_hand_set_headers():
+    # The acceptance shape for #1931: a plugin POSTs an OpenAI-compatible endpoint the
+    # chat client doesn't cover, setting NO headers itself — base_url, bearer, and the
+    # allowlisted UA all come from the factory.
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["ua"] = request.headers.get("user-agent")
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": [{"b64_json": "…"}]})
+
+    cfg = LangGraphConfig(api_base="http://gw.test/v1", api_key="sk-abc")
+    async with gateway_client(cfg, transport=httpx.MockTransport(handler)) as client:
+        resp = await client.post("/images/generations", json={"model": "img-1", "prompt": "a cat"})
+    assert resp.status_code == 200
+    assert seen["url"] == "http://gw.test/v1/images/generations"
+    assert seen["ua"] == _GATEWAY_UA
+    assert seen["auth"] == "Bearer sk-abc"
+
+
+def test_gateway_client_auth_falls_back_to_env_and_omits_when_absent(monkeypatch):
+    cfg = LangGraphConfig(api_base="http://gw.test/v1", api_key="")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    with gateway_sync_client(cfg) as client:
+        assert isinstance(client, httpx.Client)
+        assert client.headers["Authorization"] == "Bearer env-key"
+        assert client.headers["User-Agent"] == _GATEWAY_UA
+    monkeypatch.delenv("OPENAI_API_KEY")
+    with gateway_sync_client(cfg) as client:
+        assert "Authorization" not in client.headers  # no key → no header, not "Bearer "
+
+
+def test_gateway_base_is_egress_trusted_while_backends_are_not():
+    # The egress-trust property the client rides on (ADR 0008): under a deny-by-default
+    # allowlist the configured api_base host is auto-included, so a call through the
+    # gateway client passes — while a direct provider-backend host is denied.
+    from security import egress
+
+    cfg = LangGraphConfig(api_base="http://gw.test/v1")
+    egress.set_allowed_hosts(["example.com"], also_allow_url=cfg.api_base)
+    try:
+        assert egress.check_url("http://gw.test/v1/images/generations") is None
+        assert egress.check_url("http://backend.internal/v1/images/generations") is not None
+    finally:
+        egress.set_allowed_hosts([])
+
+
+async def test_sdk_gateway_client_resolves_the_live_config(monkeypatch):
+    # The plugin-facing handle: graph.sdk.gateway_client() reads the LIVE runtime config
+    # (no config argument for the plugin to thread through).
+    from graph import sdk
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(api_base="http://gw.test/v1", api_key="sk-live"))
+    async with sdk.gateway_client(timeout=7.5) as client:
+        assert str(client.base_url).rstrip("/") == "http://gw.test/v1"
+        assert client.headers["Authorization"] == "Bearer sk-live"
+        assert client.headers["User-Agent"] == _GATEWAY_UA
+        assert client.timeout.read == 7.5
 
 
 # --- #1728: reconnect a provider stream that drops before emitting any content ---

@@ -143,7 +143,7 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
         # UA. If you self-host behind a different edge, this is safe to
         # keep.
         "default_headers": {
-            "User-Agent": "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)",
+            "User-Agent": _GATEWAY_UA,
         },
     }
 
@@ -290,6 +290,57 @@ def create_embed_batch_fn(
     return emb.embed_documents if emb is not None else None
 
 
+# ── direct gateway endpoint calls (the shared HTTP client, #1931) ─────────────
+#
+# Core AND plugins sometimes need a non-chat, OpenAI-compatible gateway endpoint
+# the LangChain clients don't cover — /audio/transcriptions here, /images/* for
+# an image plugin. Every such call must reproduce three load-bearing details, so
+# they live in ONE factory instead of being re-derived per caller:
+#
+#   1. the configured ``api_base`` + ``api_key`` (bearer auth);
+#   2. the allowlisted User-Agent — the gateway's Cloudflare WAF 403s default
+#      SDK UAs (see the ``default_headers`` note in ``_build_llm_kwargs``);
+#   3. the egress-trust property (ADR 0008): the ``api_base`` host is
+#      auto-allowlisted by ``security/egress.py`` and the OpenShell network
+#      policy, while a provider *backend* host is deny-by-default (a private IP
+#      is denied outright) — so callers go through the gateway, never around it.
+
+# Default timeout for a direct gateway call — generous enough for a slow
+# generation endpoint, bounded so a hung gateway can't wedge the caller.
+_GATEWAY_CLIENT_TIMEOUT_S = 120.0
+
+
+def _gateway_client_kwargs(config: LangGraphConfig, *, timeout: float) -> dict:
+    """The shared httpx client kwargs (base_url + bearer + allowlisted UA + timeout)."""
+    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+    headers = {"User-Agent": _GATEWAY_UA}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return {"base_url": (config.api_base or "").rstrip("/"), "headers": headers, "timeout": timeout}
+
+
+def gateway_client(
+    config: LangGraphConfig, *, timeout: float = _GATEWAY_CLIENT_TIMEOUT_S, **httpx_kwargs
+) -> httpx.AsyncClient:
+    """An ``httpx.AsyncClient`` pre-configured for the model gateway (#1931).
+
+    Request relative paths (``await client.post("/images/generations", json=…)``) —
+    they resolve under the configured ``api_base`` with bearer auth and the
+    allowlisted User-Agent already set, zero hand-set headers. Use it per call
+    (``async with``); ``**httpx_kwargs`` forwards to the client constructor
+    (e.g. a ``transport`` in tests). Plugins reach this via
+    ``graph.sdk.gateway_client()`` (live config resolved for them)."""
+    return httpx.AsyncClient(**_gateway_client_kwargs(config, timeout=timeout), **httpx_kwargs)
+
+
+def gateway_sync_client(
+    config: LangGraphConfig, *, timeout: float = _GATEWAY_CLIENT_TIMEOUT_S, **httpx_kwargs
+) -> httpx.Client:
+    """The sync twin of :func:`gateway_client` — for worker-thread callers like
+    the ingestion pipeline (``create_transcribe_fn``)."""
+    return httpx.Client(**_gateway_client_kwargs(config, timeout=timeout), **httpx_kwargs)
+
+
 # Transcription timeout — STT of a long clip is slow (cold model load + minutes
 # of audio); generous but bounded so a hung gateway can't wedge an ingest thread.
 _TRANSCRIBE_TIMEOUT_S = 600.0
@@ -303,26 +354,19 @@ def create_transcribe_fn(
     Posts to the gateway's OpenAI-compatible ``/audio/transcriptions`` endpoint
     (ADR 0021) using ``knowledge.transcribe_model`` (e.g. ``whisper-1``) — so
     audio/video ingestion reuses the same gateway + key as chat/embeddings, no
-    local ASR model. Raw httpx (not the OpenAI SDK) to send the allowlisted
-    User-Agent the gateway's WAF requires. Returns ``None`` when no transcribe
-    model is configured; transport/parse errors propagate to the ingestion
-    engine, which maps them to a clean extraction failure."""
+    local ASR model. Goes through the shared :func:`gateway_sync_client` (not the
+    OpenAI SDK) to send the allowlisted User-Agent the gateway's WAF requires.
+    Returns ``None`` when no transcribe model is configured; transport/parse
+    errors propagate to the ingestion engine, which maps them to a clean
+    extraction failure."""
     model = (getattr(config, "transcribe_model", "") or "").strip()
     if not model:
         return None
-    api_base = (config.api_base or "").rstrip("/")
-    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
 
     def _transcribe(data: bytes, filename: str) -> str:
-        import httpx
-
-        headers = {"User-Agent": _GATEWAY_UA}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        with httpx.Client(timeout=_TRANSCRIBE_TIMEOUT_S) as client:
+        with gateway_sync_client(config, timeout=_TRANSCRIBE_TIMEOUT_S) as client:
             resp = client.post(
-                f"{api_base}/audio/transcriptions",
-                headers=headers,
+                "/audio/transcriptions",
                 data={"model": model},
                 files={"file": (filename or "audio.mp3", data)},
             )

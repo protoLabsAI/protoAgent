@@ -280,6 +280,25 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   completion (vs `host.invoke`, which runs a full lead-agent *chat turn*).
 - `subagent_types()` — the configured subagent ids.
 - `config()` — the live `LangGraphConfig`.
+- `gateway_client(timeout=…)` — an `httpx.AsyncClient` **pre-configured for the model
+  gateway** (#1931): `base_url` = the configured `api_base`, bearer auth, a sane timeout,
+  and the allowlisted `protoAgent/…` User-Agent (the gateway's Cloudflare WAF 403s the
+  default SDK UAs — hand-rolled httpx calls get blocked at the edge). For the
+  OpenAI-compatible endpoints the chat model doesn't cover — `/images/generations`,
+  `/images/edits`, `/audio/*` (core's own audio transcription rides the same client).
+  **Call gateway endpoints through this; never hit a provider backend directly** — the
+  configured `api_base` host is auto-trusted by the egress guard and the OpenShell
+  network policy (ADR 0008), while any other host is deny-by-default under an egress
+  allowlist and a private backend IP is denied outright. Request **relative paths** and
+  use it per call:
+
+  ```python
+  from graph import sdk
+
+  async with sdk.gateway_client(timeout=300) as client:
+      resp = await client.post("/images/generations", json={"model": m, "prompt": p})
+      resp.raise_for_status()
+  ```
 - `knowledge_search(query, *, k=5, domain=None, epoch=None)` /
   `knowledge_add(content, *, domain="general", heading=None, epoch=None)` — the
   plugin↔knowledge channel: search the agent's knowledge graph (hybrid FTS5 +
