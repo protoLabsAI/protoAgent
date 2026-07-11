@@ -3,24 +3,24 @@
     "status": "Planned",
     "items": [
       {
-        "title": "One-command install",
-        "detail": "a curl | sh bootstrap with an interactive CLI config wizard.",
+        "title": "Signed Windows installer",
+        "detail": "Authenticode-sign the desktop setup.exe — Windows leaves the notify-me gate when it ships.",
         "refs": [
-          "#1520"
+          "#1689"
         ]
       },
       {
-        "title": "Migrate from Hermes",
-        "detail": "a script that imports an existing Hermes agent into protoAgent.",
+        "title": "Multi-window desktop chat",
+        "detail": "\"Open in New Window\" spawns a real second desktop window with its own chat surface.",
         "refs": [
-          "#1515"
+          "#1706"
         ]
       },
       {
-        "title": "Migrate from OpenClaw",
-        "detail": "a script that imports an existing OpenClaw agent into protoAgent.",
+        "title": "Plugin Python deps in the desktop app",
+        "detail": "opt-in install of a plugin's requires_pip packages inside the frozen desktop build.",
         "refs": [
-          "#1514"
+          "#1631"
         ]
       },
       {
@@ -31,10 +31,18 @@
         ]
       },
       {
-        "title": "Rewind a chat thread",
-        "detail": "jump a conversation back to an earlier message and branch from there.",
+        "title": "Backend-agnostic tracing",
+        "detail": "generic OTLP / OpenInference trace export instead of hard-coding the Langfuse SDK.",
         "refs": [
-          "#1535"
+          "#1884"
+        ]
+      },
+      {
+        "title": "Ollama & Hugging Face listings",
+        "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
+        "refs": [
+          "#1833",
+          "#1834"
         ]
       }
     ]
@@ -43,24 +51,15 @@
     "status": "In progress",
     "items": [
       {
-        "title": "Plugin management from the rail",
-        "detail": "uninstall a plugin from the rail context menu and a plugin-management settings panel.",
-        "refs": [
-          "#1522"
-        ]
+        "title": "Image generation plugin (protobanana)",
+        "detail": "generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.",
+        "refs": []
       },
       {
-        "title": "Plugin version + update",
-        "detail": "show the installed version inline with an \"update if available\" action.",
+        "title": "Production traces → training flywheel",
+        "detail": "wire per-turn trajectory export from production agents into the lab for downstream training-data collection.",
         "refs": [
-          "#1521"
-        ]
-      },
-      {
-        "title": "Live Work panel",
-        "detail": "reflect goal, task, and schedule changes as they happen, without a manual refresh.",
-        "refs": [
-          "#1537"
+          "#1897"
         ]
       }
     ]
@@ -69,24 +68,53 @@
     "status": "Shipped",
     "items": [
       {
-        "title": "/compact",
-        "detail": "summarize and archive a long chat thread in a single command.",
+        "title": "Autonomous operating model",
+        "detail": "goals, tasks, scheduling, and watches compose into one self-directed OODA loop, with durable task→goal attribution (ADR 0079).",
         "refs": [
-          "v0.78.0"
+          "v0.98.0"
         ]
       },
       {
-        "title": "Developer flags",
-        "detail": "gate pre-release work behind local feature flags, with a Settings ▸ Developer panel.",
+        "title": "Media platform",
+        "detail": "plugin tools save generated images/audio/video the chat renders inline (signed URLs, bearer-safe), and can return images a vision model actually sees.",
         "refs": [
-          "v0.78.0"
+          "v0.98.0"
         ]
       },
       {
-        "title": "Watches",
-        "detail": "supervise many external conditions at once as a first-class primitive.",
+        "title": "Fleet trace export",
+        "detail": "opt-in per-turn trajectory rows (OpenAI chat format + verifiable reward) with a PII-redacting sync pipeline.",
         "refs": [
-          "v0.78.0"
+          "v0.97.0"
+        ]
+      },
+      {
+        "title": "Migrate from Hermes or OpenClaw",
+        "detail": "import scripts that carry an existing agent's config, memory, and history into protoAgent.",
+        "refs": [
+          "v0.96.0",
+          "v0.93.0"
+        ]
+      },
+      {
+        "title": "Rewind a chat thread",
+        "detail": "jump a conversation back to an earlier message and branch from there.",
+        "refs": [
+          "v0.90.0"
+        ]
+      },
+      {
+        "title": "Plugin management from the rail",
+        "detail": "installed version, \"update if available\", and uninstall — from the rail context menu and a settings panel.",
+        "refs": [
+          "v0.89.0"
+        ]
+      },
+      {
+        "title": "One-command install",
+        "detail": "a curl | sh bootstrap with an interactive CLI config wizard.",
+        "refs": [
+          "#1520"
         ]
       }
     ]
