@@ -106,6 +106,15 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
 
     middleware.append(SubagentFenceMiddleware())
 
+    # Multimodal tool results (#1930) — a tool that opts in (via the
+    # graph.multimodal sentinel envelope) can return an image the vision model
+    # SEES as ToolMessage content blocks; on a text-only model it degrades to
+    # the text part (optionally described via knowledge.image_describe_model).
+    # Always on: inert for every ordinary tool (one startswith per result).
+    from graph.middleware.multimodal_tool import build_multimodal_middleware
+
+    middleware.append(build_multimodal_middleware(config))
+
     # KnowledgeMiddleware also carries the always-on skill index (the
     # <available_skills> injection, ADR 0060). Build it when knowledge OR skills
     # is active, so skills work even on a KB-less agent (the store is None-tolerant).
@@ -308,7 +317,8 @@ async def _run_subagent(
         return f"Error: No tools available for subagent '{subagent_type}'."
 
     # Subagent model: per-subagent override → routing.aux_model → main model.
-    sub_llm = create_llm(config, model_name=_resolve_aux_model(config, getattr(sub_config, "model", "")))
+    sub_model = _resolve_aux_model(config, getattr(sub_config, "model", ""))
+    sub_llm = create_llm(config, model_name=sub_model)
 
     # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
     # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/
@@ -318,7 +328,18 @@ async def _run_subagent(
     # calls join the SAME Langfuse trace (nested under the subagent boundary span).
     from graph.middleware.trace_context import TraceContextMiddleware
 
-    sub_middleware = [TraceContextMiddleware(), AuditMiddleware()]
+    # Multimodal tool results (#1930) mirror the lead chain too — otherwise an
+    # opt-in tool called inside a delegation would leak its raw base64 envelope
+    # into the subagent's context. Vision only when the delegation runs on the
+    # MAIN model (`sub_model is None`): `model.vision` describes that model, and
+    # an aux/per-subagent override may be text-only — those degrade to text.
+    from graph.middleware.multimodal_tool import build_multimodal_middleware
+
+    sub_middleware = [
+        TraceContextMiddleware(),
+        AuditMiddleware(),
+        build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
+    ]
     if getattr(config, "enforcement_enabled", False) and (
         config.enforcement_disallowed_tools or config.enforcement_rate_limits
     ):
