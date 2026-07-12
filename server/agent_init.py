@@ -1632,9 +1632,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     if pending_start is not None:
         _start_scheduler_async(pending_start)
 
-    # Plugin surfaces with a reload hook (ADR 0018/0019) reconnect on a config
-    # change without a restart — this is how the Discord plugin live-reconnects
-    # when its token/admin/enabled changes (was a bespoke discord_changed block).
+    # Publish the reloaded surface spec set so the reconcile below (and any
+    # introspection) sees the CURRENT wanted surfaces — this is what lets a reload
+    # hot-start a newly-enabled plugin's surface and stop a disabled one. Was
+    # boot-only before, so surface enable/disable needed a restart.
+    STATE.plugin_surfaces = new_plugins.surfaces
+    # Reconcile running surfaces against that set (ADR 0018/0019): stop surfaces whose
+    # plugin was disabled/removed, hot-start newly-enabled ones, and fire each survivor's
+    # reload hook so a Discord/Google-style gateway live-reconnects on a token/admin change.
     _reload_plugin_surfaces(new_config)
 
     # Hot-mount routes from newly-enabled plugins (e.g. delegates) — already-mounted
@@ -1696,30 +1701,95 @@ def _populate_plugin_host() -> None:
         log.exception("[plugins] failed to populate plugin host")
 
 
-def _reload_plugin_surfaces(new_config) -> None:
-    """Notify started plugin surfaces of a config change (ADR 0018/0019).
+def _surface_key(spec_or_handle) -> tuple:
+    """The identity of a surface for reconcile: ``(plugin_id, name)``. Keyed on both so
+    two plugins may share a surface name without colliding."""
+    return (spec_or_handle.get("plugin_id"), spec_or_handle.get("name"))
 
-    Each surface that registered a ``reload`` callback gets it called with the new
-    ``LangGraphConfig`` on the server loop, so a migrated Discord/Google-style
-    surface can reconnect on a Settings save without a restart. Best-effort.
+
+def _plan_surface_reconcile(handles: list, wanted: list) -> tuple[list, list, list]:
+    """Pure diff for surface hot-reload — no I/O, so it's unit-testable.
+
+    ``handles`` is the live ``STATE.plugin_surface_handles`` (running surfaces); ``wanted``
+    is the reloaded plugin surface spec set. Returns ``(to_stop, to_start, to_reload)``:
+
+    - ``to_stop`` — running handles whose ``(plugin_id, name)`` is no longer wanted
+      (its plugin was disabled/uninstalled).
+    - ``to_start`` — wanted specs not currently running (a newly-enabled plugin).
+    - ``to_reload`` — handles present in both (fire the ``reload(cfg)`` callback; leave
+      the surface running so a live gateway connection isn't dropped).
     """
-    for h in STATE.plugin_surface_handles:
-        reload_cb = h.get("reload")
-        if not callable(reload_cb):
-            continue
+    running = {_surface_key(h): h for h in handles}
+    wanted_by = {_surface_key(s): s for s in wanted}
+    to_stop = [h for k, h in running.items() if k not in wanted_by]
+    to_start = [s for k, s in wanted_by.items() if k not in running]
+    to_reload = [running[k] for k in wanted_by if k in running]
+    return to_stop, to_start, to_reload
 
-        def _make(cb=reload_cb, name=h.get("name")):
-            async def _run():
+
+def _reload_plugin_surfaces(new_config) -> None:
+    """Reconcile running plugin surfaces against the reloaded plugin set (ADR 0018/0019).
+
+    On a config reload: **stop** surfaces whose plugin was disabled/uninstalled,
+    **hot-start** newly-enabled plugins' surfaces, and fire each survivor's ``reload(cfg)``
+    callback so a Discord/Google-style gateway reconnects on a token/admin change without a
+    restart. Before this, a reload only fired reload callbacks — a newly-enabled surface
+    stayed dead and a disabled one leaked (kept running) until a full restart.
+
+    A no-op until the startup hook has started surfaces (``plugin_surfaces_started``): a
+    reload before boot's surface loop would double-start (here AND there). The whole
+    reconcile runs as ONE coroutine on the server loop, so every read/write of
+    ``plugin_surface_handles`` is serialized on the loop thread (the start/stop I/O is
+    async, and back-to-back reloads enqueue sequential tasks). Best-effort per surface: a
+    failure logs, never breaks the reload.
+    """
+    if not STATE.plugin_surfaces_started:
+        return  # the pending startup hook will start the already-updated STATE.plugin_surfaces
+    wanted = list(STATE.plugin_surfaces)
+
+    async def _run():
+        to_stop, to_start, to_reload = _plan_surface_reconcile(STATE.plugin_surface_handles, wanted)
+        for h in to_stop:
+            stop_cb = h.get("stop")
+            if callable(stop_cb):
                 try:
-                    res = cb(new_config)
+                    res = stop_cb()
                     if asyncio.iscoroutine(res):
                         await res
                 except Exception:
-                    log.exception("[plugins] surface %s reload failed", name)
+                    log.exception("[plugins] surface %s stop-on-reload failed", h.get("name"))
+            if h in STATE.plugin_surface_handles:
+                STATE.plugin_surface_handles.remove(h)
+            log.info("[plugins] stopped surface %s — its plugin was disabled/removed", h.get("name"))
+        for s in to_start:
+            try:
+                res = s["start"]()
+                if asyncio.iscoroutine(res):
+                    res = await res
+                STATE.plugin_surface_handles.append(
+                    {
+                        "plugin_id": s.get("plugin_id"),
+                        "name": s.get("name"),
+                        "stop": s.get("stop"),
+                        "reload": s.get("reload"),
+                        "handle": res,
+                    }
+                )
+                log.info("[plugins] hot-started surface %s — its plugin was enabled", s.get("name"))
+            except Exception:
+                log.exception("[plugins] surface %s failed to hot-start", s.get("name"))
+        for h in to_reload:
+            reload_cb = h.get("reload")
+            if not callable(reload_cb):
+                continue
+            try:
+                res = reload_cb(new_config)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                log.exception("[plugins] surface %s reload failed", h.get("name"))
 
-            return _run()
-
-        _run_on_server_loop(_make, f"surface reload ({h.get('name')})")
+    _run_on_server_loop(lambda: _run(), "surface reconcile")
 
 
 def _sync_autostart_with_config(config: dict | None) -> str | None:
