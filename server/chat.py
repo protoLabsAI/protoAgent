@@ -493,19 +493,76 @@ def _last_tool_text(result) -> str:
     return ""
 
 
-def _vision_human_message(message: str, images: list[tuple[str, str]] | None = None):
+# Byte-matches the protobanana plugin's middleware marker: the plugin skips any
+# message whose text already carries it, so core bridging and the plugin's
+# (pre-min-host-version) middleware never double-save an attachment.
+_ATTACHMENT_REFS_MARKER = "[attached-image refs]"
+
+
+def _bridge_attachment_ids(images: list[tuple[str, str]] | None, session_id: str | None = None) -> str:
+    """Persist ``data:`` image attachments to the media store; return the id note.
+
+    The tools side of native vision (#1969): the model can SEE an attachment but
+    cannot echo megabytes of base64 out of its vision context into a tool
+    argument — so each image is saved once at turn entry (before the vision
+    gate, so text-only models get the refs too) and named by media id in a text
+    note any media-ref-taking tool can act on.
+
+    Remote http(s) image URLs are left alone — no server-side fetch (SSRF).
+    A failed save degrades to today's behavior (no note); it never breaks the turn.
+    """
+    import base64
+
+    from infra.media import save_media
+
+    ids: list[str] = []
+    for mime, uri in images or []:
+        if not uri.startswith("data:image/") or "," not in uri:
+            continue
+        try:
+            _header, b64 = uri.split(",", 1)
+            meta = {"source": "user_attachment"}
+            if session_id:
+                meta["session_id"] = session_id
+            ref = save_media(base64.b64decode(b64), mime or "image/png", meta)
+            ids.append(ref.id)
+        except Exception:  # noqa: BLE001 — one bad part must not kill the turn
+            log.warning("[media] failed to persist an attached image", exc_info=True)
+    if not ids:
+        return ""
+    listing = ", ".join(f"image {i} = `{mid}`" for i, mid in enumerate(ids, start=1))
+    return (
+        f"{_ATTACHMENT_REFS_MARKER} the user's attached image(s) are saved and can be "
+        f"passed to image tools by media id: {listing}"
+    )
+
+
+def _vision_human_message(
+    message: str,
+    images: list[tuple[str, str]] | None = None,
+    *,
+    session_id: str | None = None,
+    incognito: bool = False,
+):
     """The turn's user message, with native vision (ADR 0021): when the model is
     vision-capable and the turn carried image parts, a multimodal content list
     (text + image_url blocks) the model sees directly — not piped through
-    extraction. Non-vision models get plain text (images dropped), the same
-    gating on both the streaming and non-streaming (#1943) paths."""
+    extraction. Non-vision models get plain text (image blocks dropped), the
+    same gating on both the streaming and non-streaming (#1943) paths.
+
+    Attachments are also bridged into the media store (#1969) so tools can
+    reference them by id — on vision AND non-vision models — except on
+    incognito turns (ADR 0069: no persistence)."""
     from langchain_core.messages import HumanMessage
 
+    note = "" if incognito else _bridge_attachment_ids(images, session_id)
     if images and getattr(STATE.graph_config, "model_vision", False):
         blocks: list[dict] = [{"type": "text", "text": message}] if message else []
         blocks += [{"type": "image_url", "image_url": {"url": uri}} for _mt, uri in images]
+        if note:
+            blocks.append({"type": "text", "text": note})
         return HumanMessage(content=blocks)
-    return HumanMessage(content=message)
+    return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
 
 
 async def _run_turn_stream(
@@ -536,7 +593,7 @@ async def _run_turn_stream(
     """
     from langgraph.types import Command
 
-    human = _vision_human_message(message, images)
+    human = _vision_human_message(message, images, session_id=session_id, incognito=incognito)
 
     graph_input = (
         Command(resume=await _resume_payload(config, resume_value))
@@ -1880,7 +1937,7 @@ async def _chat_langgraph_impl(
                     graph_input = {
                         # Vision parts ride the user message when the model supports
                         # them (#1943) — same gating as the streaming path.
-                        "messages": [_vision_human_message(_msg, images)],
+                        "messages": [_vision_human_message(_msg, images, session_id=session_id, incognito=incognito)],
                         "session_id": session_id,
                         **_state_extra,
                     }

@@ -150,13 +150,17 @@ async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     assert content and "Wait scheduled" in content  # not a blank reply
 
 
-def test_vision_human_message_gates_on_model_vision(monkeypatch):
+def test_vision_human_message_gates_on_model_vision(monkeypatch, tmp_path):
     # #1943: image parts become multimodal content blocks only on a vision-capable
-    # model; otherwise they're dropped and the message stays plain text — the same
-    # gating the streaming path applies. (config=None — e.g. tests/boot — is non-vision.)
+    # model; otherwise the image BLOCKS are dropped and the message stays plain
+    # text — the same gating the streaming path applies. (config=None — e.g.
+    # tests/boot — is non-vision.) Since #1969 every data: attachment is also
+    # bridged into the media store and named by id in a marker note, so the note
+    # rides both shapes.
     import runtime.state as rs
-    from server.chat import _vision_human_message
+    from server.chat import _ATTACHMENT_REFS_MARKER, _vision_human_message
 
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "instance"))
     images = [("image/png", "data:image/png;base64,AAA=")]
 
     class _Cfg:
@@ -164,17 +168,61 @@ def test_vision_human_message_gates_on_model_vision(monkeypatch):
 
     monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
     human = _vision_human_message("look", images)
-    assert human.content == [
+    assert human.content[:2] == [
         {"type": "text", "text": "look"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA="}},
     ]
-    # Image-only turn (no text) → no empty text block.
-    assert _vision_human_message("", images).content == [
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA="}}
-    ]
+    assert human.content[2]["type"] == "text" and _ATTACHMENT_REFS_MARKER in human.content[2]["text"]
+    # Image-only turn (no text) → no empty text block; the note block still rides.
+    blocks = _vision_human_message("", images).content
+    assert blocks[0] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA="}}
+    assert _ATTACHMENT_REFS_MARKER in blocks[1]["text"]
 
     _Cfg.model_vision = False
-    assert _vision_human_message("look", images).content == "look"
+    content = _vision_human_message("look", images).content
+    assert content.startswith("look") and _ATTACHMENT_REFS_MARKER in content and "image_url" not in content
     monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
-    assert _vision_human_message("look", images).content == "look"
+    assert _ATTACHMENT_REFS_MARKER in _vision_human_message("look", images).content
     assert _vision_human_message("look", None).content == "look"
+
+
+def test_attachment_bridge_saves_to_media_store(monkeypatch, tmp_path):
+    # #1969: each data: image attachment is persisted once at turn entry with
+    # user_attachment provenance; the note names ids in attachment order.
+    from infra.media import media_dir
+    from server.chat import _bridge_attachment_ids
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "instance"))
+    images = [
+        ("image/png", "data:image/png;base64,AAA="),
+        ("image/jpeg", "data:image/jpeg;base64,AAA="),
+    ]
+    note = _bridge_attachment_ids(images, "sess-bridge")
+    assert "image 1 = `" in note and "image 2 = `" in note
+    saved = sorted(p.suffix for p in media_dir().iterdir() if not p.name.startswith("."))
+    assert saved == [".jpg", ".png"]
+    # Provenance sidecar carries source + session.
+    import json
+
+    sidecars = [json.loads(p.read_text()) for p in media_dir().glob(".*.json")]
+    assert all(s["meta"] == {"source": "user_attachment", "session_id": "sess-bridge"} for s in sidecars)
+
+
+def test_attachment_bridge_skips_incognito_remote_and_garbage(monkeypatch, tmp_path):
+    # Incognito turns persist nothing (ADR 0069); remote http URLs are never
+    # fetched (SSRF); undecodable payloads degrade to no-note, never a crash.
+    import runtime.state as rs
+    from infra.media import media_dir
+    from server.chat import _ATTACHMENT_REFS_MARKER, _bridge_attachment_ids, _vision_human_message
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "instance"))
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+
+    data_img = [("image/png", "data:image/png;base64,AAA=")]
+    human = _vision_human_message("look", data_img, incognito=True)
+    assert human.content == "look"  # no note …
+    assert not list(media_dir(create=True).iterdir())  # … and nothing written
+
+    assert _bridge_attachment_ids([("image/png", "https://example.com/x.png")]) == ""
+    assert _bridge_attachment_ids([("image/png", "data:image/png;base64,%%%not-b64%%%")]) == ""
+    assert _ATTACHMENT_REFS_MARKER not in _vision_human_message("look", None).content
