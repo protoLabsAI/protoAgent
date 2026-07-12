@@ -189,14 +189,46 @@ def test_denylist_and_core_collision_filtered(monkeypatch) -> None:
             "s": [
                 SimpleNamespace(name="s__keep"),
                 SimpleNamespace(name="s__drop"),  # denylisted
-                SimpleNamespace(name="current_time"),  # collides with a core tool
+                # An unprefixed name gets normalized to s__current_time — the
+                # namespace itself is the shadowing defense, so it binds.
+                SimpleNamespace(name="current_time"),
             ],
         },
     )
     cfg = _cfg([{"name": "s", "transport": "stdio", "command": "python", "args": ["s.py"]}])
     cfg.mcp_denylist = ["s__drop"]
     _clients, tools, meta = build_mcp_tools(cfg)
-    assert [t.name for t in tools] == ["s__keep"]
+    assert [t.name for t in tools] == ["s__keep", "s__current_time"]
+    assert meta[0]["tool_count"] == 2
+
+
+def test_single_underscore_adapter_prefix_normalized(monkeypatch) -> None:
+    # langchain-mcp-adapters 0.2.x names prefixed tools "<server>_<tool>"
+    # (single underscore); protoAgent's documented contract is
+    # "<server>__<tool>". Discovery must normalize so bare-name
+    # include/exclude entries and subagent allowlists keep matching.
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "mythx": [
+                SimpleNamespace(name="mythx_roll_dice"),
+                SimpleNamespace(name="mythx_attack"),
+            ],
+        },
+    )
+    cfg = _cfg(
+        [
+            {
+                "name": "mythx",
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["-y", "srv"],
+                "tools": {"include": ["roll_dice"]},
+            }
+        ]
+    )
+    _clients, tools, meta = build_mcp_tools(cfg)
+    assert [t.name for t in tools] == ["mythx__roll_dice"]
     assert meta[0]["tool_count"] == 1
 
 
