@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.101.0",
+    "date": "2026-07-12",
+    "changes": [
+      "HITL forms honor schema defaults and are fully keyboard-operable (#1978).",
+      "Plugins: uninstall now tears down live state (#1955).",
+      "MCP tool calls reuse one persistent session per server (default ON).",
+      "Favorite models + /model quick-switch (#1957).",
+      "Chat image controls: top-right action cluster + fullscreen Lightbox (#1960).",
+      "Chat image attachments are bridged into the media store so tools can act on them (#1969).",
+      "HITL forms float above the chat instead of shifting it (#1973)."
+    ]
+  },
+  {
     "version": "v0.100.0",
     "date": "2026-07-12",
     "changes": [

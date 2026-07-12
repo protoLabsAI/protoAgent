@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.101.0] - 2026-07-12
+
 ### Fixed
 - **HITL forms honor schema defaults and are fully keyboard-operable (#1978).**
   `HitlForm` — the shared renderer for `request_user_input` wizards, approval gates,
