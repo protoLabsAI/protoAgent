@@ -151,8 +151,34 @@ existing configs are unchanged.
 | `streamable_http` | Remote, production servers | `url` (`headers` optional) |
 | `sse` | Legacy SSE servers | `url` (`headers` optional) |
 
-Each tool invocation opens a fresh MCP session and cleans up (the client is
-stateless), so there's no long-lived connection to manage.
+## Sessions
+
+Each server keeps **one long-lived MCP session** that every tool call reuses
+(the default). This is how other MCP hosts (Claude Desktop, Cursor) drive
+servers too, and it's what makes stdio servers fast: the stateless alternative
+spawns a fresh subprocess **per call** (~1s of pure overhead for a typical
+`npx`-launched server — an agent turn making ten calls would pay ten seconds).
+Sessions open lazily on first use, and a server that dies mid-call is
+reconnected **once** automatically; if that also fails the call returns a
+recoverable tool-error string to the model instead of failing the turn.
+Config reloads close the old sessions and open fresh ones.
+
+If a specific server misbehaves when kept alive (leaks memory, caches stale
+state), opt it out alone with `persistent: false` on its `servers` entry, or
+set `mcp.persistent_sessions: false` to restore fresh-session-per-call
+behavior globally:
+
+```yaml
+mcp:
+  enabled: true
+  persistent_sessions: true    # default — one live session per server
+  servers:
+    - name: flaky
+      transport: stdio
+      command: npx
+      args: ["-y", "some-server"]
+      persistent: false        # this server alone gets a fresh session per call
+```
 
 ## Try it locally
 

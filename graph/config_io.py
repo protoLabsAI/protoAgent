@@ -478,6 +478,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "servers": list(config.mcp_servers),
                 "timeout_seconds": config.mcp_timeout_seconds,
                 "denylist": list(config.mcp_denylist),
+                "persistent_sessions": config.mcp_persistent_sessions,
             },
             "skills": {
                 "enabled": config.skills_enabled,

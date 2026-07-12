@@ -60,10 +60,18 @@ def test_build_mcp_tools_wires_the_handler(monkeypatch):
             return _coro()
 
     monkeypatch.setattr(mt, "MultiServerMCPClient", lambda *a, **k: _FakeClient(), raising=False)
-    # patch the imported symbol path used inside build_mcp_tools
+    # patch the imported symbol paths used inside build_mcp_tools — the default
+    # (persistent-session) discovery goes through load_mcp_tools, the
+    # persistent:false fallback through MultiServerMCPClient.
     import langchain_mcp_adapters.client as mcp_client
+    import langchain_mcp_adapters.tools as mcp_adapter_tools
 
     monkeypatch.setattr(mcp_client, "MultiServerMCPClient", lambda *a, **k: _FakeClient())
+
+    async def _fake_load(session, **_kw):
+        return [kept]
+
+    monkeypatch.setattr(mcp_adapter_tools, "load_mcp_tools", _fake_load)
 
     class _Cfg:
         mcp_enabled = True

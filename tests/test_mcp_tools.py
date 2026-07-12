@@ -1,18 +1,31 @@
-"""Tests for the MCP client (tools/mcp_tools.py).
+"""Tests for the MCP client (tools/mcp_tools.py) and its persistent session pool.
 
-No real MCP servers: MultiServerMCPClient is monkeypatched to return canned
-tools so we can exercise connection mapping, the loop-safe blocking runner,
-namespacing/denylist/collision filtering, and per-server failure isolation.
-The real stdio round-trip is covered by the end-to-end check in the PR.
+Two layers:
+
+* Fake-backed unit tests — both discovery paths (the default pooled one and the
+  stateless ``MultiServerMCPClient`` fallback) are monkeypatched to return
+  canned tools, exercising connection mapping, the loop-safe blocking runner,
+  namespacing/denylist/collision filtering, and per-server failure isolation.
+* Real stdio integration tests — a tiny FastMCP fixture server that counts its
+  own boots in a temp file proves the pooled session is REUSED across calls
+  (one boot total), reconnects after the subprocess dies, degrades to a
+  tool-error string when the pool is closed, and that ``persistent: false``
+  restores the one-session-per-call behavior.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
 from graph.config import LangGraphConfig
-from tools.mcp_tools import _run_blocking, _server_connection, build_mcp_tools
+from tools.mcp_tools import (
+    _run_blocking,
+    _server_connection,
+    build_mcp_tools,
+    close_mcp_clients,
+)
 
 
 # ── connection mapping ───────────────────────────────────────────────────────
@@ -104,9 +117,13 @@ def test_run_blocking_inside_running_loop() -> None:
 
 
 def _fake_client_factory(monkeypatch, *, by_server: dict):
-    """Patch MultiServerMCPClient so each server returns canned tools or raises.
+    """Patch BOTH discovery paths so each server returns canned tools or raises.
 
-    ``by_server`` maps server name → list[tool] | Exception.
+    ``by_server`` maps server name → list[tool] | Exception. The default
+    (persistent-session) path discovers via ``load_mcp_tools`` with a pooled
+    session proxy; the ``persistent: false`` fallback goes through
+    ``MultiServerMCPClient.get_tools``. Patching both from the same map keeps
+    every filtering/merging test exercising the default pooled path.
     """
 
     class FakeClient:
@@ -119,7 +136,14 @@ def _fake_client_factory(monkeypatch, *, by_server: dict):
                 raise result
             return result or []
 
+    async def fake_load_mcp_tools(session, *, server_name=None, tool_name_prefix=False, **_kw):
+        result = by_server.get(server_name)
+        if isinstance(result, Exception):
+            raise result
+        return result or []
+
     monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", FakeClient)
+    monkeypatch.setattr("langchain_mcp_adapters.tools.load_mcp_tools", fake_load_mcp_tools)
 
 
 def _cfg(servers):
@@ -233,7 +257,8 @@ def test_single_underscore_adapter_prefix_normalized(monkeypatch) -> None:
 
 
 def test_disabled_server_not_connected(monkeypatch) -> None:
-    # enabled: false → the server is skipped before any connection attempt.
+    # enabled: false → the server is skipped before any connection attempt,
+    # on BOTH the pooled (default) and the stateless discovery path.
     calls = {"connected": False}
 
     class TripwireClient:
@@ -243,7 +268,12 @@ def test_disabled_server_not_connected(monkeypatch) -> None:
         async def get_tools(self):
             return [SimpleNamespace(name="x__t")]
 
+    async def tripwire_load(session, **_kw):
+        calls["connected"] = True
+        return []
+
     monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", TripwireClient)
+    monkeypatch.setattr("langchain_mcp_adapters.tools.load_mcp_tools", tripwire_load)
     _clients, tools, meta = build_mcp_tools(
         _cfg([{"name": "x", "transport": "stdio", "command": "python", "args": ["s.py"], "enabled": False}])
     )
@@ -370,6 +400,92 @@ def test_invalid_server_entry_skipped(monkeypatch) -> None:
     assert tools == [] and meta == []
 
 
+# ── persistent-session path selection ────────────────────────────────────────
+
+
+def _path_tripwires(monkeypatch, *, tools_by_server=()):
+    """Patch both discovery paths with tripwires; returns the hit-counter dict."""
+    used = {"stateless": 0, "pooled": 0}
+    canned = dict(tools_by_server)
+
+    class FakeClient:
+        def __init__(self, connections, tool_name_prefix=False):
+            self.name = next(iter(connections))
+            used["stateless"] += 1
+
+        async def get_tools(self):
+            return canned.get(self.name) or []
+
+    async def fake_load(session, *, server_name=None, **_kw):
+        used["pooled"] += 1
+        return canned.get(server_name) or []
+
+    monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", FakeClient)
+    monkeypatch.setattr("langchain_mcp_adapters.tools.load_mcp_tools", fake_load)
+    return used
+
+
+def test_persistent_default_discovers_via_pool(monkeypatch) -> None:
+    from tools.mcp_session_pool import MCPSessionPool
+
+    used = _path_tripwires(monkeypatch, tools_by_server={"s": [SimpleNamespace(name="s__t")]})
+    clients, tools, _meta = build_mcp_tools(
+        _cfg([{"name": "s", "transport": "stdio", "command": "python", "args": ["s.py"]}])
+    )
+    assert used == {"stateless": 0, "pooled": 1}
+    assert [t.name for t in tools] == ["s__t"]
+    # The pool is the connection handle a rebuild must close.
+    assert len(clients) == 1 and isinstance(clients[0], MCPSessionPool)
+    close_mcp_clients(clients)
+
+
+def test_global_persistent_off_uses_stateless_clients(monkeypatch) -> None:
+    used = _path_tripwires(monkeypatch, tools_by_server={"s": [SimpleNamespace(name="s__t")]})
+    cfg = _cfg([{"name": "s", "transport": "stdio", "command": "python", "args": ["s.py"]}])
+    cfg.mcp_persistent_sessions = False
+    _clients, tools, _meta = build_mcp_tools(cfg)
+    assert used == {"stateless": 1, "pooled": 0}
+    assert [t.name for t in tools] == ["s__t"]
+
+
+def test_per_server_persistent_false_opts_out_alone(monkeypatch) -> None:
+    # One server opts out (persistent: false) while its sibling stays pooled.
+    used = _path_tripwires(
+        monkeypatch,
+        tools_by_server={
+            "pooled": [SimpleNamespace(name="pooled__a")],
+            "legacy": [SimpleNamespace(name="legacy__b")],
+        },
+    )
+    cfg = _cfg(
+        [
+            {"name": "pooled", "transport": "stdio", "command": "python", "args": ["p.py"]},
+            {
+                "name": "legacy",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["l.py"],
+                "persistent": False,
+            },
+        ]
+    )
+    clients, tools, _meta = build_mcp_tools(cfg)
+    assert used == {"stateless": 1, "pooled": 1}
+    assert {t.name for t in tools} == {"pooled__a", "legacy__b"}
+    close_mcp_clients(clients)
+
+
+def test_close_mcp_clients_tolerates_everything() -> None:
+    # Stateless clients (no close()), broken close(), and None-ish input are all fine.
+    class Boom:
+        def close(self):
+            raise RuntimeError("nope")
+
+    close_mcp_clients(None)
+    close_mcp_clients([])
+    close_mcp_clients([SimpleNamespace(), Boom()])
+
+
 # ── config round-trip ────────────────────────────────────────────────────────
 
 
@@ -380,6 +496,7 @@ def test_from_yaml_parses_mcp(tmp_path) -> None:
         "  enabled: true\n"
         "  timeout_seconds: 12\n"
         "  denylist: [x__y]\n"
+        "  persistent_sessions: false\n"
         "  servers:\n"
         "    - name: echo\n"
         "      transport: stdio\n"
@@ -390,7 +507,9 @@ def test_from_yaml_parses_mcp(tmp_path) -> None:
     assert cfg.mcp_enabled is True
     assert cfg.mcp_timeout_seconds == 12
     assert cfg.mcp_denylist == ["x__y"]
+    assert cfg.mcp_persistent_sessions is False  # default True, opt-out parses
     assert cfg.mcp_servers[0]["name"] == "echo"
+    assert LangGraphConfig().mcp_persistent_sessions is True  # default ON
 
 
 def test_config_to_dict_includes_mcp() -> None:
@@ -400,6 +519,7 @@ def test_config_to_dict_includes_mcp() -> None:
     assert d["mcp"]["enabled"] is True
     assert "servers" in d["mcp"] and "denylist" in d["mcp"]
     assert d["mcp"]["scope"] == ""  # tier field round-trips
+    assert d["mcp"]["persistent_sessions"] is True  # session-pool knob round-trips
 
 
 # ── Box-commons sharing (ADR 0041) ────────────────────────────────────────────
@@ -473,3 +593,138 @@ def test_private_shadows_commons_by_name(monkeypatch, tmp_path) -> None:
     write_mcp_commons(cfg, [{"name": "dup", "transport": "stdio", "command": "commons", "args": []}])
     _clients, _tools, meta = build_mcp_tools(cfg)
     assert len(meta) == 1 and meta[0]["tier"] == "private"  # private wins by name
+
+
+# ── real stdio round-trips (persistent session pool) ─────────────────────────
+#
+# A tiny FastMCP server that appends one line to a boot file every time it
+# starts — the spawn-count oracle. `ping` proves the link; `die` kills the
+# server process MID-CALL to exercise the pool's reconnect path.
+
+_FIXTURE_SERVER = '''
+import os
+import sys
+
+with open(sys.argv[1], "a") as f:
+    f.write("boot\\n")
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("fix")
+
+
+@mcp.tool()
+def ping(text: str) -> str:
+    """Round-trip a string."""
+    return "pong:" + text
+
+
+@mcp.tool()
+def die() -> str:
+    """Kill the server process mid-call."""
+    os._exit(1)
+
+
+mcp.run(transport="stdio")
+'''
+
+
+def _fixture_server_cfg(tmp_path, **server_extra):
+    script = tmp_path / "boot_counter_server.py"
+    script.write_text(_FIXTURE_SERVER)
+    boot_file = tmp_path / "boots.txt"
+    server = {
+        "name": "fix",
+        "transport": "stdio",
+        "command": sys.executable,
+        "args": [str(script), str(boot_file)],
+        **server_extra,
+    }
+    return _cfg([server]), boot_file
+
+
+def _boots(boot_file) -> int:
+    return boot_file.read_text().count("boot") if boot_file.exists() else 0
+
+
+def test_persistent_session_reused_across_calls(tmp_path) -> None:
+    cfg, boot_file = _fixture_server_cfg(tmp_path)
+    clients, tools, meta = build_mcp_tools(cfg)
+    try:
+        assert {t.name for t in tools} == {"fix__ping", "fix__die"}
+        assert meta == [{"name": "fix", "transport": "stdio", "tool_count": 2, "tier": "private"}]
+        ping = next(t for t in tools if t.name == "fix__ping")
+        # Two invocations from two DIFFERENT event loops — the pool bridges every
+        # call onto its own loop, so callers stay loop-agnostic like before.
+        assert "pong:a" in str(asyncio.run(ping.ainvoke({"text": "a"})))
+        assert "pong:b" in str(asyncio.run(ping.ainvoke({"text": "b"})))
+        # ONE server boot covered discovery + both calls — the session is reused
+        # (the stateless path would have booted three times).
+        assert _boots(boot_file) == 1
+    finally:
+        close_mcp_clients(clients)
+
+
+def test_disabled_persistence_opens_session_per_call(tmp_path) -> None:
+    # persistent: false → the pre-pool behavior: a fresh session (= subprocess
+    # for stdio) for discovery and for EVERY call.
+    cfg, boot_file = _fixture_server_cfg(tmp_path, persistent=False)
+    clients, tools, _meta = build_mcp_tools(cfg)
+    try:
+        ping = next(t for t in tools if t.name == "fix__ping")
+        assert "pong:a" in str(asyncio.run(ping.ainvoke({"text": "a"})))
+        assert "pong:b" in str(asyncio.run(ping.ainvoke({"text": "b"})))
+        assert _boots(boot_file) == 3  # discovery + one per call
+    finally:
+        close_mcp_clients(clients)
+
+
+def test_reconnect_after_server_death(tmp_path) -> None:
+    cfg, boot_file = _fixture_server_cfg(tmp_path)
+    clients, tools, _meta = build_mcp_tools(cfg)
+    try:
+        ping = next(t for t in tools if t.name == "fix__ping")
+        die = next(t for t in tools if t.name == "fix__die")
+
+        assert "pong:a" in str(asyncio.run(ping.ainvoke({"text": "a"})))
+        assert _boots(boot_file) == 1
+
+        # `die` kills the server mid-call. The pool reconnects ONCE and retries;
+        # the retry kills the fresh process too, so the call degrades to the
+        # recoverable tool-error string (handle_tool_error) — never a dead turn.
+        result = asyncio.run(die.ainvoke({}))
+        assert "Tool error" in str(result)
+        assert _boots(boot_file) == 2  # the original + exactly one reconnect
+
+        # The NEXT call finds no live session and transparently reconnects.
+        assert "pong:b" in str(asyncio.run(ping.ainvoke({"text": "b"})))
+        assert _boots(boot_file) == 3
+    finally:
+        close_mcp_clients(clients)
+
+
+def test_include_filter_applies_to_pooled_server(tmp_path) -> None:
+    # The include allowlist (bare tool names) keeps working over the pooled
+    # discovery path, including the <server>__<tool> prefix normalization.
+    cfg, _boot_file = _fixture_server_cfg(tmp_path, tools={"include": ["ping"]})
+    clients, tools, meta = build_mcp_tools(cfg)
+    try:
+        assert [t.name for t in tools] == ["fix__ping"]
+        assert meta[0]["tool_count"] == 1
+        assert "pong:x" in str(asyncio.run(tools[0].ainvoke({"text": "x"})))
+    finally:
+        close_mcp_clients(clients)
+
+
+def test_closed_pool_degrades_to_tool_error(tmp_path) -> None:
+    # After a config rebuild closes the pool (close_mcp_clients), a stale tool
+    # still bound to it returns a recoverable tool-error string — no hang, no
+    # raised exception killing the turn.
+    cfg, _boot_file = _fixture_server_cfg(tmp_path)
+    clients, tools, _meta = build_mcp_tools(cfg)
+    ping = next(t for t in tools if t.name == "fix__ping")
+    assert "pong:a" in str(asyncio.run(ping.ainvoke({"text": "a"})))
+    close_mcp_clients(clients)
+    close_mcp_clients(clients)  # idempotent
+    result = asyncio.run(ping.ainvoke({"text": "b"}))
+    assert "Tool error" in str(result)

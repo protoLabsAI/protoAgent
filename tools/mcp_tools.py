@@ -3,10 +3,17 @@
 Configured MCP servers (stdio or streamable-HTTP) are connected via
 ``langchain-mcp-adapters``; their tools are discovered at graph-build time and
 appended to the agent's tool list as ordinary LangChain ``BaseTool``s. Tools are
-namespaced by server (``<server>__<tool>``) so they can't shadow core tools, and
-``MultiServerMCPClient`` is stateless — each invocation opens a fresh MCP
-session — so the discovered tools are event-loop-agnostic and the client object
-just needs to stay alive for reconnection.
+namespaced by server (``<server>__<tool>``) so they can't shadow core tools.
+
+Sessions: by default each server gets ONE long-lived MCP session shared across
+tool calls (``tools/mcp_session_pool.py``) — for stdio servers the stateless
+per-call alternative spawns a fresh subprocess per invocation (~1s of pure
+overhead each). The pooled sessions are still event-loop-agnostic (the pool
+bridges onto its own loop) and auto-reconnect once when a server dies.
+``mcp.persistent_sessions: false`` (global) or ``persistent: false`` (per
+server) restores the stateless per-call behavior. Whatever handles
+``build_mcp_tools`` returns must be passed to ``close_mcp_clients`` when the
+config is rebuilt, so pooled sessions are shut down with it.
 
 Configuring a server is the opt-in act; MCP is off unless ``mcp.enabled`` is set.
 """
@@ -219,12 +226,31 @@ def _core_tool_names() -> set[str]:
         return set()
 
 
+def close_mcp_clients(clients) -> None:
+    """Release the handles ``build_mcp_tools`` returned (best-effort, never raises).
+
+    Persistent session pools hold live subprocesses/connections and MUST be
+    closed when the config is rebuilt or old sessions leak per reload; the
+    stateless ``MultiServerMCPClient``s have nothing to close and are skipped.
+    """
+    for client in clients or []:
+        close = getattr(client, "close", None)
+        if not callable(close):
+            continue
+        try:
+            close()
+        except Exception:  # noqa: BLE001 — teardown must never break a reload
+            log.warning("[mcp] error closing MCP client %r", client, exc_info=True)
+
+
 def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[dict]]:
     """Discover tools from configured MCP servers.
 
     Returns ``(clients, tools, servers_meta)``:
-    - ``clients`` — live ``MultiServerMCPClient``s, one per server, kept alive so
-      the stateless tools can reconnect on invocation.
+    - ``clients`` — the live connection handles: one shared ``MCPSessionPool``
+      for all persistent-session servers (the default) and/or one stateless
+      ``MultiServerMCPClient`` per opted-out server. Keep them alive while the
+      tools are bound and hand them to ``close_mcp_clients`` on rebuild.
     - ``tools`` — LangChain ``BaseTool``s to append to the agent.
     - ``servers_meta`` — ``[{name, transport, tool_count}]`` for runtime status.
 
@@ -287,7 +313,14 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
     timeout = float(getattr(config, "mcp_timeout_seconds", 20.0))
     denylist = set(getattr(config, "mcp_denylist", []) or [])
     core_names = _core_tool_names()
+    # Persistent sessions (default ON): one long-lived session per server shared
+    # across calls, instead of a fresh session (= subprocess, for stdio) per call.
+    # ``mcp.persistent_sessions: false`` disables globally; a server entry can opt
+    # out alone with ``persistent: false`` (e.g. one that misbehaves long-lived).
+    persistent_default = bool(getattr(config, "mcp_persistent_sessions", True))
+    pool = None  # one shared MCPSessionPool, created lazily for the first pooled server
 
+    import langchain_mcp_adapters.tools as adapter_tools
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     for server in servers:
@@ -315,10 +348,33 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
         include = {str(n) for n in (tool_filter.get("include") or [])}
         exclude = {str(n) for n in (tool_filter.get("exclude") or [])}
 
+        use_pool = persistent_default and server.get("persistent", True) is not False
+
         try:
-            # tool_name_prefix=True → tools are named "<server>__<tool>".
-            client = MultiServerMCPClient({name: conn}, tool_name_prefix=True)
-            discovered = _run_blocking(client.get_tools(), timeout)
+            if use_pool:
+                # Persistent session (default): discovery AND every later tool call
+                # ride one pooled session. load_mcp_tools binds the tools to the
+                # pool's loop-agnostic session proxy; tool_name_prefix=True keeps
+                # the same "<server>__<tool>" naming as the stateless path.
+                from tools.mcp_session_pool import MCPSessionPool
+
+                if pool is None:
+                    pool = MCPSessionPool(connect_timeout=timeout)
+                    clients.append(pool)
+                discovered = _run_blocking(
+                    adapter_tools.load_mcp_tools(
+                        pool.server_session(name, conn),
+                        server_name=name,
+                        tool_name_prefix=True,
+                    ),
+                    timeout,
+                )
+            else:
+                # Stateless opt-out: tool_name_prefix=True → "<server>__<tool>",
+                # and every invocation opens (and tears down) its own session.
+                client = MultiServerMCPClient({name: conn}, tool_name_prefix=True)
+                clients.append(client)
+                discovered = _run_blocking(client.get_tools(), timeout)
         except Exception as exc:  # noqa: BLE001 — one server must not break the rest
             log.warning("[mcp] server %r discovery failed: %s — skipping", name, exc)
             continue
@@ -362,7 +418,6 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
                 log.debug("[mcp] %s: could not set handle_tool_error on %s", name, tool.name)
             kept.append(tool)
 
-        clients.append(client)
         tools.extend(kept)
         meta.append(
             {

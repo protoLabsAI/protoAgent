@@ -658,6 +658,12 @@ class LangGraphConfig:
     mcp_servers: list[dict] = field(default_factory=list)
     mcp_timeout_seconds: float = 20.0
     mcp_denylist: list[str] = field(default_factory=list)
+    # Persistent sessions (default ON): each server keeps ONE long-lived MCP
+    # session reused across tool calls, auto-reconnected once when it dies.
+    # OFF restores stateless per-call sessions — for stdio servers that means a
+    # fresh subprocess (~1s of spawn overhead) per invocation. A single server
+    # can opt out alone with ``persistent: false`` on its ``servers`` entry.
+    mcp_persistent_sessions: bool = True
     # Tier (ADR 0041) — does this agent run the box-shared MCP commons? "scoped"
     # (default/blank) = only this agent's ``mcp.servers``; "layered" = also run the
     # box commons (``~/.protoagent/commons/mcp-servers.json``), ∪ private (private
@@ -1115,6 +1121,9 @@ class LangGraphConfig:
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
             mcp_denylist=list(mcp.get("denylist", []) or []),
+            mcp_persistent_sessions=bool(
+                mcp.get("persistent_sessions", cls.mcp_persistent_sessions)
+            ),
             mcp_scope=mcp.get("scope", cls.mcp_scope),
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
