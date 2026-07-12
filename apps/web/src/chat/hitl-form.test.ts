@@ -10,6 +10,7 @@ import {
   isMultiChoice,
   missingInStep,
   optionsOf,
+  seedDefaults,
   visibleFieldsOf,
 } from "./hitl-form";
 
@@ -126,6 +127,53 @@ describe("missingInStep / anyStepMissing", () => {
     // mode=custom → `detail` shows → now required-and-empty blocks.
     expect(missingInStep(conditional, { mode: "custom" })).toEqual(["detail"]);
     expect(missingInStep(conditional, { mode: "custom", detail: "x" })).toEqual([]);
+  });
+});
+
+describe("seedDefaults — schema defaults prefill the answers (#1978)", () => {
+  it("seeds every field carrying a default, across ALL steps up front", () => {
+    const s1 = step({
+      properties: {
+        env: { type: "string", default: "staging" },
+        note: { type: "string" }, // no default — stays unanswered
+      },
+    });
+    const s2 = step({ properties: { strategy: { type: "string", default: "rolling" } } });
+    expect(seedDefaults([s1, s2])).toEqual({ env: "staging", strategy: "rolling" });
+  });
+
+  it("keeps falsy defaults (false / 0 / \"\") — only an absent default is skipped", () => {
+    const s = step({
+      properties: {
+        dry_run: { type: "boolean", default: false },
+        retries: { type: "number", default: 0 },
+        prefix: { type: "string", default: "" },
+      },
+    });
+    expect(seedDefaults([s])).toEqual({ dry_run: false, retries: 0, prefix: "" });
+  });
+
+  it("is empty for no steps or steps without defaults", () => {
+    expect(seedDefaults([])).toEqual({});
+    expect(seedDefaults([step({ properties: { env: { type: "string" } } })])).toEqual({});
+  });
+
+  it("a required field's default satisfies the gate — Submit is live untouched", () => {
+    const s = step({
+      properties: { model: { type: "string", default: "protolabs/fast", oneOf: [{ const: "protolabs/fast" }] } },
+      required: ["model"],
+    });
+    const seeded = seedDefaults([s]);
+    expect(missingInStep(s, seeded)).toEqual([]);
+    expect(anyStepMissing([s], seeded)).toBe(false);
+  });
+
+  it("a required field WITHOUT a default still gates as before", () => {
+    const s = step({
+      properties: { env: { type: "string" }, mode: { type: "string", default: "auto" } },
+      required: ["env", "mode"],
+    });
+    expect(missingInStep(s, seedDefaults([s]))).toEqual(["env"]);
   });
 });
 

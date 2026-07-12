@@ -585,6 +585,11 @@ function ChatSessionSlot({
       requestAnimationFrame(() => {
         const ta = textareaRef.current;
         if (!ta) return;
+        // A form the command opened (e.g. /model's picker — possibly ASYNC, after a
+        // schema fetch) owns focus on appear (#1978) — don't yank it back. Checked at
+        // fire time against the DOM: state/refs can't see an openForm that hasn't
+        // happened yet. Either race order converges on the form keeping focus.
+        if (document.activeElement?.closest(".hitl-float")) return;
         ta.focus();
         ta.selectionStart = ta.selectionEnd = pos;
         refreshSlash();

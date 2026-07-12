@@ -111,7 +111,11 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
     - **multi-choice cards** ("pick any") → wrap the same options in an array:
       ``{"type": "array", "items": {"oneOf": [...]}}`` → the value is a list.
     Mark a field required via the step schema's ``"required": [...]``; required
-    fields gate Next / Submit.
+    fields gate Next / Submit. A field's ``"default"`` prefills its answer — the
+    form opens with it filled in (choice cards render it selected) and a default
+    **counts as an answer**, so a required-with-default field doesn't gate: the
+    operator can submit your proposal untouched. Use defaults to propose values
+    you want confirmed or adjusted, not for fields they must actively decide.
 
     Phrase the ask clearly and only request fields you actually need. For a single
     free-text or yes/no question, use ``ask_human`` instead. As with ``ask_human``,

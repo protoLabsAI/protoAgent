@@ -9,8 +9,8 @@ import type { HitlPayload } from "../lib/types";
 
 // The verifier types the operator `/api/goals` surface accepts (ADR 0028/0066). Rendered as
 // option cards (the `oneOf` + descriptions turn the field into cards — hitl-form.isCardChoice).
-// `llm` is the default (applied in the mapping — HitlForm doesn't seed schema defaults, so the
-// field is left OPTIONAL and an unpicked card falls back to llm rather than blocking Submit).
+// `llm` is the default: HitlForm seeds it from the schema (#1978) so the card opens selected,
+// and the mapping still coerces an absent/unknown answer to llm as the belt-and-braces layer.
 export const GOAL_VERIFIER_TYPES = [
   { value: "command", label: "command", description: "A shell command that exits 0" },
   { value: "test", label: "test", description: "A test command that exits 0" },

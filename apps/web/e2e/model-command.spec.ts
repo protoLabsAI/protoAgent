@@ -45,9 +45,12 @@ test("bare /model shows ONLY the favorites as cards; picking one switches the mo
   // Provider + configured-default hints on the cards (#1957 "name + provider").
   await expect(form.locator(".hitl-card-desc").last()).toHaveText("protolabs · configured default");
 
-  // The single required field gates Submit until a card is picked (/effort-style form).
+  // The tab's current model (the configured default, protolabs/reasoning) arrives
+  // PRESELECTED from the schema default (#1978) — Submit is live immediately, so a bare
+  // confirm is one keypress. Picking another card switches the selection.
   const submit = form.getByRole("button", { name: "Submit" });
-  await expect(submit).toBeDisabled();
+  await expect(form.getByRole("radio", { name: /protolabs\/reasoning/ })).toHaveAttribute("aria-checked", "true");
+  await expect(submit).toBeEnabled();
   await form.getByRole("radio", { name: /protolabs\/fast/ }).click();
   await submit.click();
   await expect(page.locator(".chat-note", { hasText: "Model set to" })).toBeVisible();
@@ -60,6 +63,54 @@ test("bare /model shows ONLY the favorites as cards; picking one switches the mo
   await expect(page.locator(".pl-message--user", { hasText: "hello there" })).toBeVisible();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0].metadata?.model).toBe("protolabs/fast");
+});
+
+test("a full /model switch works with the keyboard alone (#1978)", async ({ page }) => {
+  const sent = captureA2ABodies(page);
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+
+  await composer.fill("/model");
+  await composer.press("Enter");
+
+  const form = page.locator(".hitl-card", { hasText: "Switch model" });
+  await expect(form).toBeVisible();
+  // The card opens with focus ON the preselected current model (protolabs/reasoning) —
+  // no Tab, no mouse needed to start.
+  const current = form.getByRole("radio", { name: /protolabs\/reasoning/ });
+  await expect(current).toBeFocused();
+  await expect(current).toHaveAttribute("aria-checked", "true");
+
+  // ← moves selection to the other favorite (selection follows focus, radio-group style)…
+  await page.keyboard.press("ArrowLeft");
+  const fast = form.getByRole("radio", { name: /protolabs\/fast/ });
+  await expect(fast).toBeFocused();
+  await expect(fast).toHaveAttribute("aria-checked", "true");
+
+  // …and Enter confirms the form: the model switches and focus returns to the composer.
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".chat-note", { hasText: "Model set to" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Model for this chat" })).toHaveText("protolabs/fast");
+  await expect(composer).toBeFocused();
+
+  // The override rides the next (typed, not clicked) send on the wire.
+  await composer.fill("hello again");
+  await composer.press("Enter");
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0].metadata?.model).toBe("protolabs/fast");
+});
+
+test("Esc dismisses the /model picker and hands focus back to the composer (#1978)", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.fill("/model");
+  await composer.press("Enter");
+
+  const form = page.locator(".hitl-card", { hasText: "Switch model" });
+  await expect(form).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(form).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  // Dismissed without picking — the tab keeps tracking the configured default.
+  await expect(page.getByRole("button", { name: "Model for this chat" })).toHaveText("protolabs/reasoning");
 });
 
 test("no favorites configured → /model falls back to the FULL model list with a pin-favorites hint", async ({ page }) => {

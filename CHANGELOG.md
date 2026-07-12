@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **HITL forms honor schema defaults and are fully keyboard-operable (#1978).**
+  `HitlForm` — the shared renderer for `request_user_input` wizards, approval gates,
+  and the `/effort`/`/model` slash pickers — ignored the field schemas' `default`s:
+  choice cards opened with nothing selected (no one-keypress confirm of the current
+  value) and agent-proposed values arrived empty. Defaults now seed the answers across
+  all steps up front, and a default **counts as an answer** — required-with-default
+  fields no longer gate, so a fully-defaulted form submits untouched (contract
+  documented in `request_user_input`'s docstring). The floating card also takes focus
+  on appear (the step's first control; within option cards, the selected one via a
+  roving tabindex), supports ←/→ radio-group selection, confirms with Enter from
+  fields and cards, dismisses on Esc, and returns focus to the composer on close —
+  a full `/model` switch now needs zero mouse.
 - **Plugins: uninstall now tears down live state (#1955).** `DELETE /api/plugins/{id}`
   used to remove the files and return — leaving the plugin's modules in `sys.modules`
   (stale imports over deleted files), the id in `plugins_enabled`, and no
