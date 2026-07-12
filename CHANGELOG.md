@@ -11,6 +11,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Secrets manager: pull env vars from external secrets managers — Infisical first
+  (ADR 0080) (#1963).** protoAgent can now pull secrets from Infisical and export them as
+  env vars at boot, on config reload, and on a refresh interval, instead of relying on
+  hand-set env or an `infisical run` wrapper (which stays supported as the ops
+  alternative). `infra/secrets/` owns every `os.environ` write with existing-env-wins
+  semantics and ownership/provenance tracking so a refresh only ever touches manager-set
+  vars; hydration runs in `from_yaml` before parsing, so every load path (boot, `--setup`,
+  hot-reload, CLIs, fleet members) sees manager values. Fail-open by default
+  (`required: true` for fail-fast boot instead); in-process TTL cache only, no disk cache;
+  escape hatch `PROTOAGENT_NO_SECRETS_HYDRATE=1`.
+- **Console: Settings ▸ Secrets panel for the secrets manager (#1965).** The console half
+  of #1963 — a schema-driven Settings ▸ Secrets section (Agent group) with a live status
+  card (connected/error/disabled badge, manager-owned env-var names as chips, last-fetch
+  timestamp, refresh cadence), plus **Test connection** and **Sync now** actions over the
+  new `/api/secrets/*` endpoints.
+- **Plugins: surfaces reconcile on config hot-reload (#1961).** Routers already
+  hot-mounted on a config reload; surfaces (e.g. a Discord/Google-style gateway) did not —
+  a newly-enabled plugin's surface stayed dead until restart, and a disabled/uninstalled
+  plugin's surface kept running as a leak until process shutdown. `_reload_plugin_surfaces`
+  now reconciles running surfaces against the reloaded plugin set: stop what's no longer
+  wanted, hot-start what's newly wanted, and fire `reload(cfg)` on survivors so a live
+  gateway connection isn't dropped.
+
+### Fixed
+- **Plugins: refresh the last boot-only plugin wiring on hot-reload (#1958).** Four
+  contribution types were assigned only at boot and went stale until a full restart; three
+  of the cheap ones (`thread_id_resolver`, `a2a_skills`, `workflow_dirs`) are refreshed on
+  reload now, closing most of the asymmetry (surfaces, the fourth, are the larger #1961
+  change). Also fixes a testkit parity gap where `FakeRegistry` didn't reserve the
+  `lifecycle` chat-command token the real registry reserves (ADR 0074).
+- **MCP: normalize discovered tool names to the documented `<server>__<tool>` form
+  (#1962).** `langchain-mcp-adapters` 0.2.x names prefixed tools with a single underscore
+  instead of the documented double underscore, so every bare-name `tools.include`/`exclude`
+  entry and subagent MCP allowlist silently matched nothing against a current adapter —
+  discovery skipped every tool. Tool names are now normalized at discovery time regardless
+  of adapter naming version.
+
+### Docs
+- **Plugins: consolidate the seam reference; fill gaps; fix drift (#1959).** Audited every
+  plugin-authoring doc against the actual code surface and folded ~6 guides + 4 ADRs into a
+  single canonical reference in `plugins.md` — filled in 7 undocumented contribution seams,
+  added a full manifest field-reference table (including the previously ADR-only
+  `public_paths` webhooks/assets section), documented SDK re-exports, and fixed dead anchors
+  and stale hot-reload claims across the plugin docs.
+
 ## [0.99.0] - 2026-07-12
 
 ### Added
