@@ -281,6 +281,77 @@ def test_install_deps_rejects_non_pep508_requires_pip(env, bad):
         installer.install_deps("demo_ext")
 
 
+@pytest.mark.parametrize("bad", ["--index-url=https://evil.example/simple", "git+https://evil.example/pkg.git"])
+def test_install_deps_rejects_bad_optional_specs(env, bad):
+    """The _validate_pip_specs rails cover the optional tier too (#1953)."""
+    repo = _make_plugin_repo(env, manifest_extra=f"requires_pip: [{{pkg: '{bad}', optional: true}}]\n")
+    installer.install(str(repo))
+    with pytest.raises(installer.InstallError):
+        installer.install_deps("demo_ext")
+
+
+# ── optional dep tier (#1953) — install-deps installs optional deps best-effort ──
+
+
+class _PipResult:
+    def __init__(self, returncode: int = 0):
+        self.returncode = returncode
+        self.stderr = "boom" if returncode else ""
+        self.stdout = ""
+
+
+def test_install_deps_includes_optional_in_own_pip_call(env, monkeypatch):
+    repo = _make_plugin_repo(
+        env,
+        manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n",
+    )
+    installer.install(str(repo))
+    calls = []
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
+    deps = installer.install_deps("demo_ext")
+    assert deps == ["requests>=2", "pillow>=10"]
+    # hard deps first (fail-hard), then the optional tier best-effort — both behind `--`
+    assert [c[4:] for c in calls] == [["--", "requests>=2"], ["--", "pillow>=10"]]
+
+
+def test_install_deps_optional_pip_failure_warns_not_fails(env, monkeypatch, caplog):
+    """A failed optional install must not fail the command — the hard deps landed."""
+    import logging as _logging
+
+    repo = _make_plugin_repo(
+        env,
+        manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n",
+    )
+    installer.install(str(repo))
+    # hard pip call succeeds; the optional one fails
+    monkeypatch.setattr(
+        installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1 if "pillow>=10" in cmd else 0)
+    )
+    with caplog.at_level(_logging.WARNING):
+        deps = installer.install_deps("demo_ext")  # no raise
+    assert deps == ["requests>=2"]  # only what actually installed
+    assert "optional dep install failed" in caplog.text
+
+
+def test_install_deps_only_optional_failure_still_succeeds(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [{pkg: 'pillow>=10', optional: true}]\n")
+    installer.install(str(repo))
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
+    assert installer.install_deps("demo_ext") == []  # warned, not raised
+
+
+def test_install_deps_hard_pip_failure_still_raises(env, monkeypatch):
+    """Hard-dep failure keeps today's behavior even when an optional tier exists."""
+    repo = _make_plugin_repo(
+        env,
+        manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n",
+    )
+    installer.install(str(repo))
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
+    with pytest.raises(installer.InstallError, match="pip install failed"):
+        installer.install_deps("demo_ext")
+
+
 def test_uninstall_removes_enabled_ref_keeps_config(env):
     cfg = env / "cfg" / "langgraph-config.yaml"
     cfg.write_text("plugins:\n  enabled: [demo_ext, other]\ndemo_ext:\n  greeting: hi\n")

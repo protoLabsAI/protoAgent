@@ -192,6 +192,7 @@ def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
         "capabilities": m.capabilities,
         "requires_env": m.requires_env,
         "requires_pip": m.requires_pip,
+        "optional_pip": m.optional_pip,
         "min_protoagent_version": m.min_protoagent_version,
         # what it contributes — surfaced in the install review (ADR 0027 D3)
         "contributes": {
@@ -464,13 +465,26 @@ def install(
         # Frozen runtime (desktop): no pip — a plugin can only run if its declared
         # deps are already importable in the bundle. Refuse early with a clear
         # message instead of a cryptic enable-time ImportError (ADR 0058 D2).
-        if _frozen_like() and manifest.requires_pip:
-            ok, missing = _deps_satisfied(manifest.requires_pip)
-            if not ok:
-                raise InstallError(
-                    f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
-                    f"install it on a server/Docker build instead."
-                )
+        # OPTIONAL deps (#1953) don't gate: the plugin degrades gracefully without
+        # them, so a missing one warns (in the summary + log) and install proceeds.
+        warnings: list[str] = []
+        if _frozen_like():
+            if manifest.requires_pip:
+                ok, missing = _deps_satisfied(manifest.requires_pip)
+                if not ok:
+                    raise InstallError(
+                        f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
+                        f"install it on a server/Docker build instead."
+                    )
+            if manifest.optional_pip:
+                _, soft_missing = _deps_satisfied(manifest.optional_pip)
+                if soft_missing:
+                    warn = (
+                        f"optional dep(s) {', '.join(soft_missing)} aren't in the desktop runtime — "
+                        f"installed anyway; the features of {pid!r} that need them degrade until they're available."
+                    )
+                    warnings.append(warn)
+                    log.warning("[plugins] %s: %s", pid, warn)
 
         target = target_root / pid
         if target.exists():
@@ -489,6 +503,8 @@ def install(
                 log.info("[plugins] %s already at %s from %s — up to date", pid, sha[:10], url)
                 summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
                 summary["up_to_date"] = True
+                if warnings:
+                    summary["warnings"] = warnings
                 return summary
             shutil.rmtree(target)
 
@@ -497,6 +513,8 @@ def install(
         manifest = load_manifest(target) or manifest  # re-read from final path
 
     summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
+    if warnings:
+        summary["warnings"] = warnings
     lock = _read_lock()
     lock["plugins"] = [e for e in lock["plugins"] if e.get("id") != pid]
     lock["plugins"].append(
@@ -681,7 +699,7 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     # the declared deps.
     manifest = load_manifest(target) if (target / "protoagent.plugin.yaml").exists() else None
     section = (manifest.config_section if manifest else "") or plugin_id
-    deps_left = list(manifest.requires_pip) if manifest else []
+    deps_left = [*manifest.requires_pip, *manifest.optional_pip] if manifest else []
 
     removed: list[str] = []
     if target.exists():
@@ -751,7 +769,9 @@ def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
 
 def install_deps(plugin_id: str) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
-    step that ``install`` deliberately skips (ADR 0027 D4). Returns the deps."""
+    step that ``install`` deliberately skips (ADR 0027 D4). Optional deps (#1953)
+    ride along best-effort: a failed optional install warns instead of failing
+    the command. Returns the deps actually installed/satisfied."""
     manifest = None
     for base in (live_plugins_dir(), bundled_plugins_dir()):
         if (base / plugin_id / "protoagent.plugin.yaml").exists():
@@ -760,11 +780,13 @@ def install_deps(plugin_id: str) -> list[str]:
     if manifest is None:
         raise InstallError(f"plugin {plugin_id!r} is not installed.")
     deps = list(manifest.requires_pip)
-    if not deps:
+    optional = list(manifest.optional_pip)
+    if not deps and not optional:
         return []
-    _validate_pip_specs(plugin_id, deps)
-    # Frozen runtime (desktop): no pip. The deps must already be bundled — confirm
-    # (nothing to install) or refuse with a clear message (ADR 0058 D2).
+    _validate_pip_specs(plugin_id, [*deps, *optional])
+    # Frozen runtime (desktop): no pip. The HARD deps must already be bundled —
+    # confirm (nothing to install) or refuse with a clear message (ADR 0058 D2).
+    # A missing OPTIONAL dep only warns: the plugin degrades without it (#1953).
     if _frozen_like():
         ok, missing = _deps_satisfied(deps)
         if not ok:
@@ -772,19 +794,48 @@ def install_deps(plugin_id: str) -> list[str]:
                 f"{plugin_id!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
                 f"install it on a server/Docker build instead."
             )
+        _, soft_missing = _deps_satisfied(optional)
+        if soft_missing:
+            log.warning(
+                "[plugins] %s: optional dep(s) %s aren't in the desktop runtime — the plugin degrades without them",
+                plugin_id,
+                ", ".join(soft_missing),
+            )
         log.info("[plugins] %s deps already in the runtime — nothing to install", plugin_id)
-        return deps
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--", *deps],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        _audit("install_deps", {"id": plugin_id, "deps": deps}, "pip install failed", success=False)
-        raise InstallError(f"pip install failed: {(proc.stderr or proc.stdout).strip()[-400:]}")
-    _audit("install_deps", {"id": plugin_id, "deps": deps}, f"installed {len(deps)} dep(s)")
-    log.info("[plugins] installed %d dep(s) for %s", len(deps), plugin_id)
-    return deps
+        return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing]
+    installed: list[str] = []
+    if deps:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--", *deps],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            _audit("install_deps", {"id": plugin_id, "deps": deps}, "pip install failed", success=False)
+            raise InstallError(f"pip install failed: {(proc.stderr or proc.stdout).strip()[-400:]}")
+        installed += deps
+    if optional:
+        # Best-effort (#1953): the plugin runs without these, so a failure is
+        # audited + warned, never fatal — the hard deps above already landed.
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--", *optional],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            _audit(
+                "install_deps", {"id": plugin_id, "optional": optional}, "optional pip install failed", success=False
+            )
+            log.warning(
+                "[plugins] %s: optional dep install failed (continuing without): %s",
+                plugin_id,
+                (proc.stderr or proc.stdout).strip()[-400:],
+            )
+        else:
+            installed += optional
+    _audit("install_deps", {"id": plugin_id, "deps": installed}, f"installed {len(installed)} dep(s)")
+    log.info("[plugins] installed %d dep(s) for %s", len(installed), plugin_id)
+    return installed
 
 
 def list_installed() -> list[dict]:

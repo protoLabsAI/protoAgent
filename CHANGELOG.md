@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugins: an optional tier for `requires_pip` (#1953).** A manifest dep entry may now be
+  `{pkg: "pillow>=10", optional: true}` alongside the plain spec strings (which stay hard
+  deps, byte-for-byte unchanged). The ADR 0058 D2 frozen-app gate was all-or-nothing — the
+  desktop app refused protobanana over a soft `pillow>=10` that one of its eight tools
+  imports lazily and degrades gracefully without. Now a missing *optional* dep
+  warns-and-installs (warning in the install summary + log, naming the deps) while a missing
+  hard dep refuses exactly as before; non-frozen `install-deps` installs optional deps
+  best-effort (a failed optional install warns, audited, instead of failing the command).
+  The `_validate_pip_specs` anti-injection rails cover both tiers, and the
+  `building-plugins` skill documents the tier plus the lazy-import degradation pattern it
+  pairs with.
 - **CI guard: the public roadmap can't rot silently (#1945).** The marketing /roadmap page
   is hand-maintained and drifted badly (before #1944, 7 of its 8 Planned/In-progress refs
   pointed at issues closed weeks earlier). A stdlib-only `scripts/check_roadmap_staleness.py`

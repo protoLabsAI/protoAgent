@@ -74,9 +74,31 @@ views:                      # console rail view (ADR 0026/0038) — a sandboxed 
   - { id: board, label: "Board", icon: LayoutDashboard, path: /plugins/my-plugin/board }
 emits: ["my-plugin.updated"]     # event-bus topics you broadcast (ADR 0039; optional, for discovery)
 subscribes: ["other-plugin.*"]   # topics you listen for
-requires_pip: ["httpx>=0.27"]   # deps — declared, NOT auto-installed (ADR 0027)
+requires_pip:                    # deps — declared, NOT auto-installed (ADR 0027)
+  - "httpx>=0.27"                          # hard: gates the frozen desktop install (ADR 0058 D2)
+  - { pkg: "pillow>=10", optional: true }  # optional (#1953): missing → warn, feature degrades
 repository: https://github.com/owner/my-plugin
 ```
+
+**Optional deps pair with lazy-import degradation.** Mark a dep `optional: true`
+only if the plugin genuinely runs without it: import it **inside** the tool body
+(never at module top) and catch `ImportError` to return a readable error naming
+the fix, so the plugin's other tools keep working:
+
+```python
+@tool
+async def resize_image(path: str) -> str:
+    """Resize an image."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return "resize_image needs pillow — run: python -m server plugin install-deps my-plugin"
+    ...
+```
+
+A missing hard dep refuses the frozen (desktop) install outright; a missing
+optional dep installs with a warning, and `install-deps` treats it best-effort
+(a failed optional install warns instead of failing).
 
 ## 4. Write `register(registry)`
 The registry collects code contributions (mounted once at init):

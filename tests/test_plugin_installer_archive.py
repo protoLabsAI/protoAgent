@@ -166,3 +166,68 @@ def test_install_deps_frozen_skips_pip_when_bundled(env, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
     # Would raise if it shelled out to pip; instead the gate sees httpx is bundled.
     assert installer.install_deps("demo_ext") == ["httpx>=0.27"]
+
+
+# --- optional dep tier (#1953): the D2 gate warns instead of refusing ---------
+
+_SOFT_MISSING = "{pkg: definitely_not_real_xyz>=1, optional: true}"
+
+
+def test_frozen_missing_optional_dep_warns_and_installs(env, monkeypatch, caplog):
+    """A missing OPTIONAL dep must not gate the frozen install — it lands with a
+    visible warning naming the dep (the protobanana/pillow case)."""
+    import logging as _logging
+
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
+    monkeypatch.setattr(
+        installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip=f"httpx>=0.27, {_SOFT_MISSING}"))
+    )
+    with caplog.at_level(_logging.WARNING):
+        summary = installer.install("https://github.com/acme/demo_ext")
+    assert summary["id"] == "demo_ext"
+    assert (installer.live_plugins_dir() / "demo_ext").exists()  # installed, not refused
+    assert summary["optional_pip"] == ["definitely_not_real_xyz>=1"]
+    assert any("definitely_not_real_xyz" in w for w in summary["warnings"])  # warning in the result
+    assert "definitely_not_real_xyz" in caplog.text  # ...and in the log
+
+
+def test_frozen_missing_hard_dep_still_refuses_with_optional_present(env, monkeypatch):
+    """Hard wins: a mixed manifest with a missing hard dep gets today's refusal."""
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
+    monkeypatch.setattr(
+        installer,
+        "_http_get",
+        lambda url, **kw: _Resp(content=_tarball(requires_pip=f"also_not_real_abc>=1, {_SOFT_MISSING}")),
+    )
+    with pytest.raises(installer.InstallError, match="isn't in the desktop runtime"):
+        installer.install("https://github.com/acme/demo_ext")
+    assert not (installer.live_plugins_dir() / "demo_ext").exists()
+
+
+def test_frozen_satisfied_optional_dep_no_warning(env, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
+    monkeypatch.setattr(
+        installer,
+        "_http_get",
+        lambda url, **kw: _Resp(content=_tarball(requires_pip="{pkg: websockets>=12, optional: true}")),
+    )
+    summary = installer.install("https://github.com/acme/demo_ext")
+    assert "warnings" not in summary  # nothing missing → nothing to warn about
+
+
+def test_install_deps_frozen_missing_optional_warns_not_refuses(env, monkeypatch, caplog):
+    import logging as _logging
+
+    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
+    monkeypatch.setattr(
+        installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip=f"httpx>=0.27, {_SOFT_MISSING}"))
+    )
+    installer.install("https://github.com/acme/demo_ext")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    with caplog.at_level(_logging.WARNING):
+        deps = installer.install_deps("demo_ext")  # no raise
+    assert deps == ["httpx>=0.27"]  # only the satisfied deps
+    assert "definitely_not_real_xyz" in caplog.text

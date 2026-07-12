@@ -112,6 +112,7 @@ def register_plugin_routes(app) -> None:
                     "capabilities": m.capabilities,
                     "requires_env": m.requires_env,
                     "requires_pip": m.requires_pip,
+                    "optional_pip": m.optional_pip,
                     "views": [v.get("label") for v in m.views],
                     "secrets": m.secrets,
                 }

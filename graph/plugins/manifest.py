@@ -91,11 +91,18 @@ class PluginManifest:
     # Distribution (ADR 0027) — for plugins installed from a git URL.
     #   requires_pip: declared pip deps. NOT auto-installed (install ≠ code exec);
     #     the operator installs them explicitly. Missing → clear error on enable.
+    #     An entry is a bare PEP 508 spec string (a HARD dep) or a mapping
+    #     ``{pkg: "pillow>=10", optional: true}`` — see ``_parse_requires_pip``.
+    #   optional_pip: the optional tier (#1953) — specs from ``optional: true``
+    #     entries. The plugin runs without them (lazy import, graceful
+    #     degradation), so the frozen-app gate (ADR 0058 D2) warns instead of
+    #     refusing, and ``install-deps`` installs them best-effort.
     #   repository/homepage: provenance, shown in the install review.
     #   min_protoagent_version: compat guard — the loader refuses to load the
     #     plugin when the host is older than declared (malformed strings only
     #     warn and load).
     requires_pip: list[str] = field(default_factory=list)
+    optional_pip: list[str] = field(default_factory=list)
     repository: str = ""
     homepage: str = ""
     min_protoagent_version: str = ""
@@ -308,6 +315,44 @@ def _parse_emits(entries, plugin_dir: Path, plugin_id: str) -> tuple[list[str], 
     return names, schemas
 
 
+def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str]]:
+    """Parse ``requires_pip:`` → ``(hard specs, optional specs)`` (#1953).
+
+    An entry is either a bare PEP 508 spec string (today's behavior, unchanged —
+    a HARD dep) or a mapping ``{pkg: "pillow>=10", optional: true}``:
+
+    .. code-block:: yaml
+
+        requires_pip:
+          - "httpx>=0.27"                          # hard — still fine
+          - { pkg: "pillow>=10", optional: true }  # optional tier
+
+    The optional tier is for a dep the plugin degrades gracefully without (a
+    lazy import + a readable tool error naming the fix): the frozen-app gate
+    (ADR 0058 D2) warns instead of refusing when it's missing, and
+    ``install-deps`` installs it best-effort. A mapping without
+    ``optional: true`` is just a hard dep spelled long-form; a mapping without
+    a usable ``pkg`` warns and is skipped — it never fails the manifest load
+    (mirroring ``_parse_emits``).
+    """
+    if not isinstance(entries, (list, tuple)):
+        return [], []
+    hard: list[str] = []
+    optional: list[str] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            pkg = str(entry.get("pkg", "") or "").strip()
+            if not pkg:
+                log.warning(
+                    "[plugins] %s: requires_pip entry %r has no 'pkg' — skipped", plugin_id, entry
+                )
+                continue
+            (optional if entry.get("optional") else hard).append(pkg)
+        else:
+            hard.append(str(entry))
+    return hard, optional
+
+
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     """Parse ``<plugin_dir>/protoagent.plugin.yaml`` → ``PluginManifest``.
 
@@ -362,7 +407,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     )
     emits, emits_schemas = _parse_emits(data.get("emits"), plugin_dir, pid)
     subscribes = data.get("subscribes")
-    requires_pip = data.get("requires_pip")
+    requires_pip, optional_pip = _parse_requires_pip(data.get("requires_pip"), pid)
     return PluginManifest(
         id=pid,
         name=name,
@@ -385,7 +430,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         emits=emits,
         emits_schemas=emits_schemas,
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],
-        requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],
+        requires_pip=requires_pip,
+        optional_pip=optional_pip,
         repository=str(data.get("repository", "")).strip(),
         homepage=str(data.get("homepage", "")).strip(),
         min_protoagent_version=str(data.get("min_protoagent_version", "")).strip(),
