@@ -404,8 +404,39 @@ def register_plugin_routes(app) -> None:
     @app.delete("/api/plugins/{plugin_id}")
     async def _uninstall(plugin_id: str, purge: bool = False):
         # purge=true also removes the plugin's config section + secrets (ADR 0027).
+        cfg = STATE.graph_config
+        was_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
+        meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+        was_mounted = plugin_id in _mounted_router_ids()
         try:
             report = installer.uninstall(plugin_id, purge=purge)
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, **report}
+
+        # Teardown, mirroring _update (#1955): the files are gone, so stale module
+        # objects must not survive to the next import, and an ENABLED plugin must
+        # leave plugins_enabled + hot-reload out of the live graph — otherwise the
+        # next reload or request into its surface crashes on imports of deleted
+        # files. Purge is unconditional: a previously-enabled-then-disabled
+        # plugin's modules can linger too, and purging an absent subtree is a no-op.
+        _purge_plugin_modules(plugin_id)
+        reloaded = False
+        if was_enabled:
+            from server.agent_init import _apply_settings_changes
+
+            enabled = [p for p in (getattr(cfg, "plugins_enabled", []) or []) if p != plugin_id]
+            disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != plugin_id]
+            ok, messages = _apply_settings_changes(
+                config={"plugins": {"enabled": enabled, "disabled": disabled}},
+            )
+            if not ok:
+                raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+            reloaded = True
+
+        # Same contract as _update's flag: a mounted router lingers until restart.
+        return {
+            "ok": True,
+            **report,
+            "reloaded": reloaded,
+            "restart_recommended": bool(_has_surface(meta) or was_mounted),
+        }
