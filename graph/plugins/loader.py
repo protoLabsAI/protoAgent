@@ -461,9 +461,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
             # Clear diagnostic when an enabled plugin's declared deps aren't
             # installed (ADR 0027 D4: install fetches code; deps are explicit).
-            if isinstance(exc, ModuleNotFoundError) and manifest.requires_pip:
+            if isinstance(exc, ModuleNotFoundError) and (manifest.requires_pip or manifest.optional_pip):
                 entry["error"] = (
-                    f"declared deps not installed ({', '.join(manifest.requires_pip)}) — "
+                    f"declared deps not installed ({', '.join([*manifest.requires_pip, *manifest.optional_pip])}) — "
                     f"run: python -m server plugin install-deps {manifest.id}"
                 )
             else:

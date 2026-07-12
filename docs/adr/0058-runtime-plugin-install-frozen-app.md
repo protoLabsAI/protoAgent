@@ -68,6 +68,17 @@ on server/Docker"* message (not a cryptic enable-time ImportError). On dev/serve
 the 0027 pip path is unchanged. Communication channels (Discord, Slack, Telegram:
 `httpx`/`websockets`, both core) all pass the gate.
 
+> **Amendment (#1953) — an optional tier in `requires_pip`.** A manifest entry may
+> be a mapping `{pkg: "pillow>=10", optional: true}` alongside the plain spec
+> strings (which stay hard deps, unchanged). The D2 gate applies verbatim to hard
+> deps; a missing **optional** dep **warns and installs** (warning in the install
+> summary + log) instead of refusing — the tier is for a dep the plugin degrades
+> gracefully without (a lazy import + a readable tool error naming the fix; the
+> motivating case was protobanana refused on the desktop over a soft `pillow>=10`
+> that one of its eight tools imports lazily). Non-frozen `install-deps` installs
+> optional deps too, best-effort: a failed optional install warns (audited) instead
+> of failing the command. The `_validate_pip_specs` rails apply to both tiers.
+
 ### D3 — Opt-in everywhere; Discord leaves the default bundle
 
 Discord is **removed from the default bundle on all surfaces** (server bundle +

@@ -160,6 +160,10 @@ def run_plugin_cli(argv: list[str]) -> int:
             if s["requires_pip"]:
                 print(f"  ⚠ declared deps (NOT installed — review, then install): {', '.join(s['requires_pip'])}")
                 print(f"    pip install {' '.join(s['requires_pip'])}")
+            if s.get("optional_pip"):
+                print(f"  · optional deps (features degrade without them): {', '.join(s['optional_pip'])}")
+            for w in s.get("warnings") or []:
+                print(f"  ⚠ {w}")
             if s["contributes"]["views"]:
                 print(f"  contributes views: {', '.join(s['contributes']['views'])}")
             if s["capabilities"]:

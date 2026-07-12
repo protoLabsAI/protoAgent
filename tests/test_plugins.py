@@ -57,6 +57,56 @@ def test_manifest_parse(tmp_path) -> None:
     assert load_manifest(tmp_path / "bad") is None  # missing id
 
 
+# --- Optional dep tier (#1953) — `requires_pip:` entries may be {pkg, optional} ---
+
+
+def test_requires_pip_plain_list_unchanged(tmp_path) -> None:
+    # Today's names-only form keeps working verbatim — all hard, no optional tier.
+    _make_plugin(tmp_path, "rp0", manifest_extra='requires_pip: ["httpx>=0.27", "rich"]\n')
+    m = load_manifest(tmp_path / "rp0")
+    assert m.requires_pip == ["httpx>=0.27", "rich"]
+    assert m.optional_pip == []
+
+
+def test_requires_pip_optional_entries(tmp_path) -> None:
+    # Dict entries route on the `optional` flag; a dict without it (or with
+    # optional: false) is just a hard dep spelled long-form.
+    _make_plugin(
+        tmp_path, "rp1",
+        manifest_extra=(
+            "requires_pip:\n"
+            '  - "httpx>=0.27"\n'
+            '  - { pkg: "pillow>=10", optional: true }\n'
+            '  - { pkg: "rich", optional: false }\n'
+            '  - { pkg: "numpy" }\n'
+        ),
+    )
+    m = load_manifest(tmp_path / "rp1")
+    assert m.requires_pip == ["httpx>=0.27", "rich", "numpy"]
+    assert m.optional_pip == ["pillow>=10"]
+
+
+def test_requires_pip_malformed_entries_warn_not_fail(tmp_path, caplog) -> None:
+    # A dict without a usable pkg is skipped with a warning; the load never fails.
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path, "rp2",
+        manifest_extra=(
+            "requires_pip:\n"
+            "  - { optional: true }\n"          # no pkg → skipped
+            '  - { pkg: "", optional: true }\n'  # empty pkg → skipped
+            '  - "httpx>=0.27"\n'
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "rp2")
+    assert m is not None
+    assert m.requires_pip == ["httpx>=0.27"]
+    assert m.optional_pip == []
+    assert "has no 'pkg'" in caplog.text
+
+
 # --- Typed event contracts (#1636) — `emits:` entries may carry a payload schema ---
 
 
