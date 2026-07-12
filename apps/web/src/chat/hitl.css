@@ -2,6 +2,49 @@
    Carved out of app/theme.css (#832, Axis-A step 2). Imported by HitlForm.tsx.
    Move verbatim — no restyle. */
 
+/* Floating HITL panel (#1973). ChatSurface wraps the card in .hitl-float, pinned
+   above the composer inside .composer-wrap (position: relative — the same anchor
+   the slash menu uses), so the form appearing/answering never reflows the
+   conversation, moves the composer, or jumps the scroll. Deliberately NO
+   backdrop/dimming: answering usually means re-reading (and scrolling) the chat,
+   so it stays fully readable and interactive behind the card. Other hosts
+   (GoalsPanel's inline goal form) render the card unwrapped, in normal flow. */
+.hitl-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 15; /* over chat content, UNDER .slash-menu (20) so live "/" typing wins */
+  /* Only the card takes clicks — its side gutters stay click-through to the chat. */
+  pointer-events: none;
+}
+
+.hitl-float .hitl-card {
+  pointer-events: auto;
+  /* Elevated off the chat — the DS popover shadow, same literal fallback as
+     .slash-menu / .chat-report-card for themes without the token. */
+  box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
+  /* A long wizard scrolls INSIDE the card (dvh per the mobile overlay convention)
+     instead of growing to cover the conversation. */
+  max-height: min(60dvh, 520px);
+}
+
+/* The variable-height regions give way and scroll internally when the card hits
+   its max-height; title + actions stay pinned (the card is already a flex column). */
+.hitl-float .hitl-step,
+.hitl-float .hitl-prompt {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* The DS jump-to-latest anchors at the bottom-center of the conversation — exactly
+   where the card now floats, so while a form is open the button is always buried
+   under it (and jumping would only land the latest message behind the card). Hide
+   it until the form resolves. (:has() — the .pl-overlay:has(.auth-dialog) precedent.) */
+.chat-session-slot:has(.hitl-float) .pl-convo__jump {
+  visibility: hidden;
+}
+
 /* HITL request card (request_user_input form / ask_human prompt) — sits above
    the composer when a turn pauses as input-required. */
 .hitl-card {

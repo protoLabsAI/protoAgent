@@ -58,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote http(s) image URLs are never fetched server-side. The marker byte-matches the
   protobanana plugin's middleware, which skips messages core already bridged.
 
+### Fixed
+- **HITL forms float above the chat instead of shifting it (#1973).** The
+  `ask_human` question card, the `request_user_input` wizard, approval gates, and
+  client composer-forms used to render in-flow between the conversation and the
+  composer — appearing/resolving shrank the message area, pushed messages, and
+  jumped the scroll. The card is now an elevated overlay pinned above the
+  composer (the slash-menu anchor pattern): zero reflow, scroll preserved, long
+  wizards scroll inside the card (`min(60dvh, 520px)`), and deliberately no
+  backdrop — answering usually means re-reading (and scrolling) the conversation
+  behind it. New `hitl-float.spec.ts` e2e pins the geometry contract for both
+  HITL shapes plus a phone viewport.
+
 ## [0.100.0] - 2026-07-12
 
 ### Added

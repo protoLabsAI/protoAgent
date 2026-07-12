@@ -9,6 +9,7 @@ export const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 export const COST_MIME = "application/vnd.protolabs.cost-v1+json";
 export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
+export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -428,6 +429,47 @@ const DEFAULT_SEARCH_OUTPUT = [
 // matches the real starter-tool string format the per-tool renderer expects.
 function scenarioFor(prompt) {
   const t = (prompt || "").toUpperCase();
+  if (t.includes("HITL_ASK"))
+    // ask_human free-text interrupt: the turn parks input-required with a hitl-v1
+    // DataPart carrying a plain `question` — the console shows the floating
+    // free-text card (#1973). No tool frames; the terminal artifact text is the
+    // agent's lead-in, then the final frame is `input-required` instead of
+    // `completed` (see buildFrames).
+    return {
+      events: [],
+      answer: "I need one detail before I continue.",
+      hitl: { question: "Which environment should I deploy to — staging or production?" },
+    };
+  if (t.includes("HITL_FORM"))
+    // request_user_input structured interrupt: a two-step wizard (required text
+    // input, then an optional confirm) — exercises the stepper + Back/Next path
+    // in the floating card.
+    return {
+      events: [],
+      answer: "I need a couple of details before I continue.",
+      hitl: {
+        kind: "form",
+        title: "Deployment details",
+        description: "Tell me where and how to deploy.",
+        steps: [
+          {
+            title: "Target",
+            schema: {
+              type: "object",
+              properties: { environment: { type: "string", title: "Environment" } },
+              required: ["environment"],
+            },
+          },
+          {
+            title: "Confirm",
+            schema: {
+              type: "object",
+              properties: { dry_run: { type: "boolean", title: "Dry run first" } },
+            },
+          },
+        ],
+      },
+    };
   if (t.includes("CALC"))
     return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
   if (t.includes("COMPONENT"))
@@ -692,7 +734,25 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
       // keeps e2e guarding the console's absent→replace mapping.
       lastChunk: true,
     }),
-    wrap({ kind: "status-update", taskId, contextId, status: { state: "completed" }, final: true }),
+    // A HITL scenario parks instead of completing: the final frame is
+    // `input-required` carrying the hitl-v1 DataPart (form/question payload), the
+    // shape a2a_impl emits when the graph interrupts on ask_human /
+    // request_user_input — the console opens the floating HITL card off it (#1973).
+    scenario.hitl
+      ? wrap({
+          kind: "status-update",
+          taskId,
+          contextId,
+          status: {
+            state: "input-required",
+            message: {
+              role: "agent",
+              parts: [{ kind: "data", data: scenario.hitl, metadata: { mimeType: HITL_MIME } }],
+            },
+          },
+          final: true,
+        })
+      : wrap({ kind: "status-update", taskId, contextId, status: { state: "completed" }, final: true }),
   );
   return frames;
 }
