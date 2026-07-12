@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.100.0",
+    "date": "2026-07-12",
+    "changes": [
+      "Secrets manager: pull env vars from external secrets managers — Infisical first (#1963).",
+      "Console: Settings ▸ Secrets panel for the secrets manager (#1965).",
+      "Plugins: surfaces reconcile on config hot-reload (#1961).",
+      "Plugins: refresh the last boot-only plugin wiring on hot-reload (#1958).",
+      "MCP: normalize discovered tool names to the documented <server>__<tool> form (#1962).",
+      "Plugins: consolidate the seam reference; fill gaps; fix drift (#1959)."
+    ]
+  },
+  {
     "version": "v0.99.0",
     "date": "2026-07-12",
     "changes": [
