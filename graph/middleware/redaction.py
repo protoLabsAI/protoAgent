@@ -37,7 +37,7 @@ PATTERNS: dict[str, re.Pattern] = {
         r"(?i)\b(OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
         r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
         r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
-        r"CLIENT_SECRET)\s*[=:]\s*\S+",
+        r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET)\s*[=:]\s*\S+",
     ),
 }
 
@@ -69,11 +69,25 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "CLIENT_SECRET",
         "refresh_token",
         "REFRESH_TOKEN",
+        "INFISICAL_CLIENT_SECRET",
     }
 )
 
 _PLACEHOLDER = "[REDACTED]"
 _MAX_DEPTH = 10
+
+
+def _known_secret_values() -> frozenset[str]:
+    """Exact secret values pulled by the external secrets manager (ADR 0080 D7) —
+    manager-sourced credentials have arbitrary shapes the patterns above can't know,
+    so they're scrubbed by exact match. Lazy + guarded: redaction must keep working
+    (fail open on the patterns, never crash) even if the secrets subsystem doesn't."""
+    try:
+        from infra.secrets import sensitive_values
+
+        return sensitive_values()
+    except Exception:  # noqa: BLE001 — never let redaction itself raise
+        return frozenset()
 
 
 def _redact_string_simple(value: str) -> str:
@@ -114,6 +128,11 @@ def _redact_string_simple(value: str) -> str:
         return full[: len(full) - len(cred)] + _PLACEHOLDER
 
     value = PATTERNS["client_secret"].sub(_replace_client_secret, value)
+
+    # Manager-sourced values (ADR 0080) — exact-match scrub, shape-agnostic.
+    for secret_value in _known_secret_values():
+        if secret_value in value:
+            value = value.replace(secret_value, _PLACEHOLDER)
     return value
 
 

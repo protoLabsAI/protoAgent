@@ -75,6 +75,32 @@ auth:
 
 `LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts both fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value.
 
+### External secrets manager (ADR 0080)
+
+Instead of hand-maintaining env vars (or wrapping the process in `infisical run`), the server can **pull secrets from Infisical itself** and export them as env vars — at boot, on every config reload, and on a refresh interval, so rotation lands without a restart. Enable it with the `secrets_manager` section (or Settings ▸ Secrets manager, which includes a connection test and a sync-now button):
+
+```yaml
+secrets_manager:
+  enabled: true
+  provider: infisical
+  host: https://us.infisical.com   # or your self-hosted URL
+  project_id: "<project id>"
+  environment: prod                # the dev sandbox instance can point at `dev`
+  path: /
+  recursive: true
+  refresh_seconds: 300             # 0 = fetch only at boot / config reload
+  required: false                  # true = refuse to boot when the manager is unreachable
+  override_env: false              # true = manager values beat pre-existing env vars
+```
+
+Semantics — deliberately boring:
+
+- **Fetched values land in the env fallback tier.** The precedence above is unchanged: `secrets.yaml` → main YAML → env; the manager merely populates env. An env var you exported yourself always shadows the manager (flip `override_env` for rotation-wins), and only vars the hydrator *set itself* are ever updated or removed on refresh.
+- **Bootstrap credentials stay local** — the universal-auth machine identity (`client_id` / `client_secret`) is the one pair that can't come from the manager. It resolves like any core secret: `secrets_manager.client_id/client_secret` in `secrets.yaml` (where the Settings UI stores them, never echoed back) → main YAML → the `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` env vars. The recommended posture: *secrets.yaml holds only the machine identity; every other credential lives in the manager.* Fetched values can never overwrite the bootstrap pair or `PROTOAGENT_*` instance identity.
+- **Failures don't take the boot down** — a fetch error logs one warning and the server continues with whatever the env already has; set `required: true` to fail fast instead. `PROTOAGENT_NO_SECRETS_HYDRATE=1` disables hydration entirely (debugging escape hatch). Nothing is ever cached to disk.
+- **Operator surface:** `GET /api/secrets/status` (last outcome + which env vars are manager-owned — names, never values), `POST /api/secrets/sync`, `POST /api/secrets/test`.
+- Scope the machine identity least-privilege in Infisical (that project, that environment, read-only). Values are also registered with the audit-log redaction layer, so a manager-sourced credential echoed by a tool is scrubbed by exact match.
+
 ### Federation token — operator vs peer (ADR 0066)
 
 A deployment that hands its `/a2a` endpoint to **semi-trusted A2A peers** (a fleet hub, a partner agent) can issue them a **second** credential instead of the operator bearer: set `auth.federation_token` (secret; env fallback `A2A_FEDERATION_TOKEN`). A request authenticated with the federation token reaches only the **`/a2a` + `/v1` consumer surfaces** — it is **denied the whole `/api` operator surface** (plugin install/enable = host code-exec, config/SOUL rewrite, subagent runs, the operator goal set-path) with a `403`. The operator bearer keeps full access. Leaving `federation_token` blank is **single-token mode** (unchanged behavior): every bearer holder is the operator. Rotate existing peers onto the federation token — until they do, they still hold the operator credential.

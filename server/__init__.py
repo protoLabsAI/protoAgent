@@ -271,6 +271,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _checkpoint_prune_loop,
     _init_langgraph_agent,
     _plugin_autoupdate_loop,
+    _secrets_refresh_loop,
     _watch_loop,
     _mount_plugin_routers,
     _plugin_agent_invoke,
@@ -553,6 +554,16 @@ def _main():
 
             STATE.plugin_autoupdate_task = asyncio.create_task(_plugin_autoupdate_loop())
 
+        # External secrets-manager refresh (ADR 0080) — re-pull env vars on the
+        # configured interval so rotation lands without a restart. Started
+        # unconditionally for the same reason as the auto-update loop above: the
+        # loop self-guards (disabled / refresh 0 ⇒ idle), so enabling it via a
+        # config reload takes effect without a restart.
+        if STATE.graph_config is not None:
+            import asyncio
+
+            STATE.secrets_refresh_task = asyncio.create_task(_secrets_refresh_loop())
+
         # (The inbound Discord gateway now starts as the discord plugin's surface,
         # below — ADR 0018/0019.)
 
@@ -757,6 +768,12 @@ def _main():
     from operator_api.flags_routes import register_flags_routes
 
     register_flags_routes(fastapi_app)
+
+    # External secrets manager (ADR 0080) — /api/secrets status / sync-now /
+    # connection-test for the Settings panel.
+    from operator_api.secrets_routes import register_secrets_routes
+
+    register_secrets_routes(fastapi_app)
 
     # Per-agent theme (ADR 0042) — each agent saves its own look; the console repaints
     # to the focused agent's theme (proxied via /agents/<slug>/api/theme, slug routing).

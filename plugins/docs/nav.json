@@ -685,6 +685,10 @@
           "title": "0079 — Autonomous operating model (goals · tasks · scheduling · watches → one OODA loop)"
         },
         {
+          "path": "adr/0080-external-secrets-manager.md",
+          "title": "0080 — External secrets manager: env hydration with pluggable providers (Infisical first)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

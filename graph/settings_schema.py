@@ -847,6 +847,133 @@ FIELDS: list[Field] = [
         "work. The dev sandbox instance defaults to `dev`. Env fallback: PROTOAGENT_CHANNEL.",
         options=["prod", "beta", "dev"],
     ),
+    # ── Secrets manager (ADR 0080) — pull env vars from an external manager ──
+    Field(
+        "secrets_manager.enabled",
+        "secrets_manager_enabled",
+        "Pull secrets from a manager",
+        "bool",
+        "Secrets manager",
+        "Fetch secrets from an external manager (Infisical) at boot, on config reload, and "
+        "on the refresh interval, and export them as environment variables. Values fill the "
+        "documented env fallback tier — an env var you set yourself still wins, and "
+        "secrets.yaml still beats everything.",
+    ),
+    Field(
+        "secrets_manager.provider",
+        "secrets_manager_provider",
+        "Provider",
+        "select",
+        "Secrets manager",
+        options=["infisical"],
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.host",
+        "secrets_manager_host",
+        "Server URL",
+        "string",
+        "Secrets manager",
+        "Infisical Cloud (https://us.infisical.com / https://eu.infisical.com) or your "
+        "self-hosted instance URL.",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.project_id",
+        "secrets_manager_project_id",
+        "Project ID",
+        "string",
+        "Secrets manager",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.environment",
+        "secrets_manager_environment",
+        "Environment",
+        "string",
+        "Secrets manager",
+        "Environment slug to pull from (e.g. dev / staging / prod). The dev sandbox "
+        "instance can point at a different environment than your default instance.",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.path",
+        "secrets_manager_path",
+        "Secret path",
+        "string",
+        "Secrets manager",
+        "Folder to pull (subfolders included when recursive is on).",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.recursive",
+        "secrets_manager_recursive",
+        "Include subfolders",
+        "bool",
+        "Secrets manager",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.client_id",
+        "secrets_manager_client_id",
+        "Machine identity client ID",
+        "secret",
+        "Secrets manager",
+        "Universal-auth machine identity. Stored in secrets.yaml, never echoed back — or "
+        "set INFISICAL_CLIENT_ID in the environment instead.",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.client_secret",
+        "secrets_manager_client_secret",
+        "Machine identity client secret",
+        "secret",
+        "Secrets manager",
+        "Stored in secrets.yaml, never echoed back — or set INFISICAL_CLIENT_SECRET in the "
+        "environment instead. This bootstrap pair is the only secret that stays local; "
+        "everything else can live in the manager.",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.refresh_seconds",
+        "secrets_manager_refresh_seconds",
+        "Refresh interval (seconds)",
+        "number",
+        "Secrets manager",
+        "Re-pull on this interval so rotation lands without a restart. 0 = fetch only at "
+        "boot and on config reload.",
+        minimum=0,
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.required",
+        "secrets_manager_required",
+        "Required at boot",
+        "bool",
+        "Secrets manager",
+        "Refuse to boot when the manager is unreachable, instead of the default "
+        "warn-and-continue with whatever the environment already has.",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.override_env",
+        "secrets_manager_override_env",
+        "Manager beats existing env",
+        "bool",
+        "Secrets manager",
+        "By default a pre-existing environment variable shadows the manager's value. "
+        "Turn this on to prefer the manager (rotation-wins).",
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
+    Field(
+        "secrets_manager.timeout_seconds",
+        "secrets_manager_timeout_seconds",
+        "Fetch timeout (seconds)",
+        "number",
+        "Secrets manager",
+        minimum=1,
+        depends_on={"key": "secrets_manager.enabled"},
+    ),
 ]
 
 # Knowledge domain sub-sections (console grouping). The Knowledge fields are declared with
