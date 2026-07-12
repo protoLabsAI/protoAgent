@@ -26,6 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders its text plus an image-count note, tolerating the server's 800-char preview
   truncation (a cut envelope degrades to the recovered caption or a generic label, never the
   b64 dump).
+- **OpenAI-compat: `/v1/chat/completions` accepts multimodal content lists (#1943, #1949).**
+  A message whose `content` is a list of parts (`text` + `image_url` — the standard OpenAI
+  multimodal shape) crashed the endpoint with `'list' object has no attribute 'strip'`. The
+  compat surface now parses the parts list, so images reach vision-capable models with the
+  same gating as A2A.
+- **Console: the selected agent theme renders on first load (#1916).** The theme query ran
+  with `retry: false`, so the one fetch that fires while the focused agent is still cold
+  (activate still resuming the member → 409/502 from the hub proxy; the desktop sidecar's
+  boot window → fetch throws) failed permanently and the agent rendered unthemed until a
+  full-page agent switch re-ran it warm. The fetch now rides out cold-start failures like
+  every other panel (bounded retries; a backend without `/api/theme` still no-ops straight
+  to defaults), so first load and switch-back converge on the same apply.
+- **Console: the mobile notch/status bar matches the header, not the accent (#1923).** The
+  `theme-color` meta carried the active theme's accent — fine for desktop tab chrome, but on
+  mobile (PWA/webview) that meta paints the safe-area/notch band above the header, rendering
+  a broken two-tone header. The meta now takes the theme's surface background
+  (`--pl-color-bg`, what the header actually paints — mode-appropriate via computed style);
+  the favicon keeps the accent, and clearing a theme still restores the static brand chrome.
 
 ## [0.98.0] - 2026-07-11
 
