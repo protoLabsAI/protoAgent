@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.99.0",
+    "date": "2026-07-12",
+    "changes": [
+      "Plugins: an optional tier for requires_pip (#1953).",
+      "CI guard: the public roadmap can't rot silently (#1945).",
+      "Console: wait tool blocks surface a real waiting state (#1914).",
+      "Console: server-relative /media/ URLs render cross-origin (#1946).",
+      "Console: multimodal tool results render their text, not the raw envelope (#1947).",
+      "OpenAI-compat: /v1/chat/completions accepts multimodal content lists (#1943, #1949).",
+      "Console: the selected agent theme renders on first load (#1916).",
+      "Console: the mobile notch/status bar matches the header, not the accent (#1923)."
+    ]
+  },
+  {
     "version": "v0.98.0",
     "date": "2026-07-11",
     "changes": [
