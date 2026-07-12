@@ -56,7 +56,8 @@ TypeScript is the console.
 - **Python deps:** managed with `uv` (`pyproject.toml [project.dependencies]` is
   the source of truth; `uv.lock` is tracked). `uv sync` to install.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is
-  `@protoagent/web`).
+  `@protoagent/web`). **Changing/bumping a dependency requires npm ≥ 11**
+  (`npm install -g npm@11`) — see the npm-10 no-op gotcha below.
 - **Console dev loop (frontend):** `npm run dev` (HMR) / `npm run preview` (built dist) serve
   the console on `:5173` and **proxy all backend calls (`/api`, `/a2a`, events, `/agents`,
   `/plugins`, `/_ds`) to `PROTOAGENT_API_BASE`, default `http://127.0.0.1:7871`** — the
@@ -111,6 +112,19 @@ These are the failures that actually recur — read them before you edit.
   (both retired — desktop/Docker/fleet now set `PROTOAGENT_HOME`); add a per-store
   accessor or use `instance_paths().store("<name>")`. Identity comes from env only —
   never config-file content. `config explain` prints the resolved layout.
+
+- **npm 10 silently no-ops workspace dependency bumps — use npm ≥ 11.** With a
+  dep resolved under `apps/web/node_modules/` (e.g. `@protolabsai/ui`, nested
+  because its pinned `@protolabsai/design` conflicts with the hoisted one),
+  npm 10's arborist keeps the old version through **every** supported command —
+  root `npm install` after a range bump, `npm install <pkg>@<v> -w
+  @protoagent/web`, `npm update <pkg> -w` — even when the locked version no
+  longer satisfies the manifest range. No error, nothing changes (repro'd
+  three ways, 2026-07-12). npm 11 (`npm install -g npm@11`) resolves the same
+  bump correctly with a plain root `npm install`. CI is unaffected (`npm ci`
+  installs the lockfile verbatim) — this bites the machine *changing* deps.
+  After any dep bump, regenerate `THIRD_PARTY_LICENSES.md`
+  (`uv run python scripts/gen_attribution.py`) or the attribution gate fails.
 
 - **No unused variables.** ruff selects `F` (pyflakes); `F841` (assigned-but-
   unused) **fails CI** and `ruff check --fix` does **not** auto-fix it. Don't
