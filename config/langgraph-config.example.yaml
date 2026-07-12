@@ -333,3 +333,25 @@ fleet:
     grace_seconds: 0        # spare agents touched within N seconds from LRU eviction
   autostart: []             # member ids/names the hub (re)starts on boot (survives container recreate);
                             # e.g. [cindi, matt]. Env: PROTOAGENT_FLEET_AUTOSTART (comma-separated)
+
+# External secrets manager (ADR 0080) — pull secrets from Infisical at boot, on
+# config reload, and on a refresh interval, and export them as ENV VARS. Values fill
+# the documented env fallback tier (OPENAI_API_KEY, A2A_AUTH_TOKEN, plugin
+# requires_env, …): an env var you set yourself still wins (unless override_env),
+# and secrets.yaml still beats everything. Bootstrap credentials — the machine
+# identity — are the ONE pair that stays local: set INFISICAL_CLIENT_ID /
+# INFISICAL_CLIENT_SECRET in the environment, or put client_id / client_secret
+# under `secrets_manager:` in secrets.yaml (the Settings UI stores them there).
+# Editable in-app: Settings ▸ Secrets manager (incl. connection test + sync-now).
+# secrets_manager:
+#   enabled: true
+#   provider: infisical
+#   host: https://us.infisical.com   # or https://eu.infisical.com / your self-hosted URL
+#   project_id: ""
+#   environment: prod                # the dev sandbox instance can point at `dev`
+#   path: /
+#   recursive: true                  # include subfolders under `path`
+#   refresh_seconds: 300             # re-pull cadence; 0 = boot/config-reload only
+#   required: false                  # true = refuse to boot when the manager is unreachable
+#   override_env: false              # true = manager values beat pre-existing env vars
+#   timeout_seconds: 10

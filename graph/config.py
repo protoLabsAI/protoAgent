@@ -45,6 +45,62 @@ def _load_secrets_doc(config_dir: Path) -> dict:
         return {}
 
 
+def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
+    """The file-reading half of ``from_yaml``: (host ⊕ agent) merged doc + secrets
+    overlay. The third element is False when there is nothing to parse (no agent
+    file and no host layer) — ``from_yaml``'s defaults short-circuit."""
+    host_layer = _load_host_layer()  # {} when absent/unreadable — never crashes boot
+    if not p.exists() and not host_layer:
+        return {}, {}, False
+
+    agent_data: dict = {}
+    if p.exists():
+        with open(p) as f:
+            agent_data = yaml.safe_load(f) or {}
+
+    # Host is the base; the agent leaf overlays it (agent wins). No host layer ⇒
+    # merged is exactly the agent doc — the pre-cascade input, unchanged.
+    if host_layer:
+        # Surface silent shadowing of a box default by the agent leaf (issue #1459).
+        _warn_shadowed_host_keys(host_layer, agent_data)
+    merged = _deep_merge_dicts(copy.deepcopy(host_layer), agent_data) if host_layer else agent_data
+
+    return merged, _load_secrets_doc(p.parent), True
+
+
+def load_config_docs(path: str | Path) -> tuple[dict, dict]:
+    """Public doc loader for callers that need the raw (merged, secrets) pair without
+    a full parse — the secrets refresh loop and operator sync/test routes (ADR 0080)."""
+    merged, secrets, _ = _read_config_docs(Path(path))
+    return merged, secrets
+
+
+def _hydrate_external_secrets(merged: dict, secrets: dict) -> None:
+    """External secrets-manager hydration (ADR 0080): populate ``os.environ`` from the
+    configured manager BEFORE the dataclass parse, so the env fallback tier (model
+    api_key / auth token, plugin ``requires_env``, MCP child env) sees manager values
+    on every load path — boot, ``--setup``, hot-reload, CLIs, fleet members.
+
+    Inert without an enabled ``secrets_manager`` section (no import, no network).
+    Never breaks config load: fetch failures warn and fall through to whatever the
+    env already has — except ``secrets_manager.required: true``, which propagates so
+    a boot with a hard manager dependency fails fast instead of serving a
+    half-configured agent."""
+    if not isinstance(merged, dict) or not (merged.get("secrets_manager") or {}).get("enabled"):
+        return
+    try:
+        from infra.secrets import SecretsRequiredError, hydrate_from_docs
+    except Exception as e:  # noqa: BLE001 — hydration must not take config load down
+        log.warning("[secrets] hydration unavailable (import failed): %s", e)
+        return
+    try:
+        hydrate_from_docs(merged, secrets)
+    except SecretsRequiredError:
+        raise
+    except Exception as e:  # noqa: BLE001 — belt-and-suspenders around the never-raise contract
+        log.warning("[secrets] hydration failed — continuing with the existing environment: %s", e)
+
+
 def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
     """Resolve each enabled plugin's declared config section (ADR 0019).
 
@@ -823,6 +879,25 @@ class LangGraphConfig:
     # CIDR. Enforced via ``policy.set_callback_allowlist``.
     security_callback_allowlist: list[str] = field(default_factory=list)
 
+    # External secrets manager (ADR 0080) — pull env vars from Infisical (etc.) at
+    # config load, on hot-reload, and on a refresh interval. client_id/client_secret
+    # are the bootstrap machine identity: SECRET_PATHS entries, overlaid from
+    # secrets.yaml exactly like model.api_key, with INFISICAL_CLIENT_ID /
+    # INFISICAL_CLIENT_SECRET as the env fallback.
+    secrets_manager_enabled: bool = False
+    secrets_manager_provider: str = "infisical"
+    secrets_manager_host: str = "https://us.infisical.com"
+    secrets_manager_project_id: str = ""
+    secrets_manager_environment: str = "prod"
+    secrets_manager_path: str = "/"
+    secrets_manager_recursive: bool = True
+    secrets_manager_client_id: str = ""
+    secrets_manager_client_secret: str = ""
+    secrets_manager_refresh_seconds: int = 300
+    secrets_manager_required: bool = False
+    secrets_manager_override_env: bool = False
+    secrets_manager_timeout_seconds: float = 10.0
+
     def __post_init__(self):
         # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
         # boot the same agent against different models without editing config
@@ -858,23 +933,14 @@ class LangGraphConfig:
         (zero-migration). Secrets stay leaf-only (sibling ``secrets.yaml``).
         """
         p = Path(path)
-        host_layer = _load_host_layer()  # {} when absent/unreadable — never crashes boot
-        if not p.exists() and not host_layer:
+        merged, secrets, present = _read_config_docs(p)
+        if not present:
             return cls()
 
-        agent_data: dict = {}
-        if p.exists():
-            with open(p) as f:
-                agent_data = yaml.safe_load(f) or {}
-
-        # Host is the base; the agent leaf overlays it (agent wins). No host layer ⇒
-        # merged is exactly the agent doc — the pre-cascade input, unchanged.
-        if host_layer:
-            # Surface silent shadowing of a box default by the agent leaf (issue #1459).
-            _warn_shadowed_host_keys(host_layer, agent_data)
-        merged = _deep_merge_dicts(copy.deepcopy(host_layer), agent_data) if host_layer else agent_data
-
-        secrets = _load_secrets_doc(p.parent)
+        # External secrets-manager hydration (ADR 0080) — before the parse, so the
+        # env fallbacks consulted below (and later, lazily, by create_llm / plugin
+        # requires_env gates) already see manager-sourced values.
+        _hydrate_external_secrets(merged, secrets)
         return cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
 
     @classmethod
@@ -932,6 +998,9 @@ class LangGraphConfig:
         secret_api_key = secrets.get("model", {}).get("api_key")
         secret_auth_token = secrets.get("auth", {}).get("token")
         secret_federation_token = secrets.get("auth", {}).get("federation_token")
+        secrets_manager = data.get("secrets_manager", {})
+        secret_sm_client_id = secrets.get("secrets_manager", {}).get("client_id")
+        secret_sm_client_secret = secrets.get("secrets_manager", {}).get("client_secret")
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -1070,6 +1139,31 @@ class LangGraphConfig:
             instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             federation_token=secret_federation_token or auth.get("federation_token", cls.federation_token),
+            secrets_manager_enabled=bool(secrets_manager.get("enabled", cls.secrets_manager_enabled)),
+            secrets_manager_provider=str(
+                secrets_manager.get("provider", cls.secrets_manager_provider) or "infisical"
+            ),
+            secrets_manager_host=str(secrets_manager.get("host", cls.secrets_manager_host) or ""),
+            secrets_manager_project_id=str(secrets_manager.get("project_id", cls.secrets_manager_project_id) or ""),
+            secrets_manager_environment=str(
+                secrets_manager.get("environment", cls.secrets_manager_environment) or "prod"
+            ),
+            secrets_manager_path=str(secrets_manager.get("path", cls.secrets_manager_path) or "/"),
+            secrets_manager_recursive=bool(secrets_manager.get("recursive", cls.secrets_manager_recursive)),
+            secrets_manager_client_id=secret_sm_client_id
+            or secrets_manager.get("client_id", cls.secrets_manager_client_id),
+            secrets_manager_client_secret=secret_sm_client_secret
+            or secrets_manager.get("client_secret", cls.secrets_manager_client_secret),
+            secrets_manager_refresh_seconds=int(
+                secrets_manager.get("refresh_seconds", cls.secrets_manager_refresh_seconds) or 0
+            ),
+            secrets_manager_required=bool(secrets_manager.get("required", cls.secrets_manager_required)),
+            secrets_manager_override_env=bool(
+                secrets_manager.get("override_env", cls.secrets_manager_override_env)
+            ),
+            secrets_manager_timeout_seconds=float(
+                secrets_manager.get("timeout_seconds", cls.secrets_manager_timeout_seconds) or 10.0
+            ),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
             # fallback only fires when the merged dict omits the key (zero-migration).

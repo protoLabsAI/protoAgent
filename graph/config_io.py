@@ -96,6 +96,10 @@ def presets_dir() -> Path:
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
     ("model", "api_key"),
     ("auth", "token"),
+    # Secrets-manager bootstrap machine identity (ADR 0080) — the one credential pair
+    # that can't come from the manager itself, routed to secrets.yaml like the API key.
+    ("secrets_manager", "client_id"),
+    ("secrets_manager", "client_secret"),
     # Plugin secrets (e.g. discord's `discord.bot_token`) are declared by their
     # plugin manifests and added dynamically via secret_paths() (ADR 0019).
 )

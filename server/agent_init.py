@@ -1046,6 +1046,43 @@ async def _plugin_autoupdate_loop() -> None:
         await asyncio.sleep((interval_h if interval_h > 0 else 1) * 3600)
 
 
+async def _secrets_refresh_loop() -> None:
+    """Re-pull env vars from the external secrets manager on its interval (ADR 0080
+    D5) so rotation lands without a restart. Reads the live config each pass — a
+    reload re-paces or en/disables the loop without restarting it; while disabled it
+    idles on 5-minute checks. ``force=True`` bypasses the hydrator's TTL gate (this
+    loop IS the TTL). ``required: true`` is a boot gate only — a refresh failure
+    here warns and keeps the last-applied values."""
+    import asyncio
+
+    def _live() -> tuple[bool, int]:
+        cfg = STATE.graph_config
+        if cfg is None:
+            return False, 0
+        return (
+            bool(getattr(cfg, "secrets_manager_enabled", False)),
+            int(getattr(cfg, "secrets_manager_refresh_seconds", 0) or 0),
+        )
+
+    while True:
+        enabled, refresh = _live()
+        await asyncio.sleep(float(max(30, refresh)) if (enabled and refresh > 0) else 300.0)
+        enabled, refresh = _live()  # re-read after the sleep — config may have changed
+        if not (enabled and refresh > 0):
+            continue
+        from graph.config import load_config_docs
+        from graph.config_io import config_yaml_path
+        from infra.secrets import SecretsRequiredError, hydrate_from_docs
+
+        try:
+            merged, secrets_doc = load_config_docs(config_yaml_path())
+            await asyncio.to_thread(hydrate_from_docs, merged, secrets_doc, force=True)
+        except SecretsRequiredError as e:
+            log.warning("[secrets] refresh failed (required source): %s", e)
+        except Exception:
+            log.exception("[secrets] refresh failed")
+
+
 def _build_inbox_store(config):
     """Durable inbound inbox (ADR 0003), namespaced by agent name. ``inbox_db_path``
     config (a dir) is used verbatim; else the per-instance ``instance_root/inbox`` store."""

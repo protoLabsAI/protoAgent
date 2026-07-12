@@ -25,6 +25,7 @@ class AppState:
     monitor_goals_task: Any = None  # ADR 0030 monitor-goal cadence loop
     watch_task: Any = None  # ADR 0067 watch cadence loop
     plugin_autoupdate_task: Any = None  # #1720 opt-in plugin auto-update loop
+    secrets_refresh_task: Any = None  # ADR 0080 external secrets-manager refresh loop
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
     skills_index: Any = None

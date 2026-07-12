@@ -8,6 +8,14 @@ Every env var the template reads at runtime.
 |---|---|
 | `OPENAI_API_KEY` | LiteLLM gateway master key (or direct provider key if not using a gateway). Read by `graph/llm.py`. |
 
+## External secrets manager (ADR 0080)
+
+| Variable | Default | What |
+|---|---|---|
+| `INFISICAL_CLIENT_ID` | (unset) | Universal-auth machine-identity client id — the env fallback for `secrets_manager.client_id` (`secrets.yaml` wins when present). |
+| `INFISICAL_CLIENT_SECRET` | (unset) | Machine-identity client secret — env fallback for `secrets_manager.client_secret`. |
+| `PROTOAGENT_NO_SECRETS_HYDRATE` | (unset) | Any non-empty value disables secrets-manager env hydration entirely (debugging escape hatch). |
+
 ## Identity
 
 | Variable | Default | What |
