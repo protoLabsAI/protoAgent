@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugins: uninstall now tears down live state (#1955).** `DELETE /api/plugins/{id}`
+  used to remove the files and return — leaving the plugin's modules in `sys.modules`
+  (stale imports over deleted files), the id in `plugins_enabled`, and no
+  `restart_recommended` signal, so the next reload or request into its surface could
+  crash. Uninstall now mirrors update's teardown: purges the module subtree
+  (unconditionally — a previously-enabled-then-disabled plugin's modules linger too),
+  drops the plugin from the enabled/disabled lists and hot-reloads through the same
+  path the enable toggle uses, and flags `restart_recommended` via the existing
+  surface/mounted-router heuristic. Also adds the first tests for
+  `GET /api/plugins/installed` and `GET /api/plugins/updates`.
+
 ### Changed
 - **MCP tool calls reuse one persistent session per server (default ON).**
   Previously every MCP tool invocation opened a fresh session — for stdio
