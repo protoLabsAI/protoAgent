@@ -173,6 +173,10 @@ def test_fake_registry_chat_command_rejects_what_the_host_rejects():
         reg.register_chat_command("goal", h)
     with pytest.raises(ValueError):  # slugifies to the reserved token too
         reg.register_chat_command("/GOAL", h)
+    with pytest.raises(ValueError):  # lifecycle is reserved too (ADR 0074) — mirrors the host
+        reg.register_chat_command("lifecycle", h)
+    with pytest.raises(ValueError):  # …and its slugified variant
+        reg.register_chat_command("/Lifecycle", h)
     with pytest.raises(ValueError):  # empty after slugify
         reg.register_chat_command("!!!", h)
     with pytest.raises(ValueError):  # non-callable handler

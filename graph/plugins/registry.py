@@ -40,8 +40,11 @@ class PluginRegistry:
     - ``chat_commands`` — user-only ``/<name>`` control commands that short-circuit
       the turn, like ``/goal`` (``register_chat_command``).
 
-    Routes mount + surfaces start **once** at process init; a config reload reuses
-    them — changing ``plugins.enabled`` needs a restart (ADR 0018).
+    Routes and surfaces both wire at process init. Routes now ALSO hot-mount on a
+    config reload — a newly-enabled plugin's routers, public paths, verifiers, and
+    hooks re-apply without a restart (#1752/#1890). SURFACES do not: the startup hook
+    has already fired, so a surface (re)starts only on a full restart; a config reload
+    just fires each running surface's ``reload`` callback (ADR 0018).
     """
 
     def __init__(
