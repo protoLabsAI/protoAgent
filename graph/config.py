@@ -308,6 +308,10 @@ class LangGraphConfig:
     # images as native multimodal parts straight to the model instead of routing
     # them through the extraction pipeline. Off → images go through the pipeline.
     model_vision: bool = False
+    # Pinned go-to models (#1957) — the chat `/model` quick-switch shows these (in
+    # order) instead of the gateway's full list. Console-consumed via the settings
+    # schema; empty = no favorites, /model falls back to the full model list.
+    model_favorites: list[str] = field(default_factory=list)
 
     # Per-call timeout (seconds) on the model client + transient-retry cap. Bounds
     # a hung/slow gateway so a turn surfaces a clean error instead of blocking the
@@ -1016,6 +1020,7 @@ class LangGraphConfig:
             temperature=model.get("temperature", cls.temperature),
             max_tokens=model.get("max_tokens", cls.max_tokens),
             model_vision=model.get("vision", cls.model_vision),
+            model_favorites=list(model.get("favorites", []) or []),
             max_iterations=model.get("max_iterations", cls.max_iterations),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),

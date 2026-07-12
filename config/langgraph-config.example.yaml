@@ -25,6 +25,12 @@ model:
   # protolabs/smart, protolabs/reasoning/deepseek-v4). Chat then sends attached
   # images straight to the model instead of through the extraction pipeline.
   vision: false
+  # Favorite models (#1957) — pinned go-to models the chat `/model` quick-switch
+  # offers (in this order) instead of the gateway's full list. Manage them in
+  # Settings ▸ Model ▸ Favorite models; empty/omitted = /model shows every model.
+  #   favorites:
+  #     - protolabs/fast
+  #     - protolabs/reasoning
   request_timeout: 120   # per-call timeout (s) on the model client — bounds a hung/slow gateway
   max_retries: 2         # transient-error retries inside the client
   # Advanced sampling — all optional; omit to use the gateway / model-card

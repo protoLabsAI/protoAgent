@@ -252,6 +252,16 @@ export const SETTINGS_SCHEMA = [
     ],
   },
   {
+    // Favorite models (#1957) — the /model quick-switch pins. PINNED ORDER deliberately
+    // REVERSES the gateway options order, so an e2e can prove the picker is favorites-driven
+    // (cards fast-first) and exercise the up/down reorder buttons (a 2-item ordered list).
+    section: "Favorite models",
+    category: "Model",
+    fields: [
+      { key: "model.favorites", label: "Favorites", type: "string_list", section: "Favorite models", restart: false, description: "Pinned go-to models for the chat /model quick-switch.", options: ["protolabs/reasoning", "protolabs/fast"], options_source: "models", value: ["protolabs/fast", "protolabs/reasoning"], default: [], scope: "agent", source: "agent" },
+    ],
+  },
+  {
     section: "Routing",
     category: "Model",
     fields: [

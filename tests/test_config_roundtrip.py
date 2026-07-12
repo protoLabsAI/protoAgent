@@ -162,6 +162,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "mcp_servers": [],
     "mcp_timeout_seconds": 20.0,
     "memory_middleware": True,
+    "model_favorites": [],
     "model_name": "protolabs/reasoning",
     "model_provider": "openai",
     "model_vision": False,
@@ -609,6 +610,18 @@ def test_empty_string_secret_falls_through_to_main_yaml(tmp_path):
     )
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.api_key == "main_key"
+
+
+def test_model_favorites_parse_order_and_null(tmp_path):
+    """model.favorites (#1957) parses as an ordered list; a present-but-null key
+    (`favorites:` with every entry commented out) is an empty list, not None."""
+    path = _write_yaml(tmp_path, "model:\n  favorites:\n    - protolabs/fast\n    - protolabs/reasoning\n")
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.model_favorites == ["protolabs/fast", "protolabs/reasoning"]
+    null_dir = tmp_path / "null_favorites"
+    null_dir.mkdir()
+    cfg_null = LangGraphConfig.from_yaml(_write_yaml(null_dir, "model:\n  favorites:\n"))
+    assert cfg_null.model_favorites == []
 
 
 def test_agent_runtime_nonstring_coerces_to_str(tmp_path):
