@@ -121,10 +121,14 @@ These are the failures that actually recur — read them before you edit.
   @protoagent/web`, `npm update <pkg> -w` — even when the locked version no
   longer satisfies the manifest range. No error, nothing changes (repro'd
   three ways, 2026-07-12). npm 11 (`npm install -g npm@11`) resolves the same
-  bump correctly with a plain root `npm install`. CI is unaffected (`npm ci`
-  installs the lockfile verbatim) — this bites the machine *changing* deps.
-  After any dep bump, regenerate `THIRD_PARTY_LICENSES.md`
-  (`uv run python scripts/gen_attribution.py`) or the attribution gate fails.
+  bump correctly with a plain root `npm install`. The two arborists also
+  disagree about peer-stub reachability, so **npm 10's `ci` rejects an
+  npm-11-generated lockfile** ("Missing: @types/react@… from lock file") —
+  which is why every CI job touching the root lockfile pins `npm install -g
+  npm@11` before `npm ci` (checks/desktop-build/marketing-deploy/docs
+  workflows). Keep new workflows consistent. After any dep bump, regenerate
+  `THIRD_PARTY_LICENSES.md` (`uv run python scripts/gen_attribution.py`) or
+  the attribution gate fails.
 
 - **No unused variables.** ruff selects `F` (pyflakes); `F841` (assigned-but-
   unused) **fails CI** and `ruff check --fix` does **not** auto-fix it. Don't

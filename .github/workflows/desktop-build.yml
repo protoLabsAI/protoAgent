@@ -151,6 +151,7 @@ jobs:
         # desktop. Generate it now (into public/_ds) so build_sidecar can bundle it. The
         # root install also wires the @protoagent/web workspace for the tauri build below.
         run: |
+          npm install -g npm@11  # npm-11-shaped lockfile — npm 10's `ci` rejects it (see PROTO.md)
           npm ci
           node apps/web/scripts/copy-plugin-kit.mjs
           ls -la apps/web/public/_ds/

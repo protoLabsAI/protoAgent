@@ -191,6 +191,11 @@ jobs:
         with:
           node-version: "20"
           cache: npm
+      # The lockfile is npm-11-shaped (PROTO.md: npm-10 arborist no-ops workspace
+      # dep bumps and disagrees with 11 about peer-stub reachability, so its `ci`
+      # rejects an 11-generated lock). Pin every root `npm ci`/`install` to 11.
+      - name: Use npm 11
+        run: npm install -g npm@11
       - name: Install dependencies
         run: npm ci
       - name: Run unit tests (vitest)

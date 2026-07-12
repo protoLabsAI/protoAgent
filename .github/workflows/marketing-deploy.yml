@@ -47,6 +47,7 @@ jobs:
       # --- Docs (VitePress) served at /docs ---
       - name: Build docs (base /docs/)
         run: |
+          npm install -g npm@11  # npm-11-shaped lockfile — npm 10's `ci` rejects it (see PROTO.md)
           npm ci
           DOCS_BASE=/docs/ npm run docs:build
 

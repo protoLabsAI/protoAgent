@@ -34,6 +34,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - run: npm install -g npm@11  # keep resolution npm-11-consistent with the lockfile (see PROTO.md)
       - run: npm install
       - run: npm run docs:build
       - uses: actions/upload-pages-artifact@v5
