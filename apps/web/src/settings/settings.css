@@ -244,3 +244,42 @@
   display: inline-flex;
   align-items: center;
 }
+
+/* Secrets manager status card (ADR 0080) — status + sync/test actions rendered as the
+   Secrets panel footer, below the schema-driven fields in the same stage panel. */
+.secrets-status {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-top: 6px;
+}
+.secrets-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.secrets-status-actions {
+  display: flex;
+  gap: 8px;
+}
+.secrets-status-meta {
+  font-size: 0.8rem;
+  color: var(--fg-secondary);
+}
+.secrets-status-vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.secrets-status-vars code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg-secondary);
+}

@@ -57,6 +57,7 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     "Model",
     "Behavior",
     "Knowledge",
+    "Secrets", // ADR 0080 — external secrets manager
     "Integrations",
     // Capabilities group (sharing knobs live on each manager's chip, not a separate panel)
     "Tools",

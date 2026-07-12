@@ -36,6 +36,7 @@ import {
   MEMORY_INJECTION_DETAILS,
   MEMORY_SESSIONS,
   MEMORY_SESSION_RENDERED,
+  SECRETS_STATUS,
   SUBAGENTS,
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
@@ -108,6 +109,14 @@ let knowledgeChunks = cloneKnowledge();
 // to this staging area (out of the search response) so an Undo / restore-by-source
 // can move them back. Reset with the knowledge fixture.
 let knowledgeInvalidated = [];
+
+// ADR 0080 — Sync now flips this so the status GET reflects the reconcile the
+// panel refetches after invalidation (one new owned var).
+let secretsSynced = false;
+const secretsStatusNow = () =>
+  secretsSynced
+    ? { ...SECRETS_STATUS, fetched_at: "2026-07-12T00:00:30+00:00", applied: 3, vars: [...SECRETS_STATUS.vars, "ROTATED_KEY"] }
+    : SECRETS_STATUS;
 
 // Memory inspector (ADR 0069 D7) — sessions + hot chunks are MUTATED by the delete
 // specs, so serve working copies each memory test resets via
@@ -211,6 +220,8 @@ function handleApiGet(pathname, fleet = FLEET) {
       };
     case "/api/settings/schema":
       return { groups: SETTINGS_SCHEMA };
+    case "/api/secrets/status":
+      return secretsStatusNow();
     case "/api/delegate-types":
       return DELEGATE_TYPES;
     case "/api/acp-agents":
@@ -679,6 +690,16 @@ const server = createServer(async (req, res) => {
       // ADR 0047 reset-to-inherited: pop the given keys from the agent leaf.
       const keys = Array.isArray(body.keys) ? body.keys : [];
       return sendJson(res, { ok: true, messages: [`reset ${keys.length} setting(s) to inherited`] });
+    }
+    if (pathname === "/api/secrets/sync") {
+      // ADR 0080 force-refresh: flip to the reconciled status (one new owned var)
+      // so the card's post-sync refetch observes the change.
+      secretsSynced = true;
+      return sendJson(res, secretsStatusNow());
+    }
+    if (pathname === "/api/secrets/test") {
+      // ADR 0080 connection test — fetch-only; names, never values.
+      return sendJson(res, { ok: true, error: "", error_kind: "", count: 3, names: ["DISCORD_BOT_TOKEN", "OPENAI_API_KEY", "ROTATED_KEY"] });
     }
     if (/^\/api\/plugins\/workflows\/[^/]+\/run$/.test(pathname)) {
       return sendJson(res, WORKFLOW_RUN_RESULT);

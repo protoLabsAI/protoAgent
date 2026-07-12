@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -21,6 +21,7 @@ import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { DeveloperPanel } from "./DeveloperPanel";
 import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
+import { SecretsPanel } from "./SecretsPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
 
@@ -71,6 +72,8 @@ const AGENT_SECTIONS: Section[] = [
   { id: "model", label: "Model", icon: Cpu, render: () => <SettingsCategoryPanel category="Model" title="Model & routing" /> },
   { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
   { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
+  // External secrets manager (ADR 0080) — schema fields + the status/test/sync card.
+  { id: "secrets", label: "Secrets", icon: Lock, render: () => <SecretsPanel /> },
   { id: "plugins", label: "Integrations", icon: Puzzle, render: () => <PluginSettingsHome /> },
 ];
 
