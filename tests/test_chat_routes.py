@@ -11,7 +11,7 @@ def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
         suffix = f"@{model}" if model else ""
         return chat_reply or [{"role": "assistant", "content": f"echo:{message}{suffix}"}]
 
@@ -39,7 +39,7 @@ def test_api_chat_mints_unique_session_id_when_omitted(monkeypatch):
 
     seen: list[str] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
         seen.append(session_id)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -74,7 +74,7 @@ def test_api_chat_passes_incognito_flag(monkeypatch):
 
     seen: list[bool] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
         seen.append(incognito)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -145,6 +145,77 @@ def test_openai_streaming_usage_only_when_opted_in(monkeypatch):
     c2 = _client(monkeypatch, chat_reply=reply)
     r2 = c2.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
     assert not any("usage" in f for f in _sse_data(r2.text))
+
+
+def test_openai_completion_accepts_multimodal_content_list(monkeypatch):
+    # #1943: OpenAI-format multimodal content (a list of text/image_url parts) must
+    # not crash — text parts reach chat() as the prompt, image parts as `images`.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+        seen.append((message, images))
+        return [{"role": "assistant", "content": "a red square"}]
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(cr, "chat", _fake_chat)
+
+    data_uri = "data:image/png;base64,iVBORw0KGgo="
+    body = c.post(
+        "/v1/chat/completions",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe image 1"},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                }
+            ]
+        },
+    ).json()
+    assert body["choices"][0]["message"]["content"] == "a red square"
+    assert seen == [("describe image 1", [("image/png", data_uri)])]
+
+
+def test_openai_completion_string_content_forwards_no_images(monkeypatch):
+    # Plain string content keeps the exact pre-#1943 contract: prompt as-is, images=None.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+        seen.append((message, images))
+        return [{"role": "assistant", "content": "ok"}]
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(cr, "chat", _fake_chat)
+    c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert seen == [("hi", None)]
+
+
+def test_split_openai_content_shapes():
+    # The splitter tolerates every OpenAI content shape: str, text-only list,
+    # mixed parts, remote (non-data:) image URLs, and junk parts.
+    from operator_api.chat_routes import _split_openai_content
+
+    assert _split_openai_content("plain") == ("plain", [])
+    assert _split_openai_content([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == ("a\nb", [])
+    text, images = _split_openai_content(
+        [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAA="}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+            {"type": "image_url", "image_url": {}},  # no url → skipped
+            "junk",  # non-dict part → skipped
+        ]
+    )
+    assert text == "look"
+    assert images == [("image/jpeg", "data:image/jpeg;base64,AAA="), ("", "https://example.com/x.png")]
+    # None / unknown shapes degrade to empty rather than crashing.
+    assert _split_openai_content(None) == ("", [])
 
 
 def test_delete_session_harvest_is_opt_in(monkeypatch):
@@ -362,7 +433,7 @@ def test_openai_completions_threads_incognito(monkeypatch):
 
     seen: list[bool] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
         seen.append(incognito)
         return [{"role": "assistant", "content": "ok"}]
 
