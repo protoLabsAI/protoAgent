@@ -4,6 +4,11 @@
 
 # protoAgent
 
+[![Checks](https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml/badge.svg)](https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Docs](https://img.shields.io/badge/docs-agent.protolabs.studio-9b87f2)](https://agent.protolabs.studio/docs/)
+[![GitHub Template](https://img.shields.io/badge/template-use%20this%20repo-9b87f2)](https://github.com/new?template_name=protoAgent&template_owner=protoLabsAI)
+
 A lean, A2A-native agent on LangGraph — ships a small core, grows with git-URL plugins.
 Run one agent or orchestrate a fleet; drive it from a console, the OpenAI-compatible API,
 or A2A. Local-first, yours to fork.

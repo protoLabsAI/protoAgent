@@ -4,6 +4,9 @@ protoAgent's full contributor guide — run commands, the **must-pass-before-PR
 gates**, and the gotchas that recur — lives in **[PROTO.md](./PROTO.md)**. Read it
 before sending code.
 
+By participating in this project you agree to abide by the
+[Code of Conduct](./CODE_OF_CONDUCT.md).
+
 This file covers the one thing GitHub surfaces directly on the *New issue* page:
 **what a good issue needs.**
 
