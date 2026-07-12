@@ -1,0 +1,49 @@
+name: Roadmap staleness
+
+# CI guard (#1945): the public /roadmap page (sites/marketing/data/roadmap.json, derived
+# from ROADMAP.md) is hand-maintained and rots silently — before the #1944 refresh, 7 of
+# its 8 Planned/In-progress refs pointed at issues that had closed weeks earlier. This
+# checks every #NNNN ref under Planned/In-progress against live GitHub issue state and
+# fails when one is closed. Runs on PRs touching the roadmap AND on a weekly cron, so
+# drift is caught even when no code changes. API failures soft-fail (warn, exit 0) —
+# this guard must never brick unrelated CI.
+
+on:
+  pull_request:
+    paths:
+      - 'sites/marketing/**'
+      - 'ROADMAP.md'
+      - 'scripts/check_roadmap_staleness.py'
+      - '.github/workflows/roadmap-staleness.yml'
+  schedule:
+    - cron: '17 9 * * 1'  # weekly, Monday 09:17 UTC — off the top of the hour to dodge the cron thundering herd
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  staleness:
+    name: Check Planned/In-progress refs against issue state
+    # Fork-friendly (#1534): the cron only makes sense against the canonical repo's issues
+    # (roadmap.astro hardcodes its issue URLs there); PR/dispatch runs work everywhere.
+    if: github.event_name != 'schedule' || github.repository == 'protoLabsAI/protoAgent'
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Roadmap source-of-truth in sync (ROADMAP.md → roadmap.json)
+        # ROADMAP.md is the human-owned source; roadmap.json is derived (scripts/roadmap.py).
+        # #1944 edited the json directly and nothing caught the drift — this did not run in
+        # CI anywhere before #1945. Fails if the json wasn't rebuilt from the markdown.
+        run: python scripts/roadmap.py check
+      - name: Check roadmap refs for closed issues
+        # Stdlib-only script; the default GITHUB_TOKEN just lifts the anonymous 60/hr
+        # API rate limit (issue state on a public repo needs no extra scopes).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/check_roadmap_staleness.py

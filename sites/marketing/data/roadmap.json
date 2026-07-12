@@ -54,13 +54,6 @@
         "title": "Image generation plugin (protobanana)",
         "detail": "generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.",
         "refs": []
-      },
-      {
-        "title": "Production traces → training flywheel",
-        "detail": "wire per-turn trajectory export from production agents into the lab for downstream training-data collection.",
-        "refs": [
-          "#1897"
-        ]
       }
     ]
   },
@@ -68,8 +61,15 @@
     "status": "Shipped",
     "items": [
       {
+        "title": "Production traces → training flywheel",
+        "detail": "per-turn trajectory export from production agents into the lab for downstream training-data collection.",
+        "refs": [
+          "#1897"
+        ]
+      },
+      {
         "title": "Autonomous operating model",
-        "detail": "goals, tasks, scheduling, and watches compose into one self-directed OODA loop, with durable task→goal attribution (ADR 0079).",
+        "detail": "goals, tasks, scheduling, and watches compose into one self-directed OODA loop, with durable task→goal attribution.",
         "refs": [
           "v0.98.0"
         ]
