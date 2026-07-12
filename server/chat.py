@@ -341,6 +341,7 @@ async def chat(
     model: str | None = None,
     incognito: bool = False,
     hitl_resume: bool = False,
+    images: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
@@ -354,10 +355,15 @@ async def chat(
     persistence, no memory injection. ``hitl_resume`` marks the message as the
     operator's answer to a pending HITL interrupt (#1560 — the desktop /api/chat
     fallback's analogue of the streaming path's ``hitl_resume`` metadata).
+    ``images`` (#1943) carries inbound vision parts as ``[(media_type, uri)]``,
+    same shape and gating as the streaming path's — forwarded to the model only
+    when it's vision-capable.
     """
     if STATE.graph is None:
         return _setup_required_message()
-    return await _chat_langgraph(message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume)
+    return await _chat_langgraph(
+        message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume, images=images
+    )
 
 
 # Cap tool input/output previews so a single frame stays small on the wire.
@@ -487,6 +493,21 @@ def _last_tool_text(result) -> str:
     return ""
 
 
+def _vision_human_message(message: str, images: list[tuple[str, str]] | None = None):
+    """The turn's user message, with native vision (ADR 0021): when the model is
+    vision-capable and the turn carried image parts, a multimodal content list
+    (text + image_url blocks) the model sees directly — not piped through
+    extraction. Non-vision models get plain text (images dropped), the same
+    gating on both the streaming and non-streaming (#1943) paths."""
+    from langchain_core.messages import HumanMessage
+
+    if images and getattr(STATE.graph_config, "model_vision", False):
+        blocks: list[dict] = [{"type": "text", "text": message}] if message else []
+        blocks += [{"type": "image_url", "image_url": {"url": uri}} for _mt, uri in images]
+        return HumanMessage(content=blocks)
+    return HumanMessage(content=message)
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -513,18 +534,9 @@ async def _run_turn_stream(
     ``ask_human``), yields a terminal ``("input_required", {"question": …})``
     frame instead of ``__raw__`` so the A2A layer can park the task (ADR 0003).
     """
-    from langchain_core.messages import HumanMessage
     from langgraph.types import Command
 
-    # Native vision (ADR 0021): when the model is vision-capable and the turn
-    # carried image parts, the user message is a multimodal content list (text +
-    # image_url blocks) the model sees directly — not piped through extraction.
-    if images and getattr(STATE.graph_config, "model_vision", False):
-        blocks: list[dict] = [{"type": "text", "text": message}] if message else []
-        blocks += [{"type": "image_url", "image_url": {"url": uri}} for _mt, uri in images]
-        human = HumanMessage(content=blocks)
-    else:
-        human = HumanMessage(content=message)
+    human = _vision_human_message(message, images)
 
     graph_input = (
         Command(resume=await _resume_payload(config, resume_value))
@@ -1703,6 +1715,7 @@ async def _chat_langgraph(
     model: str | None = None,
     incognito: bool = False,
     hitl_resume: bool = False,
+    images: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Idle-beacon wrapper (#1720): mark a turn in flight for the call's lifetime,
     then delegate. Keeps the public name/signature for every caller."""
@@ -1710,7 +1723,7 @@ async def _chat_langgraph(
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
         return await _chat_langgraph_impl(
-            message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume
+            message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume, images=images
         )
     finally:
         _turn_ended()
@@ -1723,6 +1736,7 @@ async def _chat_langgraph_impl(
     model: str | None = None,
     incognito: bool = False,
     hitl_resume: bool = False,
+    images: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
@@ -1864,7 +1878,9 @@ async def _chat_langgraph_impl(
                     if goal_active and _goal_state.iteration == 0:
                         _msg = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=message)
                     graph_input = {
-                        "messages": [HumanMessage(content=_msg)],
+                        # Vision parts ride the user message when the model supports
+                        # them (#1943) — same gating as the streaming path.
+                        "messages": [_vision_human_message(_msg, images)],
                         "session_id": session_id,
                         **_state_extra,
                     }

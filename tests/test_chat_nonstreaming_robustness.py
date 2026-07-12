@@ -148,3 +148,33 @@ async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     out = await chat("wait a bit then resume", "sessC")
     content = out[0]["content"]
     assert content and "Wait scheduled" in content  # not a blank reply
+
+
+def test_vision_human_message_gates_on_model_vision(monkeypatch):
+    # #1943: image parts become multimodal content blocks only on a vision-capable
+    # model; otherwise they're dropped and the message stays plain text — the same
+    # gating the streaming path applies. (config=None — e.g. tests/boot — is non-vision.)
+    import runtime.state as rs
+    from server.chat import _vision_human_message
+
+    images = [("image/png", "data:image/png;base64,AAA=")]
+
+    class _Cfg:
+        model_vision = True
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+    human = _vision_human_message("look", images)
+    assert human.content == [
+        {"type": "text", "text": "look"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA="}},
+    ]
+    # Image-only turn (no text) → no empty text block.
+    assert _vision_human_message("", images).content == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA="}}
+    ]
+
+    _Cfg.model_vision = False
+    assert _vision_human_message("look", images).content == "look"
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    assert _vision_human_message("look", images).content == "look"
+    assert _vision_human_message("look", None).content == "look"

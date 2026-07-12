@@ -59,6 +59,37 @@ def _mint_session_id() -> str:
     return f"api-{int(time.time() * 1000)}-{rand}"
 
 
+def _split_openai_content(content) -> tuple[str, list[tuple[str, str]]]:
+    """OpenAI ``message.content`` → ``(text, [(media_type, url)])`` (#1943).
+
+    OpenAI multimodal messages carry ``content`` as a list of typed parts
+    (``{"type": "text"}`` / ``{"type": "image_url"}``); assuming a plain string
+    made ``/v1`` reject any image-attaching client with a ``.strip()`` crash.
+    Text parts join with newlines; image parts keep the URL as-is (``data:`` or
+    remote — both are what the turn layer forwards to a vision model). The
+    media_type is parsed off a ``data:`` URI and empty otherwise, matching the
+    ``[(media_type, uri)]`` shape of ``a2a_impl``'s ``_extract_image_parts``.
+    """
+    if isinstance(content, str):
+        return content, []
+    texts: list[str] = []
+    images: list[tuple[str, str]] = []
+    for part in content if isinstance(content, list) else []:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            texts.append(str(part.get("text", "")))
+        elif kind == "image_url":
+            url = (part.get("image_url") or {}).get("url", "")
+            if isinstance(url, str) and url:
+                mt = ""
+                if url.startswith("data:"):
+                    mt = url[5:].split(";", 1)[0].split(",", 1)[0]
+                images.append((mt, url))
+    return "\n".join(texts), images
+
+
 def register_chat_routes(app, ui: str) -> None:
     """Register the chat / goal / health / OpenAI-compat routes on ``app``.
 
@@ -252,7 +283,7 @@ def register_chat_routes(app, ui: str) -> None:
         user_msgs = [m for m in messages if m.get("role") == "user"]
         if not user_msgs:
             return {"error": "No user message provided"}, 400
-        prompt = user_msgs[-1].get("content", "")
+        prompt, images = _split_openai_content(user_msgs[-1].get("content", ""))
         session_id = f"openai-compat-{int(time.time())}"
         stream = req.get("stream", False)
 
@@ -270,7 +301,7 @@ def register_chat_routes(app, ui: str) -> None:
         # runs. A2A and /api/chat already expose this; /v1 was the gap.
         incognito = bool(req.get("incognito", False))
 
-        result = await chat(prompt, session_id, model=model, incognito=incognito)
+        result = await chat(prompt, session_id, model=model, incognito=incognito, images=images or None)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         content = "\n\n".join(parts)
         created = int(time.time())
