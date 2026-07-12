@@ -78,7 +78,7 @@ Goals are still *set* in chat with `/goal` (setting can run shell/test verifiers
 
 ## Reacting to a goal
 
-A terminal goal is a **trigger**, not just a checkbox. Every finish publishes one of two events on the [event bus](/guides/plugins#events-the-plugin-bus) (ADR 0039):
+A terminal goal is a **trigger**, not just a checkbox. Every finish publishes one of two events on the [event bus](/guides/plugins#event-bus) (ADR 0039):
 
 | Topic | When | Payload |
 |---|---|---|

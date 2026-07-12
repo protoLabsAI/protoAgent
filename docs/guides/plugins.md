@@ -40,6 +40,7 @@ name: Hello Plugin        # required
 version: 0.1.0
 description: One-line summary.
 enabled: false            # author opt-in; operators can also enable by id in config
+entrypoint: ""            # optional module filename (defaults to __init__.py / plugin.py)
 requires_env: []          # env vars the plugin needs (missing → skipped + logged)
 capabilities:             # declarative, for transparency (not yet enforced)
   network: []
@@ -48,7 +49,29 @@ emits: []                 # event-bus topics this plugin broadcasts (ADR 0039) �
                           # An entry is a bare topic name, or {topic, summary?, schema?} to
                           # declare the payload shape — see "Typed event contracts" below
 subscribes: []            # topics it listens for (declarative — for discoverability)
+public_paths: []          # auth-exempt prefixes under THIS plugin's own namespace
+                          # (/plugins/<id>/… or /api/plugins/<id>/…) — for an inbound
+                          # webhook (no bearer; you verify its signature). See below.
 ```
+
+**Every field, at a glance** — most have a dedicated section below or in a linked guide:
+
+| Field | Meaning |
+|---|---|
+| `id` · `name` | Required. `id` is the slug that namespaces routes + config; reserved verbs (`install`, `sync`, …) are refused. |
+| `version` · `description` | Metadata; `version` also drives update/pin resolution. |
+| `enabled` | Author opt-in (`true` loads without an operator listing it). |
+| `builtin` | Core runtime infra — **always loads**, ignores enable/disable, hidden from the Plugins panel (e.g. the delegate registry). |
+| `entrypoint` | Module filename to import; defaults to `__init__.py` then `plugin.py`. |
+| `requires_env` | Env vars that must be set or the plugin is skipped (a **hard** gate, vs `required` settings). |
+| `config_section` · `config` · `secrets` · `settings` | Config declaration ([below](#config-secrets-settings)); `settings[].required: true` is the soft gate. |
+| `test` | `true` → the console renders a **Test connection** button (POST `/api/config/test-<section>`), ADR 0029. |
+| `guide_url` | A **Setup guide** link the console shows next to the plugin's settings (ADR 0059). |
+| `views` | Console rail views ([Building a plugin view](/guides/building-react-plugin-views)); a view's `palette` may be a string or a dict with its own `path`. |
+| `public_paths` | Auth-exempt prefixes under the plugin's own namespace — the escape hatch for an inbound webhook or a public asset ([below](#public-paths)). |
+| `emits` · `subscribes` · `emits_schemas` | Event-bus contract ([Typed event contracts](#typed-event-contracts)). |
+| `requires_pip` · `optional_pip` | Declared pip deps ([publish guide](/guides/plugin-registry)) — the `optional` tier degrades gracefully when absent. |
+| `repository` · `homepage` · `min_protoagent_version` | Provenance + the host-compat gate ([publish guide](/guides/plugin-registry)). |
 
 ### Entry — `register(registry)`
 
@@ -73,6 +96,8 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 |---|---|---|
 | `register_tool(tool)` / `register_tools(iter)` | A LangChain tool | graph build (live-reloads) |
 | `emit(topic, data)` / `on(topic, handler)` | Broadcast / subscribe on the **event bus** (ADR 0039) — `emit` auto-namespaces to `<plugin>.<topic>`; `on` takes `*`/`#` wildcards | any time (publish is fire-and-forget) |
+| `navigate(view="")` | Ask the console to focus one of **this plugin's own views** (ADR 0044) — scoped to your plugin id, blank opens the first view | any time (fire-and-forget) |
+| `live_config()` | The plugin's **current** resolved config, re-read from the host each call — use it inside a mounted router/surface so config edits take effect without a restart (`registry.config` is a register-time snapshot) | any time |
 | `register_skill_dir(path)` | A `SKILL.md` directory (procedural memory) | graph build |
 | `register_workflow_dir(path)` | A directory of `*.yaml` workflow recipes | workflow-registry build |
 | `register_a2a_skill(spec)` | An A2A **card** skill (what the card advertises; optional structured output) | agent-card build |
@@ -81,9 +106,14 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 | `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
 | `register_middleware(factory)` | A LangGraph **`AgentMiddleware`** (per-turn before/after-model + tool hooks) — `factory(config) → middleware \| None` | graph build; appended before message-capture (ADR 0032) |
 | `register_goal_verifier(name, fn)` | An in-process **goal/watch verifier** (ADR 0028) — dispatched by a `{"type": "plugin", "check": "<plugin-id>:<name>"}` goal or watch spec | graph build (re-set on reload) |
+| `register_goal_hook(on_achieved=, on_failed=)` | React when a **goal** reaches a terminal state (ADR 0028) — the `GoalState` in, push a notification / set the next goal | graph build (re-set on reload) |
+| `register_watch_hook(on_met=, on_expired=, on_stalled=)` | React when a **watch** trips (ADR 0067) — met / deadline passed / evidence stalled | graph build (re-set on reload) |
+| `register_lifecycle_hook(on_app_loaded=, on_agent_active=, on_system_wake=)` | React to a **system lifecycle** event (ADR 0074) — see [Lifecycle events](/guides/lifecycle-events) | graph build (re-set on reload) |
+| `register_knowledge_store(name, factory)` | A **knowledge backend** (ADR 0031) — `factory(config) → KnowledgeBackend`, selected by a fork's `knowledge.backend: "<name>"` (pgvector/Qdrant/…); degrades to the built-in SQLite store on error | graph build |
+| `register_embedder(name, factory)` | An in-process **embedder** (ADR 0031) — `factory(config) → (text) → vector`, selected by `knowledge.embedder: "<name>"` to skip the gateway round-trip; degrades to the gateway embedder on error | graph build |
 | `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
 | `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
-| `register_chat_command(name, handler)` | A **user-only** `/<name>` chat control command that short-circuits the turn (the generalized `/goal`) — token slugified+lowercased; `goal` reserved; see [publish guide](/guides/plugin-registry) | chat dispatch; first plugin to claim a token wins |
+| `register_chat_command(name, handler)` | A **user-only** `/<name>` chat control command that short-circuits the turn (the generalized `/goal`) — token slugified+lowercased; `goal` and `lifecycle` are reserved core tokens (refused); see [publish guide](/guides/plugin-registry) | chat dispatch; first plugin to claim a token wins |
 | `register_late_tool_factory(factory)` | A tool factory that runs **after** the full toolset is assembled — `factory(all_tools, config) → tool \| list \| None`, for meta-tools that must see every other tool | graph build, appended last |
 | `save_media(data, mime, meta=None)` | Persist a generated binary artifact (image/audio/video) into the **core media store** (#1929) → `MediaRef {id, url, path, mime}`. Embed `ref.url` in the tool's returned markdown (`![alt](url)`) and the console renders it inline — no plugin route needed. The URL carries a per-file HMAC signature so it works under a bearer gate; `media.public` / `media.retention_days` (core config) control exposure and pruning; broadcasts `media.saved` on the bus | any time (typically inside a tool) |
 
@@ -150,6 +180,30 @@ is how an integration plugin can ship an OAuth-gated MCP surface (e.g. a Google
 Gmail/Calendar external plugin) without a core edit. For a frozen desktop build (no `python` on PATH),
 launch via `args: ["--mcp-plugin", "<id>"]` and expose a `mcp_main()` in your
 plugin module — the binary re-invokes itself and the shim runs it.
+
+### Public paths — inbound webhooks & public assets {#public-paths}
+
+Under a token-gated deployment the auth middleware is **default-deny**: every path needs the
+operator bearer. That breaks two legitimate cases — an **inbound webhook** (a third party POSTs
+you and can't send your bearer; you verify its own HMAC/signature instead) and a **public
+asset/page** a browser loads with a plain navigation. Declare those paths in the manifest's
+`public_paths` to exempt them from the gate:
+
+```yaml
+# protoagent.plugin.yaml
+public_paths:
+  - /api/plugins/stripe/webhook      # inbound POST — verify the Stripe signature yourself
+```
+
+Each entry **must** live under this plugin's own namespace — `/plugins/<id>/…` or
+`/api/plugins/<id>/…` — with the trailing slash after the id segment. That scoping is the
+security boundary: a plugin can exempt only its own routes, never a core path like `/api/config`
+(the manifest parser drops anything else with a warning, and the auth layer re-checks it as
+defence-in-depth). **You still own the auth** on an exempt route — validate the caller's
+signature in the handler; the exemption only removes the bearer requirement. Console **view**
+pages are auto-exempted (a view page is public chrome), so you don't list those here — only
+webhooks and any non-view asset the browser must fetch anonymously. Its DATA stays gated under
+`/api/plugins/<id>/*`.
 
 ### Middleware — `register_middleware` (ADR 0032)
 
@@ -277,8 +331,15 @@ def register(registry):
 SDK** directly — `from graph.sdk import …`, the *stable* surface plugins call into core
 (so core can refactor underneath you; never reach into `graph.agent` internals). v1:
 
-- `run_subagent(subagent_type, prompt, *, description)` — run **one subagent** to
-  completion (vs `host.invoke`, which runs a full lead-agent *chat turn*).
+- `run_subagent(subagent_type, prompt, *, description, extra_tools=None, truncate=None)` — run
+  **one subagent** to completion (vs `host.invoke`, which runs a full lead-agent *chat turn*).
+  `extra_tools` defaults to the host's plugin + MCP tools, so a subagent whose allowlist names a
+  plugin tool still sees it — pass an explicit list (even `[]`) to override, but overriding with a
+  set that omits a needed tool is why an SDK step can silently degrade to "No tools available".
+- `complete(prompt, *, system=None, model_name=None)` — a single **bare LLM completion**: no
+  tools, no agent loop, no persona, no memory. The clean primitive for a one-shot
+  classify/summarize/answer (e.g. an interactive artifact calling back). Distinct from
+  `run_subagent` (a full tool-using worker); uses the live config's model through the gateway.
 - `subagent_types()` — the configured subagent ids.
 - `config()` — the live `LangGraphConfig`.
 - `gateway_client(timeout=…)` — an `httpx.AsyncClient` **pre-configured for the model
@@ -367,7 +428,7 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   event), `job_id` makes re-fires replace rather than stack, `debounce_s` coalesces a burst
   into ONE turn (trailing-edge; the last event's prompt wins), `session` defaults to the
   Activity thread. Returns an unsubscribe fn. The one-call form of the canonical
-  `registry.on` → `run_in_session` composition — see [Events](#events-the-plugin-bus-adr-0039).
+  `registry.on` → `run_in_session` composition — see [Events](#event-bus).
 - `schedule_recurring(prompt, cron, *, plugin_id, job_id, session="", timezone=None)` — a
   plugin-owned **recurring** cadence (#1642): a cron job whose id is namespaced
   `plugin:<plugin_id>:<job_id>` so the host cancels it on disable/uninstall (no orphan
@@ -390,11 +451,21 @@ SDK** directly — `from graph.sdk import …`, the *stable* surface plugins cal
   plugin can't reach another's namespace). Point-in-time snapshots stay on `telemetry()`;
   per-turn cost rollups stay on the [operator telemetry store](/guides/observability#local-telemetry-store).
 
+**Re-exported host-free kits** — the SDK also re-exports a few building blocks so a plugin
+doesn't hand-roll them (`from graph.sdk import …`):
+
+- `supervise` / `Supervisor` / `RetryAfter` — a supervised, watchdog-backed background task
+  runner for a self-perpetuating engine loop (instead of hand-rolled task/restart machinery).
+- `Knobs` / `make_knob_tools` — a bounded, reversible set of tunable engine knobs + presets,
+  with auto-generated `show`/`tune`/`preset` agent tools.
+- `DecisionLog` / `telemetry` / `render_html` — the telemetry + decision-log kit for a standard
+  observability surface (audit trail + point-in-time envelope + a themed panel).
+
 The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
 injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap
 core, not just contribute to it.
 
-## Events — the plugin bus (ADR 0039)
+## Events — the plugin bus (ADR 0039) {#event-bus}
 
 Plugins coordinate by **broadcasting events**, never by importing each other. You publish under your
 own namespace and forget; anyone who cares subscribes by topic. This is the only inter-plugin
@@ -420,7 +491,7 @@ def register(registry):
   publisher or other subscribers. Ephemeral (a ring buffer covers SSE reconnects; no durable log).
 - The most common subscriber is "when X happens, have the **agent** react" — that composition
   (`on` → prompt-from-payload → `run_in_session`, with an idempotent job id and burst debouncing)
-  ships as one consumption-SDK call: `sdk.react_on(…)` ([above](#tapping-core-deeper-graph-sdk-adr-0043)).
+  ships as one consumption-SDK call: `sdk.react_on(…)` ([above](#consumption-sdk)).
 
 > Cross-process note: under the **ACP runtime**, a tool runs in the operator-MCP process where the
 > bus isn't wired, so `emit` from a tool won't reach the server bus there. Under the default runtime
@@ -477,7 +548,7 @@ go quiet when nobody's looking. This matters doubly for the desktop build.
   away — your in-iframe timers/listeners die with it for free. For host-side work (a `registry.on`
   handler, a background surface), return/register a teardown so nothing lingers.
 
-## Config, secrets & settings (ADR 0019)
+## Config, secrets & settings (ADR 0019) {#config-secrets-settings}
 
 A configurable plugin **declares its config in the manifest** (data, so it's known
 at config-load time before `register()` imports). It claims a top-level config
@@ -538,10 +609,12 @@ A plugin declares its required config with `required: true` (above) and the cons
 surfaces the **incomplete** state so an operator knows to finish setup; a guided
 install **wizard** over those fields is the frontend follow-up (#1719).
 
-**Routes + surfaces are wired once at process init and don't hot-reload** — a
-config reload reuses them, so changing `plugins.enabled` needs a restart
-(ADR 0018). Everything is best-effort: a failing plugin/route/surface logs and
-never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
+**Routes now hot-reload; surfaces still don't.** On a config reload a newly-enabled
+plugin's **routers, public paths, verifiers, hooks, tools, subagents, chat commands,
+and MCP servers re-apply** without a restart (#1752/#1890). A **surface** does not — the
+startup hook already fired, so it (re)starts only on a full restart; a config reload just
+calls each running surface's `reload(cfg)` callback. Everything is best-effort: a failing
+plugin/route/surface logs and never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
 `GET /api/runtime/status`. The bundled `plugins/telegram` (the reference
 `ChatAdapter`) and `plugins/github` first-party plugins are worked examples of the
@@ -597,7 +670,7 @@ plugins:
 
 Each sweep, for every plugin listed in `update_policy`, the runtime checks whether
 it's behind its locked ref and — if so — pulls + hot-reloads it exactly like the
-**Update** button, then emits `plugin.updated` on the [event bus](#events--the-plugin-bus-adr-0039).
+**Update** button, then emits `plugin.updated` on the [event bus](#event-bus).
 The gates:
 
 - **Opt-in only.** A plugin is auto-updated only if it appears in `update_policy`

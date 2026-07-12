@@ -60,7 +60,11 @@ def test_scaffold_view_is_served_on_the_public_prefix(tmp_path):
     manifest = (pdir / "protoagent.plugin.yaml").read_text()
     assert 'prefix="/plugins/viewy"' in init  # public page route, not /api/plugins/viewy
     assert "path: /plugins/viewy/view" in manifest
-    assert "/_ds/plugin-kit.css" in init and "split('/plugins/')" in init  # rules 3 + 4
+    # Rules 3 + 4: slug-aware base + BOTH kit assets (css for tokens, js for the handshake).
+    assert "/_ds/plugin-kit.css" in init and "/_ds/plugin-kit.js" in init
+    assert "split('/plugins/')" in init
+    # Two-router pattern: a gated data route under /api/plugins/<id> the page fetches.
+    assert 'prefix="/api/plugins/viewy"' in init
 
 
 def test_scaffold_with_tests_is_shippable(tmp_path):

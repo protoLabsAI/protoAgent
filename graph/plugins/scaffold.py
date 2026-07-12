@@ -42,28 +42,44 @@ _TOOL_STUB = '''
 
 _VIEW_STUB = """
     from fastapi import APIRouter
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse, JSONResponse
     router = APIRouter()
 
     @router.get("/view")
     async def _view():
         # Four rules (ADR 0026/0038): serve the declared path · gate DATA (not the page)
-        # · slug-aware base · link the DS kit. Untrusted/generated HTML → nest it in an
-        # <iframe sandbox="allow-scripts"> with NO same-origin.
+        # · slug-aware base · link the DS kit (CSS + JS). Untrusted/generated HTML → nest
+        # it in an <iframe sandbox="allow-scripts"> with NO same-origin.
         return HTMLResponse(
             "<!doctype html><html><head><meta charset='utf-8'>"
-            "<script>var B=location.pathname.split('/plugins/')[0];"  # "" on host, /agents/<slug> via proxy
+            # Slug-aware base: "" on the host, "/agents/<slug>" through the fleet proxy.
+            "<script>window.__base=location.pathname.split('/plugins/')[0];"
             "var l=document.createElement('link');l.rel='stylesheet';"
-            "l.href=B+'/_ds/plugin-kit.css';document.head.appendChild(l);</script>"
+            "l.href=window.__base+'/_ds/plugin-kit.css';document.head.appendChild(l);</script>"
             "<style>body{{margin:0;padding:32px;background:var(--pl-color-bg);"
             "color:var(--pl-color-fg);font-family:var(--pl-font-sans,system-ui)}}</style>"
-            "</head><body><h1>{name}</h1>"
-            "<p>Your plugin view — replace this page. Load the kit JS and fetch gated data "
-            "with kit.apiFetch('/api/plugins/{id}/...').</p></body></html>"
+            "</head><body><h1>{name}</h1><p id='out'>Loading…</p>"
+            # plugin-kit.js is an ES module — a dynamic import() carries the slug-aware base.
+            # initPluginView() runs the token/theme handshake; apiFetch() is slug-aware AND
+            # attaches the bearer, so gated /api/plugins/{id}/* data loads under a token gate.
+            "<script type='module'>"
+            "const kit=await import(window.__base+'/_ds/plugin-kit.js');"
+            "kit.initPluginView();"
+            "const r=await kit.apiFetch('/api/plugins/{id}/hello');"
+            "document.getElementById('out').textContent=(await r.json()).message;"
+            "</script></body></html>"
         )
-    # The PAGE is PUBLIC: an iframe page-load can't carry a bearer, so it must NOT be
-    # gated. Mount any DATA routes under /api/plugins/{id} for the operator bearer gate.
+    # Two-router pattern (ADR 0026): the PAGE is PUBLIC (an iframe page-load can't carry a
+    # bearer), so it mounts under /plugins/{id}; its DATA is gated under /api/plugins/{id},
+    # which the operator bearer protects and kit.apiFetch() authenticates.
     registry.register_router(router, prefix="/plugins/{id}")
+
+    data = APIRouter()
+
+    @data.get("/hello")
+    async def _hello():
+        return JSONResponse({{"message": "Hello from {name}!"}})
+    registry.register_router(data, prefix="/api/plugins/{id}")
 """
 
 _MANIFEST_STUB = """id: {id}

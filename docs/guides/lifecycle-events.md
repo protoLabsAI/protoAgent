@@ -1,6 +1,6 @@
 # System lifecycle events
 
-The agent broadcasts a few **system lifecycle** events on the [event bus](/guides/plugins#the-event-bus-adr-0039) —
+The agent broadcasts a few **system lifecycle** events on the [event bus](/guides/plugins#event-bus) —
 that it finished booting, that it just woke up from an idle stretch, that the desktop shell came
 back. An operator can react to them from a config file; a plugin can react in code. Both are
 **opt-in** and both are **error-isolated** — a broken webhook or a bad hook can never break boot or
@@ -83,6 +83,6 @@ truth; there's no runtime mutation.)
 
 ## See also
 
-- [Plugins ▸ the event bus](/guides/plugins#the-event-bus-adr-0039) — the underlying pub/sub.
+- [Plugins ▸ the event bus](/guides/plugins#event-bus) — the underlying pub/sub.
 - [Schedule future work](/guides/scheduler) — `run_in_session`, the prompt-reaction primitive.
 - ADR 0074 (system lifecycle events) · ADR 0039 (the plugin event bus).
