@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Chat image attachments are bridged into the media store so tools can act on them
+  (#1969).** Inbound vision (#1943) let the model *see* an attachment, but tools take
+  string references — a model can't echo megabytes of base64 into a tool argument. Now
+  every `data:` image attachment is persisted to the core media store at turn entry
+  (`user_attachment` provenance, incognito turns excluded per ADR 0069) and named by
+  media id in a `[attached-image refs]` note the model can pass to any media-ref-taking
+  tool — on vision **and** text-only models (the note is built before the vision gate
+  that drops image blocks). The console no longer hard-errors an image attachment on a
+  text-only model (#1374 behavior retired): images always attach natively, and a
+  configured describe model (#1381) still adds its textual description additively.
+  Remote http(s) image URLs are never fetched server-side. The marker byte-matches the
+  protobanana plugin's middleware, which skips messages core already bridged.
+
 ## [0.100.0] - 2026-07-12
 
 ### Added

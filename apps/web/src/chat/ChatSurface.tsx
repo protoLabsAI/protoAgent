@@ -391,21 +391,11 @@ function ChatSessionSlot({
     const kind: "file" | "image" = file.type.startsWith("image/") ? "image" : "file";
     setAttachments((a) => [...a, { id, name: file.name, kind, status: "uploading" }]);
 
-    // An image on a text-only model with NO describe model can't be read at all (the file
-    // pipeline extracts text — no OCR) — so short-circuit with a clear, actionable error
-    // instead of a cryptic "unsupported file type" (#1374). When a describe model IS
-    // configured (#1381), the image falls through to the pipeline, which describes it.
-    if (kind === "image" && !visionModel && !imageDescribe) {
-      const msg =
-        "This model can't see images. Switch to a vision-capable model — or set an image-description model in Settings ▸ Knowledge — to send a screenshot.";
-      setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
-      onError(msg);
-      return;
-    }
-
-    // Native vision: a vision model sees the image directly — base64 it and send
-    // it as a multimodal part, no pipeline round-trip.
-    if (kind === "image" && visionModel) {
+    // Images always ride the turn natively as multimodal parts: a vision model
+    // sees them directly, and on a text-only model the server still bridges them
+    // into the media store so image tools can act on them by id (#1969) — the
+    // old hard error (#1374) is gone.
+    if (kind === "image") {
       try {
         const b64 = await fileToBase64(file);
         setAttachments((a) =>
@@ -419,6 +409,22 @@ function ChatSessionSlot({
         const msg = errMsg(e);
         setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
         onError(`Couldn't read ${file.name}: ${msg}`);
+        return;
+      }
+      // A configured describe model (#1381) still adds a textual description for a
+      // text-only chat model — best-effort context alongside the native part; a
+      // describe failure never sinks the already-ready attachment.
+      if (visionModel || !imageDescribe) return;
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("session_id", sessionId);
+        const r = await api.attachToChat(form);
+        if (r.enabled && r.context) {
+          setAttachments((a) => a.map((x) => (x.id === id ? { ...x, context: r.context } : x)));
+        }
+      } catch {
+        // native attachment already succeeded; description is additive
       }
       return;
     }
@@ -802,7 +808,9 @@ function ChatSessionSlot({
     // The model gets the pipeline context prepended + the images natively; the
     // user bubble shows only the typed text + a 📎 list (never a raw doc/data dump).
     const sent = [...piped.map((a) => a.context as string), text].join("\n\n").trim();
-    const names = [...piped, ...nativeImgs].map((a) => a.name).join(", ");
+    // Set-dedupe: a text-only-model image with a describe model is BOTH piped
+    // (context) and native (#1969) — list its name once.
+    const names = [...new Set([...piped, ...nativeImgs].map((a) => a.name))].join(", ");
     const display = text ? `${text}\n\nAttached: ${names}` : `Attached: ${names}`;
     setAttachments([]);
     void runTurn(display, { sendAs: sent, images });

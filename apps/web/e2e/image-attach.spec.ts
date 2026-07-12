@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-// #1374: dropping/attaching an image (e.g. a macOS screenshot — PNG) only works on a
-// vision-capable model. On a TEXT-ONLY model the file pipeline can't read images (no OCR),
-// so the composer short-circuits with a clear, actionable error instead of the cryptic
-// "unsupported file type" the extractor returns.
+// Images always attach natively as multimodal parts (#1969): a vision model sees
+// them, and on a text-only model the server bridges them into the media store so
+// image tools can act on them by id — the old #1374 hard error is gone. A configured
+// describe model (#1381) additionally contributes a textual description.
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -40,7 +40,7 @@ async function forceModel(page, { vision, image_describe }) {
   });
 }
 
-test("a text-only model with NO describe model rejects an image with a clear error", async ({ page }) => {
+test("a text-only model with NO describe model still attaches an image natively (#1969)", async ({ page }) => {
   await forceModel(page, { vision: false, image_describe: false });
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
@@ -48,10 +48,12 @@ test("a text-only model with NO describe model rejects an image with a clear err
 
   await slot.locator('input[type="file"]').setInputFiles({ name: "Screenshot.png", mimeType: "image/png", buffer: PNG_1X1 });
 
-  // The chip appears (error state) + the clear, actionable message in the alert banner —
-  // NOT a cryptic "unsupported file type" from the extractor (never called).
-  await expect(slot.locator(".pl-prompt__attachments")).toContainText("Screenshot.png");
-  await expect(page.getByText(/vision-capable model/i)).toBeVisible();
+  // No error and no pipeline round-trip: the image rides the turn natively; the
+  // server persists it to the media store so tools can reference it by id.
+  const chips = slot.locator(".pl-prompt__attachments");
+  await expect(chips).toContainText("Screenshot.png");
+  await expect(chips).not.toContainText("uploading");
+  await expect(page.getByText(/vision-capable model/i)).toHaveCount(0);
 });
 
 test("a text-only model WITH a describe model attaches the image via the pipeline (#1381)", async ({ page }) => {
