@@ -450,6 +450,40 @@ function scenarioFor(prompt) {
       answer: "I need one detail before I continue.",
       hitl: { question: "Which environment should I deploy to — staging or production?" },
     };
+  if (t.includes("HITL_FORM_PREFILL"))
+    // #1978: an agent form whose schemas carry `default`s — the card opens prefilled
+    // (a default IS an answer, so required-with-default doesn't gate), the proposed
+    // choice card is selected AND focused, and confirming untouched returns the
+    // proposal. Matched BEFORE the bare HITL_FORM (substring).
+    return {
+      events: [],
+      answer: "Confirm the deployment plan.",
+      hitl: {
+        kind: "form",
+        title: "Confirm deployment",
+        description: "I propose these settings — adjust anything, or just confirm.",
+        steps: [
+          {
+            schema: {
+              type: "object",
+              required: ["environment", "strategy"],
+              properties: {
+                environment: { type: "string", title: "Environment", default: "staging" },
+                strategy: {
+                  type: "string",
+                  title: "Strategy",
+                  default: "rolling",
+                  oneOf: [
+                    { const: "blue-green", title: "Blue/green", description: "Swap whole environments" },
+                    { const: "rolling", title: "Rolling", description: "Gradual, zero-downtime" },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
   if (t.includes("HITL_FORM"))
     // request_user_input structured interrupt: a two-step wizard (required text
     // input, then an optional confirm) — exercises the stepper + Back/Next path

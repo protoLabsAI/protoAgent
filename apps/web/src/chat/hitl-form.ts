@@ -100,6 +100,20 @@ export function visibleFieldsOf(step: HitlFormStep | undefined, values: Record<s
   return fieldsOf(step).filter(([, schema]) => isFieldVisible(schema, values));
 }
 
+/** Initial answers seeded from each field's schema `default`, across ALL steps up front
+ *  (not just the visible one) so `anyStepMissing` reflects the prefill immediately.
+ *  Contract (#1978): a `default` IS an answer — a required field that carries one arrives
+ *  satisfied, so a fully-defaulted form opens with Submit live and confirms untouched.
+ *  Producers only set `default` on a real proposal (the tab's current model/effort, an
+ *  agent's suggested value), so confirm-as-is is the point. `false`/`0` are kept — only
+ *  an absent (`undefined`) default leaves a field unanswered. */
+export function seedDefaults(steps: HitlFormStep[]): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const step of steps || [])
+    for (const [key, schema] of fieldsOf(step)) if (schema.default !== undefined) values[key] = schema.default;
+  return values;
+}
+
 /** Required field keys in this step that are still empty — non-empty ⇒ block Next/Submit.
  *  A `showWhen`-hidden field is never "missing" (it isn't asked, so it can't gate). */
 export function missingInStep(step: HitlFormStep | undefined, values: Record<string, unknown>): string[] {

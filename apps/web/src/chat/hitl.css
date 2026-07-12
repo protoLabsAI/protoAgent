@@ -210,6 +210,13 @@
   border-color: var(--brand-indigo, #6366f1);
 }
 
+/* Keyboard navigation (#1978): the roving focus must be visible even on the
+   already-selected card, where the brand border alone wouldn't distinguish it. */
+.hitl-card-option:focus-visible {
+  outline: 2px solid var(--brand-indigo, #6366f1);
+  outline-offset: 2px;
+}
+
 .hitl-card-option[data-selected] {
   border-color: var(--brand-indigo, #6366f1);
   background: color-mix(in srgb, var(--brand-indigo, #6366f1) 12%, var(--bg));
