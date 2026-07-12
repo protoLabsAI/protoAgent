@@ -84,10 +84,10 @@ const faviconSvg = (color: string) =>
   `<path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>` +
   `</g></svg>`;
 
-// Validate + normalize a CSS color before it's interpolated into SVG/markup. The accent comes
-// from the opaque, agent-supplied theme blob (--pl-color-accent), so a malformed or hostile
-// token must never reach the favicon data-URI or the meta tag. Returns null if it isn't a real
-// color, so callers bail instead of emitting broken markup.
+// Validate + normalize a CSS color before it's interpolated into SVG/markup. The accent and
+// surface come from the opaque, agent-supplied theme blob (--pl-* overrides), so a malformed or
+// hostile token must never reach the favicon data-URI or the meta tag. Returns null if it isn't
+// a real color, so callers bail instead of emitting broken markup.
 function safeColor(value: string): string | null {
   const v = value.trim();
   if (!v) return null;
@@ -113,11 +113,18 @@ function isThemed(): boolean {
 let _chromeDefaults: { iconHref: string | null; themeColor: string | null } | null = null;
 let _chromeThemed = false;
 
-/** Point the tab favicon + `<meta name="theme-color">` at the active theme's accent
- *  (`--pl-color-accent`), so an agent/theme switch (ADR 0042) reaches the browser chrome too —
- *  otherwise the tab stays the frozen brand default while the rest of the console repaints.
- *  With no theme active it leaves (or restores) index.html's static favicon. Fail-safe: bails
- *  if the accent isn't a valid color. */
+/** Sync the browser chrome to the active theme, so an agent/theme switch (ADR 0042) reaches
+ *  it too — otherwise the tab stays the frozen brand default while the rest of the console
+ *  repaints. Two DIFFERENT tokens on purpose:
+ *   - the tab favicon takes the theme's accent (`--pl-color-accent`) — the tab's brand splash;
+ *   - `<meta name="theme-color">` takes the theme's surface background (`--pl-color-bg` — what
+ *     the app shell/topbar actually paint via the `--bg` bridge in theme-base.css). On mobile
+ *     (PWA/webview) this meta colors the status-bar/notch band ABOVE the header, and the accent
+ *     there rendered a broken two-tone header (#1923); the surface color keeps the notch a
+ *     continuous extension of the header. getComputedStyle resolves the mode-appropriate
+ *     (light/dark) value.
+ *  With no theme active it leaves (or restores) index.html's static favicon + brand theme-color.
+ *  Fail-safe per token: an invalid color just leaves that piece of chrome untouched. */
 export function syncBrowserChrome() {
   if (typeof document === "undefined") return;
   const icon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
@@ -137,33 +144,39 @@ export function syncBrowserChrome() {
     return;
   }
 
-  const accent = safeColor(getComputedStyle(root()).getPropertyValue("--pl-color-accent"));
-  if (!accent) return;
+  const styles = getComputedStyle(root());
+  const accent = safeColor(styles.getPropertyValue("--pl-color-accent"));
+  const surface = safeColor(styles.getPropertyValue("--pl-color-bg"));
 
-  let link = icon;
-  if (!link) {
-    link = document.createElement("link");
-    link.rel = "icon";
-    document.head.appendChild(link);
+  if (accent) {
+    let link = icon;
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.type = "image/svg+xml";
+    link.setAttribute("href", `data:image/svg+xml,${encodeURIComponent(faviconSvg(accent))}`);
+    _chromeThemed = true;
   }
-  link.type = "image/svg+xml";
-  link.setAttribute("href", `data:image/svg+xml,${encodeURIComponent(faviconSvg(accent))}`);
 
-  let mc = meta;
-  if (!mc) {
-    mc = document.createElement("meta");
-    mc.name = "theme-color";
-    document.head.appendChild(mc);
+  if (surface) {
+    let mc = meta;
+    if (!mc) {
+      mc = document.createElement("meta");
+      mc.name = "theme-color";
+      document.head.appendChild(mc);
+    }
+    mc.setAttribute("content", surface);
+    _chromeThemed = true;
   }
-  mc.setAttribute("content", accent);
-  _chromeThemed = true;
 }
 
 // Broadcast a single `protoagent:theme` window event whenever the document's theme changes —
 // applyAgentTheme (switch/save/reset) AND the ThemePanel's live picker edits both mutate the
 // root's `style`/`data-theme`, so one MutationObserver catches everything. PluginView listens
 // and re-posts the theme to its iframe, so embedded plugin views repaint live too (ADR 0026/0042);
-// the same hook keeps the tab favicon + theme-color on the active accent.
+// the same hook keeps the tab favicon on the active accent + theme-color on the active surface.
 let _watching = false;
 export function watchThemeChanges() {
   if (_watching || typeof window === "undefined") return;
