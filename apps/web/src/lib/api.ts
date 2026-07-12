@@ -31,6 +31,8 @@ import type {
   MemorySessionDigest,
   RuntimeStatus,
   ScheduledJob,
+  SecretsStatus,
+  SecretsTestResult,
   SetupStatus,
   SettingsGroup,
   SlashCommand,
@@ -1054,6 +1056,18 @@ export const api = {
       method: "POST",
       body: fields,
     });
+  },
+
+  // External secrets manager (ADR 0080) — status / force-a-refresh / connection test.
+  // Test runs against the SAVED config (unsaved form edits don't ride along yet).
+  secretsStatus() {
+    return request<SecretsStatus>("/api/secrets/status");
+  },
+  secretsSync() {
+    return request<SecretsStatus>("/api/secrets/sync", { method: "POST", body: {} });
+  },
+  secretsTest() {
+    return request<SecretsTestResult>("/api/secrets/test", { method: "POST", body: {} });
   },
 
 

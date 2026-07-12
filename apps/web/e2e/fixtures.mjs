@@ -303,7 +303,37 @@ export const SETTINGS_SCHEMA = [
       { key: "demo.greeting", label: "Greeting", type: "string", section: "Demo Plugin", restart: false, description: "Shown by the demo tool.", options: [], value: "hello", default: "hello", scope: "agent", source: "agent" },
     ],
   },
+  {
+    // External secrets manager (ADR 0080) — its own "Secrets" category / sidenav section.
+    section: "Secrets manager",
+    category: "Secrets",
+    fields: [
+      { key: "secrets_manager.enabled", label: "Pull secrets from a manager", type: "bool", section: "Secrets manager", restart: false, description: "", options: [], value: true, default: false, scope: "agent", source: "agent" },
+      { key: "secrets_manager.host", label: "Server URL", type: "string", section: "Secrets manager", restart: false, description: "", options: [], value: "https://us.infisical.com", default: "https://us.infisical.com", scope: "agent", source: "agent", depends_on: { key: "secrets_manager.enabled" } },
+      { key: "secrets_manager.project_id", label: "Project ID", type: "string", section: "Secrets manager", restart: false, description: "", options: [], value: "proj-1", default: "", scope: "agent", source: "agent", depends_on: { key: "secrets_manager.enabled" } },
+      { key: "secrets_manager.client_secret", label: "Machine identity client secret", type: "secret", section: "Secrets manager", restart: false, description: "Stored in secrets.yaml, never echoed back.", options: [], value: "", is_set: true, scope: "agent", source: "agent", depends_on: { key: "secrets_manager.enabled" } },
+    ],
+  },
 ];
+
+// External secrets manager (ADR 0080) — GET /api/secrets/status. Sync (POST) answers
+// with one more owned var (ROTATED_KEY) so the e2e can observe a reconcile.
+export const SECRETS_STATUS = {
+  enabled: true,
+  provider: "infisical",
+  host: "https://us.infisical.com",
+  project_id: "proj-1",
+  environment: "prod",
+  path: "/",
+  ok: true,
+  error: "",
+  error_kind: "",
+  fetched_at: "2026-07-12T00:00:00+00:00",
+  applied: 2,
+  shadowed: [],
+  refresh_seconds: 300,
+  vars: ["DISCORD_BOT_TOKEN", "OPENAI_API_KEY"],
+};
 
 /** The model list a freshly-probed gateway returns from POST /api/config/models (#1386) — a
  *  DIFFERENT set than model.name's saved options, so the e2e can prove "Get models" refreshes

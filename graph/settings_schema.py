@@ -1070,7 +1070,7 @@ def _plugin_group(sch, spec) -> str:
 # (host vs agent) is a per-field badge (ADR 0047), NOT a category. Order here is the
 # domain order the console renders. Unknown sections (notably plugin-contributed ones,
 # ADR 0019) default to "Plugins" (the Integrations surface).
-_CATEGORY_ORDER = ["Identity", "Model", "Behavior", "Capabilities", "Knowledge", "Plugins", "Box"]
+_CATEGORY_ORDER = ["Identity", "Model", "Behavior", "Capabilities", "Knowledge", "Secrets", "Plugins", "Box"]
 _SECTION_CATEGORY = {
     # Identity — who the agent is (name + persona live in the dedicated Identity panel;
     # these are the operator/org/access fields rendered beneath it).
@@ -1096,6 +1096,9 @@ _SECTION_CATEGORY = {
     "Recall": "Knowledge",
     "Ingestion": "Knowledge",
     "History": "Knowledge",
+    # Secrets — the external secrets manager (ADR 0080); the console renders this
+    # category as its own sidenav section with a status/test/sync card.
+    "Secrets manager": "Secrets",
     # Box — box-wide operational config (host console only): the telemetry store + the
     # host box-runtime knobs (network / discovery / keep-warm, ADR 0047 D8). Host-scoped;
     # a workspace-leaf override of these is a silent no-op (consumed by the host process).

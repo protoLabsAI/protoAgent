@@ -301,6 +301,34 @@ export type SettingsGroup = {
   guide_url?: string;  // ADR 0059 — optional setup-guide link rendered next to the group
 };
 
+// External secrets manager (ADR 0080) — GET /api/secrets/status + POST /api/secrets/sync.
+// Names only, never secret values; `vars` are the env vars the hydrator currently owns.
+export type SecretsStatus = {
+  enabled: boolean;
+  provider: string;
+  host: string;
+  project_id: string;
+  environment: string;
+  path: string;
+  ok: boolean;
+  error: string;
+  error_kind: string;
+  fetched_at: string;
+  applied: number;
+  shadowed: string[];
+  refresh_seconds: number;
+  vars: string[];
+};
+
+// POST /api/secrets/test — fetch-only connection probe; applies nothing.
+export type SecretsTestResult = {
+  ok: boolean;
+  error: string;
+  error_kind: string;
+  count: number;
+  names: string[];
+};
+
 export type WorkflowSummary = {
   name: string;
   description: string;

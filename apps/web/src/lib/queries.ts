@@ -27,6 +27,7 @@ export const queryKeys = {
   playbooks: ["playbooks"] as const,
   knowledge: ["knowledge"] as const,
   flags: ["flags"] as const,
+  secretsStatus: ["secrets", "status"] as const,
   // Memory inspector (ADR 0069 D7) — subtree so one invalidate refreshes all panels.
   memory: ["memory"] as const,
   memorySessions: ["memory", "sessions"] as const,
@@ -51,6 +52,16 @@ export const flagsQuery = () =>
     queryKey: queryKeys.flags,
     queryFn: () => api.flags(),
     staleTime: 5 * 60_000,
+  });
+
+// External secrets-manager status (ADR 0080) — last hydration outcome + owned var
+// names. Slow poll so a background-loop refresh shows up while the panel is open;
+// Sync-now invalidates immediately.
+export const secretsStatusQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.secretsStatus,
+    queryFn: () => api.secretsStatus(),
+    refetchInterval: 30_000,
   });
 
 // Archetypes for the new-agent picker (Basic + installed bundles) — config, not live.
