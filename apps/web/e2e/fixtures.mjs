@@ -371,6 +371,12 @@ const MARKDOWN_SMOKE_ANSWER = [
   "",
   "A paragraph with **bold**, *italic*, `inline code`, ~~strike~~, and a [link](https://example.com).",
   "",
+  // An inline image on the production shape — a server-relative signed /media URL
+  // (data: URLs are stripped by the renderer's URL hardening) — so the DS MarkdownImage
+  // chrome (#1960 action cluster + Lightbox) AND the mediaUrls rehype rewrite get e2e
+  // coverage. The mock serves a 320×180 lavender PNG for any GET /media/*.
+  "![a lavender rectangle](/media/e2e-image.png?sig=mock)",
+  "",
   "> A blockquote.",
   "> > Nested blockquote.",
   "",

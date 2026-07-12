@@ -417,6 +417,12 @@ async function serveStatic(pathname, res) {
   }
 }
 
+// 320×180 solid-lavender PNG served for GET /media/* (markdown image chrome e2e).
+const E2E_MEDIA_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAUAAAAC0CAIAAABqhmJGAAABk0lEQVR42u3TAQkAAAzDsLm/iLu8gusYBKKg0OwcUCoSgIEBAwMGBgMDBgYMDBgYDAwYGDAwGBgwMGBgwMBgYMDAgIEBA4OBAQMDBgYDAwYGDAwYGAwMGBgwMGBgMDBgYMDAYGDAwICBAQODgQEDAwYGA6sABgYMDBgYDAwYGDAwYGAwMGBgwMBgYMDAgIEBA4OBAQMDBgYMDAYGDAwYGAwMGBgwMGBgMDBgYMDAgIHBwICBAQODgQEDAwYGDAwGBgwMGBgMDBgYMDBgYDAwYGDAwICBwcCAgQEDg4EBAwMGBgwMBgYMDBgYMDAYGDAwYGAwMGBgwMCAgcHAgIEBAwMGBgMDBgYMDAYGDAwYGDAwGBgwMGBgMDBgYMDAgIHBwICBAQMDBgYDAwYGDAwGBgwMGBgwMBgYMDBgYMDAYGDAwICBwcCAgQEDAwYGAwMGBgwMBlYBDAwYGDAwGBgwMGBgwMBgYMDAgIHBwICBAQMDBgYDAwYGDAwYGAwMGBgwMBgYMDBgYMDAYGDAwICBAQNDtwd61K9e9p0rRQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   // Fleet slug proxy (ADR 0042): /agents/<slug>/<path> is the hub re-proxying the console to a
@@ -452,6 +458,12 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "Method not found" } });
     }
     return handleA2AStream(req, res, body);
+  }
+  if (pathname.startsWith("/media/") && req.method === "GET") {
+    // Signed media route (#1929): serve a 320×180 lavender PNG for any name — enough
+    // for the markdown image chrome (#1960) to render a real, loadable image.
+    res.writeHead(200, { "content-type": "image/png" });
+    return res.end(E2E_MEDIA_PNG);
   }
   if (pathname === "/api/events" && req.method === "GET") {
     // Server→client SSE push channel (ADR 0003). Hold the connection open so

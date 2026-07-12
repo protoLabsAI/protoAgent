@@ -50,6 +50,34 @@ test("full markdown surface renders (structure + chrome)", async ({ page }, test
     { type: "audit", description: `mermaid SVG nodes: ${mermaid} (0 = themed code block; DS renderMermaid is opt-in)` },
   );
 
+  // ── Image chrome (#1960): the DS MarkdownImage action cluster + Lightbox ─────
+  // Two fixture images: the loadable /media/ one (mock-served PNG) carries the live
+  // chrome; the unreachable example.com one exercises the broken-image fallback.
+  const imgWrap = md
+    .locator('[data-streamdown="image-wrapper"]')
+    .filter({ has: page.locator('[data-streamdown="image"][src*="/media/"]') });
+  await expect(imgWrap.locator('[data-streamdown="image"]')).toBeVisible();
+  await expect(md.locator('[data-streamdown="image-fallback"]')).toBeVisible();
+  const cluster = imgWrap.locator(".pl-md-img-actions");
+  await expect(cluster.getByRole("button", { name: "Download image" })).toBeAttached();
+  await expect(cluster.getByRole("button", { name: "Open in new tab" })).toBeAttached();
+  await imgWrap.hover(); // cluster is hover/focus-revealed (always-on only for touch)
+  await imgWrap.screenshot({ path: testInfo.outputPath("image-cluster-hover.png") });
+  await testInfo.attach("image-cluster-hover", {
+    path: testInfo.outputPath("image-cluster-hover.png"),
+    contentType: "image/png",
+  });
+  await cluster.getByRole("button", { name: "View fullscreen" }).click();
+  const lightbox = page.locator(".pl-lightbox");
+  await expect(lightbox).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("image-lightbox.png") });
+  await testInfo.attach("image-lightbox", {
+    path: testInfo.outputPath("image-lightbox.png"),
+    contentType: "image/png",
+  });
+  await page.keyboard.press("Escape"); // Lightbox dismisses like every pl-overlay
+  await expect(lightbox).toHaveCount(0);
+
   // Visual artifact for the brand-style audit (attached to the Playwright report).
   await md.screenshot({ path: testInfo.outputPath("markdown-surface.png") });
   await testInfo.attach("markdown-surface", {
