@@ -4,24 +4,29 @@ Where protoAgent is headed, kept honest and light. This is the source of truth f
 marketing site's `/roadmap` page — `scripts/roadmap.py build` parses it into
 `sites/marketing/data/roadmap.json`. Group items under `## Planned`, `## In progress`, or
 `## Shipped`; each bullet is a short **title** — one-line detail with an optional `(#issue)`
-or `(vX.Y.Z)` reference.
+or `(vX.Y.Z)` reference. CI (`roadmap-staleness.yml`, #1945) fails when a Planned or
+In-progress ref points at a closed issue — rotate shipped work into `## Shipped`.
 
 ## Planned
 
-- **One-command install** — a `curl | sh` bootstrap with an interactive CLI config wizard. (#1520)
-- **Migrate from Hermes** — a script that imports an existing Hermes agent into protoAgent. (#1515)
-- **Migrate from OpenClaw** — a script that imports an existing OpenClaw agent into protoAgent. (#1514)
+- **Signed Windows installer** — Authenticode-sign the desktop setup.exe — Windows leaves the notify-me gate when it ships. (#1689)
+- **Multi-window desktop chat** — "Open in New Window" spawns a real second desktop window with its own chat surface. (#1706)
+- **Plugin Python deps in the desktop app** — opt-in install of a plugin's requires_pip packages inside the frozen desktop build. (#1631)
 - **Federation token follow-ups** — management UI, peer rotation, and fleet integration for ADR 0066 tokens. (#1504)
-- **Rewind a chat thread** — jump a conversation back to an earlier message and branch from there. (#1535)
+- **Backend-agnostic tracing** — generic OTLP / OpenInference trace export instead of hard-coding the Langfuse SDK. (#1884)
+- **Ollama & Hugging Face listings** — register protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app. (#1833, #1834)
 
 ## In progress
 
-- **Plugin management from the rail** — uninstall a plugin from the rail context menu and a plugin-management settings panel. (#1522)
-- **Plugin version + update** — show the installed version inline with an "update if available" action. (#1521)
-- **Live Work panel** — reflect goal, task, and schedule changes as they happen, without a manual refresh. (#1537)
+- **Image generation plugin (protobanana)** — generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.
 
 ## Shipped
 
-- **/compact** — summarize and archive a long chat thread in a single command. (v0.78.0)
-- **Developer flags** — gate pre-release work behind local feature flags, with a Settings ▸ Developer panel. (v0.78.0)
-- **Watches** — supervise many external conditions at once as a first-class primitive. (v0.78.0)
+- **Production traces → training flywheel** — per-turn trajectory export from production agents into the lab for downstream training-data collection. (#1897)
+- **Autonomous operating model** — goals, tasks, scheduling, and watches compose into one self-directed OODA loop, with durable task→goal attribution. (v0.98.0)
+- **Media platform** — plugin tools save generated images/audio/video the chat renders inline (signed URLs, bearer-safe), and can return images a vision model actually sees. (v0.98.0)
+- **Fleet trace export** — opt-in per-turn trajectory rows (OpenAI chat format + verifiable reward) with a PII-redacting sync pipeline. (v0.97.0)
+- **Migrate from Hermes or OpenClaw** — import scripts that carry an existing agent's config, memory, and history into protoAgent. (v0.96.0, v0.93.0)
+- **Rewind a chat thread** — jump a conversation back to an earlier message and branch from there. (v0.90.0)
+- **Plugin management from the rail** — installed version, "update if available", and uninstall — from the rail context menu and a settings panel. (v0.89.0)
+- **One-command install** — a curl | sh bootstrap with an interactive CLI config wizard. (#1520)

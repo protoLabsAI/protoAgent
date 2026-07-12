@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CI guard: the public roadmap can't rot silently (#1945).** The marketing /roadmap page
+  is hand-maintained and drifted badly (before #1944, 7 of its 8 Planned/In-progress refs
+  pointed at issues closed weeks earlier). A stdlib-only `scripts/check_roadmap_staleness.py`
+  — run on PRs touching `sites/marketing/**` and on a weekly cron
+  (`.github/workflows/roadmap-staleness.yml`) — checks every `#NNNN` ref under
+  Planned/In-progress against live GitHub issue state and fails naming the stale item when
+  one has closed. `vX.Y.Z` release refs, ref-less items, and Shipped are never flagged; API
+  failures warn without failing the run. The workflow also runs the pre-existing
+  `scripts/roadmap.py check` (ROADMAP.md → roadmap.json sync), which no CI ran before —
+  #1944 had edited the json directly, so ROADMAP.md is re-anchored to the live content here,
+  and the guard's first live run already caught #1897 (closed after #1944), now rotated into
+  Shipped.
+
 ### Fixed
 - **Console: server-relative `/media/` URLs render cross-origin (#1946).** Markdown replies
   embedding `![…](/media/<file>?sig=…)` (the #1929 media store) resolved against the PAGE
