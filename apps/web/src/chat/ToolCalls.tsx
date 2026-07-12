@@ -4,6 +4,7 @@ import {
   Clock,
   Database,
   Globe,
+  Hourglass,
   Network,
   Search,
   SlidersHorizontal,
@@ -18,6 +19,7 @@ import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabs
 import type { ToolCall } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { ToolValue } from "./tool-renderers";
+import { humanizeSeconds, parseWaitInput } from "./waitInfo";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
 function iconFor(name: string): LucideIcon {
@@ -26,6 +28,7 @@ function iconFor(name: string): LucideIcon {
   if (name === "fetch_url") return Globe;
   if (name === "current_time") return Clock;
   if (name === "task") return Network; // subagent delegation
+  if (name === "wait") return Hourglass; // deliberate yield-and-resume (#1914)
   if (name.startsWith("memory")) return Database;
   return Wrench;
 }
@@ -34,8 +37,24 @@ function iconFor(name: string): LucideIcon {
  *  (`task → researcher`), read from the call's args, so the roster is visible at a
  *  glance without expanding. The subagent type rides in `input` from the start frame,
  *  so it shows while the delegation is still running; falls back to the bare name until
- *  the args parse. */
+ *  the args parse. A `wait` surfaces its duration the same way (`wait · ~5 minutes`,
+ *  #1914) — the card is collapsed by default, so the header is where "the agent yielded
+ *  deliberately" has to read at a glance. */
 function cardLabel(call: ToolCall): ReactNode {
+  if (call.name === "wait") {
+    // A failed schedule ("Error: …" output) keeps the bare label — its card already
+    // reads as an error; an ETA would claim a wait that never got scheduled.
+    const failed = call.status === "error" || /^error\b/i.test((call.output ?? "").trim());
+    const info = failed ? null : parseWaitInput(call.input);
+    if (info) {
+      return (
+        <>
+          wait <span className="tool-wait-eta">· ~{humanizeSeconds(info.seconds)}</span>
+        </>
+      );
+    }
+    return call.name;
+  }
   if (call.name !== "task" || !call.input) return call.name;
   try {
     const args = JSON.parse(call.input) as { subagent_type?: unknown };
@@ -216,7 +235,9 @@ function ToolGroup({
         ) : null}
         {call.output ? (
           <ToolSection label="result" copyText={call.output}>
-            <ToolValue raw={call.output} role="output" tool={call.name} />
+            {/* `input` rides along for output renderers that need both sides — the `wait`
+                waiting block derives its duration/resume-plan from the args (#1914). */}
+            <ToolValue raw={call.output} role="output" tool={call.name} input={call.input} />
           </ToolSection>
         ) : null}
         {nestedCards ? <div className="pl-toolcard__children">{nestedCards}</div> : null}

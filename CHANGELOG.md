@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   #1944 had edited the json directly, so ROADMAP.md is re-anchored to the live content here,
   and the guard's first live run already caught #1897 (closed after #1944), now rotated into
   Shipped.
+- **Console: `wait` tool blocks surface a real waiting state (#1914).** A `wait` call ends
+  the turn deliberately and schedules its own resume, but its card read as a generic
+  success. The card now shows an hourglass with the humanized duration in the collapsed
+  header (`wait · ~5 minutes`), and expanding it reveals a waiting block: how long the agent
+  yielded, a one-line summary of the resume plan (from the tool's `then` arg), and a hint
+  that the chat stays usable meanwhile. Derived console-side from the call's input args — no
+  change to the tool's return shape; unparseable/truncated args fall back to the plain
+  render, and a failed schedule stays on the error renderer.
 
 ### Fixed
 - **Console: server-relative `/media/` URLs render cross-origin (#1946).** Markdown replies
