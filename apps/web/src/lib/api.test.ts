@@ -255,6 +255,15 @@ describe("apiUrl — fleet slug routing (ADR 0042)", () => {
     expect(apiUrl("/api/runtime/status")).toContain("/agents/m/api/runtime/status");
   });
 
+  it("routes /media/ (the #1929 media store) to the focused member (#1946)", () => {
+    // A media file a member's tool generated lives on the MEMBER — without /media/ in
+    // isAgentPath, its console view fetched the hub origin → "Image not available".
+    focus("m");
+    expect(apiUrl("/media/chart.png?sig=abc")).toBe("/agents/m/media/chart.png?sig=abc");
+    focus(null); // host window stays a no-op — same-origin behavior unchanged
+    expect(apiUrl("/media/chart.png?sig=abc")).toBe("/media/chart.png?sig=abc");
+  });
+
   it("keeps hub control-plane paths on the hub even in a member window", () => {
     focus("m");
     expect(apiUrl("/api/fleet")).not.toContain("/agents/");

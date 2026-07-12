@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Console: server-relative `/media/` URLs render cross-origin (#1946).** Markdown replies
+  embedding `![…](/media/<file>?sig=…)` (the #1929 media store) resolved against the PAGE
+  origin, which broke wherever console origin ≠ agent server — the desktop shell's bundled
+  webview and fleet remote-agent views both showed "Image not available". `/media/` +
+  `/plugins/` URLs in rendered markdown (img src / link href) are now absolutized through
+  `apiUrl()` (desktop dynamic-port base, hub `/agents/<slug>/` proxy), and `/media/` joined
+  the fleet-proxied agent paths. Same-origin consoles are a no-op by construction; signed
+  queries survive verbatim.
+- **Console: multimodal tool results render their text, not the raw envelope (#1947).** A
+  `multimodal_tool_result()` return (#1930) showed up in the tool-result expander as the raw
+  sentinel-prefixed JSON — base64 images included. The expander now parses the envelope and
+  renders its text plus an image-count note, tolerating the server's 800-char preview
+  truncation (a cut envelope degrades to the recovered caption or a generic label, never the
+  b64 dump).
+
 ## [0.98.0] - 2026-07-11
 
 ### Added
