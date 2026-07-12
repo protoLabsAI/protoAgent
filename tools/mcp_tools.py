@@ -323,10 +323,21 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
             log.warning("[mcp] server %r discovery failed: %s — skipping", name, exc)
             continue
 
+        # Normalize to the documented ``<server>__<tool>`` form. The adapter's
+        # ``tool_name_prefix`` naming has drifted across releases (0.2.x emits
+        # ``<server>_<tool>``, single underscore) — without normalizing, every
+        # bare-name include/exclude entry and subagent allowlist silently
+        # matches nothing.
         prefix = f"{name}__"
         kept = []
         for tool in discovered:
-            bare = tool.name[len(prefix) :] if tool.name.startswith(prefix) else tool.name
+            if tool.name.startswith(prefix):
+                bare = tool.name[len(prefix) :]
+            elif tool.name.startswith(f"{name}_"):
+                bare = tool.name[len(name) + 1 :]
+            else:
+                bare = tool.name
+            tool.name = f"{name}__{bare}"
             names = {tool.name, bare}
             included = bool(names & include)
             if include and not included:
