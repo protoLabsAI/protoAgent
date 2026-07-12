@@ -221,9 +221,15 @@ function isAgentPath(path: string) {
   // view must proxy to it. Custom-prefix plugins serve their view at /api/plugins/<id>/… (already
   // covered by the /api/ clause). Without /plugins/ here, a member's default-prefix view iframe
   // hits the hub origin instead of the member → 404 (the agent_browser/project_board panels).
+  //
+  // `/media/` is the core media store (#1929 `registry.save_media` → `GET /media/<file>?sig=…`)
+  // — a media file a member's tool generated lives on the MEMBER, so its console view must
+  // proxy there too (#1946). The hub-side proxy is a catch-all (fleet_routes.py
+  // `/agents/{slug}/{path:path}`), so no server change is needed.
   return (
     (path.startsWith("/api/") && !isHubPath(path)) ||
     path.startsWith("/plugins/") ||
+    path.startsWith("/media/") ||
     path.startsWith("/a2a") ||
     path.startsWith("/v1")
   );

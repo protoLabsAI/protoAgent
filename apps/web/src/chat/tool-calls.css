@@ -329,6 +329,32 @@
   margin-top: 1px;
 }
 
+/* Multimodal tool result (#1947) — the envelope's text renders as .tool-text above a small
+   image-count note; the note stands in for what would otherwise be a raw sentinel plus
+   megabytes of base64. */
+.tool-multimodal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tool-multimodal-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--fg-muted);
+}
+.tool-multimodal-note svg {
+  flex: none;
+  opacity: 0.7;
+}
+
 /* calculator: expr = result */
 .tool-calc {
   display: flex;

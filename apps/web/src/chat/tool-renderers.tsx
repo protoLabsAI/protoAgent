@@ -1,7 +1,9 @@
-import { AlertTriangle, ExternalLink } from "lucide-react";
+import { AlertTriangle, ExternalLink, Image as ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@protolabsai/ui/primitives";
+
+import { parseMultimodalEnvelope, type MultimodalEnvelope } from "./multimodalEnvelope";
 
 // Renders a tool's input/output as real components instead of a raw JSON blob.
 //
@@ -43,6 +45,14 @@ export function ToolValue({
 }) {
   const text = raw ?? "";
 
+  // Multimodal envelope (#1947): a sentinel-prefixed JSON whose images[] carry base64.
+  // Checked FIRST for outputs — the choke point — so no error/per-tool/JSON renderer ever
+  // sees the sentinel; the expander shows the text part + an image-count note, never the
+  // raw envelope.
+  if (role === "output") {
+    const mm = parseMultimodalEnvelope(text);
+    if (mm) return <MultimodalBlock env={mm} />;
+  }
   // Tool errors render uniformly regardless of which tool produced them.
   if (role === "output" && /^error\b/i.test(text.trim())) {
     return <ErrorBlock text={text} />;
@@ -130,6 +140,31 @@ function linkify(text: string): ReactNode[] {
 
 function TextBlock({ text }: { text: string }) {
   return <div className="tool-text">{linkify(text)}</div>;
+}
+
+/** Multimodal tool result (#1947): the envelope's text + an image-count note. When the
+ *  server's 800-char preview cut the envelope, the count is unknowable (null) and — if even
+ *  the text was cut — the note alone stands in as a generic label. */
+function MultimodalBlock({ env }: { env: MultimodalEnvelope }) {
+  const note =
+    env.imageCount === null
+      ? env.text
+        ? "images attached (preview truncated)"
+        : "multimodal tool result (preview truncated)"
+      : env.imageCount > 0
+        ? `${env.imageCount} image${env.imageCount === 1 ? "" : "s"} attached`
+        : null;
+  return (
+    <div className="tool-multimodal">
+      {env.text ? <TextBlock text={env.text} /> : null}
+      {note ? (
+        <span className="tool-multimodal-note">
+          <ImageIcon size={12} />
+          {note}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function ErrorBlock({ text }: { text: string }) {
