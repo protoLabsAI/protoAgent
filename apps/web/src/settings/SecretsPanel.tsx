@@ -21,7 +21,7 @@ export function SecretsPanel() {
 function SecretsStatusCard() {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { data: status } = useQuery(secretsStatusQuery());
+  const { data: status, isError } = useQuery(secretsStatusQuery());
 
   const sync = useMutation({
     mutationFn: () => api.secretsSync(),
@@ -42,6 +42,14 @@ function SecretsStatusCard() {
     onError: (e) => toast({ tone: "error", title: "Connection failed", message: errMsg(e) }),
   });
 
+  // A failed status query must not silently drop the card — say so instead.
+  if (isError) {
+    return (
+      <div className="secrets-status" data-testid="secrets-status">
+        <Alert status="error">Couldn’t load the secrets-manager status — check that the server is reachable.</Alert>
+      </div>
+    );
+  }
   if (!status) return null;
 
   return (

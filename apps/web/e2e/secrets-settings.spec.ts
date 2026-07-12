@@ -4,6 +4,11 @@ import { expect, test } from "@playwright/test";
 // the status card beneath them; Test connection and Sync now hit /api/secrets/* and
 // toast the outcome, and the card reflects the post-sync reconcile.
 
+test.beforeEach(async ({ page }) => {
+  // Per-spec hermeticity: undo a prior Sync-now flip in the mock (order-independence).
+  await page.request.post("/api/__test__/secrets/reset");
+});
+
 test("Secrets panel shows manager status and drives test/sync", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();

@@ -570,6 +570,11 @@ const server = createServer(async (req, res) => {
       fleetScopes.set(req.headers["x-e2e-fleet"] || "default", cloneFleet(FLEET));
       return sendJson(res, { ok: true });
     }
+    if (pathname === "/api/__test__/secrets/reset" && req.method === "POST") {
+      // Per-spec hermeticity: undo a Sync-now flip so status GETs are order-independent.
+      secretsSynced = false;
+      return sendJson(res, { ok: true });
+    }
     if (pathname === "/api/__test__/playbooks/reset" && req.method === "POST") {
       // Per-test hermeticity: undo any promote (private→commons) from a prior test.
       playbooks = clonePlaybooks();
