@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Chat image controls: top-right action cluster + fullscreen Lightbox (#1960).**
+  Images in chat (and every other markdown surface — Activity, Document viewer) now
+  carry a hover-revealed top-right action cluster — download, view fullscreen, open in
+  new tab — replacing the old bottom-right download-only button, plus a body-portaled
+  Lightbox (Esc / backdrop dismiss). Ships via `@protolabsai/ui` 0.55.0
+  (protoContent#449); this PR is the dependency bump plus first-ever e2e coverage for
+  the image chrome: a mock `/media/` route, a fixture image on the production
+  signed-URL shape, and assertions for the cluster, the Lightbox, and the
+  broken-image fallback.
 - **Chat image attachments are bridged into the media store so tools can act on them
   (#1969).** Inbound vision (#1943) let the model *see* an attachment, but tools take
   string references — a model can't echo megabytes of base64 into a tool argument. Now
