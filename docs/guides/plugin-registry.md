@@ -146,8 +146,9 @@ control command** — the generalized form of the core `/goal`. The handler is
 the turn (the model never runs), or `None` to pass the message through. It is
 **user-only by design** — not an agent tool — so a plugin can expose a write
 action (file an issue, open a PR) that the model can't trigger autonomously. Close
-over `registry.config` to read your own settings. Precedence is `goal` > plugin
-command > workflow > subagent > skill; `goal` is reserved.
+over `registry.config` to read your own settings. Precedence is `goal` >
+`lifecycle` > plugin command > workflow > subagent > skill; `goal` and `lifecycle`
+are reserved core tokens (a plugin can't claim either).
 
 `skills/` and `workflows/` are **data**, so they're auto-discovered from those
 conventional subdirs — no boilerplate. **Console views** (a rail icon + page) are
