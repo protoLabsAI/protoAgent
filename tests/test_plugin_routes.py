@@ -100,6 +100,20 @@ def test_disabling_a_plain_plugin_does_not_recommend_restart(monkeypatch):
     assert body["restart_recommended"] is False
 
 
+def test_disabling_a_surface_only_plugin_does_not_recommend_restart(monkeypatch):
+    # A surface-ONLY plugin (a gateway with no view/router) now STOPS live on the reload
+    # reconcile (ADR 0018), so disabling it no longer needs a restart. (A real comms plugin
+    # also registers a router for its Test route, so that path still recommends one.)
+    _wire(
+        monkeypatch,
+        enabled=["pager"],
+        disabled=[],
+        meta=[{"id": "pager", "views": [], "routers": 0, "surfaces": 1}],
+    )
+    body = _client().post("/api/plugins/pager/enabled", json={"enabled": False}).json()
+    assert body["restart_recommended"] is False
+
+
 # ── auto-enable on install (trust-by-default; install = enabled + running) ────────
 def test_install_auto_enables_and_runs(monkeypatch):
     from graph.plugins import installer

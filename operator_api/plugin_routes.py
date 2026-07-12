@@ -66,6 +66,17 @@ def _has_surface(meta: dict | None) -> bool:
     return bool(meta and (meta.get("views") or meta.get("routers") or meta.get("surfaces")))
 
 
+def _lingers_on_disable(meta: dict | None) -> bool:
+    """True when DISABLING the plugin leaves something that outlives the reload — a
+    **view or router** (FastAPI has no route-removal API, so the route lingers mounted).
+
+    A background **surface** is deliberately excluded: it now stops cleanly on the
+    config reload (``_reload_plugin_surfaces`` reconcile, ADR 0018), so a surface-only
+    plugin no longer needs a restart to go quiet. A real comms plugin also registers a
+    router (its Test route), so it still recommends a restart — for the router, correctly."""
+    return bool(meta and (meta.get("views") or meta.get("routers")))
+
+
 def _mounted_router_ids() -> set[str]:
     """Plugin ids with a router currently mounted on the live app. This is the mount
     ground truth (``_mount_plugin_routers``'s registry) — unlike ``plugin_meta`` it
@@ -265,9 +276,10 @@ def register_plugin_routes(app) -> None:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
 
         # Enabling hot-mounts the router that serves the view (#822) — fully live, no
-        # restart. Only DISABLE leaves a stale route behind (no FastAPI unmount), so we
-        # recommend a restart when turning OFF a plugin that contributed a view/route/surface.
-        restart = bool(not want and _has_surface(prev_meta))
+        # restart. Only DISABLE leaves something behind: a view/router route lingers
+        # (no FastAPI unmount) → recommend a restart. A surface no longer does — it stops
+        # on the reload reconcile (ADR 0018) — so a surface-ONLY plugin turns off cleanly.
+        restart = bool(not want and _lingers_on_disable(prev_meta))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
 
     @app.get("/api/plugins/updates")

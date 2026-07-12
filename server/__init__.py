@@ -565,11 +565,22 @@ def _main():
                 if asyncio.iscoroutine(res):
                     res = await res
                 STATE.plugin_surface_handles.append(
-                    {"name": s["name"], "stop": s.get("stop"), "reload": s.get("reload"), "handle": res}
+                    {
+                        "plugin_id": s.get("plugin_id"),
+                        "name": s["name"],
+                        "stop": s.get("stop"),
+                        "reload": s.get("reload"),
+                        "handle": res,
+                    }
                 )
                 log.info("[plugins] started surface: %s", s["name"])
             except Exception:
                 log.exception("[plugins] surface %s failed to start", s.get("name"))
+        # The startup surface-start loop has run — a config reload may now RECONCILE
+        # (hot-start newly-enabled surfaces, stop removed ones) instead of leaving them
+        # until a full restart. Before this point a reload must not hot-start, or a
+        # surface would start twice (here AND in reconcile). ADR 0018.
+        STATE.plugin_surfaces_started = True
 
         # Fleet discovery (ADR 0042 §I) — advertise this agent on mDNS so siblings on the LAN can
         # find it. Best-effort; never breaks boot. Off the loop (to_thread): sync Zeroconf

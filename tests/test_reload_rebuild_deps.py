@@ -157,7 +157,7 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
             mcp_servers=[], tools=[], tool_plugins={}, skill_dirs=[], meta=[],
             chat_commands={}, subagents=[], middleware=[], late_tool_factories=[], routers=[],
             public_paths=[], goal_verifiers={"demo:brand_new": _new_verifier}, goal_hooks=[],
-            watch_hooks=[], lifecycle_hooks=[],
+            watch_hooks=[], lifecycle_hooks=[], surfaces=[],
             thread_id_resolver=_new_resolver, a2a_skills=new_a2a_skills, workflow_dirs=new_workflow_dirs,
         ),
     )
