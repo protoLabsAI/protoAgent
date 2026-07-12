@@ -1560,40 +1560,6 @@ function ChatSessionSlot({
         ) : null}
       </Conversation>
 
-      {hitl && (
-        <HitlForm
-          payload={hitl}
-          busy={status === "streaming"}
-          onSubmit={resumeHitl}
-          onCancel={dismissHitl}
-          onApproveAlways={
-            hitl.kind === "approval" && session
-              ? () => {
-                  chatStore.setSessionBypassPermissions(session.id, true); // turn bypass on for this tab
-                  void resumeHitl("approved"); // …and approve the pending command
-                }
-              : undefined
-          }
-        />
-      )}
-
-      {/* Client composer-form (#1701) — a locally-resolved form (e.g. /effort's picker),
-          the same HitlForm but with a LOCAL onSubmit. Only when the agent isn't already
-          holding the panel for its own HITL interrupt, so the two never collide. */}
-      {!hitl && composerForm && (
-        <HitlForm
-          payload={composerForm.payload}
-          onSubmit={(answers) => {
-            composerForm.onSubmit(answers);
-            setComposerForm(null);
-          }}
-          onCancel={() => {
-            composerForm.onCancel?.();
-            setComposerForm(null);
-          }}
-        />
-      )}
-
       <div
         className="composer-wrap"
         onMouseDown={(e) => {
@@ -1615,6 +1581,47 @@ function ChatSessionSlot({
           }
         }}
       >
+        {/* HITL panel (#1973): floats ABOVE the composer (absolute, anchored to
+            .composer-wrap like the slash menu) so it never reflows the conversation,
+            moves the composer, or jumps the scroll when it appears/resolves. No
+            backdrop by design — answering usually means re-reading (and scrolling)
+            the chat behind it. Other hosts (GoalsPanel) render HitlForm in-flow. */}
+        {(hitl || composerForm) && (
+          <div className="hitl-float">
+            {hitl && (
+              <HitlForm
+                payload={hitl}
+                busy={status === "streaming"}
+                onSubmit={resumeHitl}
+                onCancel={dismissHitl}
+                onApproveAlways={
+                  hitl.kind === "approval" && session
+                    ? () => {
+                        chatStore.setSessionBypassPermissions(session.id, true); // turn bypass on for this tab
+                        void resumeHitl("approved"); // …and approve the pending command
+                      }
+                    : undefined
+                }
+              />
+            )}
+            {/* Client composer-form (#1701) — a locally-resolved form (e.g. /effort's picker),
+                the same HitlForm but with a LOCAL onSubmit. Only when the agent isn't already
+                holding the panel for its own HITL interrupt, so the two never collide. */}
+            {!hitl && composerForm && (
+              <HitlForm
+                payload={composerForm.payload}
+                onSubmit={(answers) => {
+                  composerForm.onSubmit(answers);
+                  setComposerForm(null);
+                }}
+                onCancel={() => {
+                  composerForm.onCancel?.();
+                  setComposerForm(null);
+                }}
+              />
+            )}
+          </div>
+        )}
         <PromptInput
           value={draft}
           onChange={(v) => {
