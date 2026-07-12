@@ -137,6 +137,18 @@ FIELDS: list[Field] = [
         "Hard cap on the agent loop per turn.",
         minimum=1,
     ),
+    # ── Favorite models (#1957) ──────────────────────────────────────────────
+    Field(
+        "model.favorites",
+        "model_favorites",
+        "Favorites",
+        "string_list",
+        "Favorite models",
+        "Pinned go-to models for the chat `/model` quick-switch — the inline picker offers "
+        "these, in this order, instead of the gateway's full list. Add, remove, and reorder "
+        "here; empty = /model shows every gateway model.",
+        options_source="models",
+    ),
     # ── Routing ──────────────────────────────────────────────────────────────
     Field(
         "routing.aux_model",
@@ -1077,6 +1089,7 @@ _SECTION_CATEGORY = {
     "Identity": "Identity",
     # Model — the LLM connection, sampling, and cache (the real "Model & Routing").
     "Model": "Model",
+    "Favorite models": "Model",  # /model quick-switch pins (#1957)
     "Routing": "Model",
     "Caching": "Model",
     # Behavior — how the agent thinks, loops, and decides.

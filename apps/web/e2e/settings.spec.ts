@@ -112,7 +112,7 @@ test("Model shows the agent's Model + Routing fields", async ({ page }) => {
   await openSettings(page);
   await section(page, "Model");
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
-  expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Routing"]);
+  expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Favorite models", "Routing"]);
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="routing.aux_model"] input')).toHaveValue("protolabs/fast");
   await expect(page.locator('.setting-row[data-key="model.api_key"] input')).toHaveAttribute("placeholder", /set/);

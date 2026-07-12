@@ -4,7 +4,7 @@ import { Alert } from "@protolabsai/ui/data";
 import { Combobox, DropdownSelect, Input, SecretInput, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Boxes, RotateCcw, Save } from "lucide-react";
+import { Boxes, ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -454,6 +454,17 @@ export function formatStringList(items: string[]): string {
   return items.map((s) => (s === "" ? '""' : s)).join(", ");
 }
 
+// Swap an item with its neighbor (the ordered-list up/down buttons, #1957). Out-of-range
+// moves return the list unchanged, so the boundary buttons can no-op safely.
+export function moveListItem<T>(items: T[], index: number, delta: number): T[] {
+  const target = index + delta;
+  if (index < 0 || index >= items.length || target < 0 || target >= items.length) return items;
+  const next = items.slice();
+  const [moved] = next.splice(index, 1);
+  next.splice(target, 0, moved);
+  return next;
+}
+
 function StringListInput({ id, value, onChange }: { id: string; value: unknown; onChange: (v: unknown) => void }) {
   const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
   const [text, setText] = useState(formatStringList(items));
@@ -535,18 +546,33 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
     };
     // A column of DS Comboboxes — one per value plus a trailing blank-to-add row;
     // each carries its own suggestion list (the gateway models), and clearing a row
-    // removes it. Type any alias OR pick a suggestion.
+    // removes it. Type any alias OR pick a suggestion. Filled rows get up/down
+    // buttons (#1957) — these lists are ORDERED (favorites rank the /model picker;
+    // fallbacks are retried in order), so reordering must not require retyping.
     return (
       <div id={id} className="setting-list" style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
         {[...items, ""].map((item, i) => (
-          <Combobox
-            key={i}
-            className="setting-input"
-            options={field.options}
-            value={item}
-            placeholder={i === items.length ? "add a model…" : ""}
-            onValueChange={(v) => update(i, v)}
-          />
+          <div key={i} className="setting-list-row" style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <Combobox
+                className="setting-input"
+                options={field.options}
+                value={item}
+                placeholder={i === items.length ? "add a model…" : ""}
+                onValueChange={(v) => update(i, v)}
+              />
+            </div>
+            {i < items.length && items.length > 1 ? (
+              <>
+                <Button variant="ghost" size="sm" type="button" aria-label={`Move ${item} up`} disabled={i === 0} onClick={() => onChange(moveListItem(items, i, -1))}>
+                  <ChevronUp size={14} />
+                </Button>
+                <Button variant="ghost" size="sm" type="button" aria-label={`Move ${item} down`} disabled={i === items.length - 1} onClick={() => onChange(moveListItem(items, i, 1))}>
+                  <ChevronDown size={14} />
+                </Button>
+              </>
+            ) : null}
+          </div>
         ))}
       </div>
     );

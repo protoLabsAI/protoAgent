@@ -8,9 +8,12 @@
 import { registeredSlashCommands, registerSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
+import { queryClient } from "../lib/queryClient";
+import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
 import { buildGoalSetBody, goalFormPayload } from "./goalForm";
+import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 
 // Local id for the system notes /compact posts (the command manages messages
 // directly, like /clear, so it needs to own the ids it can later replace).
@@ -188,6 +191,116 @@ registerSlashCommand({
       ctx.noteToThread(`Unknown effort \`${arg}\`. Options: ${opts}.`);
       ctx.focusComposer();
     }
+    return true;
+  },
+});
+
+// --- /model — quick-switch this tab's model from the pinned favorites (#1957) ---------
+
+/** The tab's effective model: its override, else the configured default. */
+function currentModelOf(sessionId: string, data: ModelPickerData): string {
+  const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  return session?.model || data.globalModel;
+}
+
+/** Apply a pick to the tab. Choosing the configured default CLEARS the per-tab override
+ *  (mirrors ComposerModelSelect), so the tab tracks future default changes again. */
+function applyModel(
+  ctx: { sessionId: string; noteToThread: (m: string) => void; focusComposer: () => void },
+  alias: string,
+  globalModel: string,
+) {
+  const isDefault = !alias || alias === globalModel;
+  chatStore.setSessionModel(ctx.sessionId, isDefault ? "" : alias);
+  ctx.noteToThread(
+    isDefault
+      ? `Model reset to the configured default${globalModel ? ` (**${globalModel}**)` : ""} for this tab. Applies to the next message.`
+      : `Model set to **${alias}** for this tab. Applies to the next message.`,
+  );
+  ctx.focusComposer();
+}
+
+registerSlashCommand({
+  name: "model",
+  description: "Switch this tab's model — bare /model picks from your favorites",
+  usage: "/model [alias|default]",
+  run: (ctx) => {
+    const sid = ctx.sessionId;
+    if (!sid) return false;
+    // Under an ACP runtime the turn is driven by an external coding agent, not a gateway
+    // model — a pick would be inert (mirrors ComposerModelSelect, which hides its menu).
+    // Cache-only read: the app shell fetches runtime status at boot, so this is warm;
+    // when genuinely unknown we proceed rather than block the command.
+    const runtime = queryClient.getQueryData<{ agent_runtime?: string }>(queryKeys.runtime);
+    const agentRuntime = runtime?.agent_runtime ?? "";
+    if (agentRuntime.startsWith("acp:")) {
+      ctx.noteToThread(
+        `This chat runs on the **${agentRuntime.slice(4)}** coding agent (\`agent_runtime: ${agentRuntime}\`) — gateway model switching doesn't apply.`,
+        { tone: "info" },
+      );
+      ctx.focusComposer();
+      return true;
+    }
+    const arg = ctx.rest.trim();
+    // The favorites + model list live in the settings schema — the SAME source the
+    // composer's model menu reads. ensureQueryData serves the warm cache (5-min
+    // staleTime) and only fetches on a cold start, so the picker opens instantly.
+    void queryClient
+      .ensureQueryData(settingsSchemaQuery())
+      .then((schema) => {
+        const data = modelPickerData(schema.groups);
+        const applyCtx = { sessionId: sid, noteToThread: ctx.noteToThread, focusComposer: ctx.focusComposer };
+        if (arg) {
+          // Typed form: `/model <alias>` applies directly (like `/effort high`);
+          // `/model default` clears the override without needing the default favorited.
+          if (/^(default|reset)$/i.test(arg)) {
+            applyModel(applyCtx, "", data.globalModel);
+            return;
+          }
+          const alias = resolveModelArg(data, arg);
+          if (alias) {
+            applyModel(applyCtx, alias, data.globalModel);
+          } else {
+            const known = data.favorites.length ? data.favorites : data.models.slice(0, 8);
+            ctx.noteToThread(
+              `Unknown model \`${arg}\`.${known.length ? ` Known: ${known.join(" · ")}.` : ""} Bare \`/model\` opens the picker.`,
+              { tone: "warning" },
+            );
+            ctx.focusComposer();
+          }
+          return;
+        }
+        // Bare /model → the card picker: favorites when pinned, else the full gateway
+        // list with a hint to pin favorites (graceful no-favorites fallback, #1957).
+        const { choices } = modelChoices(data);
+        if (!choices.length) {
+          ctx.noteToThread("No models available from the gateway — configure one in Settings ▸ Model.", { tone: "warning" });
+          ctx.focusComposer();
+          return;
+        }
+        if (!ctx.openForm) {
+          // Host without the composer-form panel (optional seam) — degrade to a note.
+          const cur = currentModelOf(sid, data);
+          ctx.noteToThread(
+            `Model for this tab: **${cur || "(gateway default)"}**. Switch with \`/model <alias>\`; pin favorites in Settings ▸ Model.`,
+          );
+          ctx.focusComposer();
+          return;
+        }
+        ctx.openForm({
+          payload: modelFormPayload(data, currentModelOf(sid, data)),
+          onSubmit: (answers) => {
+            const alias =
+              typeof answers === "object" && answers ? String((answers as Record<string, unknown>).model ?? "") : "";
+            if (alias && choices.includes(alias)) applyModel(applyCtx, alias, data.globalModel);
+          },
+          onCancel: ctx.focusComposer,
+        });
+      })
+      .catch(() => {
+        ctx.noteToThread("Couldn't load the model list — try again, or check Settings ▸ Model.", { tone: "danger" });
+        ctx.focusComposer();
+      });
     return true;
   },
 });

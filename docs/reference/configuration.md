@@ -50,6 +50,7 @@ knowledge:
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
 | `max_iterations` | `50` | Upper bound on tool-call loops per task. |
+| `favorites` | `[]` | Pinned go-to models for the chat `/model` quick-switch — the inline picker offers these, in this order, instead of the gateway's full list. Manage (add/remove/reorder) in Settings ▸ Model ▸ Favorite models. Empty = `/model` shows every gateway model with a hint to pin favorites. |
 | `request_timeout` | `120.0` | Per-call gateway timeout (seconds) — bounds a hung/slow gateway so a turn fails cleanly. |
 | `max_retries` | `2` | Transient-retry cap on the LLM client (→ `llm_max_retries`). |
 | `top_p` | _(unset)_ | Nucleus sampling. Standard OpenAI param; sent only when set. |

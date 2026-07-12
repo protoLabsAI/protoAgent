@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `mcp.persistent_sessions: false` or per server with `persistent: false`.
 
 ### Added
+- **Favorite models + `/model` quick-switch (#1957).** Pin your go-to models in
+  Settings ▸ Model ▸ **Favorite models** (`model.favorites`, per-workspace in the
+  settings document — add/remove via the model comboboxes, reorder with simple
+  up/down buttons, which the ordered Fallback-models list gains too). In chat,
+  `/model` opens an inline card picker (the `/effort` pattern) offering ONLY the
+  favorites — model name + provider on each card, current model preselected —
+  and a pick switches the tab's model immediately via the existing per-tab
+  override (`metadata.model` on the next send). No favorites configured →
+  `/model` falls back to the full gateway list with a hint to pin favorites.
+  Typed forms work too: `/model <alias>` (case-insensitive) and `/model default`
+  to clear the tab override; under an ACP runtime the command explains that
+  gateway model switching doesn't apply instead of offering inert cards.
 - **Chat image controls: top-right action cluster + fullscreen Lightbox (#1960).**
   Images in chat (and every other markdown surface — Activity, Document viewer) now
   carry a hover-revealed top-right action cluster — download, view fullscreen, open in

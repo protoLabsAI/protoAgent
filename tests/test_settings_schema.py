@@ -16,8 +16,9 @@ from graph.settings_schema import (
 def test_schema_groups_and_values():
     cfg = LangGraphConfig()
     groups = build_schema(cfg, model_options=["a", "b"])
-    # Grouped + ordered by domain (ADR 0048): Identity leads, then Model (Model/Routing/Caching).
-    assert [g["section"] for g in groups][:3] == ["Identity", "Model", "Routing"]
+    # Grouped + ordered by domain (ADR 0048): Identity leads, then Model
+    # (Model/Favorite models/Routing/Caching — favorites joined in #1957).
+    assert [g["section"] for g in groups][:4] == ["Identity", "Model", "Favorite models", "Routing"]
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present — EXCEPT ui_hidden ones, which stay in FIELDS for
     # config round-trip but aren't rendered in the settings UI (e.g. identity.name,
@@ -45,6 +46,10 @@ def test_schema_groups_and_values():
     # The fallback list carries the gateway options too (rendered as combobox rows).
     fallback = next(f for f in fields if f["key"] == "routing.fallback_models")
     assert fallback["type"] == "string_list" and fallback["options"] == ["a", "b"]
+    # The /model favorites (#1957) — same ordered combobox-list treatment, models-backed.
+    favorites = next(f for f in fields if f["key"] == "model.favorites")
+    assert favorites["type"] == "string_list" and favorites["options"] == ["a", "b"]
+    assert favorites["default"] == [] and favorites["scope"] == "agent"
     # #1386 — every CORE entry carries options_source so the console knows which dropdowns to
     # refresh from a freshly-probed gateway ("Get models"). Model-backed → "models"/"models+acp".
     assert all("options_source" in f for f in fields if f["key"] in core_keys)
