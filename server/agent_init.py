@@ -217,10 +217,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # their live module registries — re-applied on every (re)load via _apply_plugin_registries
     # so a config/plugin change refreshes the available `plugin` verifiers and hooks.
     _apply_plugin_registries(_plugins)
-    # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
-    # here and consumed once by _main (mount) + the startup hook (start) — they
-    # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph
-    # build below so the first compile (and every reload) can delegate to them.
+    # Surfaces / routes / subagents (ADR 0018). Both are captured here and consumed
+    # by _main (mount) + the startup hook (start). Routers DO hot-reload now — the
+    # reload commit re-mounts newly-enabled plugins' routers (#1752/#1890) — but
+    # SURFACES do not: the startup hook has already fired, so a surface only (re)starts
+    # on a full restart (the reload path just fires each running surface's `reload`
+    # callback). Subagents register into SUBAGENT_REGISTRY before the graph build below
+    # so the first compile (and every reload) can delegate to them.
     # (`global STATE.plugin_routers, STATE.plugin_surfaces` is declared at the top of the fn.)
     STATE.plugin_routers, STATE.plugin_surfaces = _plugins.routers, _plugins.surfaces
     STATE.plugin_public_paths = _plugins.public_paths
@@ -1651,6 +1654,16 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         from a2a_impl import auth as _a2a_auth
 
         _a2a_auth.set_public_prefixes(new_plugins.public_paths)
+        # Re-publish the remaining boot-time plugin wiring that consumers read fresh from
+        # STATE (same #1752/#1890 rule). Each was assigned only at init, so a hot
+        # enable/update left it stale until a full restart: the thread_id resolver
+        # (server/chat.py memory scoping), the A2A card skills (server/a2a.py card build),
+        # and the workflow recipe dirs (the workflows plugin's lazy _reg() rescans on a
+        # dir-set change — its own docstring promises "hot install, config reload", which
+        # only holds once this list actually updates).
+        STATE.thread_id_resolver = new_plugins.thread_id_resolver
+        STATE.plugin_a2a_skills = new_plugins.a2a_skills
+        STATE.plugin_workflow_dirs = new_plugins.workflow_dirs
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")

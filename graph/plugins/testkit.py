@@ -299,13 +299,13 @@ class FakeRegistry:
     def register_chat_command(self, name: str, handler) -> None:
         """Capture a user-only ``/<name>`` control command — with the real registry's
         slugify + validation, so a registration the host would refuse (empty/unslugifiable
-        name, non-callable handler, the reserved core token ``goal``, a duplicate token)
-        fails the test instead of shipping green. Live those are warn-and-skip; here they
-        raise (see the class docstring)."""
+        name, non-callable handler, a reserved core token ``goal``/``lifecycle``, a
+        duplicate token) fails the test instead of shipping green. Live those are
+        warn-and-skip; here they raise (see the class docstring)."""
         token = _slugify_slash(name)
         if not token or not callable(handler):
             raise ValueError(f"register_chat_command needs a name + callable: {name!r} / {handler!r}")
-        if token == "goal":  # reserved core token — mirrors PluginRegistry
+        if token in ("goal", "lifecycle"):  # reserved core tokens — mirrors PluginRegistry (ADR 0074)
             raise ValueError(f"chat command /{token} is reserved")
         if token in self.chat_commands:
             raise ValueError(f"chat command /{token} registered twice")

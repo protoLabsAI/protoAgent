@@ -91,9 +91,16 @@ def test_reload_threads_surviving_stores_into_the_rebuilt_graph(tmp_path, monkey
 
 
 def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
-    """#1752: a committed hot-reload must push the rebuilt plugin verifiers into the LIVE
-    registry the watch/goal controllers consult — else a plugin update that ships a new
-    verifier leaves it 'unknown plugin verifier' (armed but blind) until a full restart."""
+    """A committed hot-reload must re-publish the boot-time plugin wiring that lives
+    outside the rebuilt graph:
+
+    - #1752: the plugin verifiers pushed into the LIVE registry the watch/goal
+      controllers consult — else a plugin update that ships a new verifier leaves it
+      'unknown plugin verifier' (armed but blind) until a full restart.
+    - the STATE-read seams a hot enable/update also left stale: the thread_id resolver,
+      the A2A card skills, and the workflow recipe dirs. Each is read fresh from STATE by
+      its consumer, so re-publishing on reload is what makes a hot enable take effect
+      without a restart."""
     import graph.agent as ga
     import graph.config_io as cio
     import server.agent_init as ai
@@ -137,6 +144,12 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
 
         return VerifyResult(True, "ok", "")
 
+    def _new_resolver(request_metadata, session_id):
+        return f"reloaded:{session_id}"
+
+    new_a2a_skills = [{"id": "demo-skill", "name": "Demo"}]
+    new_workflow_dirs = ["/plugins/demo/workflows"]
+
     monkeypatch.setattr(
         ai,
         "_build_plugins",
@@ -145,6 +158,7 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
             chat_commands={}, subagents=[], middleware=[], late_tool_factories=[], routers=[],
             public_paths=[], goal_verifiers={"demo:brand_new": _new_verifier}, goal_hooks=[],
             watch_hooks=[], lifecycle_hooks=[],
+            thread_id_resolver=_new_resolver, a2a_skills=new_a2a_skills, workflow_dirs=new_workflow_dirs,
         ),
     )
     # Let the graph rebuild SUCCEED so the commit block (with the registry refresh) runs.
@@ -156,13 +170,20 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
     for name in ("scheduler", "graph", "workflow_registry", "workflow_run"):
         monkeypatch.setattr(STATE, name, None, raising=False)
 
-    # Pre-state: an OLD mapping without the new verifier (mirrors the pre-update registry).
+    # Pre-state: OLD/stale values (mirrors the pre-update process) for every seam.
     gv.set_plugin_verifiers({"demo:old": _new_verifier})
     assert "demo:brand_new" not in gv.plugin_verifier_names()
+    monkeypatch.setattr(STATE, "thread_id_resolver", None, raising=False)
+    monkeypatch.setattr(STATE, "plugin_a2a_skills", [], raising=False)
+    monkeypatch.setattr(STATE, "plugin_workflow_dirs", [], raising=False)
     try:
         ok, msg = ai._reload_langgraph_agent()
         assert ok is True, msg
         # THE regression: the reload pushed the rebuilt verifiers into the live registry.
         assert "demo:brand_new" in gv.plugin_verifier_names()
+        # …and re-published the STATE-read seams that were boot-only before this fix.
+        assert STATE.thread_id_resolver is _new_resolver
+        assert STATE.plugin_a2a_skills == new_a2a_skills
+        assert STATE.plugin_workflow_dirs == new_workflow_dirs
     finally:
         gv.set_plugin_verifiers({})
