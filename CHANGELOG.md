@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **MCP tool calls reuse one persistent session per server (default ON).**
+  Previously every MCP tool invocation opened a fresh session — for stdio
+  servers a fresh subprocess per call (~1s of pure spawn overhead each; an
+  agent turn making 5–15 MCP calls paid 5–15s of it). Each server now keeps one
+  long-lived session in a pool (`tools/mcp_session_pool.py`): lazily opened,
+  reused across calls from any event loop, auto-reconnected once when the
+  server dies (a dead server degrades to a recoverable tool-error string,
+  never a hung turn), and closed on config reload. Benchmark (echo example
+  server, 10 sequential calls): 310ms → 3ms mean per call. Opt out globally
+  with `mcp.persistent_sessions: false` or per server with `persistent: false`.
+
 ### Added
 - **Chat image controls: top-right action cluster + fullscreen Lightbox (#1960).**
   Images in chat (and every other markdown surface — Activity, Document viewer) now

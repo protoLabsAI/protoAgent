@@ -550,6 +550,10 @@ def _build_mcp(config, plugin_servers=None):
     Best-effort and per-server isolated (see tools/mcp_tools.build_mcp_tools):
     a bad/unreachable server is logged and skipped, never fatal. Returns empty
     lists when MCP is disabled.
+
+    ``clients`` may include a persistent-session pool holding live subprocesses
+    — whenever a build's clients are discarded (reload swap, failed rebuild),
+    release them via ``_close_mcp_clients``.
     """
     try:
         from tools.mcp_tools import build_mcp_tools
@@ -561,6 +565,16 @@ def _build_mcp(config, plugin_servers=None):
     except Exception as exc:  # noqa: BLE001 — MCP is optional, never fatal
         log.warning("[mcp] init failed: %s; running without MCP tools", exc)
         return [], [], []
+
+
+def _close_mcp_clients(clients) -> None:
+    """Release MCP connection handles (persistent session pools). Never raises."""
+    try:
+        from tools.mcp_tools import close_mcp_clients
+
+        close_mcp_clients(clients)
+    except Exception:  # noqa: BLE001 — teardown must never break a reload
+        log.warning("[mcp] client teardown failed", exc_info=True)
 
 
 _plugin_subagent_names: set[str] = set()
@@ -1610,6 +1624,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
+            # The freshly-built MCP clients were never committed — close them or
+            # their persistent sessions (subprocesses) leak on every failed reload.
+            _close_mcp_clients(new_mcp_clients)
             # Scheduler state hasn't been committed yet — caller's
             # running scheduler keeps polling, no orphaned tasks.
             return False, f"graph rebuild failed: {e}"
@@ -1628,7 +1645,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     STATE.graph_config = new_config
     STATE.knowledge_store = new_store
     STATE.skills_index = new_skills
+    # Swap in the new MCP clients, then release the old ones — persistent session
+    # pools hold live subprocesses that would otherwise leak on every reload. A
+    # turn still mid-flight on the OLD graph sees its next MCP call degrade to a
+    # recoverable tool-error string (never a hang) — same shape as a server crash.
+    old_mcp_clients = STATE.mcp_clients
     STATE.mcp_clients, STATE.mcp_tools, STATE.mcp_meta = new_mcp_clients, new_mcp_tools, new_mcp_meta
+    if old_mcp_clients and old_mcp_clients is not new_mcp_clients:
+        _close_mcp_clients(old_mcp_clients)
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
         new_plugin_tools,
         new_plugin_skill_dirs,
