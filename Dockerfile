@@ -18,7 +18,9 @@ WORKDIR /build
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/
 COPY apps/desktop/package.json apps/desktop/
-RUN npm ci
+# npm-11-shaped lockfile: node:20-slim ships npm 10, whose `ci` rejects it
+# ("Missing: … from lock file") — same pin as every CI job (see PROTO.md).
+RUN npm install -g npm@11 && npm ci
 # `prebuild` (check-css-comments + copy-plugin-kit) + `build` (tsc typecheck +
 # vite build) — emits apps/web/dist/, including dist/_ds/ from the plugin-kit.
 COPY apps/web/ apps/web/
