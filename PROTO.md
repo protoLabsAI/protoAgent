@@ -125,7 +125,9 @@ These are the failures that actually recur — read them before you edit.
   disagree about peer-stub reachability, so **npm 10's `ci` rejects an
   npm-11-generated lockfile** ("Missing: @types/react@… from lock file") —
   which is why every CI job touching the root lockfile pins `npm install -g
-  npm@11` before `npm ci` (checks/desktop-build/marketing-deploy/docs
+  npm@11` before `npm ci` (**the Dockerfile web-builder stage too** — node:20-slim
+  ships npm 10; missing it broke every GHCR publish + the v0.101.0 release
+  build until fixed) and the checks/desktop-build/marketing-deploy/docs
   workflows). Keep new workflows consistent. After any dep bump, regenerate
   `THIRD_PARTY_LICENSES.md` (`uv run python scripts/gen_attribution.py`) or
   the attribution gate fails.
