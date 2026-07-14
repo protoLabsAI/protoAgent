@@ -287,7 +287,14 @@ class ProtoAgentExecutor(AgentExecutor):
         answer_aid = f"{context.task_id or 'turn'}-answer"
         _text_buf = ""
         _answer_started = False  # first chunk creates the artifact (append=False); rest append
-        _FLUSH_CHARS = 24
+        # Batched by a char threshold: small enough that the live bubble still fills
+        # smoothly, large enough that a long answer doesn't emit hundreds of frames.
+        # The frame count directly scales the SSE backpressure + teardown-cancel
+        # window (a2a_impl/registry.py grants the producer a 0.5s grace then cancels)
+        # that can strand the terminal REPLACE + COMPLETED frames on a slow/large
+        # stream — an 11KB answer at 24 chars was ~480 frames; at 240 it's ~48.
+        # Governs both the answer text (below) and reasoning batching (#1710).
+        _FLUSH_CHARS = 240
         # Reasoning ("thinking") deltas arrive one token at a time. Batch them
         # like the answer text so the live thinking bubble still fills word by
         # word without a WORKING status frame per token — unbatched, one turn

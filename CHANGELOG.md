@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Chat no longer spins "Working…" forever on a large answer (hung work block).**
+  A turn whose A2A answer artifact is large (an ~11 KB research answer ≈ 480+ stream
+  frames) could leave the console's work block streaming indefinitely: the server
+  completes the task and persists the full artifact, but the SSE tail's terminal
+  frames get stranded when the producer is cancelled on teardown, and the client's
+  only "done" signal is the stream closing — so with the read loop stalled open the
+  bubble never finalized and only a reload recovered. Adds a client stall-watchdog
+  (`streamWatchdog.ts`, wired into `ChatSurface`): after 45 s of stream silence it
+  consults the durable task (`tasks/get`) and, only if it's terminal, finalizes the
+  bubble from the authoritative artifact and drops the dead socket — self-healing
+  regardless of the stall's cause, and never fabricating a completion the server
+  didn't record. Also raises the answer/reasoning flush threshold (24→240 chars) so a
+  long answer emits ~48 stream frames instead of ~480, shrinking the teardown window
+  that strands the terminal frames in the first place.
+
 ## [0.101.0] - 2026-07-12
 
 ### Fixed
