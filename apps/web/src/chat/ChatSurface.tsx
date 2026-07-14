@@ -35,6 +35,7 @@ import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
+import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 
 function messageId() {
@@ -1199,7 +1200,67 @@ function ChatSessionSlot({
     let sawAuthoritativeText = false;
     let turnTaskId = "";
 
+    // Stalled-stream watchdog (hung-workblock fix). The chat's only "turn done"
+    // signal is the SSE stream closing (onDone) — there is no standalone terminal
+    // event. If the stream stalls open mid-turn — a large answer whose terminal
+    // frames were stranded when the server's producer got cancelled on teardown
+    // (a2a_impl/registry.py), or a proxy/tailnet buffer — the reader blocks
+    // forever, so onDone, the post-stream reconcile below, and `finally` never
+    // run, and the bubble spins "Working…" until reload. Guard it: after
+    // WATCHDOG_IDLE_MS with no frames, consult the durable task (tasks/get). If
+    // it's TERMINAL the server finished and the tail was lost → finalize from the
+    // task and drop the dead socket; if it's still working the turn is just
+    // legitimately quiet (a slow tool) → keep waiting.
+    const WATCHDOG_IDLE_MS = 45_000;
+    let settledByWatchdog = false;
+    const finalizeFromTask = (state: string, text: string) => {
+      const failed = /fail|cancel/i.test(state);
+      const latest = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+      if (latest) {
+        const now = Date.now();
+        chatStore.updateMessages(
+          session.id,
+          latest.messages.map((m) => {
+            if (m.id !== assistantId) return m;
+            const toolCalls = m.toolCalls?.map((c) =>
+              c.status === "running"
+                ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
+                : c,
+            );
+            return {
+              ...m,
+              content: text || m.content,
+              parts: text ? replaceText(m.parts, text, m.content) : m.parts,
+              status: failed ? "error" : "done",
+              toolCalls,
+            };
+          }),
+        );
+      }
+      chatStore.setSessionStatus(session.id, failed ? "error" : "idle");
+      setStatusMessage(failed ? "failed" : "idle");
+    };
+    const watchdog = createStreamWatchdog({
+      idleMs: WATCHDOG_IDLE_MS,
+      getTask: async () => {
+        if (!turnTaskId) throw new Error("task id not surfaced yet");
+        return api.getTask(turnTaskId);
+      },
+      onTerminal: (task) => {
+        if (settledByWatchdog || controller.signal.aborted) return;
+        settledByWatchdog = true;
+        finalizeFromTask(task.state, task.text);
+        controller.abort(); // release the stalled socket; unwinds via catch → finally
+      },
+    });
+    const bumpWatchdog = () => {
+      if (controller.signal.aborted) return;
+      watchdog.bump();
+    };
+    const clearWatchdog = () => watchdog.stop();
+
     try {
+      bumpWatchdog();
       await api.streamChat(sent, session.id, {
         signal: controller.signal,
         onTaskId: (id) => {
@@ -1215,7 +1276,10 @@ function ChatSessionSlot({
             );
           }
         },
-        onStatus: setStatusMessage,
+        onStatus: (m) => {
+          bumpWatchdog();
+          setStatusMessage(m);
+        },
         onFailed: (detail) => {
           // The turn failed terminally (e.g. the model 401'd on a bad key).
           // Surface it as an errored assistant message + an actionable hint,
@@ -1245,6 +1309,7 @@ function ChatSessionSlot({
           );
         },
         onText: (text, append) => {
+          bumpWatchdog();
           if (!append) sawAuthoritativeText = true;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
@@ -1270,6 +1335,7 @@ function ChatSessionSlot({
           );
         },
         onReasoning: (delta) => {
+          bumpWatchdog();
           // Accumulate the streamed scratch_pad two ways: into `reasoning` (the
           // flat block kept for history/persistence) AND into the ordered `parts`,
           // so live turns render thinking inline at the point it occurred — between
@@ -1290,6 +1356,7 @@ function ChatSessionSlot({
           );
         },
         onToolCall: (evt) => {
+          bumpWatchdog();
           // `show_component` is a render directive, not a real action — its output IS the
           // inline component (delivered via onComponent / message.components). Suppress its
           // tool card so it doesn't add noise to the collapsed work timeline (#1323).
@@ -1389,6 +1456,7 @@ function ChatSessionSlot({
           );
         },
         onDone: () => {
+          clearWatchdog();
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           const now = Date.now();
@@ -1457,7 +1525,14 @@ function ChatSessionSlot({
       void reconcileSteer();
     } catch (exc) {
       if (controller.signal.aborted) {
-        setStatusMessage("stopped");
+        // A user Stop OR a watchdog self-heal (which aborts to free a stalled
+        // socket AFTER finalizing the turn from the durable task). In the watchdog
+        // case the bubble + session state are already settled — don't clobber them
+        // with "stopped"/idle.
+        if (!settledByWatchdog) {
+          setStatusMessage("stopped");
+          chatStore.setSessionStatus(session.id, "idle");
+        }
       } else {
         const message = errMsg(exc);
         onError(message);
@@ -1474,8 +1549,8 @@ function ChatSessionSlot({
         }
         return;
       }
-      chatStore.setSessionStatus(session.id, "idle");
     } finally {
+      clearWatchdog();
       abortRef.current = null;
       setTaskId("");
     }

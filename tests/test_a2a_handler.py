@@ -483,16 +483,16 @@ async def test_text_deltas_stream_as_incremental_artifact_frames():
     import json
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
-        # each chunk is over the executor's flush threshold so it emits a frame
-        yield ("text", "First sentence of the streamed answer here. ")
-        yield ("text", "Second sentence that continues the answer. ")
-        yield ("text", "Third and final sentence to wrap it up.")
-        yield (
-            "done",
-            "First sentence of the streamed answer here. "
-            "Second sentence that continues the answer. "
-            "Third and final sentence to wrap it up.",
-        )
+        # Each chunk is over the executor's flush threshold (_FLUSH_CHARS) so it
+        # emits its own artifact-update frame instead of buffering to turn end.
+        pad = " more padding words to cross the flush threshold and force a frame."
+        s1 = "First sentence of the streamed answer here." + pad * 3
+        s2 = "Second sentence that continues the answer." + pad * 3
+        s3 = "Third and final sentence to wrap it up." + pad * 3
+        yield ("text", s1)
+        yield ("text", s2)
+        yield ("text", s3)
+        yield ("done", s1 + s2 + s3)
 
     app = _build_app(stream)
     artifact_texts: list[str] = []
