@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Registered ACP coding agents now surface in the runtime + model pickers (ADR 0033).**
+  A custom `acp.agents.<id>` in config — a wholly-new coding agent, or a launch-spec override
+  of a built-in — now appears everywhere the built-in ACP agents do: the Settings ▸ Agent
+  runtime select, the aux/goal-eval/compaction model dropdowns, `GET /api/acp-agents` (the
+  setup wizard + Delegates picker), and `protoagent runtime list`. `acp_agent_catalog()` /
+  `acp_runtime_options()` take an optional `config.acp_agents` mapping and merge it over the
+  canonical catalog (a new id needs a launch `command` to be offered; a known id can override
+  its `command`/`args`/`label`), and `build_schema` resolves the runtime + aux options
+  per-request from live config. The `agent_runtime` select is now dynamically sourced (like
+  `model.name`), so a custom `acp:<id>` validates on save instead of being rejected by a
+  static enum. Groundwork for per-chat ACP runtime selection.
 - **The agent can refine its own persona — a guarded `edit_soul` tool (ADR 0081).**
   When an operator opts in (`soul.self_edit_enabled: true`, **off by default**), the lead
   agent gets an `edit_soul(section, content, mode)` tool that rewrites a **section** of its

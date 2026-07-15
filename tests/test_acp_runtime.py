@@ -539,6 +539,41 @@ def test_adapters_derived_from_canonical_catalog():
     assert "@agentclientprotocol/claude-agent-acp" in _ACP_ADAPTERS["claude"]["args"]
 
 
+def test_catalog_merges_registered_custom_agents():
+    """ADR 0033 — a user-registered ``acp.agents.<id>`` (a wholly-new custom agent OR a
+    launch-spec override of a built-in) surfaces in the catalog + the ``acp:<id>`` options,
+    so it's pickable everywhere the built-ins are. No-arg behavior is unchanged."""
+    from runtime.acp_agents import acp_agent_catalog, acp_runtime_options
+
+    builtin_opts = acp_runtime_options()
+    extra = {
+        "myagent": {"command": "my-acp", "args": ["--acp"], "label": "My Agent"},  # new custom agent
+        "claude": {"command": "claude-agent-acp"},  # override a built-in's launch command
+        "nolabel": {"command": "bare"},  # new agent, label defaults to the id
+        "skipme": {"args": ["--x"]},  # new id with no command → not launchable → dropped
+        "  ": {"command": "blank"},  # blank id → ignored
+    }
+    by_id = {a["id"]: a for a in acp_agent_catalog(extra)}
+
+    # New custom agent appears verbatim (label + launch spec).
+    assert by_id["myagent"] == {"id": "myagent", "label": "My Agent", "command": "my-acp", "args": ["--acp"]}
+    # Overriding a built-in swaps its command; args left intact (not provided in the override).
+    assert by_id["claude"]["command"] == "claude-agent-acp"
+    assert by_id["claude"]["args"] == ["-y", "@agentclientprotocol/claude-agent-acp"]
+    # A custom agent with no explicit label defaults it to the id.
+    assert by_id["nolabel"]["label"] == "nolabel"
+    # A new id with no launch command isn't offered (would raise at launch); blank id ignored.
+    assert "skipme" not in by_id and "  " not in by_id
+
+    opts = acp_runtime_options(extra)
+    assert opts[: len(builtin_opts)] == builtin_opts  # built-ins still lead, in order
+    assert "acp:myagent" in opts and "acp:nolabel" in opts
+    assert "acp:skipme" not in opts
+    # No-arg / empty-config path is untouched (built-ins only).
+    assert acp_runtime_options() == builtin_opts
+    assert "acp:myagent" not in acp_runtime_options(None)
+
+
 # ── hardening: non-streaming switch, usage_update, frozen spawn ────────────────
 
 

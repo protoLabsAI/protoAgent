@@ -286,11 +286,9 @@ def _running_server_port() -> int | None:
 def _known_runtimes(config=None) -> list[str]:
     from runtime.acp_agents import acp_runtime_options
 
-    known = ["native", *acp_runtime_options()]
-    for agent in (getattr(config, "acp_agents", None) or {}) if config else {}:
-        if f"acp:{agent}" not in known:
-            known.append(f"acp:{agent}")
-    return known
+    # acp_runtime_options folds in config.acp_agents (custom agents / overrides), so this is
+    # just native + the (config-aware) ACP options — same union the settings schema builds.
+    return ["native", *acp_runtime_options(getattr(config, "acp_agents", None) if config else None)]
 
 
 def _cmd_use(args) -> int:
@@ -331,8 +329,9 @@ def _cmd_list(_args) -> int:
     print(f"current:  {cfg.agent_runtime}")
     print("options:")
     print("  native        (built-in LangGraph loop)")
-    for a in acp_agent_catalog():
-        status = "installed" if shutil.which(a["command"]) else f"command {a['command']!r} not found"
+    for a in acp_agent_catalog(getattr(cfg, "acp_agents", None)):
+        command = a["command"]
+        status = ("installed" if shutil.which(command) else f"command {command!r} not found") if command else "no command configured"
         print(f"  acp:{a['id']:<10}{a['label']}  [{status}]")
     return 0
 

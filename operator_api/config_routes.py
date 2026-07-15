@@ -228,10 +228,12 @@ def register_config_routes(app) -> None:
     @app.get("/api/acp-agents")
     async def _api_acp_agents():
         """The canonical ACP coding-agent catalog (id, label, command, args) — one source
-        for the Delegates picker, the setup wizard, and the agent_runtime options."""
+        for the Delegates picker, the setup wizard, and the agent_runtime options. Includes
+        any user-registered ``acp.agents.<id>`` (custom agents / launch-spec overrides)."""
         from runtime.acp_agents import acp_agent_catalog
 
-        return {"agents": acp_agent_catalog()}
+        extra = getattr(STATE.graph_config, "acp_agents", None) if STATE.graph_config else None
+        return {"agents": acp_agent_catalog(extra)}
 
     # --- Generic settings (schema-driven UI) --------------------------------
     @app.get("/api/settings/schema")
