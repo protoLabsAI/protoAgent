@@ -133,11 +133,14 @@ def _goal_continuation_config(config: dict, goal_state) -> dict:
     }
 
 
-# One ACP runtime per thread (the ACP session is stateful — the coding agent holds
-# history, so we reuse it across turns; ADR 0033 slice 4).
-_ACP_RUNTIMES: dict[str, Any] = {}
-_ACP_RUNTIME_ACCESS: dict[str, float] = {}  # thread_id → time.monotonic() last access
-_ACP_BUSY: dict[str, int] = {}  # thread_id → in-flight turn count; never evict while > 0
+# One ACP runtime per (thread, agent) — the ACP session is stateful (the coding agent holds
+# history), reused across turns, and kept apart PER AGENT so a mid-chat runtime swap builds a
+# fresh session while the previous agent's survives for a swap-back (ADR 0033 slice 4; ADR 0082
+# D2). Keying by thread alone would strand or clobber a session on every swap.
+_AcpKey = tuple[str, str]  # (thread_id, agent)
+_ACP_RUNTIMES: dict[_AcpKey, Any] = {}
+_ACP_RUNTIME_ACCESS: dict[_AcpKey, float] = {}  # key → time.monotonic() last access
+_ACP_BUSY: dict[_AcpKey, int] = {}  # key → in-flight turn count; never evict while > 0
 _ACP_LOCK = asyncio.Lock()  # serializes registry mutation across concurrent turns
 _ACP_IDLE_TTL_S = 1800  # 30 min idle before eviction
 _ACP_MAX_RUNTIMES = 100  # hard cap — evict LRU when exceeded
@@ -147,72 +150,76 @@ async def _evict_acp_runtimes(now: float) -> None:
     """Sweep idle ACP runtimes and enforce the hard cap. The CALLER holds ``_ACP_LOCK``
     (kept lock-free here so it composes under the get/acquire helpers). A runtime with an
     in-flight turn (``_ACP_BUSY > 0``) is NEVER evicted — closing it would kill a live turn
-    (a long ACP coding turn can outlast the idle TTL)."""
+    (a long ACP coding turn can outlast the idle TTL). Keys are ``(thread, agent)``."""
     # Phase 1 — evict entries older than the idle TTL (never an in-flight one).
-    for tid in list(_ACP_RUNTIMES):
-        if _ACP_BUSY.get(tid, 0) > 0:
+    for key in list(_ACP_RUNTIMES):
+        if _ACP_BUSY.get(key, 0) > 0:
             continue
-        last = _ACP_RUNTIME_ACCESS.get(tid, 0)
+        last = _ACP_RUNTIME_ACCESS.get(key, 0)
         if now - last >= _ACP_IDLE_TTL_S:
-            rt = _ACP_RUNTIMES.pop(tid, None)
-            _ACP_RUNTIME_ACCESS.pop(tid, None)
+            rt = _ACP_RUNTIMES.pop(key, None)
+            _ACP_RUNTIME_ACCESS.pop(key, None)
             if rt is not None:
                 await rt.close()
-                log.info("[acp-runtime] evicted idle runtime for thread=%s agent=%s", tid, getattr(rt, "agent", "?"))
+                log.info("[acp-runtime] evicted idle runtime for key=%s agent=%s", key, getattr(rt, "agent", "?"))
 
     # Phase 2 — over cap: evict the LRU NON-BUSY runtime until at/below the cap.
     while len(_ACP_RUNTIMES) > _ACP_MAX_RUNTIMES:
-        evictable = [t for t in _ACP_RUNTIME_ACCESS if _ACP_BUSY.get(t, 0) == 0]
+        evictable = [k for k in _ACP_RUNTIME_ACCESS if _ACP_BUSY.get(k, 0) == 0]
         if not evictable:
             break  # everything is in-flight — ride over cap rather than kill a live turn
-        lru_tid = min(evictable, key=lambda k: _ACP_RUNTIME_ACCESS[k])
-        rt = _ACP_RUNTIMES.pop(lru_tid, None)
-        _ACP_RUNTIME_ACCESS.pop(lru_tid, None)
+        lru_key = min(evictable, key=lambda k: _ACP_RUNTIME_ACCESS[k])
+        rt = _ACP_RUNTIMES.pop(lru_key, None)
+        _ACP_RUNTIME_ACCESS.pop(lru_key, None)
         if rt is not None:
             await rt.close()
-            log.info("[acp-runtime] evicted LRU runtime for thread=%s agent=%s", lru_tid, getattr(rt, "agent", "?"))
+            log.info("[acp-runtime] evicted LRU runtime for key=%s agent=%s", lru_key, getattr(rt, "agent", "?"))
 
 
-async def _get_acp_runtime_locked(thread_id: str):
-    """Get-or-create the runtime for ``thread_id`` (evicting idle/over-cap first). The
-    CALLER holds ``_ACP_LOCK``."""
+async def _get_acp_runtime_locked(thread_id: str, agent: str):
+    """Get-or-create the runtime for ``(thread_id, agent)`` (evicting idle/over-cap first).
+    The CALLER holds ``_ACP_LOCK``. ``agent`` is the per-turn selection (ADR 0082), so it's
+    passed explicitly to ``AcpRuntime`` — the global ``agent_runtime`` may differ."""
     now = time.monotonic()
     await _evict_acp_runtimes(now)
-    rt = _ACP_RUNTIMES.get(thread_id)
-    _ACP_RUNTIME_ACCESS[thread_id] = now  # bump on every call (hit or miss)
+    key = (thread_id, agent)
+    rt = _ACP_RUNTIMES.get(key)
+    _ACP_RUNTIME_ACCESS[key] = now  # bump on every call (hit or miss)
     if rt is None:
         from runtime.acp_runtime import AcpRuntime
 
-        rt = AcpRuntime(STATE.graph_config)
-        _ACP_RUNTIMES[thread_id] = rt
+        rt = AcpRuntime(STATE.graph_config, agent=agent)
+        _ACP_RUNTIMES[key] = rt
     return rt
 
 
-async def _get_acp_runtime(thread_id: str):
-    """Get-or-create the ACP runtime for ``thread_id`` (lock-guarded)."""
+async def _get_acp_runtime(thread_id: str, agent: str):
+    """Get-or-create the ACP runtime for ``(thread_id, agent)`` (lock-guarded)."""
     async with _ACP_LOCK:
-        return await _get_acp_runtime_locked(thread_id)
+        return await _get_acp_runtime_locked(thread_id, agent)
 
 
-async def _acp_acquire(thread_id: str):
+async def _acp_acquire(thread_id: str, agent: str):
     """Get-or-create the runtime AND mark it in-flight (refcount++), atomically under
     ``_ACP_LOCK``, so a concurrent turn's eviction can't close it mid-turn. Pair with
     ``_acp_release`` in a ``finally``."""
     async with _ACP_LOCK:
-        rt = await _get_acp_runtime_locked(thread_id)
-        _ACP_BUSY[thread_id] = _ACP_BUSY.get(thread_id, 0) + 1
+        rt = await _get_acp_runtime_locked(thread_id, agent)
+        key = (thread_id, agent)
+        _ACP_BUSY[key] = _ACP_BUSY.get(key, 0) + 1
         return rt
 
 
-async def _acp_release(thread_id: str) -> None:
-    """Mark a thread's ACP runtime no longer in-flight (refcount--)."""
+async def _acp_release(thread_id: str, agent: str) -> None:
+    """Mark a ``(thread, agent)`` ACP runtime no longer in-flight (refcount--)."""
     async with _ACP_LOCK:
-        n = _ACP_BUSY.get(thread_id, 0) - 1
+        key = (thread_id, agent)
+        n = _ACP_BUSY.get(key, 0) - 1
         if n > 0:
-            _ACP_BUSY[thread_id] = n
+            _ACP_BUSY[key] = n
         else:
-            _ACP_BUSY.pop(thread_id, None)
-        _ACP_RUNTIME_ACCESS[thread_id] = time.monotonic()  # fresh access on release
+            _ACP_BUSY.pop(key, None)
+        _ACP_RUNTIME_ACCESS[key] = time.monotonic()  # fresh access on release
 
 
 async def _acp_drive_turn(rt, message: str):
@@ -281,12 +288,13 @@ async def _acp_drive_turn(rt, message: str):
     yield ("done", answer)
 
 
-async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, Any]]:
+async def _acp_turn_collected(session_id: str, message: str, agent: str) -> list[dict[str, Any]]:
     """The non-streaming shape of the ACP runtime switch: drive the turn, collect the
     frames, and return the single assistant message the non-streaming callers expect.
-    ``usage`` is translated to the OpenAI shape the /v1 handler sums (ADR 0075 D4)."""
+    ``agent`` is the per-turn ACP agent (ADR 0082). ``usage`` is translated to the OpenAI
+    shape the /v1 handler sums (ADR 0075 D4)."""
     tid = _resolve_thread_id(None, session_id)
-    rt = await _acp_acquire(tid)
+    rt = await _acp_acquire(tid, agent)
     answer, usage, error = "", None, None
     try:
         # Same serialization as the streaming switch: one prompt per ACP session.
@@ -301,7 +309,7 @@ async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, A
                 elif kind == "error":
                     error = payload
     finally:
-        await _acp_release(tid)
+        await _acp_release(tid, agent)
     content = error or answer or "_(The agent ended the turn without a textual reply.)_"
     out: dict[str, Any] = {"role": "assistant", "content": content}
     if usage is not None:
@@ -1543,17 +1551,21 @@ async def _chat_langgraph_stream_impl(
             if parsed_skill is not None:
                 message = _skill_directive(*parsed_skill)
 
-            # ACP runtime (ADR 0033 slice 4) — when `agent_runtime: acp:<agent>`, an
-            # external coding agent (proto/codex/claude/…) drives the turn over ACP
-            # instead of the native LangGraph loop. One stateful ACP session per thread.
-            from runtime.acp_runtime import is_acp_runtime
+            # ACP runtime (ADR 0033 slice 4; ADR 0082) — an external coding agent
+            # (proto/codex/claude/…) drives the turn over ACP instead of the native
+            # LangGraph loop, when EITHER the global `agent_runtime: acp:<agent>` OR the
+            # per-tab model for this turn is `acp:<agent>` (hot-swap from the model picker).
+            # The per-tab selection wins and picks the agent; sessions are keyed per
+            # (thread, agent), so swapping runtime mid-chat is a clean, resumable boundary.
+            from runtime.acp_runtime import resolve_turn_runtime
 
-            if is_acp_runtime(STATE.graph_config):
+            _rt_kind, _rt_agent = resolve_turn_runtime((request_metadata or {}).get("model"), STATE.graph_config)
+            if _rt_kind == "acp":
                 _acp_tid = _resolve_thread_id(request_metadata, session_id)
                 # Hold the runtime "in-flight" for the whole turn so a concurrent turn's
                 # eviction can't close it mid-stream (a long ACP coding turn can outlast the
                 # idle TTL); registry mutation is serialized by _ACP_LOCK. See _acp_acquire.
-                rt = await _acp_acquire(_acp_tid)
+                rt = await _acp_acquire(_acp_tid, _rt_agent)
                 try:
                     # One prompt at a time per ACP session — AcpClient forbids concurrent
                     # prompts on an instance (a session is a single conversation), and the
@@ -1563,7 +1575,7 @@ async def _chat_langgraph_stream_impl(
                         async for frame in _acp_drive_turn(rt, message):
                             yield frame
                 finally:
-                    await _acp_release(_acp_tid)
+                    await _acp_release(_acp_tid, _rt_agent)
                 return
 
             # thread_id keys this session's history in the checkpointer (bound
@@ -1859,15 +1871,17 @@ async def _chat_langgraph_impl(
             if parsed_skill is not None:
                 message = _skill_directive(*parsed_skill)
 
-            # Non-native runtime (ADR 0033) — same switch as the streaming driver, same
-            # position (after the control-plane short-circuits). Without it, an acp:*
-            # config silently ran this surface (OpenAI-compat /v1, the desktop /api/chat
-            # fallback, internal self-prompts) on the native loop — which a gateway-less
-            # ACP-only setup (e.g. the Hermes preset) can't serve at all.
-            from runtime.acp_runtime import is_acp_runtime
+            # Non-native runtime (ADR 0033; ADR 0082) — same switch as the streaming driver,
+            # same position (after the control-plane short-circuits). Honors BOTH the global
+            # `agent_runtime` AND a per-tab `model=acp:<agent>` for this turn (the per-tab
+            # selection wins). Without it, an acp:* config silently ran this surface
+            # (OpenAI-compat /v1, the desktop /api/chat fallback, internal self-prompts) on
+            # the native loop — which a gateway-less ACP-only setup (Hermes preset) can't serve.
+            from runtime.acp_runtime import resolve_turn_runtime
 
-            if is_acp_runtime(STATE.graph_config):
-                return await _acp_turn_collected(session_id, message)
+            _rt_kind, _rt_agent = resolve_turn_runtime(model, STATE.graph_config)
+            if _rt_kind == "acp":
+                return await _acp_turn_collected(session_id, message, _rt_agent)
 
             # Same thread-id resolution as the streaming path (ADR 0069 D4): the
             # non-streaming turns used to key `chat:{session_id}` apart from the
