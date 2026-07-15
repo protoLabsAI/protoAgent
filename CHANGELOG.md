@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   didn't record. Also raises the answer/reasoning flush threshold (24→240 chars) so a
   long answer emits ~48 stream frames instead of ~480, shrinking the teardown window
   that strands the terminal frames in the first place.
+- **Currency amounts no longer render as LaTeX math in chat replies.** The DS
+  `<Markdown>` wires `remark-math` with the single-`$` inline delimiter on, so a reply
+  with two currency amounts in one paragraph (`~A$180M total raised … A$63–90M`) parsed
+  everything between the dollar signs as inline math and rendered it in KaTeX's
+  serif-italic font. The console now escapes currency-style `$` (a `$` immediately
+  followed by a digit) before the string reaches the renderer (`chat/currencyMath.ts`),
+  so currency renders as plain text while genuine `$x^2$` inline math and `$$…$$` display
+  math are untouched.
 
 ## [0.101.0] - 2026-07-12
 

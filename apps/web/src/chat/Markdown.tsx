@@ -1,5 +1,6 @@
 import { Markdown as DSMarkdown } from "@protolabsai/ui/markdown";
 
+import { escapeCurrencyDollars } from "./currencyMath";
 import { rehypeAbsolutizeServerUrls } from "./mediaUrls";
 
 // Module-level for a stable array identity across renders. The DS appends these AFTER its
@@ -25,11 +26,15 @@ const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
  * (protoContent#376) — the DS themes the gutter for Tailwind-purging consumers and no longer
  * needs the console to force `lineNumbers={false}`. Pass an explicit `lineNumbers` prop to opt
  * a numbered code well back in.
+ *
+ * `escapeCurrencyDollars` neutralizes currency-as-math: the DS wires `remark-math` with the
+ * single-`$` inline delimiter on, so "$180M … $600M" would otherwise render as KaTeX math
+ * (see `currencyMath.ts`). Real math (`$x^2$`, `$$…$$`) is untouched.
  */
 export function Markdown({ children }: { children: string }) {
   return (
     <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS}>
-      {children}
+      {escapeCurrencyDollars(children)}
     </DSMarkdown>
   );
 }
