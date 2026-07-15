@@ -54,6 +54,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   followed by a digit) before the string reaches the renderer (`chat/currencyMath.ts`),
   so currency renders as plain text while genuine `$x^2$` inline math and `$$…$$` display
   math are untouched.
+- **Chat report cards and system notes now share a quieter, consistent elevation (#1992).**
+  Background-agent report cards (`.chat-report-card`) were using the DS's lofted *overlay*
+  shadow (`--pl-shadow-popover`, `0 8px 28px / 0.5α` in dark — meant for floating
+  menus/dialogs), which read as far too aggressive on a static in-flow card; system notes
+  (`.chat-note`, e.g. the "Ingested … N chunks indexed" confirmation) sat flat in the
+  `bg-inset` well with no lift at all. Adds one theme-scoped resting-card token
+  (`--chat-card-shadow`) used by both, and moves the system note onto the same `bg-raised`
+  surface the report card already uses — a slight, matching lift instead of an overlay halo
+  on one and a sunken well on the other. Local stand-in until the DS ships a shared
+  resting-card shadow (proposed in protoContent#457); swaps to the DS token when it lands.
 
 ## [0.101.0] - 2026-07-12
 
