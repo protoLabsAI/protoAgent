@@ -251,6 +251,7 @@ def _operator_tools_list():
             inbox_store=STATE.inbox_store,
             tasks_store=STATE.tasks_store,
             goal_enabled=bool(getattr(cfg, "goal_enabled", False)) if cfg else False,
+            soul_edit_enabled=bool(getattr(cfg, "soul_self_edit_enabled", False)) if cfg else False,
             dropped=dropped,
         )
         for t in core:

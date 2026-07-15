@@ -223,6 +223,24 @@ FIELDS: list[Field] = [
         "with a coding agent.",
         options_source="models+acp",
     ),
+    # ── Persona (self-authored SOUL) ─────────────────────────────────────────
+    # Guarded, default OFF. When on, the lead agent gets the `edit_soul` tool and can
+    # rewrite sections of its own SOUL.md (persona only — ADR 0079; every edit snapshotted
+    # + reversible via #1691). Crossing the operator-trust boundary (ADR 0066/0081) is an
+    # opt-in: settable via YAML/API, but hidden from the generic Settings UI for now — the
+    # dedicated Identity panel already owns SOUL, and this reload-live toggle can join it
+    # later. ui_hidden keeps it in FIELDS so it round-trips.
+    Field(
+        "soul.self_edit_enabled",
+        "soul_self_edit_enabled",
+        "Let the agent edit its own persona (SOUL.md)",
+        "bool",
+        "Persona",
+        "When on, the lead agent gets the `edit_soul` tool to rewrite sections of its own "
+        "SOUL.md. Persona only, never operating doctrine (ADR 0079); each edit is snapshotted "
+        "and reversible, and applies on the next turn.",
+        ui_hidden=True,
+    ),
     # ── Prompt caching ───────────────────────────────────────────────────────
     Field(
         "prompt_cache.enabled",

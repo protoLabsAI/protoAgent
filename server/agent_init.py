@@ -274,6 +274,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
         inbox_store=STATE.inbox_store,
         tasks_store=STATE.tasks_store,
         background_mgr=STATE.background_mgr,
+        # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a persona
+        # self-edit is live on the next turn — injected, so tools/ never imports server/.
+        reload_callback=_reload_langgraph_agent,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -1621,6 +1624,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
                 # The background manager (ADR 0050) survives reloads unchanged — its
                 # store path + self-invoke URL/auth don't depend on reloadable config.
                 background_mgr=STATE.background_mgr,
+                # Re-thread the reload hook so the rebuilt graph's edit_soul can reload again
+                # (self-referential: this IS the reload path). Missing it would make the
+                # persona editor a one-shot after the first hot-reload.
+                reload_callback=_reload_langgraph_agent,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")

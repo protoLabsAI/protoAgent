@@ -457,6 +457,15 @@ class LangGraphConfig:
     goal_eval_model: str = ""  # blank = main model (llm verifier / fuzzy goals)
     goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
 
+    # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
+    # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
+    # identity ONLY, never operating doctrine — ADR 0079). Every edit is snapshotted to
+    # soul-history (#1691) and reversible, and takes effect on the NEXT turn (a graph
+    # reload). This crosses the operator-trust boundary that keeps "SOUL rewrite" an
+    # ``/api`` operator capability (ADR 0066/0081), so it stays off unless an operator
+    # opts in via ``soul.self_edit_enabled: true``.
+    soul_self_edit_enabled: bool = False
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -1061,6 +1070,7 @@ class LangGraphConfig:
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
+            soul_self_edit_enabled=data.get("soul", {}).get("self_edit_enabled", cls.soul_self_edit_enabled),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
