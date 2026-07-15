@@ -21,8 +21,11 @@ dependencies = [
   "tzdata",
   "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
   # protolabs-a2a is published to PyPI (was a git+https direct ref, which PyPI
-  # rejects on upload). Keep the floor in step with requirements-core.txt.
-  "protolabs-a2a>=0.2.0",
+  # rejects on upload). Pinned to the 0.2.x line: 0.2.1 republished the old
+  # extension API (emit_cost/emit_tool_call/…) that a2a_impl/executor.py uses;
+  # 0.2.0 and 0.3.0 carry the URI-keyed rewrite this code hasn't migrated to yet.
+  # Keep in step with requirements-core.txt.
+  "protolabs-a2a>=0.2.1,<0.3",
   "fastapi>=0.115",
   "python-multipart>=0.0.9",
   "uvicorn>=0.30",
