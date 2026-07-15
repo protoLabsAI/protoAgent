@@ -1768,7 +1768,7 @@ function ChatSessionSlot({
                   {a.icon}
                 </Button>
               ))}
-              <ComposerModelSelect />
+              <ComposerModelSelect onRuntimeSwitch={(note) => noteToThread(note, { tone: "info" })} />
               {session?.incognito ? (
                 <button
                   type="button"

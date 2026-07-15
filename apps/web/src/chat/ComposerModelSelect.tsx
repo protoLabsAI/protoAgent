@@ -3,69 +3,104 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@protolabsai/ui/primitives";
 import { Menu, MenuItem } from "@protolabsai/ui/menu";
 
-import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
+import { acpAgentsQuery, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
 
 // The composer's inline model picker — rendered in the DS PromptInput `actions` slot.
-// This is a PER-TAB override: it does NOT change the saved global model (that lives in
-// Settings). The choice is stored on the chat session and sent with each turn, so each
-// tab can talk to its own model. Selecting the default-badged model clears the override
-// → the configured global model. Available models come from the settings schema's
-// `model.name` options (the gateway's live model list), the same source the wizard's
-// picker uses.
-export function ComposerModelSelect() {
+// PER-TAB override (does NOT change the saved global model in Settings): the choice is stored
+// on the chat session and sent with each turn, so each tab can run on its own model — or, per
+// ADR 0082, its own ACP coding agent. The value is a gateway alias, an `acp:<id>` (hot-swap the
+// runtime for this chat), or "" (→ the configured global runtime/model).
+//
+// Options: gateway models from the settings schema's `model.name` (the gateway's live list) PLUS
+// the ACP agent catalog (`/api/acp-agents`). Under a GLOBAL ACP runtime a gateway pick is inert
+// (the turn still routes to the coding agent — resolve_turn_runtime only overrides for `acp:*`),
+// so we offer ACP agents only there and don't show misleading gateway rows.
+export function ComposerModelSelect({ onRuntimeSwitch }: { onRuntimeSwitch?: (note: string) => void } = {}) {
   const schema = useQuery(settingsSchemaQuery());
   const runtime = useQuery(runtimeStatusQuery());
+  const acp = useQuery(acpAgentsQuery());
   const { sessions, currentSessionId } = useChatState();
   const field = schema.data?.groups.flatMap((g) => g.fields).find((f) => f.key === "model.name");
 
   const globalModel = String(field?.value ?? "");
-  const options = field?.options?.length ? field.options : globalModel ? [globalModel] : [];
+  const gatewayModels = field?.options?.length ? field.options : globalModel ? [globalModel] : [];
   const session = sessions.find((s) => s.id === currentSessionId);
-  const selected = session?.model ?? "";
+  const selected = session?.model ?? ""; // per-tab: "", a gateway alias, or "acp:<id>"
 
-  // Under an ACP runtime the turn is driven by an external coding agent, not the
-  // gateway model — so showing/picking a gateway model is misleading and inert.
-  // Surface the active runtime as a static label instead of the model menu.
-  const acpAgent = (runtime.data?.agent_runtime ?? "").startsWith("acp:")
-    ? runtime.data!.agent_runtime!.slice("acp:".length)
-    : "";
-  if (acpAgent && currentSessionId) {
-    return (
-      <span className="composer-model-select" aria-label="Active runtime" title={`This chat runs on the ${acpAgent} coding agent (agent_runtime: acp:${acpAgent}) — not a gateway model.`}>
-        {acpAgent}
-        <Badge>coding agent</Badge>
-      </span>
-    );
+  // Which coding agent (if any) the GLOBAL runtime is, from runtime status.
+  const globalRuntime = runtime.data?.agent_runtime ?? "";
+  const globalAcpAgent = globalRuntime.startsWith("acp:") ? globalRuntime.slice("acp:".length) : "";
+
+  // ACP agents to offer. Fall back to just the global agent while the catalog is still loading
+  // (so a global-ACP instance never renders an empty menu).
+  const acpAgents: { id: string; label: string }[] = acp.data?.agents?.length
+    ? acp.data.agents
+    : globalAcpAgent
+      ? [{ id: globalAcpAgent, label: globalAcpAgent }]
+      : [];
+  const agentLabel = (id: string) => acpAgents.find((a) => a.id === id)?.label ?? id;
+
+  if (!currentSessionId) return null;
+  if (!gatewayModels.length && !acpAgents.length) return null;
+
+  // What THIS turn will run on: the per-tab selection wins, else the global runtime.
+  const perTabAcpAgent = selected.startsWith("acp:") ? selected.slice("acp:".length) : "";
+  const effectiveAcpAgent = perTabAcpAgent || (selected ? "" : globalAcpAgent);
+  const effectiveGatewayModel = selected && !perTabAcpAgent ? selected : globalModel;
+
+  // Runtime identity for the Option-C boundary note (ADR 0082 D4): a note fires only when the
+  // RUNTIME crosses a boundary (native↔acp, or acp:A↔acp:B) — swapping between two gateway
+  // models is continuous (checkpointer keeps history), so it must NOT note.
+  const effectiveKey = effectiveAcpAgent ? `acp:${effectiveAcpAgent}` : "native";
+
+  function choose(nextModel: string, nextKey: string, nextLabel: string) {
+    if (nextKey !== effectiveKey) {
+      onRuntimeSwitch?.(
+        `Switched this chat to ${nextLabel}. Earlier context isn't carried across runtimes — this starts a fresh session on the new one.`,
+      );
+    }
+    chatStore.setSessionModel(currentSessionId!, nextModel);
   }
 
-  if (!options.length || !currentSessionId) return null;
-
-  const effectiveModel = selected || globalModel;
+  const trigger = (
+    <button type="button" className="composer-model-select" aria-label="Model or coding agent for this chat">
+      {effectiveAcpAgent ? (
+        <>
+          {agentLabel(effectiveAcpAgent)}
+          <Badge>coding agent</Badge>
+        </>
+      ) : (
+        effectiveGatewayModel
+      )}
+    </button>
+  );
 
   return (
-    <Menu
-      trigger={
-        <button type="button" className="composer-model-select" aria-label="Model for this chat">
-          {effectiveModel}
-        </button>
-      }
-      align="start"
-    >
-      {options.map((m) => {
-        const isDefault = m === globalModel;
+    <Menu trigger={trigger} align="start">
+      {/* Gateway models — only under a native global runtime (see header note). Picking the
+          global default clears the per-tab override (→ the configured runtime). */}
+      {!globalAcpAgent
+        ? gatewayModels.map((m) => {
+            const isDefault = m === globalModel;
+            return (
+              <MenuItem key={`gw:${m}`} onSelect={() => choose(isDefault ? "" : m, "native", m)}>
+                {m}
+                {isDefault ? <Badge>default</Badge> : null}
+              </MenuItem>
+            );
+          })
+        : null}
+      {/* ACP coding agents — hot-swap the runtime for THIS chat (ADR 0082). Under a global ACP
+          runtime, its agent is the "default" (picking it clears the per-tab override). */}
+      {acpAgents.map((a) => {
+        const isGlobalDefault = !!globalAcpAgent && a.id === globalAcpAgent;
+        const isCurrent = a.id === effectiveAcpAgent;
         return (
-          <MenuItem
-            key={m}
-            onSelect={() => {
-              chatStore.setSessionModel(
-                currentSessionId,
-                isDefault ? "" : m,
-              );
-            }}
-          >
-            {m}
-            {isDefault ? <Badge>default</Badge> : null}
+          <MenuItem key={`acp:${a.id}`} onSelect={() => choose(isGlobalDefault ? "" : `acp:${a.id}`, `acp:${a.id}`, a.label)}>
+            {a.label}
+            <Badge>coding agent</Badge>
+            {isGlobalDefault ? <Badge>default</Badge> : isCurrent ? <Badge>current</Badge> : null}
           </MenuItem>
         );
       })}
