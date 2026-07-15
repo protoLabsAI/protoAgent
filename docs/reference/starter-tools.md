@@ -348,6 +348,14 @@ graph-reload as a callback so the compiled graph rebinds (atomically — the cur
 unaffected) without `tools/` importing `server/`. In builds with no callback wired
 (subagent/eval/script), the save still lands and applies on the next natural reload.
 
+**Never silent.** Every accepted edit publishes a `persona.self_edited` event (section, mode,
+new revision) on the event bus, so the operator sees an identity change in the console even when
+it happens on an autonomous (scheduled/activity) turn — and it leaves a trail if a prompt-injection
+ever drove one. This is the transparency guardrail from ADR 0081's due-diligence against prior art
+(Hermes keeps SOUL.md operator-only; OpenClaw invites unguarded self-edit and treats the soul as a
+prompt-injection surface; Letta added a read-only persona guard after unconstrained self-edits
+degraded identity).
+
 ## Adding your own
 
 For tools that shell out, build on `tools/shell.py::run_command` (async; handles timeout/kill, missing-binary → structured error, env merge, stdin/cwd) or `tools/gh_cli.py` for `gh` specifically — don't hand-roll `subprocess`.

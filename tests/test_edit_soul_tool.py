@@ -152,6 +152,43 @@ async def test_edit_soul_writes_snapshots_and_reports_live(monkeypatch, tmp_path
     assert "restorable from Settings" in msg
 
 
+async def test_edit_soul_emits_operator_notice(monkeypatch, tmp_path: Path):
+    # ADR 0081 transparency guardrail: a self-edit surfaces on the event bus so an identity
+    # change is never silent (esp. on autonomous turns / a prompt-injection-driven edit).
+    _home(monkeypatch, tmp_path)
+    config_io.write_soul(SAMPLE)
+
+    from graph.plugins import host
+
+    events: list = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+
+    edit_soul = _build_soul_editor_tool(None)[0]
+    msg = await edit_soul.ainvoke({"section": "Voice", "content": "Warm and plain.", "mode": "replace"})
+
+    persona_events = [(t, d) for t, d in events if t == "persona.self_edited"]
+    assert len(persona_events) == 1
+    _, data = persona_events[0]
+    assert data["section"] == "Voice" and data["mode"] == "replace" and data["revision"]
+    assert "persona" in data["summary"].lower()
+    assert "operator has been notified" in msg
+
+
+async def test_edit_soul_rejected_edit_emits_no_notice(monkeypatch, tmp_path: Path):
+    # A refused edit (empty content) must NOT fire the operator notice — only real writes do.
+    _home(monkeypatch, tmp_path)
+    config_io.write_soul(SAMPLE)
+
+    from graph.plugins import host
+
+    events: list = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+
+    edit_soul = _build_soul_editor_tool(None)[0]
+    await edit_soul.ainvoke({"section": "Voice", "content": "  ", "mode": "replace"})
+    assert not any(t == "persona.self_edited" for t, _ in events)
+
+
 async def test_edit_soul_without_callback_degrades_gracefully(monkeypatch, tmp_path: Path):
     _home(monkeypatch, tmp_path)
     config_io.write_soul(SAMPLE)

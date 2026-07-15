@@ -1658,6 +1658,22 @@ def _apply_soul_section_edit(text: str, section: str, content: str, mode: str) -
     return "\n".join(rebuilt).rstrip("\n") + "\n"
 
 
+def _publish_persona_event(topic: str, data: dict) -> None:
+    """Best-effort operator notice on the server→client event bus (ADR 0039) — so a persona
+    self-edit is visible in the console even when it lands on an AUTONOMOUS turn (scheduled /
+    activity) with no human watching the chat. This is the ADR 0081 transparency guardrail —
+    identity changes are never silent — and mirrors OpenClaw's shipped "tell the user, it's
+    your soul" convention. No-op when the host hasn't wired a publisher (unit tests /
+    standalone use); a bus hiccup must never break the edit. Mirrors goals/watches store push."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(topic, data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _build_soul_editor_tool(reload_callback=None) -> list:
     """Bind the guarded self-persona editor (config ``soul.self_edit_enabled``, default off).
 
@@ -1681,8 +1697,9 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
 
         SCOPE — persona ONLY: identity, values, voice, temperament. Do NOT put operating
         instructions, task doctrine, or tool rules here — SOUL.md stays pure persona (ADR 0079).
-        Every edit is snapshotted and reversible from Settings ▸ Identity, and takes effect on
-        your next turn (not the current one). Returns a confirmation with the live persona revision."""
+        Every edit is snapshotted and reversible from Settings ▸ Identity, your operator is
+        notified of the change, and it takes effect on your next turn (not the current one).
+        Returns a confirmation with the live persona revision."""
         from graph.config_io import read_soul, soul_revision, write_soul
 
         section = (section or "").strip()
@@ -1724,6 +1741,21 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
             return f"Error: persona write failed: {exc}"
 
         new_rev = soul_revision()
+        verb = "Replaced" if mode == "replace" else "Appended to"
+
+        # Operator-visible notice (ADR 0081 transparency guardrail): every self-edit — including
+        # one on an autonomous turn — surfaces in the console over the event bus, so an identity
+        # change is never silent (also the trail if a prompt-injection ever drove one). Best-effort.
+        _publish_persona_event(
+            "persona.self_edited",
+            {
+                "section": section,
+                "mode": mode,
+                "revision": new_rev,
+                "summary": f"Agent edited its own persona — {verb.lower()} section '{section}' (SOUL.md → {new_rev}).",
+            },
+        )
+
         applied = "It will apply on the next reload/restart."
         if reload_callback is not None:
             try:
@@ -1741,9 +1773,9 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
                 log.warning("[edit_soul] reload after persona edit failed: %s", exc)
                 applied = "Saved, but the live reload failed — it will apply on the next restart."
 
-        verb = "Replaced" if mode == "replace" else "Appended to"
         return (
             f"{verb} section '{section}' in SOUL.md — persona now at revision {new_rev}. "
+            f"Your operator has been notified of the change. "
             f"The previous version is archived to soul-history and restorable from Settings ▸ Identity. "
             f"{applied}"
         )
