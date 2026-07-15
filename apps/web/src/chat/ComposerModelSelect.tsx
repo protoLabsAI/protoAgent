@@ -54,8 +54,14 @@ export function ComposerModelSelect({ onRuntimeSwitch }: { onRuntimeSwitch?: (no
   // models is continuous (checkpointer keeps history), so it must NOT note.
   const effectiveKey = effectiveAcpAgent ? `acp:${effectiveAcpAgent}` : "native";
 
+  // A brand-new chat has no context to lose, so a runtime switch there is silent. Only real
+  // turns count — system notes (including an earlier boundary note) are not carried context.
+  const hasHistory = (session?.messages ?? []).some(
+    (m) => m.role === "user" || m.role === "assistant",
+  );
+
   function choose(nextModel: string, nextKey: string, nextLabel: string) {
-    if (nextKey !== effectiveKey) {
+    if (nextKey !== effectiveKey && hasHistory) {
       onRuntimeSwitch?.(
         `Switched this chat to ${nextLabel}. Earlier context isn't carried across runtimes — this starts a fresh session on the new one.`,
       );
