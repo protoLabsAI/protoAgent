@@ -42,12 +42,18 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '20'
+          cache: npm
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Build the console (apps/web/dist — bundled into the wheel)
+        # npm 11: the lockfile is normalized with it (#1972). node 20 ships npm 10,
+        # whose arborist misreads the react@18→19 `overrides` and fails `npm ci`
+        # ("Missing: @types/react@18.3.31 from lock file") on a cold cache — a release
+        # workflow can't depend on checks.yml having warmed the npm cache first.
         run: |
+          npm install -g npm@11
           npm ci
           npm run web:build
 
