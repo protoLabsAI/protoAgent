@@ -33,7 +33,7 @@ permissions:
 jobs:
   build:
     name: Build the console + wheel
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # Fork-friendly opt-in, matching release.yml — set the RELEASE_ENABLED repo
     # variable to enable publishing (a fork publishes to its own PyPI project).
     if: vars.RELEASE_ENABLED == 'true'
@@ -77,7 +77,7 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     environment:
       name: pypi
       url: https://pypi.org/p/protoagent
