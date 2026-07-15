@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from graph.config import LangGraphConfig
+from graph.config import LangGraphConfig, _deep_merge_dicts
 from infra.paths import instance_paths
 
 log = logging.getLogger("protoagent.config_io")
@@ -402,16 +402,6 @@ def save_yaml_doc(doc: Any, path: Path | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _deep_merge(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge ``src`` into ``dst`` (src wins on leaf conflicts)."""
-    for k, v in src.items():
-        if isinstance(v, dict) and isinstance(dst.get(k), dict):
-            _deep_merge(dst[k], v)
-        else:
-            dst[k] = v
-    return dst
-
-
 def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     """Serialize a LangGraphConfig into the nested dict shape the UI works with.
 
@@ -443,7 +433,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     # doesn't expose. Their attrs still round-trip via from_yaml; they're just not
     # in FIELDS, so they stay explicit.
     r = config.researcher
-    _deep_merge(
+    _deep_merge_dicts(
         d,
         {
             # System lifecycle reactions (ADR 0074) — a top-level list of
