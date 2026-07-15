@@ -64,7 +64,7 @@ export function ComposerModelSelect({ onRuntimeSwitch }: { onRuntimeSwitch?: (no
   }
 
   const trigger = (
-    <button type="button" className="composer-model-select" aria-label="Model or coding agent for this chat">
+    <button type="button" className="composer-model-select" aria-label="Model for this chat">
       {effectiveAcpAgent ? (
         <>
           {agentLabel(effectiveAcpAgent)}
