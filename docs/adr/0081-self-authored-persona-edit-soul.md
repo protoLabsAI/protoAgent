@@ -131,8 +131,11 @@ contract.
   history + restore, 64 KB cap, the operator notice) are **reactive** — they let a human
   catch and roll back drift, but do not *detect* it. The field's recommended addition is a
   **periodic baseline anchor / drift check** (diff or re-weight against the original persona);
-  we do not have one. **Follow-up:** a `soul_revision`-tagged drift check, and/or an
-  operator-ack mode for higher-autonomy fleets. Documented, not built.
+  we do not have one. **Follow-up ([#1986](https://github.com/protoLabsAI/protoAgent/issues/1986)):**
+  a drift check built on soul-history (#1691 already persists the baseline + edit trail) — cheap
+  deterministic signals first, an opt-in LLM-judge second (whose `doctrine_leak` verdict also
+  closes the persona-vs-doctrine gap below), surfaced via a `persona.drift_detected` event with
+  restore-to-baseline as the remedy. Documented, not built.
 - *Doctrine leakage into SOUL.* The ADR 0079 persona/doctrine split is enforced only by the
   tool's contract, not mechanically — a model could still write instructions into SOUL. This
   is the exact lived failure of self-appended instruction files (the CLAUDE.md/AGENTS.md
