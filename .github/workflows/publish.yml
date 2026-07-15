@@ -5,7 +5,7 @@ name: publish
 #
 # One-time PyPI setup (owner): add a "pending publisher" at
 # https://pypi.org/manage/account/publishing/ with:
-#   PyPI project name:  protoagent
+#   PyPI project name:  protolabs-agent
 #   Owner:              protoLabsAI
 #   Repository name:    protoAgent
 #   Workflow name:      publish.yml
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     environment:
       name: pypi
-      url: https://pypi.org/p/protoagent
+      url: https://pypi.org/p/protolabs-agent
     permissions:
       id-token: write   # OIDC token for PyPI Trusted Publishing
     steps:

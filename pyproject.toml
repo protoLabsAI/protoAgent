@@ -1,5 +1,9 @@
 [project]
-name = "protoagent"
+# PyPI distribution name. NOT `protoagent` — PyPI blocks that as too-similar to the
+# unrelated `proto-agent` (typosquat protection). The CLI command stays `protoagent`
+# (see [project.scripts]); only the install identifier is namespaced under protolabs-,
+# matching the sibling `protolabs-a2a`.
+name = "protolabs-agent"
 version = "0.101.0"
 description = "protoAgent — LangGraph + A2A template for spawning protoLabs agents"
 license = "MIT"
@@ -57,8 +61,9 @@ dependencies = [
 ]
 
 # The `protoagent` command (ADR 0075 D1) — the terminal control plane: install /
-# manage / run the runtime. `uv tool install protoagent` or `pipx install protoagent`
-# put it on PATH; the frozen desktop binary exposes the same tree. Chatting is
+# manage / run the runtime. `uv tool install protolabs-agent` or `pipx install
+# protolabs-agent` put the `protoagent` command on PATH; the frozen desktop binary
+# exposes the same tree. Chatting is
 # `proto`'s job (the A2A client), so there's no chat entrypoint here.
 [project.scripts]
 protoagent = "server.cli:main"

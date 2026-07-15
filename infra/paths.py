@@ -108,10 +108,14 @@ def package_version() -> str:
     try:
         from importlib.metadata import PackageNotFoundError, version
 
-        try:
-            return version("protoagent")
-        except PackageNotFoundError:
-            pass
+        # The PyPI distribution is `protolabs-agent` (the plain `protoagent` name is
+        # blocked on PyPI as too-similar to an unrelated project). Older/source names
+        # kept as a fallback so a rename never silently reports "0.0.0".
+        for _dist in ("protolabs-agent", "protoagent"):
+            try:
+                return version(_dist)
+            except PackageNotFoundError:
+                continue
     except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
         pass
     return "0.0.0"
