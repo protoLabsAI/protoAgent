@@ -1,6 +1,6 @@
 # 0082 — Per-chat ACP runtime: hot-swap a coding agent like a model
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-15
 - **Deciders:** Josh Mabry
 - **Tags:** acp, agent-runtime, model-selection, chat, hot-swap, continuity
