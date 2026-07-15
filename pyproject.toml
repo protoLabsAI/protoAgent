@@ -20,7 +20,12 @@ dependencies = [
   # /usr/share/zoneinfo. Inert wherever system data exists (POSIX prefers it).
   "tzdata",
   "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
-  "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.2.0",
+  # protolabs-a2a is published to PyPI (was a git+https direct ref, which PyPI
+  # rejects on upload). Pinned to the 0.2.x line: 0.2.1 republished the old
+  # extension API (emit_cost/emit_tool_call/…) that a2a_impl/executor.py uses;
+  # 0.2.0 and 0.3.0 carry the URI-keyed rewrite this code hasn't migrated to yet.
+  # Keep in step with requirements-core.txt.
+  "protolabs-a2a>=0.2.1,<0.3",
   "fastapi>=0.115",
   "python-multipart>=0.0.9",
   "uvicorn>=0.30",
@@ -66,20 +71,19 @@ protoagent = "server.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.metadata]
-# protolabs-a2a is a direct git reference (PEP 508 `pkg @ git+https://…`).
-allow-direct-references = true
-
 [tool.hatch.build.targets.wheel]
 # Top-level packages (dirs with __init__.py). The former root-level runtime modules
 # were grouped into cohesive packages: a2a_impl/ (A2A auth/executor/stores — named to
 # avoid shadowing the a2a-sdk's `a2a`), observability/ (metrics/tracing/telemetry/
 # pricing/audit), security/ (egress/policy), and infra/ (paths/cache/autostart).
-# Excludes apps/, sites/, static/, docs/, deploy/, scripts/, examples/, config/,
-# mcp_servers/ and tests/ — those aren't part of the import surface a wheel needs.
+# Read-only bundle seeds (config/*, static/, apps/web/dist, plugins/, docs/) ride
+# via force-include below so `uv tool install protoagent` is a working runtime +
+# console, not just the import surface. Still excludes sites/, deploy/, scripts/,
+# examples/, mcp_servers/ and tests/.
 packages = [
   "a2a_impl",
   "activity",
+  "background",
   "tasks",
   "enforcement",
   "evals",
@@ -98,6 +102,12 @@ packages = [
   "server",
   "tools",
 ]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+# Bundle the read-only runtime seeds (config seeds, static/, console SPA) into the wheel —
+# but conditionally, so a source install with no built frontend (e.g. CI's `pip install -e .`)
+# doesn't hard-fail on the gitignored `apps/web/dist`. See hatch_build.py for the full why.
+path = "hatch_build.py"
 
 [tool.uv]
 # The app runs from the repo root (pythonpath = ["."] below); an editable build

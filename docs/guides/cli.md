@@ -78,6 +78,10 @@ the key; a placeholder is set so the client constructs — use `--key` or `secre
 for a real gateway key). This one-liner is also the copy-paste target for HuggingFace's
 "Use this model" local-app snippet — a HF model card hands the model id straight to it.
 
+**Pick a tool-calling model.** protoAgent drives tools on every turn, so the local model
+must support tool/function calling (e.g. `llama3.2`, `qwen2.5`) — point it at one that
+doesn't and the turn fails at the endpoint with `does not support tools`.
+
 ## Examples
 
 ```bash

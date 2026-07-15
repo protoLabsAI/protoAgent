@@ -1,0 +1,91 @@
+name: publish
+
+# Publish protoagent to PyPI via PyPI Trusted Publishing (OIDC) — no long-lived
+# API token stored as a secret. Mirrors protolabs-a2a's publish.yml.
+#
+# One-time PyPI setup (owner): add a "pending publisher" at
+# https://pypi.org/manage/account/publishing/ with:
+#   PyPI project name:  protoagent
+#   Owner:              protoLabsAI
+#   Repository name:    protoAgent
+#   Workflow name:      publish.yml
+#   Environment name:   pypi
+# After the first publish the pending publisher becomes a normal trusted publisher.
+#
+# To release: cut a GitHub Release on a vX.Y.Z tag whose version matches
+# pyproject.toml. `workflow_dispatch` is also wired as a fallback — the `release`
+# trigger can be flaky, and it's how you cut the FIRST publish before the release
+# flow is exercised.
+#
+# The wheel bundles the console SPA (apps/web/dist via hatch_build.py), so the
+# frontend MUST be built before the wheel or it ships console-less. We build it
+# here and hard-fail if it's missing (`python -m build --wheel` builds from the
+# source tree — NOT from an sdist, whose VCS file list excludes the gitignored dist).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the console + wheel
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    # Fork-friendly opt-in, matching release.yml — set the RELEASE_ENABLED repo
+    # variable to enable publishing (a fork publishes to its own PyPI project).
+    if: vars.RELEASE_ENABLED == 'true'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build the console (apps/web/dist — bundled into the wheel)
+        run: |
+          npm ci
+          npm run web:build
+
+      - name: Guard — the wheel must bundle the console
+        run: test -f apps/web/dist/index.html || { echo "::error::apps/web/dist not built — wheel would ship console-less"; exit 1; }
+
+      - name: Build the wheel (from source, so the console is included)
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build --wheel
+
+      - name: Validate metadata (+ version matches the release tag)
+        run: |
+          twine check dist/*
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            PKG_VERSION="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+            TAG="${GITHUB_REF_NAME#v}"
+            echo "pyproject=$PKG_VERSION  tag=$TAG"
+            test "$PKG_VERSION" = "$TAG" || { echo "::error::pyproject version ($PKG_VERSION) != release tag ($TAG)"; exit 1; }
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    environment:
+      name: pypi
+      url: https://pypi.org/p/protoagent
+    permissions:
+      id-token: write   # OIDC token for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
