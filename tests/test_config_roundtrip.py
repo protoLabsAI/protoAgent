@@ -109,6 +109,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_max_iterations": 8,
     "goal_no_progress_limit": 3,
     "goal_verify_timeout": 120.0,
+    "soul_self_edit_enabled": False,
     "identity_name": "protoagent",
     "identity_operator": "",
     "identity_org": "",

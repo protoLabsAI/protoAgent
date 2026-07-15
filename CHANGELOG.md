@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The agent can refine its own persona — a guarded `edit_soul` tool (ADR 0081).**
+  When an operator opts in (`soul.self_edit_enabled: true`, **off by default**), the lead
+  agent gets an `edit_soul(section, content, mode)` tool that rewrites a **section** of its
+  own `SOUL.md` — its identity and voice, never operating doctrine (ADR 0079's
+  persona/doctrine split is upheld by the tool's contract). Edits are section-scoped
+  (`replace`/`append`, never whole-file) and capped (64 KB) so the persona prompt prefix
+  stays bounded. Every edit goes through `write_soul`, so it **snapshots to soul-history
+  (#1691)** and is restorable from Settings ▸ Identity, and it takes effect **on the next
+  turn**: the server's graph-reload is *injected* (not imported) into the tool as a
+  callback, keeping `tools/`/`graph/` clear of `server/` (import-linter green) while
+  rebinding the compiled graph atomically so the current turn is unaffected. Lead-agent
+  only — bounded subagents never receive it. **Never silent:** every edit publishes a
+  `persona.self_edited` event so the operator sees the change in the console even on an
+  autonomous turn (and it leaves a trail if a prompt-injection ever drove one). Crossing the
+  ADR 0066 operator-trust boundary is a deliberate, off-by-default operator choice.
+  Due-diligenced against prior art (Hermes keeps SOUL.md operator-only; OpenClaw invites
+  unguarded self-edit; Letta added a read-only persona guard after unconstrained self-edits
+  degraded identity) — `edit_soul` is the guarded middle.
+
 ### Fixed
 - **Chat no longer spins "Working…" forever on a large answer (hung work block).**
   A turn whose A2A answer artifact is large (an ~11 KB research answer ≈ 480+ stream

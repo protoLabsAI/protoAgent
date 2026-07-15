@@ -1599,6 +1599,190 @@ def _build_curation_tools():
     return [recent_activity, list_skills, save_skill]
 
 
+# ── self-authored persona: edit_soul (guarded, ADR 0079/0066/0081) ────────────
+
+# Cap the whole persona so a self-edit can't grow SOUL.md unbounded — it rides in the
+# system-prompt prefix on every turn (and the cached prefix), so it has to stay tight.
+_SOUL_MAX_BYTES = 64 * 1024
+
+
+def _apply_soul_section_edit(text: str, section: str, content: str, mode: str) -> str:
+    """Return ``text`` (a SOUL.md) with markdown ``section`` replaced or appended.
+
+    The heading is matched case-insensitively on its trimmed title at any level
+    (``#``…``######``); the section body runs from just after that heading to the next
+    heading of the *same or higher* level (or EOF). ``mode`` is ``"replace"`` (swap the
+    body) or ``"append"`` (add to it). A section that doesn't exist yet is CREATED as a
+    new ``## <section>`` block at the end. Whole-file scope is deliberately not offered —
+    every edit is one section, so a single call can't blow away the persona.
+    """
+    import re
+
+    heading_re = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+    target = section.strip().lower()
+    body = content.strip()
+    lines = text.splitlines()
+
+    head_idx = level = None
+    for i, line in enumerate(lines):
+        m = heading_re.match(line)
+        if m and m.group(2).strip().lower() == target:
+            head_idx, level = i, len(m.group(1))
+            break
+
+    if head_idx is None:
+        # New section — append at the end, one blank line off the existing content.
+        block = f"## {section.strip()}\n\n{body}\n" if body else f"## {section.strip()}\n"
+        base = text.rstrip("\n")
+        return f"{base}\n\n{block}" if base else block
+
+    end = len(lines)
+    for j in range(head_idx + 1, len(lines)):
+        m = heading_re.match(lines[j])
+        if m and len(m.group(1)) <= level:
+            end = j
+            break
+
+    existing = "\n".join(lines[head_idx + 1 : end]).strip("\n")
+    if mode == "append":
+        new_body = f"{existing}\n\n{body}".strip("\n") if existing else body
+    else:  # replace
+        new_body = body
+
+    rebuilt = lines[: head_idx + 1]
+    if new_body:
+        rebuilt += ["", *new_body.splitlines(), ""]
+    else:
+        rebuilt += [""]
+    rebuilt += lines[end:]
+    return "\n".join(rebuilt).rstrip("\n") + "\n"
+
+
+def _publish_persona_event(topic: str, data: dict) -> None:
+    """Best-effort operator notice on the server→client event bus (ADR 0039) — so a persona
+    self-edit is visible in the console even when it lands on an AUTONOMOUS turn (scheduled /
+    activity) with no human watching the chat. This is the ADR 0081 transparency guardrail —
+    identity changes are never silent — and mirrors OpenClaw's shipped "tell the user, it's
+    your soul" convention. No-op when the host hasn't wired a publisher (unit tests /
+    standalone use); a bus hiccup must never break the edit. Mirrors goals/watches store push."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(topic, data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _build_soul_editor_tool(reload_callback=None) -> list:
+    """Bind the guarded self-persona editor (config ``soul.self_edit_enabled``, default off).
+
+    ``edit_soul`` lets the LEAD agent rewrite a section of its own ``SOUL.md`` — its identity
+    and voice, NOT operating doctrine (ADR 0079). Every edit is snapshotted to soul-history
+    (#1691, reversible) and takes effect on the agent's NEXT turn via a graph reload
+    (``reload_callback``, injected by the server so ``tools/`` never imports ``server/``).
+    Absent a callback (subagent/eval/test builds) the save still lands and applies on the
+    next natural reload/restart."""
+
+    @tool
+    async def edit_soul(section: str, content: str, mode: str = "replace") -> str:
+        """Rewrite a section of your own persona file (SOUL.md) — how you think, speak, and carry
+        yourself. Use this to durably refine your identity when you learn something about how you
+        should show up.
+
+        - ``section``: the markdown heading to edit, e.g. "Voice" or "Personality" (matched
+          case-insensitively). If it doesn't exist yet, a new ``## <section>`` block is created.
+        - ``content``: the new markdown for that section's body.
+        - ``mode``: "replace" (swap the section body) or "append" (add to it).
+
+        SCOPE — persona ONLY: identity, values, voice, temperament. Do NOT put operating
+        instructions, task doctrine, or tool rules here — SOUL.md stays pure persona (ADR 0079).
+        Every edit is snapshotted and reversible from Settings ▸ Identity, your operator is
+        notified of the change, and it takes effect on your next turn (not the current one).
+        Returns a confirmation with the live persona revision."""
+        from graph.config_io import read_soul, soul_revision, write_soul
+
+        section = (section or "").strip()
+        if not section:
+            return "Error: 'section' is required — the heading to edit, e.g. 'Voice'."
+        mode = (mode or "replace").strip().lower()
+        if mode not in ("replace", "append"):
+            return f"Error: mode must be 'replace' or 'append', got {mode!r}."
+        content = content or ""
+        if not content.strip():
+            return (
+                f"Error: refusing to write an empty section {section!r} — pass non-empty content. "
+                "(To retire a persona trait, replace the section with its revised text instead.)"
+            )
+
+        try:
+            current = read_soul()
+        except Exception as exc:  # noqa: BLE001 — surface as a tool error string, never raise into the turn
+            return f"Error: could not read the current persona: {exc}"
+
+        try:
+            updated = _apply_soul_section_edit(current, section, content, mode)
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: could not apply the edit: {exc}"
+
+        if updated == current:
+            return f"No change: section {section!r} already matches that content."
+        if len(updated.encode("utf-8")) > _SOUL_MAX_BYTES:
+            return (
+                f"Error: that edit would grow SOUL.md past the {_SOUL_MAX_BYTES // 1024} KB persona cap. "
+                "Keep the persona tight — trim the section or fold it into an existing one."
+            )
+
+        try:
+            # Archives the OUTGOING persona to soul-history (#1691) before overwriting, so this
+            # is reversible from Settings ▸ Identity.
+            write_soul(updated)
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: persona write failed: {exc}"
+
+        new_rev = soul_revision()
+        verb = "Replaced" if mode == "replace" else "Appended to"
+
+        # Operator-visible notice (ADR 0081 transparency guardrail): every self-edit — including
+        # one on an autonomous turn — surfaces in the console over the event bus, so an identity
+        # change is never silent (also the trail if a prompt-injection ever drove one). Best-effort.
+        _publish_persona_event(
+            "persona.self_edited",
+            {
+                "section": section,
+                "mode": mode,
+                "revision": new_rev,
+                "summary": f"Agent edited its own persona — {verb.lower()} section '{section}' (SOUL.md → {new_rev}).",
+            },
+        )
+
+        applied = "It will apply on the next reload/restart."
+        if reload_callback is not None:
+            try:
+                # Heavy + synchronous (rebuilds the compiled graph); offload so we don't block the
+                # event loop. Rebinding STATE.graph is atomic — the current turn keeps the old
+                # persona, the NEXT turn gets the new one.
+                result = await asyncio.to_thread(reload_callback)
+                ok = result[0] if isinstance(result, tuple) else bool(result)
+                applied = (
+                    "It is now live for your next turn."
+                    if ok
+                    else "Saved, but the live reload reported a problem — it will apply on the next restart."
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("[edit_soul] reload after persona edit failed: %s", exc)
+                applied = "Saved, but the live reload failed — it will apply on the next restart."
+
+        return (
+            f"{verb} section '{section}' in SOUL.md — persona now at revision {new_rev}. "
+            f"Your operator has been notified of the change. "
+            f"The previous version is archived to soul-history and restorable from Settings ▸ Identity. "
+            f"{applied}"
+        )
+
+    return [edit_soul]
+
+
 # Lead-only HITL tools: each pauses the lead A2A turn via a LangGraph interrupt that only the
 # lead turn's runner resumes. A subagent runs on a checkpointer-less graph, so binding one
 # would fail opaquely mid-delegation — graph.agent hard-denies these from every subagent's
@@ -1616,6 +1800,8 @@ def get_all_tools(
     graph_config=None,
     background_mgr=None,
     dropped=None,
+    soul_edit_enabled=False,
+    reload_callback=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
 
@@ -1633,6 +1819,12 @@ def get_all_tools(
     - ``background_mgr`` (ADR 0050) lets ``knowledge_ingest`` run a slow
       source (URL fetch / media transcription) as a detached background job
       instead of blocking the turn. Optional — without it it ingests inline.
+    - ``soul_edit_enabled`` (ADR 0079/0081) binds the guarded ``edit_soul`` tool
+      — the lead agent's self-authored persona editor. Default off; lead-only
+      (no subagent build passes it). ``reload_callback`` is the server-owned
+      graph reload, INJECTED (not imported) and handed to ``edit_soul`` so a
+      persona self-edit goes live on the next turn without ``tools/`` reaching
+      into ``server/``. ``None`` degrades to next-natural-reload semantics.
 
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
@@ -1670,6 +1862,12 @@ def get_all_tools(
         tools.append(_build_goal_plan_tool())  # goal loop — record running plan (retired <goal_plan>)
         tools.append(_build_abandon_goal_tool())  # goal loop — explicit give-up (retired <goal_unachievable>)
         tools.extend(_build_watch_tools())  # ADR 0067 — many concurrent supervised watches
+    if soul_edit_enabled:
+        # ADR 0079/0081 — guarded self-authored persona (config soul.self_edit_enabled,
+        # default off). Lead-agent only: no subagent build passes soul_edit_enabled, so
+        # edit_soul never reaches a bounded subagent. reload_callback (server-injected)
+        # makes the edit live on the next turn without tools/ importing server/.
+        tools.extend(_build_soul_editor_tool(reload_callback))
     # ADR 0054 — curation tools for the dream/distill subagents (read-only activity
     # + skill inventory + additive-only skill creation). Self-gate on STATE at call
     # time; present in the full set so the subagent allowlists can pick them up.

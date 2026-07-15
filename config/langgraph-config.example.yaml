@@ -288,6 +288,14 @@ goal:
   # eval_model: protolabs/fast
   max_iterations: 8
 
+# Persona — the agent's own SOUL.md. `self_edit_enabled` (OFF by default) gives the
+# LEAD agent the `edit_soul` tool so it can rewrite SECTIONS of its own persona
+# (identity/voice ONLY, never operating doctrine — ADR 0079/0081). Every edit is
+# snapshotted to soul-history (#1691, restorable from Settings ▸ Identity) and takes
+# effect on the next turn. Guarded self-modification — enable deliberately.
+soul:
+  self_edit_enabled: false
+
 # Programmatic tool calling — let the model write ONE Python script that
 # composes several tools in a single turn (collapses long tool-call chains).
 # SECURITY: runs model-authored code in a subprocess (scrubbed env + hard

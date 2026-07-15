@@ -885,12 +885,19 @@ def create_agent_graph(
     inbox_store=None,
     tasks_store=None,
     background_mgr=None,
+    reload_callback=None,
 ):
     """Create the protoAgent LangGraph agent.
 
     ``extra_tools`` are additional LangChain tools to expose to the lead agent
     (e.g. MCP-server tools discovered at startup). Appended before subagent /
     middleware assembly so they're in the tool map and visible to the model.
+
+    ``reload_callback`` is the server-owned graph reload (``_reload_langgraph_agent``),
+    injected — not imported — so ``tools/`` stays clear of ``server/``. It's handed to the
+    guarded ``edit_soul`` tool (ADR 0079/0081) so a persona self-edit goes live on the
+    agent's next turn. ``None`` (subagent / eval / script builds) degrades gracefully: the
+    edit still saves and applies on the next natural reload.
 
     ``checkpointer`` persists conversation state per ``thread_id``: pass one so
     multi-turn chats keep their history (the agent sees prior turns instead of
@@ -934,6 +941,11 @@ def create_agent_graph(
         # Lets knowledge_ingest detach a slow URL/media ingest as a background job (ADR 0050).
         background_mgr=background_mgr,
         dropped=disabled_tools,
+        # Guarded self-authored persona (ADR 0079/0081). Lead-only: subagent builds omit
+        # both, so edit_soul never binds on a bounded subagent. reload_callback is the
+        # server-owned graph reload (injected, not imported) that makes an edit live next turn.
+        soul_edit_enabled=getattr(config, "soul_self_edit_enabled", False),
+        reload_callback=reload_callback,
     )
 
     if extra_tools:

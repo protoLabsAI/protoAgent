@@ -689,6 +689,10 @@
           "title": "0080 — External secrets manager: env hydration with pluggable providers (Infisical first)"
         },
         {
+          "path": "adr/0081-self-authored-persona-edit-soul.md",
+          "title": "0081 — Self-authored persona: a guarded `edit_soul` tool"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

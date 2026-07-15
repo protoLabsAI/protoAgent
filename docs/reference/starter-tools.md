@@ -12,8 +12,9 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - **Goal + watch tools** — `set_goal` / `update_goal_plan` / `abandon_goal` drive a standing, plugin-verified goal; `create_watch` / `list_watches` / `clear_watch` supervise many external conditions at once ([ADR 0028](/adr/0028-plugin-goal-verifiers) / [ADR 0067](/adr/0067-standalone-watch-primitive); both plugin-verified, always on). See [Goal mode](/guides/goal-mode) + [Watches](/guides/watches).
 - Three **curation tools** — `recent_activity`, `list_skills`, `save_skill` — let the agent review what it's recently done and manage its own skill library; they also back the scheduled `/dream` (memory consolidation) and `/distill` (workflow→skill) passes ([ADR 0054](/adr/0054-dream-distill-curation-subagents)).
 - The **`search_tools`** meta-tool — added only when deferred-tool disclosure is on ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)); the agent calls it to load tools that aren't in the per-call base set.
+- One **persona tool** — `edit_soul` — lets the lead agent rewrite a section of its own `SOUL.md` ([ADR 0081](/adr/0081-self-authored-persona-edit-soul)). **Off by default, guarded**: bound only when an operator sets `soul.self_edit_enabled: true`, and never on a subagent. See [`edit_soul`](#edit_soul) below.
 
-`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server/agent_init.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). The render + curation tools are unconditional; the goal + watch tools ride `goal_enabled`. To **drop** a core tool without editing this function, list it in `tools.disabled`.
+`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False, soul_edit_enabled=False, reload_callback=None)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server/agent_init.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). The render + curation tools are unconditional; the goal + watch tools ride `goal_enabled`, and `edit_soul` rides `soul_edit_enabled`. To **drop** a core tool without editing this function, list it in `tools.disabled`.
 
 ## Plugin-provided tools (not in `get_all_tools`)
 
@@ -321,6 +322,39 @@ only when an `InboxStore` is configured. `priority_floor` selects the tiers:
 `now`-priority items have already fired an Activity turn; `next`/`later` wait for
 this call so the agent decides when to surface them. Returns the items one per
 line, or `"Inbox empty."`.
+
+## `edit_soul`
+
+```python
+@tool
+async def edit_soul(section: str, content: str, mode: str = "replace") -> str
+```
+
+**Guarded, off by default** ([ADR 0081](/adr/0081-self-authored-persona-edit-soul)). Bound to
+the **lead agent only** when an operator opts in with `soul.self_edit_enabled: true`; bounded
+subagents never receive it. Lets the agent durably refine its own persona by rewriting one
+markdown **section** of its `SOUL.md` — `section` is matched case-insensitively (a missing
+section is created), `mode` is `replace` (swap the body) or `append`.
+
+**Scope is persona only** — identity, voice, values, temperament — never operating doctrine
+(SOUL stays pure persona, [ADR 0079](/adr/0079-autonomous-operating-model)). Guardrails: a
+single call edits one section (can't blow away the file), a 64 KB cap keeps the persona prompt
+prefix bounded, and empty/no-op/invalid-mode edits are refused with an error string.
+
+Every edit goes through `write_soul`, so the outgoing persona is **snapshotted to soul-history
+([#1691](https://github.com/protoLabsAI/protoagent/issues/1691))** and is restorable from
+Settings ▸ Identity. The change takes effect on the agent's **next turn**: the server injects its
+graph-reload as a callback so the compiled graph rebinds (atomically — the current turn is
+unaffected) without `tools/` importing `server/`. In builds with no callback wired
+(subagent/eval/script), the save still lands and applies on the next natural reload.
+
+**Never silent.** Every accepted edit publishes a `persona.self_edited` event (section, mode,
+new revision) on the event bus, so the operator sees an identity change in the console even when
+it happens on an autonomous (scheduled/activity) turn — and it leaves a trail if a prompt-injection
+ever drove one. This is the transparency guardrail from ADR 0081's due-diligence against prior art
+(Hermes keeps SOUL.md operator-only; OpenClaw invites unguarded self-edit and treats the soul as a
+prompt-injection surface; Letta added a read-only persona guard after unconstrained self-edits
+degraded identity).
 
 ## Adding your own
 
