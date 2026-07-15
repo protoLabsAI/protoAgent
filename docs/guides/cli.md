@@ -12,8 +12,8 @@ front door that replaces the bare `python -m server <subcommand>` invocation
 ## Install
 
 ```bash
-uv tool install protoagent        # or: pipx install protoagent
-protoagent --help
+uv tool install protolabs-agent   # or: pipx install protolabs-agent
+protoagent --help                 # the command is `protoagent` (install name differs)
 ```
 
 In a source checkout you can also run it through uv without installing:

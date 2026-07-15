@@ -208,8 +208,9 @@ Both, binary-first for the headline:
 - **Zero-Python** — the existing PyInstaller **frozen binary** (the desktop build) shipped as
   `protoagent` behind `curl -fsSL https://…/install.sh | sh` (mirroring proto's `install.sh`:
   detect arch/OS, fetch, put on PATH, run `protoagent setup`). Also a Homebrew tap.
-- **Python present** — `uv tool install protoagent` / `pipx install protoagent` → the
-  `console_scripts` entry on PATH.
+- **Python present** — `uv tool install protolabs-agent` / `pipx install protolabs-agent`
+  (the PyPI name; `protoagent` is similarity-blocked) → the `protoagent` `console_scripts`
+  entry on PATH.
 
 ### G. Auth
 
