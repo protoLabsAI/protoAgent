@@ -58,6 +58,25 @@ def test_schema_groups_and_values():
     # The main-brain runtime select offers native + every ACP agent (incl. gemini).
     runtime = next(f for f in fields if f["key"] == "agent_runtime")
     assert runtime["type"] == "select" and runtime["options"] == ["native", *ACP_MODEL_OPTIONS]
+    assert runtime["options_source"] == "runtime"  # config-aware, not a static enum
+
+
+def test_registered_acp_agent_surfaces_in_runtime_and_aux_selects():
+    """ADR 0033 — a config with a user-registered custom ACP agent surfaces it in the
+    agent_runtime select AND the aux-model dropdowns, and validate_flat accepts it (the
+    runtime select is dynamically sourced, so it carries no rejecting enum — like model.name)."""
+    cfg = LangGraphConfig()
+    cfg.acp_agents = {"myagent": {"command": "my-acp", "args": ["--acp"], "label": "My Agent"}}
+    fields = {f["key"]: f for g in build_schema(cfg, model_options=["a"]) for f in g["fields"]}
+
+    assert fields["agent_runtime"]["options"] == ["native", *ACP_MODEL_OPTIONS, "acp:myagent"]
+    assert fields["routing.aux_model"]["options"] == ["a", *ACP_MODEL_OPTIONS, "acp:myagent"]
+
+    # A custom acp:<id> validates (parity with model.name); before this it was a rejecting enum.
+    assert validate_flat({"agent_runtime": "acp:myagent"})[0] is True
+    # An empty-config schema is unchanged — built-ins only, no drift.
+    base = {f["key"]: f for g in build_schema(LangGraphConfig(), model_options=["a"]) for f in g["fields"]}
+    assert base["agent_runtime"]["options"] == ["native", *ACP_MODEL_OPTIONS]
 
 
 def test_groups_carry_category_in_taxonomy_order():

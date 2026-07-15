@@ -68,7 +68,10 @@ FIELDS: list[Field] = [
         "Agent runtime",
         "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
         "coding agent over ACP (needs its CLI installed + authenticated on the host).",
-        options=["native", *ACP_MODEL_OPTIONS],
+        # "runtime" = native + every ACP agent, resolved per-request from config.acp_agents so
+        # user-registered custom agents show up too (build_schema). Dynamic source ⇒ no static
+        # enum, so validate_flat accepts a custom acp:<id> — same as the model.name select.
+        options_source="runtime",
     ),
     Field(
         "operator_mcp.tools",
@@ -1188,6 +1191,10 @@ def build_schema(
     Secrets report ``value: ""`` plus ``is_set`` rather than echoing the secret.
     """
     defaults = type(config)()
+    # ACP options are config-aware (ADR 0033): built-ins + any user-registered
+    # `acp.agents.<id>`, so a custom coding agent shows in the runtime + aux-model
+    # dropdowns. Empty config ⇒ exactly ACP_MODEL_OPTIONS (the built-in list).
+    acp_opts = acp_runtime_options(getattr(config, "acp_agents", None))
     groups: dict[str, dict[str, Any]] = {}
     for f in FIELDS:
         if f.ui_hidden:
@@ -1203,8 +1210,10 @@ def build_schema(
             "options": (
                 (model_options or [])
                 if f.options_source == "models"
-                else (model_options or []) + ACP_MODEL_OPTIONS
+                else (model_options or []) + acp_opts
                 if f.options_source == "models+acp"
+                else ["native", *acp_opts]
+                if f.options_source == "runtime"
                 else list(f.options)
             ),
             "default": _jsonable(getattr(defaults, f.attr, None)),
