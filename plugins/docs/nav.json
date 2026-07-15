@@ -693,6 +693,10 @@
           "title": "0081 — Self-authored persona: a guarded `edit_soul` tool"
         },
         {
+          "path": "adr/0082-per-chat-acp-runtime.md",
+          "title": "0082 — Per-chat ACP runtime: hot-swap a coding agent like a model"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
