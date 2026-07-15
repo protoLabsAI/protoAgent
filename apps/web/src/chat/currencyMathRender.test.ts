@@ -1,8 +1,9 @@
 // Render-level proof: mount the REAL <Markdown> (DS → streamdown → remark-math → KaTeX) and
 // assert currency amounts reach the DOM as plain text (no `.katex` element), while genuine
-// `$$…$$` display math still renders KaTeX. The pure escape logic is covered in
-// currencyMath.test.ts; this covers the wiring through the DS component the screenshot bug
-// came from.
+// `$$…$$` display math still renders KaTeX. The currency guard now lives in the DS `<Markdown>`
+// itself (on by default as of @protolabsai/ui@0.55.1, protoContent#456) — the console's own
+// `escapeCurrencyDollars` pre-processing was removed once the DS ported it. This test is the
+// console-side regression guard: it catches a DS currency-guard regression at the next bump.
 import { afterEach, describe, expect, it } from "vitest";
 import { act } from "react";
 import { createElement } from "react";

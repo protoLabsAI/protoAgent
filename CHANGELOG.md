@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unguarded self-edit; Letta added a read-only persona guard after unconstrained self-edits
   degraded identity) — `edit_soul` is the guarded middle.
 
+### Changed
+- **Console now consumes the DS's shipped tokens for chat card elevation and currency,
+  dropping two local stand-ins (#1996).** Bumps `@protolabsai/ui` `0.55.0 → 0.55.1` and
+  retires the workarounds the DS has since absorbed: (1) chat report cards and system notes
+  use the DS resting-card shadow `--pl-shadow-card` (protoContent#457) instead of the local
+  `--chat-card-shadow` token added in #1992 — identical values, no visual change; (2) the
+  console's `escapeCurrencyDollars` markdown pre-processing (#1983) is removed because the DS
+  `<Markdown>` now escapes a `$`-before-a-digit by default (protoContent#456), so currency
+  amounts still render as text, not LaTeX. The render-level regression test is kept (now
+  guarding the DS's default guard); the pre-processor and its unit test are deleted.
+
 ### Fixed
 - **Chat no longer spins "Working…" forever on a large answer (hung work block).**
   A turn whose A2A answer artifact is large (an ~11 KB research answer ≈ 480+ stream

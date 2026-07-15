@@ -2,18 +2,12 @@
    slash-command autocomplete, chat input sizing). Carved out of app/theme.css
    (#832, Axis-A step 2). Imported by ChatSurface.tsx. Move verbatim — no restyle. */
 
-/* Resting-card elevation for chat's raised automation surfaces — background-agent
-   report cards (.chat-report-card) and local system notes (.chat-note). The DS only
-   ships --pl-shadow-popover, a lofted OVERLAY shadow (0 8px 28px / 0.5α in dark) meant
-   for floating menus/popovers; on an inline, in-flow card it reads as far too aggressive.
-   This is its quiet in-flow counterpart — a slight lift — theme-scoped to mirror how the
-   DS splits light/dark (plugin-kit.css). One token so both surfaces stay in lockstep. */
-:root { --chat-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
-@media (prefers-color-scheme: light) {
-  :root { --chat-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
-}
-:root[data-theme="light"] { --chat-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
-:root[data-theme="dark"] { --chat-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
+/* Chat's raised automation surfaces — background-agent report cards (.chat-report-card)
+   and local system notes (.chat-note) — use the DS resting-card elevation --pl-shadow-card
+   (@protolabsai/ui ≥0.55.1, protoContent#457): a slight in-flow lift, the quiet counterpart
+   to the lofted overlay --pl-shadow-popover (menus/dialogs). This started as a local
+   --chat-card-shadow stand-in (#1992) while the DS shipped only the overlay shadow; now
+   consumed from the DS so both surfaces track the token centrally. */
 
 /* Per-session status dot — passed into the DS TabBar `icon` slot (#832), so it
    renders inside .pl-tabbar__icon before the title (the TabBar frame itself is
@@ -115,7 +109,7 @@
   border-radius: var(--pl-radius);
   /* A slight resting lift, NOT the lofted popover shadow (which read as too heavy for an
      inline in-flow card). Shared with the system note so both raised surfaces match. */
-  box-shadow: var(--chat-card-shadow);
+  box-shadow: var(--pl-shadow-card);
   padding: 14px 16px;
   cursor: pointer; /* the whole card opens the report (selection-guarded in JSX) */
 }
@@ -413,7 +407,7 @@
 /* Local SYSTEM NOTE (noteToThread) — a slash-command confirmation / status / warning. A
    compact raised card with a tone-coloured left accent driven by the message's `noteTone`
    (info/warning/danger/success). Shares the report card's raised surface + slight resting
-   shadow (--chat-card-shadow) rather than sitting in the flat bg-inset well, so an ingestion
+   shadow (--pl-shadow-card) rather than sitting in the flat bg-inset well, so an ingestion
    confirmation reads as a lifted automation notice. System notes never carry the answer
    action row (that's role-"assistant"-only). Add a tone: one rule here + the SystemNoteTone
    union in lib/types.ts. The `.chat-note--*` class sits ON `.pl-message--system`, so these
@@ -422,7 +416,7 @@
   font-size: 0.85rem;
   padding: 8px 12px;
   background: var(--pl-color-bg-raised);
-  box-shadow: var(--chat-card-shadow);
+  box-shadow: var(--pl-shadow-card);
 }
 .chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-info, #3b82f6); }
 .chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-success, #30a46c); }
