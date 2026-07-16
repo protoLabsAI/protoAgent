@@ -1,14 +1,14 @@
 id: notes
 name: Notes
-version: 0.2.0
+version: 0.3.0
 description: >-
   A single shared markdown note the agent and the operator both read and write.
   The flagship reference plugin (ADR 0034 S4) — it owns its storage, its agent
-  tools, and a sandboxed-iframe editor it serves itself (ADR 0038). Replaces the
-  legacy native Notes surface.
+  tools, and a live-preview markdown editor it serves itself (ADR 0038), with
+  CodeMirror vendored so it runs offline. Replaces the legacy native Notes surface.
 enabled: true            # first-party — shipped on
 capabilities:
-  network: []
+  network: []            # literally true since 0.3.0 — CM6 is vendored, no CDN
   filesystem: scoped     # one note file in the instance data dir
 # The plugin self-serves its editor page (ADR 0038) — a sandboxed iframe, no host build, so it's
 # git-installable like any plugin. (Was a federated `ui: react` remote; federation retired.)
