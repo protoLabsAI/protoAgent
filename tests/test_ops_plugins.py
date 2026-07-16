@@ -115,3 +115,90 @@ async def test_install_error_propagates(monkeypatch):
 
 def test_op_registered_as_mutating():
     assert registry()["plugins.install_and_activate"].mutates is True  # never in safe-operator
+
+
+# ── peek_bundle (archetype preview) ───────────────────────────────────────────
+
+
+def _write_bundle_fixture(tmp_path):
+    import shutil
+    from pathlib import Path
+
+    member = tmp_path / "member-src"
+    (member / "skills" / "demo").mkdir(parents=True)
+    (member / "protoagent.plugin.yaml").write_text(
+        "id: m1\nname: Member One\nversion: 1.2.3\ndescription: A member.\nrequires_pip: [somelib]\n"
+    )
+    (member / "skills" / "demo" / "SKILL.md").write_text("---\nname: demo\ndescription: Demo skill.\n---\n\nBody.\n")
+
+    bundle = tmp_path / "bundle-src"
+    bundle.mkdir()
+    (bundle / "protoagent.bundle.yaml").write_text(
+        "id: stack\nname: Stack\ndescription: D\nverified_against: 0.1.0\n"
+        "plugins:\n"
+        "  - { id: hello, builtin: true }\n"
+        "  - { id: m1, url: https://example.test/m1, ref: v1.2.3 }\n"
+        "enabled: [hello, m1]\n"
+    )
+
+    def fake_fetch(url, ref, dest):
+        src = member if url.rstrip("/").endswith("/m1") else bundle
+        shutil.copytree(src, Path(dest))
+        return "deadbeef"
+
+    return fake_fetch
+
+
+async def test_peek_bundle_enumerates_members(tmp_path, monkeypatch):
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    monkeypatch.setattr(installer, "_fetch", _write_bundle_fixture(tmp_path))
+    result = await plugin_ops.peek_bundle("https://example.test/stack")
+
+    assert result["kind"] == "bundle" and result["id"] == "stack"
+    by_id = {m["id"]: m for m in result["members"]}
+    assert by_id["hello"]["builtin"] is True and "error" not in by_id["hello"]
+    m1 = by_id["m1"]
+    assert m1["version"] == "1.2.3" and m1["requires_pip"] == ["somelib"]
+    assert m1["skills"] == [{"name": "demo", "description": "Demo skill."}]
+
+
+async def test_peek_bundle_survives_unreachable_member(tmp_path, monkeypatch):
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    fixture = _write_bundle_fixture(tmp_path)
+
+    def flaky_fetch(url, ref, dest):
+        if "example.test/m1" in url:
+            raise RuntimeError("clone failed")
+        return fixture(url, ref, dest)
+
+    monkeypatch.setattr(installer, "_fetch", flaky_fetch)
+    result = await plugin_ops.peek_bundle("https://example.test/stack2")
+    m1 = next(m for m in result["members"] if m["id"] == "m1")
+    assert "clone failed" in m1["error"]
+    hello = next(m for m in result["members"] if m["id"] == "hello")
+    assert "error" not in hello
+
+
+async def test_peek_bundle_caches_by_url(tmp_path, monkeypatch):
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    calls = {"n": 0}
+    fixture = _write_bundle_fixture(tmp_path)
+
+    def counting_fetch(url, ref, dest):
+        calls["n"] += 1
+        return fixture(url, ref, dest)
+
+    monkeypatch.setattr(installer, "_fetch", counting_fetch)
+    await plugin_ops.peek_bundle("https://example.test/stack3")
+    first = calls["n"]
+    await plugin_ops.peek_bundle("https://example.test/stack3")
+    assert calls["n"] == first, "second peek must hit the TTL cache"

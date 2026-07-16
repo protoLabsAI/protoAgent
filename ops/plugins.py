@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from ops import OpContext, op
@@ -119,3 +120,113 @@ async def install_and_activate(
         reloaded=False,
         enable_error="; ".join(messages) or "reload failed",
     )
+
+
+# ── Bundle peek (archetype preview) ────────────────────────────────────────────
+# Enumerate what an UN-installed bundle would set up — members, each member's
+# manifest identity, skills, pip deps, capabilities — without installing anything.
+# Read-only: fetches to a throwaway staging dir, never touches plugins.lock or
+# config. Results are TTL-cached per URL so the archetype picker can call freely.
+
+_PEEK_TTL_SECONDS = 600.0
+_peek_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _peek_skills(root: Path) -> list[dict]:
+    """Name + description of every SKILL.md a plugin checkout ships."""
+    from graph.skills.loader import parse_skill_md
+
+    out = []
+    for skill_md in sorted(root.glob("skills/*/SKILL.md")):
+        art = parse_skill_md(skill_md)
+        if art is not None:
+            out.append({"name": art.name, "description": art.description})
+    return out
+
+
+def _peek_member_from(root: Path, entry: dict) -> dict:
+    """Describe one bundle member from a checkout (builtin dir or fetched repo)."""
+    from graph.plugins.manifest import load_manifest
+
+    manifest = load_manifest(root)
+    detail = {
+        "id": entry.get("id"),
+        "builtin": bool(entry.get("builtin")),
+        "ref": entry.get("ref"),
+        "url": entry.get("url"),
+    }
+    if manifest is None:
+        detail["error"] = "manifest unreadable"
+        return detail
+    detail.update(
+        {
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "requires_pip": list(manifest.requires_pip or []),
+            "capabilities": dict(manifest.capabilities or {}),
+            "views": [v.get("label") or v.get("id") for v in (manifest.views or [])],
+            "skills": _peek_skills(root),
+        }
+    )
+    return detail
+
+
+def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
+    import shutil
+    import tempfile
+    import time
+
+    from graph.plugins import installer
+    from infra.paths import instance_paths
+
+    now = time.monotonic()
+    hit = _peek_cache.get(url)
+    if hit and now - hit[0] < _PEEK_TTL_SECONDS:
+        return hit[1]
+
+    builtin_root = instance_paths().app_root / "plugins"
+    with tempfile.TemporaryDirectory(prefix="pa-bundle-peek-") as tmp:
+        staging = Path(tmp) / "bundle"
+        installer._fetch(url, ref, staging)
+        bundle = installer.load_bundle(staging)
+        if bundle is None:
+            # Not a bundle — a single-plugin repo; preview it as one member.
+            result = {
+                "kind": "plugin",
+                "members": [_peek_member_from(staging, {"id": None, "url": url, "ref": ref})],
+            }
+            _peek_cache[url] = (now, result)
+            return result
+
+        members = []
+        for entry in bundle.get("plugins", []):
+            pid = entry.get("id")
+            try:
+                if entry.get("builtin"):
+                    members.append(_peek_member_from(builtin_root / pid, entry))
+                else:
+                    member_dir = Path(tmp) / f"member-{pid}"
+                    installer._fetch(entry["url"], entry.get("ref"), member_dir)
+                    members.append(_peek_member_from(member_dir, entry))
+                    shutil.rmtree(member_dir, ignore_errors=True)
+            except Exception as exc:  # noqa: BLE001 — one unreachable member ≠ no preview
+                members.append({"id": pid, "builtin": bool(entry.get("builtin")), "error": str(exc)})
+
+        result = {
+            "kind": "bundle",
+            "id": bundle.get("id"),
+            "name": bundle.get("name"),
+            "description": bundle.get("description"),
+            "verified_against": bundle.get("verified_against"),
+            "enabled": list(bundle.get("enabled") or []),
+            "members": members,
+        }
+
+    _peek_cache[url] = (now, result)
+    return result
+
+
+async def peek_bundle(url: str, ref: str | None = None) -> dict:
+    """Async wrapper — blocking git/fs work runs off the event loop."""
+    return await asyncio.to_thread(_peek_bundle_sync, url, ref)

@@ -3,6 +3,7 @@ import type {
   ActivityHistory,
   AgentConfig,
   Archetype,
+  ArchetypePreview,
   BackgroundJobDTO,
   FsProject,
   Task,
@@ -1275,6 +1276,9 @@ export const api = {
   },
   archetypes() {
     return request<{ archetypes: Archetype[] }>("/api/archetypes");
+  },
+  archetypePreview(id: string) {
+    return request<ArchetypePreview>(`/api/archetypes/${encodeURIComponent(id)}/preview`);
   },
   createAgent(body: {
     name: string;

@@ -253,6 +253,26 @@ def register_fleet_routes(app) -> None:
         every installed bundle's ``archetype:`` metadata."""
         return {"archetypes": _archetypes()}
 
+    @app.get("/api/archetypes/{archetype_id}/preview")
+    async def _archetype_preview(archetype_id: str):
+        """What picking this archetype actually sets up: for bundle-backed
+        archetypes, the bundle's members with each one's identity, skills,
+        pip deps, and capabilities — enumerated WITHOUT installing (read-only
+        peek, TTL-cached). Code-free archetypes return ``bundle: null``; the
+        SOUL text is already in the list payload."""
+        record = next((a for a in _archetypes() if a.get("id") == archetype_id), None)
+        if record is None:
+            raise HTTPException(404, f"unknown archetype: {archetype_id}")
+        if not record.get("bundle"):
+            return {"id": archetype_id, "bundle": None}
+        from ops import plugins as plugin_ops
+
+        try:
+            peek = await plugin_ops.peek_bundle(record["bundle"])
+        except Exception as exc:  # noqa: BLE001 — network/git failure → clean 502
+            raise HTTPException(502, f"could not read bundle {record['bundle']}: {exc}")
+        return {"id": archetype_id, "bundle": peek}
+
 
 def _norm_url(u: str | None) -> str:
     """Canonicalize a git URL for dedupe (drop trailing ``.git`` / ``/``, lowercase) —
