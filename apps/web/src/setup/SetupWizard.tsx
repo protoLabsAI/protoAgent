@@ -24,6 +24,7 @@ import { errMsg } from "../lib/format";
 import { lucideIcon } from "../lib/lucideIcon";
 import { acpAgentsQuery, archetypesQuery } from "../lib/queries";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
+import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
 import { personaSoul } from "./persona";
 
 // Four steps: intro, then "who the agent is" (name + persona), then "how it thinks"
@@ -155,6 +156,7 @@ export function SetupWizard({
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
+  const [previewOpen, setPreviewOpen] = useState(false);
   // Starter archetypes (the archetype-catalog: Basic + Custom, plus any installed bundle
   // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
   // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
@@ -480,6 +482,14 @@ export function SetupWizard({
                   <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
                 ))}
               </RadioCardGroup>
+              {pickedArchetype ? (
+                <button type="button" className="archetype-preview-link" onClick={() => setPreviewOpen(true)}>
+                  See what&apos;s included in {pickedArchetype.label} →
+                </button>
+              ) : null}
+              {previewOpen && pickedArchetype ? (
+                <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
+              ) : null}
               <FormField label="SOUL.md">
                 <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
               </FormField>

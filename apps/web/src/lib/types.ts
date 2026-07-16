@@ -912,6 +912,35 @@ export type Archetype = {
   soul: string; // base SOUL.md the wizard seeds when this archetype is picked ("" = none)
 };
 
+// What an archetype's bundle would set up — the read-only pre-install peek
+// served by GET /api/archetypes/{id}/preview. `bundle: null` = code-free persona.
+export type ArchetypePreviewMember = {
+  id: string | null;
+  builtin: boolean;
+  ref?: string | null;
+  url?: string | null;
+  name?: string;
+  version?: string;
+  description?: string;
+  requires_pip?: string[];
+  capabilities?: Record<string, unknown>;
+  views?: string[];
+  skills?: { name: string; description: string }[];
+  error?: string; // member unreachable — the rest of the preview still renders
+};
+export type ArchetypePreview = {
+  id: string;
+  bundle: {
+    kind: "bundle" | "plugin";
+    id?: string;
+    name?: string;
+    description?: string;
+    verified_against?: string;
+    enabled?: string[];
+    members: ArchetypePreviewMember[];
+  } | null;
+};
+
 // Developer flags (ADR 0068) — the /api/flags payload the Developer panel renders.
 export type FlagTier = "off" | "dev" | "beta" | "on";
 export type FlagChannel = "prod" | "beta" | "dev";

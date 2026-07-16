@@ -315,3 +315,60 @@ def test_fleet_list_status_not_on_event_loop_thread(client, monkeypatch):
     # Offloaded via to_thread → runs on a thread-pool worker → no error.
     r = client.get("/api/fleet")
     assert r.status_code == 200
+
+
+# ── Archetype preview (peek without install) ─────────────────────────────────
+
+
+def test_archetype_preview_code_free_returns_null_bundle(client):
+    arr = client.get("/api/archetypes").json()["archetypes"]
+    code_free = next(a["id"] for a in arr if not a.get("bundle"))
+    body = client.get(f"/api/archetypes/{code_free}/preview").json()
+    assert body == {"id": code_free, "bundle": None}
+
+
+def test_archetype_preview_unknown_id_404s(client):
+    assert client.get("/api/archetypes/nope/preview").status_code == 404
+
+
+def test_archetype_preview_peeks_bundle(client, monkeypatch):
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(
+        fleet_routes,
+        "_load_archetype_catalog",
+        lambda: [
+            {"id": "stacked", "label": "Stacked", "bundle": "https://github.com/x/stack", "soul": "S"},
+            *fleet_routes._FALLBACK_ARCHETYPES,
+        ],
+    )
+    import ops.plugins as plugin_ops
+
+    async def _fake_peek(url, ref=None):
+        assert url == "https://github.com/x/stack"
+        return {"kind": "bundle", "id": "stack", "members": [{"id": "m1", "builtin": False}]}
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _fake_peek)
+    body = client.get("/api/archetypes/stacked/preview").json()
+    assert body["bundle"]["id"] == "stack"
+    assert body["bundle"]["members"][0]["id"] == "m1"
+
+
+def test_archetype_preview_fetch_failure_is_502(client, monkeypatch):
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(
+        fleet_routes,
+        "_load_archetype_catalog",
+        lambda: [
+            {"id": "stacked", "label": "Stacked", "bundle": "https://github.com/x/stack", "soul": "S"},
+            *fleet_routes._FALLBACK_ARCHETYPES,
+        ],
+    )
+    import ops.plugins as plugin_ops
+
+    async def _boom(url, ref=None):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _boom)
+    assert client.get("/api/archetypes/stacked/preview").status_code == 502

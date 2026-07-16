@@ -8,6 +8,7 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
+import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
 import { archetypesQuery, queryKeys } from "../lib/queries";
 import { lucideIcon } from "../lib/lucideIcon";
 import type { Archetype } from "../lib/types";
@@ -23,10 +24,12 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
   const archetypes = useQuery(archetypesQuery());
   const [picked, setPicked] = useState<string>("basic");
   const [name, setName] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
   // agent from a bundle and has no SOUL editor, so Custom would just duplicate Basic.
   const list = (archetypes.data?.archetypes ?? []).filter((a) => a.id !== "custom");
+  const pickedArchetype = list.find((a) => a.id === picked);
   const archetype = list.find((a) => a.id === picked) ?? list[0];
   const nameOk = NAME_RE.test(name);
 
@@ -65,6 +68,14 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
             <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
           ))}
         </RadioCardGroup>
+        {pickedArchetype ? (
+          <button type="button" className="archetype-preview-link" onClick={() => setPreviewOpen(true)}>
+            See what&apos;s included in {pickedArchetype.label} →
+          </button>
+        ) : null}
+        {previewOpen && pickedArchetype ? (
+          <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
+        ) : null}
 
         <label className="field archetype-name-field">
           <span>Name</span>
