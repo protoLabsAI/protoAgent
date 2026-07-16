@@ -62,34 +62,37 @@ test("the chat composer model picker overrides the model per-tab (no global save
   expect(settingsWrite).toBe(false);
 });
 
-test("Tools panel: the Shell & filesystem chip disables run_command via /api/settings", async ({ page }) => {
-  // The per-agent run_command kill switch lives on the Tools capability panel as a
-  // QuickSetting chip (ADR 0048 §2.2) — same /api/settings write path as the central home.
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.getByTestId("header-menu").click();
-  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
-  await page
-    .locator(".settings-overlay .pl-sidenav")
-    .getByRole("tab", { name: "Tools", exact: true })
-    .click();
+test("Tools panel: the Filesystem group's inline settings disable run_command via /api/settings", async ({ page }) => {
+  // The per-agent run_command kill switch is config for ONE tool group, so it opens in
+  // place inside that group (#2000) rather than in a dialog over the panel. Same
+  // /api/settings write path as the central home; writes on change like the tool rows.
+  await openToolsTab(page);
 
-  await page.getByRole("button", { name: "Shell & filesystem tools" }).click();
-  const dialog = page.getByRole("dialog", { name: "Shell & filesystem tools" });
-  await expect(dialog).toBeVisible();
-  // All four gates render, allow_run being the full kill switch.
-  await expect(dialog.getByText("Allow run_command")).toBeVisible();
-  await expect(dialog.getByText("Require approval per command")).toBeVisible();
+  // The Filesystem group isn't the default-open one (that's General) — open it.
+  await page.getByRole("button", { name: /^Filesystem/ }).click();
+  await page.getByRole("button", { name: "Filesystem settings" }).click();
+
+  const panel = page.locator(".tools-group-settings--open");
+  await expect(panel).toBeVisible();
+  // No modal: the settings live in the group. (The Settings OVERLAY hosting this panel is
+  // itself role=dialog, so this asserts the absence of the old QuickSetting one by name.)
+  await expect(page.getByRole("dialog", { name: "Shell & filesystem tools" })).toHaveCount(0);
+  await expect(panel.getByText("Allow run_command")).toBeVisible();
 
   const saved = page.waitForRequest(
     (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
   );
-  await dialog.locator('[data-key="filesystem.allow_run"] .pl-switch').click();
-  await dialog.getByRole("button", { name: "Save" }).click();
+  // Flipping the switch writes immediately — there is no Save button to press.
+  await panel.locator('[data-key="filesystem.allow_run"] .pl-switch').click();
   const req = await saved;
   const body = req.postDataJSON();
   expect(body.updates["filesystem.allow_run"]).toBe(false);
   expect(body.layer ?? "agent").toBe("agent"); // per-agent leaf, not box-wide
   await expect(page.locator(".pl-toast").getByText("Saved")).toBeVisible();
+
+  // depends_on: with run_command off, its dependent gates govern nothing and hide —
+  // the dialog used to render them regardless.
+  await expect(panel.getByText("Require approval per command")).toHaveCount(0);
 });
 
 // The old "Disabled tools" chip (a raw tools.disabled textarea) is gone — every row
@@ -106,10 +109,14 @@ async function openToolsTab(page: Page) {
     .click();
 }
 
-test("Tools panel: the Disabled tools chip is gone (row switches replaced it)", async ({ page }) => {
+test("Tools panel: the chip strip is gone — settings live on the group they govern", async ({ page }) => {
   await openToolsTab(page);
-  await expect(page.getByRole("button", { name: "Shell & filesystem tools" })).toBeVisible();
+  // The old "Disabled tools" chip went when every row grew a switch; the "Shell &
+  // filesystem tools" chip went in #2000 when its settings moved into the Filesystem group.
   await expect(page.getByRole("button", { name: "Disabled tools" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Shell & filesystem tools" })).toHaveCount(0);
+  // Groups without settings don't grow a gear — General is open by default.
+  await expect(page.getByRole("button", { name: "General settings" })).toHaveCount(0);
 });
 
 test("Tools panel: toggling a tool row off appends it to tools.disabled", async ({ page }) => {

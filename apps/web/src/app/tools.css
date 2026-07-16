@@ -71,10 +71,34 @@
   }
 }
 
-/* Contextual settings chips above the search (mirrors .mcp-browse-row). */
-.tools-config-row {
+/* A tool group's own settings, opened in place from inside the group (#2000). Replaces the
+   old .tools-config-row chip strip, which floated a dialog over a panel whose every other
+   control is inline. Sits above the group's .tools-list, indented to read as part of the
+   group rather than as a sibling of its rows. */
+.tools-group-settings {
+  padding: 4px 0 8px;
+}
+.tools-group-settings--open {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-inset);
+}
+.tools-group-settings-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin: 0 0 6px;
+  margin-bottom: 2px;
+}
+.tools-group-settings-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+/* The rows are the shared .setting-row from settings.css; inside a group they sit in an
+   inset well, so drop the trailing rule the settings page uses to separate stacked rows. */
+.tools-group-settings .setting-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
 }

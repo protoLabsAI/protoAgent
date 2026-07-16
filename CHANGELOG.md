@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The Tools panel's shell/filesystem settings now open inside the Filesystem group they
+  govern, instead of in a dialog above the panel.** The panel already groups the toolset by
+  the subsystem category the backend stamps on each tool, and `filesystem.enabled` /
+  `allow_run` / `run_requires_approval` / `bypass_allowed` are config for exactly one of
+  those groups — so they live on it, expanded in place from a "Filesystem settings" button
+  (the same shape as the MCP panel's "Add server"), rather than in a second settings surface
+  floating over a panel whose every other control is inline. Add an entry to
+  `toolGroupSettings.ts` to give another group its own.
+  They now also write **on change**, like the per-tool row switches beside them — no Save
+  button — and honour `depends_on`: a dependent gate stays hidden until its parent is on.
+
+### Fixed
+- **Dependent settings no longer render when the setting they depend on is off.** The
+  QuickSetting dialog mapped over its fields raw, skipping the `fieldVisible` check the
+  canonical settings pages apply — so "Require approval per command" showed (and appeared
+  operable) while `run_command` was off and it governed nothing. The inline renderer honours
+  the same `depends_on` chain as the rest of Settings.
+
 ## [0.102.0] - 2026-07-16
 
 ### Added

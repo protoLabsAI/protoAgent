@@ -4,17 +4,18 @@ import { Input, Switch } from "@protolabsai/ui/forms";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { TerminalSquare } from "lucide-react";
+import { ChevronUp, Settings2 } from "lucide-react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
-import { Badge } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
-import { QuickSetting } from "../settings/QuickSetting";
+import { InlineSettings } from "../settings/InlineSettings";
 import { useUI } from "../state/uiStore";
 import { StagePanel } from "./ErrorBoundary";
+import { toolGroupHasSettings, toolGroupSettingKeys } from "./toolGroupSettings";
 
 // Runtime → Tools: the live tool inventory the lead agent + subagents can call.
 // Core tools group by subsystem; plugin tools group by the PLUGIN that brought them
@@ -150,24 +151,11 @@ function ToolsBody() {
         kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
-        <div className="tools-config-row">
-          {/* Contextual settings chip (ADR 0048 §2.2) — same /api/settings save path as
-              the central home. This is the run_command EXECUTION policy (approval,
-              /bypass) plus the coarse kill switches; per-tool wiring is the row
-              switches below (the old "Disabled tools" denylist editor is gone — a row
-              toggle writes the same tools.disabled). Saves hot-rebuild. */}
-          <QuickSetting
-            keys={[
-              "filesystem.enabled",
-              "filesystem.allow_run",
-              "filesystem.run_requires_approval",
-              "filesystem.bypass_allowed",
-            ]}
-            title="Shell & filesystem tools"
-            label="Shell & filesystem tools"
-            icon={<TerminalSquare size={16} />}
-          />
-        </div>
+        {/* The run_command execution policy + the coarse kill switches used to live up here
+            in a QuickSetting chip → dialog (ADR 0048 §2.2). They're settings for ONE group
+            of tools, so they now open in place inside that group (#2000) — a panel whose
+            every other control is inline shouldn't send you to a modal for three switches.
+            Per-tool wiring stays the row switches (a row toggle writes tools.disabled). */}
         <Input
           className="playbook-search"
           type="search"
@@ -200,6 +188,16 @@ function ToolsBody() {
                     </span>
                   }
                 >
+                  {/* Group-level config, expanded in place from the group it governs
+                      (#2000). Only groups with settings render it — see toolGroupSettings. */}
+                  {toolGroupHasSettings(cat) ? (
+                    <ToolGroupSettings
+                      category={cat}
+                      // filesystem.enabled / allow_run change which tools are BOUND, so the
+                      // hot-rebuilt catalog has to be refetched or the list below goes stale.
+                      onSaved={() => void queryClient.invalidateQueries({ queryKey: toolsQuery().queryKey })}
+                    />
+                  ) : null}
                   <div className="tools-list">
                     {items.map((t) => (
                       <div
@@ -227,6 +225,33 @@ function ToolsBody() {
         {tools.length === 0 ? <p className="muted">No tools match.</p> : null}
       </div>
     </>
+  );
+}
+
+/** A tool group's own settings, opened in place from the group (#2000) — the same
+ *  expand-here-instead-of-a-modal shape as the MCP panel's "Add server". Collapsed by
+ *  default: the group's job is listing its tools, and the config is the occasional visit. */
+function ToolGroupSettings({ category, onSaved }: { category: string; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <div className="tools-group-settings">
+        <Button type="button" variant="ghost" onClick={() => setOpen(true)}>
+          <Settings2 size={14} /> {category} settings
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="tools-group-settings tools-group-settings--open">
+      <div className="tools-group-settings-head">
+        <span className="tools-group-settings-title">{category} settings</span>
+        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+          <ChevronUp size={14} /> Hide
+        </Button>
+      </div>
+      <InlineSettings keys={toolGroupSettingKeys(category)} onSaved={onSaved} />
+    </div>
   );
 }
 
