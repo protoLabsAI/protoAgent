@@ -57,8 +57,10 @@ type UIState = {
   rightPanel: RightPanel;
   pluginsTab: PluginsTab;
   settingsSection: string;
-  // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
+  // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Global ▸ Fleet
   // and asks the fleet panel to open the new-agent picker on mount, then clears it.
+  // EPHEMERAL — partialized out of persistence so an unconsumed set never leaks into a
+  // later session (#1999).
   fleetStartNew: boolean;
   // One-shot: a chat tool card's "Manage" deep-link (#1803) routes to Capabilities ▸ Tools
   // carrying the tool name, so the Tools panel filters + highlights that row on mount, then
@@ -503,7 +505,11 @@ export const useUI = create<UIState>()(
       // (the Global settings overlay, the per-plugin Configure dialog, the pending
       // rail-menu Update/Uninstall action, and the per-session background-delivery set
       // (#1640) — a view's page re-requests it on every load).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, ...rest }) => rest,
+      // `fleetStartNew` joins them (#1999): it's a one-shot consumed by FleetSurface on
+      // mount, so persisting it means a set that never reaches the panel (the switcher
+      // fired in a window with no Fleet section) survives reload and pops the picker at
+      // random later. A one-shot that outlives its trigger isn't one.
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, fleetStartNew: _fsn, ...rest }) => rest,
     },
   ),
 );

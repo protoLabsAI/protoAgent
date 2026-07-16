@@ -9,7 +9,7 @@ import { StatusDot } from "@protolabsai/ui/data";
 
 import { agentHref, api, currentSlug } from "../lib/api";
 import { queryKeys } from "../lib/queries";
-import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
+import { fleetDisabledReason } from "./fleetGate";
 
 // The URL slug is the agent's STABLE id, never its (editable) display name — renaming an agent
 // must not change its URL/bookmarks. `host` is the reserved slug for this instance.
@@ -36,9 +36,11 @@ export function FleetSwitcher({
   const agents = fleet.data?.agents ?? [];
   const slug = currentSlug(); // the agent THIS window is on
   const current = agents.find((a) => slugOf(a) === slug);
-  // Fleet settings are hub-only (#1708): non-null in a member window (a hub slug window,
-  // or a spawned workspace member reached directly) — the item disables with this tooltip.
-  const fleetSettingsBlocked = fleetSettingsDisabledReason(agents, slug);
+  // One gate for BOTH fleet items (#1999). They share a destination (Global ▸ Fleet), so
+  // gating only "Fleet settings" left "+ New agent" as a live link to the same place —
+  // which silently landed on an unrelated section. Non-null only when this instance is
+  // itself a spawned workspace member being driven directly (see fleetGate.ts).
+  const fleetBlocked = fleetDisabledReason(agents, slug);
 
   // Only a hard fleet-API error hides the switcher; otherwise it's always available.
   if (fleet.isError) return <>{fallbackName}</>;
@@ -82,23 +84,44 @@ export function FleetSwitcher({
         );
       })}
       {agents.length > 0 ? <MenuSeparator /> : null}
-      <MenuItem icon={<Plus size={14} />} onSelect={() => onNewAgent?.()}>
+      {/* Both fleet items share `fleetBlocked` — see fleetGate.ts for why that's one gate. */}
+      <FleetMenuItem icon={<Plus size={14} />} blocked={fleetBlocked} onSelect={() => onNewAgent?.()}>
         New agent
-      </MenuItem>
-      {fleetSettingsBlocked ? (
-        // Disabled, not hidden — discoverable: the tooltip says WHERE fleet settings live.
-        // The DS Tooltip's own wrapper span is the hover target (a disabled Radix menu item
-        // is pointer-events:none, so the item itself can't fire the tooltip).
-        <Tooltip label={fleetSettingsBlocked} side="left">
-          <MenuItem icon={<Settings size={14} />} disabled>
-            Fleet settings
-          </MenuItem>
-        </Tooltip>
-      ) : (
-        <MenuItem icon={<Settings size={14} />} onSelect={() => onManageFleet?.()}>
-          Fleet settings
-        </MenuItem>
-      )}
+      </FleetMenuItem>
+      <FleetMenuItem icon={<Settings size={14} />} blocked={fleetBlocked} onSelect={() => onManageFleet?.()}>
+        Fleet settings
+      </FleetMenuItem>
     </Menu>
+  );
+}
+
+/** A fleet menu item that disables (never hides) when the window can't manage the fleet —
+ *  discoverable: the tooltip says WHERE the fleet lives. The DS Tooltip's own wrapper span
+ *  is the hover target, because a disabled Radix menu item is pointer-events:none and so
+ *  can't fire the tooltip itself. */
+function FleetMenuItem({
+  icon,
+  blocked,
+  onSelect,
+  children,
+}: {
+  icon: ReactNode;
+  blocked: string | null;
+  onSelect: () => void;
+  children: ReactNode;
+}) {
+  if (!blocked) {
+    return (
+      <MenuItem icon={icon} onSelect={onSelect}>
+        {children}
+      </MenuItem>
+    );
+  }
+  return (
+    <Tooltip label={blocked} side="left">
+      <MenuItem icon={icon} disabled>
+        {children}
+      </MenuItem>
+    </Tooltip>
   );
 }

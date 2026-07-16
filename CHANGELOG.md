@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **"New agent" no longer dead-ends in a fleet member's window — and the fleet is now
+  manageable from one.** The header switcher's "+ New agent" and "Fleet settings" share a
+  destination (Global ▸ Fleet), but only "Fleet settings" was gated, so "+ New agent" stayed
+  a live link to a section that didn't exist in that window — and `SettingsSurface` resolves
+  a missing section as `?? sections[0]`, silently landing on an unrelated Agent panel rather
+  than erroring. Both items now share one gate, and that gate is narrowed to the one window
+  where it's genuinely needed.
+  A hub slug window (`/app/agent/<slug>/`) is no longer blocked at all: the roster API is
+  hub-scoped by construction (`isHubPath` keeps `/api/fleet` + `/api/archetypes` off the slug
+  proxy), so creating from a member's window always targeted the hub correctly — and
+  `FleetManagerPanel` is built for exactly that window, since its "add as delegate" flow is
+  deliberately slug-scoped to the focused agent (ADR 0042 + 0025). The old gate was circular:
+  the Box group is hidden off-host, which was then cited as the reason the link "would land
+  nowhere", when the group was hidden only because `isHostConsole()` is `currentSlug() ===
+  "host"`. ADR 0047 §7.7 makes box-shared *config defaults* host-only; a fleet roster is a
+  control plane, not a default, and had been lumped in by proximity. A spawned workspace
+  member driven *directly* stays disabled with a tooltip — its own `/api/fleet` really is a
+  fleet-of-one, so managing there would build a nested fleet by accident.
+- **A stray "+ New agent" click no longer pops the archetype picker at random later.**
+  `fleetStartNew` is a one-shot consumed by the fleet panel on mount, but it was persisted —
+  so a click in a window with no Fleet section set it, nothing consumed it, and it survived
+  reload to fire on some unrelated later visit. It's now partialized out of persistence
+  alongside the other ephemeral overlay state.
+
 ## [0.102.0] - 2026-07-16
 
 ### Added

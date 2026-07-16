@@ -15,6 +15,7 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useUI } from "../state/uiStore";
 import { DelegatesSection } from "./DelegatesSection";
+import { boxSectionIds, type BoxSectionId } from "./boxSections";
 import { FleetSurface } from "./FleetSurface";
 import { KeybindingsPanel } from "./KeybindingsPanel";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
@@ -88,13 +89,15 @@ const CAPABILITY_SECTIONS: Section[] = [
   { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
 ];
 
-// BOX — box-wide operations (host console only). The host box-runtime + telemetry knobs are
-// reached via chips on Fleet ("Box runtime") and Telemetry, not a separate empty schema panel.
-const BOX_SECTIONS: Section[] = [
-  { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
-  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-];
+// BOX — box-wide operations. The host box-runtime + telemetry knobs are reached via chips on
+// Fleet ("Box runtime") and Telemetry, not a separate empty schema panel. WHICH of these a
+// window may show is decided by `boxSectionIds` (boxSections.ts) — Overview/Telemetry are
+// host-only per ADR 0047 §7.7, Fleet is available everywhere (#1999).
+const BOX_SECTION_BY_ID: Record<BoxSectionId, Section> = {
+  overview: { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
+  fleet: { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
+  telemetry: { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
+};
 
 // THIS CONSOLE — device-local preferences. These don't cascade and use their own backends
 // (Theme → /api/theme; Chat/Keyboard → the persisted UI store). Kept visibly separate from
@@ -106,7 +109,7 @@ const CONSOLE_SECTIONS: Section[] = [
 ];
 
 // One consolidated settings surface. `initialSection` deep-links a section (the overlay / a ⌘K
-// command). The Box group is gated to the host console.
+// command). The Box group's membership depends on the window — see boxSections.ts.
 export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
   const onHost = isHostConsole();
   // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
@@ -127,10 +130,11 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     ? [...CONSOLE_SECTIONS, { id: "developer", label: "Developer", icon: FlaskConical, render: () => <DeveloperPanel /> }]
     : CONSOLE_SECTIONS;
 
+  const boxSections = boxSectionIds(onHost).map((id) => BOX_SECTION_BY_ID[id]);
   const sections = [
     ...AGENT_SECTIONS,
     ...CAPABILITY_SECTIONS,
-    ...(onHost ? BOX_SECTIONS : []),
+    ...boxSections,
     ...consoleSections,
   ];
   const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
@@ -138,7 +142,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
   const groups = [
     { label: "Agent", items: AGENT_SECTIONS.map(toItem) },
     { label: "Capabilities", items: CAPABILITY_SECTIONS.map(toItem) },
-    ...(onHost ? [{ label: "Box", items: BOX_SECTIONS.map(toItem) }] : []),
+    { label: "Box", items: boxSections.map(toItem) },
     { label: "This console", items: consoleSections.map(toItem) },
   ];
 
