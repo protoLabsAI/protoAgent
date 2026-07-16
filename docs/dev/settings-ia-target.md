@@ -82,18 +82,54 @@ This is already right today; noting it so the rework doesn't "fix" it.
 
 ## 4. Decisions
 
-### DECISION B — `agent_runtime` → Model · **PROPOSED: B1 (yes)**
+### DECISION B — `agent_runtime` → Model · **PROPOSED: B1 (yes)** — *now evidence-backed*
 *Josh: "I would think agent runtime would just be in the model section"*
 
 Move `agent_runtime` + `operator_mcp.tools` to **Model**, retitled **"Model & runtime"**.
-The console already merged these axes for the operator: #1993 put ACP agents **in the model
-picker**; #1995 makes runtime a per-chat choice from that same dropdown. If you pick it where you
-pick a model, it configures where a model does.
+
+**This is not a presentation preference — the two are functionally coupled, and the code says so.**
+`graph/llm.py:207` (`create_llm`) carries an ACP-only fallback:
+
+```python
+# ACP-only fallback (ADR 0033): when the runtime is an ACP coding agent AND no gateway
+# key is configured, back protoAgent's auxiliary LLM calls with that same ACP agent —
+# so an ACP-only setup needs no OpenAI-compatible endpoint.
+if is_acp_runtime(config) and not _gateway_configured(config):
+    return make_acp_aux_model(config)
+```
+
+So **the runtime decides whether a gateway model + key is required at all**. `acp:*` → the ACP
+agent backs the aux slots, no gateway needed. `native` → the gateway is mandatory.
+`agent_runtime` is therefore a *precondition* of the Model settings, not an unrelated axis.
+
+**Reproduced live** (dev instance, no gateway key configured):
+
+```
+POST /api/settings {"agent_runtime": "acp:proto"}  → ok:true   "reloaded"
+POST /api/settings {"agent_runtime": "native"}     → ok:false
+    "config saved · graph rebuild failed: Missing credentials. Please pass an `api_key` …
+     or set the OPENAI_API_KEY … environment variable."
+```
+
+Josh, hitting exactly this: *"I can't swap to native and save because I get this error. And I
+shouldn't have to go over and put in my key to come back. It's just stupid UX."*
+
+He's right, and the fix is structural: the field that makes a key **mandatory** sits two sections
+away from the field that **supplies** it. Under B1 they're one section — "Model & runtime" — and
+switching to native surfaces the empty `model.api_key` right there.
+
+Follow-ups this exposes (not IA):
+- The error names an **environment variable**, when the fix is `model.api_key` in the same
+  settings surface. It should point at the field.
+- `agent_runtime` ought to *validate* against the resolved gateway config before saving, rather
+  than failing in the rebuild after the config is already committed (see **D10**).
 
 ⚠️ **ADR 0033 D1 holds runtime and model are separate axes** — a deliberate position. B1
 contradicts it at the IA level. Proposed resolution: amend ADR 0033 D1 to say the axes remain
 separate *in the model* (a runtime is not a model, and `acp:*` is not valid in an aux slot) but
-are **presented together**, because the operator's question is "what drives this turn?".
+are **presented together**, because the operator's question is "what drives this turn?" — and
+because, per the fallback above, **the runtime determines whether the model config is even
+required**. The ACP-only fallback is itself an admission that the axes aren't independent.
 → **Needs your call: amend the ADR, or keep B2 and accept the picker/settings mismatch.**
 
 `operator_mcp.tools` only means anything when `agent_runtime` is `acp:*`. It should also gain

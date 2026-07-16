@@ -170,6 +170,60 @@ isn't keep-warm.
 
 `skills.top_k` also has an **empty description**.
 
+### D10 — a failed rebuild leaves disk and runtime diverged (**high — not an IA bug**)
+
+The settings write is **not atomic**. `_apply_settings_changes` commits the config to YAML, *then*
+rebuilds the graph. When the rebuild fails, the config stays written and the process keeps serving
+the **old** graph — with only a toast to say so.
+
+Reproduced live on a dev instance with no gateway key:
+
+```
+POST /api/settings {"agent_runtime":"acp:proto"} → ok:true  "reloaded"
+POST /api/settings {"agent_runtime":"native"}    → ok:false
+   messages: ["config saved", "graph rebuild failed: Missing credentials …"]
+
+langgraph-config.yaml  → agent_runtime: native      ← committed
+GET /api/config        → agent_runtime: acp:proto   ← still running the old graph
+```
+
+Disk and runtime now disagree, silently. And the next restart boots `native` — the state the
+rebuild just rejected — so a failure that was survivable in-process becomes a **fatal boot**.
+That isn't hypothetical; it was verified by restarting the same instance:
+
+```
+graph/agent.py:912   llm = create_llm(config)
+graph/llm.py:238     return _ReasoningChatOpenAI(**kwargs)
+openai.OpenAIError: Missing credentials …
+→ process exits 1. The instance will not start.
+```
+
+**A toast-level warning ended in an instance that cannot boot**, recoverable only by hand-editing
+`langgraph-config.yaml` — which is exactly what it took to restore it. The console offers no way
+back, because the console needs the server that won't start.
+
+Why the runtime swap specifically: `create_llm` (`graph/llm.py:207`) carries an ACP-only fallback —
+under `acp:*` **with no gateway configured**, aux calls route through the ACP agent, so no
+credentials are needed. `native` has no such fallback. An ACP-only instance is therefore *one
+settings save away from being unbootable*, and the UI presents that save as an ordinary dropdown
+change.
+
+Note the rebuild path is careful *internally*: it closes the freshly-built MCP clients and commits
+no scheduler state (`agent_init.py:1633-1639`, and `tests/test_reload_rebuild_deps.py` asserts
+"nothing committed"). The gap is that the **YAML write happens earlier** and isn't part of that
+rollback. `tests/test_config_secrets.py:312` documents an earlier instance of the same symptom
+("this is what failed live"), fixed for the secrets-stripping case only.
+
+Fixes, roughly in order of honesty:
+1. **Validate before commit** — dry-build the graph (or at least resolve credentials for the
+   target runtime) and refuse the save with the reason, changing nothing.
+2. **Roll back the YAML** when the rebuild fails.
+3. At minimum, say so plainly: the toast reads "config saved · graph rebuild failed", which
+   understates "your config and your running agent now disagree".
+
+Related IA consequence: the *reason* you can hit this by accident is D-B — the runtime field is
+two sections from the key it makes mandatory. See the target doc's Decision B.
+
 ### D9 — Knowledge is a 25-field category carrying non-knowledge concerns (**low**)
 
 Split into Recall (12) / Ingestion (7) / History (6) by `_KNOWLEDGE_SUBSECTION`. "History" is
