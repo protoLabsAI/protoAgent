@@ -3,8 +3,13 @@
 A single shared markdown note that BOTH the agent (via tools) and the operator
 (via a console panel) read and write. The plugin owns its whole vertical: storage,
 agent tools, and a sandboxed-iframe editor it serves itself (ADR 0038 — no host
-build, git-installable). No tabs, no undo, no versioning — deliberately the basic
-notebook we actually want.
+build, git-installable). Still one note: no tabs, no versioning — deliberately the
+basic notebook we actually want.
+
+The editor renders markdown AS YOU TYPE (CodeMirror 6, vendored — see _VENDOR_FILES):
+headings are sized, **bold** is bold, and the syntax chrome hides until your cursor
+enters the line. There is no edit/preview toggle and nothing is ever rewritten on
+disk — the file stays exactly the markdown you typed.
 
 It models the VIEW-vs-DATA gating rule (the plugin-authoring guide): the editor
 PAGE is served under the PUBLIC ``/plugins/notes`` prefix because a browser iframe
@@ -34,6 +39,35 @@ log = logging.getLogger("protoagent.plugins.notes")
 # Serializes read-compare-write so the concurrency guard can't be raced. RE-entrant:
 # the guarded PUT holds it across a _read() + _write(), and _write takes it too.
 _LOCK = threading.RLock()
+
+# The CodeMirror 6 closure, vendored and served same-origin: the editor works fully
+# OFFLINE and the manifest's `network: []` is finally literal (it wasn't while the old
+# preview pulled `marked` off cdnjs). Allowlisted — the route joins this name onto
+# vendor/, so the set IS the path-traversal defence.
+#
+# WHY TEN FILES AND NOT ONE BUNDLE — the trap that makes CM6 look broken:
+# CM6 packages carry IDENTITY. Facets, StateFields and EditorState are compared by
+# REFERENCE, so two copies of @codemirror/state means markdown()'s extensions are
+# rejected by the other copy's EditorView ("Unrecognized extension value"). esm.sh's
+# default `?bundle` inlines a private copy of state into every package and fails exactly
+# that way. These are built with `?external=` so each emits BARE specifiers, and the
+# page's import map resolves every one to a single shared copy.
+_VENDOR_FILES = {
+    "state.mjs",
+    "view.mjs",
+    "language.mjs",
+    "commands.mjs",  # history/undo + the default keymap
+    "lang-markdown.mjs",
+    "autocomplete.mjs",  # lang-markdown imports it
+    "common.mjs",
+    "highlight.mjs",
+    "lr.mjs",
+    "markdown.mjs",
+    # Stands in for esm.sh's /node/process.mjs, which @lezer/lr's bundle imports for
+    # `process.env.LOG`. Without it that import 404s, the module graph aborts, and the
+    # editor silently renders as an empty box. See vendor/process.shim.mjs.
+    "process.shim.mjs",
+}
 
 
 def _note_path() -> Path:
@@ -117,13 +151,32 @@ def _build_view_router():
     build, git-installable). The page then fetches its DATA from the gated data
     router with the postMessage handshake token."""
     from fastapi import APIRouter
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import FileResponse, HTMLResponse, Response
 
     router = APIRouter()
 
     @router.get("/view")
     async def _view():
         return HTMLResponse(_EDITOR_HTML)
+
+    # The vendored CodeMirror modules, on the PUBLIC prefix alongside the page that
+    # imports them — an iframe's module fetches carry no bearer either, so gating these
+    # would break the editor exactly the way gating the page would. They're third-party
+    # library bytes, not operator data. No CORS header needed: unlike artifact's srcdoc
+    # (an opaque origin), this iframe is allow-same-origin, so these load same-origin.
+    @router.get("/vendor/{name}")
+    async def _vendor(name: str):
+        if name not in _VENDOR_FILES:  # allowlist — the only path-traversal defence
+            return Response(status_code=404)
+        f = Path(__file__).parent / "vendor" / name
+        if not f.exists():
+            return Response(status_code=404, content=f"{name} not vendored")
+        return FileResponse(
+            f,
+            media_type="application/javascript",
+            # Version-pinned bytes that only change when the plugin does — cache hard.
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     # The compact "quick note" PAGE (ADR 0057) — the plugin's PALETTE view: the same
     # shared note + autosave, trimmed chrome (no preview toggle) to fit the ⌘K palette
@@ -199,20 +252,24 @@ def register(registry) -> None:
     registry.register_router(_build_data_router(), prefix="/api/plugins/notes")
 
 
-# The editor page the console iframes. A self-contained markdown editor: debounced
-# autosave (PUT /note), an edit↔preview toggle (marked from CDN, degrades to raw text
-# offline), and a poll that adopts the agent's writes. No host build — the plugin
-# serves its own UI, so it works installed from a git URL (ADR 0038).
+# The editor page the console iframes: a CodeMirror 6 markdown editor that renders as
+# you type — headings sized, **bold** actually bold, syntax chrome hidden until your
+# cursor enters the line — plus debounced autosave (PUT /note), the conflict guard, and
+# a poll that adopts the agent's writes. No host build and no CDN: CM6 is vendored and
+# served from this plugin, so it still installs from a git URL (ADR 0038) and runs
+# offline.
 #
 # FOUR-RULES COMPLIANT (docs/how-to/build-a-plugin-view.md, the chat_example pattern):
 #   3. SLUG-AWARE — the kit's apiFetch derives the base (host vs /agents/<slug> proxy)
 #      for every data call; only the kit's own <link>/<script> are base-prefixed by
-#      hand (they load before the kit exists).
+#      hand (they load before the kit exists). The import map gets this for FREE by
+#      being relative — see the note on it below.
 #   4. LINK THE KIT — <base>/_ds/plugin-kit.{css,js} replaces the hand-rolled hex
 #      token map + bespoke protoagent:init listener + manual bearer headers this page
 #      carried before: plugin-kit.js maps the operator's live theme onto --pl-*
 #      (initial handshake AND protoagent:theme re-themes), and apiFetch attaches the
-#      token. Local <style> is layout-only.
+#      token. CodeMirror ships NO stylesheet of its own — only stable .cm-* hooks — so
+#      the editor is themed entirely from --pl-* tokens and re-skins with the operator.
 _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 <script>
   "use strict";
@@ -221,24 +278,76 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   window.__base = location.pathname.split("/plugins/")[0];
   document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
 </script>
+<!-- The vendored CodeMirror closure. RELATIVE specifiers are slug-aware for FREE: this
+     page is served at <base>/plugins/notes/view, so "./vendor/x.mjs" resolves against
+     it to <base>/plugins/notes/vendor/x.mjs — behind a fleet proxy (/agents/<slug>/…)
+     it follows the proxy with no hand-prefixing, which is why this needs no __base.
+     ONE entry per package, each to ONE file: CM6 compares Facets and EditorState by
+     REFERENCE, so a duplicate @codemirror/state makes markdown()'s extensions
+     unrecognizable to the other copy's EditorView. -->
+<script type="importmap">
+{"imports":{
+  "@codemirror/state":"./vendor/state.mjs",
+  "@codemirror/view":"./vendor/view.mjs",
+  "@codemirror/language":"./vendor/language.mjs",
+  "@codemirror/commands":"./vendor/commands.mjs",
+  "@codemirror/lang-markdown":"./vendor/lang-markdown.mjs",
+  "@codemirror/autocomplete":"./vendor/autocomplete.mjs",
+  "@lezer/common":"./vendor/common.mjs",
+  "@lezer/highlight":"./vendor/highlight.mjs",
+  "@lezer/lr":"./vendor/lr.mjs",
+  "@lezer/markdown":"./vendor/markdown.mjs",
+  "/node/process.mjs":"./vendor/process.shim.mjs"
+}}
+</script>
 <style>
-  /* Layout only — colors/typography come from plugin-kit.css's --pl-* tokens, which
-     plugin-kit.js re-skins to the operator's live theme on the handshake. */
+  /* Layout + the editor's skin. Every colour is a --pl-* token, which plugin-kit.js
+     re-skins to the operator's live theme on the handshake — no hex here. */
   html,body{margin:0;height:100%;background:var(--pl-color-bg-raised);color:var(--pl-color-fg);
     font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}
   #wrap{display:flex;flex-direction:column;height:100%}
   #bar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;
     border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border);
     font-size:12px;color:var(--pl-color-fg-muted)}
-  #ed{flex:1;min-height:0;resize:none;border:0;outline:none;padding:12px;background:transparent;
-    color:var(--pl-color-fg);font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);
-    font-size:13px;line-height:1.6}
-  #pv{flex:1;min-height:0;overflow:auto;padding:12px;display:none}
-  #pv :is(h1,h2,h3){color:var(--pl-color-fg)}
-  #pv code{background:var(--pl-color-bg-raised);padding:2px 5px;border-radius:var(--pl-radius)}
   #actions{display:flex;gap:6px;align-items:center}
   #conflict[hidden]{display:none}
   #conflict{display:flex;gap:6px}
+  #ed{flex:1;min-height:0;overflow:hidden}
+
+  /* CodeMirror hooks. It ships no colours of its own, so these are the whole theme.
+     EVERY rule below is scoped with `.cm-editor` ON PURPOSE, and it is not cosmetic:
+     CM's baseTheme injects `.ͼ1 .cm-scroller{font-family:monospace}` — a GENERATED
+     class, so two-class specificity (0,2,0). A bare `.cm-scroller` (0,1,0) loses to it
+     no matter where our stylesheet sits, and the editor silently renders monospace with
+     the DS font ignored. `.cm-editor .cm-scroller` matches its specificity and wins on
+     order (CM inserts its sheet at the TOP of <head> precisely so authors can override). */
+  .cm-editor{height:100%;background:transparent}
+  .cm-editor.cm-focused{outline:none}
+  .cm-editor .cm-scroller{overflow:auto;font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif);
+    line-height:1.7}
+  .cm-editor .cm-content{padding:14px 16px;caret-color:var(--pl-color-fg)}
+  .cm-editor .cm-cursor,.cm-editor .cm-dropCursor{border-left-color:var(--pl-color-fg)}
+  .cm-editor .cm-selectionBackground,.cm-editor .cm-content ::selection,.cm-editor .cm-line ::selection{
+    background:color-mix(in srgb, var(--pl-color-accent) 28%, transparent)}
+  .cm-editor .cm-placeholder{color:var(--pl-color-fg-subtle)}
+
+  /* Live-preview decorations — the "rendering". Sizes are em-relative so the whole
+     editor scales from one font-size. */
+  .cm-editor .cm-md-h1{font-size:1.7em;font-weight:700;line-height:1.3}
+  .cm-editor .cm-md-h2{font-size:1.4em;font-weight:700;line-height:1.35}
+  .cm-editor .cm-md-h3{font-size:1.2em;font-weight:600}
+  .cm-editor .cm-md-h4{font-size:1.05em;font-weight:600}
+  .cm-editor .cm-md-h5,.cm-editor .cm-md-h6{font-size:1em;font-weight:600;color:var(--pl-color-fg-muted)}
+  .cm-editor .cm-md-strong{font-weight:700}
+  .cm-editor .cm-md-em{font-style:italic}
+  .cm-editor .cm-md-strike{text-decoration:line-through;color:var(--pl-color-fg-muted)}
+  .cm-editor .cm-md-code{font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);font-size:.9em;
+    background:var(--pl-color-bg-inset);padding:.1em .35em;border-radius:var(--pl-radius)}
+  .cm-editor .cm-md-link{color:var(--pl-color-accent);text-decoration:underline;text-underline-offset:2px}
+  .cm-editor .cm-md-quote{border-left:3px solid var(--pl-color-border-strong);padding-left:10px;
+    color:var(--pl-color-fg-muted)}
+  .cm-editor .cm-md-fence{font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);font-size:.9em;
+    background:var(--pl-color-bg-inset)}
 </style></head><body>
 <div id="wrap">
   <div id="bar"><span id="status">Notes</span>
@@ -247,17 +356,27 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
         <button id="mine" class="pl-btn pl-btn--sm" type="button">Keep mine</button>
         <button id="theirs" class="pl-btn pl-btn--sm" type="button">Take theirs</button>
       </span>
-      <button id="toggle" class="pl-btn pl-btn--sm" type="button">Preview</button>
     </span>
   </div>
-  <textarea id="ed" placeholder="A shared note — you and the agent both write here." spellcheck="false" autofocus></textarea>
-  <div id="pv"></div>
+  <div id="ed"></div>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script type="module">
   "use strict";
-  var ed=document.getElementById("ed"), pv=document.getElementById("pv"), st=document.getElementById("status"), tg=document.getElementById("toggle");
+  var st=document.getElementById("status");
   var cf=document.getElementById("conflict"), bMine=document.getElementById("mine"), bTheirs=document.getElementById("theirs");
+  // plugin-kit.js is an ES MODULE (it has export statements) — a classic
+  // <script src> throws "Unexpected token 'export'" and never sets the
+  // window.protoPluginView global. Dynamic import is the no-build way to load it
+  // with a slug-aware URL (a static import specifier can't carry the base).
+  // If the kit can't load, FAIL LOUDLY. The old fallback here fetched tokenlessly,
+  // which quietly 401s every save on a gated instance and looks like data loss; an
+  // unthemed, unauthed editor is not a degraded editor, it's a broken one.
+  import {EditorView, Decoration, ViewPlugin, keymap, placeholder} from "@codemirror/view";
+  import {EditorState, Annotation} from "@codemirror/state";
+  import {markdown, markdownLanguage} from "@codemirror/lang-markdown";
+  import {syntaxTree} from "@codemirror/language";
+  import {defaultKeymap, history, historyKeymap} from "@codemirror/commands";
+
   // plugin-kit.js is an ES MODULE (it has export statements) — a classic
   // <script src> throws "Unexpected token 'export'" and never sets the
   // window.protoPluginView global. Dynamic import is the no-build way to load it
@@ -269,45 +388,152 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
   catch (e) {
     st.textContent = "Editor unavailable — the console plugin kit failed to load";
-    ed.disabled = true; tg.disabled = true;
     throw e;
   }
-  var lastSynced="", baseVersion=null, remote=null, dirty=false, preview=false, conflicted=false, loaded=false, t=null;
+
+  // ── live preview ──────────────────────────────────────────────────────────────
+  // What makes this "rendering" rather than syntax highlighting: the markdown chrome
+  // (`##`, `**`, backticks, `[]()`) is REPLACED with nothing while your cursor is on
+  // another line, so you read formatted text — then reappears the moment you enter the
+  // line, so it stays editable as plain markdown. Nothing is ever rewritten on disk;
+  // the document is always exactly the markdown you typed.
+  const LINE_CLASS = {
+    ATXHeading1:"cm-md-h1", ATXHeading2:"cm-md-h2", ATXHeading3:"cm-md-h3",
+    ATXHeading4:"cm-md-h4", ATXHeading5:"cm-md-h5", ATXHeading6:"cm-md-h6",
+    SetextHeading1:"cm-md-h1", SetextHeading2:"cm-md-h2",
+    Blockquote:"cm-md-quote", FencedCode:"cm-md-fence", CodeBlock:"cm-md-fence",
+  };
+  const MARK_CLASS = {
+    Emphasis:"cm-md-em", StrongEmphasis:"cm-md-strong", InlineCode:"cm-md-code",
+    Strikethrough:"cm-md-strike", Link:"cm-md-link",
+  };
+  // NB: EmphasisMark covers BOTH * and ** — @lezer/markdown has no StrongEmphasisMark.
+  // ListMark is deliberately absent: the bullet IS the rendering, so it stays.
+  const HIDE = new Set(["HeaderMark","EmphasisMark","StrikethroughMark","LinkMark","URL","LinkTitle","CodeMark","QuoteMark"]);
+
+  function hideable(node){
+    const parent = node.node.parent && node.node.parent.name;
+    // Inline code's backticks go; a fenced block's ``` stay — hiding them collapses the
+    // fence to a blank line, which reads as a rendering bug.
+    if (node.name === "CodeMark") return parent === "InlineCode";
+    // A link's chrome goes, an image's stays: we don't draw images, so reducing
+    // ![alt](url) to "alt" would look like prose that lost its picture.
+    if (node.name === "LinkMark" || node.name === "URL" || node.name === "LinkTitle") return parent === "Link";
+    return true;
+  }
+
+  function decorate(view){
+    const state = view.state, decos = [], seen = new Set();
+    // Every line touched by a cursor or selection stays in source form — but only while
+    // we HAVE focus. An unfocused editor has a caret parked at position 0, so without
+    // this the first line would sit there showing its raw `#` to someone who is just
+    // reading the note. Not editing ⇒ fully rendered.
+    const live = new Set();
+    if (view.hasFocus){
+      for (const r of state.selection.ranges){
+        const a = state.doc.lineAt(r.from).number, b = state.doc.lineAt(r.to).number;
+        for (let n = a; n <= b; n++) live.add(n);
+      }
+    }
+    for (const range of view.visibleRanges){
+      syntaxTree(state).iterate({from: range.from, to: range.to, enter(node){
+        const lineClass = LINE_CLASS[node.name];
+        if (lineClass){
+          // Blockquotes and fences span lines; headings don't. Walk either way.
+          let pos = node.from;
+          for (;;){
+            const line = state.doc.lineAt(pos), key = line.from + "|" + lineClass;
+            if (!seen.has(key)){ seen.add(key); decos.push(Decoration.line({class: lineClass}).range(line.from)); }
+            if (line.to >= node.to) break;
+            pos = line.to + 1;
+          }
+        }
+        const markClass = MARK_CLASS[node.name];
+        if (markClass && node.to > node.from) decos.push(Decoration.mark({class: markClass}).range(node.from, node.to));
+        if (HIDE.has(node.name) && !live.has(state.doc.lineAt(node.from).number) && hideable(node)){
+          let to = node.to;
+          // Swallow the space after `## ` / `> ` too, or the text keeps a phantom
+          // indent once the marker is gone.
+          if ((node.name === "HeaderMark" || node.name === "QuoteMark") && state.doc.sliceString(node.to, node.to + 1) === " ") to = node.to + 1;
+          if (to > node.from) decos.push(Decoration.replace({}).range(node.from, to));
+        }
+      }});
+    }
+    // sort=true: line and replace decorations interleave, and RangeSet demands order.
+    return Decoration.set(decos, true);
+  }
+
+  const livePreview = ViewPlugin.fromClass(class {
+    constructor(view){ this.decorations = decorate(view); }
+    update(u){
+      // selectionSet matters as much as docChanged — moving the caret is what reveals
+      // and re-hides the markers; focusChanged re-renders the line you left behind.
+      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged) this.decorations = decorate(u.view);
+    }
+  }, {decorations: v => v.decorations});
+
+  // ── wiring ────────────────────────────────────────────────────────────────────
+  var lastSynced="", baseVersion=null, remote=null, dirty=false, conflicted=false, loaded=false, t=null;
+  // Marks transactions WE dispatch (adopting the agent's text), so the update listener
+  // can tell them from the operator's typing and not flag the note dirty.
+  const Remote = Annotation.define();
+
+  const view = new EditorView({
+    parent: document.getElementById("ed"),
+    state: EditorState.create({doc: "", extensions: [
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.lineWrapping,
+      markdown({base: markdownLanguage}),  // markdownLanguage = GFM (strikethrough, tasks)
+      livePreview,
+      placeholder("A shared note — you and the agent both write here."),
+      EditorView.updateListener.of(function(u){
+        if (!u.docChanged) return;
+        if (u.transactions.some(function(tr){ return tr.annotation(Remote); })) return;
+        dirty = true; st.textContent = "Saving…"; clearTimeout(t); t = setTimeout(save, 700);
+      }),
+    ]}),
+  });
+  view.focus();
+
+  function docText(){ return view.state.doc.toString(); }
+  function setDocText(text){
+    view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: text}, annotations: Remote.of(true)});
+  }
+
   // The kit owns the protoagent:init handshake (bearer + theme, incl. live re-themes)
   // and authed slug-aware fetches; on a token-gated instance the first token arrives
   // with the handshake, so re-load then (the immediate load() covers tokenless local).
   kit.initPluginView(function(){ if(!dirty) load(); });
-  function renderPreview(){ pv.innerHTML = window.marked ? marked.parse(ed.value||"") : ed.value; }
-  tg.onclick=function(){ preview=!preview; if(preview){renderPreview();pv.style.display="block";ed.style.display="none";tg.textContent="Edit";}
-    else{pv.style.display="none";ed.style.display="block";tg.textContent="Preview";} };
-  ed.addEventListener("input", function(){ dirty=true; st.textContent="Saving…"; clearTimeout(t); t=setTimeout(save,700); });
+
   // A 409 means the note moved under us (the agent wrote while we were typing). Park
-  // BOTH versions — ours in the textarea, theirs on disk — and let the operator pick.
+  // BOTH versions — ours on screen, theirs on disk — and let the operator pick.
   // Auto-resolving either way is data loss with extra steps.
   function onConflict(c){ conflicted=true; remote=c; clearTimeout(t); cf.hidden=false;
     st.textContent="⚠ The agent changed this note — your edits are unsaved"; }
   function clearConflict(){ conflicted=false; remote=null; cf.hidden=true; }
   bMine.onclick=function(){ baseVersion=remote?remote.version:null; clearConflict(); save(); };
-  bTheirs.onclick=function(){ if(!remote)return; ed.value=remote.content; lastSynced=remote.content;
-    baseVersion=remote.version; dirty=false; clearConflict(); if(preview)renderPreview(); st.textContent="Reloaded"; };
+  bTheirs.onclick=function(){ if(!remote)return; var text=remote.content; setDocText(text);
+    lastSynced=text; baseVersion=remote.version; dirty=false; clearConflict(); st.textContent="Reloaded"; };
+
   async function save(){
     // Never save what we never loaded: if the initial GET failed we hold no
     // base_version, and saving would force-overwrite the real note with whatever is
-    // in this (probably empty) textarea.
+    // in this (probably empty) editor.
     if(!loaded){ st.textContent="Not loaded — not saving"; return; }
     try{
-      var body={content:ed.value};
+      var body={content:docText()};
       // Omitting base_version force-overwrites; we send it whenever we know it, so a
       // save that would clobber an unseen agent write comes back 409 instead.
       if(baseVersion!==null) body.base_version=baseVersion;
       var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       if(r.status===409){ onConflict(await r.json()); return; }
       if(!r.ok)throw 0;
-      var a=await r.json(); lastSynced=ed.value; baseVersion=a.version; dirty=false; st.textContent="Saved ✓";
+      var a=await r.json(); lastSynced=body.content; baseVersion=a.version; dirty=false; st.textContent="Saved ✓";
     }catch(e){ st.textContent="Save failed"; } }
   async function load(){ try{
       var a=await kit.apiFetch("/api/plugins/notes/note").then(function(r){return r.json();});
-      if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; if(preview)renderPreview(); }
+      if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ setDocText(a.content); lastSynced=a.content; }
       if(!dirty && typeof a.version==="string") baseVersion=a.version;
       loaded=true;
     }catch(e){} }

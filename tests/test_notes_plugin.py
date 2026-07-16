@@ -128,6 +128,95 @@ def test_idempotent_rewrite_does_not_manufacture_a_conflict(tmp_path, monkeypatc
     assert r.status_code == 200
 
 
+def test_editor_renders_markdown_inline_with_no_preview_toggle() -> None:
+    """The editor renders as you type — no edit↔preview mode to flip between."""
+    html = _load_notes()._EDITOR_HTML
+    assert 'id="toggle"' not in html and ">Preview<" not in html
+    assert "livePreview" in html  # the marker-hiding ViewPlugin
+    # Moving the caret is what reveals/re-hides markers, so selection changes MUST
+    # rebuild decorations — on docChanged alone the markers never come back.
+    assert "u.selectionSet" in html
+
+
+def test_editor_is_offline_and_the_marked_cdn_is_gone() -> None:
+    """`network: []` in the manifest was a lie while the preview pulled marked off
+    cdnjs. Every asset the page loads is now same-origin."""
+    html = _load_notes()._EDITOR_HTML
+    assert "cdnjs" not in html and "marked" not in html
+    assert "http://" not in html and "https://" not in html  # nothing loads off-box
+    assert '<script type="importmap">' in html
+
+
+def test_import_map_covers_the_whole_vendored_closure() -> None:
+    """Every bare specifier the vendored bundles emit must be in the import map, and
+    each must map to exactly ONE file: CM6 compares Facets/EditorState by reference, so
+    a duplicate @codemirror/state makes markdown()'s extensions unrecognizable to the
+    other copy's EditorView. A missing entry is a bare-specifier resolution error."""
+    import json
+    import re
+    from pathlib import Path
+
+    notes = _load_notes()
+    raw = re.search(r'<script type="importmap">\s*(\{.*?\})\s*</script>', notes._EDITOR_HTML, re.S)
+    assert raw, "no import map in the editor page"
+    imports = json.loads(raw.group(1))["imports"]
+
+    vendor = Path("plugins/notes/vendor")
+    # Every mapped target is allowlisted AND actually on disk (a typo here is a 404 at
+    # runtime, which the static four-rules checks would never catch).
+    for spec, target in imports.items():
+        name = target.rsplit("/", 1)[-1]
+        assert name in notes._VENDOR_FILES, f"{spec} → {name} is not allowlisted"
+        assert (vendor / name).is_file(), f"{spec} → {name} is not vendored"
+    # One package, one file — no package resolves to two different modules.
+    assert len(set(imports.values())) == len(imports)
+
+    # And the closure is CLOSED: nothing any bundle imports is left unmapped. This
+    # catches BOTH bare specifiers ("@codemirror/state") and esm.sh's absolute-path
+    # polyfill injections ("/node/process.mjs") — the latter is not hypothetical:
+    # @lezer/lr's bundle imports it for `process.env.LOG`, and an unmapped import 404s,
+    # aborts the module graph, and leaves the editor as a silent empty box with nothing
+    # thrown on the page. Anything unresolvable must fail HERE, not in a browser.
+    needed = set()
+    for f in vendor.glob("*.mjs"):
+        src = f.read_text(encoding="utf-8")
+        for pat in (r'from\s*"([@/][^"]+)"', r'import\s*"([@/][^"]+)"', r'import\s+\S+\s+from\s*"([@/][^"]+)"'):
+            needed |= set(re.findall(pat, src))
+    # Relative specifiers resolve on their own; only bare/absolute ones need mapping.
+    needed = {s for s in needed if not s.startswith(".")}
+    assert needed <= set(imports), f"unmapped specifiers: {sorted(needed - set(imports))}"
+
+
+def test_editor_css_outranks_codemirrors_base_theme() -> None:
+    """CM injects `.ͼ1 .cm-scroller{font-family:monospace}` — a GENERATED class, so
+    two-class specificity. A bare `.cm-scroller` rule (one class) loses to it wherever
+    our stylesheet sits, and the editor renders monospace with the DS font silently
+    ignored. Our rules must stay scoped under `.cm-editor` to match it."""
+    html = _load_notes()._EDITOR_HTML
+    css = html.split("<style>")[1].split("</style>")[0]
+    for hook in (".cm-scroller", ".cm-content", ".cm-md-h1"):
+        assert f".cm-editor {hook}" in css, f"{hook} must be scoped under .cm-editor"
+
+
+def test_vendor_route_is_allowlisted_against_path_traversal(tmp_path, monkeypatch) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    notes = _load_notes()
+    app = FastAPI()
+    app.include_router(notes._build_view_router(), prefix="/plugins/notes")
+    c = TestClient(app)
+
+    r = c.get("/plugins/notes/vendor/state.mjs")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/javascript")
+
+    # The allowlist IS the traversal defence — the route joins the name onto vendor/.
+    for bad in ("../__init__.py", "../../../etc/passwd", "nope.mjs"):
+        assert c.get(f"/plugins/notes/vendor/{bad}").status_code == 404
+
+
 def test_views_send_base_version_and_never_fall_back_to_a_tokenless_fetch() -> None:
     """The kit fallback used to fetch WITHOUT the bearer — silently 401ing every save
     on a gated instance. A kit that won't load is a broken editor, not a degraded one."""
