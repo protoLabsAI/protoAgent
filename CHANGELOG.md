@@ -495,6 +495,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nothing caught it: CI installs via `requirements.txt` (a `-e .` shim that routes through
   `pyproject.toml`, so tests always resolved 0.2.1), and the attribution gate compared the
   doc against the equally stale lock. Regenerated both.
+### Changed
+- **The agent-runtime selector now lives in the Model settings section ("Model & runtime"),
+  not Behavior.** The runtime and the model aren't independent for the operator: an `acp:*`
+  runtime needs no gateway (its ACP agent backs protoAgent's own calls), while `native`
+  requires a gateway model **and key** — so the runtime is a precondition of the model config,
+  and putting the selector two sections from the `model.api_key` it may require produced a real
+  papercut (swap to native, get "Missing credentials", go hunt for the key elsewhere). It now
+  leads the model section, above the fields it governs; the ACP "running on X — the model
+  settings below power protoAgent's own calls" banner finally sits over actual model fields.
+  ADR 0033 D1 amended: the config axes and resolution precedence are unchanged — this is
+  presentation only. First move of the settings-IA rework (docs/dev/settings-ia-target.md,
+  Decision B).
 
 ## [0.102.0] - 2026-07-16
 

@@ -42,6 +42,31 @@ reference stays canonical (mirrors OpenClaw's `agentRuntime.id: "claude-cli"` +
 Selection precedence (per-subagent override → per-call → config default) reuses the existing
 model-resolution shape.
 
+**Amendment (2026-07-16, settings IA rework) — separate *mechanism*, joint *presentation*.**
+The axes remain distinct in the config and the resolver: a runtime is not a model, `agent_runtime`
+and `model.name` are different keys, and `acp:<agent>` stays **invalid** in a model slot (aux /
+goal-eval / compaction / subagent `model`) — those resolve a gateway model, with the ACP-only
+fallback in `create_llm` handling the keyless case. That part of D1 stands.
+
+What this amendment corrects is the original implication that the two are *independent* for the
+operator. They are not, in two concrete ways:
+
+1. **The runtime decides whether a model config is even required.** `create_llm`'s ACP-only
+   fallback means an `acp:*` runtime with no gateway configured is valid, while `native` requires
+   a gateway model **and key**. So `agent_runtime` is a *precondition* of the Model settings, not
+   a peer of them. Presenting the two in different settings sections produced a real failure: a
+   keyless ACP instance switched to `native` fails the rebuild with "Missing credentials", and the
+   supplying field (`model.api_key`) was two sections away (fixed atomically in the settings-save
+   path; see the settings-IA docs).
+2. **The console already merged them at the point of choice.** #1993 surfaces ACP agents *in the
+   model picker*; #1995 makes the runtime a per-chat choice from that same dropdown. The
+   operator's question is "what drives this turn?", answered in one control.
+
+Therefore: `agent_runtime` (and its ACP-only sibling `operator_mcp.tools`) are **presented in the
+Model settings section** ("Model & runtime"), not a separate "Behavior/Agent runtime" section.
+This is an IA/UX decision about grouping; it does **not** collapse the config axes or change
+resolution precedence. The runtime contract (D2/D4) is unchanged.
+
 ### D2 — Two runtime families behind one contract
 
 - **Native (embedded):** the LangGraph loop. Owns the tool-call loop; tools/middleware as today.

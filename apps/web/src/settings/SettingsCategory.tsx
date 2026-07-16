@@ -84,7 +84,10 @@ export function SettingsCategory({
   const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
 
   // Active agent runtime (ADR 0033) — for the banner + header badge when this category
-  // carries the selector (the Agent settings). Reflects the pending (dirty) choice live.
+  // carries the selector. Keyed on the field, not the category: agent_runtime now lives in
+  // the Model section (ADR 0033 D1 amended), so the "running on X — the model settings below
+  // power protoAgent's own calls" banner finally sits above the model fields it names.
+  // Reflects the pending (dirty) choice live.
   const runtimeField = groups.flatMap((g) => g.fields).find((f) => f.key === "agent_runtime");
   const activeRuntime = runtimeField
     ? String((dirty["agent_runtime"] ?? runtimeField.value) ?? "native")
