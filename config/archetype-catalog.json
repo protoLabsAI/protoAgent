@@ -10,6 +10,14 @@
       "soul_preset": "base"
     },
     {
+      "id": "cowork",
+      "label": "Cowork",
+      "icon": "Briefcase",
+      "bundle": "https://github.com/protoLabsAI/cowork-stack",
+      "blurb": "A knowledge-work copilot — office-document skills, Google connectors, schedules, and memory, prepackaged.",
+      "soul_preset": "cowork"
+    },
+    {
       "id": "custom",
       "label": "Custom",
       "icon": "PenLine",
