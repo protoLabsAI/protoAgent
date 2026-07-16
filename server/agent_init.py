@@ -1973,6 +1973,101 @@ def _prune_shadowing_agent_keys(host_only: dict) -> list[str]:
     return removed
 
 
+def _config_files_to_snapshot() -> list[Path]:
+    """Every file a settings write can touch — the agent leaf, the untracked secrets
+    sibling, and the box-shared host layer. Resolved at call time (each honours an
+    instance repoint / test monkeypatch). A path that can't resolve is skipped, not fatal:
+    the snapshot is a safety net, and half a net still catches the file that changed."""
+    import graph.config_io as _cio
+
+    out: list[Path] = []
+    for resolve in (
+        _cio.config_yaml_path,
+        _cio.secrets_yaml_path,
+        lambda: __import__("infra.paths", fromlist=["host_config_path"]).host_config_path(),
+    ):
+        try:
+            p = Path(resolve())
+        except Exception:  # noqa: BLE001 — an unresolvable layer just isn't snapshotted
+            log.debug("[config] snapshot: a config path did not resolve", exc_info=True)
+            continue
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _snapshot_config_files() -> dict[Path, tuple[bytes, int] | None]:
+    """Byte+mode snapshot of the config files, for rolling back a write whose reload fails.
+
+    ``None`` records "this file did not exist" so a restore deletes a file the write
+    created (e.g. a first-ever secrets.yaml). Mode is captured so restoring the 0600
+    secrets file can't silently widen its permissions.
+    """
+    snaps: dict[Path, tuple[bytes, int] | None] = {}
+    for p in _config_files_to_snapshot():
+        try:
+            st = p.stat()
+            snaps[p] = (p.read_bytes(), st.st_mode)
+        except FileNotFoundError:
+            snaps[p] = None
+        except OSError:
+            # Unreadable → we can't promise to restore it, so don't pretend we can.
+            log.warning("[config] snapshot: %s unreadable; not covered by rollback", p)
+    return snaps
+
+
+def _restore_config_files(snaps: dict[Path, tuple[bytes, int] | None]) -> list[str]:
+    """Put the config files back exactly as ``_snapshot_config_files`` found them.
+
+    Returns the paths actually rewritten (empty = the write never landed, nothing to undo).
+    Best-effort per file: a restore that itself fails is logged loudly rather than raised —
+    the caller is already on a failure path, and one unrestorable file must not stop the
+    others going back.
+    """
+    restored: list[str] = []
+    for p, snap in snaps.items():
+        try:
+            if snap is None:
+                if p.exists():
+                    p.unlink()
+                    restored.append(str(p))
+                continue
+            data, mode = snap
+            if p.exists() and p.read_bytes() == data:
+                continue  # untouched by this write
+            p.write_bytes(data)
+            os.chmod(p, mode & 0o7777)  # a restored secrets.yaml keeps its 0600
+            restored.append(str(p))
+        except OSError:
+            log.exception("[config] ROLLBACK FAILED for %s — disk may not match the running agent", p)
+    return restored
+
+
+# A reload that returns False has committed NOTHING (see _reload_langgraph_agent: both of its
+# failure exits — "config load failed" and "graph rebuild failed" — return before
+# `STATE.graph = new_graph`, and the rebuild path closes the MCP clients it built). The old
+# graph is still serving. So the honest response to a failed reload is to put the YAML back:
+# otherwise disk says one thing, the running agent does another, and the NEXT restart boots the
+# config the rebuild just rejected. That is not theoretical — an ACP-only instance (no gateway
+# key: create_llm's ACP fallback covers acp:*, but `native` needs a real key) could be made
+# unbootable by one dropdown change, recoverable only by hand-editing YAML.
+_ROLLBACK_NOTE = "rolled back — your config and the running agent are unchanged"
+
+# Messages that a rollback makes retroactively false: the write they announce has been undone,
+# so reporting "config saved · rebuild failed · rolled back" tells the operator their config
+# both did and didn't save. Dropped from the response when the undo lands.
+_WRITE_ANNOUNCEMENTS = ("config saved", "host config saved")
+
+
+def _drop_undone_write_messages(messages: list[str]) -> list[str]:
+    """Strip the now-false "saved" lines after a rollback, keeping the failure reason."""
+    return [
+        m
+        for m in messages
+        if not (m in _WRITE_ANNOUNCEMENTS or m.startswith("reset ") and m.endswith("to inherited"))
+    ]
+
+
 @_serialized_config_write
 def _apply_settings_changes(
     config: dict | None = None,
@@ -2005,6 +2100,12 @@ def _apply_settings_changes(
     )
 
     messages: list[str] = []
+    # Snapshot BEFORE the first write so a failed reload can undo it (see _ROLLBACK_NOTE).
+    # Only when there's a config write to undo: a pure reload / SOUL-only save has no YAML
+    # change to revert, and SOUL is deliberately outside the rollback — it's authored prose,
+    # and silently reverting an operator's persona edit because a plugin failed to rebuild
+    # would destroy work to fix a mismatch that the persona didn't cause.
+    snaps = _snapshot_config_files() if config is not None else None
 
     if config is not None:
         ok, err = validate_config_dict(config)
@@ -2070,6 +2171,22 @@ def _apply_settings_changes(
 
     ok, reload_msg = _reload_langgraph_agent()
     messages.append(reload_msg)
+    if not ok and snaps is not None:
+        if _restore_config_files(snaps):
+            messages = _drop_undone_write_messages(messages)
+            messages.append(_ROLLBACK_NOTE)
+            # _sync_autostart_with_config already ran against the now-reverted patch, so a
+            # rejected save could otherwise leave a LaunchAgent plist installed (or removed)
+            # for a config that no longer exists on disk. Re-sync to the value we rolled back
+            # TO — STATE.graph_config is still the old config precisely because the rebuild
+            # never committed. Only when this save actually touched runtime.*.
+            if layer != "host" and config and "runtime" in config:
+                try:
+                    _sync_autostart_with_config(
+                        {"runtime": {"autostart_on_boot": bool(getattr(STATE.graph_config, "runtime_autostart_on_boot", False))}}
+                    )
+                except Exception:  # noqa: BLE001 — never mask the original failure
+                    log.exception("[config] autostart re-sync after rollback failed")
     return ok, messages
 
 
@@ -2085,6 +2202,11 @@ def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
     from graph.config_io import load_yaml_doc, pop_keys_from_yaml, save_yaml_doc
 
     messages: list[str] = []
+    # Same contract as _apply_settings_changes: a reload that fails committed nothing, so the
+    # popped keys go back rather than leaving disk ahead of the running agent. Dropping an
+    # override can make a graph unbuildable just as easily as setting one (the inherited value
+    # is what gets rebuilt against).
+    snaps = _snapshot_config_files() if keys else None
     if keys:
         try:
             leaf = _cio.config_yaml_path()  # resolved at call time (honors a repoint)
@@ -2098,6 +2220,9 @@ def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
 
     ok, reload_msg = _reload_langgraph_agent()
     messages.append(reload_msg)
+    if not ok and snaps is not None and _restore_config_files(snaps):
+        messages = _drop_undone_write_messages(messages)
+        messages.append(_ROLLBACK_NOTE)
     return ok, messages
 
 
