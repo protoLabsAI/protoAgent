@@ -215,7 +215,12 @@ PR #1692). The canonical capture path is `get_window_state` with
   process, killable, swappable.
 - Two untrodden seams get their first real exerciser: `register_mcp_server` has
   had **no** in-tree user (only the devkit skill mentions it), and this is the
-  first plugin to ship a managed MCP server behind a binary probe.
+  first plugin to ship a managed MCP server behind a binary probe. **Verified
+  end-to-end** by driving `build_mcp_tools(config, plugin_servers=[factory])`
+  against the installed driver: 17 tools bind as `cua-driver__*`, the
+  `tools: {include: […]}` allowlist holds exactly (no leakage from the other 21),
+  the entry reports `tier: "managed"`, and it activates MCP with
+  `mcp_enabled = False` — confirming a plugin's server needs no `mcp.enabled`.
 
 **Bad, and accepted.**
 - The most dangerous capability we ship is also the cheapest to enable. Off by
@@ -226,20 +231,23 @@ PR #1692). The canonical capture path is `get_window_state` with
   human-out-of-the-loop concern ADR 0071 §1 raised about self-updating plugins,
   now one layer down where our `plugins.update_policy` cannot see it. The plugin
   does not enable driver self-update.
-- macOS TCC grants attribute to the **responsible app identity**, which for the
-  Tauri desktop build (ADR 0058) is the sidecar, not Terminal. Expect the grant
-  UX to differ between `scripts/dev.sh` and the packaged app. **Verified on
-  0.8.3, and worse than "differs":** the driver's own `check_permissions` tool
-  answers for the *caller's* identity, so it reports `accessibility: true` from a
-  terminal on a machine where the driver has no grant at all — a false positive
-  and a false negative from one command. The honest check is
-  `cua-driver permissions status --json`, which answers via the daemon
-  (`attribution: "driver-daemon"`) and returns `unknown` when none is running.
-  The mitigation is to run the daemon (`cua-driver serve`) so grants attach to
-  `com.trycua.driver` **once**, independent of who spawns `cua-driver mcp`;
-  without it the grant follows the protoAgent process and the dev-vs-packaged
-  split becomes real. The plugin's Test button uses the honest check and
-  distinguishes *can't-confirm* from *denied*.
+- macOS TCC grants attribute to the **responsible app identity**. This ADR first
+  predicted the grant UX would differ between `scripts/dev.sh` and the packaged
+  app (ADR 0058's sidecar); **verified on 0.8.3, that concern is mostly void** —
+  `cua-driver mcp` detects that it lacks grants under whatever spawned it and
+  **auto-launches the CuaDriver daemon** via LaunchServices, then proxies through
+  it. So grants attach to `com.trycua.driver` once and hold regardless of who
+  spawns the server, and the operator never manages a daemon.
+  (`--no-daemon-relaunch` opts out and stays in-process, which *would* put the
+  grant on protoAgent's identity — don't.)
+- The permission story is nastier than the grant story. The driver's own
+  `check_permissions` tool answers for the **caller's** TCC identity, so it
+  reports `accessibility: true` from a terminal on a machine where the driver has
+  no grant at all — a false positive and a false negative from one command. The
+  honest check is `cua-driver permissions status --json`: daemon-attributed
+  (`"attribution": "driver-daemon"`), `unknown` when none is running. The
+  plugin's Test button uses it and distinguishes *can't-confirm* from *denied*.
+  Anything downstream that reports on driver permissions must do the same.
 
 **Neutral.**
 - Nothing in core changes. No new seam, no core edit — this ADR records a posture
