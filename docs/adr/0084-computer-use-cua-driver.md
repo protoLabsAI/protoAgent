@@ -154,15 +154,23 @@ allowlist **do not apply** to anything it does. No hedging.
 
 ### D3 — Allowlist the tool surface (ADR 0005)
 
-The driver exposes **~28** tools (`list_apps`, `list_windows`, `get_window_state`,
+The driver exposes **38** tools — `list_apps`, `list_windows`, `get_window_state`,
 `launch_app`, `kill_app`, `bring_to_front`, `click`, `double_click`,
-`right_click`, `drag`, `type_text`, `type_text_chars`, `press_key`, `hotkey`,
-`set_value`, `scroll`, `zoom`, `page`, `get_screen_size`, `get_desktop_state`,
-`get_cursor_position`, `move_cursor`, cursor/config/permission/health tools, …).
-Dumping all of them into every turn is exactly the pollution ADR 0005 exists to
-prevent. The plugin ships a **default allowlist** covering the documented loop
-and leaves the rest opt-in via config. `tools.disabled` remains the operator's
-per-row override.
+`right_click`, `drag`, `type_text`, `press_key`, `hotkey`, `set_value`, `scroll`,
+`zoom`, `page`, `get_screen_size`, `get_desktop_state`, `get_accessibility_tree`,
+`get_cursor_position`, `move_cursor`, plus session, recording, cursor-styling,
+config, permission and health tools. Dumping all of them into every turn is
+exactly the pollution ADR 0005 exists to prevent. The plugin ships a **default
+allowlist** covering the documented loop — **17 of the 38** — and leaves the rest
+opt-in via config. `tools.disabled` remains the operator's per-row override.
+
+> Verified against `cua-driver list-tools` on **0.8.3** (2026-07-16), correcting
+> this section as first drafted: the count is **38**, not ~28, and
+> `type_text_chars` — a Rust module in the driver's source — is **not** a
+> published tool. Every one of the 17 allowlisted names does exist. The plugin
+> re-diffs its allowlist against the live driver on every Test-connection, since
+> `tools: {include: […]}` drops unknown names **silently** and a driver upgrade
+> that renames a tool would otherwise remove it with no error.
 
 ### D4 — Ship the skill; the snapshot invariant is not optional
 
@@ -220,7 +228,18 @@ PR #1692). The canonical capture path is `get_window_state` with
   does not enable driver self-update.
 - macOS TCC grants attribute to the **responsible app identity**, which for the
   Tauri desktop build (ADR 0058) is the sidecar, not Terminal. Expect the grant
-  UX to differ between `scripts/dev.sh` and the packaged app.
+  UX to differ between `scripts/dev.sh` and the packaged app. **Verified on
+  0.8.3, and worse than "differs":** the driver's own `check_permissions` tool
+  answers for the *caller's* identity, so it reports `accessibility: true` from a
+  terminal on a machine where the driver has no grant at all — a false positive
+  and a false negative from one command. The honest check is
+  `cua-driver permissions status --json`, which answers via the daemon
+  (`attribution: "driver-daemon"`) and returns `unknown` when none is running.
+  The mitigation is to run the daemon (`cua-driver serve`) so grants attach to
+  `com.trycua.driver` **once**, independent of who spawns `cua-driver mcp`;
+  without it the grant follows the protoAgent process and the dev-vs-packaged
+  split becomes real. The plugin's Test button uses the honest check and
+  distinguishes *can't-confirm* from *denied*.
 
 **Neutral.**
 - Nothing in core changes. No new seam, no core edit — this ADR records a posture
