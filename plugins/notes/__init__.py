@@ -19,15 +19,21 @@ base from its own iframe path and prefixes every request, so a proxied
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 log = logging.getLogger("protoagent.plugins.notes")
+
+# Serializes read-compare-write so the concurrency guard can't be raced. RE-entrant:
+# the guarded PUT holds it across a _read() + _write(), and _write takes it too.
+_LOCK = threading.RLock()
 
 
 def _note_path() -> Path:
@@ -50,15 +56,16 @@ def _read() -> str:
 
 def _write(content: str) -> None:
     """Atomic write so a crash mid-save never truncates the note."""
-    path = _note_path()
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    with _LOCK:
+        path = _note_path()
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def _updated_at() -> str | None:
@@ -67,6 +74,14 @@ def _updated_at() -> str | None:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     except FileNotFoundError:
         return None
+
+
+def _version(content: str) -> str:
+    """Opaque version token for the optimistic-concurrency guard (an ETag by another
+    name). Content-hashed rather than mtime-derived: mtime collides under filesystem
+    timestamp granularity when two writes land in the same tick, and it's clock-skew
+    sensitive. A hash also means an idempotent rewrite never manufactures a conflict."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
 @tool
@@ -127,17 +142,45 @@ def _build_data_router():
     loaded view page with the postMessage handshake token (the view page is public,
     the data is gated — the rule the plugin-authoring guide teaches)."""
     from fastapi import APIRouter, Body
+    from fastapi.responses import JSONResponse
 
     router = APIRouter()
 
     @router.get("/note")
     async def _get() -> dict:
-        return {"content": _read(), "updated_at": _updated_at()}
+        content = _read()
+        return {"content": content, "updated_at": _updated_at(), "version": _version(content)}
 
     @router.put("/note")
-    async def _put(body: dict = Body(...)) -> dict:
-        _write(str(body.get("content", "")))
-        return {"ok": True, "updated_at": _updated_at()}
+    async def _put(body: dict = Body(...)):
+        """Optimistic concurrency: a caller that passes ``base_version`` is saying "I
+        edited the note as of THIS version" — if the note moved on (the agent's
+        write_note landed while the operator was typing), we 409 with the current
+        content instead of clobbering it. The editor only polls-and-adopts while it's
+        clean, so without this guard the operator's next autosave silently overwrites
+        the agent's write.
+
+        ``base_version`` is OPTIONAL and its absence means force-overwrite — that
+        keeps the agent's write_note tool (a documented full overwrite) and any older
+        client working unchanged."""
+        content = str(body.get("content", ""))
+        base = body.get("base_version")
+        with _LOCK:
+            current = _read()
+            current_version = _version(current)
+            if base is not None and str(base) != current_version:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "ok": False,
+                        "conflict": True,
+                        "content": current,
+                        "version": current_version,
+                        "updated_at": _updated_at(),
+                    },
+                )
+            _write(content)
+        return {"ok": True, "updated_at": _updated_at(), "version": _version(content)}
 
     return router
 
@@ -193,27 +236,43 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   #pv{flex:1;min-height:0;overflow:auto;padding:12px;display:none}
   #pv :is(h1,h2,h3){color:var(--pl-color-fg)}
   #pv code{background:var(--pl-color-bg-raised);padding:2px 5px;border-radius:var(--pl-radius)}
+  #actions{display:flex;gap:6px;align-items:center}
+  #conflict[hidden]{display:none}
+  #conflict{display:flex;gap:6px}
 </style></head><body>
 <div id="wrap">
   <div id="bar"><span id="status">Notes</span>
-    <button id="toggle" class="pl-btn pl-btn--sm" type="button">Preview</button></div>
+    <span id="actions">
+      <span id="conflict" hidden>
+        <button id="mine" class="pl-btn pl-btn--sm" type="button">Keep mine</button>
+        <button id="theirs" class="pl-btn pl-btn--sm" type="button">Take theirs</button>
+      </span>
+      <button id="toggle" class="pl-btn pl-btn--sm" type="button">Preview</button>
+    </span>
+  </div>
   <textarea id="ed" placeholder="A shared note — you and the agent both write here." spellcheck="false" autofocus></textarea>
   <div id="pv"></div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script type="module">
   "use strict";
+  var ed=document.getElementById("ed"), pv=document.getElementById("pv"), st=document.getElementById("status"), tg=document.getElementById("toggle");
+  var cf=document.getElementById("conflict"), bMine=document.getElementById("mine"), bTheirs=document.getElementById("theirs");
   // plugin-kit.js is an ES MODULE (it has export statements) — a classic
   // <script src> throws "Unexpected token 'export'" and never sets the
   // window.protoPluginView global. Dynamic import is the no-build way to load it
   // with a slug-aware URL (a static import specifier can't carry the base).
-  // Older host with no /_ds route: fall back to a tokenless same-origin shim
-  // (fine locally; gated instances always serve the kit).
+  // If the kit can't load, FAIL LOUDLY. The old fallback here fetched tokenlessly,
+  // which quietly 401s every save on a gated instance and looks like data loss; an
+  // unthemed, unauthed editor is not a degraded editor, it's a broken one.
   let kit;
   try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
-  catch (e) { kit = { initPluginView(){}, apiFetch: (p, i) => fetch(window.__base + p, i) }; }
-  var lastSynced="", dirty=false, preview=false, t=null;
-  var ed=document.getElementById("ed"), pv=document.getElementById("pv"), st=document.getElementById("status"), tg=document.getElementById("toggle");
+  catch (e) {
+    st.textContent = "Editor unavailable — the console plugin kit failed to load";
+    ed.disabled = true; tg.disabled = true;
+    throw e;
+  }
+  var lastSynced="", baseVersion=null, remote=null, dirty=false, preview=false, conflicted=false, loaded=false, t=null;
   // The kit owns the protoagent:init handshake (bearer + theme, incl. live re-themes)
   // and authed slug-aware fetches; on a token-gated instance the first token arrives
   // with the handshake, so re-load then (the immediate load() covers tokenless local).
@@ -222,18 +281,40 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   tg.onclick=function(){ preview=!preview; if(preview){renderPreview();pv.style.display="block";ed.style.display="none";tg.textContent="Edit";}
     else{pv.style.display="none";ed.style.display="block";tg.textContent="Preview";} };
   ed.addEventListener("input", function(){ dirty=true; st.textContent="Saving…"; clearTimeout(t); t=setTimeout(save,700); });
-  async function save(){ try{
-      var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:ed.value})});
-      if(!r.ok)throw 0; lastSynced=ed.value; dirty=false; st.textContent="Saved ✓";
+  // A 409 means the note moved under us (the agent wrote while we were typing). Park
+  // BOTH versions — ours in the textarea, theirs on disk — and let the operator pick.
+  // Auto-resolving either way is data loss with extra steps.
+  function onConflict(c){ conflicted=true; remote=c; clearTimeout(t); cf.hidden=false;
+    st.textContent="⚠ The agent changed this note — your edits are unsaved"; }
+  function clearConflict(){ conflicted=false; remote=null; cf.hidden=true; }
+  bMine.onclick=function(){ baseVersion=remote?remote.version:null; clearConflict(); save(); };
+  bTheirs.onclick=function(){ if(!remote)return; ed.value=remote.content; lastSynced=remote.content;
+    baseVersion=remote.version; dirty=false; clearConflict(); if(preview)renderPreview(); st.textContent="Reloaded"; };
+  async function save(){
+    // Never save what we never loaded: if the initial GET failed we hold no
+    // base_version, and saving would force-overwrite the real note with whatever is
+    // in this (probably empty) textarea.
+    if(!loaded){ st.textContent="Not loaded — not saving"; return; }
+    try{
+      var body={content:ed.value};
+      // Omitting base_version force-overwrites; we send it whenever we know it, so a
+      // save that would clobber an unseen agent write comes back 409 instead.
+      if(baseVersion!==null) body.base_version=baseVersion;
+      var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(r.status===409){ onConflict(await r.json()); return; }
+      if(!r.ok)throw 0;
+      var a=await r.json(); lastSynced=ed.value; baseVersion=a.version; dirty=false; st.textContent="Saved ✓";
     }catch(e){ st.textContent="Save failed"; } }
   async function load(){ try{
       var a=await kit.apiFetch("/api/plugins/notes/note").then(function(r){return r.json();});
       if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; if(preview)renderPreview(); }
+      if(!dirty && typeof a.version==="string") baseVersion=a.version;
+      loaded=true;
     }catch(e){} }
   load();
   // Be a good desktop citizen: don't poll while the window is hidden/minimized; refresh on return.
-  setInterval(function(){ if(!document.hidden && !dirty) load(); }, 4000);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty) load(); });
+  setInterval(function(){ if(!document.hidden && !dirty && !conflicted) load(); }, 4000);
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty && !conflicted) load(); });
 </script></body></html>"""
 
 
@@ -263,22 +344,36 @@ _QUICK_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 </div>
 <script type="module">
   "use strict";
+  var ed=document.getElementById("ed"), st=document.getElementById("status");
+  // Fail loudly rather than fall back to a tokenless fetch — see the rail editor.
   let kit;
   try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
-  catch (e) { kit = { initPluginView(){}, apiFetch:(p,i)=>fetch(window.__base+p,i) }; }
-  var lastSynced="", dirty=false, t=null;
-  var ed=document.getElementById("ed"), st=document.getElementById("status");
+  catch (e) { st.textContent = "Unavailable — plugin kit failed to load"; ed.disabled = true; throw e; }
+  var lastSynced="", baseVersion=null, dirty=false, conflicted=false, loaded=false, t=null;
   kit.initPluginView(function(){ if(!dirty) load(); });
   ed.addEventListener("input", function(){ dirty=true; st.textContent="Saving…"; clearTimeout(t); t=setTimeout(save,600); });
-  async function save(){ try{
-      var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:ed.value})});
-      if(!r.ok)throw 0; lastSynced=ed.value; dirty=false; st.textContent="Saved ✓";
+  async function save(){
+    // Never save what we never loaded — see the rail editor.
+    if(!loaded){ st.textContent="Not loaded — not saving"; return; }
+    try{
+      var body={content:ed.value};
+      if(baseVersion!==null) body.base_version=baseVersion;
+      var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      // The palette has no room for a resolve UI, so it fails SAFE: keep the operator's
+      // text on screen, leave the agent's version on disk, and point at the rail editor
+      // (which has Keep mine / Take theirs) rather than silently picking a winner.
+      if(r.status===409){ conflicted=true; clearTimeout(t);
+        st.textContent="⚠ Changed by the agent — open Notes to resolve"; return; }
+      if(!r.ok)throw 0;
+      var a=await r.json(); lastSynced=ed.value; baseVersion=a.version; dirty=false; st.textContent="Saved ✓";
     }catch(e){ st.textContent="Save failed"; } }
   async function load(){ try{
       var a=await kit.apiFetch("/api/plugins/notes/note").then(function(r){return r.json();});
       if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; }
+      if(!dirty && typeof a.version==="string") baseVersion=a.version;
+      loaded=true;
     }catch(e){} }
   load();
-  setInterval(function(){ if(!document.hidden && !dirty) load(); }, 4000);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty) load(); });
+  setInterval(function(){ if(!document.hidden && !dirty && !conflicted) load(); }, 4000);
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty && !conflicted) load(); });
 </script></body></html>"""
