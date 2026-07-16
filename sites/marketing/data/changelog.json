@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.102.0",
+    "date": "2026-07-16",
+    "changes": [
+      "Registered ACP coding agents now surface in the runtime + model pickers (#1993).",
+      "The agent can refine its own persona — a guarded edit_soul tool, off by default (#1985).",
+      "Chat: a stalled turn self-heals, so a large answer never spins \"Working…\" forever (#1982).",
+      "Chat: currency amounts no longer render as LaTeX math (#1983).",
+      "Console: chat report cards and system notes share a quieter, consistent elevation (#1992)."
+    ]
+  },
+  {
     "version": "v0.101.0",
     "date": "2026-07-12",
     "changes": [
