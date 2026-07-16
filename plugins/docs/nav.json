@@ -697,6 +697,10 @@
           "title": "0082 — Per-chat ACP runtime: hot-swap a coding agent like a model"
         },
         {
+          "path": "adr/0083-cowork-mode-archetype.md",
+          "title": "0083 — Cowork mode: a prepackaged knowledge-worker archetype"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
