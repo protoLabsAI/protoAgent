@@ -51,7 +51,7 @@ Filed correctly, most of the IA falls out and the three stranded fields get obvi
 
 ## 3. Target structure
 
-> **DECISION A — Capabilities and Box get schema sections.** · **PROPOSED: A1**
+> **DECISION A — Capabilities and Box get schema sections.** · **DECIDED: A1 (2026-07-16, Josh)**
 >
 > Each gains a schema-driven section alongside its bespoke managers — exactly the shape Agent
 > already has (`Identity` bespoke + `Operator & access` schema). Follows the precedent set at
@@ -181,24 +181,44 @@ Knowledge grows again.
   as the agent's default project). They're operator/console scope. Cross-reference them from the
   Tool access section rather than moving them.
 
-### DECISION G — the two-layer tool control · **PROPOSED: G2, pending a backend answer**
+### DECISION G — the two-layer tool control · **DECIDED: G2 (2026-07-16)**
 
-Correcting the inventory: **both** layers act at graph build (`tools.disabled` = *"removed from
-this agent's toolset at graph build"*). The real difference is only whether the tool stays
-**catalogued** — a denylisted tool is listed `enabled:false` so it can be toggled back; a
-config-unbound one isn't listed at all.
+The blocking question — *is "never built" a security guarantee distinct from "denylisted"?* —
+is now answered from the code, not opinion. Traced all three binding paths for `run_command`:
 
-So the operator sees two switches for one intent (P5) that never agree.
+| path | `allow_run=false` | `tools.disabled: [run_command]` |
+|---|---|---|
+| native lead graph | never constructed (`fs_tools.py:258`, `@tool` inside `if allow_run:`) | built, then dropped before binding **and** before `search_tools` (`agent.py:997`) |
+| `search_tools` disclosure | n/a — doesn't exist | not surfaced (drop runs first) |
+| ACP operator-MCP bus | never constructed | **doesn't matter** — the bus sources `get_all_tools`, and `run_command` is **not in it** (fs tools are built separately by `build_fs_tools`; verified at runtime: `run_command in get_all_tools → False`) |
 
-- **G2 (proposed)** — keep both configs; **couple them in the UI**. The Filesystem group shows
-  one state per tool; flipping `run_command` off writes whichever config is authoritative, and
-  `filesystem.allow_run` reflects it rather than contradicting it.
-- **G1** — make the row switch authoritative and retire `filesystem.allow_run`. Cleanest, but
-  only if "never built" carries no security weight over "denylisted".
-- **Blocking question for you:** is *"the tool is never built — the model can't see or call it"*
-  a guarantee we intend to keep distinct from denylisting? The `allow_run` description sells it
-  as "the full kill switch for shell access". If that distinction is real, **G1 is off** and G2
-  is the ceiling.
+**Verdict: "never built" IS the stronger guarantee, and it's the one to keep.**
+
+- `allow_run=false` is a **construction-time** kill switch: the object never exists, so *no*
+  consumer — native, subagents, any future binding path — can bind what isn't there. One point
+  of enforcement, impossible to bypass by forgetting a filter.
+- `tools.disabled` is an **enforcement-time** filter: the object exists and every binding path
+  must remember to drop it. The native path does (`agent.py:997`). The **operator-MCP bus does
+  NOT apply `tools.disabled` at all** (`runtime/operator_mcp_tools.py` — no `drop_disabled_tools`
+  call). For `run_command` that's harmless only by accident (it isn't in `get_all_tools`); for
+  any *other* denylisted tool that IS in `get_all_tools`, the ACP brain can still be handed it.
+
+So retiring `allow_run` (G1) would move the shell kill-switch from a construction-time guarantee
+onto a filter that already has a known bypass path. **G1 is off.**
+
+- **G2 (DECIDED)** — keep `filesystem.allow_run` as THE shell kill switch (construction-time).
+  In the UI, the two controls stop disagreeing: the Filesystem group shows one coherent state,
+  and the per-tool `run_command` row reflects/writes `allow_run` rather than being a second
+  independent `tools.disabled` authority for that one tool. `tools.disabled` remains the generic
+  per-tool denylist for everything else.
+
+**Spun-off finding — file separately (not this rework):** the operator-MCP bus ignores
+`tools.disabled`. It may be *intentional* (ADR 0033 D3 gives the ACP brain its own `operator_mcp.tools`
+allowlist as a distinct trust surface), but an operator who denylists a dangerous tool would
+reasonably expect it gone from the ACP brain too. At minimum a documentation gap; possibly a
+`tools.disabled ∩ operator_mcp` intersection should apply. Tracked as **D11**.
+
+### DECISION H — where filesystem settings render · **PROPOSED: H2**
 
 ### DECISION H — where filesystem settings render · **PROPOSED: H2**
 
@@ -212,7 +232,7 @@ settings **cannot** live inside it (P6) — that's a one-way door out of the UI.
 - This is also the smallest change from today that satisfies Josh's *"keep the dialog, organise it
   with the filesystem group"* — the trigger sits with the group; the settings live somewhere that
   can't delete itself.
-- **PR #2000 is invalidated by D3** and should be closed, not merged.
+- **PR #2000 was invalidated by D3 and is CLOSED** (2026-07-16), pointing here.
 
 ---
 
@@ -221,14 +241,14 @@ settings **cannot** live inside it (P6) — that's a one-way door out of the UI.
 | # | Question | Proposed | Status |
 |---|---|---|---|
 | P | Adopt the principles | yes | **PROPOSED** |
-| A | Schema sections for Capabilities/Box | A1 | **PROPOSED** |
-| B | `agent_runtime` → Model & runtime | B1 (+ amend ADR 0033 D1) | **PROPOSED — needs your call on the ADR** |
+| A | Schema sections for Capabilities/Box | A1 | **DECIDED — A1 (Josh, 2026-07-16)** |
+| B | `agent_runtime` → Model & runtime | B1 (+ amend ADR 0033 D1) | **DECIDED — shipped #2007, ADR amended** |
 | C | Kill "Runtime"; `autostart_on_boot` → Box ▸ Boot | C1 | **PROPOSED** |
-| D | Fail loudly on unmapped sections; Media→Capabilities, Persona→Identity | D1 | **PROPOSED** |
+| D | Fail loudly on unmapped sections; Media→Capabilities, Persona→Identity | D1 | **PARTIAL — guardrail + explicit mapping shipped #2017; Media→Capabilities pending A** |
 | E | `checkpoint.*` stay in Knowledge | keep | **PROPOSED** |
 | F | `skills.top_k` → Capabilities; operator dirs stay | — | **PROPOSED** |
-| G | Two-layer tool control | G2 | **BLOCKED — is "never built" a security guarantee?** |
-| H | Filesystem settings home | H2 | **PROPOSED** |
+| G | Two-layer tool control | G2 | **DECIDED — G2 (2026-07-16, from code)** |
+| H | Filesystem settings home | H2 | **PROPOSED (unblocked by A)** |
 
 ---
 

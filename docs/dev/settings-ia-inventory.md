@@ -230,6 +230,24 @@ Split into Recall (12) / Ingestion (7) / History (6) by `_KNOWLEDGE_SUBSECTION`.
 `checkpoint.*` — conversation-history retention and pruning, which is chat-history plumbing
 rather than knowledge. It is the largest category by 8 fields.
 
+### D11 — the operator-MCP bus ignores `tools.disabled` (**medium — not an IA bug**)
+
+Found while deciding G. `runtime/operator_mcp_tools.py::operator_tools` assembles the toolset it
+exposes to an ACP coding agent (ADR 0033 D3) from `get_all_tools` + `STATE.plugin_tools`, filtered
+by the `operator_mcp.tools` allowlist — but it **never applies `drop_disabled_tools`**. So a tool
+an operator removed via `tools.disabled` (expecting it gone) can still be handed to the ACP brain,
+as long as it's in `get_all_tools` and allowlisted (or `*`).
+
+Not exploitable via `run_command` specifically — the filesystem tools aren't in `get_all_tools`
+(built separately by `build_fs_tools`; `run_command in get_all_tools → False` at runtime), so that
+one is unreachable on this path regardless. But memory / scheduler / task / goal tools **are** in
+`get_all_tools`, so the gap is real for them.
+
+May be intentional — ADR 0033 D3 frames `operator_mcp.tools` as the ACP brain's own trust surface,
+distinct from the native model's `tools.disabled`. But the operator's mental model of "denylist =
+gone everywhere" says otherwise. At minimum a documented behaviour; arguably the exposed set should
+be `operator_mcp.tools` minus `tools.disabled`. File separately from the settings rework.
+
 ---
 
 ## 3. Full field inventory (101 fields, 8 categories)
