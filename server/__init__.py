@@ -423,6 +423,7 @@ def _main():
     import uvicorn
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.middleware.gzip import GZipMiddleware
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
@@ -439,6 +440,16 @@ def _main():
         allow_headers=["*"],
         allow_credentials=True,
     )
+    # gzip every text/JSON response — the console's own JS bundle is ~1 MB and was
+    # shipping uncompressed (gzips ~79%); assets are cached immutable but STILL
+    # recompressed per request, so keep compresslevel at the web-standard 6 (level 9
+    # buys ~1% for materially more CPU). SSE is the one thing that must NOT be buffered:
+    # Starlette's GZipMiddleware excludes `text/event-stream` by default
+    # (DEFAULT_EXCLUDED_CONTENT_TYPES) and skips already-`content-encoding`'d bodies, so
+    # the chat stream, the event bus, A2A message/stream (sse-starlette), and the fleet
+    # proxy's forwarded SSE all pass through untouched. minimum_size skips tiny JSON
+    # where gzip framing would cost more than it saves. See issue #2005.
+    fastapi_app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
     # --- React operator-console API ----------------------------------------
     # Console handler bodies live in operator_api/console_handlers.py (ADR 0023
