@@ -4,6 +4,7 @@ import type {
   AgentConfig,
   Archetype,
   BackgroundJobDTO,
+  FsProject,
   Task,
   ChatMessage,
   ComponentSpec,
@@ -1825,6 +1826,23 @@ export const api = {
   },
   uninstallPlugin(id: string) {
     return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+  // Pip-install a plugin's declared requires_pip (the code-exec step `install`
+  // deliberately skips) — previously CLI-only.
+  installPluginDeps(id: string) {
+    return request<{ ok: boolean; installed: string[] }>("/api/plugins/install-deps", {
+      method: "POST",
+      body: { id },
+    });
+  },
+  fsProjects() {
+    return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
+  },
+  setFsProjects(projects: FsProject[]) {
+    return request<{ ok: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects", {
+      method: "POST",
+      body: { projects },
+    });
   },
   // Per-plugin freshness (ADR 0027). The backend TTL-caches the ls-remote probe,
   // so polling is cheap; each row carries behind/pinned/error.

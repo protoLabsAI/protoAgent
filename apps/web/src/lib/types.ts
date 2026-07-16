@@ -161,6 +161,9 @@ export type InstalledPlugin = {
   // loaded but a `required: true` setting is blank, with the fields still needed.
   incomplete?: boolean;
   needs_config?: { key: string; label: string }[];
+  // Declared requires_pip entries missing from the runtime — drives the one-click
+  // "Install deps" action (POST /api/plugins/install-deps).
+  deps_missing?: string[];
   manifest?: {
     name: string;
     version: string;
@@ -174,6 +177,9 @@ export type InstalledPlugin = {
     secrets?: string[];
   };
 };
+
+// A fenced filesystem root (ADR 0007) — one entry of `filesystem.projects`.
+export type FsProject = { name?: string; path: string; write: boolean };
 
 // An entry in the official-plugin directory (GET /api/plugins/catalog, ADR 0059),
 // merged with install state. `repo` is the install URL — one-click install runs

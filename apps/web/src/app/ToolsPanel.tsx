@@ -1,17 +1,18 @@
 import "./tools.css";
 
 import { Input, Switch } from "@protolabsai/ui/forms";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { TerminalSquare } from "lucide-react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
-import { Badge } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
+import type { FsProject } from "../lib/types";
 import { QuickSetting } from "../settings/QuickSetting";
 import { useUI } from "../state/uiStore";
 import { StagePanel } from "./ErrorBoundary";
@@ -168,6 +169,7 @@ function ToolsBody() {
             icon={<TerminalSquare size={16} />}
           />
         </div>
+        <FsProjectsEditor />
         <Input
           className="playbook-search"
           type="search"
@@ -235,5 +237,72 @@ export function ToolsPanel() {
     <StagePanel label="tools">
       <ToolsBody />
     </StagePanel>
+  );
+}
+
+// Work-folder editor for the fenced fs roots (`filesystem.projects`, ADR 0007) —
+// this collection previously had NO console editor (the QuickSetting above covers
+// only the scalar toggles; the list was YAML-only). Replace-list semantics, same
+// as the MCP servers editor. Saving with any folder present also enables fs tools.
+function FsProjectsEditor() {
+  const toast = useToast();
+  const query = useQuery({ queryKey: ["fs-projects"], queryFn: () => api.fsProjects() });
+  const [rows, setRows] = useState<FsProject[] | null>(null);
+  useEffect(() => {
+    if (query.data && rows === null) setRows(query.data.projects);
+  }, [query.data, rows]);
+
+  const save = useMutation({
+    mutationFn: (projects: FsProject[]) => api.setFsProjects(projects),
+    onSuccess: (res) => {
+      setRows(res.projects);
+      void query.refetch();
+      toast({ tone: "success", title: "Folders saved", message: "Filesystem tools cover the listed folders." });
+    },
+    onError: (e: Error) => toast({ tone: "error", title: "Couldn't save folders", message: errMsg(e) }),
+  });
+
+  if (query.isLoading || rows === null) return null;
+  const saved = JSON.stringify(query.data?.projects ?? []);
+  const dirty = JSON.stringify(rows) !== saved;
+
+  return (
+    <div className="fs-projects">
+      <p className="fleet-section-label">Work folders</p>
+      <p className="setup-hint">
+        The folders the filesystem tools may read{" "}
+        (and, per-folder, write). The agent can't reach anything outside this list.
+      </p>
+      {rows.map((row, i) => (
+        <div key={i} className="fs-projects-row">
+          <Input
+            value={row.path}
+            placeholder="~/Documents"
+            aria-label="Folder path"
+            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)))}
+          />
+          <label className="fs-projects-write">
+            <Switch
+              checked={row.write}
+              onCheckedChange={(v: boolean) => setRows(rows.map((r, j) => (j === i ? { ...r, write: v } : r)))}
+            />
+            <span>write</span>
+          </label>
+          <Button variant="ghost" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label="Remove folder">
+            ✕
+          </Button>
+        </div>
+      ))}
+      <div className="fs-projects-actions">
+        <Button onClick={() => setRows([...rows, { path: "", write: false }])}>Add folder</Button>
+        <Button
+          variant="primary"
+          disabled={!dirty || save.isPending || rows.some((r) => !r.path.trim())}
+          onClick={() => save.mutate(rows)}
+        >
+          {save.isPending ? "Saving…" : "Save folders"}
+        </Button>
+      </div>
+    </div>
   );
 }

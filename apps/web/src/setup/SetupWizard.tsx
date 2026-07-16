@@ -26,6 +26,16 @@ import { acpAgentsQuery, archetypesQuery } from "../lib/queries";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { personaSoul } from "./persona";
 
+// One row of the post-install dependency report (finish step): a just-enabled
+// plugin that declares pip deps the runtime doesn't have yet.
+type PostInstallRow = {
+  id: string;
+  name: string;
+  deps: string[];
+  state: "pending" | "busy" | "done" | "error";
+  error: string;
+};
+
 // Four steps: intro, then "who the agent is" (name + persona), then "how it thinks"
 // (the model/coding-agent runtime), then a summary. Identity + persona are one step.
 type Step = "welcome" | "agent" | "brain" | "finish";
@@ -170,6 +180,10 @@ export function SetupWizard({
   // Result of the last "Test connection" probe (a real completion). null = not
   // yet tested; invalidated whenever the key/base/model changes.
   const [tested, setTested] = useState<null | { ok: boolean; error: string }>(null);
+  // Post-install dependency report: set when the archetype bundle installed fine
+  // but some members declare pip deps the runtime lacks. Non-null = the finish
+  // step stays up showing one-click installs instead of unmounting to a toast.
+  const [postInstall, setPostInstall] = useState<PostInstallRow[] | null>(null);
   // The bundle-install outcome is surfaced as a toast (not an in-wizard Callout): finishing
   // setup unmounts the wizard, so a Callout would vanish before it's read.
   const toast = useToast();
@@ -406,6 +420,28 @@ export function SetupWizard({
             });
           } else {
             toast({ tone: "success", title: "Setup complete", message: `${personaLabel} tools are ready.` });
+            // If any just-enabled member declares pip deps the runtime lacks, keep the
+            // wizard open on a one-click dependency report instead of unmounting —
+            // previously this was an "install manually" advisory buried in a toast.
+            try {
+              const inst = await api.installedPlugins();
+              const needy = inst.plugins.filter((p) => r.enabled.includes(p.id) && p.deps_missing?.length);
+              if (needy.length) {
+                setMessage("");
+                setPostInstall(
+                  needy.map((p) => ({
+                    id: p.id,
+                    name: p.manifest?.name || p.id,
+                    deps: p.deps_missing ?? [],
+                    state: "pending" as const,
+                    error: "",
+                  })),
+                );
+                return;
+              }
+            } catch {
+              // advisory only — a failed report check must never block finishing
+            }
           }
         } catch (exc) {
           toast({
@@ -422,6 +458,19 @@ export function SetupWizard({
       setError(errMsg(exc));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function installDepsFor(id: string) {
+    setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "busy" as const } : r)) ?? null);
+    try {
+      await api.installPluginDeps(id);
+      setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "done" as const } : r)) ?? null);
+    } catch (exc) {
+      setPostInstall(
+        (rows) =>
+          rows?.map((r) => (r.id === id ? { ...r, state: "error" as const, error: errMsg(exc) } : r)) ?? null,
+      );
     }
   }
 
@@ -583,10 +632,40 @@ export function SetupWizard({
                 )}
                 <StatusLine icon={<Sparkles size={15} />} label={`Persona · ${personaLabel}`} />
               </div>
-              <p className="setup-intro setup-intro-foot">
-                Finishing writes your config and starts the agent. Tools, knowledge, and
-                integrations are all in Settings.
-              </p>
+              {postInstall ? (
+                <div className="setup-postinstall">
+                  <p className="setup-hint">
+                    Your tools are installed. A few need Python packages before their skills can run — install them
+                    now, or later from Settings ▸ Plugins.
+                  </p>
+                  {postInstall.map((row) => (
+                    <div key={row.id} className="setup-postinstall-row">
+                      <div className="setup-postinstall-info">
+                        <strong>{row.name}</strong>
+                        <span>{row.deps.join(", ")}</span>
+                        {row.state === "error" ? <span className="setup-postinstall-error">{row.error}</span> : null}
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => void installDepsFor(row.id)}
+                        disabled={row.state === "busy" || row.state === "done"}
+                      >
+                        {row.state === "busy" ? <Spinner size={14} /> : null}
+                        {row.state === "done" ? "Installed ✓" : row.state === "error" ? "Retry" : "Install"}
+                      </Button>
+                    </div>
+                  ))}
+                  <p className="setup-hint">
+                    Next, in Settings: add your work folders (Tools) so files land where you expect, and connect
+                    integrations (Plugins).
+                  </p>
+                </div>
+              ) : (
+                <p className="setup-intro setup-intro-foot">
+                  Finishing writes your config and starts the agent. Tools, knowledge, and
+                  integrations are all in Settings.
+                </p>
+              )}
               {message ? <Callout>{message}</Callout> : null}
             </StepBody>
           ) : null}
@@ -594,15 +673,28 @@ export function SetupWizard({
           {error ? <Callout tone="error">{error}</Callout> : null}
 
           <div className="setup-actions">
-            <Button type="button" onClick={() => setStep(steps[Math.max(0, index - 1)])} disabled={index === 0 || busy}>
+            <Button
+              type="button"
+              onClick={() => setStep(steps[Math.max(0, index - 1)])}
+              disabled={index === 0 || busy || Boolean(postInstall)}
+            >
               <ChevronLeft size={15} />
               Back
             </Button>
             {step === "finish" ? (
-              <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy}>
-                {busy ? <Spinner size={15} /> : <Check size={15} />}
-                Finish
-              </Button>
+              postInstall ? (
+                // Setup is already written and the bundle installed — this just closes
+                // the report. Pending deps are re-installable from Settings ▸ Plugins.
+                <Button variant="primary" type="button" onClick={onFinished} disabled={postInstall.some((r) => r.state === "busy")}>
+                  <Check size={15} />
+                  Open console
+                </Button>
+              ) : (
+                <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy}>
+                  {busy ? <Spinner size={15} /> : <Check size={15} />}
+                  Finish
+                </Button>
+              )
             ) : (
               <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy}>
                 Next

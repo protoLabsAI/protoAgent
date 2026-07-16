@@ -465,3 +465,35 @@ def test_updates_route_returns_check_results(monkeypatch):
     monkeypatch.setattr(installer, "check_updates", lambda: [{"id": "github", "update_available": True}])
     body = _client().get("/api/plugins/updates").json()
     assert body == {"plugins": [{"id": "github", "update_available": True}]}
+
+
+# ── install-deps route + deps_missing (wizard post-install report) ────────────
+
+
+def test_install_deps_route_runs_installer(monkeypatch):
+    from graph.plugins import installer
+
+    calls: list[str] = []
+
+    def _fake_install_deps(pid):
+        calls.append(pid)
+        return ["python-docx", "openpyxl"]
+
+    monkeypatch.setattr(installer, "install_deps", _fake_install_deps)
+    body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
+    assert body == {"ok": True, "installed": ["python-docx", "openpyxl"]} and calls == ["cowork"]
+
+
+def test_install_deps_route_requires_id():
+    assert _client().post("/api/plugins/install-deps", json={}).status_code == 400
+
+
+def test_install_deps_route_maps_install_error(monkeypatch):
+    from graph.plugins import installer
+
+    def _boom(pid):
+        raise installer.InstallError("pip install failed")
+
+    monkeypatch.setattr(installer, "install_deps", _boom)
+    r = _client().post("/api/plugins/install-deps", json={"id": "cowork"})
+    assert r.status_code == 400 and "pip install failed" in r.json()["detail"]
