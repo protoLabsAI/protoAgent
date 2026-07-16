@@ -701,6 +701,10 @@
           "title": "0083 — Cowork mode: a prepackaged knowledge-worker archetype"
         },
         {
+          "path": "adr/0084-computer-use-cua-driver.md",
+          "title": "0084 — Computer use: an out-of-process driver, and the fence it voids"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
