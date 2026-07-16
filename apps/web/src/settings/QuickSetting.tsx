@@ -13,6 +13,7 @@ import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField } from "../lib/types";
 import { SettingInput } from "./SettingsCategory";
+import { fieldVisible } from "./visibility";
 
 // QuickSetting (ADR 0048) — a contextual settings shortcut: a small icon button that
 // opens a dialog editing one (or a few) named fields right where they're relevant,
@@ -95,6 +96,30 @@ function QuickSettingDialog({
     return keys.map((k) => byKey.get(k)).filter((f): f is SettingsField => Boolean(f));
   }, [schema.data, keys]);
 
+  // Live value per key — the dirty edit if any, else the saved value — so `depends_on`
+  // reacts to what's on the form right now (flip the parent off and its dependents
+  // collapse in the same click), matching SettingsCategory.
+  //
+  // Built from the WHOLE schema, not just `fields`: a chip names an arbitrary key set, so
+  // it can list a dependent whose parent it doesn't list. Resolving only within `fields`
+  // would read that parent as `undefined` and hide a row that should show.
+  const currentValues = useMemo(() => {
+    const m = new globalThis.Map<string, unknown>();
+    for (const g of schema.data?.groups ?? []) {
+      for (const f of g.fields) m.set(f.key, f.key in dirty ? dirty[f.key] : f.value);
+    }
+    return m;
+  }, [schema.data, dirty]);
+
+  // #963's rule, which this dialog never applied: a field whose `depends_on` isn't
+  // satisfied governs nothing, so it must not render as an operable control. Without it a
+  // chip showed e.g. "Require approval per command" while run_command was off — a switch
+  // that looks live and does nothing. The canonical settings pages have always filtered.
+  const visibleFields = useMemo(
+    () => fields.filter((f) => fieldVisible(f, (k) => currentValues.get(k))),
+    [fields, currentValues],
+  );
+
   // Save to the host layer iff every edited field is host-scoped (a mixed set is
   // unusual for a quick-set; default to the agent leaf then).
   const layer = fields.length && fields.every((f) => f.scope === "host") ? "host" : "agent";
@@ -138,11 +163,13 @@ function QuickSettingDialog({
     >
       {schema.isLoading ? (
         <p className="muted">Loading…</p>
-      ) : !fields.length ? (
+      ) : !visibleFields.length ? (
+        // Covers both "no such keys" and "every key here is gated off right now" — either
+        // way there is nothing operable to show, and an empty dialog would be a lie.
         <p className="muted">Nothing to configure here.</p>
       ) : (
         <div className="quick-setting-body">
-          {fields.map((field) => (
+          {visibleFields.map((field) => (
             <div className="setting-row" key={field.key} data-key={field.key}>
               <div className="setting-meta">
                 <label className="setting-label" htmlFor={`set-${field.key}`}>
