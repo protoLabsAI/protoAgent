@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Two core settings sections no longer file themselves under Integrations by accident.**
+  `_category_for` defaults an unmapped section to "Plugins" (the Integrations surface) — right
+  for plugin sections, a trap for core ones. `Persona` (the SOUL self-edit toggle) and `Media`
+  (the core media store) hit that default silently. Both are now mapped explicitly — Persona to
+  Identity (its real home; the field is `ui_hidden` so nothing renders yet), Media to Plugins as
+  a documented interim until the Capabilities schema panel lands (settings-IA Decision A). A test
+  now asserts every core section has an explicit category, so a new one can't strand itself.
+
 ## [0.102.0] - 2026-07-16
 
 ### Added

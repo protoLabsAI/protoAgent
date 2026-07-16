@@ -1143,8 +1143,20 @@ _SECTION_CATEGORY = {
     # Developer — pre-release feature gating (ADR 0068). The channel this instance runs on;
     # the flags themselves live in a device-local Developer panel, not the schema.
     "Developer": "Behavior",
-    # Discord / Google / GitHub / other plugin sections → "Plugins" (the default), the
-    # Integrations surface.
+    # Persona — the SOUL/self-edit toggle (ADR 0081). Belongs with Identity (name + persona).
+    # soul.self_edit_enabled is ui_hidden today, so this doesn't render yet — but mapping it
+    # explicitly keeps it OUT of the Plugins default (it's core, not a plugin section).
+    "Persona": "Identity",
+    # Media — the core media store (registry.save_media, #1929): tool-generated image/audio/
+    # video exposure + retention. INTERIM: mapped to Plugins so it stays reachable, because
+    # Capabilities has no schema panel yet. It moves to Capabilities under the settings-IA
+    # rework's Decision A (docs/dev/settings-ia-target.md) once that panel lands. Explicit so
+    # a CORE section is never silently swept into Integrations by the default below (D5).
+    "Media": "Plugins",
+    # Discord / Google / GitHub / other PLUGIN-contributed sections → "Plugins" (the default),
+    # the Integrations surface. Only genuinely plugin sections may rely on the default —
+    # every CORE section (declared by a FIELDS entry) must be mapped explicitly above; a test
+    # enforces this so a new core section can't strand itself under Integrations by accident.
 }
 
 

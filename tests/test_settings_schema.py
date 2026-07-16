@@ -294,3 +294,32 @@ def test_filesystem_and_tools_sections_surfaced_under_capabilities():
     dis = by_key["tools.disabled"]
     assert dis["type"] == "string_list" and dis["section"] == "Tools"
     assert dis["default"] == [] and dis["restart"] is False
+
+
+def test_every_core_section_is_mapped_to_a_category():
+    """No core section may fall through to the "Plugins" default (D5).
+
+    `_category_for` defaults an unmapped section to "Plugins" (the Integrations surface) —
+    correct for genuinely plugin-contributed sections, but a trap for CORE ones: `Media` and
+    `Persona` silently filed themselves under Integrations for exactly this reason. This pins
+    the contract: every section declared by a core FIELD must have an explicit
+    `_SECTION_CATEGORY` entry, so a new core section can't strand itself by accident.
+    """
+    from graph.settings_schema import FIELDS, _SECTION_CATEGORY
+
+    core_sections = {f.section for f in FIELDS}
+    unmapped = sorted(core_sections - set(_SECTION_CATEGORY))
+    assert not unmapped, (
+        f"core section(s) {unmapped} have no _SECTION_CATEGORY entry and would default to "
+        f"'Plugins' (Integrations). Map each to its real category."
+    )
+
+
+def test_persona_and_media_are_not_swept_into_plugins():
+    """Regression for D5: the two core sections that used to hit the default."""
+    from graph.settings_schema import _category_for
+
+    assert _category_for("Persona") == "Identity"  # SOUL/self-edit belongs with Identity
+    assert _category_for("Media") == "Plugins"  # interim (no Capabilities panel yet) — but EXPLICIT
+    # A genuinely unknown (plugin) section still gets the Integrations default.
+    assert _category_for("Discord") == "Plugins"
