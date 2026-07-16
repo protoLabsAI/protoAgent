@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.102.0",
+    "date": "2026-07-16",
+    "changes": [
+      "Registered ACP coding agents now surface in the runtime + model pickers.",
+      "The agent can refine its own persona — a guarded edit_soul tool.",
+      "Console now consumes the DS's shipped tokens for chat card elevation and currency, dropping two local stand-ins (#1996).",
+      "Chat no longer spins \"Working…\" forever on a large answer (hung work block).",
+      "Currency amounts no longer render as LaTeX math in chat replies.",
+      "Chat report cards and system notes now share a quieter, consistent elevation (#1992)."
+    ]
+  },
+  {
     "version": "v0.101.0",
     "date": "2026-07-12",
     "changes": [

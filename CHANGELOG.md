@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.102.0] - 2026-07-16
+
 ### Added
 - **Registered ACP coding agents now surface in the runtime + model pickers (ADR 0033).**
   A custom `acp.agents.<id>` in config — a wholly-new coding agent, or a launch-spec override
