@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Docs
 - ADR 0084 — computer use as an out-of-process driver and the fence it voids. **Design only:
   no computer-use capability ships in this release.**
+### Fixed
+- **`uv.lock` and the third-party attribution now match `pyproject.toml` again.** The
+  PyPI rename (#1989) switched the project to `protolabs-agent` and moved `protolabs-a2a`
+  from a git pin to the registry (`>=0.2.1,<0.3`) without re-locking, so a clean checkout
+  failed `uv lock --check` and `THIRD_PARTY_LICENSES.md` credited `protolabs-a2a` 0.2.0.
+  Nothing caught it: CI installs via `requirements.txt` (a `-e .` shim that routes through
+  `pyproject.toml`, so tests always resolved 0.2.1), and the attribution gate compared the
+  doc against the equally stale lock. Regenerated both.
 
 ## [0.102.0] - 2026-07-16
 
