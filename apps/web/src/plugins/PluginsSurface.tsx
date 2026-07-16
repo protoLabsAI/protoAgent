@@ -49,6 +49,9 @@ function PluginRow({
   removable,
   onRemove,
   removing,
+  depsMissing,
+  onInstallDeps,
+  installingDeps,
 }: {
   p: Plugin;
   update?: PluginUpdate;
@@ -60,6 +63,9 @@ function PluginRow({
   removable: boolean;
   onRemove: (p: Plugin) => void;
   removing: boolean;
+  depsMissing?: string[];
+  onInstallDeps?: (p: Plugin) => void;
+  installingDeps?: boolean;
 }) {
   const on = p.enabled;
   const [configOpen, setConfigOpen] = useState(false);
@@ -103,6 +109,21 @@ function PluginRow({
               aria-label={`Update ${p.name}`}
             >
               <RefreshCw size={15} />
+            </Button>
+          ) : null}
+          {/* Missing declared pip deps (previously an "install manually" advisory with
+              no in-app action): a labeled install button — pip runs server-side via
+              POST /api/plugins/install-deps. */}
+          {depsMissing?.length && onInstallDeps ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              loading={installingDeps}
+              onClick={() => onInstallDeps(p)}
+              title={`Install ${depsMissing.join(", ")}`}
+            >
+              Install deps
             </Button>
           ) : null}
           {/* Configure opens a per-plugin settings dialog (ADR 0059) rather than expanding
@@ -229,6 +250,21 @@ function LocalTab() {
   const onRemove = (p: Plugin) => setUninstallPending(p);
   const removingId = remove.isPending ? remove.variables?.id : undefined;
 
+  // One-click pip install for declared requires_pip (POST /api/plugins/install-deps).
+  // refreshAll refetches the installed inventory, so the missing-deps state clears.
+  const installDeps = useMutation({
+    mutationFn: (p: Plugin) => api.installPluginDeps(p.id),
+    onSuccess: (res, p) => {
+      toast({
+        tone: "success",
+        title: "Dependencies installed",
+        message: `${p.name}: ${res.installed.join(", ") || "nothing to install"}.`,
+      });
+      refreshAll();
+    },
+    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install deps", message: `${p.name}: ${errMsg(err)}` }),
+  });
+
   // Re-clone locked-but-missing plugins (fresh clone / restored data dir).
   const sync = useMutation({
     mutationFn: () => api.syncPlugins(),
@@ -267,6 +303,7 @@ function LocalTab() {
   const loaded = plugins.filter((p) => p.loaded).sort(byName);
   const disabled = plugins.filter((p) => !p.loaded).sort(byName);
 
+  const depsById = new Map((installed.data?.plugins ?? []).map((e) => [e.id, e.deps_missing ?? []]));
   const renderRow = (p: Plugin) => (
     <PluginRow
       key={p.id}
@@ -280,6 +317,9 @@ function LocalTab() {
       removable={removableIds.has(p.id)}
       onRemove={onRemove}
       removing={removingId === p.id}
+      depsMissing={depsById.get(p.id) ?? []}
+      onInstallDeps={(pl) => installDeps.mutate(pl)}
+      installingDeps={installDeps.isPending && installDeps.variables?.id === p.id}
     />
   );
 

@@ -324,3 +324,56 @@ def test_soul_history_restore_404_for_unknown(monkeypatch):
     )
     resp = _client().post("/api/config/soul/history/nope/restore")
     assert resp.status_code == 404
+
+
+# ── filesystem.projects editor routes (fenced fs roots, ADR 0007) ─────────────
+
+
+def _fs_state(monkeypatch, **attrs):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "graph_config", types.SimpleNamespace(**attrs), raising=False)
+
+
+def test_fs_projects_get(monkeypatch):
+    _fs_state(monkeypatch, filesystem_enabled=True, filesystem_projects=[{"name": "docs", "path": "/d", "write": False}])
+    body = _client().get("/api/settings/filesystem-projects").json()
+    assert body["enabled"] is True and body["projects"][0]["name"] == "docs"
+
+
+def test_fs_projects_set_normalizes_and_enables(monkeypatch):
+    captured = {}
+
+    def _apply(config=None, soul=None):
+        captured["config"] = config
+        return True, ["reloaded"]
+
+    monkeypatch.setitem(sys.modules, "server.agent_init", _fake_module("server.agent_init", _apply_settings_changes=_apply))
+    body = _client().post(
+        "/api/settings/filesystem-projects",
+        json={"projects": [{"path": "~/Documents", "write": True}, {"name": "inbox", "path": "/tmp/inbox"}]},
+    ).json()
+    assert body["ok"] is True
+    fs = captured["config"]["filesystem"]
+    assert fs["enabled"] is True
+    assert fs["projects"][0]["name"] == "Documents" and fs["projects"][0]["write"] is True
+    assert not fs["projects"][0]["path"].startswith("~"), "paths are ~-expanded"
+    assert fs["projects"][1] == {"name": "inbox", "path": "/tmp/inbox", "write": False}
+
+
+def test_fs_projects_set_rejections(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "server.agent_init",
+        _fake_module("server.agent_init", _apply_settings_changes=lambda config=None, soul=None: (True, [])),
+    )
+    c = _client()
+    assert c.post("/api/settings/filesystem-projects", json={"projects": "nope"}).status_code == 400
+    assert c.post("/api/settings/filesystem-projects", json={"projects": [{"path": " "}]}).status_code == 400
+    assert (
+        c.post(
+            "/api/settings/filesystem-projects",
+            json={"projects": [{"name": "x", "path": "/a"}, {"name": "x", "path": "/b"}]},
+        ).status_code
+        == 400
+    )

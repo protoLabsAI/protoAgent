@@ -127,8 +127,27 @@ def register_plugin_routes(app) -> None:
                     "views": [v.get("label") for v in m.views],
                     "secrets": m.secrets,
                 }
+                # Actionable install state (#2013 adjacent): which declared pip deps
+                # are missing from the runtime — drives the console's "Install deps"
+                # action instead of the old install-manually advisory text.
+                _, missing = installer._deps_satisfied(list(m.requires_pip or []))
+                item["deps_missing"] = missing
             out.append(item)
         return {"plugins": out}
+
+    @app.post("/api/plugins/install-deps")
+    async def _install_deps(body: dict | None = None):
+        """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
+        step `install` deliberately skips (ADR 0027 D4), previously CLI-only. The
+        wizard's post-install report and the Plugins panel call this."""
+        plugin_id = str((body or {}).get("id", "")).strip()
+        if not plugin_id:
+            raise HTTPException(status_code=400, detail="id is required")
+        try:
+            installed = await asyncio.to_thread(installer.install_deps, plugin_id)
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "installed": installed}
 
     @app.get("/api/plugins/catalog")
     async def _catalog():

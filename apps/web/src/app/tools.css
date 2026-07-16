@@ -78,3 +78,30 @@
   gap: 8px;
   margin: 0 0 6px;
 }
+
+/* Work-folder editor — the fenced fs roots (filesystem.projects, ADR 0007) */
+.fs-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+.fs-projects-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fs-projects-row > :first-child {
+  flex: 1;
+}
+.fs-projects-write {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.fs-projects-actions {
+  display: flex;
+  gap: 8px;
+}

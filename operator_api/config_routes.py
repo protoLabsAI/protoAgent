@@ -225,6 +225,54 @@ def register_config_routes(app) -> None:
 
         return {"name": name, "content": read_soul_preset(name)}
 
+    @app.get("/api/settings/filesystem-projects")
+    async def _api_fs_projects():
+        """The fenced fs roots (ADR 0007): the explicit ``filesystem.projects`` list
+        plus whether filesystem tools are enabled. Backs the Tools-panel folder
+        editor — previously this collection had no UI or API at all (YAML-only)."""
+        cfg = STATE.graph_config
+        return {
+            "enabled": bool(getattr(cfg, "filesystem_enabled", False)),
+            "projects": list(getattr(cfg, "filesystem_projects", []) or []),
+        }
+
+    @app.post("/api/settings/filesystem-projects")
+    async def _api_fs_projects_set(body: dict | None = None):
+        """Replace ``filesystem.projects`` (same replace-list pattern as
+        POST /api/mcp/servers): each entry ``{name?, path, write?}`` — name defaults
+        from the folder basename, paths are ~-expanded, blanks and duplicate names
+        are rejected. An empty list clears explicit roots (fs falls back to the
+        workspace default when enabled)."""
+        from pathlib import Path
+
+        raw = (body or {}).get("projects")
+        if not isinstance(raw, list):
+            raise HTTPException(status_code=400, detail="projects must be a list")
+        projects: list[dict] = []
+        seen: set[str] = set()
+        for entry in raw:
+            if not isinstance(entry, dict):
+                raise HTTPException(status_code=400, detail="each project must be an object")
+            path = str(entry.get("path", "")).strip()
+            if not path:
+                raise HTTPException(status_code=400, detail="each project needs a path")
+            expanded = Path(path).expanduser()
+            name = str(entry.get("name", "")).strip() or expanded.name or "folder"
+            if name in seen:
+                raise HTTPException(status_code=400, detail=f"duplicate project name: {name}")
+            seen.add(name)
+            projects.append({"name": name, "path": str(expanded), "write": bool(entry.get("write", False))})
+
+        from server.agent_init import _apply_settings_changes
+
+        updates: dict = {"filesystem": {"projects": projects}}
+        if projects and (body or {}).get("enable", True):
+            updates["filesystem"]["enabled"] = True
+        ok, messages = _apply_settings_changes(config=updates)
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        return {"ok": True, "projects": projects}
+
     @app.get("/api/acp-agents")
     async def _api_acp_agents():
         """The canonical ACP coding-agent catalog (id, label, command, args) — one source
