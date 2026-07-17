@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Overlays no longer inherit the styles of the surface that opened them** (`@protolabsai/ui`
+  0.56). v0.103.1 fixed the two selectors we'd found handing nested dialogs zero padding and no
+  scroll; the design system has since removed the whole class of bug — `Dialog`, `Drawer`, and
+  `Lightbox` now render through a portal on `<body>`, so a parent surface's scoped styles can't
+  reach them. This also covers the document viewer and the MCP catalog's browse dialog, which
+  carried the same latent shape, and any scoped surface added later.
+
 ## [0.103.1] - 2026-07-17
 
 ### Fixed
