@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Dialogs opened from inside Settings are usable again.** Add Delegate, plugin
+  install/settings, and the QuickSetting chips rendered with zero padding, no scroll, and a
+  forced full-height body — content ran to the edges and tall forms were unreachable. The
+  Settings overlay styles its own dialog body with a fixed, non-scrolling height so its two
+  columns scroll independently; because the DS `<Dialog>` renders in place rather than
+  portalling, that descendant selector also captured the body of every dialog *nested inside*
+  Settings. Both surface overrides now bind to their own body only. (The underlying design-system
+  seam — `<Dialog>` should portal to `<body>` as `<Lightbox>` already does — is filed upstream.)
+- **QuickSetting chip dialogs honour `depends_on`.** Chip dialogs rendered their fields with a
+  raw map, skipping the visibility check every canonical settings page applies — so "Require
+  approval per command" showed as a live switch while `run_command` was off, governing nothing.
+  Dependent fields now collapse with their parent in the same click, matching `SettingsCategory`.
+
+### Changed
+- `uv.lock` re-locked after the `protolabs-agent` PyPI rename: it still recorded `protolabs-a2a`
+  as a `git` ref pinned to `v0.2.0` while `pyproject.toml` had moved to the PyPI range
+  `>=0.2.1,<0.3`. Because that project's 0.2.0 and 0.2.1 ship *different* extension APIs, a
+  `--frozen`/`--locked` install resolved to a build the runtime can't call. `uv lock --check`
+  now passes on `main`.
+
 ## [0.103.0] - 2026-07-17
 
 ### Added
