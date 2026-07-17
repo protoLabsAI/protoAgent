@@ -98,6 +98,16 @@ jobs:
         # it's fast and can't flake on platform differences. To fix a failure:
         # `uv sync && uv run python scripts/gen_attribution.py`.
         run: python scripts/gen_attribution.py --check
+      - uses: astral-sh/setup-uv@v6
+      - name: Lockfile in sync with pyproject
+        # uv.lock silently rotted for a full release cycle (#1998): it kept a
+        # `git+https` ref for protolabs-a2a after pyproject moved to the PyPI range,
+        # and — because that project's 0.2.0/0.2.1 ship different APIs — any
+        # `--frozen`/`--locked` install pulled a build the runtime can't call. Nothing
+        # caught it: the CI jobs install with plain `pip`, so uv.lock is only read by
+        # the attribution gate above (which tolerates a stale project version).
+        # Fails when pyproject.toml and uv.lock disagree. To fix: `uv lock`.
+        run: uv lock --check
 
   tests:
     name: Python tests

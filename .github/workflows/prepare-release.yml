@@ -56,8 +56,19 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: Bump version
         run: python scripts/version.py ${{ inputs.bump || 'patch' }}
+
+      - name: Re-lock
+        # The version bump above rewrites pyproject.toml's `version`, which uv.lock
+        # records for the project itself — so without this the lock ships one version
+        # behind on every single release and `uv lock --check` fails the moment the
+        # bump PR lands. That drift is what #1998 had to clean up. `--offline` keeps
+        # this to the project's own version (no dependency resolution changes sneaking
+        # into a release PR).
+        run: uv lock --offline
 
       - name: Read new version
         id: version
@@ -93,7 +104,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "${BRANCH}"
-          git add pyproject.toml CHANGELOG.md sites/marketing/data/changelog.json
+          git add pyproject.toml uv.lock CHANGELOG.md sites/marketing/data/changelog.json
           git commit -m "chore: release v${VERSION}"
           git push origin "${BRANCH}"
 
