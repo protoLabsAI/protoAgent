@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.103.0] - 2026-07-17
+
 ### Added
 - **Cowork mode — a prepackaged knowledge-worker archetype (ADR 0083).** Pick **Cowork** in the
   setup wizard or the fleet new-agent picker and get an ops/content copilot ready to work:
