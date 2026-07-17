@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cowork mode — a prepackaged knowledge-worker archetype (ADR 0083).** Pick **Cowork** in the
+  setup wizard or the fleet new-agent picker and get an ops/content copilot ready to work:
+  original Word/Excel/PowerPoint/PDF document skills, session-distilling scheduled tasks,
+  memory consolidation, a writing-voice profile, Google Workspace connectors, artifact + notes
+  surfaces, and a claude-bridge importer for existing Claude Code/Cowork state — composed as
+  the [`cowork-stack`](https://github.com/protoLabsAI/cowork-stack) bundle over the existing
+  archetype seams (no new core mechanisms).
+- **Archetype preview — see what you're committing to before you pick.** Archetype cards used
+  to show an icon and a one-line blurb even when picking meant installing a six-plugin bundle.
+  A new "See what's included" dialog (setup wizard + new-agent picker) shows the full base
+  SOUL and the bundle's members — each plugin's skills, pip deps, and declared capabilities —
+  via `GET /api/archetypes/{id}/preview`, a read-only peek that installs nothing and degrades
+  per-member when a repo is unreachable.
+- **The wizard now finishes the mechanical setup it starts.** Installing a plugin's declared
+  pip deps was CLI-only (`plugin install-deps`); it's now one click — the wizard's finish step
+  stays open with a per-plugin dependency report when the installed bundle needs packages, and
+  Settings ▸ Plugins rows show an **Install deps** action (`POST /api/plugins/install-deps`,
+  plus `deps_missing` on the installed inventory). Settings ▸ Tools gains a **work-folders
+  editor** for `filesystem.projects` — the fenced fs roots previously had no console editor or
+  API at all (`GET/POST /api/settings/filesystem-projects`).
+- **Notes render markdown as you type** — a CodeMirror live preview replaces the edit/preview
+  toggle in the notes plugin.
+
 ### Fixed
 - **Two core settings sections no longer file themselves under Integrations by accident.**
   `_category_for` defaults an unmapped section to "Plugins" (the Integrations surface) — right
@@ -19,6 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Identity (its real home; the field is `ui_hidden` so nothing renders yet), Media to Plugins as
   a documented interim until the Capabilities schema panel lands (settings-IA Decision A). A test
   now asserts every core section has an explicit category, so a new one can't strand itself.
+- **A rejected settings save no longer leaves disk ahead of the running agent.** The
+  write-then-reload path snapshots and rolls back on a failed graph rebuild, so a bad edit
+  can't strand the instance with config it never actually loaded.
+- **The shared note is guarded against lost updates**, and the notes view fails loudly when
+  the plugin kit is unavailable instead of silently degrading.
+
+### Changed
+- **Console responses are gzip-compressed** (JSON/text; SSE exempt) — cold console loads drop
+  from ~1.2 MB uncompressed to a fraction of that.
+
+### Docs
+- ADR 0084 — computer use as an out-of-process driver and the fence it voids. **Design only:
+  no computer-use capability ships in this release.**
 
 ## [0.102.0] - 2026-07-16
 
