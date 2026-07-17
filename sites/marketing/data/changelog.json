@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.103.0",
+    "date": "2026-07-17",
+    "changes": [
+      "Cowork mode — a prepackaged knowledge-worker archetype.",
+      "Archetype preview — see what you're committing to before you pick.",
+      "The wizard now finishes the mechanical setup it starts.",
+      "Notes render markdown as you type",
+      "Two core settings sections no longer file themselves under Integrations by accident.",
+      "A rejected settings save no longer leaves disk ahead of the running agent.",
+      "The shared note is guarded against lost updates",
+      "Console responses are gzip-compressed",
+      "ADR 0084"
+    ]
+  },
+  {
     "version": "v0.102.0",
     "date": "2026-07-16",
     "changes": [
