@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.103.1",
+    "date": "2026-07-17",
+    "changes": [
+      "Dialogs opened from inside Settings are usable again.",
+      "QuickSetting chip dialogs honour depends_on.",
+      "uv.lock re-locked after the protolabs-agent PyPI rename: it still recorded protolabs-a2a as a git ref pinned to v0.2.0 while pyproject.toml had moved to the PyPI range >=0.2.1,<0.3"
+    ]
+  },
+  {
     "version": "v0.103.0",
     "date": "2026-07-17",
     "changes": [
