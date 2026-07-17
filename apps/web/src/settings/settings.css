@@ -139,13 +139,15 @@
    body so the shell's two columns scroll independently (rail stays put, content
    scrolls); the theme quick dialog keeps the simple scroll-the-whole-body behavior.
 
-   `>` NOT a descendant combinator (#2019): the DS <Dialog> renders IN PLACE — only
-   <Lightbox> portals to <body> — so a dialog opened from inside Settings (Add
-   Delegate, plugin install/settings, QuickSetting) nests its own .pl-dialog__body
-   under this one. A descendant selector hit those too, overriding the app default
-   with padding:0 + a forced 80vh + overflow:hidden — zero padding, no scroll.
-   These classes ride the .pl-dialog itself (cx("pl-dialog", className)), so the
-   body they mean is always a direct child. */
+   `>` NOT a descendant combinator (#2019). A descendant selector also matched the
+   .pl-dialog__body of any dialog opened from INSIDE Settings (Add Delegate, plugin
+   install/settings, QuickSetting) — handing each one padding:0 + a forced 80vh +
+   overflow:hidden, i.e. zero padding and no scroll. @protolabsai/ui 0.56 since
+   portals overlays to <body> (`overlayPortal`), so nested dialogs are no longer
+   descendants and can't be captured this way again — but keep the `>`: it states
+   what the rule actually means (this dialog's OWN body). These classes ride the
+   .pl-dialog itself (cx("pl-dialog", className)), which travels with the portal, so
+   the body they target is always a direct child either way. */
 .settings-overlay > .pl-dialog__body {
   padding: 0;
   height: 80vh;

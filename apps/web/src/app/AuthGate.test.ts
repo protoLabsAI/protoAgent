@@ -29,6 +29,14 @@ function mount(node: Parameters<Root["render"]>[0]) {
   });
 }
 
+// @protolabsai/ui ≥ 0.56 portals Dialog/Drawer/Lightbox to <body> (`overlayPortal`) so a
+// parent surface's scoped `pl-*` rules can't reach them. Overlay content is therefore a
+// SIBLING of `container`, never inside it — query the portal target. (`container` still
+// owns unmount cleanup; React removes the portal with the tree.)
+function inPortal<E extends Element = Element>(sel: string) {
+  return document.body.querySelector<E>(sel);
+}
+
 function pressEscape() {
   act(() => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -36,7 +44,7 @@ function pressEscape() {
 }
 
 function clickBackdrop() {
-  const overlay = container.querySelector<HTMLElement>(".pl-overlay");
+  const overlay = inPortal<HTMLElement>(".pl-overlay");
   if (!overlay) throw new Error("no .pl-overlay rendered");
   act(() => {
     overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -44,7 +52,7 @@ function clickBackdrop() {
 }
 
 function buttonByText(text: string) {
-  return [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
+  return [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
 }
 
 beforeEach(() => {
@@ -64,7 +72,7 @@ describe("DS Dialog dismissal contract", () => {
     mount(h(Dialog, { open: true, title: "Settings", onClose }, "body"));
 
     // The × close affordance renders only when a dialog is dismissible.
-    expect(container.querySelector(".pl-dialog__close")).not.toBeNull();
+    expect(inPortal(".pl-dialog__close")).not.toBeNull();
 
     pressEscape();
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -77,10 +85,10 @@ describe("DS Dialog dismissal contract", () => {
     mount(h(Dialog, { open: true, title: "Blocking" }, "body"));
 
     // No dismiss affordance, and the dialog stays mounted through Escape + backdrop.
-    expect(container.querySelector(".pl-dialog__close")).toBeNull();
+    expect(inPortal(".pl-dialog__close")).toBeNull();
     pressEscape();
     clickBackdrop();
-    expect(container.querySelector(".pl-dialog")).not.toBeNull();
+    expect(inPortal(".pl-dialog")).not.toBeNull();
   });
 });
 
@@ -95,8 +103,8 @@ describe("AuthGate — blocking auth modal (#1921)", () => {
 
   it("renders no dismiss affordances — no × close, no 'Not now', only Connect", () => {
     mountGate();
-    expect(container.querySelector(".pl-dialog")).not.toBeNull();
-    expect(container.querySelector(".pl-dialog__close")).toBeNull();
+    expect(inPortal(".pl-dialog")).not.toBeNull();
+    expect(inPortal(".pl-dialog__close")).toBeNull();
     expect(buttonByText("Not now")).toBeUndefined();
     expect(buttonByText("Connect")).toBeDefined();
   });
@@ -105,7 +113,7 @@ describe("AuthGate — blocking auth modal (#1921)", () => {
     mountGate();
     pressEscape();
     clickBackdrop();
-    expect(container.querySelector(".pl-dialog")).not.toBeNull();
+    expect(inPortal(".pl-dialog")).not.toBeNull();
     expect(authRequired()).toBe(true); // still gated — the only exit is authenticating
   });
 });
