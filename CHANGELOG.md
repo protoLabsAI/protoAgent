@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.103.2] - 2026-07-17
+
 ### Fixed
 - **Overlays no longer inherit the styles of the surface that opened them** (`@protolabsai/ui`
   0.56). v0.103.1 fixed the two selectors we'd found handing nested dialogs zero padding and no

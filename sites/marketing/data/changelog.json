@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.103.2",
+    "date": "2026-07-17",
+    "changes": [
+      "Overlays no longer inherit the styles of the surface that opened them"
+    ]
+  },
+  {
     "version": "v0.103.1",
     "date": "2026-07-17",
     "changes": [
