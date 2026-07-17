@@ -99,6 +99,16 @@ jobs:
         # `uv sync && uv run python scripts/gen_attribution.py`.
         run: python scripts/gen_attribution.py --check
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Pinned like ruff/import-linter above, and for a sharper reason: uv's lock
+          # OUTPUT is version-dependent. 0.11.29 and 0.11.13 disagree about how to record
+          # dependency markers (0.11.29 drops `python_full_version < '3.13'` from aiologic
+          # /culsans), so an unpinned `latest` rewrites uv.lock whenever uv ships — the
+          # file then thrashes based on whose uv ran last, and this gate is the thing that
+          # notices. 0.11.29 produced the lock currently on main.
+          # To bump: change BOTH here and in prepare-release.yml (they must match), then
+          # run `uv lock` once and commit the result.
+          version: "0.11.29"
       - name: Lockfile in sync with pyproject
         # uv.lock silently rotted for a full release cycle (#1998): it kept a
         # `git+https` ref for protolabs-a2a after pyproject moved to the PyPI range,

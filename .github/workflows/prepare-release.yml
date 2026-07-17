@@ -57,6 +57,11 @@ jobs:
           python-version: '3.12'
 
       - uses: astral-sh/setup-uv@v6
+        with:
+          # MUST match checks.yml's pin — that job's `uv lock --check` validates what this
+          # job writes, so a version skew between them would open a release PR that its own
+          # CI rejects. uv's lock output is version-dependent; see the note in checks.yml.
+          version: "0.11.29"
 
       - name: Bump version
         run: python scripts/version.py ${{ inputs.bump || 'patch' }}
