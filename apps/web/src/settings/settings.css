@@ -137,8 +137,16 @@
    full surface inside a dialog — drop the dialog's own body padding (the panels
    carry their own chrome). The settings overlay uses a FIXED-height, non-scrolling
    body so the shell's two columns scroll independently (rail stays put, content
-   scrolls); the theme quick dialog keeps the simple scroll-the-whole-body behavior. */
-.settings-overlay .pl-dialog__body {
+   scrolls); the theme quick dialog keeps the simple scroll-the-whole-body behavior.
+
+   `>` NOT a descendant combinator (#2019): the DS <Dialog> renders IN PLACE — only
+   <Lightbox> portals to <body> — so a dialog opened from inside Settings (Add
+   Delegate, plugin install/settings, QuickSetting) nests its own .pl-dialog__body
+   under this one. A descendant selector hit those too, overriding the app default
+   with padding:0 + a forced 80vh + overflow:hidden — zero padding, no scroll.
+   These classes ride the .pl-dialog itself (cx("pl-dialog", className)), so the
+   body they mean is always a direct child. */
+.settings-overlay > .pl-dialog__body {
   padding: 0;
   height: 80vh;
   height: 80dvh; /* dvh so the overlay fits the visible viewport on mobile */
@@ -149,7 +157,7 @@
   display: flex;
   flex-direction: column;
 }
-.theme-quick-dialog .pl-dialog__body {
+.theme-quick-dialog > .pl-dialog__body {
   padding: 0;
   max-height: 80vh;
   max-height: 80dvh;
