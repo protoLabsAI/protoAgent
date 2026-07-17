@@ -76,7 +76,7 @@ test("Tools panel: the Shell & filesystem chip disables run_command via /api/set
   await page.getByRole("button", { name: "Shell & filesystem tools" }).click();
   const dialog = page.getByRole("dialog", { name: "Shell & filesystem tools" });
   await expect(dialog).toBeVisible();
-  // All four gates render, allow_run being the full kill switch.
+  // All four gates render while their chain is satisfied (every parent is on).
   await expect(dialog.getByText("Allow run_command")).toBeVisible();
   await expect(dialog.getByText("Require approval per command")).toBeVisible();
 
@@ -84,6 +84,18 @@ test("Tools panel: the Shell & filesystem chip disables run_command via /api/set
     (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
   );
   await dialog.locator('[data-key="filesystem.allow_run"] .pl-switch').click();
+  // The dialog now honours `depends_on` (#963) like the canonical settings pages, reactively
+  // off the in-form value: with run_command off, "Require approval per command" (which depends
+  // on filesystem.allow_run) governs nothing and collapses. Previously it stayed on screen as
+  // an operable switch that did nothing.
+  await expect(dialog.getByText("Require approval per command")).toHaveCount(0);
+  // The chain is honoured one link at a time, NOT flattened: "Allow /bypass" depends on
+  // run_requires_approval — whose value is still true — so it stays. (Only its now-hidden
+  // PARENT changed; its own predicate is unaffected until run_requires_approval flips.)
+  await expect(dialog.getByText("Allow /bypass")).toBeVisible();
+  // The switch we flipped is still there — its own parent (filesystem.enabled) is still on.
+  await expect(dialog.getByText("Allow run_command")).toBeVisible();
+
   await dialog.getByRole("button", { name: "Save" }).click();
   const req = await saved;
   const body = req.postDataJSON();
