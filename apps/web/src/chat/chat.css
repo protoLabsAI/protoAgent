@@ -29,6 +29,25 @@
   background: var(--error);
 }
 
+/* A background server turn (push-resume / scheduled / watch reaction) is running on this
+   tab — a pulsing dot so an unfocused tab doing work reads as active, not idle. Same
+   cadence as the Chat rail dot. */
+.session-dot.processing {
+  background: var(--warning);
+  animation: session-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes session-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.7);
+  }
+}
+
 .chat-session-pool,
 .chat-session-slot {
   min-width: 0;

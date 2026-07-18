@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 // Server-initiated turn indicator (#1767). Background push-resume (ADR 0070), scheduled
 // fires, and watch reactions (ADR 0067) run a turn by self-POSTing into a session — the
@@ -68,6 +68,16 @@ export function serverTurnLabel(sessionId: string): string | null {
   return (counts.get(sessionId) ?? 0) > 0 ? (labels.get(sessionId) ?? null) : null;
 }
 
+/** A stable snapshot of every session with a server turn in flight: the ids sorted +
+ *  comma-joined, so getSnapshot stays Object.is-equal while the SET is unchanged (a
+ *  `turn.started`/`finished` on an already-counted session yields the same key and skips
+ *  the re-render). `counts` only holds sessions with count > 0, so this is inherently
+ *  overlap-safe — two nudges on one session collapse to one entry that clears only when
+ *  the last settles. */
+export function serverTurnSessionsKey(): string {
+  return [...counts.keys()].sort().join(",");
+}
+
 function subscribe(fn: () => void) {
   listeners.add(fn);
   return () => {
@@ -85,4 +95,12 @@ export function useServerTurn(sessionId: string | null | undefined): string | nu
     () => "",
   );
   return label || null;
+}
+
+/** The set of sessions with a server turn in flight — for decorating ALL tabs at once (the
+ *  tab bar can't call `useServerTurn` per row). Subscribes to the stable key and rebuilds
+ *  the Set only when that key changes, so overlapping/other-session events don't churn it. */
+export function useServerTurnSessions(): Set<string> {
+  const key = useSyncExternalStore(subscribe, serverTurnSessionsKey, () => "");
+  return useMemo(() => new Set(key ? key.split(",") : []), [key]);
 }

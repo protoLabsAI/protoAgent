@@ -6,6 +6,7 @@ import {
   noteTurnStarted,
   resetServerTurns,
   serverTurnLabel,
+  serverTurnSessionsKey,
 } from "./server-turn-store";
 
 // The server-turn store powers the #1767 typing indicator: `turn.started` arms a labelled
@@ -69,5 +70,36 @@ describe("server-turn store", () => {
     expect(serverTurnLabel("s1")).toBeNull();
     noteTurnStarted("s1", labelForOrigin("scheduler"));
     expect(serverTurnLabel("s1")).toMatch(/scheduled/i); // start still arms cleanly
+  });
+});
+
+describe("serverTurnSessionsKey (per-tab processing indicator, #2009)", () => {
+  beforeEach(() => resetServerTurns());
+
+  it("is empty with no server turns in flight", () => {
+    expect(serverTurnSessionsKey()).toBe("");
+  });
+
+  it("lists every session with a turn in flight, stably sorted", () => {
+    noteTurnStarted("s2", "x");
+    noteTurnStarted("s1", "x");
+    expect(serverTurnSessionsKey()).toBe("s1,s2"); // sorted → stable snapshot regardless of arrival order
+  });
+
+  it("drops a session only when its LAST overlapping turn finishes (no flicker)", () => {
+    noteTurnStarted("s1", "x");
+    noteTurnStarted("s1", "x"); // two overlapping turns on one session
+    noteTurnFinished("s1");
+    expect(serverTurnSessionsKey()).toBe("s1"); // still processing — one in flight
+    noteTurnFinished("s1");
+    expect(serverTurnSessionsKey()).toBe(""); // clears only when the last settles
+  });
+
+  it("keeps the same key when an unrelated session churns (Object.is-stable snapshot)", () => {
+    noteTurnStarted("s1", "x");
+    const before = serverTurnSessionsKey();
+    noteTurnStarted("s2", "x");
+    noteTurnFinished("s2");
+    expect(serverTurnSessionsKey()).toBe(before); // back to just "s1" — no re-render churn for s1's tab
   });
 });
