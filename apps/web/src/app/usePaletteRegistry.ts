@@ -56,6 +56,11 @@ export function openView(id: string) {
   const ui = useUI.getState();
   if ((ui.railOrder.hidden ?? []).includes(id)) ui.showSurface(id); // restore onto its dock, then route
   const ro = useUI.getState().railOrder; // re-read: showSurface mutated it
+  // The mobile shell reads `mobileActive`, NOT the per-dock ids — so without this every
+  // programmatic navigation (⌘K "go to", the rail context menu, a plugin's `ui.navigate`,
+  // a launcher intent) silently did nothing on a phone: it moved a dock the mobile shell
+  // never renders. Set both; `mobileActive` is inert on desktop.
+  ui.setMobileActive(id);
   if (ro.right.includes(id)) {
     ui.setRightCollapsed(false);
     ui.setRightPanel(id);

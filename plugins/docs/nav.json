@@ -709,6 +709,10 @@
           "title": "0085 — Managed Node.js runtime, provisioned on demand"
         },
         {
+          "path": "adr/0086-chat-first-mobile-shell.md",
+          "title": "ADR 0086 — Chat-first mobile shell (amends ADR 0035 D6)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

@@ -1,0 +1,317 @@
+/* mobile-shell.css — the chat-first mobile shell (MobileShell.tsx, supersedes ADR 0035 D6).
+   Only loaded behaviour: the shell renders exclusively under 768px, so these classes never
+   collide with the desktop DS AppShell. Kept unscoped by media query on purpose — the
+   component itself is the gate, and scoping would just add a dead conditional. */
+
+.mshell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────────
+   Three slots: leading action · title · trailing action. The title is a button at
+   the root (opens the session sheet) and static text in a pushed view. */
+.mshell-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  padding-top: env(safe-area-inset-top);
+  min-height: calc(52px + env(safe-area-inset-top));
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised, var(--bg));
+}
+
+.mshell-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px hard minimum — the HIG target. The audit that motivated this shell found the
+     old composer send button at 30x30. */
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  border-radius: var(--radius);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mshell-head-btn:active {
+  opacity: 0.55;
+}
+
+.mshell-title {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 600;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mshell-title:active {
+  opacity: 0.55;
+}
+.mshell-title--static {
+  font-weight: 600;
+}
+.mshell-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Body: chat root + pushed layer ──────────────────────────────────────────
+   `position: relative` so `.mshell-pushed` can absolutely cover the root. The root
+   stays in flow and stays MOUNTED (#613) — it is covered, never swapped out. */
+.mshell-body {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mshell-root {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The pushed view. Opaque and full-bleed so the live chat underneath doesn't show
+   through, and slid in from the right — the direction that reads as "deeper". */
+.mshell-pushed {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  animation: mshell-push-in 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes mshell-push-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* A pushed surface fills the layer and scrolls internally, same contract as a desktop
+   dock column — otherwise `.stage-panel`'s `flex: 1` goes inert and strands dead canvas
+   below it (the #1899 bug class). */
+.mshell-pushed > .stage-panel,
+.mshell-pushed > .panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* `.chat-stage` is `grid-template-rows: auto minmax(0,1fr)` — the `auto` row is the DS
+   TabBar, which this shell removes (SessionSheet replaces it). Left as-is, the session
+   pool lands in the `auto` row and sizes to CONTENT while the `1fr` row sits empty below
+   it: the composer floats mid-screen over dead canvas. Exactly the #1899 failure, one
+   layer up. One row here, because there's one child. */
+.mshell .chat-stage {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Chat fills the root layer. ChatSlot's panel is the flex child that has to stretch. */
+.mshell-root > .stage-panel,
+.mshell-root > .panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Edge-to-edge. `.panel` is a card — border, radius, inset background — which is right on
+   a desktop rail sitting in a column of other panels, and wrong as the whole screen: a
+   framed card inside a frame is the single clearest "this is a website" tell. */
+.mshell .panel,
+.mshell .stage-panel {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* ── Session sheet ───────────────────────────────────────────────────────────
+   Hand-rolled: the DS Drawer is side-only (left/right) and a thread switcher wants to
+   come up from the bottom, under the thumb. Mirrors AppDrawer's structure. */
+.session-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.session-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  animation: mshell-fade-in 0.18s ease;
+}
+.session-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 70dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised, var(--bg));
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: mshell-sheet-in 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+  transition: transform 0.2s ease;
+}
+@keyframes mshell-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes mshell-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.session-sheet-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  margin: 8px auto 4px;
+  flex: 0 0 auto;
+}
+
+.session-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 16px 8px;
+  flex: 0 0 auto;
+}
+.session-sheet-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.session-sheet-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.session-sheet-new:active {
+  opacity: 0.55;
+}
+
+.session-sheet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+.session-sheet-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+}
+.session-sheet-row.is-current {
+  background: var(--bg-hover);
+}
+.session-sheet-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 0 8px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 15px;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.session-sheet-pick:active {
+  opacity: 0.55;
+}
+.session-sheet-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-sheet-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: var(--fg-subtle, var(--fg));
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.session-sheet-del:active {
+  opacity: 0.55;
+}
+
+/* ── Toasts ──────────────────────────────────────────────────────────────────
+   `ToastProvider position="top-right"` (main.tsx) was chosen so toasts clear the bottom
+   composer / utility bar — desktop reasoning. On a 390px screen the DS stack is nearly
+   full-width, so "top-right" lands squarely on the session title and the new-chat button.
+   Anchor it BELOW the header instead: still top (the composer owns the bottom, and more so
+   once the keyboard lifts it), but clear of the header's controls. */
+@media (max-width: 767px) {
+  .pl-toast-stack[data-position="top-right"] {
+    top: calc(52px + env(safe-area-inset-top) + 8px);
+    left: 8px;
+    right: 8px;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mshell-pushed,
+  .session-sheet,
+  .session-sheet-backdrop {
+    animation: none;
+  }
+  .session-sheet {
+    transition: none;
+  }
+}

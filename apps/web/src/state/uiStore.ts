@@ -414,9 +414,15 @@ export const useUI = create<UIState>()(
           arrs[target].push(id);
           return { railOrder: arrs };
         }),
+      // The mobile navigation stack (ADR 0086 D1): "chat" = the root view, any other id =
+      // that surface pushed over it. Not a rail id — the mobile shell reads only this.
       mobileActive: "chat",
       setMobileActive: (mobileActive) => set({ mobileActive }),
-      quickBar: ["chat", "knowledge", "plugins"],
+      // Retired on mobile by ADR 0086 D1 (the bottom quick-bar is gone; chat is the root).
+      // Kept as inert persisted state pending a separate cleanup. The old default listed
+      // "plugins" — a surface folded into Settings long ago — and since MobileNav silently
+      // dropped ids it couldn't resolve, every fresh install rendered a 2-tab bottom bar.
+      quickBar: ["chat", "knowledge", "memory"],
       toggleQuickBar: (id) =>
         set((s) => {
           if (s.quickBar.includes(id)) return { quickBar: s.quickBar.filter((x) => x !== id) };

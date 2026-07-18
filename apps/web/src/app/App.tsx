@@ -111,6 +111,8 @@ import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useKeyboardInset } from "../lib/useKeyboardInset";
+import { MobileShell } from "./MobileShell";
+import "./mobile-shell.css";
 import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
@@ -125,7 +127,7 @@ import { WorkPanel } from "./WorkPanel";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
-import { applyNavIntent, usePaletteRegistry } from "./usePaletteRegistry";
+import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
@@ -275,6 +277,7 @@ export function App() {
   const configurePlugin = useUI((s) => s.configurePlugin);
   const closePluginConfig = useUI((s) => s.closePluginConfig);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
   // always renders; the retry doubles as the desktop sidecar boot-probe. The
@@ -354,7 +357,9 @@ export function App() {
         if (!pid) return;
         const own = pluginViewsRef.current.filter((v) => v.key.startsWith(`plugin:${pid}:`));
         const target = d?.view ? own.find((v) => v.key === `plugin:${pid}:${d.view}`) : own[0];
-        if (target) setSurface(target.key);
+        // Route through openView, not setSurface: it resolves the owning dock AND sets
+        // `mobileActive`, so "the AI navigates the UI" works on a phone too.
+        if (target) openView(target.key);
       }),
     [],
   );
@@ -372,7 +377,12 @@ export function App() {
     if (runtime && typeof surface === "string" && surface.startsWith("plugin:") && !activePluginView) {
       setSurface("chat");
     }
-  }, [runtime, surface, activePluginView]);
+    // Same fallback for the mobile stack: a pushed plugin view whose plugin vanished would
+    // otherwise strand the shell on a blank pushed layer with only Back to escape.
+    if (runtime && mobileActive.startsWith("plugin:") && !allPluginViews.some((v) => v.key === mobileActive)) {
+      setMobileActive("chat");
+    }
+  }, [runtime, surface, activePluginView, mobileActive, allPluginViews, setMobileActive]);
   // White-label the window/tab title to the configured identity (default
   // protoAgent), so a fork's title follows its name without a rebuild.
   // brandName() display-cases a bare lower-case slug (e.g. `gina` → `Gina`).
@@ -684,6 +694,41 @@ export function App() {
     );
   }
 
+  // ── Chat-first mobile shell (ADR 0035 D6 as amended) ──
+  // `mobileActive` doubles as the navigation stack: "chat" = the root, anything else = a
+  // surface pushed over it. One level deep by design — a phone doesn't need a rail of
+  // co-equal surfaces, it needs chat plus somewhere to go and back.
+  const mobileAtRoot = mobileActive === "chat";
+  // Docked background plugin views live in the ROOT layer alongside chat: they're iframes
+  // that must never unmount, and one of them can be the active surface (shown by display
+  // toggle, no pushed layer) — which is why MobileShell inerts on `pushed`, not on back.
+  const mobileIsBgView = bgViewsDocked.some((v) => v.key === mobileActive);
+  const mobileRoot = (
+    <>
+      <ChatSlot
+        onError={onChatError}
+        active={mobileAtRoot}
+        pluginView={chatSlotView}
+        enabledPluginIds={enabledPluginIds}
+      />
+      {bgViewsDocked.map((v) => (
+        <div
+          key={v.key}
+          className="plugin-bg-slot"
+          style={{ display: mobileActive === v.key ? "contents" : "none" }}
+        >
+          <PluginView view={v} />
+        </div>
+      ))}
+    </>
+  );
+  const mobilePushed = mobileAtRoot || mobileIsBgView ? null : renderSurface(mobileActive);
+  const mobileTitle = mobileAtRoot
+    ? ""
+    : ([...railSurfaces("left"), ...railSurfaces("right"), ...railSurfaces("bottom")].find(
+        (s) => s.id === mobileActive,
+      )?.label ?? mobileActive);
+
   // Keep plugin views as first-class railOrder members (ADR 0036) — append new ones, prune gone.
   // Keyed on a stable signature so the effect only fires when the view set actually changes.
   // GATED on the runtime status having RESOLVED: on boot `runtime` is null → zero views →
@@ -917,6 +962,34 @@ export function App() {
           logo is the brand mark, status is the glanceable health light. BASE_URL is "/app/" in
           dev and "./" in the desktop build (assets sit at the root). dragRegion = the Tauri
           window drag region. */}
+      {/* Mobile runs a different SHELL, not a different layout of the same one — chat is the
+          root view and surfaces push over it (ADR 0035 D6 as amended). The DS AppShell can't
+          express that: its mobile branch is a hard early return, and escaping it by dropping
+          `mobileItems`/`quickBarIds` falls through to the desktop tree. So below 768px we own
+          the shell; the DS one still drives every desktop viewport unchanged. */}
+      {isMobile ? (
+        <MobileShell
+          root={mobileRoot}
+          pushed={mobilePushed}
+          title={mobileTitle}
+          showBack={!mobileAtRoot}
+          onBack={() => setMobileActive("chat")}
+          onOpenDrawer={() => setDrawerOpen(true)}
+          sessionSheetOpen={sessionSheetOpen}
+          onSessionSheetChange={setSessionSheetOpen}
+          banners={
+            <>
+              {(runtime?.warnings ?? []).map((w) => (
+                <Alert status="warning" className="shell-warning-banner" key={w}>
+                  {w}
+                </Alert>
+              ))}
+              <AgentDownBanner />
+            </>
+          }
+        />
+      ) : (
+      <>
       <div className="app-topbar">
       <Header
         dragRegion
@@ -1211,6 +1284,8 @@ export function App() {
           />
         }
       />
+      </>
+      )}
 
       <SetupWizard
         open={runtime?.setup_complete === false}
@@ -1256,6 +1331,16 @@ export function App() {
       onSelectSurface={setMobileActive}
       onOpenGlobal={openGlobalSettings}
       version={runtime?.version}
+      identity={
+        <FleetSwitcher
+          fallbackName={brandName(runtime?.identity?.name)}
+          onNewAgent={() => {
+            setFleetStartNew(true);
+            openGlobalSettings("fleet");
+          }}
+          onManageFleet={() => openGlobalSettings("fleet")}
+        />
+      }
     />
     {/* Global settings overlay — opened from the drawer or a palette deep-link (store-driven). */}
     <SettingsOverlay
