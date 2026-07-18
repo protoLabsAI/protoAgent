@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { seedCurrentChat } from "./chat-helpers";
+
 // Deleting a chat tab summons a confirmation dialog (not window.confirm) so a
 // stray click can't silently drop a session. Cancel keeps it; confirm removes.
 // The dialog is the @protolabsai/ui ConfirmDialog (role="dialog", labelled by title).
@@ -10,6 +12,9 @@ test("closing a chat tab confirms first; cancel keeps it, confirm deletes", asyn
   await page.goto("/app/", { waitUntil: "load" });
 
   // Start with two sessions so a delete is unambiguous.
+  // The store reuses a pristine blank rather than piling up empty tabs, so use this one
+  // first — otherwise "+" just hands the same session back. (chat-helpers.seedCurrentChat)
+  await seedCurrentChat(page);
   await page.locator(".pl-tabbar > .pl-tabbar__add").click();
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
 
@@ -32,6 +37,9 @@ test("closing a chat tab confirms first; cancel keeps it, confirm deletes", asyn
 
 test("Escape and click-outside cancel the delete confirmation", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  // The store reuses a pristine blank rather than piling up empty tabs, so use this one
+  // first — otherwise "+" just hands the same session back. (chat-helpers.seedCurrentChat)
+  await seedCurrentChat(page);
   await page.locator(".pl-tabbar > .pl-tabbar__add").click();
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
 

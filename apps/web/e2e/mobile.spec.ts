@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { seedCurrentChat } from "./chat-helpers";
+
 // Runs under the `mobile` Playwright project (iPhone 13 device profile) — see
 // playwright.config.ts. The desktop project ignores this file: the chat-first shell
 // only exists below 768px (ADR 0086), so these would fail at 1200px by design.
@@ -48,14 +50,39 @@ test("mobile shell: the session sheet replaces the tab strip", async ({ page }) 
   await expect(page.locator(".session-sheet")).toBeVisible();
   await expect(page.locator(".session-sheet-row")).not.toHaveCount(0);
 
+  // The current chat is a pristine blank, so "New" would just hand it back — both the
+  // sheet's New and the header "+" are disabled rather than reading as a dead tap.
+  await expect(page.locator(".session-sheet-new")).toBeDisabled();
+  await page.locator(".session-sheet-backdrop").click();
+  await expect(page.locator(".session-sheet")).toHaveCount(0);
+  await expect(page.locator('button[aria-label="New chat"]')).toBeDisabled();
+
+  // Use the chat, and creating becomes available again.
+  await seedCurrentChat(page);
+  await expect(page.locator('button[aria-label="New chat"]')).toBeEnabled();
+  await page.locator(".mshell-title").click();
   await page.locator(".session-sheet-new").click();
   await expect(page.locator(".session-sheet")).toHaveCount(0); // creating closes the sheet
 
   await page.locator(".mshell-title").click();
   await expect(page.locator(".session-sheet-row")).toHaveCount(2);
-  // Backdrop dismisses.
   await page.locator(".session-sheet-backdrop").click();
   await expect(page.locator(".session-sheet")).toHaveCount(0);
+});
+
+// Guards the actual complaint: "+" was trivially spammable into a pile of blank chats.
+test("mobile shell: new-chat never piles up blanks", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const newChat = page.locator('button[aria-label="New chat"]');
+  await expect(newChat).toBeDisabled(); // pristine blank → nothing to create
+
+  await seedCurrentChat(page);
+  await newChat.click(); // now a real second chat
+  await expect(newChat).toBeDisabled(); // …which is itself pristine, so no third
+
+  await page.locator(".mshell-title").click();
+  await expect(page.locator(".session-sheet-row")).toHaveCount(2); // never 3+
 });
 
 // Guards the two defect classes the mobile audit turned up — both silent, both the kind

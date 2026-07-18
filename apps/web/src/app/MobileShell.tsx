@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronLeft, Menu, Plus } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
-import { chatStore, useChatState } from "../chat/chat-store";
+import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
 import { SessionSheet } from "./SessionSheet";
 
 /**
@@ -55,6 +55,11 @@ export function MobileShell({
 }) {
   const chatState = useChatState();
   const current = chatState.sessions.find((s) => s.id === chatState.currentSessionId);
+  // "+" is a no-op when the blank it would reuse is already what you're looking at, so
+  // disable it rather than let it read as a dead tap. If the blank is on ANOTHER tab the
+  // button stays live — pressing it switches you there, which is a visible result.
+  const blank = unusedSession(chatState);
+  const newChatIsNoop = blank != null && blank.id === chatState.currentSessionId;
 
   // Android + installed-PWA hardware back should pop the pushed view rather than exit the
   // app. Push a history entry whenever we leave the chat root and pop it on back, so the
@@ -110,6 +115,8 @@ export function MobileShell({
               type="button"
               className="mshell-head-btn"
               aria-label="New chat"
+              disabled={newChatIsNoop}
+              title={newChatIsNoop ? "This chat is already empty" : "New chat"}
               onClick={() => chatStore.createSession()}
             >
               <Plus size={20} aria-hidden />

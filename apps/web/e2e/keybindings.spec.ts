@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { seedCurrentChat } from "./chat-helpers";
+
 // The keybinding system (ADR 0063): a scoped, user-rebindable global keyboard layer. In
 // headless Chromium there's no browser chrome, so even browser-reserved combos (⌘T, ⌘1)
 // reach the page. `ControlOrMeta` matches our `mod` (⌘ on mac / Ctrl elsewhere).
@@ -27,6 +29,7 @@ test("mod+T opens a new chat tab (chat-scoped)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(1);
+  await seedCurrentChat(page); // a pristine blank would be reused, not duplicated
   await page.getByPlaceholder(/Message protoAgent/i).focus(); // focus inside the chat scope
   await page.keyboard.press("ControlOrMeta+t");
   await expect(tabs).toHaveCount(2);
@@ -37,6 +40,7 @@ test("mod+1 / mod+2 jump to chat tab N (chat-scoped)", async ({ page }) => {
   const tabs = page.locator(".pl-tabbar__tab");
   // The composer of the VISIBLE session slot (a 2nd tab mounts a 2nd slot/composer).
   const composer = () => page.locator(".chat-session-slot:not([hidden])").getByPlaceholder(/Message protoAgent/i);
+  await seedCurrentChat(page); // a pristine blank would be reused, not duplicated
   await composer().focus();
   await page.keyboard.press("ControlOrMeta+t"); // 2 tabs now
   await expect(tabs).toHaveCount(2);

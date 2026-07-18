@@ -1,7 +1,7 @@
 import { EyeOff, Plus, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { chatStore, useChatState } from "../chat/chat-store";
+import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
 
 // The mobile session switcher. Replaces the DS TabBar's `responsive` <select> collapse,
 // which is a desktop idiom wearing a phone's clothes — a native chat app switches threads
@@ -12,6 +12,7 @@ import { chatStore, useChatState } from "../chat/chat-store";
 // Filed as a DS gap; this mirrors AppDrawer's structure so it's a drop-in swap later.
 export function SessionSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const chat = useChatState();
+  const blank = unusedSession(chat);
   const sheetRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -64,9 +65,13 @@ export function SessionSheet({ open, onClose }: { open: boolean; onClose: () => 
         <div className="session-sheet-grip" aria-hidden />
         <div className="session-sheet-head">
           <h2>Chats</h2>
+          {/* Unlike the header "+", this stays enabled whenever a blank exists anywhere:
+              from the sheet, landing on that blank IS the useful outcome. It only goes
+              dead when the blank is already the current chat. */}
           <button
             type="button"
             className="session-sheet-new"
+            disabled={blank != null && blank.id === chat.currentSessionId}
             onClick={() => {
               chatStore.createSession();
               onClose();

@@ -177,6 +177,9 @@ describe("persist debouncing", () => {
   it("reorderSessions keeps a session the caller omitted (defensive)", async () => {
     const { chatStore } = await freshStore();
     const first = chatStore.getSnapshot().currentSessionId!;
+    // `first` has to be USED or createSession reuses it instead of making `b` — two
+    // pristine blanks are interchangeable and the store now collapses them.
+    chatStore.updateMessages(first, [{ role: "user", content: "hi" }]);
     const b = chatStore.createSession();
 
     chatStore.reorderSessions([b.id]); // omit `first`
@@ -485,5 +488,54 @@ describe("incognito sessions", () => {
     vi.resetModules(); // "reload": a fresh module re-reads localStorage
     const second = await import("./chat-store");
     expect(second.chatStore.getSnapshot().sessions.find((x) => x.id === s.id)?.incognito).toBe(true);
+  });
+  // ── Blank-session reuse (no "+" spam) ─────────────────────────────────────────
+  // "+" is a primary action in the chat-first mobile header, so it's trivially easy to
+  // tap repeatedly and pile up identical empty tabs the operator then closes one by one.
+
+  it("createSession reuses an unused blank instead of piling up duplicates", async () => {
+    const { chatStore } = await import("./chat-store");
+    const first = chatStore.createSession();
+    const before = chatStore.getSnapshot().sessions.length;
+    const again = chatStore.createSession();
+    expect(again.id).toBe(first.id); // same session handed back
+    expect(chatStore.getSnapshot().sessions.length).toBe(before); // nothing added
+  });
+
+  it("a used session is never reused — createSession makes a real one", async () => {
+    const { chatStore } = await import("./chat-store");
+    const s = chatStore.createSession();
+    chatStore.updateMessages(s.id, [{ role: "user", content: "hi" }]);
+    const before = chatStore.getSnapshot().sessions.length;
+    const next = chatStore.createSession();
+    expect(next.id).not.toBe(s.id);
+    expect(chatStore.getSnapshot().sessions.length).toBe(before + 1);
+  });
+
+  it("reusing a blank on another tab SWITCHES to it (the visible feedback)", async () => {
+    const { chatStore } = await import("./chat-store");
+    const used = chatStore.createSession();
+    chatStore.updateMessages(used.id, [{ role: "user", content: "hi" }]);
+    const blank = chatStore.createSession(); // only creates because `used` is now used
+    chatStore.switchSession(used.id);
+    const got = chatStore.createSession();
+    expect(got.id).toBe(blank.id);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(blank.id);
+  });
+
+  it("an incognito request never reuses a plain blank (they are different kinds)", async () => {
+    const { chatStore } = await import("./chat-store");
+    const plain = chatStore.createSession();
+    const priv = chatStore.createSession({ incognito: true });
+    expect(priv.id).not.toBe(plain.id);
+    expect(priv.incognito).toBe(true);
+  });
+
+  it("a RENAMED empty session is not reused — naming it is intent", async () => {
+    const { chatStore } = await import("./chat-store");
+    const s = chatStore.createSession();
+    chatStore.renameSession(s.id, "Ideas");
+    const next = chatStore.createSession();
+    expect(next.id).not.toBe(s.id);
   });
 });

@@ -75,9 +75,14 @@ function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** The title a session carries until its first user message renames it (or the operator
+ *  does). Load-bearing beyond display: `unusedSession` treats it as "never used", and the
+ *  auto-title on first reply only fires while the title is still this. */
+export const DEFAULT_SESSION_TITLE = "New chat";
+
 function titleFromMessages(messages: ChatMessage[]) {
   const text = messages.find((message) => message.role === "user")?.content.trim();
-  if (!text) return "New chat";
+  if (!text) return DEFAULT_SESSION_TITLE;
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
 
@@ -85,7 +90,7 @@ function createSession(opts: { incognito?: boolean } = {}): ChatSession {
   const now = Date.now();
   return {
     id: id("chat"),
-    title: "New chat",
+    title: DEFAULT_SESSION_TITLE,
     messages: [],
     createdAt: now,
     updatedAt: now,
@@ -295,6 +300,29 @@ try {
   // non-browser context (tests without a full window)
 }
 
+/**
+ * A session that has never been used, and so is interchangeable with a freshly created
+ * one: no messages and still carrying the default title. Drives both the reuse guard in
+ * `chatStore.createSession` and the disabled state of every "new chat" affordance.
+ *
+ * A RENAMED empty session is deliberately excluded — naming it is intent ("Ideas"), and
+ * silently landing the operator there when they asked for a new chat would be a surprise.
+ * Incognito must match too: an incognito request is a different kind of session, so a
+ * plain blank can't satisfy it (ADR 0069 D3b — incognito threads leave no memory).
+ */
+export function unusedSession(
+  state: ChatState,
+  opts: { incognito?: boolean } = {},
+): ChatSession | undefined {
+  const wantIncognito = Boolean(opts.incognito);
+  return state.sessions.find(
+    (s) =>
+      s.messages.length === 0 &&
+      s.title === DEFAULT_SESSION_TITLE &&
+      Boolean(s.incognito) === wantIncognito,
+  );
+}
+
 export function ensureActiveSessions(state: ChatState, sessionId: string | null): string[] {
   if (!sessionId) return state.activeSessions;
   if (state.activeSessions.includes(sessionId)) return state.activeSessions;
@@ -377,6 +405,26 @@ export const chatStore = {
   },
 
   createSession(opts: { incognito?: boolean } = {}) {
+    // Don't pile up blanks. A pristine session is byte-for-byte what this call would
+    // produce, so hand it back instead — otherwise tapping "+" repeatedly (easy to do
+    // now that it's a primary action in the mobile header) spawns identical empty tabs
+    // that the operator then has to close one by one.
+    const reusable = unusedSession(state, opts);
+    if (reusable) {
+      // Switching is the visible feedback: if the blank lives on another tab, "+" takes
+      // you there. When it IS the current tab the call is a genuine no-op, and the
+      // callers disable their button so it never looks like a dead tap.
+      setState((current) =>
+        current.currentSessionId === reusable.id
+          ? current
+          : {
+              ...current,
+              currentSessionId: reusable.id,
+              activeSessions: ensureActiveSessions(current, reusable.id),
+            },
+      );
+      return reusable;
+    }
     const session = createSession(opts);
     setState((current) => {
       // New tabs append to the RIGHT; cap at MAX_SESSIONS by dropping the oldest (left).
@@ -460,7 +508,7 @@ export const chatStore = {
           session.id === sessionId
             ? {
                 ...session,
-                title: session.title === "New chat" ? titleFromMessages(deduped) : session.title,
+                title: session.title === DEFAULT_SESSION_TITLE ? titleFromMessages(deduped) : session.title,
                 messages: deduped,
                 updatedAt: Date.now(),
               }
@@ -475,7 +523,7 @@ export const chatStore = {
     setState((current) => ({
       ...current,
       sessions: current.sessions.map((session) =>
-        session.id === sessionId ? { ...session, title: title.trim() || "New chat" } : session,
+        session.id === sessionId ? { ...session, title: title.trim() || DEFAULT_SESSION_TITLE } : session,
       ),
     }));
   },
