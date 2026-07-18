@@ -508,7 +508,15 @@ const server = createServer(async (req, res) => {
     // of times early so a slow connect can't miss the one-shot (the toast just needs to appear once).
     const goals = [setTimeout(() => frame("goal.achieved", { condition: "unit tests pass", status: "achieved", mode: "drive" }), 300),
                    setTimeout(() => frame("goal.achieved", { condition: "unit tests pass", status: "achieved", mode: "drive" }), 1200)];
-    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); });
+    // Server-initiated turn lifecycle for #2009's tab processing-dot spec — header-gated so
+    // ONLY the spec that sets it drives these frames (no pollution of other specs' streams).
+    // A `turn.started` arms the session's processing dot; the later `turn.finished` clears it.
+    const turnSession = req.headers["x-e2e-turn-session"];
+    const turns = turnSession
+      ? [setTimeout(() => frame("turn.started", { session_id: turnSession, origin: "scheduler" }), 300),
+         setTimeout(() => frame("turn.finished", { session_id: turnSession }), 2500)]
+      : [];
+    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); turns.forEach(clearTimeout); });
     return;
   }
   if (pathname.startsWith("/api/")) {

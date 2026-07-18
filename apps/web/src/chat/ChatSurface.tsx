@@ -30,7 +30,7 @@ import { useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
-import { useServerTurn } from "./server-turn-store";
+import { useServerTurn, useServerTurnSessions } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
@@ -112,6 +112,10 @@ export function ChatSurface({
   active?: boolean;
 }) {
   const chat = useChatState();
+  // Sessions with a server-initiated turn in flight (push-resume / scheduled / watch) — those
+  // turns don't touch sessionStatusMap, so without this their tab would read idle. Read once
+  // here (the tab bar can't call the per-session hook inside its .map).
+  const serverTurnSessions = useServerTurnSessions();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   const [harvestOnDelete, setHarvestOnDelete] = useState(false);
@@ -224,7 +228,18 @@ export function ChatSurface({
           responsive
           activeId={chat.currentSessionId ?? ""}
           items={chat.sessions.map((session) => {
-            const status = chat.sessionStatusMap[session.id] || "idle";
+            const fg = chat.sessionStatusMap[session.id] || "idle";
+            // Foreground streaming already lights the dot; also surface a background
+            // server-turn as a pulsing "processing" dot so an unfocused tab doing work
+            // doesn't read idle. error > streaming > processing > idle.
+            const status =
+              fg === "error"
+                ? "error"
+                : fg === "streaming"
+                  ? "streaming"
+                  : serverTurnSessions.has(session.id)
+                    ? "processing"
+                    : "idle";
             return {
               id: session.id,
               label: session.title,
