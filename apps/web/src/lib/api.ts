@@ -31,6 +31,7 @@ import type {
   MemoryInjectionDetail,
   MemoryInjectionRow,
   MemorySessionDigest,
+  NodeRuntimePayload,
   RuntimeStatus,
   ScheduledJob,
   SecretsStatus,
@@ -705,6 +706,19 @@ export const api = {
   // process you're connected to), never a slug-routed agent.
   restart() {
     return request<{ ok: boolean; restarting: boolean }>("/api/restart", { method: "POST", host: true });
+  },
+
+  // Managed Node runtime (ADR 0085) — status + one-click provisioning of node/npx for
+  // the npx-based ACP agents + MCP servers. HOST-targeted (the box-shared runtime lives
+  // on the server process, not a slug-routed agent), like restart().
+  nodeRuntime() {
+    return request<NodeRuntimePayload>("/api/runtime/node", { host: true });
+  },
+  installNodeRuntime(force = false) {
+    return request<{ ok: boolean } & NodeRuntimePayload>(
+      `/api/runtime/node/install${force ? "?force=true" : ""}`,
+      { method: "POST", host: true },
+    );
   },
 
   // The HUB's runtime status — NEVER slug-routed. The TenantGuard keys on the hub's

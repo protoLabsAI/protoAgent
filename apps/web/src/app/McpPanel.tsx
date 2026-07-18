@@ -10,6 +10,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 import { McpCatalogDialog } from "./McpCatalogDialog";
+import { NodeRuntimeCard } from "./NodeRuntimeCard";
 import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -178,6 +179,7 @@ function McpBody() {
         kicker={`${servers.length} server${servers.length === 1 ? "" : "s"} · ${total} tool${total === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
+        <NodeRuntimeCard />
         <div className="mcp-browse-row">
           <Button type="button" variant="ghost" onClick={() => setCatalogOpen(true)} title="Add a common MCP server from a curated list">
             <Boxes size={14} /> Browse common servers

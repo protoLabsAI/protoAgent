@@ -768,6 +768,13 @@ def _main():
 
     register_runtime_control_routes(fastapi_app)
 
+    # Managed Node runtime (ADR 0085) — /api/runtime/node status + one-click install,
+    # so the console can provision node/npx for the npx-based ACP agents + MCP servers
+    # on a machine that has no Node of its own.
+    from operator_api.node_routes import register_node_routes
+
+    register_node_routes(fastapi_app)
+
     # Fleet control plane (ADR 0042) — /api/fleet (list/create/start/stop) +
     # /api/archetypes. The CLI + the desktop GUI panels both drive these.
     from operator_api.fleet_routes import register_fleet_routes
