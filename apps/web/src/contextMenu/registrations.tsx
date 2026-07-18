@@ -47,7 +47,7 @@ registerContextMenu({
       { side: "right", label: "Move to right rail" },
       { side: "bottom", label: "Move to bottom dock" },
     ];
-    // Management actions. "Manage plugins…" (open the all-plugins manager, Settings ▸ Integrations)
+    // Management actions. "Manage plugins…" (open the all-plugins manager, Settings ▸ Plugins)
     // is always present; Configure (plugin views only) opens the owning plugin's settings dialog;
     // Hide moves the surface to railOrder.hidden (restore from ⌘K or "Move to …"). Chat is never
     // hidden — it mounts unconditionally on its dock, so a hidden chat would render with no rail icon.
@@ -80,7 +80,7 @@ registerContextMenu({
       }
     }
     // A rail-wide escape hatch on every icon: the all-plugins counterpart to the per-plugin
-    // "Configure…" above — opens Settings ▸ Integrations.
+    // "Configure…" above — opens Settings ▸ Plugins.
     manage.push({
       id: "manage-plugins",
       label: "Manage plugins…",
@@ -145,7 +145,7 @@ registerContextMenu({
 // Right-click the EMPTY rail background (not an icon) → the rail menu: one "Show hidden view" entry
 // per hidden surface (railOrder.hidden), each restored onto the dock whose background was clicked
 // (`ctx.side`) and then opened, plus a rail-wide "Manage plugins…" action that opens Settings ▸
-// Integrations. The App-side trigger resolves each hidden id's label (core/plugin/ext metadata lives
+// Plugins. The App-side trigger resolves each hidden id's label (core/plugin/ext metadata lives
 // there) + the clicked side into `ctx`. When nothing is hidden, a disabled hint shows so that part
 // still confirms the feature. The discoverable counterpart to ⌘K (ADR 0035/0036).
 registerContextMenu({
@@ -171,7 +171,7 @@ registerContextMenu({
         ]
       : [{ id: "none", label: "No hidden views", disabled: true, run: () => {} }];
     // A rail-wide action (not tied to one surface): open the plugin manager — Settings ▸
-    // Integrations — to install, enable/disable, configure, or update plugins.
+    // Plugins — to install, enable/disable, configure, or update plugins.
     out.push({ id: "manage-div", divider: true });
     out.push({
       id: "manage-plugins",

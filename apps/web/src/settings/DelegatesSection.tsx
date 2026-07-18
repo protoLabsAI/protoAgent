@@ -20,7 +20,7 @@ import type { DelegateFieldSpec, DelegateProbe, DelegateTypeSpec, DelegateView }
 import { SettingsSubPanel } from "./SettingsSubPanel";
 
 // Delegates panel (ADR 0025, PR3) — manage the agents & endpoints the agent can
-// talk to via delegate_to, under Settings → Integrations. Hot-swappable: create/
+// talk to via delegate_to, under Settings → Capabilities. Hot-swappable: create/
 // edit/delete write config + secrets and the server reloads, so changes take
 // effect on the next turn. Read non-suspense so a 404 (plugin disabled) shows a
 // hint rather than blanking Settings.

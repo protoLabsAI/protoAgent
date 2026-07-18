@@ -5,7 +5,7 @@ import type { PluginUpdate } from "../lib/types";
 // Shared freshness indicator (ADR 0027) — joins an installed plugin to its
 // update status (GET /api/plugins/updates) and renders a DS Badge next to the
 // v{version} ONLY when there's something to say. Used by BOTH the Settings →
-// Integrations list (PluginsSection) and the Plugins Local tab (PluginsSurface).
+// Plugins list (PluginSettingsHome) and the Plugins Local tab (PluginsSurface).
 //
 //   behind            → "update available" (info)
 //   check errored     → "check failed" (warning, error surfaced in the title)
