@@ -16,10 +16,12 @@ failed-attempt counter. See ADR 0087 D4 for the residual risk that buys.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import ipaddress
 import logging
 import socket
+import time
 
 from fastapi import Request  # module-level so the stringized `request: Request` annotations
 # resolve — under `from __future__ import annotations` FastAPI evaluates them against MODULE
@@ -73,30 +75,47 @@ def _source_ip_for(target: str) -> str | None:
         sock.close()
 
 
+# Probed per network rather than resolved from the hostname. Each is a routing-table lookup
+# that returns in microseconds; hostname resolution was measured at 5.006s BEFORE raising on
+# a normal macOS box (no DNS entry for the .local name), which froze the whole event loop.
+# The RFC1918 targets don't have to exist — we only ask which interface *would* face them, so
+# a machine on several subnets still reports each source address.
+_PROBE_TARGETS = (
+    "100.100.100.100",  # Tailscale MagicDNS — routed only when a tailnet is up
+    "8.8.8.8",  # the default route (primary LAN)
+    "192.168.0.1",
+    "192.168.1.1",
+    "10.0.0.1",
+    "172.16.0.1",
+)
+
+# Interfaces change on the order of minutes (joining Wi-Fi, tailnet up/down), so a short
+# cache makes repeated "Add a device" clicks instant without going stale in practice.
+_ADDR_CACHE: dict[str, object] = {"at": 0.0, "addrs": []}
+_ADDR_TTL_SECONDS = 15.0
+
+
 def _local_addresses() -> list[str]:
     """Every local address worth offering as a pairing target.
 
-    Hostname resolution alone is unreliable here — on macOS `gethostbyname_ex` frequently
-    resolves only to loopback, which silently produced an EMPTY candidate list and a "bind to
-    a reachable address" error on a correctly-bound server. So probe the routing table
-    directly, per network, and treat hostname lookup as a supplement rather than the source.
+    Hostname resolution is deliberately NOT used: `gethostbyname_ex` frequently resolves to
+    loopback only (which silently produced an empty candidate list on a correctly-bound
+    server) and on a box with no DNS entry for its own name it blocks for 5s before raising.
+    The routing-table probes below answer the same question in microseconds and are what
+    actually found the tailnet address.
     """
+    now = time.monotonic()
+    cached = _ADDR_CACHE.get("addrs")
+    if cached and now - float(_ADDR_CACHE["at"]) < _ADDR_TTL_SECONDS:  # type: ignore[arg-type]
+        return list(cached)  # type: ignore[arg-type]
+
     found: list[str] = []
-    # 100.100.100.100 is Tailscale's MagicDNS resolver — routed only when a tailnet is up, so
-    # the source address for it IS the tailnet address.
-    for target in ("100.100.100.100", "8.8.8.8"):
+    for target in _PROBE_TARGETS:
         ip = _source_ip_for(target)
         if ip and ip not in found:
             found.append(ip)
-    # Supplement with hostname resolution — catches secondary interfaces the two probes above
-    # don't face (a second LAN, a VPN with its own route).
-    try:
-        _, _, extra = socket.gethostbyname_ex(socket.gethostname())
-        for ip in extra:
-            if ip not in found:
-                found.append(ip)
-    except OSError:
-        pass
+    _ADDR_CACHE["at"] = now
+    _ADDR_CACHE["addrs"] = found
     return found
 
 
@@ -183,7 +202,10 @@ def register_pairing_routes(app) -> None:
     async def _start(request: Request):  # noqa: ANN202
         from security.devices import PAIRING_TTL_SECONDS, start_pairing
 
-        hosts = _candidate_hosts()
+        # Socket probes + QR rendering are blocking. Run them in a worker thread: a sync
+        # call here stalls the ENTIRE event loop, which is how a 5s hostname lookup managed
+        # to freeze every other request on the server, not just this one.
+        hosts = await asyncio.to_thread(_candidate_hosts)
         if not hosts:
             # Nothing to encode. Say why, and do NOT suggest PROTOAGENT_ALLOW_OPEN — the
             # fix is to bind a reachable address WITH a token, not to open the instance.
@@ -200,9 +222,12 @@ def register_pairing_routes(app) -> None:
         port = request.url.port or 7870
         # The code rides the FRAGMENT (ADR 0087 D5): fragments are never sent to the server,
         # so it stays out of access logs, proxy logs and Referer headers.
-        for host in hosts:
-            host["url"] = f"http://{host['host']}:{port}/app/#pair={code}"
-            host["qr"] = _qr_svg(host["url"])
+        def _render() -> None:
+            for host in hosts:
+                host["url"] = f"http://{host['host']}:{port}/app/#pair={code}"
+                host["qr"] = _qr_svg(host["url"])
+
+        await asyncio.to_thread(_render)
         return JSONResponse(
             {"ok": True, "code": code, "expires_at": expires_at, "ttl": PAIRING_TTL_SECONDS, "hosts": hosts}
         )

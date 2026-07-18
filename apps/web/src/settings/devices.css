@@ -132,3 +132,13 @@
     align-self: center;
   }
 }
+
+/* First load — a spinner beats an empty panel that reads as "nothing here". */
+.devices-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 4px;
+  font-size: 12px;
+  opacity: 0.75;
+}

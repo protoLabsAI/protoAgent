@@ -1,5 +1,6 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Empty } from "@protolabsai/ui/primitives";
+import { Spinner } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Smartphone, Trash2, QrCode } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,6 +37,11 @@ export function DevicesPanel() {
   const [pairError, setPairError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [hostIdx, setHostIdx] = useState(0);
+  // Every mutating action gets a visible pending state. Without them the panel just sat
+  // there — "Add a device" in particular does socket probes + QR rendering server-side, so
+  // a plain button reads as a dead click rather than as work in progress.
+  const [starting, setStarting] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -93,6 +99,7 @@ export function DevicesPanel() {
 
   async function startPairing() {
     setPairError(null);
+    setStarting(true);
     try {
       const res = await api.pairingStart();
       setPairing(res);
@@ -101,6 +108,8 @@ export function DevicesPanel() {
       // The common case is a loopback-bound instance — the server explains it; surface that
       // rather than a generic failure, because the fix is a restart flag.
       setPairError(err instanceof Error ? err.message : "could not start pairing");
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -110,9 +119,14 @@ export function DevicesPanel() {
   }
 
   async function revoke(device: Device) {
-    await api.revokeDevice(device.id);
-    toast({ title: `Removed ${device.name}`, message: "Its token no longer works." });
-    void refresh();
+    setRevoking(device.id);
+    try {
+      await api.revokeDevice(device.id);
+      toast({ title: `Removed ${device.name}`, message: "Its token no longer works." });
+      await refresh();
+    } finally {
+      setRevoking(null);
+    }
   }
 
   const host = pairing?.hosts[hostIdx];
@@ -128,8 +142,8 @@ export function DevicesPanel() {
           </p>
         </div>
         {!pairing && (
-          <Button type="button" onClick={startPairing}>
-            <QrCode size={15} aria-hidden /> Add a device
+          <Button type="button" onClick={startPairing} loading={starting}>
+            <QrCode size={15} aria-hidden /> {starting ? "Preparing…" : "Add a device"}
           </Button>
         )}
       </header>
@@ -176,7 +190,12 @@ export function DevicesPanel() {
         </section>
       )}
 
-      {loading ? null : devices.length === 0 ? (
+      {loading ? (
+        <div className="devices-loading">
+          <Spinner size={18} />
+          <span>Loading devices…</span>
+        </div>
+      ) : devices.length === 0 ? (
         <Empty
           icon={<Smartphone size={20} />}
           title="No paired devices"
@@ -196,6 +215,8 @@ export function DevicesPanel() {
                 variant="ghost"
                 type="button"
                 aria-label={`Remove ${d.name}`}
+                loading={revoking === d.id}
+                disabled={revoking != null}
                 onClick={() => revoke(d)}
               >
                 <Trash2 size={15} />
