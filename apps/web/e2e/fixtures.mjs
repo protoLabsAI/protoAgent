@@ -5,8 +5,10 @@
 // — no Python, no langgraph, no model, no network. Specs import the same
 // constants to assert against, so the contract can't drift between the two.
 
-export const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
-export const COST_MIME = "application/vnd.protolabs.cost-v1+json";
+// The two SDK extensions ride the message/artifact METADATA keyed by their extension URI
+// (protolabs-a2a 0.3.0); the template-local ones below stay MIME-typed DataParts.
+export const TOOL_CALL_EXT_URI = "https://proto-labs.ai/a2a/ext/tool-call-v1";
+export const COST_EXT_URI = "https://proto-labs.ai/a2a/ext/cost-v1";
 export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
@@ -660,10 +662,10 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
         state: "working",
         message: {
           role: "agent",
-          parts: [
-            { kind: "text", text },
-            ...(toolEvent ? [{ kind: "data", data: toWire(toolEvent), metadata: { mimeType: TOOL_CALL_MIME } }] : []),
-          ],
+          parts: [{ kind: "text", text }],
+          // tool-call-v1 rides the MESSAGE METADATA keyed by extension URI
+          // (protolabs-a2a 0.3.0), not a DataPart in parts[].
+          ...(toolEvent ? { metadata: { [TOOL_CALL_EXT_URI]: toWire(toolEvent) } } : {}),
         },
       },
       final: false,
@@ -746,21 +748,7 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
           // pre-tool narration (the executor's `accumulated` spans the whole
           // turn) — not just the post-tool answer.
           { kind: "text", text: (scenario.preText || "") + scenario.answer },
-          {
-            kind: "data",
-            data: {
-              usage: {
-                input_tokens: 12_340,
-                output_tokens: 1_200,
-                cache_read_input_tokens: 8_000,
-                cache_creation_input_tokens: 0,
-              },
-              costUsd: 0.0412,
-              durationMs: 2300,
-              success: true,
-            },
-            metadata: { mimeType: COST_MIME },
-          },
+          // context-v1 is a template-local extension and stays a DataPart.
           {
             kind: "data",
             data: {
@@ -772,6 +760,22 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
             metadata: { mimeType: CONTEXT_MIME },
           },
         ],
+        // cost-v1 rides the ARTIFACT METADATA keyed by extension URI (protolabs-a2a
+        // 0.3.0), exactly as a2a_impl's executor now emits it — so the per-turn usage
+        // footer (#1372) still renders.
+        metadata: {
+          [COST_EXT_URI]: {
+            usage: {
+              input_tokens: 12_340,
+              output_tokens: 1_200,
+              cache_read_input_tokens: 8_000,
+              cache_creation_input_tokens: 0,
+            },
+            costUsd: 0.0412,
+            durationMs: 2300,
+            success: true,
+          },
+        },
       },
       // No `append` key: proto3 omits the bool at false on the real wire, so the
       // terminal REPLACE frame arrives with `append` absent (#1709). Mirroring that

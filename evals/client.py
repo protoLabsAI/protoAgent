@@ -381,25 +381,34 @@ def _is_terminal(state: str) -> bool:
 def _extract(result: dict) -> tuple[str, dict]:
     """Pull text + cost data out of an A2A result envelope.
 
-    Tolerant of both the A2A 1.0 part shape (untyped — a part carries a
-    ``text`` or ``data`` field directly) and the legacy 0.x shape (parts
-    tagged with ``kind``)."""
+    Text is read from parts, tolerant of both the A2A 1.0 part shape (untyped — a part
+    carries a ``text`` or ``data`` field directly) and the legacy 0.x shape (parts tagged
+    with ``kind``). Cost comes from the **metadata map keyed by the cost-v1 extension
+    URI** (protolabs-a2a 0.3.0) on the artifact or the status message — it is no longer a
+    DataPart in ``parts[]``."""
+    import protolabs_a2a as pa
+
     text_parts: list[str] = []
     usage: dict = {}
 
-    def _scan(parts: list[dict] | None) -> None:
-        nonlocal usage
+    def _scan_text(parts: list[dict] | None) -> None:
         for p in parts or []:
             if p.get("text"):
                 text_parts.append(p["text"])
-            elif isinstance(p.get("data"), dict) and "usage" in p["data"]:
-                usage = dict(p["data"]["usage"])
-                if "durationMs" in p["data"]:
-                    usage["durationMs"] = p["data"]["durationMs"]
+
+    def _scan_cost(metadata: dict | None) -> None:
+        nonlocal usage
+        payload = pa.parse_cost(metadata)
+        if payload and isinstance(payload.get("usage"), dict):
+            usage = dict(payload["usage"])
+            if "durationMs" in payload:
+                usage["durationMs"] = payload["durationMs"]
 
     for art in result.get("artifacts") or []:
-        _scan(art.get("parts"))
+        _scan_text(art.get("parts"))
+        _scan_cost(art.get("metadata"))
     status = result.get("status") or {}
     msg = status.get("message") or {}
-    _scan(msg.get("parts"))
+    _scan_text(msg.get("parts"))
+    _scan_cost(msg.get("metadata"))
     return "\n".join(text_parts).strip(), usage

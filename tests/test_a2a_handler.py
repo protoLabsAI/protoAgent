@@ -74,20 +74,22 @@ def test_read_data_returns_none_for_non_data_part():
     assert pa.read_data(pa.text_part("hi")) == (None, None)
 
 
-# ── protolabs_a2a: the four extensions ────────────────────────────────────────
+# ── protolabs_a2a: the four extensions (URI-keyed metadata since 0.3.0) ───────
+# Each `*_metadata` helper returns a {<EXT_URI>: payload} fragment that rides the
+# message/artifact metadata map. The extension URI is now the ONLY discriminator —
+# the old MIME-typed DataPart shape (and its *_MIME constants) is gone.
 
 
-def test_cost_extension_mime_uri_and_payload():
-    assert pa.COST_MIME == "application/vnd.protolabs.cost-v1+json"
+def test_cost_extension_uri_and_payload():
     assert pa.COST_EXT_URI == "https://proto-labs.ai/a2a/ext/cost-v1"
-    part = pa.emit_cost(
+    meta = pa.cost_metadata(
         {"input_tokens": 1500, "output_tokens": 420},
         duration_ms=900,
         cost_usd=0.0123,
         success=True,
     )
-    assert part["metadata"]["mimeType"] == pa.COST_MIME
-    payload = pa.parse_cost(part)
+    assert set(meta) == {pa.COST_EXT_URI}  # the URI key IS the discriminator
+    payload = pa.parse_cost(meta)
     assert payload["usage"] == {"input_tokens": 1500, "output_tokens": 420}
     assert payload["durationMs"] == 900
     assert payload["costUsd"] == 0.0123
@@ -95,33 +97,30 @@ def test_cost_extension_mime_uri_and_payload():
 
 
 def test_cost_omits_costusd_when_not_supplied():
-    part = pa.emit_cost({"input_tokens": 10, "output_tokens": 5}, duration_ms=10)
-    assert "costUsd" not in pa.parse_cost(part)
+    meta = pa.cost_metadata({"input_tokens": 10, "output_tokens": 5}, duration_ms=10)
+    assert "costUsd" not in pa.parse_cost(meta)
 
 
-def test_confidence_extension_mime_uri_and_payload():
-    assert pa.CONFIDENCE_MIME == "application/vnd.protolabs.confidence-v1+json"
+def test_confidence_extension_uri_and_payload():
     assert pa.CONFIDENCE_EXT_URI == "https://proto-labs.ai/a2a/ext/confidence-v1"
-    part = pa.emit_confidence(0.9, explanation="sure", success=True)
-    assert pa.parse_confidence(part) == {"confidence": 0.9, "explanation": "sure", "success": True}
+    meta = pa.confidence_metadata(0.9, explanation="sure", success=True)
+    assert pa.parse_confidence(meta) == {"confidence": 0.9, "explanation": "sure", "success": True}
 
 
-def test_worldstate_delta_mime_and_uri_both_carry_v1():
-    """The MIME (...worldstate-delta-v1+json) and the card URI
-    (.../worldstate-delta-v1) both carry -v1, matching the other three
-    extensions. Locking this prevents a silent interop break."""
-    assert pa.WORLDSTATE_DELTA_MIME == "application/vnd.protolabs.worldstate-delta-v1+json"
+def test_worldstate_delta_uri_carries_v1():
+    """The extension URI (.../worldstate-delta-v1) carries -v1, matching the other three.
+    Locking it prevents a silent interop break — since 0.3.0 this URI is both the
+    agent-card declaration AND the metadata key the payload rides under."""
     assert pa.WORLDSTATE_DELTA_EXT_URI == "https://proto-labs.ai/a2a/ext/worldstate-delta-v1"
-    part = pa.emit_worldstate_delta([{"domain": "board", "path": "x", "op": "inc", "value": 1}])
-    assert part["metadata"]["mimeType"] == pa.WORLDSTATE_DELTA_MIME
-    assert pa.parse_worldstate_delta(part)["deltas"][0]["op"] == "inc"
+    meta = pa.worldstate_delta_metadata([{"domain": "board", "path": "x", "op": "inc", "value": 1}])
+    assert set(meta) == {pa.WORLDSTATE_DELTA_EXT_URI}
+    assert pa.parse_worldstate_delta(meta)["deltas"][0]["op"] == "inc"
 
 
-def test_tool_call_extension_mime_uri_and_payload():
-    assert pa.TOOL_CALL_MIME == "application/vnd.protolabs.tool-call-v1+json"
+def test_tool_call_extension_uri_and_payload():
     assert pa.TOOL_CALL_EXT_URI == "https://proto-labs.ai/a2a/ext/tool-call-v1"
-    part = pa.emit_tool_call("id1", "file_bug", "completed", args={"x": 1}, result="ok")
-    assert pa.parse_tool_call(part) == {
+    meta = pa.tool_call_metadata("id1", "file_bug", "completed", args={"x": 1}, result="ok")
+    assert pa.parse_tool_call(meta) == {
         "toolCallId": "id1",
         "name": "file_bug",
         "phase": "completed",
@@ -130,11 +129,23 @@ def test_tool_call_extension_mime_uri_and_payload():
     }
 
 
-def test_parsers_return_none_on_mime_mismatch():
-    cost = pa.emit_cost({"input_tokens": 1, "output_tokens": 1})
+def test_parsers_return_none_on_uri_mismatch():
+    cost = pa.cost_metadata({"input_tokens": 1, "output_tokens": 1})
     assert pa.parse_confidence(cost) is None
     assert pa.parse_worldstate_delta(cost) is None
     assert pa.parse_tool_call(cost) is None
+
+
+def test_merge_extension_metadata_folds_fragments_into_one_map():
+    """0.3.0's merge helper folds several URI-keyed fragments into ONE metadata map —
+    exactly how the terminal artifact carries cost + worldstate together."""
+    merged = pa.merge_extension_metadata(
+        pa.cost_metadata({"input_tokens": 1, "output_tokens": 1}),
+        pa.worldstate_delta_metadata([{"domain": "b", "path": "x", "op": "set", "value": 1}]),
+    )
+    assert set(merged) == {pa.COST_EXT_URI, pa.WORLDSTATE_DELTA_EXT_URI}
+    assert pa.parse_cost(merged) is not None
+    assert pa.parse_worldstate_delta(merged) is not None
 
 
 # ── protolabs_a2a: agent card ─────────────────────────────────────────────────
@@ -299,10 +310,11 @@ async def test_send_message_runs_to_completed_with_text_artifact():
 
 
 @pytest.mark.asyncio
-async def test_terminal_artifact_carries_all_extensions_in_order():
-    """text → worldstate-delta → cost-v1 → context-v1, matching the order the
-    hand-rolled handler emitted (consumers read parts in order); the context-v1
-    readout (#1372) trails as a pure append."""
+async def test_terminal_artifact_carries_all_extensions():
+    """Since protolabs-a2a 0.3.0 the telemetry extensions ride the artifact's METADATA
+    keyed by extension URI (worldstate-delta + cost), so `parts` carries only real
+    content: the answer text plus the context-v1 readout (#1372), which is a
+    template-local extension and stays a DataPart."""
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "done text")
@@ -316,19 +328,26 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
         task = (await _send_msg(c)).json()["result"]["task"]
         final = await _poll_terminal(c, task["id"])
 
-    parts = final["artifacts"][0]["parts"]
+    artifact = final["artifacts"][0]
+    parts = artifact["parts"]
+    # Content parts only: text, then the context-v1 DataPart as a pure append.
     assert parts[0]["text"] == "done text"
     mimes = [p.get("metadata", {}).get("mimeType") for p in parts[1:]]
-    assert mimes == [pa.WORLDSTATE_DELTA_MIME, pa.COST_MIME, _CONTEXT_MIME]
+    assert mimes == [_CONTEXT_MIME]
+
+    # The two SDK extensions now ride the artifact metadata, keyed by URI.
+    meta = artifact.get("metadata") or {}
+    assert {pa.COST_EXT_URI, pa.WORLDSTATE_DELTA_EXT_URI} <= set(meta)
+    assert pa.parse_worldstate_delta(meta)["deltas"][0]["op"] == "inc"
     # cost-v1 payload carries the SUMMED token usage (100+140 input) + the turn duration.
-    cost = pa.parse_cost(parts[2])
+    cost = pa.parse_cost(meta)
     assert cost["usage"]["input_tokens"] == 240
     assert cost["success"] is True
     # durationMs is present (proto-JSON round-trips numbers as floats, so compare numerically).
     assert isinstance(cost["durationMs"], (int, float)) and cost["durationMs"] >= 0
     # context-v1 carries the PEAK prompt size (max single call's input_tokens), the live
     # context-window fill — distinct from the summed spend above.
-    _ctx_mime, ctx = pa.read_data(parts[3])
+    _ctx_mime, ctx = pa.read_data(parts[1])
     assert _ctx_mime == _CONTEXT_MIME
     assert ctx["contextTokens"] == 140
 
@@ -380,9 +399,10 @@ async def test_input_required_parks_task_with_question():
 
 
 @pytest.mark.asyncio
-async def test_tool_events_surface_as_tool_call_dataparts():
-    """tool_start/tool_end become tool-call-v1 DataParts on working status
-    frames — observed via the streaming endpoint (the real consumer path; a
+async def test_tool_events_surface_as_tool_call_metadata():
+    """tool_start/tool_end become tool-call-v1 **metadata** on working status frames
+    (protolabs-a2a 0.3.0 — keyed by the extension URI, no longer a DataPart in
+    `parts[]`) — observed via the streaming endpoint (the real consumer path; a
     GetTask poll only sees the collapsed terminal state)."""
     import json
 
@@ -415,10 +435,9 @@ async def test_tool_events_surface_as_tool_call_dataparts():
                 msg = status.get("message")
                 if not msg:
                     continue
-                for part in msg.get("parts", []):
-                    payload = pa.parse_tool_call(part)
-                    if payload is not None:
-                        tool_payloads.append(payload)
+                payload = pa.parse_tool_call(msg.get("metadata"))
+                if payload is not None:
+                    tool_payloads.append(payload)
 
     phases = [p["phase"] for p in tool_payloads]
     assert "started" in phases and "completed" in phases
@@ -464,10 +483,9 @@ async def test_errored_tool_end_surfaces_phase_failed():
                 msg = status.get("message")
                 if not msg:
                     continue
-                for part in msg.get("parts", []):
-                    p = pa.parse_tool_call(part)
-                    if p is not None:
-                        payloads.append(p)
+                p = pa.parse_tool_call(msg.get("metadata"))
+                if p is not None:
+                    payloads.append(p)
 
     failed = next((p for p in payloads if p["phase"] == "failed"), None)
     assert failed is not None, [p["phase"] for p in payloads]
@@ -679,9 +697,11 @@ async def test_finalize_repairs_durable_artifact_after_downstream_frame_loss(mon
     text_parts = [p["text"] for p in parts if p.get("text")]
     # The canonical answer, exactly once — neither truncated nor doubled.
     assert text_parts == [full]
-    # The meta parts still land exactly once.
-    mimes = [(p.get("metadata") or {}).get("mimeType") for p in parts]
-    assert mimes.count(pa.COST_MIME) == 1
+    # The telemetry still lands exactly once. Cost now rides the artifact's metadata
+    # keyed by URI — a map, so a replayed frame can't duplicate it the way a repeated
+    # DataPart could; assert it survived the repair and still parses.
+    meta = final["artifacts"][0].get("metadata") or {}
+    assert pa.parse_cost(meta) is not None
 
 
 @pytest.mark.asyncio

@@ -517,7 +517,7 @@ export type ChatPart =
   | { kind: "component"; spec: ComponentSpec };
 
 /** Per-turn token usage + cost, accumulated across the turn's LLM calls — lifted off the
- *  terminal cost-v1 DataPart (A2A ext, ADR 0006). `inputTokens` is the SUM of prompt tokens
+ *  terminal cost-v1 extension (A2A ext, ADR 0006 — URI-keyed artifact metadata). `inputTokens` is the SUM of prompt tokens
  *  across the turn's calls (so a tool-loop turn counts each model call's prompt), NOT the live
  *  context-window fill; it's a per-turn spend/size readout, not a context-fullness gauge. */
 export type TurnUsage = {
@@ -576,7 +576,7 @@ export type ChatMessage = {
    *  shows the server's preview; this lets the card open the FULL report in the document
    *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */
   report?: { jobId: string; title: string };
-  /** This turn's token usage + cost (terminal cost-v1 DataPart). Shown as a small footer
+  /** This turn's token usage + cost (terminal cost-v1 extension metadata). Shown as a small footer
    *  under the answer; absent on user turns and history saved before this shipped. */
   usage?: TurnUsage;
   /** This turn's context-window fill + compaction threshold (terminal context-v1 DataPart).

@@ -52,9 +52,9 @@ name = "aiologic"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sniffio" },
-    { name = "typing-extensions" },
-    { name = "wrapt" },
+    { name = "sniffio", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "wrapt", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a8/13/50b91a3ea6b030d280d2654be97c48b6ed81753a50286ee43c646ba36d3c/aiologic-0.16.0.tar.gz", hash = "sha256:c267ccbd3ff417ec93e78d28d4d577ccca115d5797cdbd16785a551d9658858f", size = 225952, upload-time = "2025-11-27T23:48:41.195Z" }
 wheels = [
@@ -470,8 +470,8 @@ name = "culsans"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiologic" },
-    { name = "typing-extensions" },
+    { name = "aiologic", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d9/e3/49afa1bc180e0d28008ec6bcdf82a4072d1c7a41032b5b759b60814ca4b0/culsans-0.11.0.tar.gz", hash = "sha256:0b43d0d05dce6106293d114c86e3fb4bfc63088cfe8ff08ed3fe36891447fe33", size = 107546, upload-time = "2025-12-31T23:15:38.196Z" }
 wheels = [
@@ -1554,15 +1554,15 @@ wheels = [
 
 [[package]]
 name = "protolabs-a2a"
-version = "0.2.1"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "jsonschema" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/b0/89f81b1b07af16ad9c9b2071323be54b42edead4ed6c839095595fdfec67/protolabs_a2a-0.2.1.tar.gz", hash = "sha256:af732899f88939058016ad85e7a49bd48076b26a5ab5284e72075e4d0d21d5db", size = 14242, upload-time = "2026-07-15T09:11:38.093Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/aa/3c9a9ad5962c0bbc05c9592337d014ee55ee847910c1c8eb2aeb1c08646b/protolabs_a2a-0.3.0.tar.gz", hash = "sha256:c7611845fed54166b5bb847c8ea99fe04616d1f17feed6dbeba35e83c2a4d1f5", size = 15573, upload-time = "2026-07-18T06:20:57.936Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/97/e9c20db44d1b69e7c4bc59d6ca6d1e79de2eeee483d8cece5daa7fa474a1/protolabs_a2a-0.2.1-py3-none-any.whl", hash = "sha256:5af4b2c6f28fb76021b1a0b1c1c0a4f0ee44cf4ebed488bc6390de8f4063c6dc", size = 13779, upload-time = "2026-07-15T09:11:36.883Z" },
+    { url = "https://files.pythonhosted.org/packages/29/09/3e87a6de753aa5f6015d730c5aab5df8e947aaa2e3c6f83001ff015f31cb/protolabs_a2a-0.3.0-py3-none-any.whl", hash = "sha256:0754e243a410021452be132f8e517d71fb31cddd3c041cb5e6a201e14db7968d", size = 14889, upload-time = "2026-07-18T06:20:56.923Z" },
 ]
 
 [[package]]
@@ -1620,7 +1620,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.2" },
     { name = "packaging", specifier = ">=23.2" },
     { name = "prometheus-client", specifier = ">=0.20" },
-    { name = "protolabs-a2a", specifier = ">=0.2.1,<0.3" },
+    { name = "protolabs-a2a", specifier = ">=0.3.0" },
     { name = "pypdf", specifier = ">=4.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },

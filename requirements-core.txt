@@ -16,12 +16,16 @@ tzdata
 # builders; the sqlite extra pulls SQLAlchemy + aiosqlite for the durable
 # DatabaseTaskStore / DatabasePushNotificationConfigStore wired in a2a_stores.py.
 a2a-sdk[http-server,fastapi,sqlite]>=1.1
-# protoLabs fleet A2A conventions — the four custom DataPart extensions (cost /
+# protoLabs fleet A2A conventions — the four custom extensions (cost /
 # confidence / worldstate-delta / tool-call), agent-card builder, and auth
 # schemes that keep every fleet agent interoperable byte-for-byte. Consumed from
 # the public published repo (single source of truth, no vendored copy). The repo
 # is public so the Docker build needs no auth to clone it.
-protolabs-a2a>=0.2.1,<0.3
+# 0.3.0+ carries the URI-keyed model: the extensions ride the metadata map keyed
+# by extension URI, not MIME-typed DataParts. PyPI 0.2.0 mislabeled that same API
+# under the old number, so the floor is 0.3.0 — never 0.2.x. Keep in step with
+# pyproject.toml.
+protolabs-a2a>=0.3.0
 # Web framework for the API / A2A / operator routes (server/, operator_api/).
 # Declared here as the core runtime dep it is — it was once satisfied only
 # transitively via the (now-removed) Gradio UI, which left the lean tiers with no

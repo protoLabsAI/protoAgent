@@ -25,11 +25,13 @@ dependencies = [
   "tzdata",
   "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
   # protolabs-a2a is published to PyPI (was a git+https direct ref, which PyPI
-  # rejects on upload). Pinned to the 0.2.x line: 0.2.1 republished the old
-  # extension API (emit_cost/emit_tool_call/…) that a2a_impl/executor.py uses;
-  # 0.2.0 and 0.3.0 carry the URI-keyed rewrite this code hasn't migrated to yet.
+  # rejects on upload). 0.3.0+ carries the URI-keyed extension model: the four
+  # telemetry extensions ride the metadata map keyed by their extension URI
+  # instead of MIME-typed DataParts (a2a_impl/executor.py emits via
+  # `*_metadata` + `merge_extension_metadata`). NOTE: PyPI 0.2.0 mislabeled this
+  # same API under the old number, so the floor must be 0.3.0, never 0.2.x.
   # Keep in step with requirements-core.txt.
-  "protolabs-a2a>=0.2.1,<0.3",
+  "protolabs-a2a>=0.3.0",
   "fastapi>=0.115",
   "python-multipart>=0.0.9",
   "uvicorn>=0.30",
