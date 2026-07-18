@@ -970,3 +970,26 @@ export type SoulVersion = {
   preview: string;
   is_current: boolean;
 };
+
+// Managed Node runtime (ADR 0085) — the /api/runtime/node payload. `source` is which
+// Node would actually launch npx today (a user's own install wins over a managed one);
+// `install` tracks any in-flight provisioning the card polls.
+export type NodeRuntimeStatus = {
+  source: "system" | "managed" | null;
+  version: string | null;
+  bin_dir: string | null;
+  managed: boolean;
+  managed_version: string | null;
+  system: boolean;
+  supported: boolean;
+  target_version: string;
+};
+
+export type NodeInstallState = {
+  state: "idle" | "running" | "done" | "error";
+  pct: number;
+  message: string;
+  error: string | null;
+};
+
+export type NodeRuntimePayload = { node: NodeRuntimeStatus; install: NodeInstallState };

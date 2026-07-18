@@ -17,6 +17,7 @@ export const queryKeys = {
   inbox: ["inbox"] as const,
   schedules: ["schedules"] as const,
   runtime: ["runtime"] as const,
+  nodeRuntime: ["runtime", "node"] as const,
   delegates: ["delegates"] as const,
   delegateTypes: ["delegates", "types"] as const,
   acpAgents: ["acp", "agents"] as const,
@@ -175,6 +176,15 @@ export const runtimeStatusQuery = () =>
   queryOptions({
     queryKey: queryKeys.runtime,
     queryFn: () => api.runtimeStatus(),
+  });
+
+// Managed Node runtime (ADR 0085) — status + install progress. Polls once a second
+// only while an install is in flight (the download takes seconds); idle otherwise.
+export const nodeRuntimeQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.nodeRuntime,
+    queryFn: () => api.nodeRuntime(),
+    refetchInterval: (query) => (query.state.data?.install.state === "running" ? 1_000 : false),
   });
 
 // The HUB's runtime status (never slug-routed) — used ONLY for the tenant uid, which

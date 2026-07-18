@@ -172,6 +172,22 @@ function handleApiGet(pathname, fleet = FLEET) {
   switch (pathname) {
     case "/api/runtime/status":
       return RUNTIME_STATUS;
+    case "/api/runtime/node":
+      // Default: a system Node is present, so <NodeRuntimeCard> stays hidden and no
+      // spec sees the banner unless it explicitly page.route()s the missing state.
+      return {
+        node: {
+          source: "system",
+          version: "v22.0.0",
+          bin_dir: "/usr/bin",
+          managed: false,
+          managed_version: null,
+          system: true,
+          supported: true,
+          target_version: "v24.18.0",
+        },
+        install: { state: "idle", pct: 0, message: "", error: null },
+      };
     case "/api/config":
       return {
         config: { identity: { name: "mock-agent", operator: "" } },
