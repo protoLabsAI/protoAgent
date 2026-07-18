@@ -30,7 +30,7 @@ import { ThemeSurface } from "./ThemeSurface";
 // (ADR 0047), never a nav axis. The sidenav splits into labeled groups:
 //
 //   Agent        — what defines the focused agent: Identity · Model · Behavior · Knowledge ·
-//                  Integrations (Plugins). Schema-driven domains carry the ADR 0047 badge.
+//                  Plugins. Schema-driven domains carry the ADR 0047 badge.
 //   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates.
 //                  Each manager owns its sharing/tier knob via a contextual chip (no extra panel).
 //   Box          — box-wide ops (HOST CONSOLE ONLY): Overview · Fleet · Telemetry. Box-runtime +
@@ -40,7 +40,7 @@ import { ThemeSurface } from "./ThemeSurface";
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
 
 // The Plugins manager (install · enable · configure, plus the Discover directory) — the
-// Integrations domain. Per-plugin config is inline per row (ADR 0059).
+// Plugins domain. Per-plugin config is inline per row (ADR 0059).
 function PluginSettingsHome() {
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
@@ -74,7 +74,7 @@ const AGENT_SECTIONS: Section[] = [
   { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
   // External secrets manager (ADR 0080) — schema fields + the status/test/sync card.
   { id: "secrets", label: "Secrets", icon: Lock, render: () => <SecretsPanel /> },
-  { id: "plugins", label: "Integrations", icon: Puzzle, render: () => <PluginSettingsHome /> },
+  { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
 ];
 
 // CAPABILITIES — what the agent is wired to (rich bespoke managers). Each manager owns its own

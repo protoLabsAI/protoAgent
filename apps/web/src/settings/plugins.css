@@ -34,7 +34,7 @@
   font-size: 12px;
 }
 
-/* Plugins panel (ADR 0027) — install from a git URL, under Settings → Integrations. */
+/* Plugins panel (ADR 0027) — install from a git URL, under Settings → Plugins. */
 .plugin-install-form { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
 /* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input). */
 .plugin-install-form input { flex: 1; min-width: 220px; }

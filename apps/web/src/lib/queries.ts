@@ -188,7 +188,7 @@ export const hostRuntimeStatusQuery = () =>
     staleTime: Infinity,
   });
 
-// Delegate registry (ADR 0025) — read non-suspense in the Settings → Integrations
+// Delegate registry (ADR 0025) — read non-suspense in the Settings → Capabilities
 // panel so a 404 (delegates plugin disabled) degrades gracefully instead of
 // blanking Settings. Invalidated after create/update/delete.
 export const delegatesQuery = () =>

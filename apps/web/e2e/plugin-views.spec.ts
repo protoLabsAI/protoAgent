@@ -241,9 +241,9 @@ test("the Hidden views menu restores onto the rail it was opened on", async ({ p
   await expect(leftRail.getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
 });
 
-test("right-click the empty rail → 'Manage plugins…' opens Settings ▸ Integrations", async ({ page }) => {
+test("right-click the empty rail → 'Manage plugins…' opens Settings ▸ Plugins", async ({ page }) => {
   // The rail-background menu also carries a rail-wide action (not tied to one surface) that opens
-  // the plugin manager — Settings ▸ Integrations — via openGlobalSettings("plugins").
+  // the plugin manager — Settings ▸ Plugins — via openGlobalSettings("plugins").
   await page.goto("/app/", { waitUntil: "load" });
   const rail = page.getByRole("complementary", { name: "Left surfaces" });
   await expect(rail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
@@ -254,10 +254,10 @@ test("right-click the empty rail → 'Manage plugins…' opens Settings ▸ Inte
   await rail.click({ button: "right", position: { x: box.width / 2, y: box.height - 8 } });
   await page.locator(".pl-menu").getByText("Manage plugins", { exact: false }).click();
 
-  // The one settings dialog opens, deep-linked to the Integrations (plugins) section.
+  // The one settings dialog opens, deep-linked to the Plugins section.
   const overlay = page.locator(".settings-overlay");
   await expect(overlay).toBeVisible();
-  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Integrations/);
+  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Plugins/);
 });
 
 test("right-click a plugin view → Configure opens that plugin's settings dialog", async ({ page }) => {
@@ -269,15 +269,15 @@ test("right-click a plugin view → Configure opens that plugin's settings dialo
   await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
 });
 
-test("right-click a rail icon → 'Manage plugins…' opens Settings ▸ Integrations", async ({ page }) => {
+test("right-click a rail icon → 'Manage plugins…' opens Settings ▸ Plugins", async ({ page }) => {
   // The per-icon rail menu also carries the rail-wide "Manage plugins…" action (the all-plugins
-  // counterpart to the per-plugin "Configure…"), opening Settings ▸ Integrations.
+  // counterpart to the per-plugin "Configure…"), opening Settings ▸ Plugins.
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
   await page.locator(".pl-menu").getByText("Manage plugins", { exact: false }).click();
   const overlay = page.locator(".settings-overlay");
   await expect(overlay).toBeVisible();
-  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Integrations/);
+  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Plugins/);
 });
 
 test("right-click a plugin's util-bar widget → Configure opens its settings dialog", async ({ page }) => {

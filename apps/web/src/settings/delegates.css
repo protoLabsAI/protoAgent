@@ -1,4 +1,4 @@
-/* ── Delegates panel (ADR 0025) — Settings → Integrations ──────────────────── */
+/* ── Delegates panel (ADR 0025) — Settings → Capabilities ──────────────────── */
 .delegates-section .subagent-row strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* .delegate-type-badge / .delegate-badge-warn / .delegate-badge-ok retired (#832) —
    now DS Badge (type) + StatusPill (unconfigured/secret-set). */

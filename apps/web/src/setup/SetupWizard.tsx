@@ -666,14 +666,14 @@ export function SetupWizard({
                     </div>
                   ))}
                   <p className="setup-hint">
-                    Next, in Settings: add your work folders (Tools) so files land where you expect, and connect
-                    integrations (Plugins).
+                    Next, in Settings: add your work folders (Tools) so files land where you expect, and install
+                    plugins (Plugins).
                   </p>
                 </div>
               ) : (
                 <p className="setup-intro setup-intro-foot">
                   Finishing writes your config and starts the agent. Tools, knowledge, and
-                  integrations are all in Settings.
+                  plugins are all in Settings.
                 </p>
               )}
               {message ? <Callout>{message}</Callout> : null}

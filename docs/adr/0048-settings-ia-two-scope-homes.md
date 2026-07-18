@@ -209,8 +209,13 @@ This console  Theme · Chat · Keyboard
   *(An earlier build composed Identity + a schema panel; two `flex:1` `.stage-panel`s
   split the height 50/50 — the SOUL editor only filled half and it read as two confusing
   panels. The chip avoids both.)*
-- **Integrations** is the renamed Plugins item (id stays `plugins` for the ⌘K/deep-link
-  contract). GitHub is a plugin, so it lands here by default.
+- **Plugins** — the plugin manager (Installed · Discover). GitHub is a plugin, so it lands
+  here by default. *(This item was labeled **Integrations** in the 2026-06-28 build to hint
+  it could grow beyond plugins; it never did — Secrets became its own item (ADR 0080) and the
+  panel only ever hosts the plugin manager. Renamed back to **Plugins** on 2026-07-17 so the
+  label agrees with what the rest of the system already calls it — the section id stays
+  `plugins`, the Python config category is `Plugins`, and the ⌘K palette commands are
+  `Plugins: …`. Id unchanged, so the ⌘K/deep-link contract holds.)*
 - **No standalone schema-only items.** The sharing/tier + box-runtime knobs are reached
   via contextual **chips** on the relevant manager (Skills chip = `skills.scope` +
   `commons.path`; MCP chip = `mcp.scope`; Fleet chip = box-runtime; Telemetry chip =

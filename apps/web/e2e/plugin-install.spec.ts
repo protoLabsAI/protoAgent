@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 async function openInstallDialog(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Integrations", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
   // Install-from-URL is a dialog opened from the Installed toolbar. The DS Dialog title is
   // role="dialog" (its accessible name), not a heading — assert the dialog via its URL field,
   // which only renders while the dialog is open (InstallPluginDialog returns null when closed).
@@ -51,7 +51,7 @@ test("the install dialog's form guards an empty URL", async ({ page }) => {
 test("Discover install → Configure dialog hydrates without a page refresh (#1643)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Integrations", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
   // Land on Installed first so the settings schema is fetched + cached WITHOUT the new
   // plugin's group — the bug's precondition (the schema query has a 5-min staleTime, so
   // without the install-side invalidation the stale cache serves the Configure dialog).
