@@ -360,7 +360,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     except Exception:  # noqa: BLE001 — telemetry must never break a turn
                         meta = {}
                 context_meta = {"contextTokens": context_tokens, **meta}
-            parts = _terminal_parts(
+            parts, ext_meta = _terminal_parts(
                 body,
                 deltas,
                 usage if had_usage else None,
@@ -370,10 +370,14 @@ class ProtoAgentExecutor(AgentExecutor):
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
             parts = await self._append_structured(parts, context, final_text)
-            if parts:
+            # Guard on EITHER: cost/worldstate now ride metadata, so a turn with telemetry
+            # but no text/context part must still emit the artifact (it would previously
+            # have had a cost DataPart keeping `parts` non-empty).
+            if parts or ext_meta:
                 await updater.add_artifact(
                     parts,
                     artifact_id=answer_aid,
+                    metadata=ext_meta or None,
                     append=False,
                     last_chunk=True,
                 )
@@ -425,11 +429,13 @@ class ProtoAgentExecutor(AgentExecutor):
                     await _flush_text()
                     if event_type == "tool_start":
                         tool_calls += 1
-                    part = _tool_call_part(event_type, payload)
-                    if part is not None:
+                    part, tc_meta = _tool_call_frame(event_type, payload)
+                    if part is not None or tc_meta is not None:
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
-                            message=updater.new_agent_message([part]),
+                            message=updater.new_agent_message(
+                                [part] if part is not None else [], metadata=tc_meta
+                            ),
                         )
                     # Realtime tap (ADR 0051) — surface the tool frame to any host hook.
                     if isinstance(payload, dict):
@@ -597,12 +603,15 @@ def _extract_skill_hint(context: RequestContext) -> str:
     return hint if isinstance(hint, str) else ""
 
 
-def _tool_call_part(event_type: str, payload: Any) -> Part | None:
-    """Build a tool-call-v1 DataPart from a tool_start/tool_end event.
+def _tool_call_frame(event_type: str, payload: Any) -> tuple[Part | None, dict[str, Any] | None]:
+    """Build the tool-call-v1 frame for a tool_start/tool_end event.
 
-    Structured dict payloads ({id,name,input|output}) become a typed
-    tool-call-v1 part; a plain-string payload (legacy producers) becomes a
-    plain text status part so text-only consumers still see progress.
+    Returns ``(part, metadata)``. Structured dict payloads ({id,name,input|output})
+    become URI-keyed **metadata** on the status message (protolabs-a2a 0.3.0 — the
+    extension rides `metadata[TOOL_CALL_EXT_URI]`, not a DataPart in `parts[]`, so a
+    generic A2A client no longer renders telemetry as content). A plain-string payload
+    (legacy producers) still becomes a plain text status **part** so text-only consumers
+    see progress. Exactly one of the two is non-None.
     """
     if isinstance(payload, dict):
         errored = event_type == "tool_end" and bool(payload.get("error"))
@@ -616,21 +625,22 @@ def _tool_call_part(event_type: str, payload: Any) -> Part | None:
             kwargs["result"] = payload.get("output")
         if errored:
             kwargs["error"] = str(payload.get("output") or "tool failed")
-        emit = pa.emit_tool_call(
+        meta = pa.tool_call_metadata(
             str(payload.get("id", "")),
             str(payload.get("name", "")),
             phase,
             **kwargs,
         )
         # A subagent's tool frame carries its parent delegation's tool-call id so the
-        # console nests it under the `task` card by id (the contract dict has no field
-        # for it, so ride it as an extra payload key the console reads).
+        # console nests it under the `task` card by id (the payload has no field for it,
+        # so ride it as an extra key the console reads) — now set on the URI-keyed
+        # fragment rather than the old DataPart's content.value.
         if payload.get("parentId"):
-            emit["content"]["value"]["parentToolCallId"] = str(payload["parentId"])
-        return _ext_data_part(emit)
+            meta[pa.TOOL_CALL_EXT_URI]["parentToolCallId"] = str(payload["parentId"])
+        return None, meta
     if payload:
-        return _text_part(str(payload))
-    return None
+        return _text_part(str(payload)), None
+    return None, None
 
 
 _CONTEXT_MIME = "application/vnd.protolabs.context-v1+json"
@@ -645,31 +655,32 @@ def _terminal_parts(
     *,
     success: bool,
     duration_ms: int | None = None,
-) -> list[Part]:
-    """Assemble the terminal artifact's parts: text first, then the worldstate-delta /
-    cost / context extension DataParts that have content.
+) -> tuple[list[Part], dict[str, Any]]:
+    """Assemble the terminal artifact's ``(parts, extension_metadata)``.
 
-    Ordering (text → worldstate → cost → context) is stable so consumers reading parts
-    in order are unchanged; the context-v1 part trails as a pure append.
+    protolabs-a2a 0.3.0 moved the four telemetry extensions off DataParts: the
+    worldstate-delta and cost payloads now ride the artifact's **metadata map keyed by
+    extension URI**, so a generic A2A client no longer renders them as content. Parts
+    therefore carry only real content — the answer text, plus the context-v1 readout,
+    which is a template-local extension (no SDK helper) and stays a DataPart.
     """
     parts: list[Part] = []
+    fragments: list[dict[str, Any]] = []
     if text:
         parts.append(_text_part(text))
     if deltas:
-        parts.append(_ext_data_part(pa.emit_worldstate_delta(deltas)))
+        fragments.append(pa.worldstate_delta_metadata(deltas))
     if usage and (usage.get("input_tokens", 0) or usage.get("output_tokens", 0)):
-        parts.append(
-            _ext_data_part(
-                pa.emit_cost(
-                    usage,
-                    duration_ms=duration_ms,
-                    cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
-                    success=success,
-                )
+        fragments.append(
+            pa.cost_metadata(
+                usage,
+                duration_ms=duration_ms,
+                cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
+                success=success,
             )
         )
     # Compaction context-window readout (#1372) — a template extension (no SDK helper),
     # built with the generic DataPart packer. Only when we actually measured a prompt.
     if context and context.get("contextTokens"):
         parts.append(_ext_data_part(pa.data_part(context, _CONTEXT_MIME)))
-    return parts
+    return parts, pa.merge_extension_metadata(*fragments) if fragments else {}
