@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { contextFromParts, costFromParts } from "./api";
+import { contextFromParts, costFromMeta } from "./api";
 
-const COST_MIME = "application/vnd.protolabs.cost-v1+json";
+const COST_EXT_URI = "https://proto-labs.ai/a2a/ext/cost-v1";
+const WORLDSTATE_EXT_URI = "https://proto-labs.ai/a2a/ext/worldstate-delta-v1";
+const CONFIDENCE_EXT_URI = "https://proto-labs.ai/a2a/ext/confidence-v1";
 const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 
-// costFromParts lifts the terminal cost-v1 DataPart (A2A ext) into the camelCase TurnUsage
-// the per-turn footer renders. It must map snake_case wire fields, derive totalTokens, and
-// match across every DataPart encoding the fleet emits (flattened `data` + 1.0 `content.value`).
+// costFromMeta lifts the terminal cost-v1 extension into the camelCase TurnUsage the
+// per-turn footer renders. Since protolabs-a2a 0.3.0 the payload rides the ARTIFACT'S
+// METADATA map keyed by the extension URI (not a MIME-typed DataPart), so this reads a
+// metadata map; it must still map the snake_case wire fields and derive totalTokens.
 
-describe("costFromParts", () => {
+describe("costFromMeta", () => {
   const payload = {
     usage: {
       input_tokens: 12_340,
@@ -22,8 +25,8 @@ describe("costFromParts", () => {
     success: true,
   };
 
-  it("maps the flattened-`data` encoding → camelCase usage, deriving totalTokens", () => {
-    const usage = costFromParts([{ metadata: { mimeType: COST_MIME }, data: payload }]);
+  it("maps the URI-keyed metadata → camelCase usage, deriving totalTokens", () => {
+    const usage = costFromMeta({ [COST_EXT_URI]: payload });
     expect(usage).toEqual({
       inputTokens: 12_340,
       outputTokens: 1_200,
@@ -35,18 +38,16 @@ describe("costFromParts", () => {
     });
   });
 
-  it("matches the A2A 1.0 member-discriminated encoding (content.$case === 'data')", () => {
-    const usage = costFromParts([
-      { metadata: { mimeType: COST_MIME }, content: { $case: "data", value: payload } },
-    ]);
+  it("picks its own fragment out of a metadata map carrying several extensions", () => {
+    // The terminal artifact merges cost + worldstate into ONE metadata map
+    // (merge_extension_metadata), so the reader must select strictly by URI.
+    const usage = costFromMeta({ [WORLDSTATE_EXT_URI]: { deltas: [] }, [COST_EXT_URI]: payload });
     expect(usage?.inputTokens).toBe(12_340);
     expect(usage?.totalTokens).toBe(13_540);
   });
 
   it("omits costUsd / durationMs when the wire payload omits them", () => {
-    const usage = costFromParts([
-      { metadata: { mimeType: COST_MIME }, data: { usage: { input_tokens: 10, output_tokens: 5 } } },
-    ]);
+    const usage = costFromMeta({ [COST_EXT_URI]: { usage: { input_tokens: 10, output_tokens: 5 } } });
     expect(usage).toEqual({
       inputTokens: 10,
       outputTokens: 5,
@@ -58,10 +59,10 @@ describe("costFromParts", () => {
     expect(usage).not.toHaveProperty("durationMs");
   });
 
-  it("returns null when there's no cost part, or the part lacks a usage block", () => {
-    expect(costFromParts(undefined)).toBeNull();
-    expect(costFromParts([{ metadata: { mimeType: "text/plain" }, data: { usage: {} } }])).toBeNull();
-    expect(costFromParts([{ metadata: { mimeType: COST_MIME }, data: { costUsd: 1 } }])).toBeNull();
+  it("returns null with no metadata, a different extension, or no usage block", () => {
+    expect(costFromMeta(undefined)).toBeNull();
+    expect(costFromMeta({ [CONFIDENCE_EXT_URI]: { confidence: 0.9 } })).toBeNull();
+    expect(costFromMeta({ [COST_EXT_URI]: { costUsd: 1 } })).toBeNull();
   });
 });
 

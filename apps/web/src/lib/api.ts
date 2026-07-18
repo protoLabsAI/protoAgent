@@ -69,9 +69,13 @@ type A2APart = {
   data?: unknown;
   metadata?: { mimeType?: string };
 };
+// A Message / Artifact carries an optional `metadata` map — since protolabs-a2a 0.3.0
+// that's where the SDK extensions (cost-v1, tool-call-v1) ride, keyed by extension URI.
+type A2AMessage = { parts?: A2APart[]; metadata?: Record<string, unknown> };
+type A2AArtifact = { parts?: A2APart[]; metadata?: Record<string, unknown> };
 type A2AStatus = {
   state?: string;
-  message?: { parts?: A2APart[] };
+  message?: A2AMessage;
 };
 type A2AFrame = {
   jsonrpc?: string;
@@ -93,7 +97,7 @@ type A2AFrame = {
     artifactUpdate?: {
       taskId?: string;
       contextId?: string;
-      artifact?: { parts?: A2APart[] };
+      artifact?: A2AArtifact;
       append?: boolean;
       lastChunk?: boolean;
     };
@@ -103,8 +107,8 @@ type A2AFrame = {
     taskId?: string;
     contextId?: string;
     status?: A2AStatus;
-    artifact?: { parts?: A2APart[] };
-    artifacts?: Array<{ parts?: A2APart[] }>;
+    artifact?: A2AArtifact;
+    artifacts?: A2AArtifact[];
     append?: boolean;
     lastChunk?: boolean;
     final?: boolean;
@@ -445,12 +449,18 @@ export function artifactAppends(update: { append?: boolean; [key: string]: unkno
   return update.append === true;
 }
 
-const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
-const COST_MIME = "application/vnd.protolabs.cost-v1+json";
 const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
+
+// The two protolabs-a2a SDK extensions we consume ride the message/artifact METADATA
+// map keyed by their extension URI (protolabs-a2a 0.3.0) — they are no longer MIME-typed
+// DataParts in `parts[]`, so a generic A2A client stops rendering telemetry as content.
+// The template-local extensions (hitl / component / reasoning / context) are unaffected
+// and stay DataParts.
+const TOOL_CALL_EXT_URI = "https://proto-labs.ai/a2a/ext/tool-call-v1";
+const COST_EXT_URI = "https://proto-labs.ai/a2a/ext/cost-v1";
 
 type RawPart = {
   kind?: string;
@@ -458,6 +468,15 @@ type RawPart = {
   content?: { $case?: string; value?: unknown };
   metadata?: { mimeType?: string };
 };
+
+/** A metadata map as it arrives on a Message or Artifact — extension payloads keyed by URI. */
+type ExtMetadata = Record<string, unknown> | undefined;
+
+/** Read an extension payload out of a metadata map by its extension URI. */
+function extByUri(metadata: ExtMetadata, uri: string): unknown {
+  const value = metadata?.[uri];
+  return value && typeof value === "object" ? value : null;
+}
 
 /** Read a custom DataPart's payload iff its `metadata.mimeType` matches `mime`.
  *
@@ -483,8 +502,8 @@ function dataByMime(parts: RawPart[] | undefined, mime: string): unknown {
  * With `id` undefined, `onToolCall`'s `findIndex(c => c.id === evt.id)` matched
  * the FIRST card on every event, so all of a turn's tool calls collapsed into a
  * single ever-overwriting card — the "only one tool at a time" symptom. */
-function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
-  const d = dataByMime(parts, TOOL_CALL_MIME) as
+function toolEventFromMeta(metadata: ExtMetadata): ToolEvent | null {
+  const d = extByUri(metadata, TOOL_CALL_EXT_URI) as
     | {
         toolCallId?: string;
         name?: string;
@@ -529,12 +548,13 @@ function reasoningFromParts(parts?: RawPart[]): string | null {
   return d?.text || null;
 }
 
-/** Decode the terminal cost-v1 DataPart (A2A ext) → this turn's token usage + cost, or null.
- * Wire shape: `{ usage: {input_tokens, output_tokens, cache_read_input_tokens,
+/** Decode the terminal cost-v1 extension (A2A ext) → this turn's token usage + cost, or null.
+ * Read off the artifact's METADATA keyed by the cost-v1 extension URI (protolabs-a2a 0.3.0),
+ * not a DataPart. Wire shape: `{ usage: {input_tokens, output_tokens, cache_read_input_tokens,
  * cache_creation_input_tokens}, costUsd?, durationMs? }`. The snake_case `usage` fields are
  * mapped to the camelCase `TurnUsage` the console renders; totalTokens is derived. */
-export function costFromParts(parts?: RawPart[]): TurnUsage | null {
-  const d = dataByMime(parts, COST_MIME) as
+export function costFromMeta(metadata: ExtMetadata): TurnUsage | null {
+  const d = extByUri(metadata, COST_EXT_URI) as
     | {
         usage?: {
           input_tokens?: number;
@@ -1530,7 +1550,8 @@ export const api = {
         // A reasoning-only frame carries no status text; don't let it clobber the
         // transient status line with the bare working state.
         if (!reasoning) handlers.onStatus?.(messageText || state);
-        const toolEvent = toolEventFromParts(parts);
+        // tool-call-v1 rides the status MESSAGE's metadata (URI-keyed), not its parts.
+        const toolEvent = toolEventFromMeta(statusUpdate.status?.message?.metadata);
         if (toolEvent) handlers.onToolCall?.(toolEvent);
         const component = componentFromParts(parts);
         if (component) handlers.onComponent?.(component);
@@ -1545,9 +1566,10 @@ export const api = {
         const aParts = artifactUpdate.artifact?.parts;
         const text = textFromParts(aParts);
         if (text) handlers.onText?.(text, artifactAppends(artifactUpdate));
-        // The terminal answer artifact also carries the cost-v1 + context-v1 DataParts
-        // (a2a_impl executor) — surface this turn's spend and its context-window fill.
-        const usage = costFromParts(aParts);
+        // The terminal answer artifact carries cost-v1 in its URI-keyed METADATA and
+        // context-v1 as a DataPart (a2a_impl executor) — surface this turn's spend and
+        // its context-window fill.
+        const usage = costFromMeta(artifactUpdate.artifact?.metadata);
         if (usage) handlers.onCost?.(usage);
         const ctx = contextFromParts(aParts);
         if (ctx) handlers.onContext?.(ctx);

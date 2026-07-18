@@ -133,7 +133,7 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
         # `astream_events(v2)` populates `output.usage_metadata` on
         # `on_chat_model_end`. Without this, streaming chunks arrive as
         # AIMessageChunks with usage_metadata=None and we can't emit
-        # the cost-v1 DataPart on the terminal artifact.
+        # the cost-v1 extension metadata on the terminal artifact.
         "stream_usage": True,
         # Cloudflare's managed WAF blocks the OpenAI SDK's default
         # `OpenAI/Python <ver>` User-Agent (observed 403 "Your request
