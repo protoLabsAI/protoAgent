@@ -1,11 +1,12 @@
-import { Button } from "@protolabsai/ui/primitives";
-import { Empty } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
-import { Smartphone, Trash2, QrCode } from "lucide-react";
+import { Button, Empty } from "@protolabsai/ui/primitives";
+import { QrCode, Smartphone, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { StatusPill } from "../app/StatusPill";
 import { api } from "../lib/api";
+import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
 type Device = { id: string; name: string; created_at: number; last_seen_at: number | null };
@@ -13,21 +14,25 @@ type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr: string
 type Pairing = { code: string; expires_at: number; ttl: number; hosts: PairHost[] };
 
 function ago(ts: number | null): string {
-  if (!ts) return "never";
+  if (!ts) return "never used";
   const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
+  if (secs < 60) return "active now";
+  if (secs < 3600) return `last seen ${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `last seen ${Math.floor(secs / 3600)}h ago`;
+  return `last seen ${Math.floor(secs / 86400)}d ago`;
 }
 
 /**
- * Devices — paired devices and the QR that adds one (ADR 0087).
+ * Settings ▸ Devices — paired devices and the QR that adds one (ADR 0087).
  *
- * The QR arrives rendered from the server. Doing it here would mean a QR library in the
- * console AND assembling the pairing URL in two places; more importantly, fetching it from
- * a `GET …?code=` endpoint would put the code in access logs, which is exactly what the
- * fragment design avoids.
+ * Wrapped in `SettingsSubPanel` like every other hand-built panel (Keyboard, Delegates) so
+ * the header/padding/scroll treatment comes from one container and can't drift per panel,
+ * and rows reuse `.subagent-list`/`.subagent-row`, the list shape the other managers use.
+ * Only the pairing card is bespoke, because nothing else in Settings looks like it.
+ *
+ * The QR arrives rendered from the server: doing it here would mean a QR library in the
+ * console AND the pairing URL assembled in two places, and fetching it from a `GET …?code=`
+ * endpoint would put the code in access logs — the leak the fragment design avoids.
  */
 export function DevicesPanel() {
   const toast = useToast();
@@ -37,9 +42,8 @@ export function DevicesPanel() {
   const [pairError, setPairError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [hostIdx, setHostIdx] = useState(0);
-  // Every mutating action gets a visible pending state. Without them the panel just sat
-  // there — "Add a device" in particular does socket probes + QR rendering server-side, so
-  // a plain button reads as a dead click rather than as work in progress.
+  // Every mutating action gets a visible pending state — a button that looks identical
+  // before and after a click is indistinguishable from a dead one.
   const [starting, setStarting] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -49,7 +53,7 @@ export function DevicesPanel() {
       const res = await api.devices();
       setDevices(res.devices || []);
     } catch {
-      /* the panel is read-mostly; a transient failure just leaves the last list */
+      /* read-mostly panel; a transient failure just leaves the last list */
     } finally {
       setLoading(false);
     }
@@ -74,7 +78,7 @@ export function DevicesPanel() {
   }, [pairing]);
 
   // While a code is live, poll for the device that claims it — the phone can't tell this
-  // window it succeeded, so the list arriving IS the confirmation.
+  // window it succeeded, so the list growing IS the confirmation.
   useEffect(() => {
     if (!pairing) {
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -105,8 +109,8 @@ export function DevicesPanel() {
       setPairing(res);
       setHostIdx(0);
     } catch (err) {
-      // The common case is a loopback-bound instance — the server explains it; surface that
-      // rather than a generic failure, because the fix is a restart flag.
+      // Usually a loopback-bound instance — the server explains it and the fix is a restart
+      // flag, so surface its message rather than a generic failure.
       setPairError(err instanceof Error ? err.message : "could not start pairing");
     } finally {
       setStarting(false);
@@ -132,38 +136,41 @@ export function DevicesPanel() {
   const host = pairing?.hosts[hostIdx];
 
   return (
-    <div className="devices-panel">
-      <header className="devices-head">
-        <div>
-          <h3>Devices</h3>
-          <p className="devices-sub">
-            Each paired device gets its own token, so removing one here doesn&apos;t sign out
-            anything else.
-          </p>
-        </div>
-        {!pairing && (
+    <SettingsSubPanel
+      label="devices"
+      title="Devices"
+      actions={
+        pairing ? (
+          <Button type="button" variant="ghost" onClick={stopPairing}>
+            Cancel
+          </Button>
+        ) : (
           <Button type="button" onClick={startPairing} loading={starting}>
             <QrCode size={15} aria-hidden /> {starting ? "Preparing…" : "Add a device"}
           </Button>
-        )}
-      </header>
+        )
+      }
+    >
+      <p className="setting-desc">
+        Phones and tablets paired to this agent. Each holds its own token, so removing one
+        here doesn&apos;t sign out anything else.
+      </p>
 
-      {pairError && <p className="devices-error">{pairError}</p>}
+      {pairError && <p className="setting-desc devices-error">{pairError}</p>}
 
       {pairing && host && (
         <section className="devices-pair" aria-label="Pair a new device">
           {host.qr ? (
-            // Server-rendered SVG. Injected as markup because it IS the payload; it never
-            // leaves this origin and is generated from a URL we just built ourselves.
+            // Server-rendered SVG. Injected as markup because it IS the payload — same
+            // origin, generated from a URL we just built ourselves.
             <div className="devices-qr" dangerouslySetInnerHTML={{ __html: host.qr }} />
           ) : (
-            <p className="devices-sub">Scan unavailable — use the link below.</p>
+            <p className="setting-desc">Scan unavailable — use the link below.</p>
           )}
           <div className="devices-pair-body">
             <p className="devices-pair-hint">
               Scan with the device&apos;s camera. Expires in <strong>{remaining}s</strong>.
             </p>
-            <code className="devices-url">{host.url}</code>
             {pairing.hosts.length > 1 && (
               <div className="devices-hosts">
                 {pairing.hosts.map((h, i) => (
@@ -178,14 +185,12 @@ export function DevicesPanel() {
                 ))}
               </div>
             )}
-            <p className="devices-sub">
+            <code className="devices-url">{host.url}</code>
+            <p className="setting-desc">
               {host.kind === "tailnet"
                 ? "Works from any network the device is on."
                 : "Only works while both are on this Wi-Fi."}
             </p>
-            <Button type="button" variant="ghost" onClick={stopPairing}>
-              Cancel
-            </Button>
           </div>
         </section>
       )}
@@ -202,29 +207,38 @@ export function DevicesPanel() {
           description="Add a phone or tablet to reach this agent without typing a token."
         />
       ) : (
-        <ul className="devices-list">
+        <div className="subagent-list">
           {devices.map((d) => (
-            <li key={d.id} className="devices-row">
-              <Smartphone size={16} aria-hidden />
-              <div className="devices-row-main">
-                <span className="devices-name">{d.name}</span>
-                <span className="devices-meta">Last seen {ago(d.last_seen_at)}</span>
+            <div className="subagent-row" key={d.id}>
+              <div>
+                {/* Text-first like the other manager rows — an inline glyph here sits off
+                    the strong's baseline and earns nothing; the panel is already "Devices". */}
+                <strong>
+                  {d.name}
+                  {d.last_seen_at && Date.now() / 1000 - d.last_seen_at < 60 ? (
+                    <StatusPill label="active" tone="success" />
+                  ) : null}
+                </strong>
+                <span>{ago(d.last_seen_at)}</span>
               </div>
-              <Button
-                icon
-                variant="ghost"
-                type="button"
-                aria-label={`Remove ${d.name}`}
-                loading={revoking === d.id}
-                disabled={revoking != null}
-                onClick={() => revoke(d)}
-              >
-                <Trash2 size={15} />
-              </Button>
-            </li>
+              <div className="issue-actions">
+                <Button
+                  icon
+                  variant="ghost"
+                  type="button"
+                  title="Remove"
+                  aria-label={`Remove ${d.name}`}
+                  loading={revoking === d.id}
+                  disabled={revoking != null}
+                  onClick={() => revoke(d)}
+                >
+                  <Trash2 size={15} />
+                </Button>
+              </div>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
-    </div>
+    </SettingsSubPanel>
   );
 }
