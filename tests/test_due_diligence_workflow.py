@@ -36,6 +36,7 @@ def test_codebase_mapper_reads_code_not_the_web():
 def test_codebase_mapper_is_read_only():
     tools = SUBAGENT_REGISTRY["codebase-mapper"].tools
     assert "write_file" not in tools and "edit_file" not in tools and "run_command" not in tools
+    assert "delete_file" not in tools  # a read-only mapper never gains the delete tool
 
 
 # ── the recipe ────────────────────────────────────────────────────────────────

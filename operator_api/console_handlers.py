@@ -118,6 +118,7 @@ _TOOL_CATEGORY = {
     "search_files": "Filesystem",
     "write_file": "Filesystem",
     "edit_file": "Filesystem",
+    "delete_file": "Filesystem",
     "run_command": "Filesystem",
     "list_projects": "Filesystem",
     # Skills
