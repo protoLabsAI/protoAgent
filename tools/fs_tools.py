@@ -12,6 +12,9 @@ Security (ADR 0007 §4):
   refused (``Path.resolve`` then containment check).
 - ``write_file`` / ``edit_file`` require the project's ``write: true`` (a monitor
   fork runs every project read-only).
+- ``delete_file`` adds the third Cowork mount mode (ADR 0083 D5): refused when
+  ``write: false`` OR ``no_delete: true``, and otherwise always HITL-approved — a
+  permanent-delete floor the per-turn ``/bypass`` toggle can't skip.
 - ``run_command`` is the dual-use power tool (like ``execute_code``): fenced
   ``cwd``, but arbitrary argv — gated behind ``filesystem.allow_run``.
 - Returns clean error strings (never raises into the runner); ``AuditMiddleware``
@@ -40,6 +43,12 @@ class Project:
     name: str
     root: Path
     write: bool = False
+    # Three fence modes match the Cowork local-VM mount modes (ADR 0083 D5, #2012):
+    #   write:false                 → read-only
+    #   write:true,  no_delete:false → read-write
+    #   write:true,  no_delete:true  → read-write-no-delete (create/edit, never delete)
+    # ``no_delete`` only bites on ``delete_file``; a read-only project already refuses it.
+    no_delete: bool = False
 
 
 class ProjectRegistry:
@@ -105,7 +114,14 @@ def _registry_from_config(config) -> ProjectRegistry:
         if not root.is_dir():
             log.warning("[fs] project %r path is not a directory: %s — skipped", name, root)
             continue
-        projects.append(Project(name=name, root=root, write=bool(entry.get("write", False))))
+        projects.append(
+            Project(
+                name=name,
+                root=root,
+                write=bool(entry.get("write", False)),
+                no_delete=bool(entry.get("no_delete", False)),
+            )
+        )
     return ProjectRegistry(projects)
 
 
@@ -136,13 +152,19 @@ def build_fs_tools(config) -> list:
     # approval gate is enforced regardless of any caller-supplied bypass metadata.
     bypass_allowed = bool(getattr(config, "filesystem_bypass_allowed", True))
 
+    def _mode(p: Project) -> str:
+        if not p.write:
+            return "ro"
+        return "rw/no-delete" if p.no_delete else "rw"
+
     @tool
     def list_projects() -> str:
-        """List the project workspaces you manage (name, path, read-only vs read-write)."""
+        """List the project workspaces you manage (name, path, and access mode:
+        ``ro`` read-only, ``rw`` read-write, ``rw/no-delete`` read-write but deletes off)."""
         lines = ["Managed projects:"]
         for name in registry.names():
             p = registry.get(name)
-            lines.append(f"- {name}  [{'rw' if p.write else 'ro'}]  {p.root}")
+            lines.append(f"- {name}  [{_mode(p)}]  {p.root}")
         return "\n".join(lines)
 
     @tool
@@ -253,7 +275,49 @@ def build_fs_tools(config) -> list:
             return f"Error: cannot write {path}: {exc}"
         return f"Edited {path}."
 
-    tools = [list_projects, list_dir, read_file, find_files, search_files, write_file, edit_file]
+    @tool
+    def delete_file(project: str, path: str) -> str:
+        """Permanently delete a single file inside a managed project (relative path).
+
+        Refused in read-only projects and in ``no_delete`` (read-write-no-delete) projects.
+        Otherwise it ALWAYS pauses for the operator to approve first — a permanent-delete
+        floor that even bypass-permissions mode can't skip, because deletion is irreversible.
+        Removes one file, not a directory (use ``run_command`` for directory trees).
+        """
+        try:
+            target = registry.resolve(project, path)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        proj = registry.get(project)
+        if not proj.write:
+            return f"Error: project {project!r} is read-only (write:false)."
+        if proj.no_delete:
+            return f"Error: project {project!r} forbids deletes (no_delete:true)."
+        if target.is_dir():
+            return f"Error: {path} is a directory — delete_file removes a single file (use run_command for trees)."
+        if not target.is_file():
+            return f"Error: no such file: {path}"
+        # Permanent-delete floor (ADR 0083 D5, #2012): ALWAYS ask, regardless of the per-turn
+        # /bypass toggle that skips run_command's gate — an irreversible op gets no auto-skip.
+        from langgraph.types import interrupt
+
+        decision = interrupt(
+            {"kind": "approval", "title": "Approve permanent file delete?", "detail": path, "project": project}
+        )
+        if not _approved(decision):
+            # RETURN (not raise) a decline, same as run_command: a decline is the operator's
+            # choice, not a tool error, and raising rendered an undismissable red block.
+            return (
+                f"Delete declined by the operator — not deleted: {path!r}. "
+                "Do not retry; wait for the operator's next instruction or ask how to proceed."
+            )
+        try:
+            target.unlink()
+        except OSError as exc:
+            return f"Error: cannot delete {path}: {exc}"
+        return f"Deleted {path}."
+
+    tools = [list_projects, list_dir, read_file, find_files, search_files, write_file, edit_file, delete_file]
 
     if allow_run:
 

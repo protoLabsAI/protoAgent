@@ -182,7 +182,8 @@ def _build_projects_section(projects) -> str:
         "",
         "You operate on these project workspaces via the filesystem tools "
         "(`list_projects`, `read_file`, `list_dir`, `find_files`, `search_files`, "
-        "and — in read-write projects — `write_file`/`edit_file`). All paths are "
+        "and — in read-write projects — `write_file`/`edit_file`, plus `delete_file`, "
+        "which always asks first and is off in no-delete projects). All paths are "
         "fenced to these roots; you cannot read or write outside them.",
         "",
     ]

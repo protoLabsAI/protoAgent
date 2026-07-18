@@ -280,15 +280,15 @@ filesystem:
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `true` | Expose the fs tools (`list_projects`/`read_file`/`list_dir`/`find_files`/`search_files`/`write_file`/`edit_file`). Off → no fs tools. |
+| `enabled` | `true` | Expose the fs tools (`list_projects`/`read_file`/`list_dir`/`find_files`/`search_files`/`write_file`/`edit_file`/`delete_file`). Off → no fs tools. |
 | `allow_run` | `true` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). **`false` is the per-agent kill switch**: the tool is never built, so the model can't see or call it. |
 | `run_requires_approval` | `true` | Each `run_command` call pauses for HITL operator approval (A2A `input-required`). Drop to `false` to let commands run unattended. |
 | `bypass_allowed` | `true` | Permit the per-tab `/bypass` chat toggle to skip the approval gate. `false` = approvals enforced regardless of caller-supplied metadata. |
-| `projects` | `[]` | Managed workspaces: `{name, path, write}`. **Empty falls back to a default `workspace` dir** (so the tools are usable out of the box). **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; invalid paths are skipped. |
+| `projects` | `[]` | Managed workspaces: `{name, path, write, no_delete}`. **Empty falls back to a default `workspace` dir** (so the tools are usable out of the box). **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; `write:true` + `no_delete:true` is read-write-no-delete (create/edit, never delete — the third Cowork mount mode); invalid paths are skipped. |
 
 The four toggles are editable per agent in the console via the **Shell & filesystem** chip on **Settings ▸ Capabilities ▸ Tools** (hot-reload — a save rebuilds the graph). `tools.disabled: [run_command]` (above) is an equivalent per-tool route — in the console, that's the `run_command` row switch in the same panel's Filesystem group.
 
-**Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4.
+**Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; `delete_file` additionally needs `no_delete:false` and **always** pauses for approval (a permanent-delete floor the `/bypass` toggle can't skip); the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4 and ADR 0083 D5.
 
 ## `egress`
 

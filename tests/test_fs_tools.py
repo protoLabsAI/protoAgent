@@ -219,6 +219,124 @@ def test_run_command_bypass_forbidden_by_host_still_gates(workspace, monkeypatch
     assert "declined by the operator" in out  # gate fired despite the bypass request
 
 
+# ── no_delete fence mode + delete_file (ADR 0083 D5, #2012) ────────────────────
+
+
+def test_registry_parses_no_delete(workspace):
+    """A project's `no_delete: true` config key lands on the Project model."""
+    _, a, b = workspace
+    from tools.fs_tools import _registry_from_config
+
+    reg = _registry_from_config(
+        _Cfg(
+            filesystem_projects=[
+                {"name": "a", "path": str(a), "write": True, "no_delete": True},
+                {"name": "b", "path": str(b), "write": True},
+            ]
+        )
+    )
+    assert reg.get("a").no_delete is True
+    assert reg.get("b").no_delete is False
+
+
+def test_list_projects_reports_three_modes(workspace):
+    """list_projects labels each mode: ro / rw / rw-no-delete."""
+    tmp, a, b = workspace
+    c = tmp / "projC"
+    c.mkdir()
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[
+                {"name": "rw", "path": str(a), "write": True},
+                {"name": "ro", "path": str(b)},  # write defaults false
+                {"name": "nod", "path": str(c), "write": True, "no_delete": True},
+            ]
+        )
+    )
+    out = t["list_projects"].invoke({})
+    assert "rw  [rw]" in out
+    assert "ro  [ro]" in out
+    assert "nod  [rw/no-delete]" in out
+
+
+def test_delete_file_present_and_refused_when_read_only(workspace):
+    """delete_file is always built (it self-gates); a read-only project refuses it."""
+    _, _, b = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "b", "path": str(b)}]))  # write:false
+    assert "delete_file" in t
+    out = t["delete_file"].invoke({"project": "b", "path": "notes.txt"})
+    assert "read-only" in out
+    assert (b / "notes.txt").exists()  # untouched
+
+
+def test_delete_file_refused_in_no_delete_project(workspace):
+    """A read-write-no-delete project refuses delete_file even though writes are allowed."""
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True, "no_delete": True}]))
+    out = t["delete_file"].invoke({"project": "a", "path": "README.md"})
+    assert "no_delete" in out
+    assert (a / "README.md").exists()  # untouched
+
+
+def test_delete_file_approved_removes(workspace, monkeypatch):
+    """In a read-write project, an APPROVED delete removes the file. interrupt() → approve."""
+    import langgraph.types
+
+    _, a, _ = workspace
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "approve")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    assert (a / "README.md").exists()
+    out = t["delete_file"].invoke({"project": "a", "path": "README.md"})
+    assert "Deleted README.md" in out
+    assert not (a / "README.md").exists()
+
+
+def test_delete_file_declined_keeps_file(workspace, monkeypatch):
+    """A DECLINED delete returns a plain decline (not a raise) and leaves the file."""
+    import langgraph.types
+
+    _, a, _ = workspace
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "denied")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    out = t["delete_file"].invoke({"project": "a", "path": "README.md"})
+    assert "declined by the operator" in out
+    assert "Do not retry" in out
+    assert (a / "README.md").exists()  # kept
+
+
+def test_delete_file_floor_not_bypassable(workspace, monkeypatch):
+    """The permanent-delete floor ignores bypass-permissions: even with the /bypass toggle
+    set (which skips run_command's gate), delete_file still asks — here stubbed to deny, so
+    the file survives. This is the key difference from run_command."""
+    import langgraph.types
+    from graph.middleware.request_context import request_metadata_scope
+
+    _, a, _ = workspace
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "denied")
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a), "write": True}],
+            filesystem_bypass_allowed=True,
+        )
+    )
+    with request_metadata_scope({"bypass_permissions": True}):
+        out = t["delete_file"].invoke({"project": "a", "path": "README.md"})
+    assert "declined by the operator" in out  # gate fired despite bypass
+    assert (a / "README.md").exists()  # floor held
+
+
+def test_delete_file_refuses_directory(workspace, monkeypatch):
+    """delete_file removes a single file, never a directory tree."""
+    import langgraph.types
+
+    _, a, _ = workspace
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "approve")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    out = t["delete_file"].invoke({"project": "a", "path": "src"})
+    assert "is a directory" in out
+    assert (a / "src").is_dir()  # untouched
+
+
 # ── config round-trip ──────────────────────────────────────────────────────────
 
 
