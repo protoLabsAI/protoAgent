@@ -98,6 +98,16 @@ def _init_langgraph_agent(headless_setup: bool = False):
     if _dv_warn:
         log.warning("[data-version] %s", _dv_warn)
 
+    # Make a provisioned Node runtime (`protoagent runtime install-node`) visible to
+    # every subprocess we spawn — the npx-based ACP coding agents + MCP servers — when
+    # the user has no Node of their own. No-op if Node is already on PATH or none is
+    # provisioned. One seam covers ACP, MCP, delegates, and gh (ADR 0085).
+    from infra.node_runtime import augment_path_with_managed_node
+
+    _node_dir = augment_path_with_managed_node()
+    if _node_dir:
+        log.info("[node] managed Node runtime on PATH: %s", _node_dir)
+
     # Seed the untracked live config from the .example template on first run.
     # config_yaml_path() resolves to <instance_root>/config/langgraph-config.yaml
     # (env-driven via PROTOAGENT_HOME / PROTOAGENT_INSTANCE), so load through it.
