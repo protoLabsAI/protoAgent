@@ -16,6 +16,7 @@ failed-attempt counter. See ADR 0087 D4 for the residual risk that buys.
 
 from __future__ import annotations
 
+import io
 import ipaddress
 import logging
 import socket
@@ -99,6 +100,38 @@ def _local_addresses() -> list[str]:
     return found
 
 
+def _qr_svg(url: str) -> str | None:
+    """An inline SVG QR for ``url``, or None if rendering fails.
+
+    Rendered SERVER-SIDE and embedded in the start response rather than served from a
+    ``GET /api/pairing/qr.svg?code=…`` endpoint — a code in a query string lands in access
+    logs, proxy logs and browser history, which is the exact leak the fragment design
+    avoids (ADR 0087 D5). It also keeps the console free of a QR library and the pairing URL
+    assembled in exactly one place.
+
+    Returns None rather than raising: a missing QR degrades to "type this URL", which still
+    works. Losing the whole pairing flow because an optional render failed would not.
+    """
+    try:
+        import qrcode
+        import qrcode.image.svg
+
+        qr = qrcode.QRCode(box_size=10, border=2, image_factory=qrcode.image.svg.SvgPathImage)
+        qr.add_data(url)
+        qr.make(fit=True)
+        buf = io.BytesIO()
+        qr.make_image().save(buf)
+        svg = buf.getvalue().decode("utf-8")
+        # Strip the XML prolog. qrcode emits a standalone SVG document, but this is injected
+        # INLINE into HTML, where `<?xml …?>` is not valid markup — the browser's HTML parser
+        # chokes and the whole element silently fails to render (the QR box came up empty).
+        start = svg.find("<svg")
+        return svg[start:] if start >= 0 else svg
+    except Exception:  # noqa: BLE001 — an optional visual must never break pairing
+        log.exception("[pairing] QR render failed; falling back to the URL alone")
+        return None
+
+
 def _candidate_hosts() -> list[dict]:
     """Addresses a phone might actually reach this instance on, best first.
 
@@ -169,6 +202,7 @@ def register_pairing_routes(app) -> None:
         # so it stays out of access logs, proxy logs and Referer headers.
         for host in hosts:
             host["url"] = f"http://{host['host']}:{port}/app/#pair={code}"
+            host["qr"] = _qr_svg(host["url"])
         return JSONResponse(
             {"ok": True, "code": code, "expires_at": expires_at, "ttl": PAIRING_TTL_SECONDS, "hosts": hosts}
         )

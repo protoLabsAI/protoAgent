@@ -54,6 +54,7 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     // Agent group
     "Identity",
     "Operator & access",
+    "Devices", // ADR 0087 — paired devices; next to access because it IS access
     "Model",
     "Behavior",
     "Knowledge",
