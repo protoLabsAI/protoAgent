@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Relates to:** [ADR 0066](0066-federation-token-ceiling.md) (the operator/federation token
+**Relates to:** [ADR 0066](0066-goal-trust-operator-channel.md) (the operator/federation token
 tiers this extends), [ADR 0086](0086-chat-first-mobile-shell.md) (the mobile shell this
 exists to get onto a phone).
 
