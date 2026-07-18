@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { seedCurrentChat } from "./chat-helpers";
+
 // Drives the chat surface against the mock A2A stream and asserts the
 // tool-call card contract: stable collapsed-by-default rows, pretty-printed
 // JSON on expand, clean markdown answers, and no horizontal overflow.
@@ -142,6 +144,7 @@ test("right-click a chat tab → New chat / Rename / Close, and New chat adds a 
   // ADR 0036 — the chat tab context menu. Default has one session tab.
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(1);
+  await seedCurrentChat(page); // a pristine blank is reused, so "New chat" would be a no-op
 
   await tabs.first().click({ button: "right" });
   const menu = page.locator(".pl-menu");

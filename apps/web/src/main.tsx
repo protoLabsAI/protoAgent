@@ -17,6 +17,7 @@ import "streamdown/styles.css"; // streaming per-token fade (opt-in; see DS <Mar
 import "katex/dist/katex.min.css"; // KaTeX glyph layout for math in the DS <Markdown>
 import "./app/theme-base.css"; // shared token bridge + resets — must load before the rest
 import "./app/theme.css";
+import "./app/mobile-native.css"; // touch-input layer (≤767px) — must load LAST to win over the DS
 import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";

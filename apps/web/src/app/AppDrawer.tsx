@@ -22,6 +22,7 @@ export function AppDrawer({
   onSelectSurface,
   onOpenGlobal,
   version,
+  identity,
 }: {
   open: boolean;
   onClose: () => void;
@@ -31,6 +32,10 @@ export function AppDrawer({
   onSelectSurface: (id: string) => void;
   onOpenGlobal: (section?: string) => void;
   version?: string;
+  /** Agent/fleet identity. On mobile the chat-first shell's header carries the SESSION
+   *  title instead of the DS Header, so the fleet switcher lives here — otherwise a fleet
+   *  operator loses any indication of which agent they're talking to. */
+  identity?: ReactNode;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -59,6 +64,7 @@ export function AppDrawer({
           </Button>
         </header>
         <div className="app-drawer-body">
+          {mobile && identity ? <div className="app-drawer-identity">{identity}</div> : null}
           {mobile && surfaces.length ? (
             <section className="app-drawer-group">
               <p className="app-drawer-label">Go to</p>

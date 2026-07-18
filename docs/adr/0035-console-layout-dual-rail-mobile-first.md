@@ -1,6 +1,7 @@
 # ADR 0035 — Console layout: symmetric dual-rail, mobile-first, persisted UI state
 
-**Status:** Accepted (shipped)
+**Status:** Accepted (shipped) — **D6 amended by
+[ADR 0086](0086-chat-first-mobile-shell.md)** (chat-first mobile shell). D1–D5 and D7 stand.
 
 ## Context
 
@@ -58,6 +59,12 @@ per-rail surface assignments, and the mobile quick-bar slots. **A refresh restor
 you were.** (Server data stays in react-query; this store is *UI* state only — they don't mix.)
 
 ### D6 — Mobile-first
+
+> **Amended by [ADR 0086](0086-chat-first-mobile-shell.md).** The bottom quick-bar and the
+> "same surfaces + store, a different shell" model below are **superseded**: mobile now runs
+> a chat-first shell where chat is the root view and surfaces push over it. The
+> user-configurable quick-bar described here was never built (`toggleQuickBar` had no
+> callers) and is formally withdrawn. Read 0086 before changing mobile layout.
 
 Design the layout mobile-first, then enhance to the dual-rail split on wider viewports:
 

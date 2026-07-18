@@ -202,25 +202,3 @@ test("right-click a core surface → Hide removes it; Chat offers no Hide (ADR 0
   await expect(menu.getByText("Move to right rail")).toBeVisible();
   await expect(menu.getByText("Hide", { exact: true })).toHaveCount(0);
 });
-
-test("mobile shell: bottom quick-bar + unified header drawer (ADR 0035 S4)", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto("/app/", { waitUntil: "load" });
-
-  // Below the breakpoint: the desktop rails are gone; a bottom quick-bar appears.
-  await expect(page.locator(".pl-rail")).toHaveCount(0);
-  const bar = page.locator(".pl-mobilenav");
-  await expect(bar).toBeVisible();
-
-  // A default quick-bar surface switches the single active surface.
-  await bar.getByRole("button", { name: "Knowledge", exact: true }).click();
-
-  // The DS bottom-bar "More" is hidden (2026-06-18 IA pass) — the unified mobile
-  // "more" is the header hamburger's app drawer, which on mobile also lists surfaces.
-  await expect(bar.getByRole("button", { name: "All surfaces" })).toBeHidden();
-  await page.getByTestId("header-menu").click();
-  const drawer = page.getByTestId("app-drawer");
-  await expect(drawer).toBeVisible();
-  await drawer.getByRole("button", { name: "Work", exact: true }).click();
-  await expect(drawer).toHaveCount(0); // picking a surface closes the drawer
-});

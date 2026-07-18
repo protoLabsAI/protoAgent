@@ -3,10 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover exposes env(safe-area-inset-*) so the bottom nav / topbar
-         can pad clear of the iOS home indicator + notch in the installed PWA. -->
+         can pad clear of the iOS home indicator + notch in the installed PWA.
+         interactive-widget=resizes-content makes Chrome 108+ shrink the LAYOUT viewport
+         when the on-screen keyboard opens, so `100dvh` already excludes it. iOS Safari
+         ignores this directive — that path is handled by lib/useKeyboardInset.ts, which
+         measures visualViewport and publishes `--kb-inset`. Both are needed. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#9b87f2" />

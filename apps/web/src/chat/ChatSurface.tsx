@@ -10,6 +10,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent
 import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
+import { useIsMobile } from "../lib/useIsMobile";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -112,6 +113,7 @@ export function ChatSurface({
   active?: boolean;
 }) {
   const chat = useChatState();
+  const mobile = useIsMobile(); // hides the tab strip — MobileShell's SessionSheet replaces it
   // Sessions with a server-initiated turn in flight (push-resume / scheduled / watch) — those
   // turns don't touch sessionStatusMap, so without this their tab would read idle. Read once
   // here (the tab bar can't call the per-session hook inside its .map).
@@ -217,6 +219,10 @@ export function ChatSurface({
           `responsive` collapses to a DS-native <select> + add in a narrow panel
           (container query). The status dot rides the `icon` slot — wide-strip only:
           the collapsed <option> can't host markup, matching the old behavior. */}
+      {/* Suppressed on phones: the `responsive` collapse is a <select>, a desktop idiom that
+          reads as a form control rather than a thread switcher. The chat-first shell puts the
+          session title in its header and opens SessionSheet on tap instead (MobileShell). */}
+      {mobile ? null : (
       <div
         className={`chat-tabbar-wrap${shiftHeld ? " chat-tabbar-wrap--del chat-tabbar-wrap--incognito" : ""}`}
         onContextMenu={onTabBarBackgroundContextMenu}
@@ -267,6 +273,7 @@ export function ChatSurface({
           addLabel="New chat — Shift+click for incognito (Shift+Enter when focused)"
         />
       </div>
+      )}
 
       <div className="chat-session-pool">
         {chat.activeSessions.map((sessionId) => (

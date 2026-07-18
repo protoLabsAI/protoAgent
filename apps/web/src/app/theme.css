@@ -6,6 +6,11 @@
   height: 100vh; /* fallback for browsers without dvh */
   height: 100dvh; /* the dynamic viewport — excludes the mobile URL bar so the bottom
                      nav/composer never hide under browser chrome */
+  /* …and subtract the on-screen keyboard. `dvh` tracks browser chrome but NOT the
+     keyboard, which on iOS overlays the viewport instead of resizing it. `--kb-inset`
+     (lib/useKeyboardInset.ts) carries that height; it stays 0px everywhere else, so
+     this is inert on desktop and on engines that resize the layout viewport themselves. */
+  height: calc(100dvh - var(--kb-inset, 0px));
   display: flex;
   flex-direction: column;
   overflow: hidden;

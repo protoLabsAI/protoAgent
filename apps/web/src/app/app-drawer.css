@@ -121,3 +121,12 @@
 .pl-mobilenav__tab[aria-label="All surfaces"] {
   display: none;
 }
+
+/* Agent/fleet identity at the top of the drawer. Mobile only: the chat-first shell's
+   header carries the SESSION title, not the DS Header, so this is where a fleet operator
+   sees and switches which agent they're talking to. */
+.app-drawer-identity {
+  padding: 4px 8px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}

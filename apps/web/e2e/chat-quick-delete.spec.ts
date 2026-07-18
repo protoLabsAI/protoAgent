@@ -1,10 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+import { seedCurrentChat } from "./chat-helpers";
+
 // Shift+click a chat tab's ✕ → quick-delete: no confirm dialog, no knowledge harvest.
 // (Plain click keeps the confirm dialog.)
 
 test("Shift+click a tab's ✕ deletes it with no confirm dialog", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  await seedCurrentChat(page); // blanks are reused, so this tab must be used first
   await page.locator(".pl-tabbar__add:visible").click(); // a 2nd tab so the surface stays put
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(2);
@@ -17,6 +20,7 @@ test("Shift+click a tab's ✕ deletes it with no confirm dialog", async ({ page 
 
 test("with Shift held, the trash shows only on the hovered tab's ✕ (#1373)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  await seedCurrentChat(page); // blanks are reused, so this tab must be used first
   await page.locator(".pl-tabbar__add:visible").click();
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(2);
@@ -34,6 +38,7 @@ test("with Shift held, the trash shows only on the hovered tab's ✕ (#1373)", a
 
 test("plain click a tab's ✕ still opens the confirm dialog", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  await seedCurrentChat(page); // blanks are reused, so this tab must be used first
   await page.locator(".pl-tabbar__add:visible").click();
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(2);

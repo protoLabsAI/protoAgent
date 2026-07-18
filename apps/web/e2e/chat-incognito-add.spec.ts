@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { seedCurrentChat } from "./chat-helpers";
+
 // Shift+click the tab bar's "+" → a NEW INCOGNITO session (#1697): same semantics as the
 // tab context menu's "New incognito chat" (createSession({incognito:true})) — the new tab
 // carries the eye-off glyph and the composer shows the incognito chip. Plain click is
@@ -9,6 +11,7 @@ test("Shift+click the + opens an incognito chat; plain click stays regular", asy
   await page.goto("/app/", { waitUntil: "load" });
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(1);
+  await seedCurrentChat(page); // else the later PLAIN click reuses this blank instead of creating
 
   // Shift+click the add "+" → the new (active) tab is incognito.
   await page.locator(".pl-tabbar__add:visible").click({ modifiers: ["Shift"] });
@@ -28,6 +31,7 @@ test("Shift+Enter on the focused + is the keyboard twin of the gesture", async (
   await page.goto("/app/", { waitUntil: "load" });
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(1);
+  await seedCurrentChat(page); // else the later PLAIN click reuses this blank instead of creating
 
   await page.locator(".pl-tabbar__add:visible").focus();
   await page.keyboard.press("Shift+Enter");
@@ -45,6 +49,7 @@ test("holding Shift+Enter (key auto-repeat) creates only one incognito session",
   await page.goto("/app/", { waitUntil: "load" });
   const tabs = page.locator(".pl-tabbar__tab");
   await expect(tabs).toHaveCount(1);
+  await seedCurrentChat(page); // else the later PLAIN click reuses this blank instead of creating
 
   const addBtn = page.locator(".pl-tabbar__add:visible");
   await addBtn.focus();
