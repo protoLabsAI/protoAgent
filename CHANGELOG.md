@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no-op — previously the button could be spammed into a stack of identical empty tabs.
 - Dropped the per-row "open in new window" action from the fleet switcher, which duplicated the
   row's own click behaviour.
+- **`uv` is pinned to 0.11.29 in both release workflows** (#2034). Its lockfile output is
+  version-dependent, so a contributor re-locking with a different `uv` produced a diff CI then
+  rewrote — surfacing as spurious `uv.lock` drift failures unrelated to the change under review.
+  Completes the release-pipeline fixes started in #2030 / #2032.
 
 ## [0.103.2] - 2026-07-17
 
