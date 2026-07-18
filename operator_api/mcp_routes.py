@@ -13,101 +13,30 @@ import os
 
 from fastapi import HTTPException
 
+from graph.mcp_config import clean_mcp_entry, entries_from_blob
 from runtime.state import STATE
 
 log = logging.getLogger(__name__)
 
-_TRANSPORTS = {"stdio", "http", "streamable_http", "sse"}
 
-
+# The entry normalizer/validator lives in ``graph.mcp_config`` so the bundle/archetype
+# seed path (``graph/workspaces/manager.py``) can reuse it without ``graph/`` importing
+# ``operator_api/`` (the import-layering fence). These thin wrappers translate its
+# ``ValueError`` into the HTTP 400 the console form expects.
 def _clean_entry(body: dict) -> dict:
-    """Validate + normalize an mcp.servers entry from the form."""
-    name = str(body.get("name", "")).strip()
-    transport = str(body.get("transport", "stdio")).strip() or "stdio"
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
-    if transport not in _TRANSPORTS:
-        raise HTTPException(status_code=400, detail=f"transport must be one of {sorted(_TRANSPORTS)}")
-
-    entry: dict = {"name": name, "transport": transport}
-    if transport == "stdio":
-        command = str(body.get("command", "")).strip()
-        if not command:
-            raise HTTPException(status_code=400, detail="stdio transport needs a command")
-        entry["command"] = command
-        args = body.get("args")
-        if isinstance(args, list):
-            args = [str(a).strip() for a in args if str(a).strip()]
-        elif isinstance(args, str):
-            args = args.split()
-        else:
-            args = []
-        if args:
-            entry["args"] = args
-    else:  # http / streamable_http / sse
-        url = str(body.get("url", "")).strip()
-        if not url:
-            raise HTTPException(status_code=400, detail=f"{transport} transport needs a url")
-        entry["url"] = url
-
-    env = body.get("env")
-    if isinstance(env, dict):
-        env = {str(k).strip(): str(v) for k, v in env.items() if str(k).strip()}
-        if env:
-            entry["env"] = env
-    headers = body.get("headers")
-    if transport != "stdio" and isinstance(headers, dict):
-        headers = {str(k).strip(): str(v) for k, v in headers.items() if str(k).strip()}
-        if headers:
-            entry["headers"] = headers
-    return entry
-
-
-# Map the various "transport"/"type" spellings found in shared MCP JSON to ours.
-_TRANSPORT_ALIASES = {
-    "streamable-http": "streamable_http",
-    "streamablehttp": "streamable_http",
-    "http-stream": "streamable_http",
-}
-
-
-def _normalize_named(name: str, spec: dict) -> dict:
-    """A `{name: {...}}` entry (Claude-Desktop / mcp.json style) → a clean entry.
-
-    Infers transport when absent: an explicit ``transport``/``type``, else ``stdio``
-    if there's a ``command``, else ``http`` if there's a ``url``.
-    """
-    s = dict(spec or {})
-    s["name"] = s.get("name") or name
-    if "transport" not in s:
-        t = str(s.get("type", "")).strip().lower()
-        if t:
-            s["transport"] = _TRANSPORT_ALIASES.get(t, t)
-        elif s.get("command"):
-            s["transport"] = "stdio"
-        elif s.get("url"):
-            s["transport"] = "http"
-    return _clean_entry(s)
+    """Validate + normalize an mcp.servers entry from the form (400 on bad input)."""
+    try:
+        return clean_mcp_entry(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _entries_from_blob(data: object) -> list[dict]:
-    """Normalize a pasted MCP JSON blob into clean mcp.servers entries.
-
-    Accepts the common shapes: the standard ``{"mcpServers": {name: spec}}`` wrapper,
-    our own ``{"servers": [ {name, ...} ]}`` export, a single server object, or a bare
-    ``{name: spec}`` map.
-    """
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="expected a JSON object")
-    if isinstance(data.get("mcpServers"), dict):
-        return [_normalize_named(n, s) for n, s in data["mcpServers"].items()]
-    if isinstance(data.get("servers"), list):
-        return [_clean_entry(s) for s in data["servers"]]
-    if data.get("command") or data.get("url"):
-        return [_clean_entry(data)]  # a single server object (must carry a name)
-    if data and all(isinstance(v, dict) for v in data.values()):
-        return [_normalize_named(n, s) for n, s in data.items()]
-    raise HTTPException(status_code=400, detail="no MCP server found in the JSON")
+    """Normalize a pasted MCP JSON blob into clean mcp.servers entries (400 if none)."""
+    try:
+        return entries_from_blob(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def register_mcp_routes(app) -> None:
