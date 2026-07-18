@@ -775,6 +775,14 @@ def _main():
 
     register_node_routes(fastapi_app)
 
+    # Device pairing (ADR 0087) — /api/pairing/* + /api/devices. Lets the operator add a
+    # phone by QR instead of hand-typing a bearer, and revoke it individually afterwards.
+    # NOTE: /api/pairing/claim is on the auth allowlist by necessity (it mints the
+    # credential); see a2a_impl/auth.py `_PUBLIC_EXACT` and ADR 0087 D4.
+    from operator_api.pairing_routes import register_pairing_routes
+
+    register_pairing_routes(fastapi_app)
+
     # Fleet control plane (ADR 0042) — /api/fleet (list/create/start/stop) +
     # /api/archetypes. The CLI + the desktop GUI panels both drive these.
     from operator_api.fleet_routes import register_fleet_routes
@@ -1094,6 +1102,13 @@ def _main():
         ) or "127.0.0.1"
 
     log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
+
+    # Tell the pairing routes what we actually bound to (ADR 0087 D6). Enumerating the
+    # host's interfaces isn't enough: a loopback-bound server still HAS a LAN address, and
+    # offering it as a pairing target produces a QR that silently can't work.
+    from operator_api.pairing_routes import set_bind_host
+
+    set_bind_host(args.host)
 
     # Boot gate: a non-loopback bind with no A2A auth token exposes the full
     # operator API (plugin install+enable = code execution, config/SOUL
