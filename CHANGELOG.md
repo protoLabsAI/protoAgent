@@ -11,6 +11,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Mobile is a chat-first app, not a shrunken console (ADR 0086).** Chat is now the root view
+  on a phone and never leaves the screen; Work, Knowledge, Memory and plugin views push over it
+  with a back affordance, and threads switch through a bottom sheet instead of a `<select>`. The
+  bottom quick-bar is retired. Under it sits the touch layer the console never had: no control
+  zooms the viewport on focus any more (every input was under iOS's 16px threshold, including
+  the chat composer), tap highlight and double-tap-zoom are suppressed, press states exist, and
+  hit targets meet 44px. The on-screen keyboard now shrinks the shell instead of covering the
+  composer — it needed both `interactive-widget=resizes-content` (Chrome) and a `visualViewport`
+  hook (iOS Safari ignores that directive).
+- **Add a phone by scanning a QR, and revoke it individually (ADR 0087).** Settings ▸ Devices
+  mints a 120-second, single-use pairing code; scanning it hands that device its **own** token.
+  Previously every device shared one bearer, so revoking a lost phone meant rotating the secret
+  and signing out the desktop, the CLI and everything else. The registry stores only
+  `sha256(token)`, and the code travels in the URL fragment so it never reaches server or proxy
+  logs. Pairing refuses to offer an address the server isn't actually listening on.
+- **A managed Node runtime, provisioned on demand (ADR 0085).** `protoagent runtime install-node`
+  (or one click in Settings ▸ MCP) downloads a pinned, hash-verified Node so npx-based MCP
+  servers and ACP coding agents work on a machine with no Node installed — the common case for
+  desktop users.
+- **Bundles can seed MCP servers** via an `mcp:` field in the bundle manifest (ADR 0083 D5), so
+  an archetype arrives with its servers already wired instead of leaving the operator to add
+  them by hand.
+- **A read-write-no-delete fence mode for the filesystem toolset** (ADR 0083 D5). `no_delete`
+  lets a project be writable while still refusing `delete_file`, which is otherwise the one
+  destructive verb in an otherwise-safe write fence.
+
+### Changed
+- **Telemetry extensions moved to URI-keyed metadata** (protolabs-a2a 0.3.0). The four
+  extensions (cost, confidence, worldstate-delta, tool-call) now ride the metadata map keyed by
+  extension URI rather than MIME-typed `DataPart`s, matching A2A's own convention — previously a
+  generic A2A client rendered our telemetry as message *content*. This is a clean cutover with
+  no dual-read: peers must be on `protolabs-a2a >= 0.3.0`.
+- Settings ▸ **Integrations** is now **Plugins**, matching what the section actually contains.
+- The console consumes `@protolabsai/ui` 0.57, which ships the touch floor upstream — the
+  temporary local overrides added alongside ADR 0086 are gone.
+
+### Fixed
+- **A chat tab doing background work shows a processing dot** instead of reading as idle, so a
+  server-initiated turn (push-resume, scheduled, watch) on an unfocused tab is visible.
+- **"+" no longer piles up empty chats.** Creating a chat while a pristine blank one exists now
+  reuses it rather than adding a duplicate, and the affordance disables when it would be a
+  no-op — previously the button could be spammed into a stack of identical empty tabs.
+- Dropped the per-row "open in new window" action from the fleet switcher, which duplicated the
+  row's own click behaviour.
+
 ## [0.103.2] - 2026-07-17
 
 ### Fixed
