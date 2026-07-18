@@ -240,6 +240,141 @@ def test_apply_bundle_config_defaults_noop_without_config(root):
     assert cfg.read_text() == before  # untouched
 
 
+# ── bundle MCP servers on create (ADR 0083 D5, #2011) ─────────────────────────
+def test_apply_bundle_mcp_servers_seeds_and_resolves_inputs(root, monkeypatch):
+    """A bundle's `mcp:` templates land in `mcp.servers` with `${input}` filled from the
+    seed-time env (or a `default`), and `mcp.enabled` flipped on."""
+    import json
+
+    monkeypatch.setenv("GITHUB_MCP_TOKEN", "ghp_secret")
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "mcp": [
+                            {
+                                "template": {
+                                    "name": "github",
+                                    "transport": "http",
+                                    "url": "https://api.githubcopilot.com/mcp/",
+                                    "headers": {"Authorization": "Bearer ${token}"},
+                                },
+                                "inputs": [{"key": "token", "env": "GITHUB_MCP_TOKEN", "required": True}],
+                            },
+                            {
+                                "template": {
+                                    "name": "fs",
+                                    "transport": "stdio",
+                                    "command": "npx",
+                                    "args": ["-y", "server-filesystem", "${path}"],
+                                },
+                                "inputs": [{"key": "path", "default": "/tmp/work", "required": True}],
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    added = manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock")
+    assert added == ["github", "fs"]
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["mcp"]["enabled"] is True
+    by_name = {s["name"]: s for s in doc["mcp"]["servers"]}
+    assert by_name["github"]["headers"]["Authorization"] == "Bearer ghp_secret"
+    assert by_name["fs"]["args"] == ["-y", "server-filesystem", "/tmp/work"]
+    assert "enabled" not in by_name["github"]  # fully resolved → left on
+
+
+def test_apply_bundle_mcp_servers_disables_unresolved_required(root, monkeypatch):
+    """A required `${input}` with no env value or default → the server is seeded but
+    `enabled: false` (visible-but-inert), never dropped and never booted half-templated."""
+    import json
+
+    monkeypatch.delenv("GITHUB_MCP_TOKEN", raising=False)
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "mcp": [
+                            {
+                                "template": {
+                                    "name": "github",
+                                    "transport": "http",
+                                    "url": "https://api.githubcopilot.com/mcp/",
+                                    "headers": {"Authorization": "Bearer ${token}"},
+                                },
+                                "inputs": [
+                                    {"key": "token", "env": "GITHUB_MCP_TOKEN", "required": True, "secret": True}
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    added = manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock")
+    assert added == ["github"]
+    gh = yaml.safe_load(cfg.read_text())["mcp"]["servers"][0]
+    assert gh["enabled"] is False  # inert until the operator supplies the secret
+    assert gh["headers"]["Authorization"] == "Bearer "  # placeholder blanked, not left literal
+
+
+def test_apply_bundle_mcp_servers_unions_by_name_no_clobber(root):
+    """A server name already present in the config wins — the bundle never overwrites it."""
+    import json
+
+    ws = root / "agent"
+    ws.mkdir(parents=True, exist_ok=True)
+    cfg = ws / "langgraph-config.yaml"
+    cfg.write_text(
+        "mcp:\n  enabled: true\n  servers:\n"
+        "    - {name: fs, transport: stdio, command: /usr/local/bin/mine}\n"
+    )
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "mcp": [
+                            {"template": {"name": "fs", "transport": "stdio", "command": "npx"}},
+                            {"template": {"name": "new", "transport": "stdio", "command": "npx"}},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    added = manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock")
+    assert added == ["new"]  # `fs` already present → skipped
+    by_name = {s["name"]: s for s in yaml.safe_load(cfg.read_text())["mcp"]["servers"]}
+    assert by_name["fs"]["command"] == "/usr/local/bin/mine"  # operator entry untouched
+    assert by_name["new"]["command"] == "npx"
+
+
+def test_apply_bundle_mcp_servers_noop_without_mcp(root):
+    """A bundle with no `mcp:` block (or a missing lock) writes nothing."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    before = cfg.read_text()
+    assert manager._apply_bundle_mcp_servers(cfg, ws / "nope.lock") == []
+    (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "stack", "plugins": ["a"]}]}))
+    assert manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock") == []
+    assert cfg.read_text() == before  # untouched
+
+
 def test_server_argv_frozen_vs_source(monkeypatch):
     """The spawn prefix must adapt to the frozen desktop sidecar: there
     ``sys.executable`` IS the server entrypoint, and a ``-m server`` prefix dies at

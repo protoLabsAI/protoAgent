@@ -42,6 +42,24 @@ config:                                              # recommended defaults (you
   agent_browser:
     panel_mode: full
 
+# MCP servers to seed into a new agent (ADR 0083 D5, #2011). Each item is catalog-shaped
+# (like config/mcp-catalog.json rows): a `template` (an mcp.servers entry, transport
+# stdio|http|streamable_http|sse) plus optional `inputs`. A `${key}` placeholder in the
+# template is filled AT CREATE TIME from that input's `env` var (or `default`). An entry
+# whose *required* input has no value at seed time is added `enabled: false` — it shows up
+# in the agent's MCP panel, inert, for the operator to finish. `config: {mcp: ...}` can't do
+# this (its overlay merges dict leaves, not the `mcp.servers` list), which is why `mcp:` is
+# its own field. Omit the whole block if your bundle seeds no MCP servers.
+mcp:
+  - template: { name: filesystem, transport: stdio, command: npx,
+                args: ["-y", "@modelcontextprotocol/server-filesystem", "${path}"] }
+    inputs:
+      - { key: path, env: PROTOAGENT_MCP_FS_PATH, default: "~", required: true }
+  - template: { name: github, transport: http, url: "https://api.githubcopilot.com/mcp/",
+                headers: { Authorization: "Bearer ${token}" } }
+    inputs:
+      - { key: token, env: GITHUB_MCP_TOKEN, required: true, secret: true }
+
 # Agent archetype (ADR 0042) — presents this bundle as a starter "agent type" in the
 # new-agent picker. Additive metadata; it doesn't change the bundle shape.
 archetype:

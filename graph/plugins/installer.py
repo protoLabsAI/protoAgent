@@ -615,6 +615,11 @@ def _install_bundle(
             # Cached for the same lock-only consumer; applied as DEFAULTS (operator values
             # win, present keys are never clobbered — see `bundle_config_overlay`).
             "config": dict(bundle.get("config") or {}),
+            # The bundle's MCP servers to seed (ADR 0083 D5, #2011): catalog-shaped
+            # {template, inputs} items. Cached for the lock-only create path, which seeds
+            # them into the workspace's `mcp.servers` via `_apply_bundle_mcp_servers` —
+            # `config:`'s dict-leaf overlay can't merge the `mcp.servers` list.
+            "mcp": list(bundle.get("mcp") or []),
             # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
             # this bundle as a starter type without re-reading its manifest.
             "archetype": bundle.get("archetype") or {},

@@ -317,6 +317,10 @@ def create(
             # per-plugin config defaults (#1350) — a fresh workspace, so nothing to clobber.
             _enable_installed_in_config(cfg, ws / "plugins.lock")
             _apply_bundle_config_defaults(cfg, ws / "plugins.lock")
+            # Seed the bundle's MCP servers (ADR 0083 D5, #2011). Separate from the config
+            # defaults above because `mcp.servers` is a LIST — the dict-leaf overlay can't
+            # merge it — and because its `${input}` placeholders resolve from the env here.
+            _apply_bundle_mcp_servers(cfg, ws / "plugins.lock")
     except Exception:
         shutil.rmtree(ws, ignore_errors=True)
         raise
@@ -400,6 +404,63 @@ def _apply_bundle_config_defaults(cfg: Path, lock: Path) -> dict:
             dest[k] = v
     save_yaml_doc(doc, cfg)
     return overlay
+
+
+def _apply_bundle_mcp_servers(cfg: Path, lock: Path) -> list[str]:
+    """Seed a freshly-installed bundle's ``mcp:`` servers into the workspace config
+    (ADR 0083 D5, #2011). A bundle can carry catalog-shaped MCP templates
+    (``{template, inputs}``); each is resolved against the seed-time environment (an
+    ``${input}`` whose ``env`` var / ``default`` is set is filled in), normalized, and
+    unioned BY NAME into ``mcp.servers`` — a name the config already has always wins, so an
+    operator/template value is never clobbered — with ``mcp.enabled`` flipped on. An entry
+    whose *required* inputs can't be resolved at seed time lands ``enabled: false``: visible
+    in the console MCP panel but inert, so the operator supplies the secret there instead of
+    the agent booting a half-templated server. Best-effort — a malformed lock/config is a
+    no-op. Returns the server names added."""
+    import json
+    import os
+
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.mcp_config import resolve_bundle_mcp_item
+
+    try:
+        data = json.loads(lock.read_text()) if lock.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return []
+    items: list = []
+    for b in data.get("bundles") or []:
+        items += list(b.get("mcp") or [])
+    if not items:
+        return []
+
+    doc = load_yaml_doc(cfg)
+    if not isinstance(doc, dict):
+        return []
+    mcp = doc.setdefault("mcp", {})
+    if not isinstance(mcp, dict):
+        return []
+    servers = mcp.get("servers")
+    servers = list(servers) if isinstance(servers, list) else []
+    have = {s.get("name") for s in servers if isinstance(s, dict)}
+    added: list[str] = []
+    for item in items:
+        try:
+            entry, unresolved = resolve_bundle_mcp_item(item, os.environ)
+        except ValueError:
+            continue  # a malformed template is skipped, never fails the whole create()
+        if entry["name"] in have:
+            continue  # a name already in the config wins — never clobber
+        if unresolved:
+            entry["enabled"] = False  # visible-but-inert until the operator fills the secret
+        servers.append(entry)
+        have.add(entry["name"])
+        added.append(entry["name"])
+    if not added:
+        return []
+    mcp["servers"] = servers
+    mcp["enabled"] = True  # a bundle that ships servers wants MCP on (matches the add route)
+    save_yaml_doc(doc, cfg)
+    return added
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
