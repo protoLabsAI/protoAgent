@@ -1,0 +1,171 @@
+/* mobile-native.css — the touch-input layer the console never had.
+   ────────────────────────────────────────────────────────────────────────────
+   MOSTLY TEMPORARY. The July 2026 mobile initiative fixed the GEOMETRY (dvh,
+   viewport-fit=cover, single-pane breakpoint, zero horizontal overflow) but none of
+   the touch-input work: every form control sits under iOS's 16px zoom threshold,
+   there is no tap-highlight suppression, no `touch-action`, no press states, and
+   only one `env(safe-area-*)` consumer in the whole codebase.
+
+   Most of these rules target `.pl-*` classes owned by @protolabsai/ui, so the durable
+   fix belongs in protoContent (per the DS contribute-back rule) — this file buys the
+   fix NOW while those PRs land. Each block below is tagged:
+
+     [DS]  → superseded by a protoContent PR; DELETE when ui@0.57 is consumed.
+     [APP] → genuinely app-owned; stays.
+
+   Loaded last (main.tsx) so it wins over both theme.css and the DS stylesheet without
+   needing !important. Scoped to the ≤767px band — desktop is untouched. Keep 767 in
+   lockstep with lib/useIsMobile.ts and the DS `mobileBreakpoint` (768 ⇒ its query is
+   also ≤767). */
+
+@media (max-width: 767px) {
+  /* ── 1. Kill the focus zoom [DS + APP] ────────────────────────────────────
+     iOS Safari zooms the viewport whenever a focused control computes under 16px.
+     NOTHING in this app reached 16px: `body` sets 14px (theme-base.css) and the
+     `button,input,textarea,select { font: inherit }` reset propagates it everywhere,
+     while the DS sets its own smaller values on top (.pl-input 13px, the chat
+     composer 0.9rem/14.4px). So every single text entry zoomed on focus.
+
+     16px is the threshold, not a design choice — below it the zoom fires regardless.
+     Note `user-scalable=no` would ALSO suppress it, but Safari ignores that in the
+     browser and it breaks pinch-zoom accessibility in the installed PWA. Sizing up
+     is the only fix that doesn't cost zoom. */
+  input,
+  textarea,
+  select,
+  .pl-input,
+  .pl-textarea,
+  .pl-select,
+  .pl-field__input,
+  .pl-sidenav__select, /* [DS] settings nav — a control that exists ONLY on phones */
+  .pl-tabbar__select, /* [DS] session picker — `font: inherit` (0,1,0) outranks bare `select` */
+  .pl-prompt__field {
+    /* [DS] the chat composer — the most-used input in the product */
+    font-size: 16px;
+  }
+
+  /* ── 2. Touch feedback [DS] ───────────────────────────────────────────────
+     The blue flash is the browser's default because nothing ever set a tap-highlight,
+     and `touch-action` appears 5 times in the repo — all `none`, all dnd-kit drag
+     surfaces, never `manipulation`. Without it the engine keeps the double-tap-zoom
+     gesture alive on every button, which is where tap latency comes from. */
+  a,
+  button,
+  [role="button"],
+  .pl-mobilenav__tab,
+  .pl-rail__btn,
+  .pl-btn,
+  .pl-iconbtn {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  /* Long-pressing UI chrome should not raise the iOS callout or select label text.
+     Deliberately NOT applied to message content — that has to stay selectable. */
+  .app-topbar,
+  .pl-mobilenav__tab,
+  .pl-rail__btn,
+  .pl-dialog__head,
+  .pl-drawer__head,
+  .pl-tabbar {
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* A press state, because there wasn't one. `:active` appears exactly twice in the
+     whole repo and neither is a press — every control transitions on `:hover`, which
+     a touch device never delivers. So a tap produced either a stock blue flash or no
+     feedback at all. Opacity (not transform) to avoid reflow on the nav bar. */
+  .pl-btn:active,
+  .pl-iconbtn:active,
+  .pl-mobilenav__tab:active,
+  .pl-rail__btn:active,
+  a.pl-row:active {
+    opacity: 0.6;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pl-btn,
+    .pl-iconbtn,
+    .pl-mobilenav__tab,
+    .pl-rail__btn {
+      transition: none;
+    }
+  }
+
+  /* ── 3. Touch targets [DS] ────────────────────────────────────────────────
+     #1903 bumped `.pl-btn--icon` to 40px but missed `.pl-iconbtn`, which is what the
+     composer actually uses — so the send button, the single most-tapped control in the
+     product, is still 30×30. Attachment-chip remove is 18×18 and the dialog close is
+     24×24. 44px is the Apple HIG minimum.
+
+     Expanding the HIT AREA rather than the box: bumping the rendered size would
+     reflow the composer bar and the tab strip. `::after` overlay keeps the visual
+     footprint and gives the finger the full 44px. */
+  .pl-iconbtn,
+  .pl-prompt__send,
+  .pl-prompt__attach,
+  .pl-prompt__stop,
+  .pl-prompt__chip-remove,
+  .pl-dialog__close,
+  .pl-tabbar__add,
+  .pl-tabbar__close,
+  .pl-btn--icon, /* [DS] #1903 bumped this to 40px — still 4px under the HIG minimum */
+  .fleet-switcher-trigger, /* [APP] 57×19 */
+  .composer-model-select {
+    /* [APP] ~125×23, and hover-only styling means no touch affordance at all */
+    position: relative;
+  }
+  .pl-iconbtn::after,
+  .pl-prompt__send::after,
+  .pl-prompt__attach::after,
+  .pl-prompt__stop::after,
+  .pl-prompt__chip-remove::after,
+  .pl-dialog__close::after,
+  .pl-tabbar__add::after,
+  .pl-tabbar__close::after,
+  .pl-btn--icon::after,
+  .fleet-switcher-trigger::after,
+  .composer-model-select::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ── 4. Scroll containment [DS + APP] ─────────────────────────────────────
+     The conversation scroller already contains its overscroll (DS ai.css) but these
+     don't, so a flick past the end rubber-bands the page behind them. Note the DS
+     `body { overflow: hidden }` lock in overlays.tsx is a no-op here — theme-base.css
+     already sets it globally, and `overflow: hidden` on body does not stop iOS touch
+     chaining regardless. `overscroll-behavior` is the mechanism that actually works. */
+  .pl-appshell__mobile-stage, /* [DS] the primary mobile scroll surface */
+  .pl-dialog__body, /* [DS] */
+  .pl-drawer__body, /* [DS] */
+  .app-drawer-body, /* [APP] */
+  .slash-menu {
+    /* [APP] */
+    overscroll-behavior: contain;
+  }
+
+  /* ── 5. Safe areas [APP] ──────────────────────────────────────────────────
+     `viewport-fit=cover` has been set since the July work, but the ONLY consumer in
+     the codebase is `padding-bottom` on `.pl-mobilenav`. Nothing reads the TOP inset,
+     so in the installed PWA the topbar renders under the notch / Dynamic Island. */
+  /* Grow the row by the inset rather than padding into its 48px — `.app-topbar` is
+     `flex: 0 0 48px`, so flex-basis (not `height`) is what actually sizes it. */
+  .app-topbar {
+    flex-basis: calc(48px + env(safe-area-inset-top));
+    min-height: calc(48px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+  .app-topbar-menu {
+    top: env(safe-area-inset-top);
+  }
+}

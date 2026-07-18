@@ -110,6 +110,7 @@ import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
 import { useIsMobile } from "../lib/useIsMobile";
+import { useKeyboardInset } from "../lib/useKeyboardInset";
 import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
@@ -253,6 +254,7 @@ export function App() {
   const reconcilePluginViews = useUI((s) => s.reconcilePluginViews);
   const reconcileCoreSurfaces = useUI((s) => s.reconcileCoreSurfaces);
   const isMobile = useIsMobile();
+  useKeyboardInset(); // publish `--kb-inset` so the shell lifts clear of the on-screen keyboard
   useActiveTheme(); // apply the focused agent's saved theme on boot + repaint on switch (ADR 0042)
   const mobileActive = useUI((s) => s.mobileActive);
   const setMobileActive = useUI((s) => s.setMobileActive);
