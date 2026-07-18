@@ -21,6 +21,7 @@ import "./app/mobile-native.css"; // touch-input layer (≤767px) — must load 
 import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
+import { redeemPairingFromUrl } from "./lib/pairing";
 
 watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
 
@@ -32,6 +33,15 @@ const launcher = isLauncherWindow();
 if (launcher) document.documentElement.classList.add("is-launcher");
 if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigation (#806)
 
+// Device pairing (ADR 0087): a `#pair=<code>` fragment is redeemed for a device token
+// BEFORE React mounts, so a freshly scanned phone never flashes the "enter your token" gate
+// on its way in. The code is stripped from the URL + history either way — a spent one left
+// in the address bar leaks into screenshots for no benefit.
+//
+// `.finally` rather than top-level await: TLA constrains the build target, and this must
+// render even if the claim rejects. With no `#pair=` fragment the promise resolves
+// synchronously-ish (no network call at all), so the normal boot is unaffected.
+void redeemPairingFromUrl().finally(() => {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     {/* The ROOT boundary (#872): anything a panel boundary doesn't catch lands on a
@@ -47,3 +57,4 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </React.StrictMode>,
 );
+});

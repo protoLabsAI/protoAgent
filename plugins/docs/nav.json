@@ -713,6 +713,10 @@
           "title": "ADR 0086 — Chat-first mobile shell (amends ADR 0035 D6)"
         },
         {
+          "path": "adr/0087-device-pairing-and-per-device-tokens.md",
+          "title": "ADR 0087 — Device pairing: per-device revocable tokens + short-TTL QR codes"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

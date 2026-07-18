@@ -64,6 +64,22 @@ _PUBLIC_PREFIXES = (
     "/_ds/",
 )
 
+# Public paths matched EXACTLY, not by prefix. Kept separate from _PUBLIC_PREFIXES because
+# prefix-matching a credential-minting route would also exempt any sibling that happens to
+# share the string (``/api/pairing/claim-something``) — fine for static asset trees, not for
+# this.
+_PUBLIC_EXACT = frozenset(
+    {
+        # Device pairing claim (ADR 0087 D4) — UNAUTHENTICATED BY NECESSITY: obtaining auth
+        # is its entire purpose, so it cannot require it. The only credential-minting path
+        # on the allowlist, guarded in `security.devices` instead: ~190-bit codes, a 120s
+        # TTL, single-use consumption, an immediate reject when nothing is pending, and a
+        # failed-attempt counter that drops all pending codes rather than allowing
+        # indefinite probing. The operator-only pairing/device routes beside it stay authed.
+        "/api/pairing/claim",
+    }
+)
+
 # /metrics is CONDITIONALLY public — see ``_metrics_public``. It carries
 # operational data (model/tool inventory, cost, traffic) so it is exposed without
 # auth only in open mode (no token configured). Once a bearer / X-API-Key gates
@@ -155,6 +171,8 @@ def _metrics_public() -> bool:
 
 def _is_public(path: str) -> bool:
     """Return True when ``path`` is on the public allowlist (no auth needed)."""
+    if path in _PUBLIC_EXACT:
+        return True
     if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
         return True
     if any(path.startswith(p) for p in _PLUGIN_PUBLIC):
@@ -174,6 +192,22 @@ def _requires_operator(path: str) -> bool:
     reach the ceiling (handled earlier in dispatch). The substring form also catches the
     fleet-proxy variants (``/active/<slug>/api/…``, ``/agents/<slug>/api/…``)."""
     return "/api/" in path or path == "/api" or path.endswith("/api")
+
+
+def _device_token_ok(token: str) -> bool:
+    """True when ``token`` belongs to a paired, non-revoked device (ADR 0087).
+
+    Imported lazily and failed-closed: the device registry is an optional, additive tier, and
+    a broken/absent registry must never take down auth for the shared bearer — which is
+    already handled above by the time we get here.
+    """
+    try:
+        from security.devices import verify_token
+
+        return verify_token(token) is not None
+    except Exception:  # noqa: BLE001 — registry problems must not become auth outages
+        logger.exception("[auth] device-token check failed; denying this credential")
+        return False
 
 
 def set_bearer_token(token: str | None) -> None:
@@ -366,6 +400,12 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 tier = "operator"
             elif is_federation:
                 tier = "federation"
+            elif _device_token_ok(token):
+                # A paired device (ADR 0087 D1) is the OPERATOR — it runs the full console
+                # and needs the same surface the desktop does. The point of per-device
+                # tokens is identity + revocation, not a reduced tier. Checked last so the
+                # shared-bearer path stays a single compare and never touches disk.
+                tier = "operator"
             else:
                 return _unauthorized("Unauthorized: invalid bearer token")
 

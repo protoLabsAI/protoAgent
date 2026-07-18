@@ -1,0 +1,95 @@
+/* Settings ▸ Devices (ADR 0087).
+   Only the PAIRING CARD is styled here. The panel chrome comes from SettingsSubPanel and
+   the device rows reuse `.subagent-list`/`.subagent-row` like the other managers, so the
+   header/padding/scroll/row treatment can't drift away from the rest of Settings. */
+
+.devices-error {
+  color: var(--fg);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-inset, var(--bg));
+}
+
+.devices-pair {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin: 10px 0 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised, var(--bg));
+}
+
+/* The server sends an SVG sized to its own viewBox; pin it to a scannable square on a
+   forced WHITE quiet-zone — a dark-theme background behind a dark QR leaves a camera no
+   contrast to work with. */
+.devices-qr {
+  flex: 0 0 auto;
+  width: 168px;
+  height: 168px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fff;
+}
+.devices-qr svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.devices-pair-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.devices-pair-hint {
+  margin: 0;
+  font-size: 13px;
+}
+.devices-url {
+  font-size: 11px;
+  word-break: break-all;
+  opacity: 0.75;
+}
+
+.devices-hosts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.devices-host {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font-size: 11px;
+}
+.devices-host.on {
+  background: var(--bg-hover);
+  border-color: var(--border-strong, var(--border));
+}
+
+/* First load — a spinner beats an empty panel, which reads as "no devices". */
+.devices-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 4px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+/* 168px of QR beside text doesn't fit a 390px phone. */
+@media (max-width: 767px) {
+  .devices-pair {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .devices-qr {
+    align-self: center;
+  }
+}

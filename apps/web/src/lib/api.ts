@@ -706,6 +706,29 @@ export const api = {
     return request<RuntimeStatus>("/api/runtime/status");
   },
 
+  // ── Device pairing (ADR 0087) ──
+  // The CLAIM half deliberately lives outside this object (lib/pairing.ts): `request`
+  // attaches the operator bearer, and claiming runs precisely when there isn't one.
+  devices() {
+    return request<{ devices: { id: string; name: string; created_at: number; last_seen_at: number | null }[] }>(
+      "/api/devices",
+    );
+  },
+  pairingStart() {
+    return request<{
+      code: string;
+      expires_at: number;
+      ttl: number;
+      hosts: { host: string; kind: "tailnet" | "lan"; url: string; qr: string | null }[];
+    }>("/api/pairing/start", { method: "POST" });
+  },
+  pairingCancel() {
+    return request<{ ok: boolean }>("/api/pairing/cancel", { method: "POST" });
+  },
+  revokeDevice(id: string) {
+    return request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
   // Short-lived HMAC token for the SSE EventSource, which can't send an
   // Authorization header. Bearer-gated; in open mode the server returns "" and
   // accepts a tokenless /api/events. events.ts fetches this before each

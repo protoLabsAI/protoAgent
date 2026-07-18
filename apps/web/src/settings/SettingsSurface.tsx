@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -21,6 +21,7 @@ import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { DeveloperPanel } from "./DeveloperPanel";
 import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
+import { DevicesPanel } from "./DevicesPanel";
 import { SecretsPanel } from "./SecretsPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
@@ -67,6 +68,9 @@ const AGENT_SECTIONS: Section[] = [
   // chip-in-a-dialog was unnecessary extra clicking).
   { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
   { id: "access", label: "Operator & access", icon: KeyRound, render: () => <SettingsCategoryPanel category="Identity" title="Operator & access" /> },
+  // Paired devices (ADR 0087) — sits next to access because it IS access: each device holds
+  // its own revocable token rather than sharing the operator bearer.
+  { id: "devices", label: "Devices", icon: Smartphone, render: () => <DevicesPanel /> },
   // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
   // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
   { id: "model", label: "Model", icon: Cpu, render: () => <SettingsCategoryPanel category="Model" title="Model & routing" /> },
