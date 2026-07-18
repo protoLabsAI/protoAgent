@@ -1804,11 +1804,10 @@ textarea {
     flex-direction: column;
   }
 
-  /* Bottom quick-bar clears the iOS home indicator / Android gesture bar
-     (needs `viewport-fit=cover`, set in index.html). */
-  .pl-mobilenav {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+  /* (The `.pl-mobilenav` safe-area inset that lived here is gone twice over: the bottom
+     quick-bar itself was retired by the chat-first shell (ADR 0086 D1), and the DS now
+     ships that inset next to the component in ui@0.57 — it was always a consumer
+     patching a design-system gap.) */
 
   /* Dense content grids collapse to a single column on phones. */
   .subagent-grid,

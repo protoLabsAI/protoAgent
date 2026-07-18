@@ -271,6 +271,14 @@ export function ChatSurface({
           // hover hint for the Shift+click incognito gesture (#1697). Shift+Enter is the
           // keyboard twin (onTabBarKeyDownCapture), so the label teaches both paths.
           addLabel="New chat — Shift+click for incognito (Shift+Enter when focused)"
+          // NOT wired to ui@0.58's `addDisabled`, deliberately. The store reuses a pristine
+          // blank rather than duplicating it, so a plain click on an already-blank tab is a
+          // no-op — but this "+" is a DUAL-gesture control (Shift+click / Shift+Enter opens
+          // an INCOGNITO chat, #1697), and a disabled button fires no events, so dimming it
+          // would kill that gesture too. Disabling only when BOTH creates are no-ops is
+          // correct but fires so rarely it doesn't fix the wart. The store guard already
+          // prevents the pile-up; a live-but-inert plain click is the residue.
+          // MobileShell/SessionSheet have no such conflict and DO disable their buttons.
         />
       </div>
       )}
