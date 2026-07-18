@@ -705,6 +705,10 @@
           "title": "0084 — Computer use: an out-of-process driver, and the fence it voids"
         },
         {
+          "path": "adr/0085-managed-node-runtime.md",
+          "title": "0085 — Managed Node.js runtime, provisioned on demand"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

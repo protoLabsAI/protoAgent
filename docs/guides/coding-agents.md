@@ -81,6 +81,22 @@ If you still hit it (an unusual shell setup), either set an **absolute** `comman
 probe too. The web app (terminal-launched server) is unaffected.
 :::
 
+::: tip No Node installed at all? Provision a managed one
+All of the above *finds* a Node you already have. If you have **none** — a common
+case for a fresh desktop install — the `npx`-based agents (Claude Code, Codex) and
+`npx`-based [MCP servers](/guides/mcp) have nothing to launch. Provision a managed
+Node runtime once (ADR 0085):
+
+```bash
+protoagent runtime install-node    # downloads a pinned Node into ~/.protoagent/runtime/node
+```
+
+It's a box-shared, hash-verified download; the server picks it up on the next start
+(a running server hot-adopts it), and `protoagent runtime list` shows Node status.
+A user Node install always takes precedence, so this only fills the gap. `npx -y`
+still fetches the adapter itself on first launch (then caches it).
+:::
+
 **Claude Code has no native ACP mode.** Drive it through the
 [`claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)
 adapter: install it (`npm i -g @agentclientprotocol/claude-agent-acp`) and use the

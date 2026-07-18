@@ -323,10 +323,22 @@ def _cmd_use(args) -> int:
 def _cmd_list(_args) -> int:
     from graph.config import LangGraphConfig
     from graph.config_io import config_yaml_path
+    from infra.node_runtime import augment_path_with_managed_node
     from runtime.acp_agents import acp_agent_catalog
+    from runtime.node_install import node_status
+
+    # A provisioned Node isn't on the CLI's own PATH until we add it — do so before the
+    # per-agent `shutil.which` probes, so npx-based agents read as installed when the
+    # managed runtime covers them (same wiring the server does at boot).
+    augment_path_with_managed_node()
 
     cfg = LangGraphConfig.from_yaml(config_yaml_path())
     print(f"current:  {cfg.agent_runtime}")
+    ns = node_status()
+    if ns["source"]:
+        print(f"node:     {ns['version'] or '?'} ({ns['source']})")
+    elif ns["supported"]:
+        print("node:     not found — `protoagent runtime install-node` (needed for npx-based agents/MCP)")
     print("options:")
     print("  native        (built-in LangGraph loop)")
     for a in acp_agent_catalog(getattr(cfg, "acp_agents", None)):
@@ -336,13 +348,50 @@ def _cmd_list(_args) -> int:
     return 0
 
 
+def _cmd_install_node(args) -> int:
+    from runtime.node_install import NODE_VERSION, NodeRuntimeError, install_managed_node, node_status
+
+    st = node_status()
+    if not st["supported"]:
+        print("node: no managed Node build for this platform/architecture.", file=sys.stderr)
+        return 2
+    if st["system"] and not args.force:
+        print(f"node: already on PATH — {st['version']} at {st['bin_dir']}. Nothing to provision.")
+        print("      Re-run with --force to install a managed runtime alongside it.")
+        return 0
+    if st["managed"] and st["managed_version"] == NODE_VERSION and not args.force:
+        print(f"node: managed runtime already installed ({st['managed_version']}) at {st['bin_dir']}.")
+        return 0
+
+    print(f"node: provisioning managed Node {NODE_VERSION} …")
+    last = [-1]
+
+    def _progress(done: int, total: int) -> None:
+        pct = int(done * 100 / total) if total else 0
+        if pct != last[0] and (pct % 5 == 0 or not total):
+            last[0] = pct
+            bar = f"{pct}%" if total else f"{done // (1 << 20)} MiB"
+            print(f"\r  downloading… {bar}   ", end="", file=sys.stderr, flush=True)
+
+    try:
+        st = install_managed_node(force=args.force, on_progress=_progress)
+    except NodeRuntimeError as exc:
+        print(file=sys.stderr)
+        print(f"node: install failed — {exc}", file=sys.stderr)
+        return 1
+    print(file=sys.stderr)
+    print(f"node: installed {st['managed_version']} at {st['bin_dir']}")
+    print("      npx-based coding agents (Claude Code, Codex) + MCP servers can now launch.")
+    return 0
+
+
 def run_runtime_cli(argv: list[str]) -> int:
     """`protoagent runtime` — see module docstring. Returns a process exit code."""
     parser = argparse.ArgumentParser(
         prog="protoagent runtime",
         description="Select the agent runtime — native (LangGraph) or an ACP agent (ADR 0033).",
     )
-    sub = parser.add_subparsers(dest="cmd", metavar="<use|list>")
+    sub = parser.add_subparsers(dest="cmd", metavar="<use|list|install-node>")
 
     p_use = sub.add_parser("use", help="Switch runtime (writes the live config); `use hermes` runs the full preset")
     p_use.add_argument("runtime", help="native | hermes | acp:<agent>  (see `runtime list`)")
@@ -356,6 +405,13 @@ def run_runtime_cli(argv: list[str]) -> int:
     sub.add_parser("list", help="Show the current runtime + available ones (with install status)").set_defaults(
         fn=_cmd_list
     )
+
+    p_node = sub.add_parser(
+        "install-node",
+        help="Provision a managed Node.js runtime (for the npx-based ACP agents + MCP servers)",
+    )
+    p_node.add_argument("--force", action="store_true", help="Reinstall even if a Node is already available")
+    p_node.set_defaults(fn=_cmd_install_node)
 
     args = parser.parse_args(argv)
     fn = getattr(args, "fn", None)

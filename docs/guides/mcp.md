@@ -151,6 +151,14 @@ existing configs are unchanged.
 | `streamable_http` | Remote, production servers | `url` (`headers` optional) |
 | `sse` | Legacy SSE servers | `url` (`headers` optional) |
 
+::: tip `npx`/`node` not installed? (desktop)
+Many stdio servers launch via `command: npx`. A desktop machine with no Node
+toolchain has none to launch. Provision a managed one once —
+`protoagent runtime install-node` (ADR 0085) — and every `npx`-based server (and
+the [ACP coding agents](/guides/coding-agents)) can start. A Node you install
+yourself always wins; this only fills the gap.
+:::
+
 ## Sessions
 
 Each server keeps **one long-lived MCP session** that every tool call reuses
