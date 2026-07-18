@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ExternalLink, Plus, Settings } from "lucide-react";
+import { Check, ChevronDown, Plus, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
@@ -17,10 +17,9 @@ const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : a.id);
 
 // Topbar agent switcher (ADR 0042 slug routing). The focused agent lives in the URL
 // (/app/agent/<slug>/), so picking one NAVIGATES there — each window is its own agent, a reload
-// can't desync, and you can open a second agent in a new window. The dropdown ALWAYS shows (so
-// New agent + Fleet settings are reachable even with a single agent); only a hard fleet-API error
-// falls back to the plain name. The dropdown is the DS Menu (#1078): open/close, outside-click,
-// focus trap, and the trailing per-row "open in a new window" action all come from @protolabsai/ui.
+// can't desync. The dropdown ALWAYS shows (so New agent + Fleet settings are reachable even with a
+// single agent); only a hard fleet-API error falls back to the plain name. The dropdown is the DS
+// Menu (#1078): open/close, outside-click, and focus trap all come from @protolabsai/ui.
 export function FleetSwitcher({
   fallbackName,
   onNewAgent,
@@ -61,17 +60,6 @@ export function FleetSwitcher({
             onSelect={() => {
               if (!isCurrent) window.location.href = agentHref(slugOf(a)); // navigate → this agent
             }}
-            // Non-current rows get a trailing "open in a new window" action (two agents at once —
-            // the point of slug routing); it doesn't trigger the row's navigate or close the menu.
-            action={
-              isCurrent
-                ? undefined
-                : {
-                    icon: <ExternalLink size={13} />,
-                    label: "Open in a new window",
-                    onClick: () => window.open(agentHref(slugOf(a)), "_blank", "noopener"),
-                  }
-            }
           >
             <span className="fleet-switcher-name">
               {a.name}
