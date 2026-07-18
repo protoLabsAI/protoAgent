@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.104.0",
+    "date": "2026-07-18",
+    "changes": [
+      "Mobile is a chat-first app, not a shrunken console.",
+      "Add a phone by scanning a QR, and revoke it individually.",
+      "A managed Node runtime, provisioned on demand.",
+      "Bundles can seed MCP servers",
+      "A read-write-no-delete fence mode for the filesystem toolset",
+      "Telemetry extensions moved to URI-keyed metadata",
+      "Settings ▸ Integrations is now Plugins, matching what the section actually contains.",
+      "The console consumes @protolabsai/ui 0.57, which ships the touch floor upstream",
+      "A chat tab doing background work shows a processing dot",
+      "\"+\" no longer piles up empty chats.",
+      "Dropped the per-row \"open in new window\" action from the fleet switcher, which duplicated the row's own click behaviour.",
+      "uv is pinned to 0.11.29 in both release workflows"
+    ]
+  },
+  {
     "version": "v0.103.2",
     "date": "2026-07-17",
     "changes": [

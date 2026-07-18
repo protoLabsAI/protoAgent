@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.104.0] - 2026-07-18
+
 ### Added
 - **Mobile is a chat-first app, not a shrunken console (ADR 0086).** Chat is now the root view
   on a phone and never leaves the screen; Work, Knowledge, Memory and plugin views push over it
