@@ -463,6 +463,82 @@ fn focus_main<R: Runtime>(app: AppHandle<R>) {
     show_main_window(&app);
 }
 
+
+/// Extract `auth.token` from a protoAgent `secrets.yaml`.
+///
+/// A deliberate hand-scan rather than a YAML dependency: the file is written by our own
+/// Python (ruamel) with a fixed shape, and the desktop binary shouldn't grow a parser for
+/// one two-line lookup. Kept narrow on purpose — a top-level `auth:` block, then an indented
+/// `token:` before the block ends. Anything else returns None and the console falls back to
+/// its normal token prompt.
+fn parse_auth_token(yaml: &str) -> Option<String> {
+    let mut in_auth = false;
+    for line in yaml.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.trim_start().starts_with('#') || trimmed.trim().is_empty() {
+            continue;
+        }
+        let indented = line.starts_with(' ') || line.starts_with('\t');
+        if !indented {
+            // A new top-level key ends the auth block (and starts it, if it IS auth).
+            in_auth = trimmed.trim_end_matches(':').trim() == "auth" && trimmed.ends_with(':');
+            continue;
+        }
+        if !in_auth {
+            continue;
+        }
+        let (key, value) = match trimmed.split_once(':') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        if key.trim() != "token" {
+            continue;
+        }
+        // Strip an inline comment, then surrounding quotes.
+        let mut v = value.trim();
+        if let Some(hash) = v.find(" #") {
+            v = v[..hash].trim();
+        }
+        let v = v.trim_matches('"').trim_matches('\'').trim();
+        if v.is_empty() {
+            return None;
+        }
+        return Some(v.to_string());
+    }
+    None
+}
+
+/// The operator token this app's own server is configured with, if any.
+///
+/// The desktop app SPAWNS the sidecar and sets its `PROTOAGENT_HOME`, so it already has
+/// filesystem access to that server's config — it should never make the operator go hunting
+/// for a secret to unlock an app running on their own machine. The console calls this when it
+/// is running in the desktop shell and hits a 401 (issue #2055).
+///
+/// Delivered over `invoke` rather than `initialization_script`: injection proved unreliable
+/// across Tauri v2 webview contexts (see the API-base handoff above), and a token must never
+/// ride the webview URL, which is visible to the page and anything it embeds.
+///
+/// Returns None when no token is configured — the common, correct case for a loopback-only
+/// install — and the console keeps its existing behaviour.
+#[tauri::command]
+fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+    // Env wins, mirroring the server's own precedence (a2a_impl/auth.py `configure`).
+    if let Ok(t) = std::env::var("A2A_AUTH_TOKEN") {
+        let t = t.trim().to_string();
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    let dir = app.path().app_config_dir().ok()?;
+    let path = dir.join("config").join("secrets.yaml");
+    let found = std::fs::read_to_string(&path).ok().and_then(|b| parse_auth_token(&b));
+    // Logged at INFO without the value: this is the one place that answers "did the shell
+    // hand the webview a token, or is the operator being asked for one the app already had?"
+    log::info!("desktop: auth_token requested — configured: {}", found.is_some());
+    found
+}
+
 /// Check the GitHub Release updater manifest (latest.json) for a newer build;
 /// prompt, download + install, then relaunch. Signatures are verified against
 /// the org minisign pubkey baked into tauri.conf.json.
@@ -707,7 +783,8 @@ pub fn run() {
             hide_launcher,
             focus_main,
             hotkeys_status,
-            hotkeys_set
+            hotkeys_set,
+            auth_token
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -912,4 +989,38 @@ pub fn run() {
                 kill_sidecar(app_handle);
             }
         });
+}
+
+
+#[cfg(test)]
+mod auth_token_tests {
+    use super::parse_auth_token;
+
+    #[test]
+    fn reads_a_plain_token() {
+        assert_eq!(
+            parse_auth_token("auth:\n  token: abc123\n").as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn tolerates_quotes_comments_and_other_blocks() {
+        let y = "model:\n  api_base: https://x\n# a comment\nauth:\n  token: \"q-tok\"  # inline\n";
+        assert_eq!(parse_auth_token(y).as_deref(), Some("q-tok"));
+    }
+
+    #[test]
+    fn ignores_a_token_outside_the_auth_block() {
+        // A `token:` under some OTHER key must not be mistaken for the operator bearer.
+        let y = "gateway:\n  token: not-the-one\n";
+        assert_eq!(parse_auth_token(y), None);
+    }
+
+    #[test]
+    fn returns_none_when_absent_or_empty() {
+        assert_eq!(parse_auth_token("model:\n  api_base: x\n"), None);
+        assert_eq!(parse_auth_token("auth:\n  token:\n"), None);
+        assert_eq!(parse_auth_token(""), None);
+    }
 }

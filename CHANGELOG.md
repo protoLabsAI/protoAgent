@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The token prompt says where the token lives.** It named `A2A_AUTH_TOKEN`, which is a dead
   end when the token was written to `secrets.yaml` instead — the exact case the pairing flow
   creates. It now names both.
+- **The desktop app authenticates itself instead of asking you for a token it already has.**
+  Once an instance has an auth token — most easily by enabling network access in Settings ▸
+  Devices, which mints one — the app's own window had nothing stored and showed the token
+  prompt on next launch, sending you to `secrets.yaml` to unlock software running on your own
+  machine. The app spawns that server, so it now reads the configured token and hands it to
+  its own webview. Falls back to the prompt when there's no token, when the shell is older
+  than the command, or when the token it holds is the one the server just rejected.
 
 ## [0.104.2] - 2026-07-19
 
