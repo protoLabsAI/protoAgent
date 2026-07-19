@@ -9,9 +9,13 @@ import { api } from "../lib/api";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
+import type { PairAddress, PairHost } from "../lib/api";
+
 type Device = { id: string; name: string; created_at: number; last_seen_at: number | null };
-type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr: string | null };
 type Pairing = { code: string; expires_at: number; ttl: number; hosts: PairHost[] };
+/** Loopback-bound: what we COULD bind to, so the panel can offer the fix rather than
+ *  dead-ending on an error the operator has no way to act on. */
+type Unreachable = { error: string; available: PairAddress[] };
 
 function ago(ts: number | null): string {
   if (!ts) return "never used";
@@ -40,6 +44,9 @@ export function DevicesPanel() {
   const [loading, setLoading] = useState(true);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
+  const [unreachable, setUnreachable] = useState<Unreachable | null>(null);
+  const [exposing, setExposing] = useState<string | null>(null);
+  const [needsRestart, setNeedsRestart] = useState(false);
   const [remaining, setRemaining] = useState(0);
   const [hostIdx, setHostIdx] = useState(0);
   // Every mutating action gets a visible pending state — a button that looks identical
@@ -103,17 +110,62 @@ export function DevicesPanel() {
 
   async function startPairing() {
     setPairError(null);
+    setUnreachable(null);
     setStarting(true);
     try {
       const res = await api.pairingStart();
-      setPairing(res);
-      setHostIdx(0);
+      if (res.ok) {
+        setPairing({ code: res.code, expires_at: res.expires_at, ttl: res.ttl, hosts: res.hosts });
+        setHostIdx(0);
+      } else if (res.available.length) {
+        // Loopback-bound but fixable — offer the addresses instead of an error the operator
+        // can't act on. This is the desktop app's default state.
+        setUnreachable({ error: res.error, available: res.available });
+      } else {
+        setPairError(`${res.error} No tailnet or LAN address was found on this machine either.`);
+      }
     } catch (err) {
-      // Usually a loopback-bound instance — the server explains it and the fix is a restart
-      // flag, so surface its message rather than a generic failure.
       setPairError(err instanceof Error ? err.message : "could not start pairing");
     } finally {
       setStarting(false);
+    }
+  }
+
+  /**
+   * Bind the server to `addr` so phones can reach it, minting an auth token first if the
+   * instance has none.
+   *
+   * ORDER MATTERS. `auth.token` applies LIVE (no restart), so writing it would 401 this very
+   * session on the next request if the browser didn't already hold it. Store it locally
+   * first, then save; roll the local value back if the save fails, or we'd lock ourselves
+   * out with a token the server never accepted.
+   *
+   * `network.bind` is host-scoped and restart-gated, hence the restart notice rather than a
+   * silent "done".
+   */
+  async function makeReachable(addr: PairAddress) {
+    setExposing(addr.host);
+    const previous = window.localStorage.getItem("protoagent.authToken");
+    try {
+      if (!previous) {
+        // The server REFUSES a non-loopback bind with no token, so exposing without one
+        // isn't an option we could offer even if we wanted to.
+        const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+        window.localStorage.setItem("protoagent.authToken", token);
+        const res = await api.saveSettings({ "auth.token": token }, "agent");
+        if (!res.ok) {
+          window.localStorage.removeItem("protoagent.authToken");
+          throw new Error(res.messages.join(" · ") || "could not set an auth token");
+        }
+      }
+      const bind = await api.saveSettings({ "network.bind": addr.host }, "host");
+      if (!bind.ok) throw new Error(bind.messages.join(" · ") || "could not set the bind address");
+      setUnreachable(null);
+      setNeedsRestart(true);
+    } catch (err) {
+      setPairError(err instanceof Error ? err.message : "could not update the bind address");
+    } finally {
+      setExposing(null);
     }
   }
 
@@ -157,6 +209,46 @@ export function DevicesPanel() {
       </p>
 
       {pairError && <p className="setting-desc devices-error">{pairError}</p>}
+
+      {needsRestart && (
+        <section className="devices-notice" aria-label="Restart required">
+          <p className="devices-pair-hint">
+            <strong>Restart protoAgent to finish.</strong> The bind interface only takes effect
+            at startup — reopen the app, then add your device.
+          </p>
+        </section>
+      )}
+
+      {unreachable && (
+        <section className="devices-notice" aria-label="Make this agent reachable">
+          <p className="devices-pair-hint">{unreachable.error}</p>
+          <p className="setting-desc">
+            Allow devices on your network to reach it. This agent will listen on the address you
+            pick instead of localhost only, and will require a token — one is generated now if you
+            don&apos;t have one. Undo it any time in Settings ▸ Network by setting the bind
+            interface back to <code>127.0.0.1</code>.
+          </p>
+          <div className="devices-hosts">
+            {unreachable.available.map((a) => (
+              <Button
+                key={a.host}
+                type="button"
+                variant="ghost"
+                loading={exposing === a.host}
+                disabled={exposing != null}
+                onClick={() => makeReachable(a)}
+              >
+                {a.kind === "tailnet" ? "Tailnet" : "Wi-Fi"} · {a.host}
+              </Button>
+            ))}
+          </div>
+          <p className="setting-desc">
+            {unreachable.available.some((a) => a.kind === "tailnet")
+              ? "Tailnet is the safer pick — only your own devices can reach it, from any network."
+              : "This is a local-network address, so it's reachable by anything on this Wi-Fi."}
+          </p>
+        </section>
+      )}
 
       {pairing && host && (
         <section className="devices-pair" aria-label="Pair a new device">

@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Pairing works in the desktop app.** The desktop app listens on `127.0.0.1` by design, so
+  "Add a device" reported *no reachable address* and stopped there — the fix (bind to your
+  tailnet or LAN, set a token, restart) appeared nowhere in the UI, which made QR pairing
+  unusable in the place it was built for. Settings ▸ Devices now offers the addresses this
+  machine could be reached on and binds to the one you pick, minting an auth token first if
+  the instance has none. Tailnet is offered above Wi-Fi and labelled — it's reachable only by
+  your own devices — and a public address is never offered. Takes effect on restart, and the
+  panel says so rather than pretending to be done; undo it in Settings ▸ Network by setting
+  the bind interface back to `127.0.0.1`.
+
 ## [0.104.0] - 2026-07-18
 
 ### Added

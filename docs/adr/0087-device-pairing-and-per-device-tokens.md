@@ -105,6 +105,30 @@ This must **not** nudge anyone toward `PROTOAGENT_ALLOW_OPEN=1`. The server alre
 non-loopback bind with no token (`server/__init__.py`), and that guard stays — pairing is
 about adding devices to a *secured* instance, not about opening one up.
 
+**Amended after shipping.** D6 as written assumed a server someone launched with flags, which
+is not how most people run this. The **desktop app binds `127.0.0.1` by design** — correct for
+a local app — so pairing was unusable in precisely the place it was asked for: it reported "no
+reachable address" and dead-ended, with the fix (edit two config keys, restart) nowhere in
+sight.
+
+So a loopback-bound instance now also reports what it **could** be reached on
+(`_pairable_addresses`, deliberately split from the bind-filtered `_candidate_hosts`), and the
+Devices panel offers to bind there. Choosing an address writes `network.bind` (host layer) and,
+when the instance has no token, mints one first — the server refuses a non-loopback bind
+without one, so "expose it but leave it open" is not a state the flow can even produce.
+
+Two properties this must keep:
+
+- **Tailnet is offered above LAN and labelled as the safer pick.** A tailnet address is
+  reachable only by the operator's own devices; a LAN address is reachable by anything on that
+  Wi-Fi. The UI says which is which rather than presenting them as equivalent.
+- **The offer never contains a public address.** `_pairable_addresses` allowlists tailnet +
+  RFC1918 exactly as `_candidate_hosts` does — "make me reachable" must never become "expose me
+  to the internet".
+
+`network.bind` is restart-gated, so the flow ends on an explicit restart notice rather than
+pretending to have finished, and it names how to undo it (set the bind back to `127.0.0.1`).
+
 ## Consequences
 
 - The unauthenticated surface grows by one endpoint. It is the only one, it is rate-limited
