@@ -1,7 +1,7 @@
 import { Spinner } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Button, Empty } from "@protolabsai/ui/primitives";
-import { QrCode, Smartphone, Trash2 } from "lucide-react";
+import { Copy, QrCode, Smartphone, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { StatusPill } from "../app/StatusPill";
@@ -47,6 +47,10 @@ export function DevicesPanel() {
   const [unreachable, setUnreachable] = useState<Unreachable | null>(null);
   const [exposing, setExposing] = useState<string | null>(null);
   const [needsRestart, setNeedsRestart] = useState(false);
+  // A token MINTED by this flow exists nowhere the operator can see it — it goes straight
+  // into this browser's localStorage. Every other client (the desktop app's own webview, the
+  // CLI, another browser) then gets 401s with no way to know the secret. Surface it once.
+  const [mintedToken, setMintedToken] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [hostIdx, setHostIdx] = useState(0);
   // Every mutating action gets a visible pending state — a button that looks identical
@@ -163,6 +167,7 @@ export function DevicesPanel() {
           window.localStorage.removeItem("protoagent.authToken");
           throw new Error(res.messages.join(" · ") || "could not set an auth token");
         }
+        setMintedToken(token);
       }
       // See the note above: 0.0.0.0, not addr.host — a specific bind kills loopback and with
       // it the desktop app's own connection to the sidecar.
@@ -224,6 +229,28 @@ export function DevicesPanel() {
             <strong>Restart protoAgent to finish.</strong> The bind interface only takes effect
             at startup — reopen the app, then add your device.
           </p>
+          {mintedToken && (
+            <>
+              <p className="setting-desc">
+                This agent had no token, so one was created. <strong>Save it now</strong> — it
+                isn&apos;t shown again. Anything else that talks to this agent (the desktop app
+                after restart, the CLI, another browser) will ask for it.
+              </p>
+              <div className="devices-token">
+                <code>{mintedToken}</code>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(mintedToken);
+                    toast({ title: "Token copied", message: "Keep it somewhere safe." });
+                  }}
+                >
+                  <Copy size={14} aria-hidden /> Copy
+                </Button>
+              </div>
+            </>
+          )}
         </section>
       )}
 

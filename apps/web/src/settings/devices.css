@@ -106,3 +106,21 @@
   border-radius: var(--radius);
   background: var(--bg-raised, var(--bg));
 }
+
+/* A minted token, shown ONCE. It's a secret the operator has no other way to see —
+   `secrets.yaml` is the only other copy — so it gets room to be read and copied. */
+.devices-token {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-inset, var(--bg));
+}
+.devices-token code {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  word-break: break-all;
+}
