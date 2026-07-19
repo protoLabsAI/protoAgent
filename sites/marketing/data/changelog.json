@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.104.2",
+    "date": "2026-07-19",
+    "changes": [
+      "The desktop app no longer hangs on launch after enabling network access."
+    ]
+  },
+  {
     "version": "v0.104.1",
     "date": "2026-07-19",
     "changes": [

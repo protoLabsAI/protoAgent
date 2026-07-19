@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.104.2] - 2026-07-19
+
 ### Fixed
 - **The desktop app no longer hangs on launch after enabling network access.** v0.104.1's
   "Allow devices on my network" bound the single address you picked, which drops loopback —
