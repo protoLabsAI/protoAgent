@@ -99,6 +99,33 @@ def test_synthesizer_filters_ledger_slippage_and_gap_lines():
     assert "never in the array" in p  # Gap prose lines stay out of the findings JSON
 
 
+# ── ported review disciplines (the open-swe reviewer lessons) ────────────────
+
+
+def test_finder_runs_the_literal_changed_line_pass_first():
+    p = SUBAGENT_REGISTRY["review-finder"].system_prompt
+    assert "Literal changed-line pass FIRST" in p
+    assert "local failure beats an elaborate adjacent hypothesis" in p
+
+
+def test_finder_claims_name_the_concrete_failure_mode():
+    p = SUBAGENT_REGISTRY["review-finder"].system_prompt
+    assert "CONCRETE" in p and "failure mode" in p
+    assert "runtime consequence, not how bad the code looks" in p
+
+
+def test_synthesizer_runs_coverage_cross_checks_prose_only():
+    p = SUBAGENT_REGISTRY["review-synthesizer"].system_prompt
+    assert "silence on a real change is usually a miss" in p
+    assert "they never add" in p  # the cross-checks can't breach the never-add rule
+
+
+def test_conventions_angle_checks_ci_test_enforcement():
+    conventions = next(s for s in _recipe()["steps"] if s["id"] == "find_conventions")
+    assert "check test enforcement specifically" in conventions["prompt"]
+    assert "made non-blocking" in conventions["prompt"]
+
+
 # ── injection posture + ref discipline (the open-swe reviewer lessons) ───────
 
 
