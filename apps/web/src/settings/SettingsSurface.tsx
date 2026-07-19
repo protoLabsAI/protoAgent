@@ -1,4 +1,5 @@
 import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { useFlagPredicate } from "../flags/flags";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -38,7 +39,16 @@ import { ThemeSurface } from "./ThemeSurface";
 //                  telemetry knobs are chips on Fleet / Telemetry, not a separate empty panel.
 //   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard.
 
-type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
+type Section = {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  render: () => ReactNode;
+  /** Developer flag gating this section (ADR 0068). Absent = always shown. A flag-off
+   *  section is filtered from BOTH the nav and the resolvable set, so a persisted id
+   *  pointing at it falls back to the first visible section rather than a blank pane. */
+  flag?: string;
+};
 
 // The Plugins manager (install · enable · configure, plus the Discover directory) — the
 // Plugins domain. Per-plugin config is inline per row (ADR 0059).
@@ -70,7 +80,10 @@ const AGENT_SECTIONS: Section[] = [
   { id: "access", label: "Operator & access", icon: KeyRound, render: () => <SettingsCategoryPanel category="Identity" title="Operator & access" /> },
   // Paired devices (ADR 0087) — sits next to access because it IS access: each device holds
   // its own revocable token rather than sharing the operator bearer.
-  { id: "devices", label: "Devices", icon: Smartphone, render: () => <DevicesPanel /> },
+  // Behind `settings.devices` (ADR 0068), default OFF — see the flag's description in
+  // runtime/flags.py. The pairing flow stopped the desktop app from starting four times; it
+  // stays hidden until the whole path is exercised in the desktop app itself.
+  { id: "devices", label: "Devices", icon: Smartphone, flag: "settings.devices", render: () => <DevicesPanel /> },
   // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
   // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
   { id: "model", label: "Model", icon: Cpu, render: () => <SettingsCategoryPanel category="Model" title="Model & routing" /> },
@@ -131,18 +144,26 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     ? [...CONSOLE_SECTIONS, { id: "developer", label: "Developer", icon: FlaskConical, render: () => <DeveloperPanel /> }]
     : CONSOLE_SECTIONS;
 
+  // Drop flag-off sections everywhere they'd be reachable — nav, active-id resolution, and
+  // the ⌘K/deep-link path that reads the same persisted id.
+  const flagOn = useFlagPredicate();
+  const shown = (list: Section[]) => list.filter((s) => !s.flag || flagOn(s.flag));
+  const agentSections = shown(AGENT_SECTIONS);
+  const capabilitySections = shown(CAPABILITY_SECTIONS);
+  const boxSections = onHost ? shown(BOX_SECTIONS) : [];
+
   const sections = [
-    ...AGENT_SECTIONS,
-    ...CAPABILITY_SECTIONS,
-    ...(onHost ? BOX_SECTIONS : []),
+    ...agentSections,
+    ...capabilitySections,
+    ...boxSections,
     ...consoleSections,
   ];
   const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
   const toItem = (s: Section) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> });
   const groups = [
-    { label: "Agent", items: AGENT_SECTIONS.map(toItem) },
-    { label: "Capabilities", items: CAPABILITY_SECTIONS.map(toItem) },
-    ...(onHost ? [{ label: "Box", items: BOX_SECTIONS.map(toItem) }] : []),
+    { label: "Agent", items: agentSections.map(toItem) },
+    { label: "Capabilities", items: capabilitySections.map(toItem) },
+    ...(onHost ? [{ label: "Box", items: boxSections.map(toItem) }] : []),
     { label: "This console", items: consoleSections.map(toItem) },
   ];
 

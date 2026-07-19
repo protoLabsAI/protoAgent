@@ -51,6 +51,21 @@ FLAGS: list[Flag] = [
         owner="kj",
         remove_by="2026-09-01",
     ),
+    Flag(
+        id="settings.devices",
+        description=(
+            "Settings ▸ Devices — QR device pairing + per-device tokens (ADR 0087). OFF by "
+            "default: the 'Allow devices on my network' flow stopped the desktop app from "
+            "starting four separate times (v0.104.1 killed loopback; then a token only the "
+            "acting browser held; then a bind written with no token configured; then CORS "
+            "preflight 401s once a token exists). Each fix was correct and each exposed the "
+            "next layer. It stays behind this flag until the whole path is exercised in the "
+            "desktop app itself, which is where every one of those failures actually landed."
+        ),
+        tier="off",
+        owner="kj",
+        remove_by="2026-10-01",
+    ),
 ]
 
 

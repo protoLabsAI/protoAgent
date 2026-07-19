@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Settings ▸ Devices is hidden behind a developer flag (`settings.devices`, default off).**
+  The QR pairing flow behind it stopped the desktop app from starting four separate times in
+  one day — each fix correct, each exposing the next layer underneath. It stays hidden until
+  the whole path has been exercised in the desktop app itself, which is where every one of
+  those failures actually landed. Nothing else changes: instances that never opened the panel
+  were never affected, and per-device tokens already issued keep working.
+
 ### Added
 - **`graph.sdk.start_goal_loop` / `stop_goal_loop` are back — watch-based this time** (#2060).
   The one-call OODA loop — *arm a verifier-backed watch on a goal and schedule the recurring
