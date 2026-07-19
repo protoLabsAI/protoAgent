@@ -32,6 +32,18 @@ inputs:
       still open, then look for new defects. GitHub-native review memory
       (ADR 0078 D5) — the caller recalls, the panel re-evaluates.
     default: "(none — first review of this PR)"
+  - name: head_sha
+    description: >-
+      The PR's head SHA, resolved SERVER-SIDE by the caller (optional). Finders
+      pass it as `ref=` on code-context github_read_file calls — a plain read
+      shows the default branch, which does not contain this PR's changes.
+    default: ""
+  - name: base_ref
+    description: >-
+      The PR's base ref, resolved SERVER-SIDE by the caller (optional). The
+      conventions finder reads policy docs (CLAUDE.md/PROTO.md) at this ref —
+      never at the PR head, so a PR can't rewrite the rules it is judged by.
+    default: ""
 steps:
   - id: find_correctness
     subagent: review-finder
@@ -42,8 +54,13 @@ steps:
       conditionals, unhandled None/empty/failure paths — does this code do what
       it claims under all inputs it will actually see?
 
+      Server-resolved refs (empty when not provided): head SHA
+      "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
       ## Prior findings
+      <prior_findings>
       {{inputs.prior_findings}}
+      </prior_findings>
 
   - id: find_removed_behavior
     subagent: review-finder
@@ -55,8 +72,13 @@ steps:
       conditions, deleted call sites, semantics changed without the callers
       changing. Regressions hide on the minus side of the diff.
 
+      Server-resolved refs (empty when not provided): head SHA
+      "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
       ## Prior findings
+      <prior_findings>
       {{inputs.prior_findings}}
+      </prior_findings>
 
   - id: find_crossfile
     subagent: review-finder
@@ -68,22 +90,33 @@ steps:
       the new behavior. Use github_read_file on the files the diff touches
       indirectly — this angle is exactly the one a hunk-by-hunk read misses.
 
+      Server-resolved refs (empty when not provided): head SHA
+      "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
       ## Prior findings
+      <prior_findings>
       {{inputs.prior_findings}}
+      </prior_findings>
 
   - id: find_conventions
     subagent: review-finder
     prompt: |
       Review PR #{{inputs.pr}} (repo: "{{inputs.repo}}" — empty means the
       default repo). Your assigned angle: **conventions and hygiene**. The
-      repo's own documented rules first (read its CLAUDE.md / PROTO.md /
-      contributor docs with github_read_file if present), then: naming that
+      repo's own documented rules first — read its CLAUDE.md / PROTO.md /
+      contributor docs with github_read_file at the BASE ref below (or the
+      default branch when it's empty), never at the PR head — then: naming that
       lies, duplicated logic, dead/debug code left in, missing or weakened
       tests for changed behavior, secrets or scratch files in the diff.
       Severity honestly — most convention findings are minor/nit.
 
+      Server-resolved refs (empty when not provided): head SHA
+      "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
       ## Prior findings
+      <prior_findings>
       {{inputs.prior_findings}}
+      </prior_findings>
 
   - id: synthesize
     subagent: review-synthesizer
@@ -114,6 +147,9 @@ steps:
       surrounding code); annotate every finding with verdict
       confirmed/refuted/uncertain + a one-line note. Return the same fenced
       findings array, annotated.
+
+      Server-resolved refs (empty when not provided): head SHA
+      "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
 
       {{steps.synthesize.output}}
 
