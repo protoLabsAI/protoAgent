@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.104.4",
+    "date": "2026-07-19",
+    "changes": [
+      "\"Allow devices on my network\" can no longer stop the app from starting."
+    ]
+  },
+  {
     "version": "v0.104.3",
     "date": "2026-07-19",
     "changes": [

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.104.4] - 2026-07-19
+
 ### Fixed
 - **"Allow devices on my network" can no longer stop the app from starting.** It decided
   whether to create an auth token by looking at the *browser's* stored token rather than
