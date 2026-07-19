@@ -180,15 +180,28 @@ functions/tools) so your plugin still loads + tests host-free. The surface:
       path = _render(spec)
       return multimodal_tool_result("Rendered chart:", images=[{"path": path}])
   ```
-- **A self-driving goal loop (OODA)** — `start_goal_loop(…)`: set a monitor goal verified by
-  your plugin verifier **and** schedule a recurring tick that drives it until the verifier
-  passes — in one call (`stop_goal_loop` to tear down, e.g. from an `on_achieved` hook). Register
-  the verifier + hook in `register()` first; pass `session_id` from your tool's `InjectedState`.
+- **A self-driving goal loop (OODA)** — `start_goal_loop(…)` (#2060): arm a **watch** on the
+  goal, verified by your plugin verifier, **and** schedule the recurring tick that drives it —
+  in one call. Sugar over `create_watch` + `schedule_recurring` under a shared derived id
+  (goals themselves are drive-only since ADR 0067 — the "wait for the metric" half is a
+  watch). Register the verifier + an `on_met` watch hook in `register()` first; the hook
+  calling `stop_goal_loop` is what retires the cadence when the verifier passes. Pass
+  `session_id` from your tool's `InjectedState`.
   ```python
-  from graph.sdk import start_goal_loop
-  start_goal_loop(session_id=sid, goal="reach 1M credits",
-                  verifier="fleet:credits", verifier_args={"min": 1_000_000},
-                  every="30m", prompt="Run the OODA tick and report.")
+  from graph.sdk import start_goal_loop, stop_goal_loop
+
+  start_goal_loop(goal="reach 1M credits", verifier="fleet:credits",
+                  verifier_args={"min": 1_000_000}, every="30m",
+                  prompt="Run the OODA tick and report.",
+                  plugin_id=registry.plugin_id, loop_id="credits-1m",
+                  session_id=sid)
+
+  # in register(): the self-retiring half
+  PREFIX = "fleet:goal-loop:"
+  async def on_met(watch):
+      if watch.id.startswith(PREFIX):
+          stop_goal_loop(plugin_id="fleet", loop_id=watch.id.removeprefix(PREFIX))
+  registry.register_watch_hook(on_met=on_met)
   ```
 - **Observability** — `DecisionLog` (an audit trail of what the agent changed, and why),
   `telemetry(…)` (the standard status/metrics/hints/decisions envelope), `render_html(env)` (a

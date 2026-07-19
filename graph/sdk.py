@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -219,9 +220,11 @@ async def knowledge_purge(domain: str, *, before: str | None = None) -> int:
 
 # ── goal-driven recurring loop (the OODA pattern) ──────────────────────────────────────
 # Composing a self-driving "run a tick every N toward a goal until its verifier passes" loop
-# means stitching three subsystems by hand: a plugin goal verifier (ADR 0028), the goal
-# controller (set a MONITOR goal, ADR 0030), and the scheduler (a recurring prompt, ADR
-# 0003/0053). These helpers do it in one call so a plugin doesn't have to know the wiring.
+# means stitching three primitives by hand: a WATCH ground-truthed by a plugin verifier
+# (ADR 0067), the scheduler (a recurring prompt, ADR 0003/0053), and a watch hook for the
+# teardown. run_in_session / create_watch / schedule_recurring are those primitives;
+# start_goal_loop / stop_goal_loop (below) are the one-call sugar over them (#2060 — the
+# monitor-goal originals were removed with ADR 0067; these are their watch-based return).
 
 
 def run_in_session(
@@ -356,6 +359,181 @@ def clear_watch(watch_id: str) -> bool:
     if controller is None:
         return False
     return controller.clear(watch_id)
+
+
+_DURATION = re.compile(r"^\s*(\d+)\s*([mhd])\s*$", re.IGNORECASE)
+# The shared id segment tying a loop's two halves together: the tick job is
+# ``plugin:<plugin_id>:goal-loop:<loop_id>`` (schedule_recurring's namespacing) and the watch
+# is ``<plugin_id>:goal-loop:<loop_id>`` — both derived, so stop_goal_loop (and a watch
+# ``on_met`` hook doing prefix matching) re-derives them from (plugin_id, loop_id) alone.
+_GOAL_LOOP_SEG = "goal-loop"
+
+
+def _to_cron(every: str) -> str:
+    """A 5-field cron passes through; a duration shorthand (``"15m"`` / ``"2h"`` / ``"1d"``)
+    is converted to cron. Raises ValueError on anything else."""
+    from scheduler.interface import is_cron
+
+    s = (every or "").strip()
+    if is_cron(s):
+        return s
+    m = _DURATION.match(s)
+    if not m:
+        raise ValueError(f"{every!r} is not a 5-field cron or a duration like '15m'/'2h'/'1d'")
+    n, unit = int(m.group(1)), m.group(2).lower()
+    if n < 1:
+        raise ValueError("duration must be >= 1")
+    if unit == "m":
+        if n > 59:
+            raise ValueError("minutes must be 1–59 (use '1h' for 60)")
+        return f"*/{n} * * * *"
+    if unit == "h":
+        if n > 23:
+            raise ValueError("hours must be 1–23 (use '1d' for 24)")
+        return f"0 */{n} * * *"
+    if n > 31:
+        raise ValueError("days must be 1–31")
+    return f"0 0 */{n} * *"
+
+
+def start_goal_loop(
+    *,
+    goal: str,
+    verifier: str,
+    every: str,
+    prompt: str,
+    plugin_id: str,
+    loop_id: str,
+    session_id: str = "",
+    verifier_args: dict | None = None,
+    done_prompt: str = "",
+    timezone: str | None = None,
+    interval_s: float | None = None,
+    deadline: float | None = None,
+    stall_after: int | None = None,
+) -> dict:
+    """Wire a goal-driven recurring loop in ONE call (the OODA / self-improving pattern):
+    arm a WATCH on ``goal`` — ground-truthed by the plugin verifier ``verifier`` — and
+    schedule the recurring ``prompt`` tick that drives it. Sugar over :func:`create_watch` +
+    :func:`schedule_recurring` under a shared derived id (#2060); goals themselves stay
+    drive-only (ADR 0067) — the "wait for the metric" half IS the watch.
+
+    The tick keeps firing until torn down: call :func:`stop_goal_loop` from a watch
+    ``on_met`` hook for a self-retiring cadence (or from a stop tool). Register the
+    verifier — and that hook — in ``register()`` first; pass ``session_id`` from your
+    tool's ``InjectedState`` so the tick (and the ``done_prompt`` reaction) run in the
+    caller's session::
+
+        from graph.sdk import start_goal_loop, stop_goal_loop
+
+        start_goal_loop(goal="reach 1M credits", verifier="fleet:credits",
+                        verifier_args={"min": 1_000_000}, every="30m",
+                        prompt="Run the OODA tick and report.",
+                        plugin_id=registry.plugin_id, loop_id="credits-1m",
+                        session_id=sid)
+
+        PREFIX = f"{PLUGIN_ID}:goal-loop:"
+        async def on_met(watch):                       # self-retiring cadence
+            if watch.id.startswith(PREFIX):
+                stop_goal_loop(plugin_id=PLUGIN_ID, loop_id=watch.id.removeprefix(PREFIX))
+        registry.register_watch_hook(on_met=on_met)
+
+    Idempotent by (``plugin_id``, ``loop_id``): a re-call REPLACES both the pending tick and
+    the watch, so a plugin re-arms in ``register()`` without colliding. If the tick can't be
+    scheduled the watch is rolled back — never half a loop.
+
+    Args:
+        goal: the condition the watch verifies (e.g. ``"reach 1,000,000 credits"``).
+        verifier: the registered plugin verifier name, ``"<plugin-id>:<name>"``.
+        every: the tick cadence — a 5-field cron (``"0 */6 * * *"``) or a duration
+            shorthand ``"15m"`` / ``"2h"`` / ``"1d"``.
+        prompt: the recurring tick prompt (e.g. "Run the manage-the-fleet OODA tick …").
+        plugin_id: the owning plugin's id (``registry.plugin_id``) — the tick job rides
+            the plugin namespace, so disable/uninstall sweeps it. ``':'`` is rejected.
+        loop_id: a stable plugin-local id for this loop (e.g. ``"credits-1m"``).
+        session_id: the session the tick fires into; empty → the durable Activity thread.
+        verifier_args: declarative args for the verifier (e.g. ``{"min": 1000000}``).
+        done_prompt: optional follow-up turn to run (in ``session_id``) when the watch
+            trips — the wrap-up/celebration half. Requires a non-empty ``session_id``.
+        timezone: IANA tz the cron is evaluated in (None = UTC).
+        interval_s, deadline, stall_after: watch knobs, passed through to
+            :func:`create_watch` (poll floor / epoch-seconds deadline / stall hook).
+
+    Returns ``{"ok", "goal", "loop_id", "watch_id", "job_id", "schedule", "message"}``;
+    ``ok=False`` with a readable message when a subsystem is off or the inputs are bad.
+    """
+    plugin_id = (plugin_id or "").strip()
+    loop_id = (loop_id or "").strip()
+    if not plugin_id or ":" in plugin_id:
+        return {"ok": False, "message": "plugin_id is required (and must not contain ':')"}
+    if not loop_id:
+        return {"ok": False, "message": "loop_id is required"}
+    if done_prompt.strip() and not (session_id or "").strip():
+        return {"ok": False, "message": "done_prompt needs a session_id to run the follow-up turn in"}
+    try:
+        schedule = _to_cron(every)
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+    watch_id = f"{plugin_id}:{_GOAL_LOOP_SEG}:{loop_id}"
+    watched = create_watch(
+        condition=goal,
+        verifier=verifier,
+        verifier_args=verifier_args,
+        watch_id=watch_id,
+        interval_s=interval_s,
+        deadline=deadline,
+        stall_after=stall_after,
+        run_prompt=done_prompt,
+        run_session=(session_id or "").strip() if done_prompt.strip() else "",
+    )
+    if not watched.get("ok"):
+        return {"ok": False, "message": f"goal watch not set: {watched.get('message')}"}
+    scheduled = schedule_recurring(
+        prompt,
+        schedule,
+        plugin_id=plugin_id,
+        job_id=f"{_GOAL_LOOP_SEG}:{loop_id}",
+        session=session_id,
+        timezone=timezone,
+    )
+    if not scheduled.get("ok"):
+        clear_watch(watch_id)  # roll back — a watch nothing drives would just sit there
+        return {"ok": False, "message": f"tick not scheduled: {scheduled.get('message')}"}
+    return {
+        "ok": True,
+        "goal": goal,
+        "loop_id": loop_id,
+        "watch_id": watch_id,
+        "job_id": scheduled["job_id"],
+        "schedule": schedule,
+        "message": f"goal loop started — {goal} · tick {schedule} · watch {watch_id}",
+    }
+
+
+def stop_goal_loop(*, plugin_id: str, loop_id: str) -> dict:
+    """Tear down the goal loop (``plugin_id``, ``loop_id``): cancel its recurring tick and
+    clear its watch — both re-derived, so the caller only holds the two ids it started the
+    loop with. Idempotent: stopping an absent loop is ``ok=True`` with both flags False.
+    Call it from a watch ``on_met`` hook (the self-retiring pattern in
+    :func:`start_goal_loop`'s example), a stop tool, or when winding down."""
+    plugin_id = (plugin_id or "").strip()
+    loop_id = (loop_id or "").strip()
+    if not plugin_id or ":" in plugin_id or not loop_id:
+        return {
+            "ok": False,
+            "job_cancelled": False,
+            "watch_cleared": False,
+            "message": "plugin_id (without ':') and loop_id are required",
+        }
+    cancelled = cancel_scheduled(f"{_GOAL_LOOP_SEG}:{loop_id}", plugin_id=plugin_id)
+    cleared = clear_watch(f"{plugin_id}:{_GOAL_LOOP_SEG}:{loop_id}")
+    return {
+        "ok": True,
+        "job_cancelled": cancelled,
+        "watch_cleared": cleared,
+        "message": f"goal loop {loop_id!r} stopped "
+        f"(tick {'cancelled' if cancelled else 'absent'}, watch {'cleared' if cleared else 'absent'})",
+    }
 
 
 # ── background jobs (ADR 0050 spawn + ADR 0070 results pipeline) ───────────────────────

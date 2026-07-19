@@ -115,3 +115,15 @@ to `create_watch` + `register_watch_hook`.
 - **Migration (done)** — removed goal `monitor` mode, `start_goal_loop`/`stop_goal_loop`, the
   monitor tick, and `GoalState`'s union fields; goals are drive-only. `create_watch` is the
   replacement.
+
+## Amendment (2026-07-19, #2060)
+
+`start_goal_loop` / `stop_goal_loop` return to `graph.sdk` — as **watch-based sugar**, not a
+revival of the monitor disposition. After the removal above, two plugins (spacetraders'
+campaign loops, learning-wiki's `/learn`) independently hand-rolled the identical
+composition, and the devkit `building-plugins` skill had kept documenting the one-call shape
+— the signal the API was right even though its substrate wasn't. The reinstated
+`start_goal_loop` = `create_watch` + `schedule_recurring` under a shared derived id
+(watch `<plugin>:goal-loop:<loop_id>`, tick `plugin:<plugin>:goal-loop:<loop_id>`), with the
+tick rolled back if either half fails; `stop_goal_loop` cancels both, typically from a watch
+`on_met` hook (the self-retiring cadence). Goals remain drive-only; `GoalState` is untouched.
