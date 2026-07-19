@@ -4,7 +4,7 @@
 # (see [project.scripts]); only the install identifier is namespaced under protolabs-,
 # matching the sibling `protolabs-a2a`.
 name = "protolabs-agent"
-version = "0.104.3"
+version = "0.104.4"
 description = "protoAgent — LangGraph + A2A template for spawning protoLabs agents"
 license = "MIT"
 license-files = ["LICENSE"]
