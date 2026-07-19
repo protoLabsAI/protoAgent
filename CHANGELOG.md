@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Enabling network access no longer hands you a secret you can't see.** The flow mints an
+  auth token when the instance has none — but it went straight into the localStorage of
+  whichever browser clicked the button, so every *other* client (the desktop app's own
+  window after a restart, the CLI, a second browser) hit 401s with no way to learn the
+  secret. The token is now shown once, with a copy button, and says plainly that nothing
+  else will know it until you pass it on.
+- **The token prompt says where the token lives.** It named `A2A_AUTH_TOKEN`, which is a dead
+  end when the token was written to `secrets.yaml` instead — the exact case the pairing flow
+  creates. It now names both.
+
 ## [0.104.2] - 2026-07-19
 
 ### Fixed

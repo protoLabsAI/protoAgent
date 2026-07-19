@@ -58,8 +58,16 @@ export function AuthGate() {
         }}
       >
         <p>
-          This instance is token-gated. Paste the operator token (the server's{" "}
-          <code>A2A_AUTH_TOKEN</code>) to connect — it's kept in this browser only.
+          This instance is token-gated. Paste the operator token to connect — it&apos;s kept in
+          this browser only, which is why a new window (or the desktop app) asks again.
+        </p>
+        {/* Someone who never had the token needs to know WHERE it lives, not just that one
+            exists. `A2A_AUTH_TOKEN` alone is a dead end when the token was written to
+            secrets.yaml — e.g. minted by the Devices pairing flow, which is exactly the case
+            that locks a second client out. */}
+        <p className="auth-gate-hint">
+          It&apos;s the server&apos;s <code>A2A_AUTH_TOKEN</code>, or <code>auth.token</code> in
+          its <code>secrets.yaml</code> (under the instance&apos;s <code>config/</code>).
         </p>
         <SecretInput
           autoFocus
