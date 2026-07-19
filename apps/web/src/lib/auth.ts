@@ -31,9 +31,14 @@ export function authRequired(): boolean {
   return needed;
 }
 
-/** Flip the "needs auth" state (idempotent — panels can 401 in bursts). */
+/** Flip the "needs auth" state (idempotent — panels can 401 in bursts).
+ *
+ * In the desktop app, try the shell's own token FIRST (#2055): it spawned the server and
+ * knows the secret, so prompting the operator for it is asking them to look up something
+ * their own machine already has. Only if that yields nothing does the gate go up. */
 export function notifyAuthRequired() {
   if (needed) return;
+  void tryDesktopSelfAuth();
   needed = true;
   emit();
 }
@@ -57,4 +62,28 @@ export function saveAuthToken(token: string) {
     // best-effort
   }
   clearAuthRequired();
+}
+
+
+/** True once a desktop self-auth attempt has run — one shot per page, so a burst of 401s
+ *  doesn't fire a storm of IPC calls, and a genuinely-wrong token still reaches the prompt. */
+let desktopAuthTried = false;
+
+async function tryDesktopSelfAuth(): Promise<void> {
+  if (desktopAuthTried) return;
+  desktopAuthTried = true;
+  const { desktopAuthToken } = await import("./desktop");
+  const token = await desktopAuthToken();
+  // Only useful if it differs from what we already sent — otherwise the server rejected
+  // this exact token and re-saving it would loop.
+  let existing = "";
+  try {
+    existing = window.localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    // best-effort; an unreadable store just means we try the shell's token
+  }
+  if (!token || token === existing) return;
+  saveAuthToken(token);
+  // Same recovery path the manual prompt takes: everything refetches with the new bearer.
+  window.dispatchEvent(new CustomEvent("protoagent:auth-recovered"));
 }
