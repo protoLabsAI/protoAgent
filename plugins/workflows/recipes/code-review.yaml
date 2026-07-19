@@ -44,6 +44,13 @@ inputs:
       conventions finder reads policy docs (CLAUDE.md/PROTO.md) at this ref —
       never at the PR head, so a PR can't rewrite the rules it is judged by.
     default: ""
+  - name: existing_threads
+    description: >-
+      Pre-rendered <pr_review_threads> data block of the inline review threads
+      already on this PR (optional; the caller fetches, escapes, and wraps).
+      Finders suppress candidates that overlap an existing thread by location
+      or underlying defect — the panel must not re-post what's being discussed.
+    default: "(none)"
 steps:
   - id: find_correctness
     subagent: review-finder
@@ -56,6 +63,9 @@ steps:
 
       Server-resolved refs (empty when not provided): head SHA
       "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
+      ## Existing review threads
+      {{inputs.existing_threads}}
 
       ## Prior findings
       <prior_findings>
@@ -75,6 +85,9 @@ steps:
       Server-resolved refs (empty when not provided): head SHA
       "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
 
+      ## Existing review threads
+      {{inputs.existing_threads}}
+
       ## Prior findings
       <prior_findings>
       {{inputs.prior_findings}}
@@ -92,6 +105,9 @@ steps:
 
       Server-resolved refs (empty when not provided): head SHA
       "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
+      ## Existing review threads
+      {{inputs.existing_threads}}
 
       ## Prior findings
       <prior_findings>
@@ -116,6 +132,9 @@ steps:
 
       Server-resolved refs (empty when not provided): head SHA
       "{{inputs.head_sha}}", base ref "{{inputs.base_ref}}".
+
+      ## Existing review threads
+      {{inputs.existing_threads}}
 
       ## Prior findings
       <prior_findings>
