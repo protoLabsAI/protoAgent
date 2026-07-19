@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.104.3",
+    "date": "2026-07-19",
+    "changes": [
+      "Enabling network access no longer hands you a secret you can't see.",
+      "The token prompt says where the token lives.",
+      "The desktop app authenticates itself instead of asking you for a token it already has."
+    ]
+  },
+  {
     "version": "v0.104.2",
     "date": "2026-07-19",
     "changes": [
