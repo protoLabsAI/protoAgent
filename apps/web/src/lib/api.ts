@@ -705,8 +705,10 @@ export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr:
 export type PairAddress = { host: string; kind: "tailnet" | "lan" };
 export type PairingStart =
   | { ok: true; code: string; expires_at: number; ttl: number; hosts: PairHost[] }
-  /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6). */
-  | { ok: false; error: string; available: PairAddress[]; bind: string };
+  /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6).
+   *  `authConfigured` is THIS SERVER's answer to "do I have a token", which a client cannot
+   *  infer: localStorage holding one says nothing about what the server accepts. */
+  | { ok: false; error: string; available: PairAddress[]; bind: string; authConfigured: boolean };
 
 export const api = {
   runtimeStatus() {
@@ -740,6 +742,9 @@ export const api = {
       error: String(data?.error || `${res.status} ${res.statusText}`),
       available: Array.isArray(data?.available) ? data.available : [],
       bind: String(data?.bind || ""),
+      // Absent (an older server) is treated as NOT configured, so the flow mints rather than
+      // assuming — minting a second token is recoverable; writing a bind with no token is not.
+      authConfigured: data?.auth_configured === true,
     };
   },
   pairingCancel() {

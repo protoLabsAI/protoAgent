@@ -210,6 +210,19 @@ def _device_token_ok(token: str) -> bool:
         return False
 
 
+def bearer_configured() -> bool:
+    """True when a bearer token is active on THIS server.
+
+    The single source of truth for "does this instance require a token", exposed because a
+    client cannot infer it: a browser holding a token in localStorage says nothing about what
+    the server accepts, and the two diverge the moment a token is rotated or removed. The
+    pairing flow reads this before it will write a non-loopback bind — writing one without a
+    token configured makes the server refuse to start (`evaluate_open_bind`), which bricks
+    the app until someone hand-edits YAML.
+    """
+    return _BEARER[0] is not None
+
+
 def set_bearer_token(token: str | None) -> None:
     """Update the active bearer token at runtime (wizard/drawer reload)."""
     _BEARER[0] = (token or "").strip() or None

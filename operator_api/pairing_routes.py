@@ -221,6 +221,8 @@ def register_pairing_routes(app) -> None:
             # was asked for). Still no PROTOAGENT_ALLOW_OPEN suggestion: the fix is a
             # reachable bind WITH a token, never an open instance.
             available = await asyncio.to_thread(_pairable_addresses)
+            from a2a_impl.auth import bearer_configured
+
             return JSONResponse(
                 {
                     "ok": False,
@@ -228,6 +230,11 @@ def register_pairing_routes(app) -> None:
                     "hosts": [],
                     "available": available,
                     "bind": _BIND_HOST[0],
+                    # Whether THIS SERVER has a token, so the console can decide to mint one
+                    # from fact rather than from what its own localStorage happens to hold.
+                    # Those diverge whenever a token is rotated or removed, and acting on the
+                    # wrong one writes a bind the server then refuses to boot with.
+                    "auth_configured": bearer_configured(),
                 },
                 status_code=409,
             )
