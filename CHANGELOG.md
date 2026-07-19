@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The desktop app no longer hangs on launch after enabling network access.** v0.104.1's
+  "Allow devices on my network" bound the single address you picked, which drops loopback —
+  and the desktop app reaches its own server over `127.0.0.1`, so it could no longer talk to
+  the thing it had just reconfigured (it sat on *"This is taking longer than usual"*). It now
+  listens on all interfaces, which is what keeps the app working while your phone connects;
+  the address you pick is the one advertised in the QR. If you hit this, set
+  `network.bind: 0.0.0.0` in `~/.protoagent/host-config.yaml` and restart.
+
 ## [0.104.1] - 2026-07-19
 
 ### Fixed
