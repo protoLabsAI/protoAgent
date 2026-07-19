@@ -717,6 +717,10 @@
           "title": "ADR 0087 — Device pairing: per-device revocable tokens + short-TTL QR codes"
         },
         {
+          "path": "adr/0088-per-finding-inline-review-threads.md",
+          "title": "0088 — Per-finding inline review threads: finding-granular GitHub-native memory"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
