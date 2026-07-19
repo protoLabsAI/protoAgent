@@ -701,6 +701,13 @@ async function consumeSse(
   }
 }
 
+export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr: string | null };
+export type PairAddress = { host: string; kind: "tailnet" | "lan" };
+export type PairingStart =
+  | { ok: true; code: string; expires_at: number; ttl: number; hosts: PairHost[] }
+  /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6). */
+  | { ok: false; error: string; available: PairAddress[]; bind: string };
+
 export const api = {
   runtimeStatus() {
     return request<RuntimeStatus>("/api/runtime/status");
@@ -714,13 +721,26 @@ export const api = {
       "/api/devices",
     );
   },
-  pairingStart() {
-    return request<{
-      code: string;
-      expires_at: number;
-      ttl: number;
-      hosts: { host: string; kind: "tailnet" | "lan"; url: string; qr: string | null }[];
-    }>("/api/pairing/start", { method: "POST" });
+  /** Start pairing.
+   *
+   * Read directly rather than through `request` because the 409 body is MEANINGFUL: a
+   * loopback-bound instance reports the addresses it *could* be reached on so the panel can
+   * offer to bind there. `request` collapses every non-2xx into a thrown string, which would
+   * throw that payload away — and the alternative (returning 200 with ok:false) would weaken
+   * a correct status code for client convenience. */
+  async pairingStart(): Promise<PairingStart> {
+    const res = await fetch(apiUrl("/api/pairing/start"), {
+      method: "POST",
+      headers: applyAuth(new Headers()),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: true, ...data } as PairingStart;
+    return {
+      ok: false,
+      error: String(data?.error || `${res.status} ${res.statusText}`),
+      available: Array.isArray(data?.available) ? data.available : [],
+      bind: String(data?.bind || ""),
+    };
   },
   pairingCancel() {
     return request<{ ok: boolean }>("/api/pairing/cancel", { method: "POST" });

@@ -199,3 +199,45 @@ def test_claim_path_is_public_but_only_exactly():
     assert _is_public("/api/pairing/claim-extra") is False
     assert _is_public("/api/pairing/start") is False
     assert _is_public("/api/devices") is False
+
+
+# ── Loopback recovery (ADR 0087 D6) ─────────────────────────────────────────────────────
+# The desktop app binds 127.0.0.1 by design, which made pairing unusable in exactly the
+# place it was asked for. A loopback-bound instance must still report what it COULD bind to
+# so the console can offer the fix instead of dead-ending on an error.
+
+
+def test_a_loopback_bind_still_reports_what_it_could_use(monkeypatch):
+    import operator_api.pairing_routes as pr
+
+    monkeypatch.setattr(pr, "_local_addresses", lambda: ["192.168.5.31", "100.119.239.8"])
+    monkeypatch.setattr(pr, "_BIND_HOST", ["127.0.0.1"])
+    assert pr._candidate_hosts() == []  # nothing pairable RIGHT NOW…
+    # …but the panel needs somewhere to point, tailnet first.
+    assert pr._pairable_addresses() == [
+        {"host": "100.119.239.8", "kind": "tailnet"},
+        {"host": "192.168.5.31", "kind": "lan"},
+    ]
+
+
+def test_pairable_addresses_still_excludes_unusable_ones(monkeypatch):
+    """The offer must not include anything a QR could never reach, or anything PUBLIC —
+    'make me reachable' must not become 'expose me to the internet'."""
+    import operator_api.pairing_routes as pr
+
+    monkeypatch.setattr(pr, "_local_addresses", lambda: ["127.0.0.1", "169.254.1.1", "8.8.8.8"])
+    monkeypatch.setattr(pr, "_BIND_HOST", ["127.0.0.1"])
+    assert pr._pairable_addresses() == []
+
+
+def test_pairable_ignores_the_bind_but_candidates_do_not(monkeypatch):
+    """The two must not drift: candidates = pairable ∩ reachable."""
+    import operator_api.pairing_routes as pr
+
+    monkeypatch.setattr(pr, "_local_addresses", lambda: ["192.168.5.31", "100.119.239.8"])
+    monkeypatch.setattr(pr, "_BIND_HOST", ["192.168.5.31"])
+    assert pr._pairable_addresses() == [
+        {"host": "100.119.239.8", "kind": "tailnet"},
+        {"host": "192.168.5.31", "kind": "lan"},
+    ]
+    assert pr._candidate_hosts() == [{"host": "192.168.5.31", "kind": "lan"}]

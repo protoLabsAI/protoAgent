@@ -163,11 +163,21 @@ def _candidate_hosts() -> list[dict]:
     honest answer the caller turns into "bind to a reachable address first" (ADR 0087 D6)
     rather than a QR that fails mysteriously.
     """
-    addrs = _local_addresses()
+    return [h for h in _pairable_addresses() if _reachable(h["host"])]
 
+
+def _pairable_addresses() -> list[dict]:
+    """Every address that is a VALID pairing target on this machine, ignoring what the
+    server currently binds to.
+
+    Split out from `_candidate_hosts` so a loopback-bound instance can still answer "here
+    is what you *could* expose" — otherwise the console dead-ends on an error with nothing
+    actionable in it, which is exactly how the desktop app (which binds 127.0.0.1 by design)
+    left pairing unusable.
+    """
     out: list[dict] = []
     seen: set[str] = set()
-    for raw in addrs:
+    for raw in _local_addresses():
         if raw in seen:
             continue
         seen.add(raw)
@@ -175,8 +185,6 @@ def _candidate_hosts() -> list[dict]:
             ip = ipaddress.ip_address(raw)
         except ValueError:
             continue
-        if not _reachable(raw):
-            continue  # the server isn't listening on this interface
         # Classify by ALLOWLIST, not by `is_private`. Tailscale hands out 100.64.0.0/10
         # (RFC 6598 CGNAT), which Python reports as NEITHER is_private NOR is_global — so a
         # `not ip.is_private` filter silently drops the tailnet address, the one most worth
@@ -207,14 +215,19 @@ def register_pairing_routes(app) -> None:
         # to freeze every other request on the server, not just this one.
         hosts = await asyncio.to_thread(_candidate_hosts)
         if not hosts:
-            # Nothing to encode. Say why, and do NOT suggest PROTOAGENT_ALLOW_OPEN — the
-            # fix is to bind a reachable address WITH a token, not to open the instance.
+            # Nothing to encode — but don't dead-end. Report what this machine COULD be
+            # reached on so the console can offer to bind there (the desktop app ships
+            # loopback-only by design, which made pairing unusable in exactly the place it
+            # was asked for). Still no PROTOAGENT_ALLOW_OPEN suggestion: the fix is a
+            # reachable bind WITH a token, never an open instance.
+            available = await asyncio.to_thread(_pairable_addresses)
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "no reachable address — this instance looks bound to loopback. "
-                    "Restart it bound to your tailnet or LAN address to pair a device.",
+                    "error": "This agent only listens on localhost, so a phone can't reach it.",
                     "hosts": [],
+                    "available": available,
+                    "bind": _BIND_HOST[0],
                 },
                 status_code=409,
             )
