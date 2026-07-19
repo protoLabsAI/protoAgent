@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **"Allow devices on my network" can no longer stop the app from starting.** It decided
+  whether to create an auth token by looking at the *browser's* stored token rather than
+  asking the server — so a browser holding a token the server no longer had made it skip
+  creating one, then write a network bind onto an instance with no token. The server refuses
+  that combination at startup (correctly: the operator API includes plugin install), so the
+  app wouldn't boot and could only be recovered by hand-editing YAML. The flow now reads
+  whether *this server* has a token and refuses to change the bind until one exists.
+
 ## [0.104.3] - 2026-07-19
 
 ### Fixed

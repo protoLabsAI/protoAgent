@@ -15,7 +15,7 @@ type Device = { id: string; name: string; created_at: number; last_seen_at: numb
 type Pairing = { code: string; expires_at: number; ttl: number; hosts: PairHost[] };
 /** Loopback-bound: what we COULD bind to, so the panel can offer the fix rather than
  *  dead-ending on an error the operator has no way to act on. */
-type Unreachable = { error: string; available: PairAddress[] };
+type Unreachable = { error: string; available: PairAddress[]; authConfigured: boolean };
 
 function ago(ts: number | null): string {
   if (!ts) return "never used";
@@ -124,7 +124,7 @@ export function DevicesPanel() {
       } else if (res.available.length) {
         // Loopback-bound but fixable — offer the addresses instead of an error the operator
         // can't act on. This is the desktop app's default state.
-        setUnreachable({ error: res.error, available: res.available });
+        setUnreachable({ error: res.error, available: res.available, authConfigured: res.authConfigured });
       } else {
         setPairError(`${res.error} No tailnet or LAN address was found on this machine either.`);
       }
@@ -155,16 +155,26 @@ export function DevicesPanel() {
    */
   async function makeReachable(addr: PairAddress) {
     setExposing(addr.host);
-    const previous = window.localStorage.getItem("protoagent.authToken");
+    // Mint based on what the SERVER reports, never on what this browser happens to hold.
+    // Those are different facts and they diverge the moment a token is rotated or removed —
+    // and acting on the wrong one wrote a non-loopback bind onto an instance with no token,
+    // which the boot guard then refuses, bricking the app until someone edits YAML by hand.
+    const serverHasToken = unreachable?.authConfigured === true;
     try {
-      if (!previous) {
+      if (!serverHasToken) {
         // The server REFUSES a non-loopback bind with no token, so exposing without one
         // isn't an option we could offer even if we wanted to.
         const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+        // Store locally BEFORE saving: `auth.token` applies live, so the very next request
+        // would 401 this session if the browser weren't already holding it.
+        const prior = window.localStorage.getItem("protoagent.authToken");
         window.localStorage.setItem("protoagent.authToken", token);
         const res = await api.saveSettings({ "auth.token": token }, "agent");
         if (!res.ok) {
-          window.localStorage.removeItem("protoagent.authToken");
+          // Restore what was there, don't blank it — this browser may hold a token that is
+          // still valid for something, and the save we just attempted never took effect.
+          if (prior) window.localStorage.setItem("protoagent.authToken", prior);
+          else window.localStorage.removeItem("protoagent.authToken");
           throw new Error(res.messages.join(" · ") || "could not set an auth token");
         }
         setMintedToken(token);
