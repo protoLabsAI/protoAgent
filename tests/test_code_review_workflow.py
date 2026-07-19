@@ -99,6 +99,23 @@ def test_synthesizer_filters_ledger_slippage_and_gap_lines():
     assert "never in the array" in p  # Gap prose lines stay out of the findings JSON
 
 
+# ── existing-thread overlap suppression (the open-swe reviewer lessons) ──────
+
+
+def test_recipe_threads_existing_threads_into_every_finder():
+    r = _recipe()
+    assert any(i["name"] == "existing_threads" for i in r["inputs"])
+    for s in (s for s in r["steps"] if s["subagent"] == "review-finder"):
+        assert "{{inputs.existing_threads}}" in s["prompt"], s["id"]
+
+
+def test_finder_and_synthesizer_suppress_existing_thread_overlaps():
+    finder = SUBAGENT_REGISTRY["review-finder"].system_prompt
+    assert "pr_review_threads" in finder  # the data block is named, and framed as data
+    assert "never re-filed" in finder  # agreement goes in prose, not the array
+    assert "overlap an existing PR review thread" in SUBAGENT_REGISTRY["review-synthesizer"].system_prompt
+
+
 # ── ported review disciplines (the open-swe reviewer lessons) ────────────────
 
 
