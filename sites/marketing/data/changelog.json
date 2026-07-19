@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.104.1",
+    "date": "2026-07-19",
+    "changes": [
+      "Pairing works in the desktop app."
+    ]
+  },
+  {
     "version": "v0.104.0",
     "date": "2026-07-18",
     "changes": [
