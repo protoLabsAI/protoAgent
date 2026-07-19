@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.104.3] - 2026-07-19
+
 ### Fixed
 - **Enabling network access no longer hands you a secret you can't see.** The flow mints an
   auth token when the instance has none — but it went straight into the localStorage of
