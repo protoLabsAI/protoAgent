@@ -107,7 +107,7 @@ def register(registry):
     registry.register_goal_hook(on_achieved=on_achieved)
 ```
 
-Pass `job_id=` to make the re-arm idempotent, or `delay_seconds=` to defer the turn. This is the *reaction* half of the self-improving loop: `sdk.start_goal_loop` **drives** a goal; a hook + `run_in_session` **reacts** when it lands.
+Pass `job_id=` to make the re-arm idempotent, or `delay_seconds=` to defer the turn. This is the *reaction* half of the self-improving loop: a recurring cadence **drives** the work (`sdk.start_goal_loop` arms one against a watch-verified target — ADR 0067/#2060); a hook + `run_in_session` **reacts** when it lands.
 
 ## Verifier types
 

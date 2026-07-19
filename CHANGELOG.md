@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`graph.sdk.start_goal_loop` / `stop_goal_loop` are back — watch-based this time** (#2060).
+  The one-call OODA loop — *arm a verifier-backed watch on a goal and schedule the recurring
+  tick that drives it* — returns as sugar over `create_watch` + `schedule_recurring` under a
+  shared derived id; `stop_goal_loop` cancels both (call it from a watch `on_met` hook for a
+  self-retiring cadence). The originals were removed with monitor goals (ADR 0067, since
+  amended), but the devkit `building-plugins` skill kept documenting them — a copy-pasteable
+  `ImportError` — and two plugins had hand-rolled the same composition. The skill's example
+  is now true again, and the stale reference in the goal-mode guide is fixed with it.
+
 ## [0.104.4] - 2026-07-19
 
 ### Fixed
