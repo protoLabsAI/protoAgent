@@ -117,6 +117,17 @@ Devices panel offers to bind there. Choosing an address writes `network.bind` (h
 when the instance has no token, mints one first — the server refuses a non-loopback bind
 without one, so "expose it but leave it open" is not a state the flow can even produce.
 
+**The bind value is `0.0.0.0`, not the address the operator picked.** v0.104.1 wrote the chosen
+address and hung the desktop app on launch: uvicorn takes ONE host, a single non-loopback bind
+DROPS loopback, and the desktop webview reaches its own sidecar over `http://127.0.0.1:<port>`.
+So the app could no longer talk to the server it had just reconfigured. Picking "Tailnet"
+selects the address we **advertise in the QR**, not the only one we listen on — "loopback plus
+tailnet, nothing else" is not expressible in a single uvicorn host.
+
+That means the instance really does listen on every interface, which is broader than "the
+address you pick" implied. The UI says so plainly rather than describing a tighter posture than
+it delivers; the token is what actually gates access.
+
 Two properties this must keep:
 
 - **Tailnet is offered above LAN and labelled as the safer pick.** A tailnet address is

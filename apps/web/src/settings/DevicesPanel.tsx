@@ -132,8 +132,14 @@ export function DevicesPanel() {
   }
 
   /**
-   * Bind the server to `addr` so phones can reach it, minting an auth token first if the
-   * instance has none.
+   * Make the agent reachable so phones can pair, minting an auth token first if the instance
+   * has none.
+   *
+   * Binds `0.0.0.0`, NOT the address the operator picked. uvicorn takes ONE host, and binding
+   * a single non-loopback address DROPS loopback — which breaks the desktop app outright,
+   * because its webview talks to its own sidecar over `http://127.0.0.1:<port>`. Choosing
+   * "Tailnet" therefore selects the address we ADVERTISE in the QR, not the only one we
+   * listen on. `0.0.0.0` is the only single value that satisfies both callers.
    *
    * ORDER MATTERS. `auth.token` applies LIVE (no restart), so writing it would 401 this very
    * session on the next request if the browser didn't already hold it. Store it locally
@@ -158,7 +164,9 @@ export function DevicesPanel() {
           throw new Error(res.messages.join(" · ") || "could not set an auth token");
         }
       }
-      const bind = await api.saveSettings({ "network.bind": addr.host }, "host");
+      // See the note above: 0.0.0.0, not addr.host — a specific bind kills loopback and with
+      // it the desktop app's own connection to the sidecar.
+      const bind = await api.saveSettings({ "network.bind": "0.0.0.0" }, "host");
       if (!bind.ok) throw new Error(bind.messages.join(" · ") || "could not set the bind address");
       setUnreachable(null);
       setNeedsRestart(true);
@@ -223,10 +231,12 @@ export function DevicesPanel() {
         <section className="devices-notice" aria-label="Make this agent reachable">
           <p className="devices-pair-hint">{unreachable.error}</p>
           <p className="setting-desc">
-            Allow devices on your network to reach it. This agent will listen on the address you
-            pick instead of localhost only, and will require a token — one is generated now if you
-            don&apos;t have one. Undo it any time in Settings ▸ Network by setting the bind
-            interface back to <code>127.0.0.1</code>.
+            Allow devices on your network to reach it. This agent will start listening on{" "}
+            <strong>all</strong> your network interfaces rather than localhost only — that&apos;s
+            what keeps this app working while your phone connects — and will require a token; one
+            is generated now if you don&apos;t have one. Pick the address to put in the QR below.
+            Undo it any time in Settings ▸ Network by setting the bind interface back to{" "}
+            <code>127.0.0.1</code>.
           </p>
           <div className="devices-hosts">
             {unreachable.available.map((a) => (
@@ -244,7 +254,7 @@ export function DevicesPanel() {
           </div>
           <p className="setting-desc">
             {unreachable.available.some((a) => a.kind === "tailnet")
-              ? "Tailnet is the safer pick — only your own devices can reach it, from any network."
+              ? "Tailnet is the safer address to share — only your own devices can reach it, from any network."
               : "This is a local-network address, so it's reachable by anything on this Wi-Fi."}
           </p>
         </section>
