@@ -11,7 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A token-gated instance's own desktop app can reach it again.** CORS preflight (`OPTIONS`)
+  requests carry no `Authorization` header — that's how browsers work — but the auth
+  middleware demanded a bearer on them, so every cross-origin request 401'd before the real
+  one was sent. Any token-gated instance whose console runs on a different origin was affected;
+  the desktop webview (`tauri://localhost`) is the common case. Preflight is now exempt (it
+  carries no credentials and triggers no side effects); the actual request is still checked.
+
 ### Changed
+- **The `/code-review` panel got sharper prompts** (#2063–#2066, ADR 0088). The reviewer now
+  frames diff content as untrusted data, holds a stricter file:line reference discipline,
+  carries the open-swe review conventions, and suppresses findings that overlap a live PR
+  thread so re-reviews don't repeat themselves.
 - **Settings ▸ Devices is hidden behind a developer flag (`settings.devices`, default off).**
   The QR pairing flow behind it stopped the desktop app from starting four separate times in
   one day — each fix correct, each exposing the next layer underneath. It stays hidden until
