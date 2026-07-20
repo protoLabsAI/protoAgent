@@ -721,6 +721,10 @@
           "title": "0088 — Per-finding inline review threads: finding-granular GitHub-native memory"
         },
         {
+          "path": "adr/0089-intra-instance-trust-boundary.md",
+          "title": "ADR 0089 — Intra-instance trust boundary: the hub authenticates, members trust a fleet service token"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
