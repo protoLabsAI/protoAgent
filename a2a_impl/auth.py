@@ -180,6 +180,16 @@ def _is_public(path: str) -> bool:
         return True
     if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
         return True
+    # A SISTER agent's public STATIC assets ride the hub proxy as ``/agents/<slug>/<public-path>``
+    # — a plugin view's ``import()``/``<link>`` of ``/_ds/*``, the SPA, favicons: plain browser
+    # loads that CANNOT carry a bearer. The member already serves them anonymously; a token-gated
+    # hub must too, or the DS plugin-kit 401s and every sister plugin view falls back to
+    # unauthenticated ``fetch`` (→ its data 401s: the "Could not load" class). Only the static
+    # ``_PUBLIC_PREFIXES`` are lifted this way (never ``/agents/<slug>/api/…`` — those stay gated,
+    # then get the fleet-token swap); the #1890 member_public resolver covers plugin NAMESPACES.
+    m = _AGENTS_RE.match(path)
+    if m and any(m.group(2).startswith(p) for p in _PUBLIC_PREFIXES):
+        return True
     if any(path.startswith(p) for p in _PLUGIN_PUBLIC):
         return True
     if path.startswith("/metrics") and _metrics_public():
