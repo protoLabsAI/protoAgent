@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.105.0] - 2026-07-20
+
 ### Fixed
 - **Plugins work again on sister agents in a fleet — over both HTTP and WebSocket.** A fleet
   member runs under its own instance scope, so its device registry and auth token are its own.
