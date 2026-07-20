@@ -9,9 +9,13 @@ Two data sources, chosen so the *inventory* is deterministic and
 platform-independent (which is what the CI gate depends on):
 
   * Python  — package list + versions from ``uv.lock`` (committed, covers every
-    platform's resolution). License strings are enriched best-effort from the
-    installed environment (``importlib.metadata``); a package's license text is
-    stable across platforms even when *which* packages install is not.
+    platform's resolution). License strings are resolved best-effort from the
+    installed environment (``importlib.metadata``) and, for any that don't
+    resolve, back-filled from the committed manifest itself — safe because a
+    pinned ``name==version``'s license is immutable, so the existing file is a
+    valid cache. That makes regeneration *monotonic*: the installed environment
+    can only ever fill in an ``UNKNOWN``, never wipe an already-recorded license
+    (which used to happen when regenerating in an env without the deps installed).
   * Node    — package list + versions + licenses from ``package-lock.json``
     (committed, lockfileVersion 3 carries a ``license`` field per entry). No
     ``node_modules`` walk, so platform-specific optional binaries can't skew it.
@@ -53,6 +57,13 @@ OWN_PY = {"protoagent"}
 OWN_NPM = {"protoagent-docs", "@protoagent/web", "@protoagent/desktop"}
 
 UNKNOWN = "UNKNOWN"
+
+# Backstop for the one case carry-forward can't rescue: seeding a fresh manifest
+# in an env without the deps installed, so nothing resolves *and* there's no
+# prior file to back-fill from. Refuse to write rather than commit an all-UNKNOWN
+# file. Set well above the normal genuinely-unresolved rate (~5/117 ≈ 4%) so a
+# healthy regen never trips it; a bare-env seed sits near 100%.
+MAX_UNKNOWN_FRACTION = 0.4
 
 # Machine-readable inventory the --check gate diffs against. Bump the version
 # suffix if the embedded shape ever changes.
@@ -111,9 +122,38 @@ def _installed_py_licenses() -> dict[str, str]:
     return out
 
 
-def collect_python() -> list[dict]:
+def _committed_licenses() -> dict[tuple[str, str], str]:
+    """Parse the current manifest's rendered tables into ``{(name, version):
+    license}``. This is the carry-forward cache: a pinned ``name==version``'s
+    license never changes, so a value already recorded here is authoritative
+    even when the installed environment can't reproduce it."""
+    if not OUT.exists():
+        return {}
+    out: dict[tuple[str, str], str] = {}
+    for line in OUT.read_text("utf-8").splitlines():
+        # Package rows render as ``| `name` | version | license |``; header and
+        # separator rows (``| Package …``, ``| --- …``) don't start with a code
+        # span, so this cleanly selects only real entries from both tables.
+        if not line.startswith("| `"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 3:
+            continue
+        name, version, lic = cells[0].strip("`"), cells[1], cells[2]
+        if name and version:
+            out[(name, version)] = lic
+    return out
+
+
+def collect_python() -> tuple[list[dict], list[str]]:
+    """Return ``(rows, carried)`` where ``carried`` lists the ``name==version``
+    packages whose license was preserved from the committed manifest because the
+    installed environment resolved them to ``UNKNOWN`` (i.e. the regressions the
+    carry-forward prevented — the guard in ``main`` keys off this)."""
     data = tomllib.loads(UV_LOCK.read_text("utf-8"))
     installed = _installed_py_licenses()
+    prior = _committed_licenses()
+    carried: list[str] = []
     rows: dict[str, dict] = {}
     for pkg in data.get("package", []):
         name = pkg.get("name", "")
@@ -125,12 +165,17 @@ def collect_python() -> list[dict]:
         src = pkg.get("source", {})
         if "virtual" in src or "editable" in src:
             continue
-        rows[name.lower()] = {
-            "name": name,
-            "version": version,
-            "license": _normalize(installed.get(_canon(name), UNKNOWN)),
-        }
-    return sorted(rows.values(), key=lambda r: r["name"].lower())
+        lic = _normalize(installed.get(_canon(name), UNKNOWN))
+        if lic == UNKNOWN:
+            # This env couldn't resolve a license — back-fill from the committed
+            # manifest. Immutable name==version means a previously-recorded value
+            # is still correct, so we never regress known -> UNKNOWN.
+            prev = prior.get((name, version))
+            if prev and prev != UNKNOWN:
+                lic = prev
+                carried.append(f"{name}=={version}")
+        rows[name.lower()] = {"name": name, "version": version, "license": lic}
+    return sorted(rows.values(), key=lambda r: r["name"].lower()), carried
 
 
 # --- Node / npm -------------------------------------------------------------
@@ -278,10 +323,28 @@ def main() -> int:
                          "reads only committed files, no install needed")
     args = ap.parse_args()
 
-    py, npm = collect_python(), collect_npm()
+    (py, carried), npm = collect_python(), collect_npm()
 
     if args.check:
         return _check(py, npm)
+
+    # Loud, non-fatal: a healthy regen carries nothing. Anything here means this
+    # env couldn't resolve those licenses and we fell back to the committed file.
+    if carried:
+        shown = ", ".join(carried[:8]) + (" …" if len(carried) > 8 else "")
+        print(f"::warning::preserved {len(carried)} license(s) from the existing "
+              f"{OUT.name} — this env couldn't resolve them (deps not installed?). "
+              f"Regenerate after `uv sync` to refresh: {shown}", file=sys.stderr)
+
+    # Backstop the seed-in-bare-env case carry-forward can't save (nothing to
+    # back-fill from). Don't overwrite a manifest with a mostly-UNKNOWN one.
+    unknown = sum(1 for r in py if r["license"] == UNKNOWN)
+    if py and unknown / len(py) > MAX_UNKNOWN_FRACTION:
+        print(f"::error::refusing to write {OUT.name}: {unknown}/{len(py)} Python "
+              f"licenses are {UNKNOWN} — this looks like an environment without the "
+              f"project deps. Run: uv sync && uv run python scripts/gen_attribution.py",
+              file=sys.stderr)
+        return 1
 
     OUT.write_text(render(py, npm), encoding="utf-8")
     print(f"Wrote {OUT.relative_to(REPO)}: {len(py)} Python + {len(npm)} npm packages")
