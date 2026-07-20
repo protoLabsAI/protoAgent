@@ -805,3 +805,26 @@ def test_bearer_tier_classifies_every_credential():
     assert auth.bearer_tier("fleet") == "operator"  # ADR 0089 — fleet token is operator-grade
     assert auth.bearer_tier("nope") is None
     assert auth.bearer_tier("") is None
+
+
+def test_valid_sse_token_marks_operator_tier_for_the_fleet_swap():
+    """ADR 0089: a proxied /agents/<slug>/api/events must get the fleet-token swap, which keys on
+    request.state.trust_tier. The SSE branch admits BEFORE the bearer classifier runs, so it has
+    to set the tier itself — else forward_to never swaps and a closed member 401s the hub-signed
+    SSE token (the portfolio dashboard's live stream 'Could not load')."""
+    auth.configure(bearer_token="op", api_key="", allowed_origins_raw="")
+    tok = auth.generate_sse_token()  # signed with the current bearer
+
+    def _echo(r):
+        return PlainTextResponse(getattr(r.state, "trust_tier", "<unset>"))
+
+    app = Starlette(routes=[Route("/api/events", _echo)])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+    r = c.get("/api/events", params={"token": tok})
+    assert r.status_code == 200 and r.text == "operator"
+    # a slug-proxied path resolves the same SSE branch (endswith match)
+    app2 = Starlette(routes=[Route("/agents/{slug}/api/events", _echo)])
+    app2.add_middleware(auth.A2AAuthMiddleware)
+    r2 = TestClient(app2).get("/agents/roxy/api/events", params={"token": tok})
+    assert r2.status_code == 200 and r2.text == "operator"

@@ -439,6 +439,14 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if path == "/api/events" or path.endswith("/api/events"):
             sse_token = request.query_params.get("token", "")
             if _validate_sse_token(sse_token):
+                # A valid SSE token proves the caller held the operator bearer — it's HMAC-signed
+                # with it and mintable only via the operator-gated /api/sse-token. Mark the tier so
+                # the fleet proxy swaps in the MEMBER's credential (ADR 0089) for a proxied
+                # /agents/<slug>/api/events: this branch returns BEFORE the bearer classifier that
+                # normally sets trust_tier, so without this the swap never fires — and a closed
+                # member, which validates the token against ITS bearer (the fleet token, not the
+                # hub's that signed it), rejects the hub-signed token → 401 on every live stream.
+                request.state.trust_tier = "operator"
                 return await call_next(request)
             # Fall through to the normal bearer/X-API-Key check below — a
             # server-to-server caller with an Authorization header still passes.

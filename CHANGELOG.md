@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A fleet member's live console streams work again (`/api/events`).** v0.105.0 (ADR 0089) closed
+  members on loopback, but the hub reverse-proxy swapped in the member's credential only for regular
+  API calls — not for the Server-Sent Events stream, which is admitted by a short-lived query token
+  signed with the *hub's* bearer. A closed member validates that token against *its* bearer (the
+  fleet token) and rejected it, so any plugin panel that streams live updates (the portfolio
+  dashboard, for one) showed "Could not load — Unauthorized". The SSE branch now marks the caller
+  operator (a valid SSE token proves it held the operator bearer), so the proxy swaps the fleet token
+  in for the stream too — the same way it already did for API calls and WebSockets. (ADR 0089)
+
 ## [0.105.0] - 2026-07-20
 
 ### Fixed
