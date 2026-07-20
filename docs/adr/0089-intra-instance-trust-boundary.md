@@ -146,11 +146,17 @@ workspace that set its *own* token via config keeps it (`configure()` prefers `c
 while still accepting the fleet token via the `_FLEET` tier. With a credential now gating the surface,
 `PROTOAGENT_ALLOW_OPEN` is dropped rather than set.
 
-**WebSocket is out of scope here.** A member's WS route is *not* gated by the auth middleware (which is
-HTTP-only), so closing the member's HTTP surface neither breaks a proxied member WS (terminal PTY,
-agent_browser viewport) nor widens the pre-existing gap that the hub's `forward_ws` already runs
-without hub auth. Authenticating the hub's WS handshake — and having `forward_ws` swap in the fleet
-token the way `forward_to` does — is a separate follow-up, tracked apart from this ADR.
+**WebSocket — the handshake swap (follow-up, now landed).** A member's WS route is *not* gated by the
+auth middleware (which is HTTP-only); each plugin WS self-authenticates. That splits by scheme, and
+D5 exposed the split: a plugin that validates a `?token=` bearer against the **member's own** credential
+(terminal PTY) breaks once that credential becomes the fleet token but the console still opens the
+socket with the *operator* bearer; a plugin that mints a **member-side ticket** over HTTP
+(agent_browser) is unaffected, because the ticket endpoint is already swapped correctly by `forward_to`.
+The fix mirrors D3 on the socket: `forward_ws` authenticates a presented `?token=` at the hub
+(`a2a_impl.auth.bearer_tier`) and swaps it for the fleet token the member expects — refusing a token
+that doesn't authenticate, and passing through the `host` slug (its plugins want the operator bearer)
+and ticket-based plugins (no `token` param). Remote-member WS stays refused (its stored bearer must not
+be lent to an unauthenticated caller).
 
 ### D6 — Rotation and lifecycle
 

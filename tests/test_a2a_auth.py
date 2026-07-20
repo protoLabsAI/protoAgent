@@ -789,3 +789,19 @@ def test_fleet_token_is_operator_tier_not_federation():
     assert c.get("/api/x", headers={"Authorization": "Bearer fleet"}).status_code == 200  # operator
     assert c.get("/api/x", headers={"Authorization": "Bearer op"}).status_code == 200
     assert c.get("/api/x", headers={"Authorization": "Bearer fed"}).status_code == 403  # ceiling denies federation
+
+
+def test_bearer_tier_classifies_every_credential():
+    # open mode (no bearer, no api-key) → operator regardless of the token
+    auth.configure(bearer_token=None, api_key="", allowed_origins_raw="")
+    assert auth.bearer_tier("") == "operator"
+    assert auth.bearer_tier("anything") == "operator"
+    # closed: operator bearer / federation / fleet service token, else None
+    auth.configure(
+        bearer_token="op", api_key="", allowed_origins_raw="", federation_token="fed", fleet_token="fleet"
+    )
+    assert auth.bearer_tier("op") == "operator"
+    assert auth.bearer_tier("fed") == "federation"
+    assert auth.bearer_tier("fleet") == "operator"  # ADR 0089 — fleet token is operator-grade
+    assert auth.bearer_tier("nope") is None
+    assert auth.bearer_tier("") is None
