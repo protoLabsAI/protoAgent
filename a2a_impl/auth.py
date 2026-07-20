@@ -215,6 +215,31 @@ def _device_token_ok(token: str) -> bool:
         return False
 
 
+def bearer_tier(token: str) -> str | None:
+    """Classify a raw bearer token to its trust tier, or None if it doesn't authenticate.
+
+    The non-middleware entry point for scopes the HTTP ``A2AAuthMiddleware`` skips — notably
+    the fleet WS proxy (``@app.websocket`` runs outside HTTP middleware). Mirrors the dispatch
+    classification exactly: open mode (no bearer AND no X-API-Key) ⇒ ``operator``; otherwise the
+    operator bearer, a configured federation token, the fleet service token (ADR 0089), or a
+    paired device token ⇒ their tier, else ``None``.
+    """
+    active, fed, fleet = _BEARER[0], _FEDERATION[0], _FLEET[0]
+    if active is None and not _API_KEY[0]:
+        return "operator"  # open mode — the surface is unauthenticated
+    if not token:
+        return None
+    if active is not None and hmac.compare_digest(token, active):
+        return "operator"
+    if fed is not None and hmac.compare_digest(token, fed):
+        return "federation"
+    if fleet is not None and hmac.compare_digest(token, fleet):
+        return "operator"
+    if _device_token_ok(token):
+        return "operator"
+    return None
+
+
 def bearer_configured() -> bool:
     """True when a bearer token is active on THIS server.
 

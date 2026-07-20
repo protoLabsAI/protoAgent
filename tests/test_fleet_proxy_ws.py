@@ -116,3 +116,59 @@ def test_ws_proxy_still_serves_live_local_peer(monkeypatch):
             assert ws.receive_text() == "ping"
     finally:
         stop()
+
+
+# ── _member_ws_query: token auth + fleet swap (ADR 0089) ──────────────────────
+
+
+def _patch_bt(monkeypatch, fn):
+    monkeypatch.setattr("a2a_impl.auth.bearer_tier", fn)
+
+
+def _patch_fleet(monkeypatch, tok="fleet-tok"):
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: tok)
+
+
+def test_member_ws_query_swaps_operator_token_for_fleet(monkeypatch):
+    from urllib.parse import parse_qs
+
+    _patch_bt(monkeypatch, lambda t: "operator" if t == "op" else None)
+    _patch_fleet(monkeypatch)
+    q, allowed = proxy._member_ws_query("alice", "token=op&cols=80")
+    assert allowed
+    d = parse_qs(q)
+    assert d["token"] == ["fleet-tok"] and d["cols"] == ["80"]  # swapped; other params kept
+
+
+def test_member_ws_query_refuses_unauthenticated_token(monkeypatch):
+    _patch_bt(monkeypatch, lambda t: None)  # nothing authenticates → close, don't lend the socket
+    _, allowed = proxy._member_ws_query("alice", "token=nope")
+    assert not allowed
+
+
+def test_member_ws_query_passes_through_ticket_plugin(monkeypatch):
+    # No token param (agent_browser mints a member-side ?ticket=) — forward as-is; the member
+    # self-authenticates and the hub must neither gate nor inject.
+    _patch_bt(monkeypatch, lambda t: None)  # closed hub, empty token → not operator
+    q, allowed = proxy._member_ws_query("alice", "ticket=abc123")
+    assert allowed and q == "ticket=abc123"
+
+
+def test_member_ws_query_open_mode_injects_fleet(monkeypatch):
+    from urllib.parse import parse_qs
+
+    # Open hub: bearer_tier('') → operator, so even a tokenless handshake gets the fleet token a
+    # closed member still needs; harmless for ticket plugins (they ignore ?token=).
+    _patch_bt(monkeypatch, lambda t: "operator")
+    _patch_fleet(monkeypatch)
+    q, allowed = proxy._member_ws_query("alice", "ticket=abc")
+    d = parse_qs(q)
+    assert allowed and d["token"] == ["fleet-tok"] and d["ticket"] == ["abc"]
+
+
+def test_member_ws_query_host_passes_through(monkeypatch):
+    # The host's plugins expect the operator bearer, not the fleet token — never swap for host.
+    _patch_bt(monkeypatch, lambda t: "operator")
+    _patch_fleet(monkeypatch)
+    q, allowed = proxy._member_ws_query("host", "token=op")
+    assert allowed and q == "token=op"

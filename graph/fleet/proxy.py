@@ -187,6 +187,40 @@ async def _pump_ws(client_ws, upstream) -> None:
             t.cancel()
 
 
+def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
+    """Rewrite a WS handshake's query for a LOCAL-member target (ADR 0089).
+
+    A member's plugin WS (terminal PTY, say) validates a ``?token=`` param against the member's
+    OWN inbound bearer — which is now the fleet service token (D5) — but the console opens the
+    socket with the *operator* bearer, so post-D5 that token mismatches and the member refuses
+    the socket. Mirror what ``forward_to`` does for HTTP: authenticate the presented token at the
+    hub and, if it's an operator credential, swap it for the fleet token the member expects.
+
+    Returns ``(query, allowed)``; ``allowed=False`` ⇒ a token was presented that does not
+    authenticate as operator — close the socket rather than proxy it. Pass-through unchanged for:
+    the ``host`` slug (its plugins expect the operator bearer, not the fleet token) and
+    ticket-based plugins that carry no ``token`` param (agent_browser mints a member-side ticket
+    over HTTP — already correct — so the hub must not gate them). Callers refuse remote members
+    before this (their stored bearer must never be lent to an unauthenticated WS caller)."""
+    from urllib.parse import parse_qsl, urlencode
+
+    pairs = parse_qsl(raw_query, keep_blank_values=True)
+    if slug == "host":
+        return raw_query, True
+    from a2a_impl.auth import bearer_tier
+
+    tok = next((v for (k, v) in pairs if k == "token"), None)
+    if bearer_tier(tok or "") == "operator":
+        from graph.fleet.service_token import resolve_service_token
+
+        fleet = resolve_service_token()
+        pairs = [(k, v) for (k, v) in pairs if k != "token"] + [("token", fleet)]
+        return urlencode(pairs), True
+    if tok is not None:
+        return raw_query, False  # a token was offered and it isn't operator — don't lend the socket
+    return raw_query, True  # no token (ticket-based plugin) — the member self-authenticates
+
+
 async def forward_ws(slug: str, ws, path: str) -> None:
     """Reverse-proxy a **WebSocket** to the agent named by ``slug`` (#883). The HTTP proxy
     above can't carry a WS upgrade (it strips ``Upgrade``/``Connection``), so a plugin's
@@ -194,14 +228,15 @@ async def forward_ws(slug: str, ws, path: str) -> None:
     the panel but the socket showed "Disconnected". This resolves the slug → member, opens
     a client WS to it (carrying the bearer + subprotocols), and pumps frames both ways.
 
-    **Remote members are NOT proxied over WS (security).** The hub's default-deny auth is an
-    HTTP middleware (``A2AAuthMiddleware`` is a Starlette ``BaseHTTPMiddleware``, which skips
-    non-HTTP scopes), so this ``@app.websocket`` route runs with NO hub auth. For a local
-    peer/host that's benign — the hub attaches no stored credential, and a browser WS can't
-    carry one — but for a REMOTE member the hub would attach the remote's stored bearer
-    (``_target_for_slug``) and thereby lend an unauthenticated caller a ride into the remote's
-    authed sockets (e.g. a terminal plugin's PTY). Until the caller can be authenticated over
-    the WS handshake, remote-member live sockets don't traverse the hub; use ``delegate_to`` /
+    **Auth (ADR 0089).** The hub's default-deny auth is an HTTP middleware
+    (``A2AAuthMiddleware`` is a Starlette ``BaseHTTPMiddleware``, which skips non-HTTP scopes),
+    so this ``@app.websocket`` route runs with NO hub auth. ``_member_ws_query`` restores it for
+    a LOCAL member: a presented ``?token=`` is authenticated at the hub and swapped for the fleet
+    service token the member expects (its plugin WS validates against the member's own bearer,
+    now the fleet token); a token that doesn't authenticate is refused. **Remote members are NOT
+    proxied over WS**: the hub would attach the remote's stored bearer (``_target_for_slug``) and
+    lend an unauthenticated caller a ride into the remote's authed sockets (e.g. a terminal
+    plugin's PTY); until a remote handshake is authenticated end-to-end, use ``delegate_to`` /
     a direct connection to the remote instead.
     """
     import websockets
@@ -221,7 +256,14 @@ async def forward_ws(slug: str, ws, path: str) -> None:
         return
     base, extra = target
     ws_base = "ws" + base[len("http") :]  # http(s):// → ws(s)://
-    query = ws.url.query
+    # Authenticate + swap the ?token= credential for a local member (ADR 0089): the member's
+    # plugin WS validates it against the member's own (fleet) bearer, which the console's
+    # operator bearer no longer matches. A presented-but-unauthenticated token is refused here.
+    query, allowed = _member_ws_query(slug, ws.url.query)
+    if not allowed:
+        log.info("[fleet] refusing WS to %r — presented token is not an operator credential", slug)
+        await ws.close(code=1008, reason="unauthorized")
+        return
     upstream_url = f"{ws_base}/{path}" + (f"?{query}" if query else "")
 
     headers = dict(extra)  # a remote member's bearer; else carry the browser's
