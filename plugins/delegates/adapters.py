@@ -25,6 +25,20 @@ class DelegateError(Exception):
     """A dispatch/parse failure. The caller turns it into a tool error string."""
 
 
+def _is_loopback_url(url: str) -> bool:
+    """True when ``url`` targets this box's loopback interface — i.e. an in-instance
+    member/board (its own workspace port, or the hub's own port for a ``host`` tenant
+    path). Used to decide whether an otherwise-tokenless delegate may present the fleet
+    service token (ADR 0089): loopback only — the token never rides off the box."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in ("localhost", "::1") or host == "127.0.0.1" or host.startswith("127.")
+
+
 # ── field schema (drives the panel form + validation) ─────────────────────────
 
 
@@ -298,6 +312,18 @@ class A2aAdapter(Adapter):
             headers["Authorization"] = f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
             if d.auth_scheme == "apiKey":
                 headers["X-API-Key"] = d.auth_token
+        elif _is_loopback_url(d.url):
+            # ADR 0089 D4: an in-instance delegate to a loopback member/board carries no
+            # explicit credential (the "local board is tokenless" pattern, supervisor.py). Now
+            # that members require a credential (D5), present the fleet service token so the
+            # call still authenticates — the member accepts it as operator. Loopback ONLY: an
+            # off-box delegate must configure its own token; the fleet token never leaves the box.
+            try:
+                from graph.fleet.service_token import resolve_service_token
+
+                headers["Authorization"] = f"Bearer {resolve_service_token()}"
+            except Exception:  # noqa: BLE001 — not in a fleet / no token: dispatch unauthenticated as before
+                logger.debug("[delegates] no fleet service token for loopback delegate %r", d.name)
 
         async def _rpc(client, method, params):
             body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
