@@ -688,18 +688,27 @@ def _env_capturing_fleet(tmp_path, monkeypatch):
     return captured
 
 
-def test_spawned_member_runs_open_on_loopback(tmp_path, monkeypatch):
-    """A hub-spawned member must NOT inherit the hub's inbound A2A_AUTH_TOKEN — else it
-    would require a bearer that a token-free local dispatch (the portfolio PM) never sends,
-    making a spawned team unreachable by its own PM (the 401). It runs open on loopback."""
+def test_spawned_member_is_closed_with_fleet_token(tmp_path, monkeypatch):
+    """ADR 0089 D5: a hub-spawned member REQUIRES a credential — it no longer runs open on
+    loopback (that was the local-process RCE hole). It does NOT inherit the hub's raw inbound
+    A2A_AUTH_TOKEN; the fleet service token becomes its bearer (delivered by env, so
+    ``workspace new --from`` can't copy it) and is also injected as PROTOAGENT_FLEET_TOKEN. The
+    hub proxy, the delegate adapters, and the member's own self-POSTs all present this token,
+    so PROTOAGENT_ALLOW_OPEN is unnecessary and dropped."""
+    import graph.fleet.service_token as st
+
+    monkeypatch.setattr(st, "resolve_service_token", lambda: "fleet-xyz")
     captured = _env_capturing_fleet(tmp_path, monkeypatch)
-    monkeypatch.setenv("A2A_AUTH_TOKEN", "hub-inbound-secret")
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "hub-inbound-secret")  # the hub's own inbound token
+    monkeypatch.setenv("PROTOAGENT_ALLOW_OPEN", "1")  # hub is open; the member must not inherit it
     manager.create("beta", port=7891)
 
     supervisor.start("beta")
 
-    assert "A2A_AUTH_TOKEN" not in captured["env"]  # stripped
-    assert captured["env"].get("PROTOAGENT_ALLOW_OPEN") == "1"
+    env = captured["env"]
+    assert env["A2A_AUTH_TOKEN"] == "fleet-xyz"  # the fleet token, NOT the hub's "hub-inbound-secret"
+    assert env["PROTOAGENT_FLEET_TOKEN"] == "fleet-xyz"  # also accepted via the _FLEET tier
+    assert "PROTOAGENT_ALLOW_OPEN" not in env  # dropped — a credential now gates the surface
 
 
 def test_spawned_member_keeps_explicit_workspace_token(tmp_path, monkeypatch):

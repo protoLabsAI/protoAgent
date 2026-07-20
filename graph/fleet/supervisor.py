@@ -188,27 +188,31 @@ def start(ident: str) -> dict:
 
         env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
-        # A hub-spawned member binds loopback and is reached in-process — the fleet proxy
-        # attaches the hub's own token, and the portfolio PM treats a local board as
-        # tokenless. But the child inherits the hub's INBOUND ``A2A_AUTH_TOKEN`` here, which
-        # would make it REQUIRE a bearer that a token-free local dispatch never sends → 401
-        # (a spawned team is unreachable by its own PM). So a spawned member runs OPEN on
-        # loopback unless its own workspace env set a token explicitly. Loopback-only, so
-        # open is safe; ``PROTOAGENT_ALLOW_OPEN`` covers the case it binds a non-loopback host.
-        if "A2A_AUTH_TOKEN" not in env:
-            full_env.pop("A2A_AUTH_TOKEN", None)
-            full_env.setdefault("PROTOAGENT_ALLOW_OPEN", "1")
-        # Fleet service token (ADR 0089): hand the member the instance's internal credential
-        # so the hub can present it in place of the caller's (a device token the member's own
-        # registry can't verify — the reason "plugins broke on sister agents"). Delivered by
-        # env, never config, so `workspace new --from` can't copy it. The member accepts it as
-        # operator; the hub's proxy swaps it in for local-peer targets. (Phase 1 still runs the
-        # member open per the block above — the token is accepted whether the member is open or,
-        # post-D5, closed; injecting it now is the additive half.)
+        # Fleet service token (ADR 0089): the instance's internal, loopback-only credential.
+        # A hub-spawned member binds loopback and is reached in-process (the fleet proxy) or by
+        # its own PM/delegates. It used to run OPEN — inheriting the hub's inbound
+        # ``A2A_AUTH_TOKEN`` would have made it demand a bearer a token-free local dispatch never
+        # sent (a spawned team unreachable by its own PM), so the token was stripped. That left
+        # a member's ``/api`` (plugin install/enable, config rewrite — code execution) reachable
+        # by any local process: a loopback RCE hole.
         from graph.fleet.service_token import ENV_VAR as _FLEET_ENV
         from graph.fleet.service_token import resolve_service_token
 
-        full_env[_FLEET_ENV] = resolve_service_token()
+        fleet_token = resolve_service_token()
+        full_env[_FLEET_ENV] = fleet_token
+        # ADR 0089 D5 — close the member: the fleet token becomes its inbound bearer, delivered
+        # by ENV (never the config file, so ``workspace new --from`` can't copy it). Every
+        # in-instance caller now presents this same token — the hub's reverse proxy and the
+        # delegate adapters from the OUTSIDE (ADR 0089 D3/D4), and the member's OWN
+        # scheduler/background/inbox self-POSTs, which bearer from ``config.auth_token or
+        # A2A_AUTH_TOKEN`` and so authenticate to its own ``/a2a`` for free. A workspace that set
+        # its own token via config keeps it (``configure()`` prefers ``config.auth_token``; the
+        # member still ACCEPTS the fleet token via the ``_FLEET`` tier). With a credential now
+        # gating the surface, ``PROTOAGENT_ALLOW_OPEN`` is unnecessary (a non-loopback bind is
+        # allowed on its own merit) — dropped rather than set.
+        if "A2A_AUTH_TOKEN" not in env:
+            full_env["A2A_AUTH_TOKEN"] = fleet_token
+            full_env.pop("PROTOAGENT_ALLOW_OPEN", None)
         # A2A URL-based multi-tenancy (A2A spec — Multi-Tenancy § URL-based routing). The
         # hub reverse-proxies ``/agents/<slug>/*`` to this member (ADR 0042), so the member's
         # reachable A2A endpoint is the hub's tenant SUB-PATH, not the hub root. But the child

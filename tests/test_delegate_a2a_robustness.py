@@ -269,3 +269,62 @@ def test_dispatch_survives_tracing_helper_blowup(patched):
     _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
 
     assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+
+# ── ADR 0089 D4: fleet service token for a loopback (in-instance) delegate ──────
+
+
+@pytest.fixture(autouse=True)
+def _isolate_fleet_token(tmp_path, monkeypatch):
+    """Keep the fleet-token resolution (now reached by every loopback dispatch) off the real
+    instance root, and clear its process cache so each test starts clean."""
+    import graph.fleet.service_token as _st
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path))
+    monkeypatch.delenv(_st.ENV_VAR, raising=False)
+    monkeypatch.setattr(_st, "_cached", [None])
+    yield
+
+
+def _install_header_capture(monkeypatch, **kw):
+    """A fake AsyncClient that records the headers of the last POST (the SendMessage)."""
+
+    class _C(_FakeClient):
+        seen: dict = {}
+
+        async def post(self, url, json=None, headers=None):
+            _C.seen["headers"] = headers
+            return await super().post(url, json=json, headers=headers)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **client_kw: _C(**kw, **client_kw))
+    return _C.seen
+
+
+def test_dispatch_loopback_delegate_attaches_fleet_token(patched, monkeypatch):
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-abc")
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    seen = _install_header_capture(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+    d = _parse()  # url is http://127.0.0.1:9/a2a — loopback, no auth_token
+    assert asyncio.run(A.dispatch(d, "ping")) == "pong"
+    assert seen["headers"]["Authorization"] == "Bearer fleet-abc"
+
+
+def test_dispatch_remote_delegate_gets_no_fleet_token(patched, monkeypatch):
+    """The fleet token never leaves the box: an off-box (non-loopback) tokenless delegate
+    dispatches unauthenticated, exactly as before."""
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-abc")
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    seen = _install_header_capture(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+    d = _parse(url="http://100.1.2.3:7870/a2a")
+    assert asyncio.run(A.dispatch(d, "ping")) == "pong"
+    assert "Authorization" not in seen["headers"]
+
+
+def test_dispatch_explicit_token_wins_over_fleet(patched, monkeypatch):
+    """A delegate with its own configured token keeps it — the fleet fallback is elif-gated."""
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-abc")
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    seen = _install_header_capture(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+    d = _parse(auth={"scheme": "bearer", "token": "sekret"})  # loopback, but explicit token
+    assert asyncio.run(A.dispatch(d, "ping")) == "pong"
+    assert seen["headers"]["Authorization"] == "Bearer sekret"
