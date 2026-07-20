@@ -115,6 +115,12 @@ member presents the fleet token. That means the same credential is attached by:
 The fleet token becomes the one intra-instance operator credential, replacing "the member is open so
 anything works".
 
+**As implemented.** The delegate A2A adapter (`plugins/delegates/adapters.py`) attaches the fleet
+token when dialing a **loopback** target that carries no explicit `auth_token` — loopback only, so the
+token never leaves the box; an off-box delegate must configure its own credential, and an explicit
+token always wins (the fallback is `elif`-gated). A member's *own* self-POSTs (scheduler / background /
+inbox) need no per-site change — see D5.
+
 ### D5 — Members stop running open (phased, because D4's other call sites must land first)
 
 Once the fleet token is injected and accepted, a member no longer needs to run open. Stop stripping
@@ -131,6 +137,20 @@ D4 enumerates). Phasing:
   so device tokens work on sisters immediately.
 - **Phase 2 (closes the hole):** D4 conversions land, then D5 flips members closed. Members must be
   restarted to adopt the closed posture; the hub triggers the restart on upgrade.
+
+**As implemented — the close mechanism.** The supervisor sets the member's `A2A_AUTH_TOKEN` **env**
+(not its config file) to the fleet token instead of stripping it. Two things then fall out for free: a
+member's own scheduler / background / inbox self-POSTs bearer from `config.auth_token or
+A2A_AUTH_TOKEN`, so they authenticate to the member's own `/a2a` with no per-site change; and a
+workspace that set its *own* token via config keeps it (`configure()` prefers `config.auth_token`)
+while still accepting the fleet token via the `_FLEET` tier. With a credential now gating the surface,
+`PROTOAGENT_ALLOW_OPEN` is dropped rather than set.
+
+**WebSocket is out of scope here.** A member's WS route is *not* gated by the auth middleware (which is
+HTTP-only), so closing the member's HTTP surface neither breaks a proxied member WS (terminal PTY,
+agent_browser viewport) nor widens the pre-existing gap that the hub's `forward_ws` already runs
+without hub auth. Authenticating the hub's WS handshake — and having `forward_ws` swap in the fleet
+token the way `forward_to` does — is a separate follow-up, tracked apart from this ADR.
 
 ### D6 — Rotation and lifecycle
 
