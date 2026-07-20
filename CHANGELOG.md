@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugins work again on sister agents in a fleet — over both HTTP and WebSocket.** A fleet
+  member runs under its own instance scope, so its device registry and auth token are its own.
+  The hub reverse-proxy was forwarding the *caller's* credential — a phone's per-device token, or
+  the operator bearer — straight through to a member that couldn't verify it, so every proxied
+  plugin call to a sister agent `401`'d (the console-side symptom being a plugin panel crashing on
+  the error body — "dashboard offline — TypeError"). The hub is now the single place that
+  authenticates the caller; it presents each member an internal **fleet service token** the member
+  trusts, and swaps it in for the caller's credential on both the HTTP proxy and the WebSocket
+  handshake (so a live socket like the terminal PTY reaches a sister too). A paired phone reaches
+  every agent's plugins; the device registry is consulted only at the hub. (ADR 0089,
+  #2074/#2075/#2076)
+- **Third-party attribution can no longer be silently wiped to `UNKNOWN`.** `THIRD_PARTY_LICENSES.md`
+  resolved Python licenses from the *installed* environment, so regenerating it somewhere the
+  project deps weren't importable flipped all ~117 packages to `UNKNOWN` while still passing the
+  drift gate. Regeneration is now monotonic — it carries forward the license already recorded for an
+  immutable `name==version` and refuses to write a mostly-`UNKNOWN` file — so a bare-env regen is a
+  no-op instead of a wipe. (#2070)
+
+### Security
+- **Fleet members no longer run open on loopback.** A hub-spawned member used to accept
+  unauthenticated requests on its loopback port — including its operator API, which can install
+  plugins (code execution) — so any local process on the box could drive it. Members now require the
+  fleet service token; the hub reverse-proxy, the delegate registry, and a member's own
+  scheduler/background/inbox all present it automatically, so nothing legitimate changes while the
+  local-process vector is closed. (ADR 0089)
+
 ## [0.104.5] - 2026-07-20
 
 ### Fixed
