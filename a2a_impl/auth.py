@@ -338,6 +338,18 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
+        # CORS preflight is never authenticated — by SPEC. A browser sends `OPTIONS` with no
+        # `Authorization` header (the actual credentialed request follows only if this
+        # succeeds), so demanding a bearer here 401s EVERY cross-origin call before it starts:
+        # any token-gated instance whose console is a different origin — the desktop webview
+        # (tauri://localhost) is the common one — can't talk to its own server. This
+        # middleware is added AFTER CORSMiddleware and so wraps outside it (Starlette runs
+        # later-added middleware first), meaning without this branch the preflight never
+        # reaches CORS to be answered. Preflight carries no credentials and triggers no side
+        # effects; the real request still passes through the checks below.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Public allowlist — pass without auth.
         if _is_public(path):
             return await call_next(request)
