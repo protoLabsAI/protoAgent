@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugin panels load again on a sister agent viewed from a token-gated hub.** A hub with a
+  bearer set (any paired instance, and the desktop app) rejected `/agents/<slug>/_ds/*` and the
+  other public static assets a plugin view loads — the DS plugin-kit, favicons, the SPA —
+  because they're fetched by plain browser requests (`import()`/`<link>`) that can't carry a
+  bearer, and the proxied `/agents/<slug>/` form wasn't on the public allowlist. So the kit
+  `401`'d, the view fell back to unauthenticated fetches, and its own data call then failed with
+  "Could not load — Unauthorized" (the portfolio dashboard, for one). The hub now serves a
+  sister's public static assets anonymously through the proxy, exactly as the member already
+  does; `/agents/<slug>/api/*` stays gated. Affects every sister plugin view, not just portfolio.
+  (ADR 0089)
+
 ## [0.105.1] - 2026-07-20
 
 ### Fixed
