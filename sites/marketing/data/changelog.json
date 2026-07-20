@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.105.0",
+    "date": "2026-07-20",
+    "changes": [
+      "Plugins work again on sister agents in a fleet — over both HTTP and WebSocket.",
+      "Third-party attribution can no longer be silently wiped to UNKNOWN.",
+      "Fleet members no longer run open on loopback."
+    ]
+  },
+  {
     "version": "v0.104.5",
     "date": "2026-07-20",
     "changes": [
