@@ -264,3 +264,78 @@ def test_get_client_is_pooled_and_recreated_when_closed():
     c2 = proxy._get_client()
     assert c2 is not c1  # recreated after close
     asyncio.run(c2.aclose())
+
+
+# --- fleet service token swap (ADR 0089) ----------------------------------
+
+
+async def test_forward_to_local_operator_swaps_in_fleet_token(monkeypatch):
+    """The #2047/ADR-0089 fix: for a LOCAL peer, an operator caller's Authorization (e.g. a
+    device token the member's own registry can't verify) is REPLACED with the fleet service
+    token the member does accept."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-secret")
+    seen = {}
+
+    async def fake_fwd(base, request, path, extra=None):
+        seen.update(extra=extra)
+        return "OK"
+
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
+    req = FakeRequest(headers={"Authorization": "Bearer device-token"})
+    req.state = SimpleNamespace(trust_tier="operator")
+    assert await proxy.forward_to("alice", req, "api/plugins/spacetraders/x") == "OK"
+    assert seen["extra"] == {"authorization": "Bearer fleet-secret"}
+
+
+async def test_forward_to_local_non_operator_gets_no_fleet_token(monkeypatch):
+    """Never elevate a lesser credential: a non-operator tier is forwarded as-is."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    seen = {}
+
+    async def fake_fwd(base, request, path, extra=None):
+        seen.update(extra=extra)
+        return "OK"
+
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
+    req = FakeRequest()
+    req.state = SimpleNamespace(trust_tier="federation")
+    await proxy.forward_to("alice", req, "a2a")
+    assert seen["extra"] == {}
+
+
+async def test_forward_to_local_member_public_gets_no_fleet_token(monkeypatch):
+    """member_public wins over the swap: an anonymously-admitted request is forwarded
+    anonymous, never lent the fleet token even at operator tier."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    seen = {}
+
+    async def fake_fwd(base, request, path, extra=None):
+        seen.update(extra=extra)
+        return "OK"
+
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
+    req = FakeRequest()
+    req.state = SimpleNamespace(member_public=True, trust_tier="operator")
+    await proxy.forward_to("matt", req, "plugins/content/view")
+    assert seen["extra"] == {}
+
+
+async def test_forward_base_swapped_auth_replaces_callers(monkeypatch):
+    """The swapped Authorization REPLACES the caller's (case-insensitively) — the upstream
+    never carries two, and unrelated headers survive."""
+    up = FakeUpstream()
+    client = FakeClient(upstream=up)
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(headers={"Authorization": "Bearer caller", "X-Keep": "1"})
+    await proxy._forward_to_base("http://h:1", req, "api/x", {"authorization": "Bearer fleet"})
+    sent = client.built["headers"]
+    auth_keys = [k for k in sent if k.lower() == "authorization"]
+    assert len(auth_keys) == 1 and sent[auth_keys[0]] == "Bearer fleet"
+    assert sent.get("X-Keep") == "1"

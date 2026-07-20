@@ -877,12 +877,24 @@ def _main():
     # — registered before the gate is installed so an inbound webhook / public view
     # page passes under a token-gated deployment.
     auth.set_public_prefixes(getattr(STATE, "plugin_public_paths", []) or [])
+    # Fleet service token (ADR 0089): the instance's internal, loopback-only credential. A
+    # member reads it from PROTOAGENT_FLEET_TOKEN (injected by the hub at spawn); a hub /
+    # standalone instance reads-or-creates the persisted file. Accepted as operator so the
+    # hub can present it to a member in place of the caller's credential — never fatal.
+    from graph.fleet.service_token import resolve_service_token
+
+    try:
+        fleet_token = resolve_service_token()
+    except Exception:  # noqa: BLE001 — a fleet-token hiccup must not take down boot
+        log.exception("[a2a] could not resolve fleet service token — intra-fleet auth degraded")
+        fleet_token = None
     auth.install(
         fastapi_app,
         bearer_token=((STATE.graph_config.auth_token if STATE.graph_config else "") or None),
         api_key=os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", ""),
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
         federation_token=((STATE.graph_config.federation_token if STATE.graph_config else "") or None),
+        fleet_token=fleet_token,
     )
 
     # Member-public deferral for the fleet proxy (#1890): a member's plugin view

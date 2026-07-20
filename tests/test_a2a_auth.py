@@ -25,12 +25,14 @@ def _reset_guard():
     """Each test seeds the guard itself; reset module state around it."""
     auth._BEARER[0] = None
     auth._FEDERATION[0] = None
+    auth._FLEET[0] = None
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
     auth._MEMBER_PUBLIC[0] = None
     yield
     auth._BEARER[0] = None
     auth._FEDERATION[0] = None
+    auth._FLEET[0] = None
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
     auth._MEMBER_PUBLIC[0] = None
@@ -752,3 +754,38 @@ def test_the_real_get_still_needs_the_bearer(monkeypatch):
     assert (
         client.get("/api/runtime/status", headers={"Authorization": "Bearer a-real-token"}).status_code == 200
     )
+
+
+# ── Fleet service token (ADR 0089) ────────────────────────────────────────────
+
+
+def test_fleet_service_token_authenticates_and_wrong_token_does_not():
+    auth.configure(bearer_token="op-secret", api_key="", allowed_origins_raw="", fleet_token="fleet-secret")
+    c = _client()
+    assert c.post("/a2a", headers={"Authorization": "Bearer op-secret"}).status_code == 200
+    assert c.post("/a2a", headers={"Authorization": "Bearer fleet-secret"}).status_code == 200  # ADR 0089
+    assert c.post("/a2a", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
+def test_fleet_token_denied_when_not_configured():
+    auth.configure(bearer_token="op-secret", api_key="", allowed_origins_raw="")  # no fleet token
+    assert _client().post("/a2a", headers={"Authorization": "Bearer fleet-secret"}).status_code == 401
+
+
+def test_fleet_token_is_operator_tier_not_federation():
+    """The fleet token must reach the /api operator surface (unlike a federation token, which
+    the R1 ceiling denies with 403) — a member is proxied operator-console traffic."""
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    auth.configure(
+        bearer_token="op", api_key="", allowed_origins_raw="", federation_token="fed", fleet_token="fleet"
+    )
+    app = Starlette(routes=[Route("/api/x", lambda r: PlainTextResponse("ok"))])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+    assert c.get("/api/x", headers={"Authorization": "Bearer fleet"}).status_code == 200  # operator
+    assert c.get("/api/x", headers={"Authorization": "Bearer op"}).status_code == 200
+    assert c.get("/api/x", headers={"Authorization": "Bearer fed"}).status_code == 403  # ceiling denies federation
