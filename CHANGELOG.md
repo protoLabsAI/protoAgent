@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.105.2] - 2026-07-20
+
 ### Fixed
 - **Plugin panels load again on a sister agent viewed from a token-gated hub.** A hub with a
   bearer set (any paired instance, and the desktop app) rejected `/agents/<slug>/_ds/*` and the

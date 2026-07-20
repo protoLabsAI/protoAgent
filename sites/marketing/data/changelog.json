@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.105.2",
+    "date": "2026-07-20",
+    "changes": [
+      "Plugin panels load again on a sister agent viewed from a token-gated hub."
+    ]
+  },
+  {
     "version": "v0.105.1",
     "date": "2026-07-20",
     "changes": [
