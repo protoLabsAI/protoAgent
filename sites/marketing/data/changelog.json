@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.105.1",
+    "date": "2026-07-20",
+    "changes": [
+      "A fleet member's live console streams work again (/api/events)."
+    ]
+  },
+  {
     "version": "v0.105.0",
     "date": "2026-07-20",
     "changes": [

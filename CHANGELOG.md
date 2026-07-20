@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.105.1] - 2026-07-20
+
 ### Fixed
 - **A fleet member's live console streams work again (`/api/events`).** v0.105.0 (ADR 0089) closed
   members on loopback, but the hub reverse-proxy swapped in the member's credential only for regular
