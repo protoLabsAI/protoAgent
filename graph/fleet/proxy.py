@@ -91,7 +91,13 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
     url = f"{base}/{path}"
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
-    headers.update(extra_headers or {})
+    if extra_headers:
+        # A header in extra REPLACES the caller's — drop any case-variant first, else the
+        # upstream carries both (dict keys are case-sensitive, HTTP header names aren't) and
+        # a swapped Authorization would sit BESIDE the caller's instead of overriding it.
+        overridden = {k.lower() for k in extra_headers}
+        headers = {k: v for k, v in headers.items() if k.lower() not in overridden}
+        headers.update(extra_headers)
 
     client = _get_client()
     upstream_req = client.build_request(
@@ -121,12 +127,26 @@ async def forward_to(slug: str, request, path: str):
     if target is None:
         return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
     base, extra = target
-    # A request the hub admitted off the MEMBER's public list (#1890 — the auth
-    # middleware stamps ``member_public``) arrived anonymous; forward it anonymous.
-    # Attaching the stored remote bearer would lend an unauthenticated caller the
-    # remote's credential (same rule as the remote-WS refusal in forward_ws).
-    if extra and getattr(getattr(request, "state", None), "member_public", False):
+    state = getattr(request, "state", None)
+    # A remote member carries its own stored bearer in ``extra``; a host/local peer carries
+    # nothing (the browser's own header rides through unless we swap it below).
+    is_local = not extra.get("authorization")
+    if getattr(state, "member_public", False):
+        # A request the hub admitted off the MEMBER's public list (#1890 — the auth middleware
+        # stamps ``member_public``) arrived anonymous; forward it anonymous. Lending EITHER the
+        # stored remote bearer OR the fleet service token would hand an unauthenticated caller a
+        # credential (same rule as the remote-WS refusal in forward_ws).
         extra = {k: v for k, v in extra.items() if k.lower() != "authorization"}
+    elif is_local and getattr(state, "trust_tier", None) == "operator":
+        # ADR 0089 D3: the hub already authenticated this operator caller. Present a LOCAL
+        # member with the fleet service token in place of the caller's credential — a device
+        # token the member's own registry (a different instance_root) can't verify, which is
+        # why proxied plugin calls to sister agents 401'd. Swap only for the operator tier
+        # (never elevate a lesser credential) and only for a local peer (a remote member keeps
+        # its own stored bearer, resolved above).
+        from graph.fleet.service_token import resolve_service_token
+
+        extra = {**extra, "authorization": f"Bearer {resolve_service_token()}"}
     return await _forward_to_base(base, request, path, extra)
 
 

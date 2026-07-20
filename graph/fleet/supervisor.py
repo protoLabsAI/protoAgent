@@ -198,6 +198,17 @@ def start(ident: str) -> dict:
         if "A2A_AUTH_TOKEN" not in env:
             full_env.pop("A2A_AUTH_TOKEN", None)
             full_env.setdefault("PROTOAGENT_ALLOW_OPEN", "1")
+        # Fleet service token (ADR 0089): hand the member the instance's internal credential
+        # so the hub can present it in place of the caller's (a device token the member's own
+        # registry can't verify — the reason "plugins broke on sister agents"). Delivered by
+        # env, never config, so `workspace new --from` can't copy it. The member accepts it as
+        # operator; the hub's proxy swaps it in for local-peer targets. (Phase 1 still runs the
+        # member open per the block above — the token is accepted whether the member is open or,
+        # post-D5, closed; injecting it now is the additive half.)
+        from graph.fleet.service_token import ENV_VAR as _FLEET_ENV
+        from graph.fleet.service_token import resolve_service_token
+
+        full_env[_FLEET_ENV] = resolve_service_token()
         # A2A URL-based multi-tenancy (A2A spec — Multi-Tenancy § URL-based routing). The
         # hub reverse-proxies ``/agents/<slug>/*`` to this member (ADR 0042), so the member's
         # reachable A2A endpoint is the hub's tenant SUB-PATH, not the hub root. But the child

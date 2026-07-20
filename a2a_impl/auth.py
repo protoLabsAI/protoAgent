@@ -43,6 +43,11 @@ _BEARER: list[str | None] = [None]
 # Optional federation token (ADR 0066) — a second credential confined to the /a2a + /v1
 # consumer surfaces and DENIED the /api operator surface. None = no federation tier.
 _FEDERATION: list[str | None] = [None]
+# Fleet service token (ADR 0089) — the instance's internal, loopback-only credential. The
+# hub authenticates the external caller, then presents a member with THIS token (never the
+# caller's) so a per-device token (whose registry is the hub's) still reaches sister agents.
+# Resolves to the operator tier. None = not a member of a fleet / no service token.
+_FLEET: list[str | None] = [None]
 # X-API-Key (env-seeded at install; constant for the process).
 _API_KEY: list[str] = [""]
 # Allowed origins: None = verification disabled; list = allowlist.
@@ -233,8 +238,18 @@ def set_federation_token(token: str | None) -> None:
     _FEDERATION[0] = (token or "").strip() or None
 
 
+def set_fleet_token(token: str | None) -> None:
+    """Set the fleet service token (ADR 0089). None = not behind a fleet hub."""
+    _FLEET[0] = (token or "").strip() or None
+
+
 def configure(
-    *, bearer_token: str | None, api_key: str, allowed_origins_raw: str, federation_token: str | None = None
+    *,
+    bearer_token: str | None,
+    api_key: str,
+    allowed_origins_raw: str,
+    federation_token: str | None = None,
+    fleet_token: str | None = None,
 ) -> None:
     """Seed the guard at route-registration time.
 
@@ -262,6 +277,10 @@ def configure(
         logger.warning("[a2a] federation_token set but no operator bearer — federation tier is inert (open mode)")
     if _FEDERATION[0] is not None and _FEDERATION[0] == _BEARER[0]:
         logger.warning("[a2a] federation_token equals the operator token — federation tier collapses to operator")
+
+    # Fleet service token (ADR 0089) — the caller (server bootstrap) resolves it from env (a
+    # member) or the persisted file (a hub); passing None leaves this agent outside a fleet.
+    _FLEET[0] = (fleet_token or "").strip() or None
 
     _API_KEY[0] = api_key or ""
 
@@ -419,12 +438,22 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             token = header[len("Bearer ") :]
             # Constant-time compare against each configured secret; classify by which
             # matched. Trust = the matched secret, never the path/Origin/loopback (R5).
+            fleet = _FLEET[0]
             is_operator = hmac.compare_digest(token, active)
             is_federation = fed is not None and hmac.compare_digest(token, fed)
+            is_fleet = fleet is not None and hmac.compare_digest(token, fleet)
             if is_operator:
                 tier = "operator"
             elif is_federation:
                 tier = "federation"
+            elif is_fleet:
+                # Fleet service token (ADR 0089): the hub already authenticated the external
+                # caller and presents members with this internal, loopback-only credential.
+                # Operator tier — a paired device reaches sister agents without the member
+                # ever seeing (or being able to verify) the device token. Checked before the
+                # device registry so the intra-fleet hot path is a single constant-time
+                # compare and never touches disk.
+                tier = "operator"
             elif _device_token_ok(token):
                 # A paired device (ADR 0087 D1) is the OPERATOR — it runs the full console
                 # and needs the same surface the desktop does. The point of per-device
@@ -455,7 +484,13 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
 
 
 def install(
-    app, *, bearer_token: str | None, api_key: str, allowed_origins_raw: str, federation_token: str | None = None
+    app,
+    *,
+    bearer_token: str | None,
+    api_key: str,
+    allowed_origins_raw: str,
+    federation_token: str | None = None,
+    fleet_token: str | None = None,
 ) -> None:
     """Configure the guard and add the middleware to ``app``."""
     configure(
@@ -463,6 +498,7 @@ def install(
         api_key=api_key,
         allowed_origins_raw=allowed_origins_raw,
         federation_token=federation_token,
+        fleet_token=fleet_token,
     )
     app.add_middleware(A2AAuthMiddleware)
 
