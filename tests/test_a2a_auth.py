@@ -713,3 +713,42 @@ def test_public_prefixes_getter_reflects_live_list():
     assert auth.public_prefixes() == ["/plugins/content/view", "/api/plugins/content/hook/"]
     auth.set_public_prefixes([])
     assert auth.public_prefixes() == []
+
+
+# ── CORS preflight is never authenticated (the desktop webview outage) ────────
+
+
+def _client_with_options() -> TestClient:
+    app = Starlette(
+        routes=[Route("/api/runtime/status", lambda r: PlainTextResponse("ok"), methods=["GET", "OPTIONS"])]
+    )
+    app.add_middleware(auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_options_preflight_bypasses_bearer(monkeypatch):
+    """An `OPTIONS` preflight carries no Authorization by spec. Demanding a bearer here 401s
+    every cross-origin call before it starts — which is how a token-gated instance's own
+    desktop webview (tauri://localhost) got locked out."""
+    auth.configure(bearer_token="a-real-token", api_key="", allowed_origins_raw="")
+    client = _client_with_options()
+    # Preflight, unauthenticated, mimicking the browser.
+    r = client.options(
+        "/api/runtime/status",
+        headers={
+            "Origin": "http://tauri.localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert r.status_code != 401  # was 401 before the fix
+
+
+def test_the_real_get_still_needs_the_bearer(monkeypatch):
+    """The exemption is preflight-only — it must not open the actual request."""
+    auth.configure(bearer_token="a-real-token", api_key="", allowed_origins_raw="")
+    client = _client_with_options()
+    assert client.get("/api/runtime/status").status_code == 401  # no token → still denied
+    assert (
+        client.get("/api/runtime/status", headers={"Authorization": "Bearer a-real-token"}).status_code == 200
+    )
