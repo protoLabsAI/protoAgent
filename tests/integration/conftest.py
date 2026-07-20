@@ -138,7 +138,14 @@ def fleet(tmp_path_factory, fake_gateway):
     they spawned) down. Returns ``boot(name=..., instance=..., ui=...)`` → ``Server``."""
     servers: list[Server] = []
 
-    def boot(*, name: str = "hub", instance: str | None = None, ui: str = "none", timeout: float = 120.0) -> Server:
+    def boot(
+        *,
+        name: str = "hub",
+        instance: str | None = None,
+        ui: str = "none",
+        timeout: float = 120.0,
+        auth_token: str = "",
+    ) -> Server:
         data_root = tmp_path_factory.mktemp(f"{name}-data")
         home = tmp_path_factory.mktemp(f"{name}-home")
         (home / "config").mkdir(parents=True, exist_ok=True)
@@ -162,6 +169,12 @@ def fleet(tmp_path_factory, fake_gateway):
         env.pop("PROTOAGENT_INSTANCE", None)
         if instance:
             env["PROTOAGENT_INSTANCE"] = instance
+        # Gate the surface via env (the desktop's posture: a bearer, but NOT in workspace config).
+        # A member spawned with inherit_config:true then copies only the MODEL (so it boots) — no
+        # auth.token in its config — and the supervisor closes it with the fleet service token
+        # (ADR 0089 D5 overwrites the inherited A2A_AUTH_TOKEN), so its bearer differs from the hub's.
+        if auth_token:
+            env["A2A_AUTH_TOKEN"] = auth_token
         proc = subprocess.Popen([PY, "-m", "server", "--ui", ui, "--port", str(port)], cwd=str(ROOT), env=env)
         s = Server(name=name, port=port, home=home, data_root=data_root, proc=proc)
         servers.append(s)

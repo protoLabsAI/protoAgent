@@ -89,3 +89,68 @@ def test_member_config_resolves_under_new_layout(fleet):
     )
     assert cfg is not None, "member /api/config not reachable through the proxy"
     assert "127.0.0.1" in json.dumps(cfg), f"member config api missing inherited gateway: {json.dumps(cfg)[:300]}"
+
+
+def _http_status_only(url: str, timeout: float = 6.0) -> int:
+    """Return just the HTTP status of ``url`` without consuming the body — works for the SSE
+    stream (a normal read would block until timeout). Raw socket so we read only the status line."""
+    import socket
+    import urllib.parse
+
+    u = urllib.parse.urlsplit(url)
+    s = socket.create_connection((u.hostname, u.port), timeout=timeout)
+    try:
+        path = u.path + (f"?{u.query}" if u.query else "")
+        s.sendall(f"GET {path} HTTP/1.1\r\nHost: {u.hostname}\r\nConnection: close\r\n\r\n".encode())
+        s.settimeout(timeout)
+        line = s.recv(128).split(b"\r\n", 1)[0].decode("latin1")
+        return int(line.split()[1])
+    finally:
+        s.close()
+
+
+def test_hub_proxies_authed_sse_to_a_fleet_token_member(fleet):
+    """ADR 0089 regression repro (roxy portfolio 'Could not load — Unauthorized').
+
+    A member closed with the FLEET token (inherit_config:false → no auth.token → D5) has a
+    bearer the hub-signed SSE token can't verify. The hub must swap the fleet token in for a
+    proxied /agents/<id>/api/events, else the member 401s every live stream. Also checks a
+    regular authed API call is proxied+swapped (the already-working P1/P2 path)."""
+    hub = fleet(name="hub", auth_token="hub-operator-secret")
+    H = {"Authorization": "Bearer hub-operator-secret"}
+
+    st, raw = http_post(
+        f"{hub.base}/api/fleet", {"name": "team", "inherit_config": True, "start": True}, timeout=180, headers=H
+    )
+    assert st == 200, f"create member: {st} {raw[:300]}"
+    agent = json.loads(raw)["agent"]
+    mid, mport = agent["id"], agent.get("port")
+    assert poll(
+        lambda: http_get(f"{hub.base}/agents/{mid}/healthz", timeout=3, headers=H)[0] == 200, timeout=90
+    ), "unreachable"
+
+    # Prove the member is genuinely CLOSED with the fleet token (else an SSE 200 would be a false
+    # pass from an open member): a DIRECT unauthenticated call to its own port is rejected.
+    assert mport, f"no member port in {agent}"
+    st_direct, _ = http_get(f"http://127.0.0.1:{mport}/api/flags", timeout=5)
+    assert st_direct == 401, f"member must be CLOSED (fleet token); direct unauthenticated /api/flags got {st_direct}"
+
+    # A sister agent's public DS/static assets ride the proxy as /agents/<slug>/_ds/* and are
+    # loaded by bearer-less browser requests (a plugin view's import()/<link>). A token-gated hub
+    # MUST serve them anonymously — the member already does — or the DS plugin-kit 401s and the
+    # plugin view drops to unauthenticated fetch, whose data call then 401s (the "Could not load"
+    # class, roxy portfolio). This is the fix; the member serves /_ds/ regardless of auth.
+    st_ds = http_get(f"{hub.base}/agents/{mid}/_ds/plugin-kit.js", timeout=10)[0]
+    assert st_ds == 200, f"closed hub must serve a sister's /_ds/ assets WITHOUT a bearer, got {st_ds}"
+
+    # Regular authed API call through the proxy → 200 (the swap that already worked).
+    st, _ = http_get(f"{hub.base}/agents/{mid}/api/flags", timeout=10, headers=H)
+    assert st == 200, f"proxied authed API to a closed member must be 200, got {st}"
+
+    # SSE token minted by the HUB (signed with the hub bearer), streamed THROUGH the proxy to
+    # the fleet-token member. This is the exact request that 401'd on roxy before 0.105.1.
+    st, raw = http_get(f"{hub.base}/api/sse-token", timeout=10, headers=H)
+    assert st == 200 and json.loads(raw).get("token"), f"sse-token mint: {st} {raw[:200]}"
+    sse = json.loads(raw)["token"]
+    code = _http_status_only(f"{hub.base}/agents/{mid}/api/events?token={sse}")
+    assert code == 200, f"proxied SSE to a fleet-token member must be 200 (was 401 pre-fix), got {code}"
