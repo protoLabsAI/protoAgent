@@ -21,7 +21,7 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 |---|---|
 | [A2A endpoints](/reference/a2a-endpoints) | JSON-RPC methods, SSE stream, well-known paths |
 | [Agent card](/reference/agent-card) | Card shape with every supported field |
-| [Extensions](/reference/extensions) | A2A DataPart extensions (`cost-v1`, `confidence-v1`, `tool-call-v1`, …) + `a2a.trace` |
+| [Extensions](/reference/extensions) | A2A extensions — URI-keyed metadata (`cost-v1`, `worldstate-delta-v1`, `tool-call-v1`) + MIME-typed DataParts + `a2a.trace` |
 
 ## Tools, MCP & plugins
 

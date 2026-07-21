@@ -50,7 +50,7 @@ A chat panel's binding contract is the **wire**, which already exists and is pub
 
 | Channel | Contract |
 |---|---|
-| `POST /a2a` — `SendStreamingMessage` | the streaming turn: text deltas; `application/vnd.protolabs.tool-call-v1+json` DataParts (tool events); `hitl-v1` DataParts (input-required pause → resume by sending the reply on the same `contextId`); cost/confidence extension parts; terminal state |
+| `POST /a2a` — `SendStreamingMessage` | the streaming turn: text deltas; `application/vnd.protolabs.tool-call-v1+json` DataParts (tool events); `hitl-v1` DataParts (input-required pause → resume by sending the reply on the same `contextId`); cost extension metadata; terminal state |
 | `POST /a2a` — `tasks/get` / cancel | durable-task reconciliation + abort |
 | `GET /api/chat/commands` | slash-command roster |
 | `DELETE /api/chat/sessions/{id}` | retire a session (harvest + purge checkpoints) |

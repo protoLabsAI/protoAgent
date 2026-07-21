@@ -373,6 +373,18 @@ _DEFAULT_CARD_DESCRIPTION = (
 )
 
 
+def _emitted_extension_uris(pa) -> list[str]:
+    """The extension URIs this runtime actually emits, in card order.
+
+    Deliberately narrower than ``pa.ALL_EXTENSION_URIS``: that constant is the
+    fleet-wide *vocabulary*, while the card must state this agent's *behavior*.
+    Declaring an extension nothing emits is a broken promise a consumer can't
+    detect except by waiting for a payload that never comes — so anything added
+    here must have a live emission path (see ``a2a_impl/executor.py``).
+    """
+    return [pa.COST_EXT_URI, pa.WORLDSTATE_DELTA_EXT_URI, pa.TOOL_CALL_EXT_URI]
+
+
 def _build_agent_card_proto():
     """Build the A2A 1.0 ``AgentCard`` (proto) served at
     ``/.well-known/agent-card.json``, applying the protoLabs fleet conventions
@@ -382,10 +394,20 @@ def _build_agent_card_proto():
     ``name`` resolves from identity (``agent_name()``), ``description`` from
     ``a2a.description`` in ``langgraph-config.yaml`` (falling back to the template
     default below), and ``skills`` from config/plugins (``_resolved_skill_specs``).
-    The four custom extensions (cost / confidence / worldstate-delta / tool-call)
-    are declared by default — the template emits cost-v1 + confidence-v1 from
-    ``_chat_langgraph_stream`` and worldstate-delta / tool-call when a tool reports
-    them.
+    The card declares exactly the extensions this runtime actually emits
+    (``_EMITTED_EXTENSION_URIS``) — **not** ``pa.ALL_EXTENSION_URIS``:
+
+    * ``cost-v1`` — emitted on every terminal artifact (``_terminal_parts``).
+    * ``worldstate-delta-v1`` — emitted when a tool yields ``delta`` events.
+    * ``tool-call-v1`` — emitted on status frames as tools run.
+
+    ``confidence-v1`` is deliberately NOT declared. A card is a contract: a
+    consumer that sees the URI is entitled to build a calibration pipeline on
+    it, and this agent has no ``<confidence>`` self-report to populate it with,
+    so declaring it would strand that consumer on a field that never arrives.
+    A fork that wants it should emit the tag, merge
+    ``pa.confidence_metadata(...)`` in ``_terminal_parts``, and add the URI back
+    here — in that order.
 
     The interface ``url`` (``_a2a_card_url``) targets the JSON-RPC endpoint
     (``/a2a``) at the agent's reachable address — set ``A2A_PUBLIC_URL`` when
@@ -401,6 +423,7 @@ def _build_agent_card_proto():
         url=_a2a_card_url(),
         version=_package_version(),
         skills=_agent_skills(),
+        extension_uris=_emitted_extension_uris(pa),
         bearer=_bearer_configured(),
     )
     # Card polish (ADR 0051 Slice 3) — build_agent_card doesn't set these, but the
