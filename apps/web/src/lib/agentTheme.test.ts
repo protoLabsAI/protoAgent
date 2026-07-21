@@ -55,10 +55,11 @@ describe("persistedThemeIsForCurrentAgent — cross-agent boot-merge guard (#176
 // The favicon keeps the accent (the tab's brand splash). Clearing the theme must restore the
 // exact static brand chrome index.html shipped.
 describe("syncBrowserChrome — theme-color = surface, favicon = accent (#1923)", () => {
-  // index.html's static chrome, mirrored here (jsdom doesn't load it): the brand
-  // theme-color is #9b87f2 — the brand DEFAULT for the unthemed console, distinct
-  // from any agent accent — and the favicon is a real fetchable asset.
-  const BRAND_THEME_COLOR = "#9b87f2";
+  // index.html's static chrome, mirrored here (jsdom doesn't load it): the default
+  // theme-color is the console's dark SURFACE background (#0a0a0c) — NOT the brand accent,
+  // so the installed-PWA status bar matches the app instead of showing an accent band — and
+  // the favicon is a real fetchable asset (the accent-recolored one only when themed).
+  const BRAND_THEME_COLOR = "#0a0a0c";
   const BRAND_ICON = "/protolabs-icon-outline.svg";
 
   // jsdom lacks CSS.supports, so safeColor() normalizes through the span probe → rgb().
