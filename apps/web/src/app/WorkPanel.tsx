@@ -20,6 +20,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { tasksQuery, goalsQuery, schedulesQuery, watchesQuery, queryKeys } from "../lib/queries";
+import type { GoalSetBody } from "../chat/goalForm";
 import type { GoalState, ScheduledJob, Task, WatchState } from "../lib/types";
 import type { IssueDraft } from "./tasks";
 import {
@@ -122,7 +123,7 @@ export function WorkPanel({ confirm }: { confirm: Confirm }) {
 // in-progress from ready.
 const goalDot = (status: string): Status => {
   if (status === "achieved") return "success";
-  if (status === "unachievable" || status === "failed") return "error";
+  if (status === "unachievable") return "error";
   return "warning";
 };
 const watchDot = (status: string): Status => {
@@ -156,8 +157,7 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const setGoal = useMutation({
-    mutationFn: (body: { session_id: string; condition: string; verifier: unknown }) =>
-      api.setGoal(body),
+    mutationFn: (body: GoalSetBody) => api.setGoal(body),
     onSuccess: (res) => {
       setGoalOpen(false);
       toast({ tone: "success", title: "Goal set", message: res.message || "The agent has a new goal." });
@@ -217,7 +217,7 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
               <StatusDot status={goalDot(g.status)} />
               <span className="work-row-title">{g.condition}</span>
               <span className="work-row-meta">
-                {g.mode === "monitor" ? "monitor" : `${g.iteration ?? 0}/${g.max_iterations ?? "∞"}`}
+                {g.iteration ?? 0}/{g.max_iterations ?? "∞"}
               </span>
             </li>
           ))}

@@ -394,14 +394,12 @@ export type GoalState = {
   constraints?: string[]; // invariants that must NOT change/regress
   boundaries?: string[]; // files/dirs/systems in scope
   stop_when?: string; // condition under which the agent pauses and asks the operator
-  mode?: "drive" | "monitor";
   iteration?: number;
   max_iterations?: number;
   last_reason?: string;
   last_evidence?: string;
-  last_checked?: number | null; // monitor: last out-of-band verifier check (epoch seconds)
   started_at?: number;
-  finished_at?: number | null;
+  finished_at?: number | null; // terminal time (epoch seconds); set alongside a terminal status
 };
 
 // A passive watch (ADR 0067) — a verifier-only objective polled out-of-band. Unlike a goal

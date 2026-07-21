@@ -48,22 +48,20 @@
   right: 6px;
 }
 
-/* New-goal dialog (GoalCreateDialog) — a vertical stack of .field rows, one component
-   hosted by both the Goals panel header action and the Work overview quick-add. */
-.goal-create-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+/* New-goal modal (GoalCreateDialog) — a chromeless DS Dialog around the shared HitlForm
+   wizard (ADR 0073), the one creator for both the Goals panel header action and the Work
+   overview quick-add. HitlForm brings its own title/stepper/actions, so drop the dialog
+   body padding and the card's own margin/border/background: the dialog frame provides the
+   border + elevation, and the wizard fills it instead of floating as a box-in-a-box. */
+.goal-create-modal .pl-dialog__body {
+  padding: 0;
 }
 
-.goal-new-error {
+.goal-create-modal .hitl-card {
   margin: 0;
-  font-size: 11px;
-}
-
-/* Inline guided goal form (ADR 0073, Part 2) — hosts the shared HitlForm in the panel.
-   HitlForm's own .hitl-card carries the border/padding; this wrapper just adds a little
-   top breathing room below the header so the card doesn't butt against it. */
-.goal-form-host {
-  padding-top: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: min(72dvh, 620px);
+  overflow-y: auto;
 }

@@ -119,22 +119,25 @@ test("an empty card shows the DS Empty with the quick-add as its CTA", async ({ 
   await expect(goals.locator(".work-card-head .pl-badge")).toHaveText("0");
   await expect(goals.getByText("No active goals")).toBeVisible();
 
-  // The Empty's action IS the quick-add — it opens the goal dialog, no navigation.
+  // The Empty's action IS the quick-add — it opens the goal-creation wizard, no navigation.
   await goals.locator(".pl-empty__action").getByTestId("work-add-goal").click();
-  await expect(page.getByTestId("goal-create-dialog")).toBeVisible();
+  const dialog = page.getByTestId("goal-create-dialog");
+  await expect(dialog).toBeVisible();
   await expect(page.getByTestId("work-back")).toHaveCount(0);
 
-  // Gated on a condition, like the panel host.
-  await expect(page.getByTestId("goal-create-submit")).toBeDisabled();
-  await page.getByTestId("goal-create-condition").fill("Ship the overview");
-  await expect(page.getByTestId("goal-create-submit")).toBeEnabled();
+  // The guided two-step wizard (ADR 0073) — the SAME GoalCreateDialog the Goals panel opens.
+  // Step 1's Next is gated on the required condition (the first textbox).
+  const next = dialog.getByRole("button", { name: "Next" });
+  await expect(next).toBeDisabled();
+  await dialog.getByRole("textbox").first().fill("Ship the overview");
+  await expect(next).toBeEnabled();
 });
 
 test("the Goals PANEL hosts the guided goal form via its New goal header action", async ({ page }) => {
-  // The Goals panel's "New goal" header action opens the guided completion-contract form
-  // (ADR 0073, Part 2) — the SAME goalFormPayload + HitlForm the chat `/goal new` composer
-  // form renders, hosted inline here. (The Work-overview Goals CARD quick-add keeps the
-  // simpler GoalCreateDialog — covered by the "empty card" spec above.)
+  // The Goals panel's "New goal" header action opens the guided completion-contract wizard
+  // (ADR 0073) — the SAME GoalCreateDialog + goalFormPayload the Work-overview quick-add
+  // opens (covered by the "empty card" spec above) and the chat `/goal new` composer form
+  // renders. One creator, two hosts (mirroring TaskCreateDialog / ScheduleModal).
   let posted: Record<string, unknown> | null = null;
   await page.route("**/api/goals", async (route) => {
     if (route.request().method() === "POST") {
@@ -149,7 +152,7 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
 
   await page.getByTestId("goal-new").click();
-  const form = page.getByTestId("goal-form");
+  const form = page.getByTestId("goal-create-dialog");
   await expect(form).toBeVisible();
   // Two-step wizard (ADR 0073): step 1's "Next" is gated on the required condition (the first
   // textbox); step 2 holds the optional contract, so its "Submit" is enabled straight away.
@@ -162,7 +165,7 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await expect(submit).toBeEnabled();
   await submit.click();
 
-  // Operator goal-set payload; success closes the inline form + toasts. The verifier
+  // Operator goal-set payload; success closes the dialog + toasts. The verifier
   // defaults to llm when no card is picked; the contract fields are omitted when empty.
   await expect(form).toHaveCount(0);
   await expect(page.locator(".pl-toast__title", { hasText: "Goal set" })).toBeVisible();
