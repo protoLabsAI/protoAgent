@@ -125,6 +125,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_verify_timeout": 120.0,
     "watches_enabled": False,  # #2020 feature flag, default off (example keeps watches: commented)
     "soul_self_edit_enabled": False,
+    "soul_drift_enabled": True,  # #1986 read-only persona-drift curation pass, on by default
+    "soul_drift_interval_hours": 24,
+    "soul_drift_threshold": 0.25,
     "identity_name": "protoagent",
     "identity_operator": "",
     "identity_org": "",
@@ -711,3 +714,222 @@ def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
         "update_policy": {},
         "autoupdate_interval_hours": 6,
     }
+
+
+# ---------------------------------------------------------------------------
+# (f) Deterministic persona drift detection (#1986)
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from graph import config_io  # noqa: E402
+
+
+def test_soul_drift_config_knobs_parse(tmp_path):
+    """soul.drift.{enabled,interval_hours,threshold} parse onto the dataclass;
+    the top-level `soul.self_edit_enabled` sibling still resolves alongside them."""
+    path = _write_yaml(
+        tmp_path,
+        """
+        soul:
+          self_edit_enabled: true
+          drift:
+            enabled: false
+            interval_hours: 12
+            threshold: 0.5
+        """,
+    )
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.soul_self_edit_enabled is True
+    assert cfg.soul_drift_enabled is False
+    assert cfg.soul_drift_interval_hours == 12
+    assert cfg.soul_drift_threshold == 0.5
+
+
+def test_soul_drift_defaults_when_section_absent_or_null(tmp_path):
+    """No soul block -> defaults; a present-but-null `soul.drift:` also falls back to
+    defaults (nested null isn't caught by the top-level normalizer, hence the `or {}`)."""
+    cfg_absent = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "model:\n  name: foo\n"))
+    assert cfg_absent.soul_drift_enabled is True
+    assert cfg_absent.soul_drift_interval_hours == 24
+    assert cfg_absent.soul_drift_threshold == 0.25
+
+    null_dir = tmp_path / "null_drift"
+    null_dir.mkdir()
+    cfg_null = LangGraphConfig.from_yaml(_write_yaml(null_dir, "soul:\n  drift:\n"))
+    assert cfg_null.soul_drift_enabled is True
+    assert cfg_null.soul_drift_interval_hours == 24
+    assert cfg_null.soul_drift_threshold == 0.25
+
+
+def test_compute_soul_drift_identical_is_no_drift():
+    """Identical persona texts -> retention 1.0, score 0.0, no section churn."""
+    report = config_io.compute_soul_drift("# Identity\nI am steady.", "# Identity\nI am steady.")
+    assert report["retention"] == 1.0
+    assert report["score"] == 0.0
+    assert report["size_delta"] == 0
+    assert report["sections_added"] == [] and report["sections_dropped"] == []
+
+
+def test_compute_soul_drift_signals_size_and_section_churn():
+    """A rewrite is scored deterministically: net size delta, section churn (added +
+    dropped markdown headings), and a difflib retention ratio strictly between 0 and 1."""
+    baseline = "# Identity\nCalm and precise.\n\n# Voice\nTerse.\n"
+    current = "# Identity\nCalm and precise.\n\n# Persona\nLoud and rambling and very different now.\n"
+    report = config_io.compute_soul_drift(baseline, current)
+    assert report["sections_added"] == ["Persona"]
+    assert report["sections_dropped"] == ["Voice"]
+    assert report["size_delta"] == len(current) - len(baseline)
+    assert report["baseline_size"] == len(baseline)
+    assert report["current_size"] == len(current)
+    assert 0.0 < report["score"] < 1.0
+    assert report["retention"] == round(1.0 - report["score"], 4)
+    assert "retained" in report["rationale"]
+
+
+def _seed_soul_history(monkeypatch, tmp_path, baseline: str, current: str):
+    """Two persona saves so the soul-history holds `baseline` (earliest snapshot) and
+    the live SOUL.md holds `current` — the exact shape detect_soul_drift compares."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    # Neutralize the bundled seed so the first save has no prior persona to archive.
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: tmp_path / "no-seed.md")
+    config_io.write_soul(baseline)  # live = baseline; history empty (nothing to archive)
+    config_io.write_soul(current)  # archives baseline; live = current
+    return home
+
+
+def test_detect_soul_drift_none_without_history(monkeypatch, tmp_path):
+    """A single persona (no archived baseline) -> nothing to compare -> None, so the
+    curation pass stays silent on a fresh instance."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    monkeypatch.setattr(config_io, "soul_source_path", lambda: tmp_path / "no-seed.md")
+    config_io.write_soul("# Identity\nOnly ever one version.\n")
+    assert config_io.list_soul_versions() == []
+    assert config_io.detect_soul_drift() is None
+
+
+def test_detect_soul_drift_compares_against_earliest_snapshot(monkeypatch, tmp_path):
+    """detect_soul_drift diffs the live persona against the EARLIEST recorded snapshot
+    and tags the report with that baseline id."""
+    _seed_soul_history(
+        monkeypatch,
+        tmp_path,
+        baseline="# Identity\nThe original, careful persona.\n",
+        current="# Identity\nA wholly rewritten, very different persona now.\n",
+    )
+    versions = config_io.list_soul_versions()
+    assert len(versions) == 1
+    report = config_io.detect_soul_drift()
+    assert report is not None
+    assert report["baseline_id"] == versions[-1]["id"]  # earliest snapshot
+    assert report["baseline_size"] == len("# Identity\nThe original, careful persona.\n")
+    assert 0.0 < report["score"] <= 1.0
+
+
+def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path):
+    """The curation pass publishes `persona.drift_detected` (score + signals + rationale)
+    to the event bus when the drift score crosses the configured threshold."""
+    from server import agent_init
+
+    _seed_soul_history(
+        monkeypatch,
+        tmp_path,
+        baseline="# Identity\nThe original persona, steady and precise.\n",
+        current="totally different content with no overlap whatsoever xyz 123\n",
+    )
+    published = []
+    monkeypatch.setattr(
+        agent_init,
+        "_event_bus",
+        SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
+    )
+    cfg = SimpleNamespace(soul_drift_enabled=True, soul_drift_threshold=0.1)
+    report = agent_init._run_soul_drift_pass(cfg)
+
+    assert report is not None
+    assert len(published) == 1
+    event, data = published[0]
+    assert event == "persona.drift_detected"
+    assert data["score"] == report["score"] and data["score"] >= 0.1
+    assert data["threshold"] == 0.1
+    assert data["rationale"] == report["rationale"]
+    # Every deterministic signal rides along for a verifiable payload.
+    assert set(data["signals"]) == {
+        "retention",
+        "size_delta",
+        "baseline_size",
+        "current_size",
+        "sections_added",
+        "sections_dropped",
+    }
+
+
+def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
+    """A near-identical persona scores below threshold -> the pass runs but publishes
+    nothing (still returns the report for observability)."""
+    from server import agent_init
+
+    _seed_soul_history(
+        monkeypatch,
+        tmp_path,
+        baseline="# Identity\nThe original persona, steady and precise.\n",
+        current="# Identity\nThe original persona, steady and precise!\n",  # one char changed
+    )
+    published = []
+    monkeypatch.setattr(
+        agent_init,
+        "_event_bus",
+        SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
+    )
+    cfg = SimpleNamespace(soul_drift_enabled=True, soul_drift_threshold=0.5)
+    report = agent_init._run_soul_drift_pass(cfg)
+    assert report is not None and report["score"] < 0.5
+    assert published == []
+
+
+def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
+    """soul_drift_enabled=False -> the pass is a no-op (no detection, no publish)."""
+    from server import agent_init
+
+    _seed_soul_history(
+        monkeypatch,
+        tmp_path,
+        baseline="# Identity\nBaseline.\n",
+        current="# Identity\nDrastically different now, entirely rewritten.\n",
+    )
+    published = []
+    monkeypatch.setattr(
+        agent_init,
+        "_event_bus",
+        SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
+    )
+    cfg = SimpleNamespace(soul_drift_enabled=False, soul_drift_threshold=0.0)
+    assert agent_init._run_soul_drift_pass(cfg) is None
+    assert published == []
+
+
+def test_maybe_run_soul_drift_pass_gates_to_interval(monkeypatch, tmp_path):
+    """The interval gate runs the pass once, then suppresses further runs until the
+    cadence elapses (verified by counting detect_soul_drift calls)."""
+    from server import agent_init
+
+    monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
+    calls = {"n": 0}
+
+    def _fake_run(cfg):
+        calls["n"] += 1
+        return {"score": 0.0}
+
+    monkeypatch.setattr(agent_init, "_run_soul_drift_pass", _fake_run)
+    cfg = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=24)
+
+    assert agent_init._maybe_run_soul_drift_pass(cfg) is not None  # first tick runs
+    assert agent_init._maybe_run_soul_drift_pass(cfg) is None  # gated within the interval
+    assert calls["n"] == 1
+
+    # interval_hours=0 disables the pass outright.
+    monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
+    disabled = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=0)
+    assert agent_init._maybe_run_soul_drift_pass(disabled) is None

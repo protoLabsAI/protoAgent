@@ -475,6 +475,22 @@ class LangGraphConfig:
     # opts in via ``soul.self_edit_enabled: true``.
     soul_self_edit_enabled: bool = False
 
+    # Deterministic persona drift detection (#1986). A read-only curation pass
+    # (lineage of the dream/distill maintenance passes) periodically diffs the live
+    # ``SOUL.md`` against its EARLIEST recorded soul-history snapshot — net size
+    # delta, section churn (added/dropped markdown headings), and a ``difflib``
+    # retention ratio — and publishes a ``persona.drift_detected`` event on the bus
+    # when the drift score (``1 - retention``, 0..1) crosses ``threshold``. It never
+    # rewrites the persona: recovery already exists via the restore endpoint (ADR
+    # 0081), so this only SURFACES the signal. ``interval_hours`` sets the cadence
+    # (0 disables the pass); the pass is hosted by the checkpoint-prune maintenance
+    # loop, so it runs at most once per interval. Cheap (a diff of two small text
+    # files) and a true no-op until there's history to compare against, so it's on
+    # by default like the other curation passes.
+    soul_drift_enabled: bool = True
+    soul_drift_interval_hours: int = 24
+    soul_drift_threshold: float = 0.25
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -1013,6 +1029,10 @@ class LangGraphConfig:
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
         operator = data.get("operator", {})
+        # `or {}` at each level: a present-but-empty `soul:` or `soul.drift:` block
+        # parses to None (top-level null is normalized above, a nested null is not).
+        soul = data.get("soul", {}) or {}
+        soul_drift = soul.get("drift", {}) or {}
         # Box runtime (Host layer, ADR 0047 D8) — `or {}` because a present-but-empty
         # section parses to None.
         network = data.get("network", {}) or {}
@@ -1080,7 +1100,14 @@ class LangGraphConfig:
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
             watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
-            soul_self_edit_enabled=data.get("soul", {}).get("self_edit_enabled", cls.soul_self_edit_enabled),
+            soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
+            soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
+            soul_drift_interval_hours=int(
+                soul_drift.get("interval_hours", cls.soul_drift_interval_hours) or 0
+            ),
+            soul_drift_threshold=float(
+                soul_drift.get("threshold", cls.soul_drift_threshold) or 0.0
+            ),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
