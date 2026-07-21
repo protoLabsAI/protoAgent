@@ -1,6 +1,13 @@
 # ADR 0089 — Intra-instance trust boundary: the hub authenticates, members trust a fleet service token
 
-**Status:** Proposed
+**Status:** Accepted
+
+**Implementation:** D1–D5 shipped — the fleet service token (#2074), closing members + presenting
+the token from every in-instance caller (#2075), the authenticated WS handshake + member socket
+token swap (#2076), and the last proxied-SSE gap (#2079). Covered by
+`tests/test_fleet_service_token.py`, `tests/test_fleet_proxy.py`, `tests/test_fleet_proxy_ws.py`,
+`tests/test_device_pairing.py`. **D7** (plugin views must render on a non-2xx) remains an open
+hardening follow-up, as does the signed-per-request-assertion evolution.
 
 **Relates to:** [ADR 0087](0087-device-pairing-and-per-device-tokens.md) (per-device tokens —
 the credential that exposed this), [ADR 0066](0066-goal-trust-operator-channel.md) (the

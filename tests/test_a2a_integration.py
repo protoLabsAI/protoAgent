@@ -107,16 +107,23 @@ def test_agent_card_security_requirement_apikey_only_when_token_unset(monkeypatc
     assert scheme_keys == [{"apiKey"}]
 
 
-def test_agent_card_declares_all_four_protolabs_extensions() -> None:
-    """The runtime emits cost / confidence / worldstate-delta / tool-call
-    DataParts; every extension must be declared so A2A consumers know to
-    extract them."""
+def test_agent_card_declares_exactly_the_extensions_it_emits() -> None:
+    """The card is a contract, not a vocabulary dump.
+
+    ``pa.ALL_EXTENSION_URIS`` is the fleet-wide vocabulary; this agent declares
+    only the subset it actually emits (cost / worldstate-delta / tool-call).
+    ``confidence-v1`` is the case that motivated this: it was declared for
+    months while nothing ever emitted it, so a consumer building a calibration
+    pipeline on the declaration would wait forever for a payload. Declaring an
+    extension without an emission path is a broken promise a peer cannot detect
+    except by timing out — so this asserts equality, not containment.
+    """
     import protolabs_a2a as pa
 
     exts = _card_json()["capabilities"].get("extensions", [])
     declared = {e.get("uri") for e in exts}
-    for uri in pa.ALL_EXTENSION_URIS:
-        assert uri in declared, f"missing extension declaration: {uri}"
+    assert declared == {pa.COST_EXT_URI, pa.WORLDSTATE_DELTA_EXT_URI, pa.TOOL_CALL_EXT_URI}
+    assert pa.CONFIDENCE_EXT_URI not in declared
 
 
 def test_agent_card_declares_cost_v1_extension() -> None:

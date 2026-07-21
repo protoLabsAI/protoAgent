@@ -840,9 +840,13 @@ export const api = {
   },
 
   telemetryRecent(limit = 50) {
-    return request<{ enabled: boolean; turns: TelemetryTurn[] }>(
-      `/api/telemetry/recent?limit=${limit}`,
-    );
+    // `langfuse_trace_url_template` carries a `{trace_id}` placeholder (null when
+    // Langfuse isn't configured) — see telemetry/traceUrl.ts.
+    return request<{
+      enabled: boolean;
+      turns: TelemetryTurn[];
+      langfuse_trace_url_template?: string | null;
+    }>(`/api/telemetry/recent?limit=${limit}`);
   },
 
   telemetryInsights() {

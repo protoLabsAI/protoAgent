@@ -9,7 +9,7 @@ Hierarchy
 ─────────
 A typical A2A-submitted task produces a trace like::
 
-    a2a.task (session root)
+    a2a-stream (session root)
     ├── agent-turn (LangGraph run)
     │   ├── tool:<my_tool_a>
     │   ├── tool:<my_tool_b>
@@ -193,7 +193,7 @@ async def trace_session(
 
     Usage::
 
-        async with tracing.trace_session(session_id, name="a2a.task",
+        async with tracing.trace_session(session_id, name="a2a-stream",
                                          metadata={"task_id": tid}):
             ... # LangGraph run, tool calls, subagent dispatches
             ... # all land as children of this span

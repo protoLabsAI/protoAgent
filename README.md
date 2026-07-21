@@ -194,10 +194,14 @@ to list it on the directory. See [Install & publish plugins](./docs/guides/plugi
 
 ## A2A extensions shipped by default
 
+Since protolabs-a2a 0.3.0 these ride the **`metadata` map keyed by extension URI** — not
+MIME-typed DataParts — so a generic A2A client never renders telemetry as message content.
+
 | URI | Declared on card | Emitted at runtime |
 |---|---|---|
-| `cost-v1` (`https://proto-labs.ai/a2a/ext/cost-v1`) | Yes | Yes — every terminal task carries a cost-v1 DataPart with token usage + `durationMs` |
-| `confidence-v1` (`https://proto-labs.ai/a2a/ext/confidence-v1`) | Yes | When the model self-reports a `<confidence>` tag — a confidence-v1 DataPart with the score (`[0,1]`), optional explanation, and `success` |
+| `cost-v1` (`https://proto-labs.ai/a2a/ext/cost-v1`) | Yes | Yes — every terminal artifact's `metadata` carries a cost-v1 fragment with token usage, `durationMs`, `costUsd`, `success` |
+| `worldstate-delta-v1` (`https://proto-labs.ai/a2a/ext/worldstate-delta-v1`) | Yes | When tools report observed state mutations — a `deltas[]` fragment on the terminal artifact |
+| `tool-call-v1` (`https://proto-labs.ai/a2a/ext/tool-call-v1`) | Yes | Per-tool progress on `statusUpdate` frames while the task is `WORKING` — how a live consumer watches the agent work |
 | `a2a.trace` propagation | No (it's a protocol convention, not a card extension) | Yes — reads caller's Langfuse trace context from `params.metadata["a2a.trace"]` and nests this agent's trace under it |
 
 Declare additional extensions on the card in

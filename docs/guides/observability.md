@@ -16,7 +16,7 @@ That's it. `tracing.init()` runs at server boot, detects the keys, and connects.
 
 ### What gets traced
 
-- Each A2A task → a root span named `a2a.task`
+- Each A2A task → a root span named `a2a-stream` (the name to filter on in Langfuse — it is set at `server/chat.py::_run_turn_stream` and pinned by `tests/test_tracing.py`)
 - Each LangGraph run → a child span with tool calls + LLM calls nested beneath
 - Each subagent delegation → a nested span under the parent's
 - Each tool call → a `tool:<name>` observation with args + result preview + duration

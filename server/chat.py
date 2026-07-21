@@ -1108,8 +1108,7 @@ async def _hold_if_hitl_pending(message: str, session_id: str, config: dict, *, 
 
 async def _run_native_turn(message, session_id, config, *, request_metadata=None, resume=False, images=None):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
-    kicker retry, and goal-mode continuations, then yield the terminal confidence + done
-    frames. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
+    kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
     lock around the whole turn without a deep in-line reindent."""
     from graph.goals.goal_turn import goal_turn
 

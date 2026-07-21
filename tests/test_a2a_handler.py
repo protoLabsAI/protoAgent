@@ -12,8 +12,8 @@ replaced by ``a2a-sdk`` 1.0 + two thin layers:
 These tests assert the same behaviors the hand-rolled handler guaranteed, now
 in the 1.0 shapes:
 
-  - terminal artifact carries the accumulated text + the cost / confidence /
-    worldstate-delta DataParts, in order;
+  - terminal artifact carries the accumulated text plus the cost /
+    worldstate-delta extension metadata;
   - tool events surface as tool-call-v1 DataParts on working status frames;
   - input_required parks the task (non-terminal) carrying the question;
   - errors land the task FAILED; cancel lands it CANCELED;
@@ -101,12 +101,6 @@ def test_cost_omits_costusd_when_not_supplied():
     assert "costUsd" not in pa.parse_cost(meta)
 
 
-def test_confidence_extension_uri_and_payload():
-    assert pa.CONFIDENCE_EXT_URI == "https://proto-labs.ai/a2a/ext/confidence-v1"
-    meta = pa.confidence_metadata(0.9, explanation="sure", success=True)
-    assert pa.parse_confidence(meta) == {"confidence": 0.9, "explanation": "sure", "success": True}
-
-
 def test_worldstate_delta_uri_carries_v1():
     """The extension URI (.../worldstate-delta-v1) carries -v1, matching the other three.
     Locking it prevents a silent interop break — since 0.3.0 this URI is both the
@@ -131,7 +125,6 @@ def test_tool_call_extension_uri_and_payload():
 
 def test_parsers_return_none_on_uri_mismatch():
     cost = pa.cost_metadata({"input_tokens": 1, "output_tokens": 1})
-    assert pa.parse_confidence(cost) is None
     assert pa.parse_worldstate_delta(cost) is None
     assert pa.parse_tool_call(cost) is None
 

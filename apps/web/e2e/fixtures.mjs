@@ -859,6 +859,7 @@ export const TELEMETRY_TURNS = [
     cache_read_input_tokens: 3600, cache_creation_input_tokens: 0, cost_usd: 0.12,
     duration_ms: 8100, llm_calls: 3, tool_calls: 2,
     created_at: "2026-06-01T05:00:00+00:00", ended_at: "2026-06-01T05:00:08+00:00",
+    trace_id: "0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",
   },
   {
     task_id: "task-2", session_id: "s1", state: "failed", success: 0,

@@ -744,6 +744,9 @@ export type TelemetryTurn = {
   tool_calls: number;
   created_at: string;
   ended_at: string;
+  // Langfuse trace for this turn — empty/absent when tracing was off. Paired
+  // with /api/telemetry/recent's `langfuse_trace_url_template` to deep-link.
+  trace_id?: string | null;
 };
 
 export type TelemetryInsights = {

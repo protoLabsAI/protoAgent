@@ -42,6 +42,7 @@ _COLUMNS = (
     "created_at",
     "ended_at",
     "soul_rev",  # short hash of the persona (SOUL.md) live for this turn (#1691)
+    "trace_id",  # Langfuse trace for this turn — lets the console deep-link to the trace tree
 )
 
 
@@ -81,14 +82,15 @@ class TelemetryStore:
                     tool_calls                  INTEGER DEFAULT 0,
                     created_at                  TEXT,
                     ended_at                    TEXT,
-                    soul_rev                    TEXT
+                    soul_rev                    TEXT,
+                    trace_id                    TEXT
                 )
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_ended ON turns(ended_at)")
             # Lightweight migrations for stores created before a column existed. Each ALTER is
             # idempotent-guarded by the try/except (fires once on an older DB, no-ops after).
-            for _col, _type in (("models", "TEXT"), ("soul_rev", "TEXT")):  # `models`: ADR 0006 4b; `soul_rev`: #1691
+            for _col, _type in (("models", "TEXT"), ("soul_rev", "TEXT"), ("trace_id", "TEXT")):  # `models`: ADR 0006 4b; `soul_rev`: #1691; `trace_id`: console→Langfuse pivot
                 try:
                     db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
                 except sqlite3.OperationalError:

@@ -22,7 +22,7 @@ A **hub** instance (one running a fleet of workspace members — [ADR 0042](/adr
 
 `<slug>` is the member's workspace id (e.g. `matt-7689`); `host` targets the hub itself. Routing to a member is pure transport — **the hub agent's own reasoning loop is not invoked** — so dispatching to a member's tenant path is a *direct* call, not a `delegate_to` through the hub agent.
 
-Because a member self-advertises this tenant URL in its card (see [`supportedInterfaces`](/reference/agent-card#supportedinterfaces)), a peer that **discovers** the member's card routes to it correctly with no special client logic — the spec's "read the card, follow its URL" contract. The single auth boundary is the hub's token: a caller presents the **hub's** `A2A_AUTH_TOKEN` to `/agents/<slug>/a2a`, and the proxy forwards to the (loopback-bound) member behind it.
+Because a member self-advertises this tenant URL in its card (see [`supportedInterfaces`](/reference/agent-card#supportedinterfaces)), a peer that **discovers** the member's card routes to it correctly with no special client logic — the spec's "read the card, follow its URL" contract. The hub is the **single auth boundary** (ADR [0089](/adr/0089-intra-instance-trust-boundary)): a caller presents any credential the hub accepts — its `A2A_AUTH_TOKEN`, an API key, or a per-device token — to `/agents/<slug>/a2a`. The hub authenticates it, and the proxy then **swaps** the `Authorization` header for the internal **fleet service token** before forwarding to the loopback-bound member. It does not forward the caller's credential verbatim, because each member has its own `instance_root` and therefore its own device registry and `auth.token` — a hub-minted device token would be structurally 401'd by every sister. The swap is **operator-tier only** and preserves the member-public anonymization, so unauthenticated callers still reach only a member's declared public paths.
 
 ## JSON-RPC methods (POST /a2a)
 
@@ -133,7 +133,11 @@ point.
 ```
 
 A message with no `taskId` (or one that isn't `input-required`) starts a fresh
-task as usual. The card advertises support via the `hitl-mode-v1` extension.
+task as usual. HITL is **not** advertised as a card extension — the form rides a
+`application/vnd.protolabs.hitl-v1+json` DataPart on the `INPUT_REQUIRED` frame,
+and a consumer discovers it by reading the part's mimeType. (Earlier revisions of
+this page and ADR 0014 referred to a `hitl-mode-v1` card capability; no such
+extension is declared or implemented.)
 
 ### `tasks/cancel`
 

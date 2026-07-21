@@ -280,12 +280,10 @@ class A2aAdapter(Adapter):
     async def dispatch(
         self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
     ) -> str:
-        import time
+        import httpx  # noqa: F401 — used by the pre-flight probe below
 
-        import httpx
-
+        from observability import tracing
         from security import policy
-        from tools.a2a_parse import _extract_text, _is_terminal
 
         blocked = policy.check_url(d.url)
         if blocked:
@@ -346,6 +344,31 @@ class A2aAdapter(Adapter):
             return data.get("result") or {}
 
         poll_timeout = d.poll_timeout_s if d.poll_timeout_s and d.poll_timeout_s > 0 else 300.0
+
+        # Boundary span for the OUTBOUND hop. Without it, a delegation is invisible on
+        # the caller's side except as the enclosing `tool:delegate_to` observation, so
+        # you cannot separate "the peer was slow" from "we were slow calling it" — the
+        # first question anyone asks of a multi-agent trace. This span's duration IS the
+        # cross-agent latency: dispatch → peer terminal, including the GetTask poll.
+        #
+        # Opened BEFORE the trace context is read below, deliberately: the peer then
+        # nests under *this* span rather than the enclosing turn, so a delegation chain
+        # reads as a real call tree instead of a flat list of sibling agents.
+        with tracing.trace_span(
+            f"a2a:{d.name}",
+            metadata={"url": d.url, "delegate": d.name, "poll_timeout_s": poll_timeout},
+            as_type="agent",
+        ):
+            return await self._dispatch_traced(d, query, send_timeout=timeout, poll_timeout=poll_timeout, _rpc=_rpc)
+
+    async def _dispatch_traced(self, d, query, *, send_timeout, poll_timeout, _rpc) -> str:
+        """The wire half of ``dispatch``, inside the outbound span (see caller)."""
+        import time
+
+        import httpx
+
+        from tools.a2a_parse import _extract_text, _is_terminal
+
         # Fleet tracing: when this dispatch runs inside a traced turn, hand the
         # peer our Langfuse trace context as ``a2a.trace`` metadata — the shape
         # a2a_impl/executor._extract_caller_trace reads on the receiving side
@@ -384,7 +407,7 @@ class A2aAdapter(Adapter):
         # >60s (#1778: hub→member delegation silently fell back on any non-trivial turn). Connect
         # stays short so an unreachable peer still fails fast; the same client serves the GetTask
         # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
-        read_budget = timeout if timeout is not None else poll_timeout
+        read_budget = send_timeout if send_timeout is not None else poll_timeout
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             result = await _rpc(client, "SendMessage", send_params)
             text = _extract_text(result)

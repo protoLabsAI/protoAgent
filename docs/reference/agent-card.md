@@ -28,7 +28,6 @@ The card is the **A2A 1.0** (`a2a-sdk` proto) shape, assembled by
     "pushNotifications": true,
     "extensions": [
       {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"},
-      {"uri": "https://proto-labs.ai/a2a/ext/confidence-v1"},
       {"uri": "https://proto-labs.ai/a2a/ext/worldstate-delta-v1"},
       {"uri": "https://proto-labs.ai/a2a/ext/tool-call-v1"}
     ]
@@ -89,7 +88,7 @@ Your agent's version, not the A2A spec version. Semver is conventional.
 |---|---|
 | `streaming: true` | `SendStreamingMessage` works — consumers switch to the SSE path |
 | `pushNotifications: true` | `tasks/pushNotificationConfig/*` works — consumers can register webhooks |
-| `extensions` | The four protoLabs DataPart extensions, declared by default — `cost-v1`, `confidence-v1`, `worldstate-delta-v1`, `tool-call-v1`. See [Extensions](/reference/extensions) |
+| `extensions` | The protoLabs extensions this agent actually emits — `cost-v1`, `worldstate-delta-v1`, `tool-call-v1` (URI-keyed `metadata`, not DataParts). `confidence-v1` is in the shared vocabulary but deliberately **not** declared, because nothing emits it. See [Extensions](/reference/extensions) |
 
 Lying about capabilities breaks consumers silently. If you disable streaming (for example), also strip the handler routes — otherwise clients see a mismatch.
 
@@ -140,7 +139,7 @@ shapes come from `protolabs_a2a.security_schemes(bearer=…)`.)
 
 ## Customize (no core edit)
 
-The card is assembled in `server/a2a.py::_build_agent_card_proto`, but you **don't edit it** — identity is config/plugin-driven ([#570](configuration.md#a2a)). The template declares four custom extensions by default — **cost** / **confidence** / **worldstate-delta** / **tool-call** (the URIs come from `protolabs_a2a`; see [Extensions](/reference/extensions)). At a minimum, every fork sets:
+The card is assembled in `server/a2a.py::_build_agent_card_proto`, but you **don't edit it** — identity is config/plugin-driven ([#570](configuration.md#a2a)). The template declares the three custom extensions it emits — **cost** / **worldstate-delta** / **tool-call** (URIs from `protolabs_a2a`, selected by `_emitted_extension_uris`; see [Extensions](/reference/extensions)). At a minimum, every fork sets:
 
 - `name` → `identity.name` (the setup wizard sets it)
 - `description` + `skills` → the [`a2a:`](configuration.md#a2a) config section (or a plugin's `register_a2a_skill`)
