@@ -132,6 +132,18 @@ These are the failures that actually recur — read them before you edit.
   `THIRD_PARTY_LICENSES.md` (`uv run python scripts/gen_attribution.py`) or
   the attribution gate fails.
 
+  **This is now enforced**: root `package.json` declares `engines.npm >= 11` and
+  `.npmrc` sets `engine-strict=true`, so npm 10 fails the install outright
+  instead of silently building a wrong tree. Added after the no-op cost real
+  debugging time: `@protolabsai/ui` sat at `0.54.1` under
+  `apps/web/node_modules` while the manifest said `^0.57.0`, shadowing the
+  correctly-hoisted copy. The only visible symptom was
+  `currencyMathRender.test.ts` failing — on a currency guard the DS didn't ship
+  until `0.55.1` — which reads exactly like a product regression, while CI (npm
+  11) stayed green. `npm ls @protolabsai/ui` is the tell: it prints
+  `invalid: "^0.57.0"`. If a console unit test fails locally but passes in CI,
+  check the installed tree before reading the code.
+
 - **No unused variables.** ruff selects `F` (pyflakes); `F841` (assigned-but-
   unused) **fails CI** and `ruff check --fix` does **not** auto-fix it. Don't
   leave dead locals in code or tests. (Style rules `E402/E501/E702/E731/E741`
