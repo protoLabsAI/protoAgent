@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were slow calling it" were indistinguishable. The span's duration is the real cross-agent latency
   (SendMessage through the `GetTask` poll), and it opens *before* the trace context is read so the
   peer nests under it — a delegation chain now renders as a call tree, not a flat list of siblings.
+- **Goal detail drawer.** Click a goal in the console's Goals panel to open a read-only drawer:
+  the agent's live **plan** (`.plan.md`, rendered as markdown), the completion-contract read-back
+  (outcome / constraints / boundaries / stop_when), the last verifier reason/evidence, and a
+  per-iteration **timeline**. `GET /api/goals/{session_id}` now returns the goal's `plan` artifact.
+  (ADR 0073, 0079)
+- **Goal lifecycle actions.** From the drawer, give an active goal more room (**Add iterations**)
+  or **Restart** a terminal one — new `POST /api/goals/{session_id}/rearm`. A goal that stalls or
+  exhausts is no longer a dead end.
+- **Panel goals drive in a dedicated chat tab.** Creating a goal from the Work panel opens a
+  focused chat tab and drives the goal in it, so the whole loop **streams live** instead of running
+  invisibly in the background. Closing the tab prompts you to keep it **running in the background**
+  (detach — `POST /api/goals/{session_id}/resume`) or **stop** it and close the tasks it filed
+  (`DELETE /api/goals/{session_id}?close_tasks=true`). A goal set in chat with `/goal` still stays
+  in that chat. (ADR 0079)
 
 ### Changed
 - **The agent card declares only the extensions this runtime actually emits.** It advertised
@@ -39,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   card now declares `cost-v1`, `worldstate-delta-v1`, `tool-call-v1` via
   `server/a2a.py::_emitted_extension_uris`, and the test asserts set **equality** (the old one
   checked containment, so it could never fail on an over-declaration).
+- **One guided goal-creation wizard.** The console's two goal-creation entry points (the Goals
+  panel and the Work overview quick-add) now share a single wizard — verifier cards plus an
+  optional completion-contract step (ADR 0073) — replacing the old raw-JSON verifier dialog.
+- **A goal set from the console starts driving immediately** (parity with the chat `/goal` set),
+  instead of sitting idle until the next turn in its session.
 
 ### Fixed
 - **The A2A docs taught a wire format that 1.0 removed.** `docs/explanation/a2a-protocol.md`
@@ -56,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Authorization header for the fleet service token; it doesn't forward the caller's verbatim), docs
   cited modules deleted in #453, ADR 0014 claimed a `hitl-mode-v1` capability that exists nowhere,
   and ADR 0089/0075 statuses were stale.
+- **No-progress detection now works for fuzzy (`llm`) goals.** The stall check compared the
+  verifier's free-text reason, which varies every call for an `llm` verifier, so `no_progress_limit`
+  could never fire — a fuzzy goal only ever stopped at the iteration cap. It now fingerprints the
+  agent's plan artifact for fuzzy goals (deterministic verifiers are unchanged).
+- **A goal set could 500 after being persisted** if the best-effort drive-turn kick hit a scheduler
+  hiccup — the kick is now guarded (the goal is already saved; a failed kick just means it drives on
+  the next turn).
+- **Retired dead monitor-mode UI** in the console Goals surface (leftover from the drive-only goal
+  migration) and a goal-status filter that checked a status the backend never emits.
 
 ## [0.105.2] - 2026-07-20
 

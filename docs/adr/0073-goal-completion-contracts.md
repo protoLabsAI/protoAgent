@@ -106,5 +106,7 @@ tracked follow-up.
   (the contract) — forks stop overloading `condition`.
 - **No new arbiter risk.** Because verification is unchanged, none of the LLM-judge failure
   modes (prompt-injection of the judge, judge drift) enter the completion decision.
-- **Follow-ups:** the FE goal-creation form (Part 2); optionally a `stop_when`-as-verifier
+- **Follow-ups:** the FE goal-creation form (Part 2) **shipped** — a guided wizard (verifier
+  cards + the contract step) in the console, with the contract read-back surfaced in a goal
+  **detail drawer** (plan + timeline + contract). Still open: optionally a `stop_when`-as-verifier
   auto-park (D4).
