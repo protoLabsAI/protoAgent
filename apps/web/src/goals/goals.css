@@ -12,6 +12,17 @@
   padding: 10px 34px 10px 12px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
+  cursor: pointer;
+}
+
+/* The row is a button (opens the detail drawer) — hover/focus affordance. */
+.goal-row:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.06));
+}
+
+.goal-row:focus-visible {
+  outline: 2px solid var(--brand-accent, #9b87f2);
+  outline-offset: -2px;
 }
 
 .goal-row:last-child {
@@ -64,4 +75,161 @@
   background: transparent;
   max-height: min(72dvh, 620px);
   overflow-y: auto;
+}
+
+/* Goal detail drawer (read-only) — plan + completion contract + progress. */
+.goal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.goal-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.goal-detail-condition {
+  font-size: 14px;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.goal-detail-facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.goal-detail-facts > div {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.goal-detail-facts dt {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.goal-detail-facts dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.goal-detail-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.goal-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.goal-detail-section h4 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.goal-detail-section p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.goal-detail-section ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}
+
+.goal-detail-key {
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.goal-detail-evidence {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* The plan is agent-authored markdown — keep it readable but compact in the drawer. */
+.goal-detail-plan {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.goal-detail-muted {
+  margin: 0;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+/* Drive-loop timeline — one row per iteration (verifier verdict), newest first. */
+.goal-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.goal-timeline-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.goal-timeline-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.goal-timeline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.goal-timeline-iter {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.goal-timeline-time {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.goal-timeline-reason {
+  font-size: 12.5px;
+  line-height: 1.45;
+  word-break: break-word;
 }

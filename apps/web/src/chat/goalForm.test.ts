@@ -9,6 +9,7 @@ import {
   parseMaxIterations,
   splitLines,
   verifierDetail,
+  verifierLabel,
 } from "./goalForm";
 
 // The form is rendered by HitlForm (not exercised here — jsdom has no renderer and the DS
@@ -209,5 +210,24 @@ describe("buildGoalSetBody", () => {
     });
     expect(body).not.toHaveProperty("constraints");
     expect(body).not.toHaveProperty("outcome");
+  });
+});
+
+describe("verifierLabel", () => {
+  it("summarizes each verifier type (mirrors the backend)", () => {
+    expect(verifierLabel({ type: "command", command: "pytest -q" })).toBe("command: pytest -q");
+    expect(verifierLabel({ type: "test", command: "" })).toBe("test");
+    expect(verifierLabel({ type: "ci", pr: 12 })).toBe("ci PR #12");
+    expect(verifierLabel({ type: "ci", branch: "main" })).toBe("ci branch main");
+    expect(verifierLabel({ type: "ci" })).toBe("ci");
+    expect(verifierLabel({ type: "data", path: "status.json" })).toBe("data check on status.json");
+    expect(verifierLabel({ type: "plugin", check: "demo:probe" })).toBe("plugin demo:probe");
+    expect(verifierLabel({ type: "llm" })).toBe("llm judgment");
+  });
+
+  it("defaults to llm judgment when the verifier is absent/empty", () => {
+    expect(verifierLabel(undefined)).toBe("llm judgment");
+    expect(verifierLabel(null)).toBe("llm judgment");
+    expect(verifierLabel({})).toBe("llm judgment");
   });
 });

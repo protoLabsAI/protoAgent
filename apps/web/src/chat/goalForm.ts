@@ -135,6 +135,8 @@ export type GoalSetBody = {
   boundaries?: string[];
   stop_when?: string;
   max_iterations?: number;
+  // `false` when the panel drives the goal from a dedicated chat tab (no headless kick).
+  kick?: boolean;
 };
 
 /** Split a textarea value into trimmed, non-empty lines → `string[]` (constraints/boundaries
@@ -196,6 +198,34 @@ export function verifierDetail(answers: Record<string, unknown>): string {
 export function parseMaxIterations(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_ITERATIONS;
+}
+
+/** A compact human label for a verifier spec — mirrors the backend `_verifier_summary`
+ *  (graph/goals/controller.py) so the goal detail drawer reads the same as the continuation
+ *  contract line: `command: pytest -q`, `ci PR #12`, `plugin demo:probe`, `llm judgment`. */
+export function verifierLabel(verifier?: Record<string, unknown> | null): string {
+  const v = verifier ?? {};
+  const str = (k: string) => (typeof v[k] === "string" ? (v[k] as string).trim() : "");
+  const t = str("type") || "llm";
+  if (t === "command" || t === "test") {
+    const cmd = str("command");
+    return cmd ? `${t}: ${cmd}` : t;
+  }
+  if (t === "ci") {
+    if (v.pr != null && v.pr !== "") return `ci PR #${v.pr}`;
+    const branch = str("branch");
+    return branch ? `ci branch ${branch}` : "ci";
+  }
+  if (t === "data") {
+    const path = str("path");
+    return path ? `data check on ${path}` : "data check";
+  }
+  if (t === "plugin") {
+    const check = str("check");
+    return check ? `plugin ${check}` : "plugin verifier";
+  }
+  if (t === "llm") return "llm judgment";
+  return t;
 }
 
 /** Map the HitlForm answers → the `POST /api/goals` body for `session_id`. Returns `null`

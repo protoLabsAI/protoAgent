@@ -136,16 +136,24 @@ def test_operator_routes_map_value_errors_to_400() -> None:
 # ── goals routes (list + clear) ──────────────────────────────────────────────
 
 
-def _goals_client(*, goals=None, on_clear=None):
+def _goals_client(*, goals=None, on_clear=None, on_rearm=None):
     app = FastAPI()
 
     async def glist():
         return {"goals": goals if goals is not None else [], "enabled": True}
 
-    async def gclear(session_id):
+    async def gclear(session_id, close_tasks=False):
         if on_clear:
-            on_clear(session_id)
-        return {"cleared": True}
+            on_clear(session_id, close_tasks)
+        return {"cleared": True, "tasks_closed": 2 if close_tasks else 0}
+
+    async def grearm(session_id, body):
+        if on_rearm is not None:
+            return on_rearm(session_id, body)
+        return {"ok": True, "message": "re-armed", "resumed": True, "kicked": True}
+
+    async def gresume(session_id):
+        return {"ok": bool(session_id != "none"), "kicked": True, "error": "no active goal for this session"}
 
     register_operator_routes(
         app,
@@ -155,6 +163,8 @@ def _goals_client(*, goals=None, on_clear=None):
         subagent_batch=lambda r: None,
         goal_list=glist,
         goal_clear=gclear,
+        goal_rearm=grearm,
+        goal_resume=gresume,
     )
     return TestClient(app)
 
@@ -163,14 +173,19 @@ def test_goals_list_and_clear() -> None:
     seen = {}
     client = _goals_client(
         goals=[{"session_id": "s1", "condition": "ship it", "status": "active", "iteration": 2}],
-        on_clear=lambda sid: seen.update(id=sid),
+        on_clear=lambda sid, close_tasks: seen.update(id=sid, close_tasks=close_tasks),
     )
     body = client.get("/api/goals").json()
     assert body["enabled"] is True
     assert body["goals"][0]["session_id"] == "s1" and body["goals"][0]["status"] == "active"
 
-    assert client.delete("/api/goals/s1").json() == {"cleared": True}
-    assert seen["id"] == "s1"
+    # Plain clear: goal removed, no tasks touched.
+    assert client.delete("/api/goals/s1").json() == {"cleared": True, "tasks_closed": 0}
+    assert seen["id"] == "s1" and seen["close_tasks"] is False
+
+    # Stop goal (?close_tasks=true): the goal's task backlog is closed too.
+    assert client.delete("/api/goals/s1?close_tasks=true").json() == {"cleared": True, "tasks_closed": 2}
+    assert seen["close_tasks"] is True
 
 
 def test_goal_single_status_under_plural(monkeypatch) -> None:
@@ -181,16 +196,48 @@ def test_goal_single_status_under_plural(monkeypatch) -> None:
     client = _goals_client(goals=[])
 
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
-    assert client.get("/api/goals/s1").json() == {"enabled": False, "goal": None}
+    assert client.get("/api/goals/s1").json() == {"enabled": False, "goal": None, "plan": ""}
 
     class _Store:
         def get(self, sid):
             return type("G", (), {"to_dict": lambda self: {"session_id": "s1", "status": "active"}})() if sid == "s1" else None
 
+        def read_plan(self, sid):
+            return "# plan\n- step one" if sid == "s1" else ""
+
     monkeypatch.setattr(rs.STATE, "goal_controller", type("C", (), {"store": _Store()})(), raising=False)
     body = client.get("/api/goals/s1").json()
     assert body["enabled"] is True and body["goal"]["status"] == "active"
-    assert client.get("/api/goals/other").json() == {"enabled": True, "goal": None}
+    # The `.plan.md` artifact rides along (ADR 0079) for the detail drawer.
+    assert body["plan"] == "# plan\n- step one"
+    # No goal → no plan read (and a null goal), but the shape stays stable.
+    assert client.get("/api/goals/other").json() == {"enabled": True, "goal": None, "plan": ""}
+
+
+def test_goal_rearm_route() -> None:
+    # POST /api/goals/{sid}/rearm forwards the body to the injected handler and returns its
+    # result; a handler ok=False maps to 400 (a no-op re-arm).
+    seen = {}
+
+    def _rearm(sid, body):
+        seen["sid"], seen["body"] = sid, body
+        if body.get("add_iterations") == 0:
+            return {"ok": False, "error": "goal is already active — add iterations to extend it."}
+        return {"ok": True, "message": "Goal budget extended.", "resumed": False, "kicked": False}
+
+    client = _goals_client(on_rearm=_rearm)
+    ok = client.post("/api/goals/s1/rearm", json={"add_iterations": 4})
+    assert ok.status_code == 200 and ok.json()["resumed"] is False
+    assert seen == {"sid": "s1", "body": {"add_iterations": 4}}
+    # Empty body is allowed (defaults) and a no-op re-arm surfaces as 400.
+    assert client.post("/api/goals/s1/rearm", json={"add_iterations": 0}).status_code == 400
+
+
+def test_goal_resume_route() -> None:
+    # POST /api/goals/{sid}/resume forwards to the handler; a no active goal maps to 400.
+    client = _goals_client()
+    assert client.post("/api/goals/s1/resume").status_code == 200
+    assert client.post("/api/goals/none/resume").status_code == 400
 
 
 def test_goals_routes_absent_when_not_wired() -> None:

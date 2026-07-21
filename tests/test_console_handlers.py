@@ -97,6 +97,105 @@ async def test_goals_set_backward_compatible_without_contract(monkeypatch, tmp_p
     assert ctrl.active_goal("s2").has_contract is False
 
 
+async def test_goals_set_kicks_an_initial_drive_turn(monkeypatch, tmp_path):
+    # Parity with the chat `/goal` SET (#1910): a successful operator set enqueues a first
+    # drive turn so a console-set goal starts immediately.
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    kicks: list[tuple] = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda sid, prompt, **k: (kicks.append((sid, prompt)), {"ok": True})[1])
+    res = await ch._operator_goals_set(
+        {"session_id": "s9", "condition": "go", "verifier": {"type": "command", "command": "true"}}
+    )
+    assert res["ok"] is True and res["kicked"] is True
+    assert kicks and kicks[0][0] == "s9"
+
+
+async def test_goals_set_failure_does_not_kick(monkeypatch, tmp_path):
+    # A rejected set (no condition) returns an error and never enqueues a turn.
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    kicks: list = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda *a, **k: (kicks.append(a), {"ok": True})[1])
+    res = await ch._operator_goals_set({"session_id": "s9", "verifier": {"type": "llm"}})
+    assert res["ok"] is False and not kicks
+
+
+async def test_goals_set_kick_false_skips_the_turn(monkeypatch, tmp_path):
+    # The console panel path drives the goal from a chat tab, so it sets `kick: false` — no
+    # headless turn is enqueued (the tab owns the drive).
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    kicks: list = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda *a, **k: (kicks.append(a), {"ok": True})[1])
+    res = await ch._operator_goals_set(
+        {"session_id": "s9", "condition": "go", "verifier": {"type": "llm"}, "kick": False}
+    )
+    assert res["ok"] is True and res["kicked"] is False and not kicks
+
+
+async def test_goals_resume_kicks_active_goal(monkeypatch, tmp_path):
+    ctrl = _wire_goal_controller(monkeypatch, tmp_path)
+    ctrl.set_goal_operator("s1", "cond", {"type": "llm"})
+    import graph.sdk as sdk
+
+    kicks: list = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda sid, prompt, **k: (kicks.append(sid), {"ok": True})[1])
+    res = await ch._operator_goals_resume("s1")
+    assert res["ok"] is True and res["kicked"] is True and kicks == ["s1"]
+
+
+async def test_goals_resume_no_active_goal_is_a_noop(monkeypatch, tmp_path):
+    _wire_goal_controller(monkeypatch, tmp_path)
+    res = await ch._operator_goals_resume("nope")
+    assert res["ok"] is False and "no active goal" in res["error"]
+
+
+async def test_goals_set_kick_error_does_not_crash(monkeypatch, tmp_path):
+    # QA #2091: the best-effort kick must never 500 the request — the goal is already set.
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    def _boom(*a, **k):
+        raise RuntimeError("scheduler down")
+
+    monkeypatch.setattr(sdk, "run_in_session", _boom)
+    res = await ch._operator_goals_set({"session_id": "s9", "condition": "go", "verifier": {"type": "llm"}})
+    assert res["ok"] is True and res["kicked"] is False  # goal set; kick swallowed
+
+
+async def test_goals_clear_close_tasks(monkeypatch, tmp_path):
+    # Stopping a goal with close_tasks closes its session-scoped task backlog (ADR 0079).
+    ctrl = _wire_goal_controller(monkeypatch, tmp_path)
+    ctrl.set_goal_operator("s1", "cond", {"type": "llm"})
+    import runtime.state as rs
+
+    class _Tasks:
+        def __init__(self):
+            self.closed: list[str] = []
+
+        def list(self, *, include_closed=True, session_id=None):
+            return [{"id": "t1"}, {"id": "t2"}] if session_id == "s1" else []
+
+        def close(self, issue_id, reason=None):
+            self.closed.append(issue_id)
+
+    tasks = _Tasks()
+    monkeypatch.setattr(rs.STATE, "tasks_store", tasks, raising=False)
+
+    res = await ch._operator_goals_clear("s1", close_tasks=True)
+    assert res == {"cleared": True, "tasks_closed": 2} and tasks.closed == ["t1", "t2"]
+
+    # Plain clear leaves tasks alone.
+    ctrl.set_goal_operator("s1", "cond", {"type": "llm"})
+    tasks.closed.clear()
+    res2 = await ch._operator_goals_clear("s1", close_tasks=False)
+    assert res2["tasks_closed"] == 0 and tasks.closed == []
+
+
 def test_as_str_list_coercion():
     assert ch._as_str_list("x") == ["x"]
     assert ch._as_str_list(["a", "b"]) == ["a", "b"]

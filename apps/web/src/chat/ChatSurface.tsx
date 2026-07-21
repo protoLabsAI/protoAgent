@@ -14,7 +14,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { runtimeStatusQuery } from "../lib/queries";
+import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
@@ -23,6 +23,8 @@ import {
   chatStore,
   useChatState,
   effectiveReasoningEffort,
+  subscribeGoalKickoff,
+  takeGoalKickoff,
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
@@ -121,7 +123,17 @@ export function ChatSurface({
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   const [harvestOnDelete, setHarvestOnDelete] = useState(false);
+  // Goal tab close: default keeps the goal running (detach); toggle on to STOP it (clear the
+  // goal + close its task backlog) instead.
+  const [stopGoalOnClose, setStopGoalOnClose] = useState(false);
   const pendingCloseSession = chat.sessions.find((s) => s.id === pendingClose) || null;
+  // Active goals keyed by session — a tab whose session is driving a goal gets a different
+  // close flow (detach + keep running) instead of the plain delete. Cached; refetches on
+  // focus. `status: "active"` is the only in-flight state.
+  const goalSessions = useQuery(goalsQuery()).data?.goals ?? [];
+  const closingGoal = pendingClose
+    ? goalSessions.find((g) => g.session_id === pendingClose && g.status === "active")
+    : undefined;
 
   useEffect(() => {
     if (!chat.currentSessionId && chat.sessions.length === 0) {
@@ -297,31 +309,66 @@ export function ChatSurface({
 
       <ConfirmDialog
         open={pendingClose !== null}
-        title="Delete this chat?"
-        confirmLabel="Delete chat"
-        destructive
+        title={closingGoal ? "Close this goal tab?" : "Delete this chat?"}
+        confirmLabel={closingGoal ? (stopGoalOnClose ? "Stop goal & close" : "Keep running, close tab") : "Delete chat"}
+        destructive={!closingGoal || stopGoalOnClose}
         onConfirm={() => {
-          if (pendingClose) closeSession(pendingClose, harvestOnDelete);
+          if (pendingClose) {
+            if (closingGoal) {
+              if (stopGoalOnClose) {
+                // STOP: clear the goal + close its task backlog, and purge the (now finished)
+                // session. The tab unmount aborts the in-flight drive stream.
+                void api.clearGoal(pendingClose, true).catch(() => {});
+                void api.deleteChatSession(pendingClose, false).catch(() => {});
+                chatStore.deleteSession(pendingClose);
+              } else {
+                // DETACH: keep the goal driving in the background (a headless continuation) and
+                // KEEP the server session — its checkpoint is the goal's accumulated context, so
+                // we must NOT purge it. Just drop the tab locally; track it in the Goals panel.
+                void api.resumeGoal(pendingClose).catch(() => {});
+                chatStore.deleteSession(pendingClose);
+              }
+            } else {
+              closeSession(pendingClose, harvestOnDelete);
+            }
+          }
           setPendingClose(null);
           setHarvestOnDelete(false);
+          setStopGoalOnClose(false);
         }}
-        onClose={() => { setPendingClose(null); setHarvestOnDelete(false); }}
+        onClose={() => { setPendingClose(null); setHarvestOnDelete(false); setStopGoalOnClose(false); }}
       >
         {pendingCloseSession ? (
-          <>
-            <p style={{ margin: 0 }}>
-              {`"${pendingCloseSession.title}" and its history will be removed — this can't be undone from here.`}
-            </p>
-            {/* Harvest is OPT-IN: deleting a chat must not silently copy it into
-                searchable memory — the operator may be deleting it precisely to
-                get rid of it. */}
-            <Switch
-              className="chat-delete-harvest"
-              checked={harvestOnDelete}
-              onCheckedChange={setHarvestOnDelete}
-              label="Harvest into the knowledge base first (keeps a searchable summary)"
-            />
-          </>
+          closingGoal ? (
+            <>
+              <p style={{ margin: 0 }}>
+                This tab is driving the goal <strong>{`"${closingGoal.condition || pendingCloseSession.title}"`}</strong>.
+                By default it keeps running in the background — track it in the Goals panel.
+              </p>
+              {/* Opt-in STOP: cancel the goal AND close the tasks it filed (its backlog). */}
+              <Switch
+                className="chat-delete-harvest"
+                checked={stopGoalOnClose}
+                onCheckedChange={setStopGoalOnClose}
+                label="Stop the goal and close its open tasks instead"
+              />
+            </>
+          ) : (
+            <>
+              <p style={{ margin: 0 }}>
+                {`"${pendingCloseSession.title}" and its history will be removed — this can't be undone from here.`}
+              </p>
+              {/* Harvest is OPT-IN: deleting a chat must not silently copy it into
+                  searchable memory — the operator may be deleting it precisely to
+                  get rid of it. */}
+              <Switch
+                className="chat-delete-harvest"
+                checked={harvestOnDelete}
+                onCheckedChange={setHarvestOnDelete}
+                label="Harvest into the knowledge base first (keeps a searchable summary)"
+              />
+            </>
+          )
         ) : undefined}
       </ConfirmDialog>
     </section>
@@ -357,6 +404,21 @@ function ChatSessionSlot({
     setHitlState(payload);
   };
   const abortRef = useRef<AbortController | null>(null);
+  // Auto-drive a goal created from the Work panel: that flow opens this tab (`kick:false`)
+  // and, once the goal is set on the server, registers a kickoff on the chat-store seam. Fire
+  // it as a HIDDEN turn so the drive loop streams live INTO this tab (the server's iteration-0
+  // kickoff injection re-states the goal). `check()` also covers a kickoff registered before
+  // this slot mounted; `takeGoalKickoff` is idempotent, so it fires exactly once.
+  useEffect(() => {
+    const check = () => {
+      const kickoff = takeGoalKickoff(sessionId);
+      if (kickoff) void runTurn(kickoff, { hidden: true });
+    };
+    check();
+    return subscribeGoalKickoff(check);
+    // runTurn is a stable per-render closure that reads the live store; sessionId is the key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
   // Client composer-form (#1701): a form a CLIENT command opens in the composer (e.g.
   // `/effort`'s picker), rendered through the same HitlForm but resolved LOCALLY — no
   // agent round-trip. Kept DISTINCT from the agent `hitl` interrupt so the two never

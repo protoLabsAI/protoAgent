@@ -1237,10 +1237,34 @@ export const api = {
     return request<{ goals: GoalState[]; enabled: boolean }>("/api/goals");
   },
 
-  clearGoal(sessionId: string) {
-    return request<{ cleared: boolean }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
-      method: "DELETE",
-    });
+  // One goal's full detail — the status dict + the durable plan artifact (`.plan.md`, the
+  // agent's "orient" world-model it maintains via `update_goal_plan`, ADR 0079). `plan` is
+  // "" when the goal hasn't recorded one. Powers the goal detail drawer.
+  goalDetail(sessionId: string) {
+    return request<{ enabled: boolean; goal: GoalState | null; plan: string }>(
+      `/api/goals/${encodeURIComponent(sessionId)}`,
+    );
+  },
+
+  // Clear (stop) a goal. `closeTasks` also closes the goal's session-scoped task backlog
+  // (ADR 0079) — the "Stop goal" action. Returns how many tasks were closed.
+  clearGoal(sessionId: string, closeTasks = false) {
+    const q = closeTasks ? "?close_tasks=true" : "";
+    return request<{ cleared: boolean; tasks_closed?: number }>(
+      `/api/goals/${encodeURIComponent(sessionId)}${q}`,
+      { method: "DELETE" },
+    );
+  },
+
+  // Goal lifecycle (ADR 0079) — re-arm: extend an active goal's iteration budget
+  // (`add_iterations`), or reactivate a terminal one and kick a fresh drive turn (the backend
+  // resets the loop + enqueues the turn). `resumed` is true when a terminal goal was
+  // reactivated. A no-op (active goal, no added budget) comes back HTTP 400.
+  rearmGoal(sessionId: string, body: { add_iterations?: number }) {
+    return request<{ ok: boolean; message?: string; resumed?: boolean; kicked?: boolean; error?: string }>(
+      `/api/goals/${encodeURIComponent(sessionId)}/rearm`,
+      { method: "POST", body },
+    );
   },
 
   // Operator goal-set (ADR 0066) — the trusted operator channel. `/api` is operator-tier by
@@ -1258,11 +1282,23 @@ export const api = {
     boundaries?: string[];
     stop_when?: string;
     max_iterations?: number;
+    // `false` = don't kick a headless drive turn; the caller drives the goal from a chat tab
+    // instead (the console panel path). Omitted/true = the pre-tab behavior (auto-start).
+    kick?: boolean;
   }) {
-    return request<{ ok: boolean; message?: string; error?: string }>("/api/goals", {
+    return request<{ ok: boolean; message?: string; kicked?: boolean; error?: string }>("/api/goals", {
       method: "POST",
       body,
     });
+  },
+
+  // Detach-continue (ADR 0079): keep an ACTIVE goal driving in the background after the chat
+  // tab that was streaming it is closed. 400 when the session has no active goal.
+  resumeGoal(sessionId: string) {
+    return request<{ ok: boolean; kicked?: boolean; error?: string }>(
+      `/api/goals/${encodeURIComponent(sessionId)}/resume`,
+      { method: "POST" },
+    );
   },
 
   // Watches (ADR 0067) — passive verifier-only objectives, many at once, keyed by id. The

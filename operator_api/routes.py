@@ -189,8 +189,10 @@ def register_operator_routes(
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
-    goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    goal_rearm: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    goal_resume: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     watch_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -447,24 +449,31 @@ def register_operator_routes(
 
     if goal_clear is not None:
 
+        # `?close_tasks=true` also closes the goal's session-scoped task backlog (ADR 0079) —
+        # used by the "Stop goal" action so a stopped goal leaves no orphaned open tasks.
         @app.delete("/api/goals/{session_id}")
-        async def _goal_clear(session_id: str):
+        async def _goal_clear(session_id: str, close_tasks: bool = False):
             try:
-                return await goal_clear(session_id)
+                return await goal_clear(session_id, close_tasks)
             except Exception as exc:
                 raise _http_error(exc) from exc
 
-    # One session's goal status under the canonical plural shape (D4 dedupe, ADR 0075)
-    # — replaces the retired singular `/api/goal/{session_id}`. Reads the controller
-    # directly, so it degrades to {enabled: False} when goals are off; no injected fn.
+    # One session's goal status + its durable plan artifact under the canonical plural
+    # shape (D4 dedupe, ADR 0075) — replaces the retired singular `/api/goal/{session_id}`.
+    # Reads the controller directly, so it degrades to {enabled: False} when goals are off;
+    # no injected fn. `plan` is the `.plan.md` the agent maintains with `update_goal_plan`
+    # (its "orient" world-model, ADR 0079) — "" when the goal hasn't recorded one. Powers
+    # the console goal detail drawer; additive, so pre-existing callers are unaffected.
     @app.get("/api/goals/{session_id}")
     async def _goal_status(session_id: str):
         from runtime.state import STATE
 
         if STATE.goal_controller is None:
-            return {"enabled": False, "goal": None}
-        state = STATE.goal_controller.store.get(session_id)
-        return {"enabled": True, "goal": state.to_dict() if state else None}
+            return {"enabled": False, "goal": None, "plan": ""}
+        store = STATE.goal_controller.store
+        state = await asyncio.to_thread(store.get, session_id)
+        plan = await asyncio.to_thread(store.read_plan, session_id) if state else ""
+        return {"enabled": True, "goal": state.to_dict() if state else None, "plan": plan or ""}
 
     # Programmatic goal-set (ADR 0028 D3) — accepts ONLY a `plugin` verifier;
     # command/test/ci/data stay operator-only (/goal). 400 on a rejected verifier.
@@ -474,6 +483,35 @@ def register_operator_routes(
         async def _goal_set(body: dict):
             try:
                 res = await goal_set(body or {})
+            except Exception as exc:
+                raise _http_error(exc) from exc
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
+            return res
+
+    # Goal lifecycle (ADR 0079) — re-arm: extend an active goal's budget, or reactivate a
+    # terminal one and kick a fresh drive turn. Operator-tier by the `/api` ceiling. 400 on a
+    # no-op (e.g. an active goal with no added iterations).
+    if goal_rearm is not None:
+
+        @app.post("/api/goals/{session_id}/rearm")
+        async def _goal_rearm(session_id: str, body: dict | None = Body(default=None)):
+            try:
+                res = await goal_rearm(session_id, body or {})
+            except Exception as exc:
+                raise _http_error(exc) from exc
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
+            return res
+
+    # Detach-continue (ADR 0079): kick a headless continuation for an ACTIVE goal so it keeps
+    # driving after the chat tab that was streaming it is closed. 400 when nothing is active.
+    if goal_resume is not None:
+
+        @app.post("/api/goals/{session_id}/resume")
+        async def _goal_resume(session_id: str):
+            try:
+                res = await goal_resume(session_id)
             except Exception as exc:
                 raise _http_error(exc) from exc
             if not res.get("ok"):

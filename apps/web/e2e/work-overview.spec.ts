@@ -165,17 +165,54 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await expect(submit).toBeEnabled();
   await submit.click();
 
-  // Operator goal-set payload; success closes the dialog + toasts. The verifier
-  // defaults to llm when no card is picked; the contract fields are omitted when empty.
+  // Operator goal-set payload; success closes the dialog + toasts. The panel drives the goal
+  // in a dedicated chat tab, so it targets a FRESH `chat-` session (not "operator") and sends
+  // `kick: false` (the tab fires the kickoff itself, no headless turn). Verifier defaults to
+  // llm when no card is picked; contract fields are omitted when empty.
   await expect(form).toHaveCount(0);
   await expect(page.locator(".pl-toast__title", { hasText: "Goal set" })).toBeVisible();
   expect(posted).toMatchObject({
-    session_id: "operator",
     condition: "All tests pass twice",
     verifier: { type: "llm" },
+    kick: false,
   });
-  // Still in the nested Goals view — creating never navigates.
+  expect(String((posted as { session_id?: unknown }).session_id ?? "")).toMatch(/^chat-/);
+  // Still in the nested Goals view — creating the goal opens its tab in the chat surface but
+  // doesn't navigate the Work panel away.
   await expect(page.getByTestId("work-back")).toBeVisible();
+});
+
+test("clicking a goal row opens the detail drawer (plan, contract, timeline, actions)", async ({ page }) => {
+  // The Goals panel row opens a right drawer surfacing what the console couldn't see before:
+  // the completion contract read-back (ADR 0073), the durable plan artifact + per-iteration
+  // timeline (ADR 0079), and the lifecycle actions.
+  await openWork(page);
+  await page.getByTestId("work-card-goals").click();
+  await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
+
+  await page.getByTestId("goal-row").first().click();
+  const detail = page.getByTestId("goal-detail");
+  await expect(detail).toBeVisible();
+
+  // Verifier summary mirrors the backend (`command: pytest -q`).
+  await expect(detail).toContainText("command: pytest -q");
+
+  // Completion-contract read-back — outcome, constraints, boundaries, stop_when.
+  const contract = page.getByTestId("goal-detail-contract");
+  await expect(contract).toContainText("The suite is green on main");
+  await expect(contract).toContainText("public API unchanged");
+  await expect(contract).toContainText("graph/goals/");
+  await expect(contract).toContainText("schema migration");
+
+  // The `.plan.md` artifact renders (markdown or its raw-text fallback).
+  await expect(detail).toContainText("Fix the no-progress streak assertion");
+
+  // Per-iteration timeline (drive-loop history).
+  await expect(page.getByTestId("goal-detail-timeline")).toContainText("2 tests still failing");
+
+  // The fixture goal is ACTIVE → the extend action; clicking it re-arms (POST → toast).
+  await page.getByTestId("goal-extend").click();
+  await expect(page.locator(".pl-toast__title", { hasText: "Goal re-armed" })).toBeVisible();
 });
 
 test("watches empty state explains agent-created watches and offers no CTA", async ({ page }) => {

@@ -82,8 +82,19 @@ class GoalState:
     # Per-goal patience (ADR 0030 D4); None → the config goal_no_progress_limit.
     no_progress_limit: int | None = None
     no_progress_streak: int = 0
+    # The previous iteration's progress fingerprint — stable ⟺ no real progress, so the
+    # no_progress_streak counts consecutive matches. It is verifier-type-aware (see
+    # GoalController.evaluate): a deterministic verifier's (reason, evidence) for
+    # command/test/ci/data/plugin; the PLAN artifact hash for the fuzzy `llm` verifier
+    # (whose free-text reason varies every call and so can't serve as a stall signal).
+    last_progress_signature: str = ""
     last_reason: str = ""
     last_evidence: str = ""
+    # Per-iteration verifier trail (the drive-loop timeline), newest appended last and
+    # capped to the most recent entries. Each event: {iteration, at (epoch), status
+    # ("continue" | terminal), reason, evidence}. Survives re-arms so the timeline shows
+    # the whole journey. Plain dicts (not a dataclass) so to_dict/from_dict round-trip it.
+    history: list[dict] = field(default_factory=list)
     started_at: float = field(default_factory=time)
     finished_at: float | None = None
 

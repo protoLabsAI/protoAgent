@@ -7,6 +7,9 @@ import { api } from "./api";
 // stable and hierarchical so a mutation can invalidate a whole subtree.
 export const queryKeys = {
   goals: ["goals"] as const,
+  // One goal's detail (status + plan artifact). Prefixed under `goals` so the panel's
+  // `invalidateQueries(["goals"])` on the goal.* bus pushes also refreshes an open drawer.
+  goalDetail: (sessionId: string) => ["goals", "detail", sessionId] as const,
   watches: ["watches"] as const,
   tasks: ["tasks", "issues"] as const,
   workflows: ["workflows"] as const,
@@ -79,6 +82,15 @@ export const goalsQuery = () =>
   queryOptions({
     queryKey: queryKeys.goals,
     queryFn: () => api.goals(),
+  });
+
+// One goal's detail (status + `.plan.md`) for the detail drawer. Keyed by session so each
+// goal caches independently; the `["goals"]` prefix means the panel's bus invalidation
+// refreshes an open drawer live as the loop iterates.
+export const goalDetailQuery = (sessionId: string) =>
+  queryOptions({
+    queryKey: queryKeys.goalDetail(sessionId),
+    queryFn: () => api.goalDetail(sessionId),
   });
 
 // Passive watches (ADR 0067) — verifier-only objectives polled out-of-band. Lives in the
