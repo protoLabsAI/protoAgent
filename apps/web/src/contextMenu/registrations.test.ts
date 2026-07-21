@@ -46,3 +46,64 @@ describe("rail-surface plugin lifecycle menu (#1521 / #1522)", () => {
     expect(got).toContain("uninstall");
   });
 });
+
+// The chat-tab menu's bulk closers (Close others/left/right): ChatSurface passes each closure
+// only when that action has tabs to close, and the menu shows an entry only when it received the
+// closure — so, e.g., "Close left" never appears on the leftmost tab.
+describe("chat-tab bulk-close menu", () => {
+  const noop = () => {};
+
+  it("offers all three bulk closers when every closure is supplied", () => {
+    const got = ids(
+      resolveMenu("chat-tab", {
+        sessionId: "s2",
+        onClose: noop,
+        onCloseOthers: noop,
+        onCloseLeft: noop,
+        onCloseRight: noop,
+      }),
+    );
+    expect(got).toEqual(expect.arrayContaining(["close", "close-others", "close-left", "close-right"]));
+  });
+
+  it("hides a bulk closer whose closure is absent (e.g. no tabs on that side)", () => {
+    const got = ids(
+      resolveMenu("chat-tab", {
+        sessionId: "s1",
+        onClose: noop,
+        onCloseOthers: noop,
+        onCloseRight: noop, // leftmost tab: nothing to the left → no onCloseLeft
+      }),
+    );
+    expect(got).toContain("close-others");
+    expect(got).toContain("close-right");
+    expect(got).not.toContain("close-left");
+  });
+
+  it("omits every bulk closer (and their divider) on a lone tab", () => {
+    const got = ids(resolveMenu("chat-tab", { sessionId: "only", onClose: noop }));
+    expect(got).toContain("close");
+    expect(got).not.toContain("close-others");
+    expect(got).not.toContain("close-left");
+    expect(got).not.toContain("close-right");
+    expect(got).not.toContain("bulk-div");
+  });
+
+  it("shows no per-tab actions (single or bulk) for the empty-space menu", () => {
+    const got = ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }));
+    expect(got).toEqual(["new", "new-incognito"]);
+  });
+
+  it("marks the bulk closers destructive", () => {
+    const items = resolveMenu("chat-tab", {
+      sessionId: "s2",
+      onClose: noop,
+      onCloseOthers: noop,
+      onCloseLeft: noop,
+      onCloseRight: noop,
+    }) as Item[];
+    for (const id of ["close-others", "close-left", "close-right"]) {
+      expect(items.find((i) => i.id === id)?.danger).toBe(true);
+    }
+  });
+});

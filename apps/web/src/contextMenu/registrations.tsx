@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -204,12 +204,15 @@ registerContextMenu({
 });
 
 // Right-click a chat session tab → New chat / New incognito chat / Rename / Incognito toggle /
-// Close (ADR 0036). ChatSurface owns the behavior and passes it in `ctx` as closures: Close
-// reuses its confirm-dialog flow, Rename triggers the DS TabBar's inline editor (a synthetic
-// dblclick on the tab), the incognito entries flip the per-thread flag (ADR 0069 D3b — every
-// send while ON carries metadata.incognito). Right-clicking empty tab-bar space carries only
-// the `onNew*` closures. (The DS TabBar exposes no per-tab context-menu hook — a DS gap noted
-// for contribute-back; ChatSurface delegates from the tab-bar wrapper meanwhile.)
+// Close + bulk Close others/left/right (ADR 0036). ChatSurface owns the behavior and passes it
+// in `ctx` as closures: Close reuses its confirm-dialog flow, Rename triggers the DS TabBar's
+// inline editor (a synthetic dblclick on the tab), the incognito entries flip the per-thread
+// flag (ADR 0069 D3b — every send while ON carries metadata.incognito). The bulk closers arrive
+// pre-resolved: ChatSurface passes each `onCloseOthers/Left/Right` closure only when that action
+// has tabs to close (e.g. no `onCloseLeft` on the leftmost tab), so the menu hides an entry
+// simply by not receiving its closure. Right-clicking empty tab-bar space carries only the
+// `onNew*` closures. (The DS TabBar exposes no per-tab context-menu hook — a DS gap noted for
+// contribute-back; ChatSurface delegates from the tab-bar wrapper meanwhile.)
 registerContextMenu({
   type: "chat-tab",
   items: (ctx: {
@@ -220,6 +223,9 @@ registerContextMenu({
     onToggleIncognito?: () => void;
     onRename?: () => void;
     onClose?: () => void;
+    onCloseOthers?: () => void;
+    onCloseLeft?: () => void;
+    onCloseRight?: () => void;
   }): MenuEntry[] => {
     const out: MenuEntry[] = [
       { id: "new", label: "New chat", icon: <Plus size={14} />, run: () => ctx?.onNew?.() },
@@ -240,6 +246,23 @@ registerContextMenu({
       });
       out.push({ id: "tab-div", divider: true });
       out.push({ id: "close", label: "Close chat", icon: <X size={14} />, danger: true, run: () => ctx.onClose?.() });
+      // Bulk closers, each present only when it has targets (ChatSurface passes the closure
+      // only then). A divider precedes them, but only if at least one is offered — so the menu
+      // never shows a trailing separator with nothing under it.
+      const bulk: MenuEntry[] = [];
+      if (ctx.onCloseOthers) {
+        bulk.push({ id: "close-others", label: "Close others", icon: <X size={14} />, danger: true, run: () => ctx.onCloseOthers?.() });
+      }
+      if (ctx.onCloseLeft) {
+        bulk.push({ id: "close-left", label: "Close left", icon: <ChevronsLeft size={14} />, danger: true, run: () => ctx.onCloseLeft?.() });
+      }
+      if (ctx.onCloseRight) {
+        bulk.push({ id: "close-right", label: "Close right", icon: <ChevronsRight size={14} />, danger: true, run: () => ctx.onCloseRight?.() });
+      }
+      if (bulk.length) {
+        out.push({ id: "bulk-div", divider: true });
+        out.push(...bulk);
+      }
     }
     return out;
   },
