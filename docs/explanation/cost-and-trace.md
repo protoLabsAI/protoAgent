@@ -40,7 +40,7 @@ elif kind == "on_chat_model_end":
     yield ("usage", {**usage_out, "cost_usd": cost})
 ```
 
-The A2A handler accumulates these onto `TaskRecord.usage` during the run, then emits them (cache fields + the lifted-out `costUsd`) as a DataPart on the terminal artifact. Per-call **Langfuse** generation spans come from the LiteLLM gateway callback — protoAgent doesn't add a manual span that would bypass `trace_session` nesting.
+The A2A executor (`a2a_impl/executor.py`) accumulates these `usage` frames across the run, then emits them (cache fields + the lifted-out `costUsd`) on the terminal artifact — since protolabs-a2a 0.3.0 as a **cost-v1 fragment in the artifact's `metadata` map keyed by the extension URI**, not as a DataPart. See [Extensions](/reference/extensions#cost-v1). Per-call **Langfuse** generation spans come from the LiteLLM gateway callback — protoAgent doesn't add a manual span that would bypass `trace_session` nesting.
 
 ### Why `stream_usage=True`
 

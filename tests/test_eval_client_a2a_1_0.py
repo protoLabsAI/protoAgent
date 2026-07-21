@@ -3,9 +3,18 @@
 The A2A 1.0 migration (ADR 0014) swapped the hand-rolled handler for
 ``a2a-sdk`` (≥1.1), which serves **proto** method names (``SendMessage`` /
 ``GetTask`` / ``SendStreamingMessage`` / ``CancelTask``), gates every method on
-an ``A2A-Version: 1.0`` request header (a missing header is read as 0.3 and the
-1.0 methods 404 with ``-32601``), and emits untyped parts (``{"text": …}`` —
-no ``kind`` discriminator) with ``TASK_STATE_*`` state names.
+an ``A2A-Version: 1.0`` request header, and emits untyped parts (``{"text": …}``
+— no ``kind`` discriminator) with ``TASK_STATE_*`` state names.
+
+Precise dispatcher semantics, because it is easy to state this wrongly: the
+version gate runs **last**. An unknown method name is ``-32601`` and unparseable
+params are ``-32602``, both *before* the header is ever consulted; only a valid
+method with valid params reaches the gate, where a missing header is read as
+``"0.3"`` and rejected with ``-32009 VERSION_NOT_SUPPORTED``. The negative case
+below asserts ``-32601`` because this fixture mounts the 1.0 routes **without**
+``enable_v0_3_compat``, so ``message/send`` is simply not a mounted method — it
+is a method-surface assertion, not a version-header one. (The real server does
+enable v0.3 compat; see ``server/__init__.py``.)
 
 ``evals/client.py`` was left on the 0.3 shape (``message/send`` + ``role:
 "user"`` + ``{"kind": "text"}`` + no version header) and so failed *every* eval

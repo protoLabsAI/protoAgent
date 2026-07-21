@@ -47,7 +47,7 @@ A2A is a protocol, not a library. The handler owns:
 The LangGraph runtime has no idea any of this exists. It sees a message, runs a tool loop, produces output. That means:
 
 - If LangGraph's API changes, the A2A handler doesn't break.
-- If A2A's spec changes, only this layer changes (the `server/a2a.py` + `a2a_executor.py` + `a2a_stores.py` modules).
+- If A2A's spec changes, only this layer changes (`server/a2a.py` + the `a2a_impl/` package — `executor.py`, `stores.py`, `auth.py`, `registry.py`).
 - Tests for the protocol are isolated from tests for the agent.
 
 ## Why LangGraph owns the tool loop
@@ -125,7 +125,7 @@ See [LiteLLM gateway](/explanation/litellm-gateway) for the full rationale. The 
 
 ## Why streaming specifically this way
 
-`_chat_langgraph_stream` in `server/chat.py` consumes `astream_events(v2)` and yields structured frames: `tool_start`, `tool_end`, `usage`, `done`. The A2A executor (`a2a_executor.py`) then translates those into A2A SSE frames.
+`_chat_langgraph_stream` in `server/chat.py` consumes `astream_events(v2)` and yields structured frames: `tool_start`, `tool_end`, `usage`, `done`. The A2A executor (`a2a_impl/executor.py`) then translates those into A2A SSE frames.
 
 This extra layer of indirection exists because:
 
