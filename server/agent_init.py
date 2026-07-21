@@ -207,6 +207,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             STATE.knowledge_store,
             scheduler=STATE.scheduler,
             goal_enabled=getattr(STATE.graph_config, "goal_enabled", True),
+            watches_enabled=getattr(STATE.graph_config, "watches_enabled", False),
         ),
     )
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
@@ -1597,7 +1598,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugins = _build_plugins(
                 new_config,
                 existing_tools=get_all_tools(
-                    new_store, scheduler=next_scheduler, goal_enabled=getattr(new_config, "goal_enabled", True)
+                    new_store,
+                    scheduler=next_scheduler,
+                    goal_enabled=getattr(new_config, "goal_enabled", True),
+                    watches_enabled=getattr(new_config, "watches_enabled", False),
                 ),
             )
             new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(

@@ -288,6 +288,16 @@ goal:
   # eval_model: protolabs/fast
   max_iterations: 8
 
+# Watches (ADR 0067) — agent-held supervised conditions (a deploy, CI, a metric),
+# polled out-of-band; when one trips the agent is resumed to react. OFF by default
+# (#2020) while the feature cooks. `enabled: true` BINDS the agent-facing
+# create_watch / list_watches / clear_watch tools (goal mode must also be on — they
+# ride inside the goal-enabled tool group). Tool-availability flag ONLY: toggling it
+# off never deletes or mutates stored watches, and the background watch poller is
+# untouched.
+# watches:
+#   enabled: true
+
 # Persona — the agent's own SOUL.md. `self_edit_enabled` (OFF by default) gives the
 # LEAD agent the `edit_soul` tool so it can rewrite SECTIONS of its own persona
 # (identity/voice ONLY, never operating doctrine — ADR 0079/0081). Every edit is

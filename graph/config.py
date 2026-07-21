@@ -457,6 +457,15 @@ class LangGraphConfig:
     goal_eval_model: str = ""  # blank = main model (llm verifier / fuzzy goals)
     goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
 
+    # Watches (ADR 0067) — agent-held supervised conditions (a deploy, CI, a metric),
+    # polled out-of-band; when one trips the agent is resumed to react. Feature flag
+    # (#2020), default OFF while the feature cooks. Gates ONLY whether the agent-facing
+    # watch tools (create_watch / list_watches / clear_watch) are BOUND — they ride
+    # inside the goal-enabled tool group, so goal mode must also be on. Toggling this
+    # off never deletes or mutates stored watch state, and the background watch poller
+    # is untouched: it's a tool-availability flag, nothing else.
+    watches_enabled: bool = False
+
     # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
     # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
     # identity ONLY, never operating doctrine — ADR 0079). Every edit is snapshotted to
@@ -1070,6 +1079,7 @@ class LangGraphConfig:
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
+            watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
             soul_self_edit_enabled=data.get("soul", {}).get("self_edit_enabled", cls.soul_self_edit_enabled),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
