@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **npm 10 can no longer install a silently-wrong dependency tree.** Root `package.json` now
+  declares `engines.npm >= 11` and `.npmrc` sets `engine-strict=true`, so npm 10 fails the install
+  outright. It previously exited 0 while no-opping workspace dependency bumps: `@protolabsai/ui`
+  sat at `0.54.1` under `apps/web/node_modules`, shadowing the correctly-hoisted `0.57.0` the
+  manifest asked for. The only symptom was `currencyMathRender.test.ts` failing — on a currency
+  guard the design system didn't ship until `0.55.1` — which reads exactly like a product
+  regression while CI (pinned to npm 11) stays green. `npm ls @protolabsai/ui` was the tell:
+  `invalid: "^0.57.0"`.
+
 ### Added
 - **A2A client-side spec coverage: `resubscribe()` and push-notification registration.** protoAgent
   was a complete A2A *server* but an incomplete *client* — nothing ever called `SubscribeToTask`

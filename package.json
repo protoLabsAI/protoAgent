@@ -7,6 +7,11 @@
     "apps/web",
     "apps/desktop"
   ],
+  "//engines": "npm 11+ is REQUIRED, not a preference. The lockfile is npm-11-shaped, and npm 10's arborist NO-OPS workspace dependency bumps \u2014 it leaves the old version installed and exits 0. The symptom is a stale package under apps/web/node_modules shadowing the hoisted one, which surfaces as a unit test failing on behavior the installed package predates, while CI (which pins npm 11) stays green. Reads as a product regression; isn't one. `engine-strict=true` in .npmrc turns that silence into a hard error.",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=11"
+  },
   "scripts": {
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
@@ -23,7 +28,7 @@
     "@protolabsai/vitepress-theme": "^0.3.6",
     "vitepress": "^1.6.4"
   },
-  "//overrides": "@docsearch/react (VitePress docs search) peers on react@18, which ERESOLVEs against the console's react@19; point it at the root react so we don't need `legacy-peer-deps` (which silently disables overrides). With this, the whole tree resolves a single @types/react@19 — matching @protolabsai/ui (React-19-native, ships .tsx source our tsc compiles).",
+  "//overrides": "@docsearch/react (VitePress docs search) peers on react@18, which ERESOLVEs against the console's react@19; point it at the root react so we don't need `legacy-peer-deps` (which silently disables overrides). With this, the whole tree resolves a single @types/react@19 \u2014 matching @protolabsai/ui (React-19-native, ships .tsx source our tsc compiles).",
   "overrides": {
     "@docsearch/react": {
       "react": "^19.0.0",
