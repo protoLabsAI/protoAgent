@@ -725,6 +725,10 @@
           "title": "ADR 0089 — Intra-instance trust boundary: the hub authenticates, members trust a fleet service token"
         },
         {
+          "path": "adr/0090-goals-drive-in-a-chat-tab.md",
+          "title": "ADR 0090 — Console-created goals drive in a dedicated chat tab (attach / detach)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
