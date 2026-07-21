@@ -370,6 +370,33 @@ goal:
 
 > **Security:** `command`/`test`/`ci` verifiers execute on the server host. Setting a goal is an **operator** action — only accept goal specs from trusted input. See [Goal mode](/guides/goal-mode).
 
+## `watches`
+
+**Watches** (ADR 0067, `graph/watches/`) are standing tripwires — a condition polled on a
+cadence, out-of-band, that resumes the agent when it trips. See [Watches](/guides/watches).
+
+```yaml
+watches:
+  enabled: false           # default OFF — the watch TOOLS are not bound
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `false` | Bind the `create_watch` / `list_watches` / `clear_watch` tools. |
+
+Three things this flag deliberately does **not** do, because the distinction matters when you
+toggle it on a running agent:
+
+- It is a **tool-availability flag only**. Turning it off never deletes or mutates stored watch
+  state, and the background watch **poller is untouched** — existing watches keep polling and
+  keep firing their `on_met` hooks. You are removing the agent's ability to *create and manage*
+  watches, not the watches themselves.
+- The tools ride inside the goal-enabled tool group, so **`goal.enabled` must also be true** for
+  them to appear. `watches.enabled: true` with goal mode off binds nothing.
+- It defaults **off** while the feature settles (#2020). Before this flag existed the tools were
+  always bound, so an agent upgrading from ≤0.105.2 that relies on them must now opt in
+  explicitly.
+
 ## `knowledge`
 
 Only read when `middleware.knowledge` is `true`.

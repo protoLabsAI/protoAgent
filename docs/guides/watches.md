@@ -11,6 +11,21 @@ When a watch is **met**, it can run a follow-up agent turn (via `run_in_session`
 `on_met` hooks. A `deadline` finishes it `expired`; `stall_after` fires `on_stalled` when the
 metric stops moving.
 
+## Turn it on first
+
+The watch tools default **OFF** as of #2020. Enable them in `langgraph-config.yaml`:
+
+```yaml
+goal:
+  enabled: true            # the watch tools ride inside the goal-enabled tool group
+watches:
+  enabled: true
+```
+
+Both flags are required — `watches.enabled` alone binds nothing. This gates only whether the
+**agent** gets `create_watch` / `list_watches` / `clear_watch`; it never touches stored watches,
+and the background poller runs regardless. See [Configuration ▸ `watches`](/reference/configuration#watches).
+
 ## What a watch is made of
 
 `{ condition, verifier, interval_s?, deadline?, stall_after?, run_prompt?, run_session? }` — the
