@@ -62,17 +62,13 @@ test("the chat composer model picker overrides the model per-tab (no global save
   expect(settingsWrite).toBe(false);
 });
 
-test("Tools panel: the Shell & filesystem chip disables run_command via /api/settings", async ({ page }) => {
-  // The per-agent run_command kill switch lives on the Tools capability panel as a
-  // QuickSetting chip (ADR 0048 §2.2) — same /api/settings write path as the central home.
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.getByTestId("header-menu").click();
-  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
-  await page
-    .locator(".settings-overlay .pl-sidenav")
-    .getByRole("tab", { name: "Tools", exact: true })
-    .click();
+test("Tools panel: the Filesystem group's shell/fs dialog disables run_command", async ({ page }) => {
+  // The shell/fs policy is a chip ON the Filesystem tool group now (ADR 0048), not a global chip
+  // above the search — it opens the same dialog (per-agent run_command kill switch, /api/settings).
+  await openToolsTab(page);
 
+  // Expand the Filesystem group to reveal its contextual settings chips, then open the dialog.
+  await page.getByRole("button", { name: /Filesystem/ }).click();
   await page.getByRole("button", { name: "Shell & filesystem tools" }).click();
   const dialog = page.getByRole("dialog", { name: "Shell & filesystem tools" });
   await expect(dialog).toBeVisible();
@@ -84,14 +80,11 @@ test("Tools panel: the Shell & filesystem chip disables run_command via /api/set
     (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
   );
   await dialog.locator('[data-key="filesystem.allow_run"] .pl-switch').click();
-  // The dialog now honours `depends_on` (#963) like the canonical settings pages, reactively
-  // off the in-form value: with run_command off, "Require approval per command" (which depends
-  // on filesystem.allow_run) governs nothing and collapses. Previously it stayed on screen as
-  // an operable switch that did nothing.
+  // depends_on (#963), reactive off the in-form value: with run_command off, "Require approval
+  // per command" (which depends on filesystem.allow_run) governs nothing and collapses.
   await expect(dialog.getByText("Require approval per command")).toHaveCount(0);
   // The chain is honoured one link at a time, NOT flattened: "Allow /bypass" depends on
-  // run_requires_approval — whose value is still true — so it stays. (Only its now-hidden
-  // PARENT changed; its own predicate is unaffected until run_requires_approval flips.)
+  // run_requires_approval — whose value is still true — so it stays.
   await expect(dialog.getByText("Allow /bypass")).toBeVisible();
   // The switch we flipped is still there — its own parent (filesystem.enabled) is still on.
   await expect(dialog.getByText("Allow run_command")).toBeVisible();
@@ -102,6 +95,15 @@ test("Tools panel: the Shell & filesystem chip disables run_command via /api/set
   expect(body.updates["filesystem.allow_run"]).toBe(false);
   expect(body.layer ?? "agent").toBe("agent"); // per-agent leaf, not box-wide
   await expect(page.locator(".pl-toast").getByText("Saved")).toBeVisible();
+});
+
+test("Tools panel: the Filesystem group's Work folders chip opens the fenced-roots dialog", async ({ page }) => {
+  await openToolsTab(page);
+  await page.getByRole("button", { name: /Filesystem/ }).click();
+  await page.getByRole("button", { name: "Work folders" }).click();
+  const dialog = page.getByRole("dialog", { name: "Work folders" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Add folder" })).toBeVisible();
 });
 
 // The old "Disabled tools" chip (a raw tools.disabled textarea) is gone — every row
@@ -120,8 +122,10 @@ async function openToolsTab(page: Page) {
 
 test("Tools panel: the Disabled tools chip is gone (row switches replaced it)", async ({ page }) => {
   await openToolsTab(page);
-  await expect(page.getByRole("button", { name: "Shell & filesystem tools" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Disabled tools" })).toHaveCount(0);
+  // The shell/fs policy is no longer a global chip above the search — it moved onto the Filesystem
+  // group (opens on expand), so there's no "Shell & filesystem tools" trigger showing up top.
+  await expect(page.getByRole("button", { name: "Shell & filesystem tools" })).not.toBeVisible();
 });
 
 test("Tools panel: toggling a tool row off appends it to tools.disabled", async ({ page }) => {

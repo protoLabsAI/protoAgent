@@ -105,3 +105,20 @@
   display: flex;
   gap: 8px;
 }
+
+/* Contextual group settings (ADR 0048) — a compact chip row at the top of a group's body; each
+   chip opens a DIALOG (shell/fs policy, Work folders), contextual to the tools it governs.
+   Replaces the old .tools-config-row + bare .fs-projects that floated above the search. */
+.tools-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+/* The group carries settings — a muted glyph on its header, next to the count. */
+.tools-group-cog {
+  color: var(--fg-muted);
+  opacity: 0.75;
+  flex-shrink: 0;
+}
