@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **PyPI releases fire on the tag push, not the derivative `release` event.** `publish.yml`
+  triggered on `release: published` — an event `release.yml` produces — and when that silently
+  failed to fire, PyPI sat **five releases behind** (0.101.0) while the Docker images and GitHub
+  Releases were current. Nothing alerts on a trigger that doesn't happen. It now runs on
+  `push: tags: ['v*.*.*']`, the same reliable event `release.yml` already uses, with the two
+  workflows independent so neither depends on the other having fired. Also: the
+  version-matches-tag guard keyed on the *event name*, so a `workflow_dispatch` — the manual
+  fallback used precisely when the trigger misfires — skipped validation entirely; it now gates
+  on the ref type, so any tag ref is checked. `skip-existing` makes an already-published version
+  a no-op rather than a red job. The release guide gained the PyPI leg (it wasn't mentioned at
+  all), the desktop-dispatch step, and a three-channel post-release verification snippet.
+
+
 ## [0.106.0] - 2026-07-21
 
 ### Added
