@@ -40,6 +40,7 @@ import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
+import { sessionsToClose } from "./bulkClose";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -122,6 +123,11 @@ export function ChatSurface({
   const serverTurnSessions = useServerTurnSessions();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
+  // Bulk close (others/left/right): GOAL tabs still waiting for their Stop/Detach confirm AFTER
+  // the one in `pendingClose`. Only goal tabs are queued — plain tabs close inline in
+  // startBulkClose — so we never parade a "Delete this chat?" dialog past each tab (the
+  // dialog-storm the spec warns against), and exactly one dialog is ever open.
+  const [closeQueue, setCloseQueue] = useState<string[]>([]);
   const [harvestOnDelete, setHarvestOnDelete] = useState(false);
   // Goal tab close: default keeps the goal running (detach); toggle on to STOP it (clear the
   // goal + close its task backlog) instead.
@@ -146,6 +152,45 @@ export function ChatSurface({
     // the dialog's checkbox opted in), best-effort, then drop the tab locally.
     void api.deleteChatSession(id, harvest).catch(() => {});
     chatStore.deleteSession(id);
+  }
+
+  // Kick off a bulk close (Close others/left/right). `ids` is the already-resolved target list
+  // (sessionsToClose, anchor excluded). Split it: plain tabs close immediately (no harvest —
+  // matching the delete dialog's default); goal-driving tabs, whose Stop-vs-Detach choice can't
+  // be defaulted safely, are queued through the SAME single-tab confirm one at a time.
+  function startBulkClose(ids: string[]) {
+    if (ids.length === 0) return;
+    const activeGoalIds = new Set(
+      goalSessions.filter((g) => g.status === "active").map((g) => g.session_id),
+    );
+    const goals = ids.filter((id) => activeGoalIds.has(id));
+    for (const id of ids) {
+      if (!activeGoalIds.has(id)) closeSession(id, false);
+    }
+    setHarvestOnDelete(false);
+    setStopGoalOnClose(false);
+    setPendingClose(goals[0] ?? null);
+    setCloseQueue(goals.slice(1));
+  }
+
+  // A close dialog resolved (confirmed): promote the next queued goal tab into the dialog, or
+  // close it when the queue is drained. Per-dialog toggles reset each step so every tab starts
+  // from the default (harvest off, goal detach). For a single (non-bulk) close the queue is
+  // empty, so this just clears the dialog.
+  function advanceClose() {
+    setHarvestOnDelete(false);
+    setStopGoalOnClose(false);
+    setPendingClose(closeQueue[0] ?? null);
+    setCloseQueue((queue) => queue.slice(1));
+  }
+
+  // Cancel: abort the WHOLE bulk operation, not just the current tab — hitting cancel means
+  // "stop closing", so the remaining queued tabs are spared.
+  function cancelClose() {
+    setPendingClose(null);
+    setCloseQueue([]);
+    setHarvestOnDelete(false);
+    setStopGoalOnClose(false);
   }
 
   // Tab-strip Shift cues. While Shift is held the DS TabBar signals both Shift+click gestures:
@@ -203,6 +248,12 @@ export function ChatSurface({
   function onTabContextMenu(id: string, e: ReactMouseEvent) {
     const tabEl = (e.target as HTMLElement).closest(".pl-tabbar__tab") as HTMLElement | null;
     const target = chat.sessions.find((s) => s.id === id);
+    // Resolve each bulk-close target set up front (index math, anchor excluded). An empty set
+    // means the entry is meaningless for this tab (e.g. "Close left" on the leftmost tab), so
+    // the closure is passed only when it has something to close — the menu hides the rest.
+    const others = sessionsToClose(chat.sessions, id, "others");
+    const left = sessionsToClose(chat.sessions, id, "left");
+    const right = sessionsToClose(chat.sessions, id, "right");
     openContextMenu("chat-tab", e, {
       sessionId: id,
       incognito: !!target?.incognito,
@@ -211,6 +262,9 @@ export function ChatSurface({
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onClose: () => setPendingClose(id),
+      onCloseOthers: others.length ? () => startBulkClose(others) : undefined,
+      onCloseLeft: left.length ? () => startBulkClose(left) : undefined,
+      onCloseRight: right.length ? () => startBulkClose(right) : undefined,
     });
   }
 
@@ -332,11 +386,10 @@ export function ChatSurface({
               closeSession(pendingClose, harvestOnDelete);
             }
           }
-          setPendingClose(null);
-          setHarvestOnDelete(false);
-          setStopGoalOnClose(false);
+          // Advance the bulk-close queue (or just clear the dialog when it's a single close).
+          advanceClose();
         }}
-        onClose={() => { setPendingClose(null); setHarvestOnDelete(false); setStopGoalOnClose(false); }}
+        onClose={cancelClose}
       >
         {pendingCloseSession ? (
           closingGoal ? (
