@@ -135,6 +135,8 @@ export type GoalSetBody = {
   boundaries?: string[];
   stop_when?: string;
   max_iterations?: number;
+  // `false` when the panel drives the goal from a dedicated chat tab (no headless kick).
+  kick?: boolean;
 };
 
 /** Split a textarea value into trimmed, non-empty lines → `string[]` (constraints/boundaries

@@ -192,6 +192,7 @@ def register_operator_routes(
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     goal_rearm: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    goal_resume: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     watch_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -495,6 +496,20 @@ def register_operator_routes(
         async def _goal_rearm(session_id: str, body: dict | None = Body(default=None)):
             try:
                 res = await goal_rearm(session_id, body or {})
+            except Exception as exc:
+                raise _http_error(exc) from exc
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
+            return res
+
+    # Detach-continue (ADR 0079): kick a headless continuation for an ACTIVE goal so it keeps
+    # driving after the chat tab that was streaming it is closed. 400 when nothing is active.
+    if goal_resume is not None:
+
+        @app.post("/api/goals/{session_id}/resume")
+        async def _goal_resume(session_id: str):
+            try:
+                res = await goal_resume(session_id)
             except Exception as exc:
                 raise _http_error(exc) from exc
             if not res.get("ok"):

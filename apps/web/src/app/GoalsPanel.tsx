@@ -13,6 +13,7 @@ import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { GoalDetailDrawer } from "./GoalDetailDrawer";
+import { newGoalTab } from "./goalTab";
 import { HitlForm } from "../chat/HitlForm";
 import { buildGoalSetBody, goalFormPayload, type GoalSetBody } from "../chat/goalForm";
 import { errMsg } from "../lib/format";
@@ -202,7 +203,12 @@ export function GoalsPanel() {
       <GoalCreateDialog
         open={creating}
         onClose={() => { setCreating(false); set.reset(); }}
-        onCreate={(body) => set.mutate(body)}
+        // Drive the goal in a dedicated, focused chat tab (streams live) — register the
+        // kickoff only AFTER the goal is set so the drive turn can't race the POST.
+        onCreate={(body) => {
+          const { body: tabBody, onSet } = newGoalTab(body);
+          set.mutate(tabBody, { onSuccess: onSet });
+        }}
         busy={set.isPending}
       />
       <GoalDetailDrawer sessionId={selected} onClose={() => setSelected(null)} />

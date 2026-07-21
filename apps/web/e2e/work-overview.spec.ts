@@ -165,16 +165,20 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await expect(submit).toBeEnabled();
   await submit.click();
 
-  // Operator goal-set payload; success closes the dialog + toasts. The verifier
-  // defaults to llm when no card is picked; the contract fields are omitted when empty.
+  // Operator goal-set payload; success closes the dialog + toasts. The panel drives the goal
+  // in a dedicated chat tab, so it targets a FRESH `chat-` session (not "operator") and sends
+  // `kick: false` (the tab fires the kickoff itself, no headless turn). Verifier defaults to
+  // llm when no card is picked; contract fields are omitted when empty.
   await expect(form).toHaveCount(0);
   await expect(page.locator(".pl-toast__title", { hasText: "Goal set" })).toBeVisible();
   expect(posted).toMatchObject({
-    session_id: "operator",
     condition: "All tests pass twice",
     verifier: { type: "llm" },
+    kick: false,
   });
-  // Still in the nested Goals view — creating never navigates.
+  expect(String((posted as { session_id?: unknown }).session_id ?? "")).toMatch(/^chat-/);
+  // Still in the nested Goals view — creating the goal opens its tab in the chat surface but
+  // doesn't navigate the Work panel away.
   await expect(page.getByTestId("work-back")).toBeVisible();
 });
 

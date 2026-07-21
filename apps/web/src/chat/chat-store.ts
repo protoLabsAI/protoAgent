@@ -71,6 +71,37 @@ const STORAGE_KEY = (() => {
 // never resurrects a chat we just removed from another tab's stale on-disk copy.
 const locallyDeletedIds = new Set<string>();
 
+// ── goal kickoff seam ──────────────────────────────────────────────────────────
+// When a goal is created from the Work panel we open a dedicated tab and drive the goal
+// FROM it (so the loop streams live) rather than as a headless background turn. The
+// ChatSessionSlot for that session fires the first (hidden) turn — but it mounts BEFORE the
+// goal is set on the server (the POST is in flight), so a plain mount-effect would race
+// ahead. This tiny pub/sub lets the caller register the kickoff AFTER the goal POST resolves;
+// the slot (subscribed) then fires it exactly once (takeGoalKickoff is idempotent).
+const pendingGoalKickoffs = new Map<string, string>();
+const kickoffListeners = new Set<() => void>();
+
+/** Queue a one-shot kickoff turn for `sessionId` (call after the goal is set) and notify the
+ *  slot to consume it. `prompt` seeds the turn; the server's iteration-0 kickoff injection
+ *  re-states the goal, so it drives from there. */
+export function registerGoalKickoff(sessionId: string, prompt: string) {
+  pendingGoalKickoffs.set(sessionId, prompt);
+  kickoffListeners.forEach((l) => l());
+}
+
+/** Subscribe to kickoff registrations (the ChatSessionSlot). Returns an unsubscribe fn. */
+export function subscribeGoalKickoff(listener: () => void): () => void {
+  kickoffListeners.add(listener);
+  return () => kickoffListeners.delete(listener);
+}
+
+/** Consume `sessionId`'s pending kickoff prompt (removing it), or null if none. */
+export function takeGoalKickoff(sessionId: string): string | null {
+  const prompt = pendingGoalKickoffs.get(sessionId);
+  if (prompt != null) pendingGoalKickoffs.delete(sessionId);
+  return prompt ?? null;
+}
+
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

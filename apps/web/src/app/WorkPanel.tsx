@@ -13,6 +13,7 @@ import { ArrowLeft, Plus } from "lucide-react";
 
 import { StagePanel } from "./ErrorBoundary";
 import { GoalCreateDialog, GoalsPanel } from "./GoalsPanel";
+import { newGoalTab } from "./goalTab";
 import { WatchesPanel } from "./WatchesPanel";
 import { TaskCreateDialog, TasksPanel } from "./TasksPanel";
 import { ScheduleModal, SchedulePanel } from "../schedule/SchedulePanel";
@@ -295,7 +296,12 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
       <GoalCreateDialog
         open={goalOpen}
         onClose={() => { setGoalOpen(false); setGoal.reset(); }}
-        onCreate={(body) => setGoal.mutate(body)}
+        // Drive the goal in a dedicated, focused chat tab (streams live); register the
+        // kickoff only after the set resolves so the turn can't race the POST.
+        onCreate={(body) => {
+          const { body: tabBody, onSet } = newGoalTab(body);
+          setGoal.mutate(tabBody, { onSuccess: onSet });
+        }}
         busy={setGoal.isPending}
       />
       <TaskCreateDialog

@@ -403,14 +403,36 @@ async def _operator_goals_set(body: dict) -> dict:
     )
     if not ok:
         return {"ok": False, "error": msg}
-    # Parity with the chat `/goal` SET (#1910): kick an initial drive turn so a goal set from
-    # the console starts working immediately instead of sitting idle until the next turn in
-    # this session. The chat kickoff injection (iteration 0) re-states the goal. Best-effort —
-    # if the scheduler is unavailable the goal simply drives on the session's next turn.
+    # Parity with the chat `/goal` SET (#1910): by default, kick an initial drive turn so a
+    # goal set programmatically starts working immediately instead of sitting idle until the
+    # next turn in this session (the chat kickoff injection at iteration 0 re-states the goal).
+    # The console PANEL passes `kick: false` — it drives the goal from a dedicated chat tab so
+    # the loop STREAMS LIVE into it, rather than running as a headless background turn.
+    # Best-effort — if the scheduler is unavailable the goal simply drives on the next turn.
+    kicked = False
+    if body.get("kick", True):
+        from graph.sdk import run_in_session
+
+        kicked = bool(run_in_session(sid, "Begin working toward your active goal now.").get("ok"))
+    return {"ok": True, "message": msg, "kicked": kicked}
+
+
+async def _operator_goals_resume(session_id: str) -> dict:
+    """Kick a headless continuation turn for an ACTIVE goal (ADR 0079). Used when a chat tab
+    that was driving a goal is closed: the goal keeps running in the background instead of
+    being stranded (the inline drive loop dies with the tab's stream). 400 (no-op) when the
+    session has no active goal — a terminal goal uses ``/rearm`` instead."""
+    import asyncio
+
+    if STATE.goal_controller is None:
+        return {"ok": False, "error": "goal mode is not enabled"}
+    state = await asyncio.to_thread(STATE.goal_controller.active_goal, session_id)
+    if state is None:
+        return {"ok": False, "error": "no active goal for this session"}
     from graph.sdk import run_in_session
 
-    kicked = bool(run_in_session(sid, "Begin working toward your active goal now.").get("ok"))
-    return {"ok": True, "message": msg, "kicked": kicked}
+    kicked = bool(run_in_session(session_id, "Resume working toward your active goal now.").get("ok"))
+    return {"ok": True, "kicked": kicked}
 
 
 def _as_str_list(value) -> list[str]:

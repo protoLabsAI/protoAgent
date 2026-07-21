@@ -1278,11 +1278,23 @@ export const api = {
     boundaries?: string[];
     stop_when?: string;
     max_iterations?: number;
+    // `false` = don't kick a headless drive turn; the caller drives the goal from a chat tab
+    // instead (the console panel path). Omitted/true = the pre-tab behavior (auto-start).
+    kick?: boolean;
   }) {
-    return request<{ ok: boolean; message?: string; error?: string }>("/api/goals", {
+    return request<{ ok: boolean; message?: string; kicked?: boolean; error?: string }>("/api/goals", {
       method: "POST",
       body,
     });
+  },
+
+  // Detach-continue (ADR 0079): keep an ACTIVE goal driving in the background after the chat
+  // tab that was streaming it is closed. 400 when the session has no active goal.
+  resumeGoal(sessionId: string) {
+    return request<{ ok: boolean; kicked?: boolean; error?: string }>(
+      `/api/goals/${encodeURIComponent(sessionId)}/resume`,
+      { method: "POST" },
+    );
   },
 
   // Watches (ADR 0067) — passive verifier-only objectives, many at once, keyed by id. The

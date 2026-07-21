@@ -152,6 +152,9 @@ def _goals_client(*, goals=None, on_clear=None, on_rearm=None):
             return on_rearm(session_id, body)
         return {"ok": True, "message": "re-armed", "resumed": True, "kicked": True}
 
+    async def gresume(session_id):
+        return {"ok": bool(session_id != "none"), "kicked": True, "error": "no active goal for this session"}
+
     register_operator_routes(
         app,
         runtime_status=lambda: {},
@@ -161,6 +164,7 @@ def _goals_client(*, goals=None, on_clear=None, on_rearm=None):
         goal_list=glist,
         goal_clear=gclear,
         goal_rearm=grearm,
+        goal_resume=gresume,
     )
     return TestClient(app)
 
@@ -222,6 +226,13 @@ def test_goal_rearm_route() -> None:
     assert seen == {"sid": "s1", "body": {"add_iterations": 4}}
     # Empty body is allowed (defaults) and a no-op re-arm surfaces as 400.
     assert client.post("/api/goals/s1/rearm", json={"add_iterations": 0}).status_code == 400
+
+
+def test_goal_resume_route() -> None:
+    # POST /api/goals/{sid}/resume forwards to the handler; a no active goal maps to 400.
+    client = _goals_client()
+    assert client.post("/api/goals/s1/resume").status_code == 200
+    assert client.post("/api/goals/none/resume").status_code == 400
 
 
 def test_goals_routes_absent_when_not_wired() -> None:

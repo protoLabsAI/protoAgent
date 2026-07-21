@@ -123,6 +123,37 @@ async def test_goals_set_failure_does_not_kick(monkeypatch, tmp_path):
     assert res["ok"] is False and not kicks
 
 
+async def test_goals_set_kick_false_skips_the_turn(monkeypatch, tmp_path):
+    # The console panel path drives the goal from a chat tab, so it sets `kick: false` — no
+    # headless turn is enqueued (the tab owns the drive).
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    kicks: list = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda *a, **k: (kicks.append(a), {"ok": True})[1])
+    res = await ch._operator_goals_set(
+        {"session_id": "s9", "condition": "go", "verifier": {"type": "llm"}, "kick": False}
+    )
+    assert res["ok"] is True and res["kicked"] is False and not kicks
+
+
+async def test_goals_resume_kicks_active_goal(monkeypatch, tmp_path):
+    ctrl = _wire_goal_controller(monkeypatch, tmp_path)
+    ctrl.set_goal_operator("s1", "cond", {"type": "llm"})
+    import graph.sdk as sdk
+
+    kicks: list = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda sid, prompt, **k: (kicks.append(sid), {"ok": True})[1])
+    res = await ch._operator_goals_resume("s1")
+    assert res["ok"] is True and res["kicked"] is True and kicks == ["s1"]
+
+
+async def test_goals_resume_no_active_goal_is_a_noop(monkeypatch, tmp_path):
+    _wire_goal_controller(monkeypatch, tmp_path)
+    res = await ch._operator_goals_resume("nope")
+    assert res["ok"] is False and "no active goal" in res["error"]
+
+
 def test_as_str_list_coercion():
     assert ch._as_str_list("x") == ["x"]
     assert ch._as_str_list(["a", "b"]) == ["a", "b"]
