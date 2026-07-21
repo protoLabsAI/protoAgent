@@ -11,6 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`scripts/a2a_conformance.py` — point it at any A2A 1.0 agent and get a conformance report.**
+  Checks the agent card's 1.0 required fields, all 11 JSON-RPC methods, version negotiation, v0.3
+  compat, SSE frame shape, and declared-vs-actually-emitted extensions. Deliberately stdlib-only
+  (no `a2a-sdk`, no `httpx`, not even this repo on the path) so it can be copied next to any agent
+  in any project. Method enumeration is side-effect-free — empty params can't create a task or
+  delete a config — and classifies `-32601` (not mounted) against anything else (mounted).
+
+### Changed
+- **The agent card declares only the extensions this runtime actually emits.** It advertised
+  `confidence-v1` while nothing emitted it: the `<confidence>` self-report was part of the
+  `<output>` tag protocol, and the parser retirement deleted it when native reasoning landed, but
+  the card declaration was never cleaned up. A card is a contract — a consumer reading the URI
+  would build on a payload that never arrives, a failure it can't detect except by timing out. The
+  card now declares `cost-v1`, `worldstate-delta-v1`, `tool-call-v1` via
+  `server/a2a.py::_emitted_extension_uris`, and the test asserts set **equality** (the old one
+  checked containment, so it could never fail on an over-declaration).
+
+### Fixed
+- **The A2A docs taught a wire format that 1.0 removed.** `docs/explanation/a2a-protocol.md`
+  described 0.3's `kind` discriminator as mandatory; 1.0 dropped the field — the frame type is the
+  single key of `result` (a proto oneof), and success frames carry no SSE `event:` name, so a
+  consumer written from the old page silently never attached. Rewritten, with the 1.0 method table,
+  the `contextId`-inside-the-message trap, and the proto3 `append`-presence trap.
+- **The documented version-negotiation model was wrong, including in our own test docstring.** The
+  gate runs *last*: unknown method → `-32601` and bad params → `-32602`, both **before** the header
+  is consulted; only a valid method with valid params reaches it, where a missing header reads as
+  `0.3` and is rejected with **`-32009`** (not `-32601`, as claimed). So a malformed probe can never
+  detect a version problem — it short-circuits and looks like the peer ignoring the header.
+- **Langfuse's A2A root span is `a2a-stream`, not `a2a.task`** — the documented name matched nothing.
+- `docs/reference/a2a-endpoints.md`'s fleet auth predated ADR 0089 (the proxy *swaps* the
+  Authorization header for the fleet service token; it doesn't forward the caller's verbatim), docs
+  cited modules deleted in #453, ADR 0014 claimed a `hitl-mode-v1` capability that exists nowhere,
+  and ADR 0089/0075 statuses were stale.
+
 ## [0.105.2] - 2026-07-20
 
 ### Fixed
