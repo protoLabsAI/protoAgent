@@ -404,8 +404,20 @@ export type GoalState = {
   abandon_reason?: string; // set by the agent's abandon_goal tool; drives a terminal "unachievable"
   last_reason?: string;
   last_evidence?: string;
+  history?: GoalEvent[]; // per-iteration verifier trail (the drive-loop timeline), oldest→newest
   started_at?: number;
   finished_at?: number | null; // terminal time (epoch seconds); set alongside a terminal status
+};
+
+// One entry in a goal's drive-loop timeline (GoalState.history) — the verifier's verdict on
+// a single iteration. `status` is "continue" for an ongoing turn or the terminal status
+// (achieved / exhausted / unachievable) on the last one.
+export type GoalEvent = {
+  iteration: number;
+  at?: number; // epoch seconds
+  status: string;
+  reason?: string;
+  evidence?: string;
 };
 
 // A passive watch (ADR 0067) — a verifier-only objective polled out-of-band. Unlike a goal

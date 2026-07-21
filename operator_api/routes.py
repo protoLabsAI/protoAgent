@@ -191,6 +191,7 @@ def register_operator_routes(
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    goal_rearm: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     watch_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     watch_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -479,6 +480,21 @@ def register_operator_routes(
         async def _goal_set(body: dict):
             try:
                 res = await goal_set(body or {})
+            except Exception as exc:
+                raise _http_error(exc) from exc
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
+            return res
+
+    # Goal lifecycle (ADR 0079) — re-arm: extend an active goal's budget, or reactivate a
+    # terminal one and kick a fresh drive turn. Operator-tier by the `/api` ceiling. 400 on a
+    # no-op (e.g. an active goal with no added iterations).
+    if goal_rearm is not None:
+
+        @app.post("/api/goals/{session_id}/rearm")
+        async def _goal_rearm(session_id: str, body: dict | None = Body(default=None)):
+            try:
+                res = await goal_rearm(session_id, body or {})
             except Exception as exc:
                 raise _http_error(exc) from exc
             if not res.get("ok"):

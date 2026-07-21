@@ -1252,6 +1252,17 @@ export const api = {
     });
   },
 
+  // Goal lifecycle (ADR 0079) — re-arm: extend an active goal's iteration budget
+  // (`add_iterations`), or reactivate a terminal one and kick a fresh drive turn (the backend
+  // resets the loop + enqueues the turn). `resumed` is true when a terminal goal was
+  // reactivated. A no-op (active goal, no added budget) comes back HTTP 400.
+  rearmGoal(sessionId: string, body: { add_iterations?: number }) {
+    return request<{ ok: boolean; message?: string; resumed?: boolean; kicked?: boolean; error?: string }>(
+      `/api/goals/${encodeURIComponent(sessionId)}/rearm`,
+      { method: "POST", body },
+    );
+  },
+
   // Operator goal-set (ADR 0066) — the trusted operator channel. `/api` is operator-tier by
   // the ADR 0066 path ceiling, so this accepts ANY verifier type (unlike the plugin-only SDK
   // path). A rejected verifier / disabled goal mode comes back as HTTP 400 (request() throws,

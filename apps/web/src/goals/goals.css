@@ -188,3 +188,48 @@
   color: var(--fg-muted);
   line-height: 1.5;
 }
+
+/* Drive-loop timeline — one row per iteration (verifier verdict), newest first. */
+.goal-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.goal-timeline-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.goal-timeline-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.goal-timeline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.goal-timeline-iter {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.goal-timeline-time {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.goal-timeline-reason {
+  font-size: 12.5px;
+  line-height: 1.45;
+  word-break: break-word;
+}

@@ -493,6 +493,7 @@ def _main():
         goal_list=_console._operator_goals_list,
         goal_clear=_console._operator_goals_clear,
         goal_set=_console._operator_goals_set,
+        goal_rearm=_console._operator_goals_rearm,
         watch_list=_console._operator_watches_list,
         watch_clear=_console._operator_watches_clear,
         watch_set=_console._operator_watches_set,

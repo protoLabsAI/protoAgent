@@ -182,6 +182,9 @@ export const GOALS = {
       max_iterations: 6,
       no_progress_streak: 0,
       last_reason: "3 tests still failing",
+      history: [
+        { iteration: 1, at: 1751000100, status: "continue", reason: "2 tests still failing" },
+      ],
       started_at: 1751000000,
     },
   ],

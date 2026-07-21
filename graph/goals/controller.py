@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 
 CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 
+# Cap the per-iteration timeline so a long-running / re-armed goal's JSON stays bounded.
+_HISTORY_CAP = 50
+
 # The exact prefix a successful ``/goal`` SET replies with. The chat runners match on it
 # to decide whether to KICK an initial goal-driven turn (#1910) — see ``is_set_ack``.
 SET_ACK_PREFIX = "Goal set. "
@@ -408,6 +411,7 @@ class GoalController:
                 evidence=result.evidence,
             )
 
+        self._record_history(state, "continue", result.reason, result.evidence)
         self._store.set(state)
         # Realtime goal-loop progress (ADR 0051 Slice 3) — only goal.achieved/failed were
         # on the bus; surface each continuation too so a console can show the loop working.
@@ -435,6 +439,49 @@ class GoalController:
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
 
+    @staticmethod
+    def _record_history(state: GoalState, status: str, reason: str, evidence: str) -> None:
+        """Append a per-iteration event to the goal's timeline (capped). Reason/evidence are
+        truncated so the persisted JSON stays bounded even for a long or re-armed loop."""
+        from time import time
+
+        event = {
+            "iteration": state.iteration,
+            "at": time(),
+            "status": status,
+            "reason": (reason or "")[:500],
+            "evidence": (evidence or "")[:500],
+        }
+        state.history = (list(state.history) + [event])[-_HISTORY_CAP:]
+
+    def rearm(self, session_id: str, *, add_iterations: int = 0) -> tuple[bool, str, bool, GoalState | None]:
+        """Re-arm a goal so its drive loop can (re)start. On an ACTIVE goal this only raises
+        the iteration budget (``add_iterations``) — the running loop picks up the higher cap.
+        On a TERMINAL goal (exhausted / unachievable / achieved) it REACTIVATES: status→active,
+        clears finished_at / abandon_reason, resets the iteration + no-progress counters for a
+        fresh attempt (the timeline ``history`` is preserved), and adds any extra budget. The
+        caller kicks a turn when ``resumed`` is True. Returns (ok, message, resumed, state)."""
+        state = self._store.get(session_id)
+        if state is None:
+            return (False, "no goal for this session.", False, None)
+        add = max(0, int(add_iterations or 0))
+        resumed = not state.active
+        if resumed:
+            state.status = "active"
+            state.finished_at = None
+            state.abandon_reason = ""
+            state.iteration = 0
+            state.no_progress_streak = 0
+            state.last_progress_signature = ""
+        if add:
+            state.max_iterations += add
+        elif not resumed:
+            # Active goal, no budget added → nothing to do (avoid a pointless write/kick).
+            return (False, "goal is already active — add iterations to extend it.", False, state)
+        self._store.set(state)
+        verb = "restarted" if resumed else "budget extended"
+        return (True, f"Goal {verb}. {state.status_line()}", resumed, state)
+
     def _progress_signature(self, state: GoalState, result) -> str:
         """A per-iteration fingerprint that stays constant ⟺ the agent made no progress
         (drives ``no_progress_streak``). Verifier-type-aware: the fuzzy ``llm`` verifier's
@@ -456,6 +503,7 @@ class GoalController:
         if evidence:
             state.last_evidence = evidence
         state.finished_at = time()
+        self._record_history(state, status, reason, evidence or state.last_evidence)
         self._store.set(state)
         # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
         await fire_goal_hooks(status, state)

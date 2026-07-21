@@ -178,9 +178,10 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await expect(page.getByTestId("work-back")).toBeVisible();
 });
 
-test("clicking a goal row opens the read-only detail drawer (plan + contract)", async ({ page }) => {
+test("clicking a goal row opens the detail drawer (plan, contract, timeline, actions)", async ({ page }) => {
   // The Goals panel row opens a right drawer surfacing what the console couldn't see before:
-  // the completion contract read-back (ADR 0073) and the durable plan artifact (ADR 0079).
+  // the completion contract read-back (ADR 0073), the durable plan artifact + per-iteration
+  // timeline (ADR 0079), and the lifecycle actions.
   await openWork(page);
   await page.getByTestId("work-card-goals").click();
   await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
@@ -201,6 +202,13 @@ test("clicking a goal row opens the read-only detail drawer (plan + contract)", 
 
   // The `.plan.md` artifact renders (markdown or its raw-text fallback).
   await expect(detail).toContainText("Fix the no-progress streak assertion");
+
+  // Per-iteration timeline (drive-loop history).
+  await expect(page.getByTestId("goal-detail-timeline")).toContainText("2 tests still failing");
+
+  // The fixture goal is ACTIVE → the extend action; clicking it re-arms (POST → toast).
+  await page.getByTestId("goal-extend").click();
+  await expect(page.locator(".pl-toast__title", { hasText: "Goal re-armed" })).toBeVisible();
 });
 
 test("watches empty state explains agent-created watches and offers no CTA", async ({ page }) => {

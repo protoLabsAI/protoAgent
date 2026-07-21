@@ -90,6 +90,11 @@ class GoalState:
     last_progress_signature: str = ""
     last_reason: str = ""
     last_evidence: str = ""
+    # Per-iteration verifier trail (the drive-loop timeline), newest appended last and
+    # capped to the most recent entries. Each event: {iteration, at (epoch), status
+    # ("continue" | terminal), reason, evidence}. Survives re-arms so the timeline shows
+    # the whole journey. Plain dicts (not a dataclass) so to_dict/from_dict round-trip it.
+    history: list[dict] = field(default_factory=list)
     started_at: float = field(default_factory=time)
     finished_at: float | None = None
 

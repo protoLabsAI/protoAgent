@@ -136,7 +136,7 @@ def test_operator_routes_map_value_errors_to_400() -> None:
 # ── goals routes (list + clear) ──────────────────────────────────────────────
 
 
-def _goals_client(*, goals=None, on_clear=None):
+def _goals_client(*, goals=None, on_clear=None, on_rearm=None):
     app = FastAPI()
 
     async def glist():
@@ -147,6 +147,11 @@ def _goals_client(*, goals=None, on_clear=None):
             on_clear(session_id)
         return {"cleared": True}
 
+    async def grearm(session_id, body):
+        if on_rearm is not None:
+            return on_rearm(session_id, body)
+        return {"ok": True, "message": "re-armed", "resumed": True, "kicked": True}
+
     register_operator_routes(
         app,
         runtime_status=lambda: {},
@@ -155,6 +160,7 @@ def _goals_client(*, goals=None, on_clear=None):
         subagent_batch=lambda r: None,
         goal_list=glist,
         goal_clear=gclear,
+        goal_rearm=grearm,
     )
     return TestClient(app)
 
@@ -197,6 +203,25 @@ def test_goal_single_status_under_plural(monkeypatch) -> None:
     assert body["plan"] == "# plan\n- step one"
     # No goal → no plan read (and a null goal), but the shape stays stable.
     assert client.get("/api/goals/other").json() == {"enabled": True, "goal": None, "plan": ""}
+
+
+def test_goal_rearm_route() -> None:
+    # POST /api/goals/{sid}/rearm forwards the body to the injected handler and returns its
+    # result; a handler ok=False maps to 400 (a no-op re-arm).
+    seen = {}
+
+    def _rearm(sid, body):
+        seen["sid"], seen["body"] = sid, body
+        if body.get("add_iterations") == 0:
+            return {"ok": False, "error": "goal is already active — add iterations to extend it."}
+        return {"ok": True, "message": "Goal budget extended.", "resumed": False, "kicked": False}
+
+    client = _goals_client(on_rearm=_rearm)
+    ok = client.post("/api/goals/s1/rearm", json={"add_iterations": 4})
+    assert ok.status_code == 200 and ok.json()["resumed"] is False
+    assert seen == {"sid": "s1", "body": {"add_iterations": 4}}
+    # Empty body is allowed (defaults) and a no-op re-arm surfaces as 400.
+    assert client.post("/api/goals/s1/rearm", json={"add_iterations": 0}).status_code == 400
 
 
 def test_goals_routes_absent_when_not_wired() -> None:

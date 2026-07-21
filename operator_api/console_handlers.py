@@ -415,6 +415,35 @@ def _as_str_list(value) -> list[str]:
     return []
 
 
+async def _operator_goals_rearm(session_id: str, body: dict) -> dict:
+    """Re-arm a goal (ADR 0079 lifecycle) — extend an active goal's iteration budget, or
+    reactivate a TERMINAL one and kick a fresh drive turn so the loop resumes. Operator
+    surface only (the ADR 0066 ``/api`` path ceiling). Maps ok=False → 400 at the route."""
+    import asyncio
+
+    if STATE.goal_controller is None:
+        return {"ok": False, "error": "goal mode is not enabled"}
+    try:
+        add = int((body or {}).get("add_iterations") or 0)
+    except (TypeError, ValueError):
+        add = 0
+    ok, msg, resumed, _state = await asyncio.to_thread(
+        STATE.goal_controller.rearm, session_id, add_iterations=add
+    )
+    if not ok:
+        return {"ok": False, "error": msg}
+    # A reactivated (terminal → active) goal needs a turn to resume driving — enqueue a
+    # one-shot turn; the chat kickoff injection (iteration 0) states the goal. Extending a
+    # still-active goal needs no kick (its loop is live and picks up the higher cap).
+    kicked = False
+    if resumed:
+        from graph.sdk import run_in_session
+
+        res = run_in_session(session_id, "Resume working toward your active goal now.")
+        kicked = bool(res.get("ok"))
+    return {"ok": True, "message": msg, "resumed": resumed, "kicked": kicked}
+
+
 async def _operator_watches_list() -> dict:
     import asyncio
 

@@ -1,14 +1,19 @@
-import { Drawer } from "@protolabsai/ui/overlays";
-import { useQuery } from "@tanstack/react-query";
-import { Target } from "lucide-react";
+import { Button } from "@protolabsai/ui/primitives";
+import { Drawer, useToast } from "@protolabsai/ui/overlays";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, RotateCcw, Target } from "lucide-react";
 
+import { api } from "../lib/api";
 import { Markdown } from "../chat/LazyMarkdown";
 import { verifierLabel } from "../chat/goalForm";
-import { ago } from "../lib/format";
-import { goalDetailQuery } from "../lib/queries";
+import { ago, errMsg } from "../lib/format";
+import { goalDetailQuery, queryKeys } from "../lib/queries";
 import type { GoalState } from "../lib/types";
 import { goalTone } from "./GoalsPanel";
 import { StatusPill } from "./StatusPill";
+
+// How many iterations the "Add iterations" action grants at once.
+const EXTEND_BY = 4;
 
 // Read-only goal detail — a right drawer opened by clicking a Goals-panel row. It surfaces
 // what the console couldn't see before (ADR 0073/0079): the completion contract read-back,
@@ -30,6 +35,17 @@ export function GoalDetailDrawer({
   const goal = data?.goal ?? null;
   const plan = (data?.plan ?? "").trim();
 
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const rearm = useMutation({
+    mutationFn: (body: { add_iterations?: number }) => api.rearmGoal(sessionId ?? "", body),
+    onSuccess: (res) =>
+      toast({ tone: "success", title: "Goal re-armed", message: res.message || "The drive loop will resume." }),
+    onError: (e) => toast({ tone: "error", title: "Couldn't re-arm the goal", message: errMsg(e) }),
+    // `["goals"]` prefix refreshes both the list and this open drawer's detail.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals }),
+  });
+
   return (
     <Drawer
       open={!!sessionId}
@@ -37,6 +53,7 @@ export function GoalDetailDrawer({
       width="min(540px, 96vw)"
       className="goal-detail-drawer"
       title={<><Target size={16} /> Goal</>}
+      footer={goal ? <GoalActions goal={goal} busy={rearm.isPending} onRearm={(b) => rearm.mutate(b)} /> : undefined}
     >
       {isLoading ? (
         <p className="goal-detail-muted">Loading…</p>
@@ -49,6 +66,36 @@ export function GoalDetailDrawer({
       )}
     </Drawer>
   );
+}
+
+// Lifecycle actions (ADR 0079). An ACTIVE goal can be given more room ("+N iterations" — the
+// running loop picks up the higher cap). A TERMINAL goal that fell short (exhausted /
+// unachievable) can be restarted — the backend resets the loop and kicks a fresh drive turn.
+// An achieved goal shows no action (it's done).
+function GoalActions({
+  goal,
+  busy,
+  onRearm,
+}: {
+  goal: GoalState;
+  busy: boolean;
+  onRearm: (body: { add_iterations?: number }) => void;
+}) {
+  if (goal.status === "active") {
+    return (
+      <Button type="button" loading={busy} data-testid="goal-extend" onClick={() => onRearm({ add_iterations: EXTEND_BY })}>
+        {busy ? null : <Plus size={15} />} Add {EXTEND_BY} iterations
+      </Button>
+    );
+  }
+  if (goal.status === "exhausted" || goal.status === "unachievable") {
+    return (
+      <Button type="button" variant="primary" loading={busy} data-testid="goal-restart" onClick={() => onRearm({})}>
+        {busy ? null : <RotateCcw size={15} />} Restart goal
+      </Button>
+    );
+  }
+  return null;
 }
 
 function GoalDetailBody({ goal, plan }: { goal: GoalState; plan: string }) {
@@ -145,6 +192,26 @@ function GoalDetailBody({ goal, plan }: { goal: GoalState; plan: string }) {
           </p>
         )}
       </section>
+
+      {(goal.history?.length ?? 0) > 0 ? (
+        <section className="goal-detail-section" data-testid="goal-detail-timeline">
+          <h4>Timeline</h4>
+          <ol className="goal-timeline">
+            {[...(goal.history ?? [])].reverse().map((e, i) => (
+              <li className="goal-timeline-item" key={`${e.iteration}-${e.at ?? i}`}>
+                <StatusPill label={e.status} tone={goalTone(e.status)} />
+                <span className="goal-timeline-body">
+                  <span className="goal-timeline-head">
+                    <span className="goal-timeline-iter">iter {e.iteration}</span>
+                    {e.at ? <span className="goal-timeline-time">{ago(e.at)}</span> : null}
+                  </span>
+                  {e.reason ? <span className="goal-timeline-reason">{e.reason}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
     </div>
   );
 }

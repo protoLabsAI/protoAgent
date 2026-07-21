@@ -592,6 +592,17 @@ const server = createServer(async (req, res) => {
     if (/^\/api\/chat\/sessions\/[^/]+\/steer\/[^/]+$/.test(pathname) && req.method === "DELETE") {
       return sendJson(res, { removed: true, pending: 0 });
     }
+    // Goal lifecycle re-arm (ADR 0079) — extend/restart. Echo a resumed re-arm.
+    if (/^\/api\/goals\/[^/]+\/rearm$/.test(pathname) && req.method === "POST") {
+      const body = await readBody(req);
+      const add = Number(body?.add_iterations || 0);
+      return sendJson(res, {
+        ok: true,
+        message: add > 0 ? `Goal budget extended (+${add}).` : "Goal restarted.",
+        resumed: add === 0,
+        kicked: add === 0,
+      });
+    }
     if (pathname === "/api/config/models" && req.method === "POST") {
       // "Get models" (#1386): probe the (form) gateway for its model list. The mock returns a
       // DIFFERENT set than the saved dropdown, so the test can prove the dropdown refreshes.
