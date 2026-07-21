@@ -35,7 +35,13 @@ def test_summary_and_recent_delegate_to_store(monkeypatch):
     body = c.get("/api/telemetry/summary?since=2026-01-01").json()
     assert body == {"enabled": True, "summary": {"turns": 3, "since": "2026-01-01"}}
     recent = c.get("/api/telemetry/recent?limit=1").json()
-    assert recent == {"enabled": True, "turns": [{"task_id": "t1"}]}
+    # `langfuse_trace_url_template` rides along so the console can turn a row's
+    # trace_id into a Langfuse deep link; None when Langfuse isn't configured.
+    assert recent == {
+        "enabled": True,
+        "turns": [{"task_id": "t1"}],
+        "langfuse_trace_url_template": None,
+    }
 
 
 def test_recent_limit_is_clamped(monkeypatch):

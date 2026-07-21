@@ -134,6 +134,7 @@ export const telemetryQuery = () =>
         enabled: s.enabled && r.enabled,
         summary: s.summary,
         turns: r.turns || [],
+        traceUrlTemplate: r.langfuse_trace_url_template ?? null,
         insights: i.insights,
       };
     },

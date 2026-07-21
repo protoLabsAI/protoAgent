@@ -1,6 +1,7 @@
 import "../settings/telemetry.css";
 
 import { Table, THead, TBody, Tr, Th, Td } from "@protolabsai/ui/data";
+import { useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { useSuspenseQuery } from "@tanstack/react-query";
 
@@ -10,8 +11,10 @@ import {
   CheckCircle2,
   Clock,
   Coins,
+  Copy,
   Database,
   Download,
+  ExternalLink,
   Hash,
   Layers,
   Wrench,
@@ -24,6 +27,9 @@ import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
 import { ms, pct, tokens, usd } from "../lib/format";
 import { telemetryQuery } from "../lib/queries";
+import { langfuseTraceUrl } from "./traceUrl";
+
+import type { TelemetryTurn } from "../lib/types";
 
 // Telemetry dashboard (ADR 0006 Slice 3) — reads /api/telemetry/* (the local
 // per-turn rollup store) on the TanStack Query data layer (ADR 0013). Summary
@@ -42,7 +48,8 @@ async function downloadTelemetryCsv() {
 
 function TelemetryBody() {
   const { data, isFetching, refetch } = useSuspenseQuery(telemetryQuery());
-  const { enabled, summary, turns, insights } = data;
+  const { enabled, summary, turns, insights, traceUrlTemplate } = data;
+  const toast = useToast();
 
   return (
     <>
@@ -140,7 +147,7 @@ function TelemetryBody() {
                 <THead>
                   <Tr>
                     <Th>Ended</Th><Th>Model</Th><Th>Tokens (in→out)</Th>
-                    <Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th>
+                    <Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th><Th>Trace</Th>
                   </Tr>
                 </THead>
                 <TBody>
@@ -159,6 +166,8 @@ function TelemetryBody() {
                       <Td>{ms(t.duration_ms)}</Td>
                       <Td>{t.llm_calls}/{t.tool_calls}</Td>
                       <Td><Badge status={t.state === "completed" ? "success" : t.state === "failed" ? "error" : "neutral"}>{t.state}</Badge></Td>
+                      <Td><TraceCell turn={t} template={traceUrlTemplate} onCopied={() =>
+                        toast({ title: "Trace id copied", message: "Paste it into Langfuse's search." })} /></Td>
                     </Tr>
                   ))}
                 </TBody>
@@ -176,6 +185,43 @@ export function TelemetrySurface() {
     <StagePanel label="telemetry" testId="telemetry-surface">
       <TelemetryBody />
     </StagePanel>
+  );
+}
+
+// Pivot from a telemetry row to its Langfuse trace. With a server-supplied URL
+// template that's a deep link; without one (Langfuse configured but its project
+// id unreachable, or no template at all) it degrades to a copyable trace id —
+// an honest id beats a fabricated link. Rows traced before the column existed,
+// or turns run with tracing off, show "—".
+function TraceCell({
+  turn,
+  template,
+  onCopied,
+}: {
+  turn: TelemetryTurn;
+  template: string | null;
+  onCopied: () => void;
+}) {
+  const traceId = (turn.trace_id || "").trim();
+  if (!traceId) return <span className="trace-none">—</span>;
+
+  const href = langfuseTraceUrl(template, traceId);
+  const short = traceId.slice(0, 8);
+
+  if (href) {
+    return (
+      <a className="trace-link" href={href} target="_blank" rel="noreferrer noopener"
+         title={`Open trace ${traceId} in Langfuse`} data-testid="telemetry-trace-link">
+        <ExternalLink size={13} aria-hidden /> {short}
+      </a>
+    );
+  }
+  return (
+    <Button type="button" variant="ghost" size="sm" className="trace-copy"
+            title={`Copy trace id ${traceId}`} data-testid="telemetry-trace-copy"
+            onClick={() => { void navigator.clipboard?.writeText(traceId); onCopied(); }}>
+      <Copy size={13} aria-hidden /> {short}
+    </Button>
   );
 }
 

@@ -330,7 +330,11 @@ function handleApiGet(pathname, fleet = FLEET) {
     case "/api/telemetry/summary":
       return { enabled: true, summary: TELEMETRY_SUMMARY };
     case "/api/telemetry/recent":
-      return { enabled: true, turns: TELEMETRY_TURNS };
+      return {
+        enabled: true,
+        turns: TELEMETRY_TURNS,
+        langfuse_trace_url_template: "https://langfuse.example.com/project/p1/traces/{trace_id}",
+      };
     case "/api/telemetry/insights":
       return { enabled: true, insights: TELEMETRY_INSIGHTS };
     case "/api/playbooks":

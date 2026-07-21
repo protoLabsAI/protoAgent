@@ -27,6 +27,13 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   await expect(surface.getByText("Recent turns")).toBeVisible();
   // The failed turn renders its state pill.
   await expect(surface.getByText("failed")).toBeVisible();
+  // A traced turn deep-links to Langfuse; the untraced one shows no link.
+  const traceLink = surface.getByTestId("telemetry-trace-link");
+  await expect(traceLink).toHaveCount(1);
+  await expect(traceLink).toHaveAttribute(
+    "href",
+    "https://langfuse.example.com/project/p1/traces/0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",
+  );
 
   // Insights (Slice 4, advise-only): flagged-turn warning + proven cache lever.
   const insights = surface.getByTestId("telemetry-insights");

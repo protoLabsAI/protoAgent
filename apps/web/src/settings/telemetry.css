@@ -33,6 +33,31 @@
 }
 /* .turn-state* retired — the State cell is a DS <Badge> (success/error/neutral) now. */
 
+/* Trace cell — deep link to Langfuse, or a copyable trace id when the console
+   has no URL template for the trace. */
+.telemetry-table .trace-link,
+.telemetry-table .trace-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+}
+.telemetry-table .trace-link {
+  text-decoration: none;
+}
+.telemetry-table .trace-link:hover {
+  color: var(--fg-primary);
+  text-decoration: underline;
+}
+.telemetry-table .trace-copy {
+  padding: 1px 6px;
+}
+.telemetry-table .trace-none {
+  color: var(--fg-muted);
+}
+
 /* Telemetry insights (ADR 0006 Slice 4 — advise-only) */
 .telemetry-insights {
   display: flex;
