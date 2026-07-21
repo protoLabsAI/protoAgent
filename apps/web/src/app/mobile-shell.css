@@ -147,6 +147,20 @@
   background: transparent;
 }
 
+/* ── Bottom safe-area inset ───────────────────────────────────────────────────
+   Counterpart to the top inset on `.mshell-head`. The shell reserved the notch at the
+   top but nothing reserved the bottom, so on a device with a home indicator the chat
+   composer sat flush against — and under — the indicator (#2086). Inset the chat surface
+   itself (the grid that stacks the message list over the composer), NOT the shell frame:
+   padding a non-scrolling wrapper would only shorten the viewport, whereas insetting the
+   surface lifts the composer clear while the message list keeps scrolling above it.
+   `max(…, 12px)` keeps a comfortable gutter where there is no home indicator. The pushed
+   rail/plugin surfaces inset their own scroll body (`.stage-body`) at the same breakpoint —
+   see theme.css. */
+.mshell .chat-session-slot {
+  padding-bottom: max(env(safe-area-inset-bottom), 12px);
+}
+
 /* ── Session sheet ───────────────────────────────────────────────────────────
    Hand-rolled: the DS Drawer is side-only (left/right) and a thread switcher wants to
    come up from the bottom, under the thumb. Mirrors AppDrawer's structure. */
