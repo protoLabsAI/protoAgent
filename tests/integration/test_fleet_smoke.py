@@ -10,10 +10,14 @@ Slow + opt-in: ``PA_RUN_INTEGRATION=1 pytest tests/integration``.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from tests.integration.conftest import http_get, http_post, poll, requires_integration
 
 pytestmark = requires_integration
+
+# tests/integration/test_fleet_smoke.py -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_two_instances_boot_isolated(fleet):
@@ -140,8 +144,21 @@ def test_hub_proxies_authed_sse_to_a_fleet_token_member(fleet):
     # MUST serve them anonymously — the member already does — or the DS plugin-kit 401s and the
     # plugin view drops to unauthenticated fetch, whose data call then 401s (the "Could not load"
     # class, roxy portfolio). This is the fix; the member serves /_ds/ regardless of auth.
+    #
+    # Assert on AUTH, not on the asset's existence. The contract under test is "the hub does not
+    # gate this path"; whether `plugin-kit.js` is on disk depends on whether the console was built
+    # (`apps/web/dist/`), which the CI fleet job does NOT do — it installs Python deps only. Pinning
+    # 200 therefore passed locally (dist present) and failed every CI run from the commit that added
+    # it, reporting a proxy-auth regression that wasn't one. A 404 here is the member honestly saying
+    # "no such file" — it still proves the request was proxied anonymously rather than 401'd.
     st_ds = http_get(f"{hub.base}/agents/{mid}/_ds/plugin-kit.js", timeout=10)[0]
-    assert st_ds == 200, f"closed hub must serve a sister's /_ds/ assets WITHOUT a bearer, got {st_ds}"
+    assert st_ds not in (401, 403), (
+        f"closed hub must serve a sister's /_ds/ assets WITHOUT a bearer, got {st_ds}"
+    )
+    if (REPO_ROOT / "apps" / "web" / "dist" / "_ds" / "plugin-kit.js").exists():
+        # Console built → the asset really should come back, so keep the strong check where it means
+        # something (local runs, and any job that builds the SPA first).
+        assert st_ds == 200, f"built console present but the proxied DS asset returned {st_ds}"
 
     # Regular authed API call through the proxy → 200 (the swap that already worked).
     st, _ = http_get(f"{hub.base}/agents/{mid}/api/flags", timeout=10, headers=H)
