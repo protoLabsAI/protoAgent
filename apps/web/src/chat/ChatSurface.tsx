@@ -123,6 +123,9 @@ export function ChatSurface({
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   const [harvestOnDelete, setHarvestOnDelete] = useState(false);
+  // Goal tab close: default keeps the goal running (detach); toggle on to STOP it (clear the
+  // goal + close its task backlog) instead.
+  const [stopGoalOnClose, setStopGoalOnClose] = useState(false);
   const pendingCloseSession = chat.sessions.find((s) => s.id === pendingClose) || null;
   // Active goals keyed by session — a tab whose session is driving a goal gets a different
   // close flow (detach + keep running) instead of the plain delete. Cached; refetches on
@@ -307,32 +310,49 @@ export function ChatSurface({
       <ConfirmDialog
         open={pendingClose !== null}
         title={closingGoal ? "Close this goal tab?" : "Delete this chat?"}
-        confirmLabel={closingGoal ? "Close tab" : "Delete chat"}
-        destructive={!closingGoal}
+        confirmLabel={closingGoal ? (stopGoalOnClose ? "Stop goal & close" : "Keep running, close tab") : "Delete chat"}
+        destructive={!closingGoal || stopGoalOnClose}
         onConfirm={() => {
           if (pendingClose) {
             if (closingGoal) {
-              // Detach: keep the goal driving in the background (a headless continuation) and
-              // KEEP the server session — its checkpoint is the goal's accumulated context, so
-              // we must NOT purge it. Just drop the tab locally; track it in the Goals panel.
-              void api.resumeGoal(pendingClose).catch(() => {});
-              chatStore.deleteSession(pendingClose);
+              if (stopGoalOnClose) {
+                // STOP: clear the goal + close its task backlog, and purge the (now finished)
+                // session. The tab unmount aborts the in-flight drive stream.
+                void api.clearGoal(pendingClose, true).catch(() => {});
+                void api.deleteChatSession(pendingClose, false).catch(() => {});
+                chatStore.deleteSession(pendingClose);
+              } else {
+                // DETACH: keep the goal driving in the background (a headless continuation) and
+                // KEEP the server session — its checkpoint is the goal's accumulated context, so
+                // we must NOT purge it. Just drop the tab locally; track it in the Goals panel.
+                void api.resumeGoal(pendingClose).catch(() => {});
+                chatStore.deleteSession(pendingClose);
+              }
             } else {
               closeSession(pendingClose, harvestOnDelete);
             }
           }
           setPendingClose(null);
           setHarvestOnDelete(false);
+          setStopGoalOnClose(false);
         }}
-        onClose={() => { setPendingClose(null); setHarvestOnDelete(false); }}
+        onClose={() => { setPendingClose(null); setHarvestOnDelete(false); setStopGoalOnClose(false); }}
       >
         {pendingCloseSession ? (
           closingGoal ? (
-            <p style={{ margin: 0 }}>
-              This tab is driving the goal <strong>{`"${closingGoal.condition || pendingCloseSession.title}"`}</strong>.
-              Closing it keeps the goal running in the background — track it in the Goals panel and reopen or
-              stop it there.
-            </p>
+            <>
+              <p style={{ margin: 0 }}>
+                This tab is driving the goal <strong>{`"${closingGoal.condition || pendingCloseSession.title}"`}</strong>.
+                By default it keeps running in the background — track it in the Goals panel.
+              </p>
+              {/* Opt-in STOP: cancel the goal AND close the tasks it filed (its backlog). */}
+              <Switch
+                className="chat-delete-harvest"
+                checked={stopGoalOnClose}
+                onCheckedChange={setStopGoalOnClose}
+                label="Stop the goal and close its open tasks instead"
+              />
+            </>
           ) : (
             <>
               <p style={{ margin: 0 }}>

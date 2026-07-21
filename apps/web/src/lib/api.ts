@@ -1246,10 +1246,14 @@ export const api = {
     );
   },
 
-  clearGoal(sessionId: string) {
-    return request<{ cleared: boolean }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
-      method: "DELETE",
-    });
+  // Clear (stop) a goal. `closeTasks` also closes the goal's session-scoped task backlog
+  // (ADR 0079) — the "Stop goal" action. Returns how many tasks were closed.
+  clearGoal(sessionId: string, closeTasks = false) {
+    const q = closeTasks ? "?close_tasks=true" : "";
+    return request<{ cleared: boolean; tasks_closed?: number }>(
+      `/api/goals/${encodeURIComponent(sessionId)}${q}`,
+      { method: "DELETE" },
+    );
   },
 
   // Goal lifecycle (ADR 0079) — re-arm: extend an active goal's iteration budget

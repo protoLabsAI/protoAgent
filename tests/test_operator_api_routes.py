@@ -142,10 +142,10 @@ def _goals_client(*, goals=None, on_clear=None, on_rearm=None):
     async def glist():
         return {"goals": goals if goals is not None else [], "enabled": True}
 
-    async def gclear(session_id):
+    async def gclear(session_id, close_tasks=False):
         if on_clear:
-            on_clear(session_id)
-        return {"cleared": True}
+            on_clear(session_id, close_tasks)
+        return {"cleared": True, "tasks_closed": 2 if close_tasks else 0}
 
     async def grearm(session_id, body):
         if on_rearm is not None:
@@ -173,14 +173,19 @@ def test_goals_list_and_clear() -> None:
     seen = {}
     client = _goals_client(
         goals=[{"session_id": "s1", "condition": "ship it", "status": "active", "iteration": 2}],
-        on_clear=lambda sid: seen.update(id=sid),
+        on_clear=lambda sid, close_tasks: seen.update(id=sid, close_tasks=close_tasks),
     )
     body = client.get("/api/goals").json()
     assert body["enabled"] is True
     assert body["goals"][0]["session_id"] == "s1" and body["goals"][0]["status"] == "active"
 
-    assert client.delete("/api/goals/s1").json() == {"cleared": True}
-    assert seen["id"] == "s1"
+    # Plain clear: goal removed, no tasks touched.
+    assert client.delete("/api/goals/s1").json() == {"cleared": True, "tasks_closed": 0}
+    assert seen["id"] == "s1" and seen["close_tasks"] is False
+
+    # Stop goal (?close_tasks=true): the goal's task backlog is closed too.
+    assert client.delete("/api/goals/s1?close_tasks=true").json() == {"cleared": True, "tasks_closed": 2}
+    assert seen["close_tasks"] is True
 
 
 def test_goal_single_status_under_plural(monkeypatch) -> None:

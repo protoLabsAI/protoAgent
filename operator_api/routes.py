@@ -189,7 +189,7 @@ def register_operator_routes(
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
-    goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     goal_rearm: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     goal_resume: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
@@ -449,10 +449,12 @@ def register_operator_routes(
 
     if goal_clear is not None:
 
+        # `?close_tasks=true` also closes the goal's session-scoped task backlog (ADR 0079) —
+        # used by the "Stop goal" action so a stopped goal leaves no orphaned open tasks.
         @app.delete("/api/goals/{session_id}")
-        async def _goal_clear(session_id: str):
+        async def _goal_clear(session_id: str, close_tasks: bool = False):
             try:
-                return await goal_clear(session_id)
+                return await goal_clear(session_id, close_tasks)
             except Exception as exc:
                 raise _http_error(exc) from exc
 

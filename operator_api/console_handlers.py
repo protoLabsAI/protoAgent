@@ -366,13 +366,32 @@ async def _operator_goals_list() -> dict:
     return {"goals": [s.to_dict() for s in states], "enabled": True}
 
 
-async def _operator_goals_clear(session_id: str) -> dict:
+async def _operator_goals_clear(session_id: str, close_tasks: bool = False) -> dict:
     import asyncio
 
     if STATE.goal_controller is None:
-        return {"cleared": False, "enabled": False}
+        return {"cleared": False, "enabled": False, "tasks_closed": 0}
     cleared = await asyncio.to_thread(STATE.goal_controller.store.clear, session_id)
-    return {"cleared": bool(cleared)}
+    # Stopping a goal can also close the tasks it filed — they're the goal's backlog,
+    # session-scoped (ADR 0079), so a stopped goal needn't leave orphaned open tasks behind.
+    tasks_closed = 0
+    if close_tasks and session_id and STATE.tasks_store is not None:
+        tasks_closed = await asyncio.to_thread(_close_session_tasks, session_id)
+    return {"cleared": bool(cleared), "tasks_closed": tasks_closed}
+
+
+def _close_session_tasks(session_id: str) -> int:
+    """Close every OPEN task a goal filed (its session-scoped backlog, ADR 0079). Best-effort
+    per task; returns the count closed. Runs off the event loop (``to_thread``)."""
+    store = STATE.tasks_store
+    closed = 0
+    for issue in store.list(include_closed=False, session_id=session_id):
+        try:
+            store.close(issue["id"], reason="goal stopped")
+            closed += 1
+        except Exception:  # noqa: BLE001 — one bad task must not abort the sweep
+            log.warning("[goals] failed to close task %s on goal stop", issue.get("id"), exc_info=True)
+    return closed
 
 
 async def _operator_goals_set(body: dict) -> dict:
@@ -408,13 +427,22 @@ async def _operator_goals_set(body: dict) -> dict:
     # next turn in this session (the chat kickoff injection at iteration 0 re-states the goal).
     # The console PANEL passes `kick: false` — it drives the goal from a dedicated chat tab so
     # the loop STREAMS LIVE into it, rather than running as a headless background turn.
-    # Best-effort — if the scheduler is unavailable the goal simply drives on the next turn.
-    kicked = False
-    if body.get("kick", True):
+    kicked = _safe_kick(sid, "Begin working toward your active goal now.") if body.get("kick", True) else False
+    return {"ok": True, "message": msg, "kicked": kicked}
+
+
+def _safe_kick(session_id: str, prompt: str) -> bool:
+    """Best-effort: enqueue a drive turn via ``run_in_session`` without ever crashing the
+    caller — the goal is already persisted, so a scheduler hiccup (or a non-dict return) must
+    NOT 500 the request (QA #2091). Returns True only when the turn was actually enqueued."""
+    try:
         from graph.sdk import run_in_session
 
-        kicked = bool(run_in_session(sid, "Begin working toward your active goal now.").get("ok"))
-    return {"ok": True, "message": msg, "kicked": kicked}
+        res = run_in_session(session_id, prompt)
+        return bool(isinstance(res, dict) and res.get("ok"))
+    except Exception:  # noqa: BLE001 — a kickoff failure must not fail the goal op
+        log.warning("[goals] run_in_session kick failed for %s", session_id, exc_info=True)
+        return False
 
 
 async def _operator_goals_resume(session_id: str) -> dict:
@@ -429,10 +457,7 @@ async def _operator_goals_resume(session_id: str) -> dict:
     state = await asyncio.to_thread(STATE.goal_controller.active_goal, session_id)
     if state is None:
         return {"ok": False, "error": "no active goal for this session"}
-    from graph.sdk import run_in_session
-
-    kicked = bool(run_in_session(session_id, "Resume working toward your active goal now.").get("ok"))
-    return {"ok": True, "kicked": kicked}
+    return {"ok": True, "kicked": _safe_kick(session_id, "Resume working toward your active goal now.")}
 
 
 def _as_str_list(value) -> list[str]:
