@@ -13,11 +13,23 @@ run "Prepare Release" (workflow_dispatch, pick bump) ◀────┘
    │  bumps pyproject.toml + rolls CHANGELOG.md
    │  opens chore: release vX.Y.Z PR   (does NOT merge or tag)
    ▼
-you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──▶  Release workflow (on: push tag):
-                                                              • builds + pushes the semver Docker tags
-                                                              • creates the GitHub Release (notes minus chore/docs)
-                                                              • posts notes to Discord (release-tools)
+you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──┬──▶  release.yml (on: push tag):
+                                                        │       • builds + pushes the semver Docker tags
+                                                        │       • creates the GitHub Release (notes minus chore/docs)
+                                                        │       • posts notes to Discord (release-tools)
+                                                        │
+                                                        └──▶  publish.yml (on: push tag):
+                                                                • builds the console + wheel
+                                                                • publishes to PyPI (Trusted Publishing / OIDC)
+
+                     desktop binaries do NOT ride the tag — dispatch desktop-build.yml (see above)
 ```
+
+The two tag-triggered workflows run **independently and in parallel**; neither waits
+on the other. That's deliberate — `publish.yml` used to trigger on `release: published`
+(the event `release.yml` produces), and when that derivative event silently failed to
+fire, PyPI sat five releases behind while Docker and the GitHub Releases looked fine.
+Nothing alerts on a trigger that simply doesn't happen.
 
 `latest` Docker tag is pushed on every `main` merge by `docker-publish.yml` —
 independent of releases.
@@ -77,8 +89,21 @@ polls) and promotes the release to **Latest**. See `apps/desktop/README.md` §§
    git checkout main && git pull
    git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
    ```
-   `release.yml` runs `on: push: tags: 'v*.*.*'` → builds + pushes the semver
-   Docker tags, creates the GitHub Release, and posts to Discord.
+   That one tag push triggers **both** `release.yml` (semver Docker tags, the
+   GitHub Release, the Discord post) and `publish.yml` (the PyPI wheel) — each on
+   `on: push: tags: 'v*.*.*'`, independently.
+5. **Dispatch the desktop build** if this release should reach desktop users:
+   `gh workflow run desktop-build.yml -f tag=vX.Y.Z`. It is *not* tag-triggered
+   (paid CI — see [Desktop](#desktop) above), and until it finishes the release
+   stays **non-Latest**, so the in-app updater keeps offering the previous one.
+
+**Verify after a release** — three channels, three checks:
+
+```sh
+gh release view vX.Y.Z --json tagName,isLatest        # GitHub Release (+ Latest after desktop)
+docker manifest inspect ghcr.io/protolabsai/protoagent:X.Y.Z >/dev/null && echo docker-ok
+curl -s https://pypi.org/pypi/protolabs-agent/json | jq -r .info.version   # PyPI
+```
 
 > **Don't also dispatch the Release workflow by hand after pushing the tag.**
 > The tag push already triggers it; a manual `workflow_dispatch` is redundant

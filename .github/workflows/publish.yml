@@ -12,10 +12,16 @@ name: publish
 #   Environment name:   pypi
 # After the first publish the pending publisher becomes a normal trusted publisher.
 #
-# To release: cut a GitHub Release on a vX.Y.Z tag whose version matches
-# pyproject.toml. `workflow_dispatch` is also wired as a fallback — the `release`
-# trigger can be flaky, and it's how you cut the FIRST publish before the release
-# flow is exercised.
+# To release: push a vX.Y.Z tag whose version matches pyproject.toml. That single
+# tag push fans out to release.yml (Docker image + GitHub Release) and this workflow
+# (PyPI) independently, so neither depends on the other having fired.
+#
+# NOTE: the trusted publisher above matches on the WORKFLOW FILENAME. Keep the PyPI
+# job in publish.yml — moving it, or invoking it as a reusable workflow from
+# release.yml, changes the OIDC claim and PyPI will reject the upload.
+#
+# `workflow_dispatch` remains as the manual fallback (and is how you cut the FIRST
+# publish, before any tag exists).
 #
 # The wheel bundles the console SPA (apps/web/dist via hatch_build.py), so the
 # frontend MUST be built before the wheel or it ships console-less. We build it
@@ -23,9 +29,25 @@ name: publish
 # source tree — NOT from an sdist, whose VCS file list excludes the gitignored dist).
 
 on:
-  release:
-    types: [published]
+  # Trigger on the TAG PUSH, the same event release.yml uses — not on
+  # `release: published`. That derivative event proved unreliable: it silently
+  # failed to fire for 0.102.0 through 0.105.2, so PyPI sat five releases behind
+  # (0.101.0) while Docker and the GitHub Releases were current. Nothing alerts on
+  # a trigger that simply doesn't happen. The tag push is the event that actually
+  # occurs, and it's what already drives release.yml reliably.
+  #
+  # publish.yml does NOT need the GitHub Release to exist (it only builds + uploads
+  # a wheel), so running in parallel with release.yml is fine.
+  push:
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
+
+# One publish per ref. Queue rather than cancel — a half-finished upload is worse
+# than a duplicate, and `skip-existing` below makes the duplicate a no-op.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -66,9 +88,14 @@ jobs:
           python -m build --wheel
 
       - name: Validate metadata (+ version matches the release tag)
+        # Gate on the REF TYPE, not the event name. The old `= "release"` check meant a
+        # workflow_dispatch skipped validation entirely — so the manual fallback, the
+        # very path used when the trigger misfires, was also the unguarded one. Any tag
+        # ref is now validated (tag push AND a dispatch run against a tag); a dispatch
+        # from a branch is a deliberate test build and still skips.
         run: |
           twine check dist/*
-          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             PKG_VERSION="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
             TAG="${GITHUB_REF_NAME#v}"
             echo "pyproject=$PKG_VERSION  tag=$TAG"
@@ -95,3 +122,9 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A version already on PyPI is a no-op, not a failure. PyPI refuses
+          # re-uploads, so without this a re-run — or a manual dispatch after the
+          # automatic run already succeeded — fails the job and looks like a broken
+          # release. Publishing stays exactly-once; only the error is suppressed.
+          skip-existing: true
