@@ -13,7 +13,12 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#9b87f2" />
+    <!-- theme-color paints the installed-PWA status bar / OS chrome. It must be the console's
+         SURFACE background (--pl-color-bg dark = #0a0a0c), NOT the brand accent — an accent
+         status bar reads as a stray band above the dark app (#1923 set the THEMED path to the
+         surface; this is the unthemed default to match). agentTheme.syncBrowserChrome overrides
+         it per active agent theme; the favicon stays the accent. -->
+    <meta name="theme-color" content="#0a0a0c" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%protolabs-icon-outline.svg" />
     <!-- Installable PWA: manifest only, deliberately NO service worker — a SW
          would intercept the /a2a SSE stream and cache stale console assets
