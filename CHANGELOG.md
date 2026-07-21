@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (no `a2a-sdk`, no `httpx`, not even this repo on the path) so it can be copied next to any agent
   in any project. Method enumeration is side-effect-free — empty params can't create a task or
   delete a config — and classifies `-32601` (not mounted) against anything else (mounted).
+- **Jump from a telemetry row to its Langfuse trace.** Every turn now records the `trace_id` it ran
+  under, and the console's Recent-turns table links straight to the trace tree — so a slow or
+  expensive turn is one click from the explanation. The trace URL needs a project id that isn't an
+  env var, so the server resolves it once via the Langfuse SDK and hands the console a
+  `{trace_id}` template; the browser never sees Langfuse keys. Tracing off ⇒ a copyable trace-id
+  chip instead of a broken link.
+- **An `a2a:<delegate>` span around each outbound A2A dispatch.** A delegation used to be invisible
+  on the caller's side except as the enclosing `tool:delegate_to`, so "the peer was slow" and "we
+  were slow calling it" were indistinguishable. The span's duration is the real cross-agent latency
+  (SendMessage through the `GetTask` poll), and it opens *before* the trace context is read so the
+  peer nests under it — a delegation chain now renders as a call tree, not a flat list of siblings.
 
 ### Changed
 - **The agent card declares only the extensions this runtime actually emits.** It advertised
