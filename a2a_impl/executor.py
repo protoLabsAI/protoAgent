@@ -90,6 +90,9 @@ class TurnOutcome:
     # The triggering input text (the scheduled prompt / inbound message / webhook body),
     # truncated — so the Activity feed can show the response as an explicit reply to it (#1375).
     stimulus: str = ""
+    # The Langfuse trace this turn ran under, so a telemetry row can deep-link to
+    # the trace tree. Captured DURING the stream, not after — see ``execute``.
+    trace_id: str = ""
 
 
 # A terminal hook the host can register (ADR 0003 / 0006): invoked with a
@@ -382,6 +385,27 @@ class ProtoAgentExecutor(AgentExecutor):
                     last_chunk=True,
                 )
 
+        # The Langfuse trace id for this turn, captured on the first streamed event.
+        #
+        # WHY IT MUST BE READ INSIDE THE LOOP: ``trace_session`` sets a contextvar in
+        # the stream generator's body. Async generators share the caller's Context
+        # (unlike Tasks), so the value IS visible here while the generator is
+        # suspended mid-iteration — but the generator's ``finally`` resets it as soon
+        # as the loop ends. Reading it from the terminal hook, or from the post-loop
+        # ``_outcome`` calls, reliably yields "". A one-slot list so the closure in
+        # ``_outcome`` sees the captured value without a ``nonlocal``.
+        trace_id: list[str] = [""]
+
+        def _capture_trace_id() -> None:
+            if trace_id[0]:
+                return
+            try:
+                from observability import tracing
+
+                trace_id[0] = tracing.current_trace_id() or ""
+            except Exception:  # noqa: BLE001 — telemetry must never break a turn
+                pass
+
         def _outcome(state: str, final_text: str) -> TurnOutcome:
             return TurnOutcome(
                 task_id=context.task_id,
@@ -398,6 +422,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 trigger=_trigger,
                 priority=_priority,
                 stimulus=_stimulus,
+                trace_id=trace_id[0],
             )
 
         try:
@@ -409,6 +434,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 request_metadata=_md,
                 images=images,
             ):
+                _capture_trace_id()
                 # A contiguous reasoning run ends at the first non-reasoning event:
                 # flush the buffered tail first so frames reach the consumer in
                 # stream order (thinking before the text/tool frame it preceded).

@@ -565,6 +565,10 @@ def _record_a2a_telemetry(outcome) -> None:
                 "created_at": created.isoformat(),
                 "ended_at": ended.isoformat(),
                 "soul_rev": soul_rev,
+                # Captured by the executor DURING the stream (the trace contextvar is
+                # already reset by the time this hook runs) — lets the console pivot a
+                # telemetry row straight to its Langfuse trace tree.
+                "trace_id": getattr(outcome, "trace_id", "") or "",
             }
         )
     except Exception:  # noqa: BLE001 — telemetry is best-effort

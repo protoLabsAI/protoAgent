@@ -328,3 +328,92 @@ def test_dispatch_explicit_token_wins_over_fleet(patched, monkeypatch):
     d = _parse(auth={"scheme": "bearer", "token": "sekret"})  # loopback, but explicit token
     assert asyncio.run(A.dispatch(d, "ping")) == "pong"
     assert seen["headers"]["Authorization"] == "Bearer sekret"
+
+
+# ── outbound boundary span (cross-agent latency on the CALLER's side) ──────────
+
+
+def _record_spans(monkeypatch) -> list[tuple[str, dict, str]]:
+    """Replace trace_span with a recorder, preserving its context-manager contract."""
+    import contextlib
+
+    seen: list[tuple[str, dict, str]] = []
+
+    @contextlib.contextmanager
+    def _span(name, metadata=None, as_type="span"):
+        seen.append((name, metadata or {}, as_type))
+        yield None
+
+    monkeypatch.setattr(_tracing, "trace_span", _span)
+    return seen
+
+
+def test_dispatch_opens_an_outbound_span_named_for_the_delegate(patched):
+    """Without this span a delegation is invisible caller-side except as the
+    enclosing ``tool:delegate_to``, so "the peer was slow" and "we were slow
+    calling it" are indistinguishable — the first question of any fleet trace."""
+    spans = _record_spans(patched)
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+    assert len(spans) == 1, f"expected exactly one outbound span, got {spans}"
+    name, meta, as_type = spans[0]
+    assert name == "a2a:peer"
+    assert as_type == "agent"
+    assert meta["url"] == "http://127.0.0.1:9/a2a"
+    assert meta["delegate"] == "peer"
+
+
+def test_outbound_span_opens_before_the_trace_context_is_read(patched):
+    """Ordering is load-bearing: the peer must nest under the DISPATCH span, not
+    the enclosing turn, or a delegation chain renders as a flat list of sibling
+    agents instead of a call tree. Pins that the context is read inside the span.
+    """
+    order: list[str] = []
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def _span(name, metadata=None, as_type="span"):
+        order.append("span-open")
+        yield None
+        order.append("span-close")
+
+    patched.setattr(_tracing, "trace_span", _span)
+
+    def _ctx():
+        order.append("read-trace-context")
+        return {"trace_id": _TID, "span_id": _SID}
+
+    patched.setattr(_tracing, "current_trace_context", _ctx)
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+    assert order == ["span-open", "read-trace-context", "span-close"], order
+
+
+def test_outbound_span_closes_even_when_the_dispatch_fails(patched):
+    """A failed hop is the one you most want on the trace — the span must still
+    close (and the DelegateError must propagate unchanged)."""
+    closed: list[str] = []
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def _span(name, metadata=None, as_type="span"):
+        try:
+            yield None
+        finally:
+            closed.append(name)
+
+    patched.setattr(_tracing, "trace_span", _span)
+    _install_client(patched, raise_exc=httpx.ConnectError("refused"))
+
+    with pytest.raises(DelegateError):
+        asyncio.run(A.dispatch(_parse(), "ping"))
+
+    assert closed == ["a2a:peer"]
