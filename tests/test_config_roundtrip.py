@@ -49,6 +49,20 @@ def _isolate_from_installed_plugins(monkeypatch):
     monkeypatch.setattr("graph.config._resolve_plugin_config", lambda *a, **k: {})
 
 
+@pytest.fixture(autouse=True)
+def _freeze_ui_tier_default(monkeypatch):
+    """Pin the UI tier so the example's ``filesystem.allow_run`` golden is deterministic.
+
+    The example config has no ``filesystem`` section, so ``allow_run`` resolves through
+    the tier-aware app-default ``_default_filesystem_allow_run`` (#1849): ON for an
+    interactive tier, OFF on a headless (``PROTOAGENT_UI=none``) instance. A dev/CI shell
+    that exports ``PROTOAGENT_UI=none`` would otherwise flip the pinned
+    ``filesystem_allow_run: True`` to False. Clearing the var restores the interactive
+    default the golden was captured under (same isolation ``test_settings_cascade.py``
+    applies when it exercises this field)."""
+    monkeypatch.delenv("PROTOAGENT_UI", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Golden captures (RUN the real code to confirm; never weaken to force green)
 # ---------------------------------------------------------------------------
@@ -109,6 +123,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_max_iterations": 8,
     "goal_no_progress_limit": 3,
     "goal_verify_timeout": 120.0,
+    "watches_enabled": False,  # #2020 feature flag, default off (example keeps watches: commented)
     "soul_self_edit_enabled": False,
     "identity_name": "protoagent",
     "identity_operator": "",

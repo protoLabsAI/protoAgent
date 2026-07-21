@@ -474,6 +474,7 @@ async def run_manual_subagent(
         inbox_store=STATE.inbox_store,
         tasks_store=STATE.tasks_store,
         goal_enabled=getattr(config, "goal_enabled", False),
+        watches_enabled=getattr(config, "watches_enabled", False),
         graph_config=config,
     )
     if extra_tools:
@@ -936,6 +937,10 @@ def create_agent_graph(
         # Subagent builds deliberately omit it: subagents are bounded by
         # max_turns and must not self-set goals.
         goal_enabled=config.goal_enabled,
+        # Watch tools (ADR 0067) additionally gated by the watches feature flag
+        # (#2020, default off) — same registry-vs-binding threading as goal_enabled,
+        # and they ride inside the goal-enabled group so goal mode must also be on.
+        watches_enabled=config.watches_enabled,
         # Lets knowledge_ingest build the gateway STT/vision fns for audio/video/image.
         graph_config=config,
         # Lets knowledge_ingest detach a slow URL/media ingest as a background job (ADR 0050).

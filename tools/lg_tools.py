@@ -1797,6 +1797,7 @@ def get_all_tools(
     inbox_store=None,
     tasks_store=None,
     goal_enabled=False,
+    watches_enabled=False,
     graph_config=None,
     background_mgr=None,
     dropped=None,
@@ -1861,7 +1862,12 @@ def get_all_tools(
         tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
         tools.append(_build_goal_plan_tool())  # goal loop — record running plan (retired <goal_plan>)
         tools.append(_build_abandon_goal_tool())  # goal loop — explicit give-up (retired <goal_unachievable>)
-        tools.extend(_build_watch_tools())  # ADR 0067 — many concurrent supervised watches
+        if watches_enabled:
+            # ADR 0067 — many concurrent supervised watches. Additionally gated by the
+            # watches feature flag (#2020, default off) while the feature cooks: when off,
+            # create_watch / list_watches / clear_watch are simply not bound. Tool
+            # availability ONLY — stored watches and the background poller are untouched.
+            tools.extend(_build_watch_tools())
     if soul_edit_enabled:
         # ADR 0079/0081 — guarded self-authored persona (config soul.self_edit_enabled,
         # default off). Lead-agent only: no subagent build passes soul_edit_enabled, so
