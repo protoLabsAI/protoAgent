@@ -11,16 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **npm 10 can no longer install a silently-wrong dependency tree.** Root `package.json` now
-  declares `engines.npm >= 11` and `.npmrc` sets `engine-strict=true`, so npm 10 fails the install
-  outright. It previously exited 0 while no-opping workspace dependency bumps: `@protolabsai/ui`
-  sat at `0.54.1` under `apps/web/node_modules`, shadowing the correctly-hoisted `0.57.0` the
-  manifest asked for. The only symptom was `currencyMathRender.test.ts` failing — on a currency
-  guard the design system didn't ship until `0.55.1` — which reads exactly like a product
-  regression while CI (pinned to npm 11) stays green. `npm ls @protolabsai/ui` was the tell:
-  `invalid: "^0.57.0"`.
-
 ### Added
 - **A2A client-side spec coverage: `resubscribe()` and push-notification registration.** protoAgent
   was a complete A2A *server* but an incomplete *client* — nothing ever called `SubscribeToTask`
@@ -78,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (detach — `POST /api/goals/{session_id}/resume`) or **stop** it and close the tasks it filed
   (`DELETE /api/goals/{session_id}?close_tasks=true`). A goal set in chat with `/goal` still stays
   in that chat. (ADR 0079)
+- **Shell/filesystem policy and Work folders moved onto the Filesystem tool group.** They were
+  global chrome floating above the Tools panel search while governing tools most of the list
+  isn't. Both are now chips *on* the Filesystem group (visible when expanded), each opening a
+  dialog — contextual to the tools they gate, the way a plugin's Configure does (ADR 0059). Search
+  is the first control now, and the group header wears a glyph marking that it has settings.
 
 ### Changed
 - **The agent card declares only the extensions this runtime actually emits.** It advertised
@@ -93,8 +88,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional completion-contract step (ADR 0073) — replacing the old raw-JSON verifier dialog.
 - **A goal set from the console starts driving immediately** (parity with the chat `/goal` set),
   instead of sitting idle until the next turn in its session.
+- **The watch tools are gated behind `watches.enabled` and now default OFF** (fixes #2020).
+  `create_watch` / `list_watches` / `clear_watch` no longer load unless you turn watches on in
+  `langgraph-config.yaml`. Existing configs that rely on them must set `watches.enabled: true`.
 
 ### Fixed
+- **npm 10 can no longer install a silently-wrong dependency tree.** Root `package.json` now
+  declares `engines.npm >= 11` and `.npmrc` sets `engine-strict=true`, so npm 10 fails the install
+  outright. It previously exited 0 while no-opping workspace dependency bumps: `@protolabsai/ui`
+  sat at `0.54.1` under `apps/web/node_modules`, shadowing the correctly-hoisted `0.57.0` the
+  manifest asked for. The only symptom was `currencyMathRender.test.ts` failing — on a currency
+  guard the design system didn't ship until `0.55.1` — which reads exactly like a product
+  regression while CI (pinned to npm 11) stays green. `npm ls @protolabsai/ui` was the tell:
+  `invalid: "^0.57.0"`.
 - **The A2A docs taught a wire format that 1.0 removed.** `docs/explanation/a2a-protocol.md`
   described 0.3's `kind` discriminator as mandatory; 1.0 dropped the field — the frame type is the
   single key of `result` (a proto oneof), and success frames carry no SSE `event:` name, so a
@@ -119,6 +125,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the next turn).
 - **Retired dead monitor-mode UI** in the console Goals surface (leftover from the drive-only goal
   migration) and a goal-status filter that checked a status the backend never emits.
+- **PR review read the code as it was BEFORE the pull request.** The review panel used
+  `github_read_file`, whose optional `ref` defaults to the repo's **default branch** — so the
+  verifier "confirmed" that symbols the PR *adds* don't exist, and correct PRs collected blocker
+  findings (observed on #2088; #2094 drew 8 → 9 → 11 findings across three re-reviews about code it
+  never touched, because recalled prior findings re-seed each panel and a wrong-ref finding
+  compounds). Prompt-level discipline was already in place and did not hold — both prompts said
+  "pass ref=<head SHA>" and the reads still went to main; a rule the model must remember on every
+  call is not a guarantee. Both review seats now use `github_read_pr_file`, which takes no ref and
+  resolves the head SHA server-side. `github_read_file` stays for policy docs, which must be read
+  at the base (a PR must not rewrite the rules it is judged by), and the verifier fails closed: an
+  unreadable head is "uncertain", never "confirmed".
+- **The installed PWA painted its status bar with the brand accent.** `index.html`'s
+  `<meta name="theme-color">` and `manifest.json`'s `theme_color` hard-coded `#9b87f2`, and the
+  themed-console override only kicks in when an agent theme is active — so the default console
+  showed a lavender band above the near-black app. Both now use the dark surface `#0a0a0c`. The
+  favicon stays the accent by design.
 
 ## [0.105.2] - 2026-07-20
 
