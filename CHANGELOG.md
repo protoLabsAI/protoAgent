@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A2A client-side spec coverage: `resubscribe()` and push-notification registration.** protoAgent
+  was a complete A2A *server* but an incomplete *client* — nothing ever called `SubscribeToTask`
+  (the reconnect-to-an-in-flight-task path) or `CreateTaskPushNotificationConfig`. `evals/client.py`
+  now does both, sharing one SSE parser between `stream()` and `resubscribe()`. Covered by a real
+  end-to-end test: a task registers `evals/webhook.py`'s listener as its callback and the assertion
+  is a genuine outbound POST over loopback, checked for the task id and the echoed
+  `X-A2A-Notification-Token`. In 1.0 `TaskPushNotificationConfig` is **flat** (`{taskId, url,
+  token}`) — the v0.3 `pushNotificationConfig` wrapper is a `-32602`, and a test pins that.
+- **[A2A conformance reference](docs/reference/a2a-conformance.md)** — every 1.0 method, task state,
+  and transport marked implemented / partial / not-mounted, each anchored to a test or a prober
+  check, with the known gaps stated rather than left to be discovered.
+- **The conformance prober now drives real calls, not just method probes.** New `lifecycle` section
+  runs `GetTask` + `SubscribeToTask` against the task the streaming check just created — being
+  *routed* (the `-32601` probe) is a much weaker claim than working. New opt-in `push` section
+  (`--push-url`) exercises the full config lifecycle create → list → delete, always cleaning up
+  after itself, and asserts the **SSRF guard**: the check passes when the peer *refuses* a
+  link-local metadata callback, since a push callback is an outbound request the agent makes with a
+  shared secret attached.
 - **`scripts/a2a_conformance.py` — point it at any A2A 1.0 agent and get a conformance report.**
   Checks the agent card's 1.0 required fields, all 11 JSON-RPC methods, version negotiation, v0.3
   compat, SSE frame shape, and declared-vs-actually-emitted extensions. Deliberately stdlib-only

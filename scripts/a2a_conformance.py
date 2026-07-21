@@ -21,11 +21,17 @@ to any agent, in any project, and run it.
 What it checks
 ──────────────
   card       the agent card is reachable and carries the 1.0 required fields
-  version    ``A2A-Version`` negotiation, including the two silent-failure modes
+  version    ``A2A-Version`` negotiation, including the silent-failure mode
   methods    which of the 11 A2A 1.0 JSON-RPC methods the peer serves
   compat     whether v0.3 method aliases are also mounted
   stream     SSE frame shape — the 1.0 oneof, and the ``append`` replace trap
   ext        extensions declared on the card vs. actually emitted on the wire
+  lifecycle  GetTask + SubscribeToTask driven against a REAL task
+  push       the push-config lifecycle and the SSRF guard (opt-in, --push-url)
+
+``methods`` only proves a method is ROUTED (empty params, read -32601). That is a
+much weaker claim than "it works" — so ``lifecycle`` and ``push`` drive the real
+calls against the task the stream check created.
 
 Exit codes: 0 all required checks passed · 1 a required check failed ·
 2 could not reach the peer at all.
@@ -321,11 +327,12 @@ def check_v03_compat(rep: Report, rpc: str, headers: dict, timeout: float) -> No
 
 def check_stream(
     rep: Report, rpc: str, headers: dict, timeout: float, prompt: str, card: dict | None
-) -> None:
+) -> str:
     """Drive one real streaming turn and inspect the frames.
 
     This costs the peer a turn (tokens), so it is the one check that mutates
-    anything — hence --no-turn.
+    anything — hence --no-turn. Returns the task id (or "") so the lifecycle
+    checks below have a real task to operate on.
     """
     payload = _envelope("SendStreamingMessage", {"message": _message(prompt)})
     req = urllib.request.Request(rpc, data=json.dumps(payload).encode(), method="POST")
@@ -367,11 +374,11 @@ def check_stream(
                 frames.append((kind, result[kind] if isinstance(result[kind], dict) else {}))
     except (TimeoutError, urllib.error.URLError, OSError) as e:
         rep.add("stream", "SendStreamingMessage", FAIL, f"transport: {e}")
-        return
+        return ""
 
     if not frames:
         rep.add("stream", "SendStreamingMessage", FAIL, "no frames received")
-        return
+        return ""
     rep.add("stream", "SendStreamingMessage", OK, f"{len(frames)} frames")
 
     kinds = [k for k, _ in frames]
@@ -452,6 +459,128 @@ def check_stream(
     if not declared and not observed:
         rep.add("ext", "extensions", SKIP, "none declared or observed")
 
+    # Task id for the lifecycle checks — from the initial `task` frame, else any
+    # frame that names one.
+    for _k, p in frames:
+        tid = p.get("id") if _k == "task" else p.get("taskId")
+        if isinstance(tid, str) and tid:
+            return tid
+    return ""
+
+
+def check_lifecycle(rep: Report, rpc: str, headers: dict, timeout: float, task_id: str) -> None:
+    """Exercise the post-turn task methods against a REAL task.
+
+    ``check_methods`` only proves a method is mounted (it probes with empty params
+    and reads -32601). That is a much weaker claim than "it works": a method can
+    be routed and still fail on every real call. These run the genuine article
+    against the task the stream check just created.
+    """
+    h = {**headers, "A2A-Version": "1.0"}
+
+    # GetTask — the task must still be retrievable after going terminal.
+    _, body, _ = _post(rpc, _envelope("GetTask", {"id": task_id}), headers=h, timeout=timeout)
+    code = _err_code(body)
+    if code is None:
+        task = ((body or {}).get("result") or {}).get("task") or (body or {}).get("result") or {}
+        state = (task.get("status") or {}).get("state", "?")
+        rep.add("lifecycle", "GetTask", OK, f"retrievable after terminal (state={state})")
+    else:
+        rep.add("lifecycle", "GetTask", FAIL, f"code={code}")
+
+    # SubscribeToTask — the reconnect path. On an ALREADY-terminal task a peer may
+    # legitimately answer with a final snapshot, an empty stream, or a "not
+    # active" error; any of those beats -32601. We assert only that it is
+    # implemented and doesn't blow up, because "reattach to a live task" can't be
+    # tested without racing the turn.
+    payload = _envelope("SubscribeToTask", {"id": task_id})
+    req = urllib.request.Request(rpc, data=json.dumps(payload).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "text/event-stream")
+    for k, v in h.items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=min(timeout, 15)) as r:  # noqa: S310 — operator-supplied URL
+            first = ""
+            for raw in r:
+                first = raw.decode("utf-8", "replace").strip()
+                if first.startswith("data:"):
+                    break
+            rep.add("lifecycle", "SubscribeToTask", OK, f"HTTP {r.status}" + (" + frames" if first else ""))
+    except urllib.error.HTTPError as e:
+        rep.add("lifecycle", "SubscribeToTask", WARN, f"HTTP {e.code} on a terminal task")
+    except (TimeoutError, urllib.error.URLError, OSError) as e:
+        rep.add("lifecycle", "SubscribeToTask", WARN, f"{type(e).__name__}: {e}")
+
+
+def check_push(rep: Report, rpc: str, headers: dict, timeout: float, task_id: str, callback: str) -> None:
+    """Full push-notification config lifecycle: create → list → delete.
+
+    Opt-in (--push-url) because registering a webhook on someone else's agent is a
+    real side effect. We always attempt the delete, so a probe leaves no residue.
+
+    In 1.0 ``TaskPushNotificationConfig`` is FLAT — ``{taskId, url, token}`` — not
+    v0.3's ``{taskId, pushNotificationConfig: {...}}`` wrapper. Sending the 0.3
+    shape here is a -32602, which is a good way to discover you are talking to a
+    0.3 peer.
+    """
+    h = {**headers, "A2A-Version": "1.0"}
+    params = {"taskId": task_id, "url": callback, "token": "a2a-conformance-probe"}
+
+    _, body, _ = _post(rpc, _envelope("CreateTaskPushNotificationConfig", params), headers=h, timeout=timeout)
+    code = _err_code(body)
+    if code is not None:
+        rep.add("push", "Create", FAIL, f"code={code} — {json.dumps((body or {}).get('error'))[:120]}")
+        return
+    cfg_id = (((body or {}).get("result") or {})).get("id", "")
+    rep.add("push", "Create", OK, f"registered{f' (id={cfg_id})' if cfg_id else ''}")
+
+    _, body, _ = _post(rpc, _envelope("ListTaskPushNotificationConfigs", {"taskId": task_id}), headers=h, timeout=timeout)
+    if _err_code(body) is None:
+        cfgs = ((body or {}).get("result") or {}).get("configs") or []
+        rep.add("push", "List", OK, f"{len(cfgs)} config(s)")
+    else:
+        rep.add("push", "List", WARN, f"code={_err_code(body)}")
+
+    # Always clean up — never leave a webhook registered on someone else's agent.
+    # Delete keys on (taskId, id); `id` is the config id from Create, which some
+    # peers omit — fall back to the task id, which the SDK store treats as the
+    # default config id.
+    del_params = {"taskId": task_id, "id": cfg_id or task_id}
+    _, body, _ = _post(rpc, _envelope("DeleteTaskPushNotificationConfig", del_params), headers=h, timeout=timeout)
+    if _err_code(body) is None:
+        rep.add("push", "Delete", OK, "cleaned up")
+    else:
+        rep.add("push", "Delete", WARN, f"code={_err_code(body)} — config may persist on the peer")
+
+    # SSRF guard. A push callback is an outbound request the AGENT makes, with a
+    # shared secret attached — so an unguarded peer can be aimed at its own cloud
+    # metadata endpoint or anything else on its network. Refusing this is the
+    # correct behavior and the check PASSES on refusal; acceptance is the finding.
+    unsafe = "http://169.254.169.254/latest/meta-data"
+    _, body, _ = _post(
+        rpc,
+        _envelope("CreateTaskPushNotificationConfig", {"taskId": task_id, "url": unsafe}),
+        headers=h,
+        timeout=timeout,
+    )
+    if _err_code(body) is not None:
+        rep.add("push", "SSRF guard", OK, "refused a link-local metadata callback")
+    else:
+        rep.add(
+            "push",
+            "SSRF guard",
+            FAIL,
+            f"peer ACCEPTED {unsafe} as a callback — it will POST task payloads there",
+        )
+        # We just armed something dangerous on the peer; remove it immediately.
+        _post(
+            rpc,
+            _envelope("DeleteTaskPushNotificationConfig", {"taskId": task_id, "id": task_id}),
+            headers=h,
+            timeout=timeout,
+        )
+
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
@@ -471,6 +600,13 @@ def _parse_args() -> argparse.Namespace:
         help="prompt for the one live turn the stream check drives",
     )
     ap.add_argument("--no-turn", action="store_true", help="skip the live turn (no tokens spent)")
+    ap.add_argument(
+        "--push-url",
+        default=None,
+        help="callback URL to exercise the push-notification config lifecycle "
+        "(create/list/delete). Opt-in: registering a webhook on a peer is a real "
+        "side effect. The probe always deletes what it created.",
+    )
     ap.add_argument("--json", action="store_true", dest="as_json", help="emit the report as JSON")
     return ap.parse_args()
 
@@ -499,8 +635,17 @@ def main() -> int:
     check_v03_compat(rep, rpc, headers, args.timeout)
     if args.no_turn:
         rep.add("stream", "live turn", SKIP, "--no-turn")
+        rep.add("lifecycle", "task methods", SKIP, "--no-turn (no task to operate on)")
     else:
-        check_stream(rep, rpc, headers, args.timeout, args.prompt, card)
+        task_id = check_stream(rep, rpc, headers, args.timeout, args.prompt, card)
+        if task_id:
+            check_lifecycle(rep, rpc, headers, args.timeout, task_id)
+            if args.push_url:
+                check_push(rep, rpc, headers, args.timeout, task_id, args.push_url)
+            else:
+                rep.add("push", "config lifecycle", SKIP, "pass --push-url <callback> to exercise")
+        else:
+            rep.add("lifecycle", "task methods", SKIP, "the turn produced no task id")
 
     if args.as_json:
         print(json.dumps({"url": base, "rpc": rpc, "checks": rep.rows}, indent=2))

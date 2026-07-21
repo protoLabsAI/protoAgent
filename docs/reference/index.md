@@ -20,6 +20,7 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 | Page | Contents |
 |---|---|
 | [A2A endpoints](/reference/a2a-endpoints) | JSON-RPC methods, SSE stream, well-known paths |
+| [A2A conformance](/reference/a2a-conformance) | What of A2A 1.0 is implemented — methods, states, transports, gaps — plus the runnable prober |
 | [Agent card](/reference/agent-card) | Card shape with every supported field |
 | [Extensions](/reference/extensions) | A2A extensions — URI-keyed metadata (`cost-v1`, `worldstate-delta-v1`, `tool-call-v1`) + MIME-typed DataParts + `a2a.trace` |
 

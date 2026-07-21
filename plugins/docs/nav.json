@@ -278,6 +278,10 @@
           "title": "A2A endpoints"
         },
         {
+          "path": "reference/a2a-conformance.md",
+          "title": "A2A conformance"
+        },
+        {
           "path": "reference/agent-card.md",
           "title": "Agent card"
         },

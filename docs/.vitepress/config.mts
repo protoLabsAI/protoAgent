@@ -188,6 +188,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "A2A endpoints", link: "/reference/a2a-endpoints" },
+            { text: "A2A conformance", link: "/reference/a2a-conformance" },
             { text: "Agent card", link: "/reference/agent-card" },
             { text: "Extensions", link: "/reference/extensions" },
           ],
