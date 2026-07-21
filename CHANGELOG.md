@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `langgraph-config.yaml`. Existing configs that rely on them must set `watches.enabled: true`.
 
 ### Fixed
+- **Mobile: the last row of content sat under the home indicator.** The mobile shell inset only
+  the top notch, so on a device with a home indicator the bottom of a scroll region was clipped
+  (#2086). The chat composer slot and the mobile surface region now carry
+  `padding-bottom: max(env(safe-area-inset-bottom), 12px)`, mirroring the existing top-inset
+  pattern.
 - **npm 10 can no longer install a silently-wrong dependency tree.** Root `package.json` now
   declares `engines.npm >= 11` and `.npmrc` sets `engine-strict=true`, so npm 10 fails the install
   outright. It previously exited 0 while no-opping workspace dependency bumps: `@protolabsai/ui`
