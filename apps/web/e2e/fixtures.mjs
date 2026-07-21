@@ -172,11 +172,33 @@ export const GOALS = {
       session_id: "operator-default",
       condition: "All tests pass",
       status: "active",
+      verifier: { type: "command", command: "pytest -q" },
+      // Completion contract (ADR 0073) — surfaced read-back in the detail drawer.
+      outcome: "The suite is green on main",
+      constraints: ["no new network calls", "public API unchanged"],
+      boundaries: ["graph/goals/"],
+      stop_when: "the fix needs a schema migration",
       iteration: 1,
       max_iterations: 6,
+      no_progress_streak: 0,
+      last_reason: "3 tests still failing",
+      started_at: 1751000000,
     },
   ],
 };
+
+// The durable plan artifact (`.plan.md`, ADR 0079) the goal detail route serves alongside
+// the fixture goal — markdown, rendered in the drawer.
+export const GOAL_PLAN = [
+  "# Plan",
+  "",
+  "## Tried",
+  "- Ran the suite; 3 failures in `test_goal_controller`.",
+  "",
+  "## Next",
+  "1. Fix the no-progress streak assertion.",
+  "2. Re-run `pytest -q`.",
+].join("\n");
 
 // Watches (ADR 0067) — varied statuses so the Work overview card renders an active
 // count, a met-today pulse fragment, and tinted status badges. Times are epoch SECONDS.

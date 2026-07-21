@@ -198,6 +198,34 @@ export function parseMaxIterations(value: unknown): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_ITERATIONS;
 }
 
+/** A compact human label for a verifier spec — mirrors the backend `_verifier_summary`
+ *  (graph/goals/controller.py) so the goal detail drawer reads the same as the continuation
+ *  contract line: `command: pytest -q`, `ci PR #12`, `plugin demo:probe`, `llm judgment`. */
+export function verifierLabel(verifier?: Record<string, unknown> | null): string {
+  const v = verifier ?? {};
+  const str = (k: string) => (typeof v[k] === "string" ? (v[k] as string).trim() : "");
+  const t = str("type") || "llm";
+  if (t === "command" || t === "test") {
+    const cmd = str("command");
+    return cmd ? `${t}: ${cmd}` : t;
+  }
+  if (t === "ci") {
+    if (v.pr != null && v.pr !== "") return `ci PR #${v.pr}`;
+    const branch = str("branch");
+    return branch ? `ci branch ${branch}` : "ci";
+  }
+  if (t === "data") {
+    const path = str("path");
+    return path ? `data check on ${path}` : "data check";
+  }
+  if (t === "plugin") {
+    const check = str("check");
+    return check ? `plugin ${check}` : "plugin verifier";
+  }
+  if (t === "llm") return "llm judgment";
+  return t;
+}
+
 /** Map the HitlForm answers → the `POST /api/goals` body for `session_id`. Returns `null`
  *  when there is no condition (the one required field) so callers can no-op rather than POST
  *  an unsatisfiable goal. Empty contract fields are omitted (backward-compatible). */

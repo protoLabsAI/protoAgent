@@ -181,16 +181,22 @@ def test_goal_single_status_under_plural(monkeypatch) -> None:
     client = _goals_client(goals=[])
 
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
-    assert client.get("/api/goals/s1").json() == {"enabled": False, "goal": None}
+    assert client.get("/api/goals/s1").json() == {"enabled": False, "goal": None, "plan": ""}
 
     class _Store:
         def get(self, sid):
             return type("G", (), {"to_dict": lambda self: {"session_id": "s1", "status": "active"}})() if sid == "s1" else None
 
+        def read_plan(self, sid):
+            return "# plan\n- step one" if sid == "s1" else ""
+
     monkeypatch.setattr(rs.STATE, "goal_controller", type("C", (), {"store": _Store()})(), raising=False)
     body = client.get("/api/goals/s1").json()
     assert body["enabled"] is True and body["goal"]["status"] == "active"
-    assert client.get("/api/goals/other").json() == {"enabled": True, "goal": None}
+    # The `.plan.md` artifact rides along (ADR 0079) for the detail drawer.
+    assert body["plan"] == "# plan\n- step one"
+    # No goal → no plan read (and a null goal), but the shape stays stable.
+    assert client.get("/api/goals/other").json() == {"enabled": True, "goal": None, "plan": ""}
 
 
 def test_goals_routes_absent_when_not_wired() -> None:

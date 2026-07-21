@@ -1237,6 +1237,15 @@ export const api = {
     return request<{ goals: GoalState[]; enabled: boolean }>("/api/goals");
   },
 
+  // One goal's full detail — the status dict + the durable plan artifact (`.plan.md`, the
+  // agent's "orient" world-model it maintains via `update_goal_plan`, ADR 0079). `plan` is
+  // "" when the goal hasn't recorded one. Powers the goal detail drawer.
+  goalDetail(sessionId: string) {
+    return request<{ enabled: boolean; goal: GoalState | null; plan: string }>(
+      `/api/goals/${encodeURIComponent(sessionId)}`,
+    );
+  },
+
   clearGoal(sessionId: string) {
     return request<{ cleared: boolean }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",

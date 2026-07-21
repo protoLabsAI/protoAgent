@@ -21,6 +21,7 @@ import {
   DELEGATE_TYPES,
   FLEET,
   GOALS,
+  GOAL_PLAN,
   INBOX_ITEMS,
   NOTES_WORKSPACE,
   RUNTIME_STATUS,
@@ -566,6 +567,15 @@ const server = createServer(async (req, res) => {
           const detail = MEMORY_INJECTION_DETAILS[m[1]];
           if (!detail) return sendJson(res, { detail: "no injection record with that id" }, 404);
           return sendJson(res, detail);
+        }
+      }
+      {
+        // One goal's detail (status dict + `.plan.md` artifact) for the goal detail drawer.
+        const m = pathname.match(/^\/api\/goals\/([^/]+)$/);
+        if (m) {
+          const sid = decodeURIComponent(m[1]);
+          const goal = GOALS.goals.find((g) => g.session_id === sid) || null;
+          return sendJson(res, { enabled: true, goal, plan: goal ? GOAL_PLAN : "" });
         }
       }
       const payload = handleApiGet(pathname, fleetFor(req));

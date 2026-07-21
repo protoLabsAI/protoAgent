@@ -396,6 +396,12 @@ export type GoalState = {
   stop_when?: string; // condition under which the agent pauses and asks the operator
   iteration?: number;
   max_iterations?: number;
+  // Per-goal patience (ADR 0030 D4): consecutive no-progress checks vs the limit that
+  // finishes the goal `unachievable`. The drawer shows "stalled N/limit" when streak > 0.
+  no_progress_streak?: number;
+  no_progress_limit?: number | null;
+  fresh_context?: boolean; // Ralph loop: each continuation starts a clean thread
+  abandon_reason?: string; // set by the agent's abandon_goal tool; drives a terminal "unachievable"
   last_reason?: string;
   last_evidence?: string;
   started_at?: number;

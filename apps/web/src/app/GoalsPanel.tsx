@@ -12,6 +12,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { GoalDetailDrawer } from "./GoalDetailDrawer";
 import { HitlForm } from "../chat/HitlForm";
 import { buildGoalSetBody, goalFormPayload, type GoalSetBody } from "../chat/goalForm";
 import { errMsg } from "../lib/format";
@@ -28,7 +29,7 @@ import { StatusPill } from "./StatusPill";
 // and clearing a goal is a `useMutation` that invalidates the goals query. No
 // useEffect / busy flag / try-catch / manual refresh.
 
-function goalTone(status: string) {
+export function goalTone(status: string) {
   if (status === "achieved") return "success" as const;
   if (status === "active") return "warning" as const;
   if (status === "unachievable") return "error" as const;
@@ -37,7 +38,7 @@ function goalTone(status: string) {
 
 const trunc = (t: string, n = 80) => (t.length > n ? `${t.slice(0, n)}…` : t);
 
-function GoalsList() {
+function GoalsList({ onSelect }: { onSelect: (sessionId: string) => void }) {
   const { data } = useSuspenseQuery(goalsQuery());
   const goals = data.goals;
   const queryClient = useQueryClient();
@@ -72,7 +73,27 @@ function GoalsList() {
   return (
     <>
       {goals.map((goal) => (
-        <div className="goal-row" key={goal.session_id}>
+        // The whole row opens the read-only detail drawer (plan + contract + progress);
+        // the clear button stops propagation so removing never opens the drawer. Same
+        // role=button + selection-guard pattern as the Work overview cards.
+        <div
+          className="goal-row"
+          key={goal.session_id}
+          role="button"
+          tabIndex={0}
+          aria-label={`Open goal: ${goal.condition || goal.session_id}`}
+          data-testid="goal-row"
+          onClick={() => {
+            if (window.getSelection()?.isCollapsed !== false) onSelect(goal.session_id);
+          }}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onSelect(goal.session_id);
+            }
+          }}
+        >
           <div className="goal-row-head">
             <strong>{goal.condition || goal.session_id}</strong>
             <StatusPill label={goal.status} tone={goalTone(goal.status)} />
@@ -85,7 +106,7 @@ function GoalsList() {
           <Button
             icon variant="ghost" className="goal-row-clear"
             type="button"
-            onClick={() => clear.mutate(goal.session_id)}
+            onClick={(e) => { e.stopPropagation(); clear.mutate(goal.session_id); }}
             disabled={clear.isPending}
             title="Clear goal"
           >
@@ -144,6 +165,7 @@ export function GoalsPanel() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [creating, setCreating] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
   const set = useMutation({
     mutationFn: (body: GoalSetBody) => api.setGoal(body),
     onSuccess: (res) => {
@@ -171,7 +193,7 @@ export function GoalsPanel() {
           {({ reset }: { reset: () => void }) => (
             <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="goals" />}>
               <Suspense fallback={<PanelSkeleton label="Loading goals…" />}>
-                <GoalsList />
+                <GoalsList onSelect={setSelected} />
               </Suspense>
             </ErrorBoundary>
           )}
@@ -183,6 +205,7 @@ export function GoalsPanel() {
         onCreate={(body) => set.mutate(body)}
         busy={set.isPending}
       />
+      <GoalDetailDrawer sessionId={selected} onClose={() => setSelected(null)} />
     </section>
   );
 }

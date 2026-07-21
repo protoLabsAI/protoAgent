@@ -454,17 +454,22 @@ def register_operator_routes(
             except Exception as exc:
                 raise _http_error(exc) from exc
 
-    # One session's goal status under the canonical plural shape (D4 dedupe, ADR 0075)
-    # — replaces the retired singular `/api/goal/{session_id}`. Reads the controller
-    # directly, so it degrades to {enabled: False} when goals are off; no injected fn.
+    # One session's goal status + its durable plan artifact under the canonical plural
+    # shape (D4 dedupe, ADR 0075) — replaces the retired singular `/api/goal/{session_id}`.
+    # Reads the controller directly, so it degrades to {enabled: False} when goals are off;
+    # no injected fn. `plan` is the `.plan.md` the agent maintains with `update_goal_plan`
+    # (its "orient" world-model, ADR 0079) — "" when the goal hasn't recorded one. Powers
+    # the console goal detail drawer; additive, so pre-existing callers are unaffected.
     @app.get("/api/goals/{session_id}")
     async def _goal_status(session_id: str):
         from runtime.state import STATE
 
         if STATE.goal_controller is None:
-            return {"enabled": False, "goal": None}
-        state = STATE.goal_controller.store.get(session_id)
-        return {"enabled": True, "goal": state.to_dict() if state else None}
+            return {"enabled": False, "goal": None, "plan": ""}
+        store = STATE.goal_controller.store
+        state = await asyncio.to_thread(store.get, session_id)
+        plan = await asyncio.to_thread(store.read_plan, session_id) if state else ""
+        return {"enabled": True, "goal": state.to_dict() if state else None, "plan": plan or ""}
 
     # Programmatic goal-set (ADR 0028 D3) — accepts ONLY a `plugin` verifier;
     # command/test/ci/data stay operator-only (/goal). 400 on a rejected verifier.

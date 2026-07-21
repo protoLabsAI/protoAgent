@@ -178,6 +178,31 @@ test("the Goals PANEL hosts the guided goal form via its New goal header action"
   await expect(page.getByTestId("work-back")).toBeVisible();
 });
 
+test("clicking a goal row opens the read-only detail drawer (plan + contract)", async ({ page }) => {
+  // The Goals panel row opens a right drawer surfacing what the console couldn't see before:
+  // the completion contract read-back (ADR 0073) and the durable plan artifact (ADR 0079).
+  await openWork(page);
+  await page.getByTestId("work-card-goals").click();
+  await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
+
+  await page.getByTestId("goal-row").first().click();
+  const detail = page.getByTestId("goal-detail");
+  await expect(detail).toBeVisible();
+
+  // Verifier summary mirrors the backend (`command: pytest -q`).
+  await expect(detail).toContainText("command: pytest -q");
+
+  // Completion-contract read-back — outcome, constraints, boundaries, stop_when.
+  const contract = page.getByTestId("goal-detail-contract");
+  await expect(contract).toContainText("The suite is green on main");
+  await expect(contract).toContainText("public API unchanged");
+  await expect(contract).toContainText("graph/goals/");
+  await expect(contract).toContainText("schema migration");
+
+  // The `.plan.md` artifact renders (markdown or its raw-text fallback).
+  await expect(detail).toContainText("Fix the no-progress streak assertion");
+});
+
 test("watches empty state explains agent-created watches and offers no CTA", async ({ page }) => {
   await page.route("**/api/watches", (route) =>
     route.fulfill({ json: { enabled: true, watches: [] } }),
