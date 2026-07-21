@@ -4,10 +4,10 @@ import { Input, Switch } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { TerminalSquare } from "lucide-react";
+import { FolderTree, TerminalSquare } from "lucide-react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
-import { useToast } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -151,25 +151,9 @@ function ToolsBody() {
         kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
-        <div className="tools-config-row">
-          {/* Contextual settings chip (ADR 0048 §2.2) — same /api/settings save path as
-              the central home. This is the run_command EXECUTION policy (approval,
-              /bypass) plus the coarse kill switches; per-tool wiring is the row
-              switches below (the old "Disabled tools" denylist editor is gone — a row
-              toggle writes the same tools.disabled). Saves hot-rebuild. */}
-          <QuickSetting
-            keys={[
-              "filesystem.enabled",
-              "filesystem.allow_run",
-              "filesystem.run_requires_approval",
-              "filesystem.bypass_allowed",
-            ]}
-            title="Shell & filesystem tools"
-            label="Shell & filesystem tools"
-            icon={<TerminalSquare size={16} />}
-          />
-        </div>
-        <FsProjectsEditor />
+        {/* The shell/fs execution policy + Work folders used to float here, above the search,
+            governing tools most of the list isn't. They now live INSIDE the Filesystem group
+            (below), contextual to the tools they gate — the search is the first control. */}
         <Input
           className="playbook-search"
           type="search"
@@ -191,6 +175,11 @@ function ToolsBody() {
                   title={
                     <span className="tools-group-head">
                       {cat}
+                      {/* A group that carries contextual settings flags it — the terminal glyph
+                          the shell/fs config used to wear, now on the group it belongs to. */}
+                      {cat === "Filesystem" ? (
+                        <TerminalSquare size={13} className="tools-group-cog" aria-label="has settings" />
+                      ) : null}
                       <Badge status="neutral">{items.length}</Badge>
                       {/* The group is homogeneous in source, so the source belongs on the
                           GROUP, not repeated on every row. Core is the baseline (no chip);
@@ -203,6 +192,26 @@ function ToolsBody() {
                   }
                 >
                   <div className="tools-list">
+                    {/* Contextual group settings (ADR 0048): the shell/fs EXECUTION policy (enable ·
+                        run · approval · /bypass) and the Work-folders fence live WITH the tools they
+                        gate — chips on the group that open a dialog (like a plugin's Configure), not
+                        global chrome above the search. Same /api/settings + fs-projects save paths. */}
+                    {cat === "Filesystem" ? (
+                      <div className="tools-group-actions">
+                        <QuickSetting
+                          keys={[
+                            "filesystem.enabled",
+                            "filesystem.allow_run",
+                            "filesystem.run_requires_approval",
+                            "filesystem.bypass_allowed",
+                          ]}
+                          title="Shell & filesystem tools"
+                          label="Shell & filesystem tools"
+                          icon={<TerminalSquare size={15} />}
+                        />
+                        <WorkFoldersButton />
+                      </div>
+                    ) : null}
                     {items.map((t) => (
                       <div
                         className={`tools-row${t.enabled ? "" : " tools-row--off"}${t.name === highlight ? " tools-row--target" : ""}`}
@@ -240,9 +249,27 @@ export function ToolsPanel() {
   );
 }
 
-// Work-folder editor for the fenced fs roots (`filesystem.projects`, ADR 0007) —
-// this collection previously had NO console editor (the QuickSetting above covers
-// only the scalar toggles; the list was YAML-only). Replace-list semantics, same
+// Work folders as a dialog (ADR 0048) — a labeled chip on the Filesystem group opens the fenced
+// fs-roots editor in a dialog, contextual to the tools it governs (the shell/fs policy chip beside
+// it does the same for the scalar toggles). Not global chrome above the search anymore.
+function WorkFoldersButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="ghost" size="sm" type="button" onClick={() => setOpen(true)}>
+        <FolderTree size={15} /> Work folders
+      </Button>
+      {open ? (
+        <Dialog open onClose={() => setOpen(false)} title="Work folders" width={520}>
+          <FsProjectsEditor />
+        </Dialog>
+      ) : null}
+    </>
+  );
+}
+
+// Work-folder editor for the fenced fs roots (`filesystem.projects`, ADR 0007) — the fenced
+// roots list (the shell/fs policy chip covers the scalar toggles). Replace-list semantics, same
 // as the MCP servers editor. Saving with any folder present also enables fs tools.
 function FsProjectsEditor() {
   const toast = useToast();

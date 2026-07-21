@@ -209,6 +209,9 @@ function handleApiGet(pathname, fleet = FLEET) {
         count: 3,
         disabled: ["run_command", "ghost_tool"],
       };
+    case "/api/settings/filesystem-projects":
+      // Empty fenced-roots list → the Work-folders dialog renders its editor (Add folder / Save).
+      return { enabled: true, projects: [] };
     case "/api/chat/commands":
       return { commands: SLASH_COMMANDS };
     case "/api/scheduler/jobs":
