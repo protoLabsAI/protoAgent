@@ -52,6 +52,12 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     # without it the desktop app shows "no servers match" (same trap as the plugin
     # catalog above).
     ("config/mcp-catalog.json", "config"),
+    # The new-agent archetype directory (ADR 0042/0083). `_load_archetype_catalog`
+    # (operator_api/fleet_routes.py) reads it from REPO_ROOT/config (→ _MEIPASS/config
+    # when frozen) and falls back to Basic + Custom when it's absent — so without this
+    # entry the desktop app's new-agent picker silently loses every catalog archetype
+    # (Cowork), and nothing errors. Same trap as the plugin/MCP catalogs above.
+    ("config/archetype-catalog.json", "config"),
     ("config/soul-presets", "config/soul-presets"),
     # The bundled first-party skills (config/skills/*/SKILL.md — release-notes,
     # web-research). `_build_skills_index` (server/agent_init.py) seeds the skill

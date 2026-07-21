@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Cowork (and any catalog archetype) was missing from the new-agent picker on desktop and on
+  `pip install`.** `config/archetype-catalog.json` was never added to either packaged-build asset
+  list — `hatch_build.py::_SEEDS` (the wheel) or `build_sidecar.py::BUNDLED_DATA` (the frozen
+  desktop sidecar) — so those builds shipped the cowork SOUL preset but not the entry that makes
+  it selectable. `_load_archetype_catalog` falls back to Basic + Custom when the file is absent
+  and logs nothing, so the picker looked correct and just silently offered less. Docker was
+  unaffected (its image copies the source tree wholesale), which is why it only reproduced on
+  desktop/PyPI. This is the third time this exact shape has shipped — after `plugin-catalog.json`
+  ("0 official plugins") and `mcp-catalog.json` ("no servers match") — so
+  `tests/test_bundled_config_assets.py` now asserts, over a **glob** rather than a hardcoded list,
+  that every `config/*catalog*.json` reaches both asset lists and that the two agree.
+
+
+### Fixed
 - **PyPI releases fire on the tag push, not the derivative `release` event.** `publish.yml`
   triggered on `release: published` — an event `release.yml` produces — and when that silently
   failed to fire, PyPI sat **five releases behind** (0.101.0) while the Docker images and GitHub
