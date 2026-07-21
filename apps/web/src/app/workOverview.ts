@@ -7,9 +7,11 @@ import type { GoalState, ScheduledJob, Task, WatchState } from "../lib/types";
 
 // ── goals ────────────────────────────────────────────────────────────────────
 
-/** Goals still in flight — not terminal and not finished (mirrors the old overview). */
+/** Goals still in flight — status "active" is the only non-terminal state (the backend sets
+ *  `finished_at` alongside every terminal status: achieved/exhausted/unachievable). The
+ *  `finished_at` guard is belt-and-braces against a corrupt record. */
 export function activeGoals(goals: GoalState[]): GoalState[] {
-  return goals.filter((g) => g.status !== "achieved" && g.status !== "failed" && !g.finished_at);
+  return goals.filter((g) => g.status === "active" && !g.finished_at);
 }
 
 /** "2 driving · iteration 3/6" — count of active goals + the furthest-along loop.
@@ -18,9 +20,7 @@ export function goalsPulse(goals: GoalState[]): string {
   const active = activeGoals(goals);
   if (!active.length) return "";
   const lead = active.reduce((a, b) => ((b.iteration ?? 0) > (a.iteration ?? 0) ? b : a));
-  const head = `${active.length} driving`;
-  if (lead.mode === "monitor") return head;
-  return `${head} · iteration ${lead.iteration ?? 0}/${lead.max_iterations ?? "∞"}`;
+  return `${active.length} driving · iteration ${lead.iteration ?? 0}/${lead.max_iterations ?? "∞"}`;
 }
 
 // ── watches ──────────────────────────────────────────────────────────────────

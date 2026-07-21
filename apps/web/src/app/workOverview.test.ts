@@ -38,11 +38,14 @@ const job = (over: Partial<ScheduledJob>): ScheduledJob => ({
 });
 
 describe("goals card", () => {
-  it("activeGoals drops achieved/failed/finished", () => {
+  it("activeGoals keeps only status:active, unfinished goals", () => {
+    // The backend's terminal statuses are achieved / exhausted / unachievable (each set
+    // alongside finished_at) — "active" is the only in-flight state.
     const goals = [
       goal({ session_id: "a" }),
       goal({ session_id: "b", status: "achieved" }),
-      goal({ session_id: "c", status: "failed" }),
+      goal({ session_id: "c", status: "exhausted" }),
+      goal({ session_id: "e", status: "unachievable" }),
       goal({ session_id: "d", finished_at: 123 }),
     ];
     expect(activeGoals(goals).map((g) => g.session_id)).toEqual(["a"]);

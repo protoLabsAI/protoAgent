@@ -171,7 +171,7 @@ export const GOALS = {
     {
       session_id: "operator-default",
       condition: "All tests pass",
-      status: "in_progress",
+      status: "active",
       iteration: 1,
       max_iterations: 6,
     },
