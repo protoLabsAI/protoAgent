@@ -20,4 +20,10 @@ Learning-oriented walkthroughs. Start here if you're new to protoAgent. Grouped 
 |---|---|
 | [Write your first tool](/tutorials/first-tool) | A custom LangChain tool wired into the agent's loop |
 
+## A2A, fleet & delegates
+
+| Tutorial | What you'll end up with |
+|---|---|
+| [Two agents over A2A](/tutorials/two-agents-over-a2a) | A second agent, verified conformant, delegated to over the protocol — and the whole exchange as one trace |
+
 Once you've worked through these, the [How-To Guides](/guides/) are where to head next — they assume you already have an agent running.

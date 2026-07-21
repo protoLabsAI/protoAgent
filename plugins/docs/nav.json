@@ -26,6 +26,15 @@
           "title": "Write your first tool"
         }
       ]
+    },
+    {
+      "label": "A2A, fleet & delegates",
+      "items": [
+        {
+          "path": "tutorials/two-agents-over-a2a.md",
+          "title": "Two agents over A2A"
+        }
+      ]
     }
   ],
   "guides": [

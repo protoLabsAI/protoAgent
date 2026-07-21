@@ -65,6 +65,11 @@ export default defineConfig({
           collapsed: false,
           items: [{ text: "Write your first tool", link: "/tutorials/first-tool" }],
         },
+        {
+          text: "A2A, fleet & delegates",
+          collapsed: false,
+          items: [{ text: "Two agents over A2A", link: "/tutorials/two-agents-over-a2a" }],
+        },
       ],
 
       "/guides/": [

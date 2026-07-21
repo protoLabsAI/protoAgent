@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a genuine outbound POST over loopback, checked for the task id and the echoed
   `X-A2A-Notification-Token`. In 1.0 `TaskPushNotificationConfig` is **flat** (`{taskId, url,
   token}`) — the v0.3 `pushNotificationConfig` wrapper is a `-32602`, and a test pins that.
+- **[Tutorial: two agents talking over A2A](docs/tutorials/two-agents-over-a2a.md)** — boot a second
+  agent, verify it's a conforming peer with the prober, delegate real work to it over the protocol,
+  and read the whole cross-agent exchange as one Langfuse trace. Every command and output in it was
+  captured from a real run, including the actual trace tree (agent A's entire turn nests *inside*
+  agent B's `a2a:<delegate>` dispatch span) and a trap worth knowing: the delegate `auth` block must
+  be nested, because a flat `auth_token` is accepted with `ok: true` and then silently drops the
+  secret, surfacing later as a 401.
 - **[A2A conformance reference](docs/reference/a2a-conformance.md)** — every 1.0 method, task state,
   and transport marked implemented / partial / not-mounted, each anchored to a test or a prober
   check, with the known gaps stated rather than left to be discovered.
