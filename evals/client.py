@@ -6,6 +6,9 @@ real A2A callers use:
 - ``agent_card()`` — GET ``/.well-known/agent-card.json``
 - ``ask()``        — ``SendMessage`` + ``GetTask`` poll
 - ``stream()``     — ``SendStreamingMessage`` SSE
+- ``resubscribe()``— ``SubscribeToTask`` SSE (reconnect to an in-flight task)
+- ``set_push_config()`` / ``get_push_config()`` / ``list_push_configs()``
+                   — ``*TaskPushNotificationConfig`` (webhook registration)
 - ``cancel()``     — ``CancelTask``
 
 Returns structured ``TaskResult`` objects the runner asserts against.
@@ -253,6 +256,40 @@ class AgentClient:
             "method": "SendStreamingMessage",
             "params": {"message": message},
         }
+        return await self._consume_sse(payload, timeout_s=timeout_s)
+
+    # ── SubscribeToTask (SSE reconnect) ─────────────────────────────────────
+
+    async def resubscribe(self, task_id: str, *, timeout_s: int = 90) -> tuple[list[dict], TaskResult | None]:
+        """Re-attach to an **in-flight** task's event stream (``SubscribeToTask``).
+
+        This is the "my stream dropped, reconnect me" path of the A2A spec
+        (§3.16; ``tasks/resubscribe`` in 0.3). Params are exactly ``{"id": …}``
+        — ``SubscribeToTaskRequest`` carries only ``tenant`` and ``id``.
+
+        The server replays a ``task`` snapshot as the first frame and then the
+        same ``statusUpdate`` / ``artifactUpdate`` / ``message`` oneofs
+        ``stream()`` consumes, so the return shape is identical:
+        ``(event_log, final TaskResult)``.
+
+        Note the server-side precondition: the task must still be running. A
+        terminal task is an ``UnsupportedOperationError``, not a replay.
+        """
+        payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "SubscribeToTask",
+            "params": {"id": task_id},
+        }
+        return await self._consume_sse(payload, timeout_s=timeout_s)
+
+    async def _consume_sse(self, payload: dict, *, timeout_s: int) -> tuple[list[dict], TaskResult | None]:
+        """POST a streaming JSON-RPC request and drain its SSE frames.
+
+        Shared by ``stream()`` (``SendStreamingMessage``) and ``resubscribe()``
+        (``SubscribeToTask``) — both emit the identical A2A 1.0 oneof frames, so
+        there is exactly one parser for them.
+        """
         events: list[dict] = []
         final: TaskResult | None = None
         artifacts: list[dict] = []  # accumulated across artifactUpdate frames
@@ -361,6 +398,71 @@ class AgentClient:
                 },
             )
             return r.json()
+
+    # ── JSON-RPC helper ─────────────────────────────────────────────────────
+
+    async def _rpc(self, method: str, params: dict, *, timeout_s: int = 10) -> dict:
+        """One unary JSON-RPC call → ``result``. Raises on a JSON-RPC error so a
+        wrong method name or param shape fails loudly instead of returning {}."""
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            r = await client.post(
+                f"{self.base_url}/a2a",
+                headers=self.headers,
+                json={"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params},
+            )
+            r.raise_for_status()
+            resp = r.json()
+        if "error" in resp:
+            raise A2ARpcError(method, resp["error"])
+        return resp.get("result") or {}
+
+    # ── push notification config ────────────────────────────────────────────
+
+    async def set_push_config(self, task_id: str, url: str, token: str | None = None) -> dict:
+        """Register a webhook for a task (``CreateTaskPushNotificationConfig``).
+
+        The params are the **bare** ``TaskPushNotificationConfig``, not a wrapper
+        request — and in A2A 1.0 that message is *flat*
+        (``{tenant, id, task_id, url, token, authentication}``), so there is no
+        0.3-style ``pushNotificationConfig`` nesting. Since the dispatcher
+        ``ParseDict``s params strictly, an extra wrapper key is a ``-32602``.
+
+        The task must already exist server-side (the handler looks it up and
+        raises TaskNotFound otherwise), so call this on an in-flight task —
+        or pass the config inline on ``SendMessage`` via
+        ``configuration.taskPushNotificationConfig``.
+
+        When ``token`` is set the agent echoes it back as the
+        ``X-A2A-Notification-Token`` header on every delivery.
+        """
+        params: dict = {"taskId": task_id, "url": url}
+        if token:
+            params["token"] = token
+        return await self._rpc("CreateTaskPushNotificationConfig", params)
+
+    async def get_push_config(self, task_id: str, config_id: str | None = None) -> dict:
+        """``GetTaskPushNotificationConfig`` → the stored config.
+
+        ``config_id`` defaults to the task id — that is what the store assigns
+        when a config is created without an explicit ``id``."""
+        return await self._rpc(
+            "GetTaskPushNotificationConfig",
+            {"taskId": task_id, "id": config_id or task_id},
+        )
+
+    async def list_push_configs(self, task_id: str) -> list[dict]:
+        """``ListTaskPushNotificationConfigs`` → the task's configs."""
+        res = await self._rpc("ListTaskPushNotificationConfigs", {"taskId": task_id})
+        return res.get("configs") or []
+
+
+class A2ARpcError(RuntimeError):
+    """A JSON-RPC error frame returned by the agent."""
+
+    def __init__(self, method: str, error: dict):
+        self.method = method
+        self.error = error
+        super().__init__(f"{method}: {error}")
 
 
 def _norm_state(state: str) -> str:

@@ -26,6 +26,15 @@
           "title": "Write your first tool"
         }
       ]
+    },
+    {
+      "label": "A2A, fleet & delegates",
+      "items": [
+        {
+          "path": "tutorials/two-agents-over-a2a.md",
+          "title": "Two agents over A2A"
+        }
+      ]
     }
   ],
   "guides": [
@@ -276,6 +285,10 @@
         {
           "path": "reference/a2a-endpoints.md",
           "title": "A2A endpoints"
+        },
+        {
+          "path": "reference/a2a-conformance.md",
+          "title": "A2A conformance"
         },
         {
           "path": "reference/agent-card.md",

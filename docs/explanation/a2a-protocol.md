@@ -160,9 +160,35 @@ This is a protoLabs convention, not part of the A2A spec. It's how the fleet tie
 
 Auth ships **bearer-token** (`A2A_AUTH_TOKEN` / `auth.token`) — when set, the card advertises a `bearer` security scheme — alongside API-key. The `a2a-sdk` advertises schemes on the card but does not enforce them, so enforcement is the template's own default-deny middleware (`a2a_impl/auth.py`). See [A2A endpoints](/reference/a2a-endpoints) + [agent card](/reference/agent-card).
 
+## Transport: JSON-RPC only, deliberately
+
+A2A 1.0 defines three transports — JSON-RPC, REST (HTTP+JSON), and gRPC. **protoAgent mounts JSON-RPC only**, and the card advertises exactly that one interface. This is a decision, not an omission, so it's worth stating the reason.
+
+`a2a-sdk` ships ready-made REST routes, and wiring them up is a single extra kwarg (`add_a2a_routes_to_fastapi(..., rest_routes=create_rest_routes(handler))`). The blocker is the last line of `create_rest_routes`:
+
+```python
+routes.append(Mount(path='/{tenant}', routes=base_route_objects))
+```
+
+That wildcard mount is how the SDK offers multi-tenant REST (`/{tenant}/tasks/{id}`). But Starlette compiles a `Mount` path as `"/{tenant}" + "/{path:path}"`, so it **full-matches any request with two or more path segments** and then 404s inside its own router rather than falling through. Anything registered after it is shadowed:
+
+| Path | Result once the tenant mount is in the table |
+|---|---|
+| `/metrics` | 200 — single segment, survives |
+| `/plugins/notes/view` | **404** |
+| `/app/index.html` | **404** |
+| `/v1/chat/completions` | **404** |
+
+Route order decides who loses. Everything mounted *before* the A2A routes is safe, but protoAgent **hot-mounts plugin routes onto the live app at runtime** (plugin reload appends to `STATE.fastapi_app`), and those land after — so enabling REST as-shipped would break every plugin view the moment a plugin reloaded, with a 404 that looks like a routing bug rather than a transport feature.
+
+A fork that wants REST has two workable options: pass a non-empty `path_prefix` (e.g. `/a2a/rest`), or filter the `Mount` out of the returned route list and mount only the concrete `Route` objects. Both need a matching second entry in the card's `supportedInterfaces[]` — `protolabs_a2a.build_agent_card` has no parameter for that today, so it means appending to `card.supported_interfaces` in `server/a2a.py` before the card is served. **Don't advertise a transport you haven't actually mounted**; the same "the card is a contract" rule that removed `confidence-v1` applies here.
+
+Auth is not the obstacle — `A2AAuthMiddleware` is default-deny and none of the REST paths match `_PUBLIC_PREFIXES`, so they'd be gated correctly. Note they would *not* match `_requires_operator` (which keys on `/api/`), so a federation-tier token would reach them — the same tier that already reaches `/a2a` and `/v1`, but worth deciding explicitly rather than inheriting.
+
+gRPC is likewise unmounted, and needs the proto stubs plus a separate server port.
+
 ## What the template doesn't do
 
-- **REST transport**: only the JSON-RPC transport is mounted. `a2a-sdk` also ships REST routes (`a2a/server/routes/rest_routes.py`) and gRPC; neither is wired up.
 - **`AUTH_REQUIRED` / `REJECTED` states**: parsed and preserved, but the executor never produces them.
 - **Multi-tenancy**: every task sees the same auth context. If you need per-caller isolation, extend the auth middleware.
 - **OAuth2**: bearer + API-key ship; A2A security schemes also allow OAuth2 — wire it up in the card's `securitySchemes` (`server/a2a.py`, via `protolabs_a2a`) + middleware if needed.
