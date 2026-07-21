@@ -33,6 +33,7 @@ _SEEDS: dict[str, str] = {
     "config/SOUL.md": "config/SOUL.md",
     "config/plugin-catalog.json": "config/plugin-catalog.json",
     "config/mcp-catalog.json": "config/mcp-catalog.json",
+    "config/archetype-catalog.json": "config/archetype-catalog.json",
     "config/soul-presets": "config/soul-presets",
     "config/skills": "config/skills",
     "static": "static",
