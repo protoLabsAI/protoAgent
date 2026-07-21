@@ -1809,6 +1809,16 @@ textarea {
      ships that inset next to the component in ui@0.57 — it was always a consumer
      patching a design-system gap.) */
 
+  /* The pushed rail/plugin surfaces (Work, Knowledge, Memory, Schedule, Subagents, …)
+     scroll inside `.stage-body`; give that scroll region the bottom safe-area inset so its
+     last row clears the home indicator instead of sitting flush against it (#2086). This
+     overrides ONLY the bottom of the base 12px padding, so a device with no inset is
+     unchanged — and the whole rule is inside this mobile media query, so desktop is
+     untouched. The chat surface gets the matching inset in mobile-shell.css. */
+  .stage-body {
+    padding-bottom: max(env(safe-area-inset-bottom), 12px);
+  }
+
   /* Dense content grids collapse to a single column on phones. */
   .subagent-grid,
   .setup-grid.two,
