@@ -742,6 +742,10 @@
           "title": "ADR 0090 — Console-created goals drive in a dedicated chat tab (attach / detach)"
         },
         {
+          "path": "adr/0091-agent-snapshot-portability.md",
+          "title": "ADR 0091 — Agent snapshot portability: a declarative, secret-free bundle (not a raw state dump)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
