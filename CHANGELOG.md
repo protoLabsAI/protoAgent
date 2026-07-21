@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.106.0] - 2026-07-21
+
 ### Added
 - **A2A client-side spec coverage: `resubscribe()` and push-notification registration.** protoAgent
   was a complete A2A *server* but an incomplete *client* — nothing ever called `SubscribeToTask`

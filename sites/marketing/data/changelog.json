@@ -1,5 +1,36 @@
 [
   {
+    "version": "v0.106.0",
+    "date": "2026-07-21",
+    "changes": [
+      "A2A client-side spec coverage: resubscribe() and push-notification registration.",
+      "Tutorial: two agents talking over A2A",
+      "A2A conformance reference",
+      "The conformance prober now drives real calls, not just method probes.",
+      "scripts/a2a_conformance.py — point it at any A2A 1.0 agent and get a conformance report.",
+      "Jump from a telemetry row to its Langfuse trace.",
+      "An a2a:<delegate> span around each outbound A2A dispatch.",
+      "Goal detail drawer.",
+      "Goal lifecycle actions.",
+      "Panel goals drive in a dedicated chat tab.",
+      "Shell/filesystem policy and Work folders moved onto the Filesystem tool group.",
+      "The agent card declares only the extensions this runtime actually emits.",
+      "One guided goal-creation wizard.",
+      "A goal set from the console starts driving immediately",
+      "The watch tools are gated behind watches.enabled and now default OFF",
+      "npm 10 can no longer install a silently-wrong dependency tree.",
+      "The A2A docs taught a wire format that 1.0 removed.",
+      "The documented version-negotiation model was wrong, including in our own test docstring.",
+      "Langfuse's A2A root span is a2a-stream, not a2a.task",
+      "docs/reference/a2a-endpoints.md's fleet auth predated ADR 0089 (the proxy *swaps* the Authorization header for the fleet service token; it doesn't forward the caller's verbatim), docs cited modules deleted in #453, ADR 0014 claimed a hitl-mode-v1 capability that exists nowhere, and ADR 0089/0075 statuses were stale.",
+      "No-progress detection now works for fuzzy (llm) goals.",
+      "A goal set could 500 after being persisted",
+      "Retired dead monitor-mode UI",
+      "PR review read the code as it was BEFORE the pull request.",
+      "The installed PWA painted its status bar with the brand accent."
+    ]
+  },
+  {
     "version": "v0.105.2",
     "date": "2026-07-20",
     "changes": [
