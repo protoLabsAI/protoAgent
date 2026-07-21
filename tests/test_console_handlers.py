@@ -97,6 +97,32 @@ async def test_goals_set_backward_compatible_without_contract(monkeypatch, tmp_p
     assert ctrl.active_goal("s2").has_contract is False
 
 
+async def test_goals_set_kicks_an_initial_drive_turn(monkeypatch, tmp_path):
+    # Parity with the chat `/goal` SET (#1910): a successful operator set enqueues a first
+    # drive turn so a console-set goal starts immediately.
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    kicks: list[tuple] = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda sid, prompt, **k: (kicks.append((sid, prompt)), {"ok": True})[1])
+    res = await ch._operator_goals_set(
+        {"session_id": "s9", "condition": "go", "verifier": {"type": "command", "command": "true"}}
+    )
+    assert res["ok"] is True and res["kicked"] is True
+    assert kicks and kicks[0][0] == "s9"
+
+
+async def test_goals_set_failure_does_not_kick(monkeypatch, tmp_path):
+    # A rejected set (no condition) returns an error and never enqueues a turn.
+    _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    kicks: list = []
+    monkeypatch.setattr(sdk, "run_in_session", lambda *a, **k: (kicks.append(a), {"ok": True})[1])
+    res = await ch._operator_goals_set({"session_id": "s9", "verifier": {"type": "llm"}})
+    assert res["ok"] is False and not kicks
+
+
 def test_as_str_list_coercion():
     assert ch._as_str_list("x") == ["x"]
     assert ch._as_str_list(["a", "b"]) == ["a", "b"]

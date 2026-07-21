@@ -401,7 +401,16 @@ async def _operator_goals_set(body: dict) -> dict:
         boundaries=_as_str_list(body.get("boundaries")),
         stop_when=str(body.get("stop_when") or ""),
     )
-    return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
+    if not ok:
+        return {"ok": False, "error": msg}
+    # Parity with the chat `/goal` SET (#1910): kick an initial drive turn so a goal set from
+    # the console starts working immediately instead of sitting idle until the next turn in
+    # this session. The chat kickoff injection (iteration 0) re-states the goal. Best-effort —
+    # if the scheduler is unavailable the goal simply drives on the session's next turn.
+    from graph.sdk import run_in_session
+
+    kicked = bool(run_in_session(sid, "Begin working toward your active goal now.").get("ok"))
+    return {"ok": True, "message": msg, "kicked": kicked}
 
 
 def _as_str_list(value) -> list[str]:
