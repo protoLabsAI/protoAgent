@@ -26,6 +26,7 @@ Three jobs:
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import logging
 import os
@@ -1023,6 +1024,90 @@ def read_soul_version(version_id: str) -> str | None:
         return path.read_text(encoding="utf-8")
     except (OSError, ValueError):  # missing / unreadable / non-utf8 → absent, never raise
         return None
+
+
+# ---------------------------------------------------------------------------
+# Persona drift detection (#1986)
+# ---------------------------------------------------------------------------
+# A deterministic, read-only curation pass: diff the live SOUL.md against a
+# baseline (the EARLIEST recorded soul-history snapshot, or an explicit pinned
+# version) and quantify how far the persona has drifted. The signals are pure
+# functions of the two texts — net size delta, section churn (added/dropped
+# markdown headings), and a difflib retention ratio — so identical inputs always
+# yield an identical score (no clock, no I/O, no model). Recovery is out of scope
+# (the restore endpoint already exists); this only surfaces the signal so a
+# background maintenance pass can publish ``persona.drift_detected``.
+
+# Markdown ATX heading (``#`` … ``######``) — the persona's section boundaries.
+_SOUL_SECTION_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
+
+
+def _soul_sections(text: str) -> list[str]:
+    """The markdown heading titles in a persona doc, in document order."""
+    return [m.group(1).strip() for m in _SOUL_SECTION_RE.finditer(text or "")]
+
+
+def compute_soul_drift(baseline: str, current: str) -> dict:
+    """Deterministic drift signals between a ``baseline`` persona and the ``current`` one.
+
+    Returns ``{score, retention, size_delta, baseline_size, current_size,
+    sections_added, sections_dropped, rationale}``. ``retention`` is difflib's
+    ``SequenceMatcher`` ratio (1.0 = identical); ``score`` is ``1 - retention``
+    (0.0 = no drift, 1.0 = total). ``sections_*`` compare the markdown heading
+    sets. Pure function of its two inputs — same inputs, same output."""
+    baseline = baseline or ""
+    current = current or ""
+    retention = difflib.SequenceMatcher(None, baseline, current, autojunk=False).ratio()
+    score = round(1.0 - retention, 4)
+    base_sections, cur_sections = _soul_sections(baseline), _soul_sections(current)
+    base_set, cur_set = set(base_sections), set(cur_sections)
+    sections_added = [s for s in cur_sections if s not in base_set]
+    sections_dropped = [s for s in base_sections if s not in cur_set]
+    size_delta = len(current) - len(baseline)
+    rationale = (
+        f"{round(retention * 100)}% of the baseline persona retained; "
+        f"size {size_delta:+d} chars ({len(baseline)}→{len(current)}); "
+        f"sections +{len(sections_added)}/-{len(sections_dropped)}"
+    )
+    return {
+        "score": score,
+        "retention": round(retention, 4),
+        "size_delta": size_delta,
+        "baseline_size": len(baseline),
+        "current_size": len(current),
+        "sections_added": sections_added,
+        "sections_dropped": sections_dropped,
+        "rationale": rationale,
+    }
+
+
+def detect_soul_drift(baseline_version_id: str | None = None) -> dict | None:
+    """Compare the live persona against a baseline soul-history snapshot.
+
+    The baseline is ``baseline_version_id`` when given (a pinned version), else the
+    EARLIEST recorded snapshot (the origin persona). Returns the
+    :func:`compute_soul_drift` report augmented with ``baseline_id`` /
+    ``baseline_saved_at``, or ``None`` when there is nothing to compare — no
+    recorded history, an unreadable/invalid baseline, or no live persona — so a
+    caller can cleanly skip publishing. Read-only and best-effort."""
+    current = read_soul()
+    if not current:
+        return None
+    if baseline_version_id:
+        baseline_id = baseline_version_id
+        baseline = read_soul_version(baseline_version_id)
+    else:
+        versions = list_soul_versions()  # newest first — the earliest is last
+        if not versions:
+            return None
+        baseline_id = versions[-1]["id"]
+        baseline = read_soul_version(baseline_id)
+    if baseline is None:
+        return None
+    report = compute_soul_drift(baseline, current)
+    report["baseline_id"] = baseline_id
+    report["baseline_saved_at"] = _soul_version_saved_at(baseline_id)
+    return report
 
 
 # ---------------------------------------------------------------------------

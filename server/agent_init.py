@@ -843,6 +843,15 @@ async def _checkpoint_prune_loop() -> None:
                         log.info("[a2a-task-prune] removed %d orphaned push-config(s)", orphaned)
             except Exception:
                 log.exception("[a2a-task-prune] sweep failed")
+        # Persona drift curation (#1986) — a read-only diff of the live SOUL.md
+        # against its earliest recorded baseline snapshot; publishes
+        # persona.drift_detected when the deterministic drift score crosses the
+        # threshold. Self-gated to its own soul.drift.interval_hours cadence and
+        # best-effort, so it never blocks the prune sweep.
+        try:
+            await asyncio.to_thread(_maybe_run_soul_drift_pass, cfg)
+        except Exception:
+            log.exception("[soul-drift] pass failed")
         # Tick at the checkpoint interval if set, else hourly (so telemetry pruning
         # still runs when checkpoint pruning is off).
         await asyncio.sleep(max(1, interval_h or 1) * 3600)
@@ -904,6 +913,91 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
         except Exception:
             log.exception("[retire] in-memory delete_thread failed for %s", thread_id)
     return chunk_id
+
+
+# ── Persona drift curation (#1986) ───────────────────────────────────────────
+# A read-only curation pass (lineage of the dream/distill maintenance passes):
+# periodically diff the live SOUL.md against its earliest recorded soul-history
+# snapshot and, when the deterministic drift score crosses ``soul.drift.threshold``,
+# publish ``persona.drift_detected`` on the event bus. It never rewrites the
+# persona — recovery already exists via the restore endpoint (ADR 0081); this only
+# surfaces the signal. Hosted by the checkpoint-prune loop below (no new startup
+# wiring), but gated to its own ``soul.drift.interval_hours`` cadence so a fast
+# prune interval doesn't over-run it.
+_last_soul_drift_check: float = 0.0
+
+
+def _run_soul_drift_pass(cfg) -> dict | None:
+    """Run one persona-drift curation pass NOW (ignores the interval gate).
+
+    Returns the drift report when a comparison ran (whether or not it crossed the
+    threshold), else ``None`` (feature off, or nothing to compare against yet).
+    Publishes ``persona.drift_detected`` — carrying the score, the individual
+    signals, and a human-readable rationale — only when the score is at or above
+    ``soul.drift.threshold``. Best-effort: detection/publish failures are logged,
+    never raised into the hosting loop."""
+    if cfg is None or not getattr(cfg, "soul_drift_enabled", False):
+        return None
+    try:
+        from graph.config_io import detect_soul_drift
+
+        report = detect_soul_drift()
+    except Exception:
+        log.exception("[soul-drift] detection failed")
+        return None
+    if report is None:
+        return None  # no baseline snapshot / no live persona — nothing to compare
+
+    threshold = float(getattr(cfg, "soul_drift_threshold", 1.0) or 0.0)
+    if report["score"] >= threshold:
+        try:
+            _event_bus.publish(
+                "persona.drift_detected",
+                {
+                    "score": report["score"],
+                    "threshold": threshold,
+                    "baseline_id": report.get("baseline_id"),
+                    "baseline_saved_at": report.get("baseline_saved_at"),
+                    "signals": {
+                        "retention": report["retention"],
+                        "size_delta": report["size_delta"],
+                        "baseline_size": report["baseline_size"],
+                        "current_size": report["current_size"],
+                        "sections_added": report["sections_added"],
+                        "sections_dropped": report["sections_dropped"],
+                    },
+                    "rationale": report["rationale"],
+                },
+            )
+            log.info(
+                "[soul-drift] persona.drift_detected score=%.3f (threshold %.3f) — %s",
+                report["score"],
+                threshold,
+                report["rationale"],
+            )
+        except Exception:
+            log.exception("[soul-drift] event publish failed")
+    return report
+
+
+def _maybe_run_soul_drift_pass(cfg) -> dict | None:
+    """Gate :func:`_run_soul_drift_pass` to its own ``soul.drift.interval_hours``
+    cadence, then run it. Called every prune tick; a no-op until an interval has
+    elapsed since the last run (tracked on a monotonic module global so a config
+    reload re-paces without restarting the loop). ``interval_hours`` ``0`` disables."""
+    global _last_soul_drift_check
+    if cfg is None or not getattr(cfg, "soul_drift_enabled", False):
+        return None
+    interval_h = getattr(cfg, "soul_drift_interval_hours", 0) or 0
+    if interval_h <= 0:
+        return None
+    import time
+
+    now = time.monotonic()
+    if _last_soul_drift_check and (now - _last_soul_drift_check) < interval_h * 3600:
+        return None
+    _last_soul_drift_check = now
+    return _run_soul_drift_pass(cfg)
 
 
 # ── Opt-in plugin auto-update (#1720) ────────────────────────────────────────
