@@ -66,15 +66,26 @@ Programmatic status/clear is also available: `GET /api/goals/{session_id}` and `
 
 ## Manage from the console
 
-The React console's **Goals** surface (right sidebar) lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), the verifier type, the **iteration count**, and the latest verifier reason. You can **clear** any of them. When a goal finishes, the console shows a **toast** (`goal.achieved` → success, `goal.failed` → error), driven by the bus events below.
+The React console's **Goals** surface (right sidebar, in the Work hub) lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), the verifier type, the **iteration count**, and the latest verifier reason. When a goal finishes, the console shows a **toast** (`goal.achieved` → success, `goal.failed` → error), driven by the bus events below.
 
-Goals are still *set* in chat with `/goal` (setting can run shell/test verifiers, so it stays an explicit operator action); the panel is a read-and-clear view. Backed by:
+**Create** — the panel's **New goal** action (and the Work overview's *+ Goal* quick-add) open a guided wizard: the condition, a type-aware verifier picker, and an optional completion contract (ADR 0073). A goal created here **opens a dedicated, focused chat tab and drives in it**, so the whole loop streams live; a goal set in chat with `/goal` stays in that chat. Command/test/ci/data verifiers are allowed here — the trust gate that refuses them from a raw `/goal` chat message doesn't apply to the authenticated, operator-tier `/api/goals` path (ADR 0066).
+
+**Inspect** — click a row to open the **detail drawer**: the agent's live **plan** (`.plan.md`, rendered as markdown), the completion-contract read-back, the last verifier reason/evidence, and a per-iteration **timeline** (ADR 0079).
+
+**Steer** — from the drawer, give an active goal more room (**Add iterations**) or **Restart** a terminal one (re-arm + resume). Closing a goal's chat tab prompts you: keep it **running in the background** (detach), or **stop** it — which clears the goal and closes the tasks it filed (its session-scoped backlog, ADR 0079).
+
+Backed by:
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/goals` | List all goals across sessions (`{goals, enabled}`) |
-| `POST` | `/api/goals` | Set a goal **programmatically** — `plugin` verifier only (safe set; command/test/ci/data/llm stay operator-only via `/goal`) |
-| `DELETE` | `/api/goals/{session_id}` | Clear one (`{cleared}`) |
+| `GET` | `/api/goals/{session_id}` | One goal's detail + its `plan` artifact |
+| `POST` | `/api/goals` | Set a goal (operator-tier — any verifier). `kick:false` drives it from a chat tab instead of a headless turn |
+| `POST` | `/api/goals/{session_id}/rearm` | Extend an active goal's budget, or restart a terminal one |
+| `POST` | `/api/goals/{session_id}/resume` | Keep an active goal running headlessly (detach on tab close) |
+| `DELETE` | `/api/goals/{session_id}` | Clear (stop) one (`{cleared, tasks_closed}`); `?close_tasks=true` also closes its task backlog |
+
+> The `plugin`-verifier-only **safe set** (`sdk.set_goal_safe`, ADR 0028 D3) is a separate, programmatic path for agents/plugins — distinct from the operator `/api/goals` route above.
 
 ## Reacting to a goal
 

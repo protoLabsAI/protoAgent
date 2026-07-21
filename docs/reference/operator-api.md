@@ -33,9 +33,12 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/goals` · `/api/goals/{session_id}` | List goals / get a session's goal |
-| POST | `/api/goals` | Set a goal |
-| DELETE | `/api/goals/{session_id}` | Clear a goal |
+| GET | `/api/goals` | List goals across sessions |
+| GET | `/api/goals/{session_id}` | One goal's detail — status + its durable plan artifact (`plan`, the `.plan.md` the agent maintains via `update_goal_plan`, ADR 0079) |
+| POST | `/api/goals` | Set a goal. Optional completion-contract fields (ADR 0073) + `kick` (default `true`; the console panel sends `false` and drives the goal from a dedicated chat tab instead of a headless turn) |
+| POST | `/api/goals/{session_id}/rearm` | Re-arm: extend an active goal's iteration budget (`add_iterations`), or reactivate a terminal one and kick a fresh drive turn |
+| POST | `/api/goals/{session_id}/resume` | Kick a headless continuation for an active goal (used when a chat tab driving it is closed but the goal is kept running) |
+| DELETE | `/api/goals/{session_id}` | Clear (stop) a goal. `?close_tasks=true` also closes the goal's session-scoped task backlog (ADR 0079) |
 
 ## Subagents & tools
 
