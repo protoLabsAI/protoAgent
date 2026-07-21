@@ -16,6 +16,7 @@ decides what should happen next.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -376,11 +377,20 @@ class GoalController:
         if state.abandon_reason:
             return await self._finish(state, "unachievable", state.abandon_reason)
 
-        # 3. Not met — track progress, decide continue vs stop. The running plan is
-        # maintained by the agent's `update_goal_plan` tool (already persisted to the goal
-        # state / plan artifact), so there is nothing to extract from the text here.
-        signature_unchanged = result.reason == state.last_reason and result.evidence == state.last_evidence
+        # 3. Not met — track progress, decide continue vs stop. No-progress detection needs a
+        # per-iteration fingerprint that is stable ⟺ the agent made no real progress:
+        #   • DETERMINISTIC verifiers (command/test/ci/data/plugin): the verifier's own
+        #     (reason, evidence) IS that fingerprint — an identical failure repeated is a stall.
+        #   • The fuzzy `llm` verifier: `reason` is model free-text that varies every call and
+        #     `evidence` is always "" (see verifiers._verify_llm), so that fingerprint would
+        #     NEVER repeat — no_progress_limit could never fire and a fuzzy goal would only ever
+        #     stop at the iteration cap. Fingerprint the agent's PLAN artifact instead: an llm
+        #     goal whose recorded plan is unchanged across turns is spinning; while the agent
+        #     keeps recording new progress (updating the plan) it runs to the cap as before.
+        signature = self._progress_signature(state, result)
+        signature_unchanged = signature == state.last_progress_signature
         state.no_progress_streak = (state.no_progress_streak + 1) if signature_unchanged else 0
+        state.last_progress_signature = signature
         state.last_reason = result.reason
         state.last_evidence = result.evidence
         state.iteration += 1
@@ -424,6 +434,18 @@ class GoalController:
             message=self._continuation(state, result),
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
+
+    def _progress_signature(self, state: GoalState, result) -> str:
+        """A per-iteration fingerprint that stays constant ⟺ the agent made no progress
+        (drives ``no_progress_streak``). Verifier-type-aware: the fuzzy ``llm`` verifier's
+        free-text reason can't serve as a stall signal (it varies every call, evidence is
+        always ""), so a fuzzy goal fingerprints its PLAN artifact; every other
+        (deterministic) verifier fingerprints its own ``(reason, evidence)``. Never returns
+        "" for a real computation, so the default-"" baseline can't false-match on turn 1."""
+        if state.verifier.get("type", "llm") == "llm":
+            plan = self._store.read_plan(state.session_id)
+            return "plan:" + hashlib.sha256(plan.encode("utf-8")).hexdigest()
+        return f"rv:{result.reason}\x00{result.evidence}"
 
     async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
         from time import time
