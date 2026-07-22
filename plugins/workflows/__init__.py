@@ -189,6 +189,11 @@ async def _resume(
     *downstream* gate is hit). Raises ``ValueError`` on an unknown/non-paused run."""
     if action not in ("approve", "edit", "reject"):
         raise ValueError(f"unknown resume action {action!r} (approve | edit | reject)")
+    # Validate EVERYTHING up front — before the registry is consulted and long before
+    # the run flips to `running` on disk. Failing later would orphan the run: gone
+    # from the pending list, stuck `running`, unresumable (QA panel blocker).
+    if action == "edit" and not str((edits or {}).get("prompt", "")).strip():
+        raise ValueError("edit action requires a non-empty edits.prompt")
     if run_store is None:
         run_store = WorkflowRunStore(_writable_dir() / ".runs")
 
@@ -207,12 +212,6 @@ async def _resume(
         raise ValueError(f"no workflow named {name!r}")
     inputs = dict(state.get("inputs") or {})
     completed = dict(state.get("step_outputs") or {})
-
-    # Validate EVERYTHING before touching disk state — flipping to `running` first and
-    # then failing validation would orphan the run: gone from the pending list, stuck
-    # `running` forever, unrepairable (QA panel blocker on the slice-3 PR).
-    if action == "edit" and not str((edits or {}).get("prompt", "")).strip():
-        raise ValueError("edit action requires a non-empty edits.prompt")
 
     # Re-attach the store to this run and flip it back to `running` before dispatching.
     run_store.resume(run_id)
