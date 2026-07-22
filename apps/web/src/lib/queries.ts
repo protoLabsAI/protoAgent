@@ -24,6 +24,7 @@ export const queryKeys = {
   schedules: ["schedules"] as const,
   runtime: ["runtime"] as const,
   nodeRuntime: ["runtime", "node"] as const,
+  pythonRuntime: ["runtime", "python"] as const,
   delegates: ["delegates"] as const,
   delegateTypes: ["delegates", "types"] as const,
   acpAgents: ["acp", "agents"] as const,
@@ -209,6 +210,16 @@ export const nodeRuntimeQuery = () =>
   queryOptions({
     queryKey: queryKeys.nodeRuntime,
     queryFn: () => api.nodeRuntime(),
+    refetchInterval: (query) => (query.state.data?.install.state === "running" ? 1_000 : false),
+  });
+
+// Managed Python runtime (ADR 0094) — status + install progress. Same polling contract
+// as the Node card: once a second only while an install is in flight (the download +
+// pip-baseline phases take tens of seconds); idle otherwise.
+export const pythonRuntimeQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.pythonRuntime,
+    queryFn: () => api.pythonRuntime(),
     refetchInterval: (query) => (query.state.data?.install.state === "running" ? 1_000 : false),
   });
 

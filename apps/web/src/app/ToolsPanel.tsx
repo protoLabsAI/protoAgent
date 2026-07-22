@@ -16,6 +16,7 @@ import type { FsProject } from "../lib/types";
 import { QuickSetting } from "../settings/QuickSetting";
 import { useUI } from "../state/uiStore";
 import { StagePanel } from "./ErrorBoundary";
+import { PythonRuntimeCard } from "./PythonRuntimeCard";
 
 // Runtime → Tools: the live tool inventory the lead agent + subagents can call.
 // Core tools group by subsystem; plugin tools group by the PLUGIN that brought them
@@ -151,6 +152,11 @@ function ToolsBody() {
         kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
+        {/* Managed Python runtime (ADR 0094) — only renders on a frozen desktop build with
+            a gap to close (unprovisioned / stale baseline / install in flight), so source
+            runs never see it. Beside the execute_code toggle because that's the capability
+            it unblocks. */}
+        <PythonRuntimeCard />
         {/* The shell/fs execution policy + Work folders used to float here, above the search,
             governing tools most of the list isn't. They now live INSIDE the Filesystem group
             (below), contextual to the tools they gate — the search is the first control. */}

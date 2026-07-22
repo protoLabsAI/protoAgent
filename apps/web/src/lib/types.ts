@@ -1038,3 +1038,21 @@ export type NodeInstallState = {
 };
 
 export type NodeRuntimePayload = { node: NodeRuntimeStatus; install: NodeInstallState };
+
+// Managed Python runtime (ADR 0094) — the execute_code child interpreter on the packaged
+// desktop app. `needed` is whether THIS backend would use it (frozen builds only — source
+// runs spawn their own interpreter, so the card stays hidden there); the baseline flags
+// track the document libraries pip-installed into the runtime's own site-packages.
+// The install-progress shape is shared with the Node runtime (same endpoint contract).
+export type PythonRuntimeStatus = {
+  needed: boolean;
+  managed: boolean;
+  managed_version: string | null;
+  exe: string | null;
+  baseline_installed: boolean;
+  baseline_current: boolean;
+  supported: boolean;
+  target_version: string;
+};
+
+export type PythonRuntimePayload = { python: PythonRuntimeStatus; install: NodeInstallState };
