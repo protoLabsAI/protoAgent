@@ -156,6 +156,10 @@ async def execute_workflow(
     max_concurrency: int = 4,
     gate_check: Callable[[dict], str | None] | None = None,
     pause_fn: Callable[[str, dict], str | None] | None = None,
+    seed_outputs: dict[str, str] | None = None,
+    prompt_overrides: dict[str, str] | None = None,
+    prefailed: dict[str, str] | None = None,
+    skip_gate: set[str] | None = None,
 ) -> dict:
     """Run the recipe's step DAG. ``run_step(subagent, prompt, step_id) -> output``.
 
@@ -171,17 +175,40 @@ async def execute_workflow(
     envelope — the gated step's subagent is never spawned. Sequential gated steps
     pause one at a time (a downstream gated step isn't ready until its deps run).
     When ``gate_check`` is ``None`` the loop below is the exact pre-gate path.
+
+    **Resume** (F3): a paused run is continued by re-invoking with the stored state.
+    ``seed_outputs`` pre-loads already-completed steps (they are treated as done and
+    never re-dispatched); ``skip_gate`` names step ids whose ``gate: human`` is
+    bypassed (the operator already approved them); ``prompt_overrides`` substitutes a
+    step's prompt verbatim (an *edited* resume); ``prefailed`` pre-records a step as
+    failed with the given error text (a *rejected* resume) so its dependents inherit
+    the error — exactly like an inline failure. All four default to empty, so a
+    from-scratch run is byte-for-byte the pre-resume path.
     """
     steps = recipe["steps"]
     by_id = {s["id"]: s for s in steps}
     pending = {s["id"]: set(s.get("depends_on", []) or []) for s in steps}
-    done: dict[str, str] = {}
+    done: dict[str, str] = dict(seed_outputs or {})
     failed: list[str] = []
+    prompt_overrides = prompt_overrides or {}
+    skip_gate = set(skip_gate or ())
     sem = asyncio.Semaphore(max(1, max_concurrency))
+
+    # Resume-reject: pre-record the rejected step's error inline so its dependents see
+    # it (like a normal inline failure). Seeded + rejected steps are already resolved —
+    # drop them from the pending set so the DAG picks up from where it paused.
+    for sid, err in (prefailed or {}).items():
+        if sid in by_id:
+            done[sid] = err
+            if sid not in failed:
+                failed.append(sid)
+    for sid in list(pending):
+        if sid in done:
+            pending.pop(sid)
 
     async def run_one(sid: str) -> tuple[str, str, bool]:
         step = by_id[sid]
-        prompt = render_template(step["prompt"], inputs, done)
+        prompt = prompt_overrides[sid] if sid in prompt_overrides else render_template(step["prompt"], inputs, done)
         async with sem:
             try:
                 out = await run_step(step["subagent"], prompt, sid)
@@ -197,7 +224,10 @@ async def execute_workflow(
                 failed.append(sid)
             break
         if gate_check is not None:
-            gated = next((sid for sid in ready if gate_check(by_id[sid]) == "pause"), None)
+            gated = next(
+                (sid for sid in ready if sid not in skip_gate and gate_check(by_id[sid]) == "pause"),
+                None,
+            )
             if gated is not None:  # park BEFORE spawning any subagent → no wasted work
                 run_id = pause_fn(gated, done) if pause_fn is not None else None
                 return {"paused": True, "paused_at": gated, "run_id": run_id, "steps": dict(done)}
