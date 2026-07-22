@@ -37,7 +37,13 @@ from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict
 
 import protolabs_a2a as pa
-from a2a_impl.executor import _CONTEXT_MIME, ProtoAgentExecutor, TurnOutcome, set_terminal_hook
+from a2a_impl.executor import (
+    _CONTEXT_MIME,
+    ProtoAgentExecutor,
+    TurnOutcome,
+    set_progress_hook,
+    set_terminal_hook,
+)
 from a2a_impl.registry import OwnedProducerActiveTaskRegistry, harden_active_task_registry
 
 A2A_HEADERS = {"A2A-Version": "1.0"}
@@ -261,6 +267,13 @@ def _clear_terminal_hook():
     set_terminal_hook(None)
 
 
+@pytest.fixture(autouse=True)
+def _clear_progress_hook():
+    set_progress_hook(None)
+    yield
+    set_progress_hook(None)
+
+
 # Handlers built by _build_app during the current test — drained at teardown so
 # their retire-then-remove cleanup tasks (#1713) finish inside the test's event
 # loop instead of being destroyed pending when pytest closes it.
@@ -389,6 +402,71 @@ async def test_input_required_parks_task_with_question():
     assert final["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
     text = " ".join(p.get("text", "") for p in final["status"]["message"]["parts"])
     assert "Approve the merge?" in text
+
+
+@pytest.mark.asyncio
+async def test_input_required_fires_progress_frame_with_prompt():
+    """A HITL pause reaches the host progress hook (#2132): the turn parks with no
+    terminal frame, so this is the only signal an off-SSE consumer (the fleet room's
+    "needs approval" pill) ever gets."""
+    frames: list = []
+    set_progress_hook(lambda ctx, task, frame: frames.append(frame))
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("input_required", {"question": "Approve the merge?"})
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+    assert final["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    assert frames[0]["phase"] == "turn_started" and frames[0]["resumed"] is False
+    parked = [f for f in frames if f.get("phase") == "input_required"]
+    assert parked and parked[0]["prompt"] == "Approve the merge?"
+
+
+@pytest.mark.asyncio
+async def test_resumed_turn_started_frame_carries_resumed_flag():
+    """Answering a parked task re-enters execute() with resume=True — the second
+    turn_started frame must say so, so a host can flip "needs approval" back to
+    "running" the moment the answer lands."""
+    frames: list = []
+    set_progress_hook(lambda ctx, task, frame: frames.append(frame))
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        if resume:
+            yield ("done", "resumed fine")
+        else:
+            yield ("input_required", {"question": "go?"})
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        parked = await _poll_terminal(c, task["id"])
+        assert parked["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+        r2 = await c.post(
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "r2",
+                "method": "SendMessage",
+                "params": {
+                    "message": {
+                        "messageId": "m2",
+                        "role": "ROLE_USER",
+                        "taskId": task["id"],
+                        "contextId": task["contextId"],
+                        "parts": [{"text": "yes"}],
+                    }
+                },
+            },
+        )
+        assert r2.status_code == 200
+        final = await _poll_terminal(c, task["id"])
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    started = [f for f in frames if f.get("phase") == "turn_started"]
+    assert [f["resumed"] for f in started] == [False, True]
 
 
 @pytest.mark.asyncio

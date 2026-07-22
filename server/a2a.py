@@ -610,6 +610,11 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
             },
         )
         return
+    if frame.get("phase") == "turn_started" and frame.get("resumed"):
+        # The parked turn got its answer and is running again — lets a console flip
+        # "needs approval" back to "running" without waiting for the terminal frame.
+        # Falls through: a resumed BACKGROUND turn still records its task id below.
+        _event_bus.publish("turn.resumed", {"task_id": task_id, "context_id": context_id})
     if not context_id.startswith("background:"):
         return
     mgr = getattr(STATE, "background_mgr", None)

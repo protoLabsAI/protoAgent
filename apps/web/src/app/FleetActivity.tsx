@@ -153,6 +153,9 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
       const p = str(data.prompt);
       return { text: p ? `⚠ needs your approval — ${shorten(p, 70)}` : "⚠ needs your approval", kind: "attn" };
     }
+    // The parked turn got its answer and is running again — closes the loop on the row above.
+    case "turn.resumed":
+      return { text: "resumed — input received", kind: "turn" };
     // turn.finished is intentionally unmapped — turn.usage (which fires for both autonomous
     // and direct turns) is the single "finished a turn" row, so autonomous turns don't
     // produce two.
@@ -256,6 +259,13 @@ function useFleetStreams() {
         // Parked awaiting a human answer — it's no longer "running", it's blocked on you.
         store.markDone(slug);
         store.markAwaiting(slug);
+      } else if (frame.topic === "turn.resumed") {
+        // The parked turn got its answer — hand "needs approval" back to "running".
+        // Balanced in any arrival order: +1 here is always closed by the terminal
+        // turn.usage's −1, and a missed pause/resume still settles at zero (markDone
+        // clamps). See the core publisher in server/a2a.py.
+        store.clearAwaiting(slug);
+        store.markRunning(slug);
       }
       const m = mapTopic(frame.topic, frame.data ?? {});
       if (!m) return;

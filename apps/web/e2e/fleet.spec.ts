@@ -219,60 +219,67 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);
 });
 
-// ── Command-palette fleet toggle (#1769) ───────────────────────────────────────────
-// Toggle a local, non-host member on/off straight from ⌘K — no Settings dive. The
-// picker lists togglable members with their live process state; picking one flips it and
-// toasts. Reuses this file's per-spec fleet scope (beforeEach resets to baseline).
+// ── Folded-in fleet controls (#1733 quick-chat + #1769 toggle → the Fleet Room) ─────
+// The per-member root commands and the `Toggle Fleet Agent ▸` submorph are gone: member
+// names ride the Fleet Room command's keywords, and the roster row carries DM / open /
+// start / stop. These tests pin the fold — the old flows keep working, one hop away.
 
-// The DS palette morphs views with a popLayout cross-fade, so the exiting root list lingers
-// in the DOM for a beat next to the entering sub-view. A sub-view row's accessible name is
-// "<name> <state>" (e.g. "ava on") — and the sub-view states ("on"/"off") never collide with
-// the root quick-chat's hints ("switch"/"stopped"/"unreachable"), so keying every assertion
-// on the exact "<name> <state>" name sidesteps the transient overlap entirely.
-async function openToggleFleet(page) {
+test("⌘K root: member names surface the Fleet Room; the old per-member commands are gone", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
-  // A reopen momentarily re-morphs the last sub-view back to the root view (the DS palette
-  // resets its stack on open), so the sub-view's search box lingers next to the root one for a
-  // beat — wait for it to leave before filling, or `.pl-cmdk-commands__input` is ambiguous.
-  await expect(page.getByPlaceholder("Toggle a fleet agent on/off…")).toHaveCount(0);
-  // Filter the root list to the toggle command, then enter its submorph.
-  await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Toggle Fleet Agent");
-  await page.getByRole("option", { name: "Toggle Fleet Agent" }).click();
-  await expect(page.locator(".pl-cmdk__title")).toHaveText("Toggle Fleet Agent"); // in the sub-view
-}
-
-const row = (page, name, state) => page.getByRole("option", { name: `${name} ${state}`, exact: true });
-
-test("⌘K → Toggle Fleet Agent lists non-host members with state and flips one", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await openToggleFleet(page);
-
-  // Local members are listed with their live process state; the host (main) never is.
-  await expect(row(page, "ava", "on")).toBeVisible(); // running in baseline
-  await expect(row(page, "roxy", "off")).toBeVisible(); // stopped, still listed
-  await expect(page.getByRole("option", { name: /^main\b/ })).toHaveCount(0); // host excluded
-
-  // Toggle ava off — the palette closes, a toast confirms, and the roster flips.
-  await row(page, "ava", "on").click();
-  await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
-  await expect(page.locator(".pl-toast", { hasText: "Stopping ava" })).toBeVisible();
-
-  // Reopen the picker: ava now reads "off" (its running state flipped on the invalidated poll).
-  await openToggleFleet(page);
-  await expect(row(page, "ava", "off")).toBeVisible();
+  const input = page.locator(".pl-cmdk__panel .pl-cmdk-commands__input");
+  // The toggle submorph is folded away.
+  await input.fill("Toggle Fleet Agent");
+  await expect(page.getByRole("option", { name: "Toggle Fleet Agent" })).toHaveCount(0);
+  // Typing a member's name routes to the room (roster keywords), not a per-member row.
+  await input.fill("ava");
+  await expect(page.getByRole("option", { name: "Fleet Room" })).toBeVisible();
+  await expect(page.getByRole("option", { name: /^ava\b/ })).toHaveCount(0);
+  await page.getByRole("option", { name: "Fleet Room" }).click();
+  await expect(page.locator(".flr")).toBeVisible();
 });
 
-test("⌘K → Toggle Fleet Agent starts a stopped member", async ({ page }) => {
+test("Fleet Room roster: stop a running member, start a stopped one (folded #1769)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await openToggleFleet(page);
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
 
-  await expect(row(page, "roxy", "off")).toBeVisible(); // stopped in baseline
-  await row(page, "roxy", "off").click();
+  // Stop ava (running in baseline) straight from her roster row; the dot flips on the
+  // invalidated poll. The host (main) never gets a toggle — it serves this console.
+  await expect(room.locator(".flr__member", { hasText: "main" }).getByRole("button", { name: /^(Stop|Start) main$/ })).toHaveCount(0);
+  await room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: "Stop ava" }).click();
+  await expect(page.locator(".pl-toast", { hasText: "Stopping ava" })).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "ava" }).locator(".flr__dot--stopped")).toBeVisible();
+
+  // Start roxy (stopped in baseline).
+  await room.locator(".flr__member", { hasText: "roxy" }).getByRole("button", { name: "Start roxy" }).click();
   await expect(page.locator(".pl-toast", { hasText: "Starting roxy" })).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "roxy" }).locator(".flr__dot--online")).toBeVisible();
+});
 
-  await openToggleFleet(page);
-  await expect(row(page, "roxy", "on")).toBeVisible();
+test("Fleet Room: a parked member turn shows 'needs approval', then hands back (#2132)", async ({ page }, testInfo) => {
+  // setExtraHTTPHeaders REPLACES the set — re-carry the fleet scope alongside the HITL gate.
+  await page.setExtraHTTPHeaders({
+    "x-e2e-fleet": `fleet-spec-${testInfo.parallelIndex}`,
+    "x-e2e-hitl": "ava",
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  const ava = room.locator(".flr__member", { hasText: "ava" });
+
+  // ava's stream emits turn.input_required → attention pill + the actionable feed row.
+  await expect(ava.locator(".flr__pill--attn")).toBeVisible();
+  await expect(room.locator(".flr-feed__event", { hasText: "needs your approval" }).first()).toBeVisible();
+
+  // The answer lands (turn.resumed) — needs-approval hands back to a live "running" pill…
+  await expect(ava.locator(".flr__pill--run")).toBeVisible();
+  await expect(room.locator(".flr-feed__event", { hasText: "resumed — input received" }).first()).toBeVisible();
+
+  // …and the terminal turn.usage clears it.
+  await expect(ava.locator(".flr__pill--run")).toHaveCount(0, { timeout: 6000 });
+  await expect(ava.locator(".flr__pill--attn")).toHaveCount(0);
 });
 
 async function openFleetRoom(page) {
@@ -298,6 +305,8 @@ test("⌘K → Fleet Room: presence, DM a member (the wired chat), broadcast", a
   // (placeholder names them). Back returns to the roster.
   await room.locator(".flr__member", { hasText: "ava" }).locator(".flr__who").click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+  // The DM header names the member (DmTitle store) — not the old generic "Direct message".
+  await expect(page.locator(".pl-cmdk__title")).toHaveText("@ava");
   await page.locator(".pl-cmdk__back").click();
   await expect(room.locator(".flr__composer")).toBeVisible();
 
