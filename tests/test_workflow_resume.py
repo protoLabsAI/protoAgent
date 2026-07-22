@@ -72,7 +72,7 @@ def _pause_gated(monkeypatch, tmp_path, prompts=None):
     _patch_sdk(monkeypatch, _echo_runner(prompts))
     store = WorkflowRunStore(tmp_path)
     result = asyncio.run(wf._execute(_GatedReg(), "gated", {"topic": "ai"}, run_store=store))
-    assert result["paused"] is True and result["paused_at"] == "analyze"
+    assert result["paused"] is True and result["paused_step"] == "analyze"
     return store, result["run_id"]
 
 
@@ -169,9 +169,7 @@ def test_edit_runs_edited_prompt_and_downstream_sees_it(tmp_path, monkeypatch):
     store, run_id = _pause_gated(monkeypatch, tmp_path, prompts)
     prompts.clear()
 
-    result = asyncio.run(
-        wf._resume(_GatedReg(), run_id, "edit", edits={"prompt": "DO THIS INSTEAD"}, run_store=store)
-    )
+    result = asyncio.run(wf._resume(_GatedReg(), run_id, "edit", edits={"prompt": "DO THIS INSTEAD"}, run_store=store))
 
     assert prompts["analyze"] == "DO THIS INSTEAD"
     assert "DO THIS INSTEAD" in prompts["write"]  # downstream step sees the edited output
@@ -235,7 +233,7 @@ def test_list_paused_runs_renders_prompt_with_inputs_and_prior_outputs(tmp_path,
     view = runs[0]
     assert view["run_id"] == run_id
     assert view["recipe_name"] == "gated"
-    assert view["paused_at"] == "analyze"
+    assert view["paused_step"] == "analyze"
     # The RENDERED prompt — inputs + prior outputs substituted, never raw template syntax.
     assert view["prompt"] == "analyze:\nresearch ai"
     assert "{{" not in view["prompt"]
@@ -253,3 +251,27 @@ def test_resolved_run_drops_out_of_the_paused_listing(tmp_path, monkeypatch):
     asyncio.run(wf._resume(_GatedReg(), run_id, "approve", run_store=store))
     # Once completed the run is no longer paused → the queue is empty again.
     assert wf._list_paused_runs(_GatedReg(), run_store=store) == []
+
+
+def test_resume_edit_without_prompt_leaves_run_paused(tmp_path):
+    """Blocker pin (slice-3 QA panel): an edit action missing edits.prompt must fail
+    BEFORE the run flips to running — the run stays paused and resumable, never
+    orphaned in a running state it can't leave."""
+    import asyncio
+
+    import pytest
+
+    from plugins.workflows import _resume
+    from plugins.workflows.run_state import WorkflowRunStore
+
+    store = WorkflowRunStore(tmp_path)
+    run_id = store.start("r", {"x": "1"})
+    store.pause("analyze")
+
+    class _Reg:
+        def get(self, name):  # never reached — validation fires first
+            raise AssertionError("registry consulted before validation")
+
+    with pytest.raises(ValueError, match="edits.prompt"):
+        asyncio.run(_resume(_Reg(), run_id, "edit", edits={}, run_store=store))
+    assert store.load(run_id)["status"] == "paused"  # still resumable

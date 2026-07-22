@@ -191,7 +191,7 @@ def test_execute_pauses_before_gated_step_is_spawned():
     )
     # gather (ungated) ran; analyze (gated) paused before spawning.
     assert spawned == ["gather"]
-    assert res == {"paused": True, "paused_at": "analyze", "run_id": "run-abc", "steps": {"gather": "<gather-out>"}}
+    assert res == {"paused": True, "paused_step": "analyze", "run_id": "run-abc", "steps": {"gather": "<gather-out>"}}
 
 
 def test_execute_pauses_at_the_very_first_step_when_gated():
@@ -216,7 +216,7 @@ def test_execute_pauses_at_the_very_first_step_when_gated():
         )
     )
     assert spawned == []  # nothing spawned at all
-    assert res == {"paused": True, "paused_at": "first", "run_id": "rid", "steps": {}}
+    assert res == {"paused": True, "paused_step": "first", "run_id": "rid", "steps": {}}
 
 
 def test_execute_multiple_gated_steps_pause_in_turn():
@@ -253,7 +253,7 @@ def test_execute_multiple_gated_steps_pause_in_turn():
     res = asyncio.run(
         execute_workflow(recipe, {}, run_step=run_step, gate_check=gate_check, pause_fn=pause_fn)
     )
-    assert res["paused_at"] == "b"  # paused at the *second* gate, in turn
+    assert res["paused_step"] == "b"  # paused at the *second* gate, in turn
     assert spawned == ["a"]  # a ran (approved); b never spawned
     assert res["steps"] == {"a": "<a>"}  # a's output carried into the paused envelope
     assert paused_with == [("b", {"a": "<a>"})]  # pause_fn saw the completed outputs
@@ -400,7 +400,7 @@ def test_execute_pauses_at_gated_step_and_persists_paused_state(tmp_path, monkey
 
     # Structured envelope — what the /workflows/{name}/run API returns verbatim.
     assert result["paused"] is True
-    assert result["paused_at"] == "analyze"
+    assert result["paused_step"] == "analyze"
     assert result["run_id"] == store.run_id
     assert result["steps"] == {"gather": "<gather-out>"}
     # Human-readable notice — the run_workflow tool return / chat /<recipe> reply.
@@ -458,7 +458,7 @@ def test_run_store_pause_persists_paused_status(tmp_path):
 def test_paused_message_matches_expected_shape():
     import plugins.workflows as wf
 
-    msg = wf._paused_message({"paused_at": "analyze", "run_id": "abc123"})
+    msg = wf._paused_message({"paused_step": "analyze", "run_id": "abc123"})
     assert msg == (
         "⚠️ Workflow paused at step 'analyze' for operator approval. "
         "Run id: abc123. Resume from the Workflows panel."

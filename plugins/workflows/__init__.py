@@ -31,7 +31,7 @@ def _paused_message(result: dict) -> str:
     """Operator-facing pause notice — the ``run_workflow`` tool return and the chat
     ``/<recipe>`` reply. The console reads the structured ``paused``/``run_id`` fields."""
     return (
-        f"⚠️ Workflow paused at step {result['paused_at']!r} for operator approval. "
+        f"⚠️ Workflow paused at step {result['paused_step']!r} for operator approval. "
         f"Run id: {result['run_id']}. Resume from the Workflows panel."
     )
 
@@ -151,7 +151,7 @@ def _paused_run_view(reg: WorkflowRegistry, state: dict) -> dict:
     return {
         "run_id": state.get("run_id"),
         "recipe_name": state.get("recipe_name"),
-        "paused_at": state.get("pending_step"),
+        "paused_step": state.get("pending_step"),
         "prompt": _rendered_gate_prompt(reg.get(state.get("recipe_name")), state),
         "step_outputs": state.get("step_outputs") or {},
         "inputs": state.get("inputs") or {},
@@ -207,6 +207,12 @@ async def _resume(
         raise ValueError(f"no workflow named {name!r}")
     inputs = dict(state.get("inputs") or {})
     completed = dict(state.get("step_outputs") or {})
+
+    # Validate EVERYTHING before touching disk state — flipping to `running` first and
+    # then failing validation would orphan the run: gone from the pending list, stuck
+    # `running` forever, unrepairable (QA panel blocker on the slice-3 PR).
+    if action == "edit" and not str((edits or {}).get("prompt", "")).strip():
+        raise ValueError("edit action requires a non-empty edits.prompt")
 
     # Re-attach the store to this run and flip it back to `running` before dispatching.
     run_store.resume(run_id)

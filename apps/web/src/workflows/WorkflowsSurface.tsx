@@ -47,7 +47,7 @@ function PendingGateCard({
       <div className="workflow-gate-head">
         <Workflow size={14} />
         <strong>{run.recipe_name}</strong>
-        <span className="workflow-step-sub">{run.paused_at}</span>
+        <span className="workflow-step-sub">{run.paused_step}</span>
       </div>
 
       {editing ? (
@@ -107,7 +107,7 @@ function ResolvedGateCard({ run, result }: { run: WorkflowPausedRun; result: Wor
       <div className="workflow-gate-head">
         <Check size={14} />
         <strong>{run.recipe_name}</strong>
-        <span className="workflow-step-sub">{run.paused_at}</span>
+        <span className="workflow-step-sub">{run.paused_step}</span>
       </div>
       {result.failed.length ? <p className="workflow-failed">Failed steps: {result.failed.join(", ")}</p> : null}
       <pre className="output-block">{result.output}</pre>
@@ -131,7 +131,17 @@ function PendingGates() {
       api.resumeWorkflow(v.run.run_id, { action: v.action, edits: v.edits }),
     onMutate: (v) => setBusyId(v.run.run_id),
     onSuccess: (result, v) => {
-      setResults((prev) => ({ ...prev, [v.run.run_id]: { run: v.run, result } }));
+      if (result.paused) {
+        // A downstream gate re-paused the SAME run — it must reappear as active, so a
+        // stale pinned result can't hide it (QA panel blocker: multi-gate workflows).
+        setResults((prev) => {
+          const next = { ...prev };
+          delete next[v.run.run_id];
+          return next;
+        });
+      } else {
+        setResults((prev) => ({ ...prev, [v.run.run_id]: { run: v.run, result } }));
+      }
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
     },
     onSettled: () => setBusyId(null),

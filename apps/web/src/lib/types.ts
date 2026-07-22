@@ -350,7 +350,7 @@ export type WorkflowRunResult = {
   // instead of finishing. `run_id` identifies the durable, resumable record.
   run_id?: string;
   paused?: boolean;
-  paused_at?: string;
+  paused_step?: string;
 };
 
 // A workflow run parked at a `gate: human` step, awaiting operator approval (F3).
@@ -360,7 +360,7 @@ export type WorkflowRunResult = {
 export type WorkflowPausedRun = {
   run_id: string;
   recipe_name: string;
-  paused_at: string;
+  paused_step: string;
   prompt: string;
   step_outputs: Record<string, string>;
   inputs: Record<string, unknown>;

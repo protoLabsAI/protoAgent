@@ -170,7 +170,7 @@ async def execute_workflow(
     ``gate_check(step_dict) -> "pause" | None`` (optional) is consulted for each
     ready step *before* it is dispatched. When it returns ``"pause"`` the run is
     parked: ``pause_fn(step_id, completed_outputs)`` persists the paused state and
-    returns the run_id, and the engine returns ``{"paused": True, "paused_at":
+    returns the run_id, and the engine returns ``{"paused": True, "paused_step":
     step_id, "run_id": run_id, "steps": {...done...}}`` instead of the normal
     envelope — the gated step's subagent is never spawned. Sequential gated steps
     pause one at a time (a downstream gated step isn't ready until its deps run).
@@ -230,7 +230,7 @@ async def execute_workflow(
             )
             if gated is not None:  # park BEFORE spawning any subagent → no wasted work
                 run_id = pause_fn(gated, done) if pause_fn is not None else None
-                return {"paused": True, "paused_at": gated, "run_id": run_id, "steps": dict(done)}
+                return {"paused": True, "paused_step": gated, "run_id": run_id, "steps": dict(done)}
         for sid, out, err in await asyncio.gather(*(run_one(s) for s in ready)):
             done[sid] = out
             if err:
