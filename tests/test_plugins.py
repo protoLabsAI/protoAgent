@@ -506,6 +506,7 @@ def test_config_round_trip() -> None:
         "enabled": ["a", "b"],
         "disabled": ["c"],
         "dir": "/x",
+        "allow_unbundled_deps": False,
         "sources": {"allow": ["github.com/protolabsai/*"]},
         "update_policy": {},
         "autoupdate_interval_hours": 6,

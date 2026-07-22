@@ -751,6 +751,12 @@ class LangGraphConfig:
     # without deleting its directory or editing core.
     plugins_disabled: list[str] = field(default_factory=list)
     plugins_dir: str = ""
+    # Opt-in (ADR 0093): let the frozen desktop app install a plugin's UNBUNDLED
+    # requires_pip as pure-Python wheels into a writable per-instance deps dir on
+    # sys.path, instead of ADR 0058 D2's refusal. Off by default — installing packages
+    # runs code on import, so it stays consent-gated (ADR 0071). No effect off-frozen
+    # (a source/server run pip-installs into its own venv as before).
+    plugins_allow_unbundled_deps: bool = False
     # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org globs
     # (e.g. ``github.com/protoLabsAI/*``); empty = any URL allowed (gated install).
     plugins_sources_allow: list[str] = field(default_factory=list)
@@ -1186,6 +1192,7 @@ class LangGraphConfig:
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
+            plugins_allow_unbundled_deps=bool(plugins.get("allow_unbundled_deps", cls.plugins_allow_unbundled_deps)),
             plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
             plugins_update_policy=dict(plugins.get("update_policy", {}) or {}),
             plugins_autoupdate_interval_hours=int(

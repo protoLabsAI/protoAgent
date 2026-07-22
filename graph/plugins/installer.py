@@ -160,6 +160,24 @@ def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> No
         log.debug("[plugins] audit log failed for %s", action, exc_info=True)
 
 
+def _allow_unbundled_deps() -> bool:
+    """`plugins.allow_unbundled_deps` read from the live config file (ADR 0093 opt-in).
+    Read here rather than threaded through ``install_deps`` — the CLI + the route both
+    call it without a loaded LangGraphConfig. Default off; any read error = off."""
+    try:
+        import yaml
+
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
+        if not cfg_path.exists():
+            return False
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+        return bool((data.get("plugins") or {}).get("allow_unbundled_deps", False))
+    except Exception:  # noqa: BLE001 — a config read must never flip the gate ON by accident
+        return False
+
+
 def configured_allowlist() -> list[str] | None:
     """`plugins.sources.allow` read from the live config file (for the CLI, which
     runs without a loaded LangGraphConfig). None = open."""
@@ -825,37 +843,68 @@ def install_deps(plugin_id: str) -> list[str]:
     if not deps and not optional:
         return []
     _validate_pip_specs(plugin_id, [*deps, *optional])
-    # Frozen runtime (desktop): the host has no pip. Deps that are already bundled or
-    # already in the managed runtime need nothing; anything still missing is installed
-    # INTO the managed Python runtime (ADR 0094 P2), where the plugin's execute_code
-    # skills import them — turning ADR 0058 D2's "install it on a server instead" refusal
-    # into a one-click install. A missing OPTIONAL dep only warns (#1953).
+    # Frozen runtime (desktop): the host has no pip. Deps already bundled / on the
+    # wheel-deps path / in the managed runtime need nothing; anything still missing is
+    # installed into whichever target is available, turning ADR 0058 D2's "install it on
+    # a server instead" refusal into a one-click install. Two complementary targets:
+    #   • ADR 0093 — pure-Python wheels into a host sys.path deps dir (opt-in
+    #     `plugins.allow_unbundled_deps`), for deps the plugin's OWN module imports;
+    #   • ADR 0094 P2 — into the managed Python runtime (when provisioned), for deps the
+    #     plugin's execute_code SKILLS import.
+    # We can't cheaply tell which kind a dep is, so we satisfy every available target;
+    # at least one must succeed or we refuse, naming what to enable. Optional deps only
+    # warn (#1953).
     if _frozen_like():
         ok, missing = _deps_satisfied(deps)
         _, soft_missing = _deps_satisfied(optional)
         if ok and not soft_missing:
-            log.info("[plugins] %s deps already satisfied (bundled or in the managed runtime)", plugin_id)
+            log.info("[plugins] %s deps already satisfied (bundled / wheel-deps / managed runtime)", plugin_id)
             return deps + optional
         to_install = [s for s in deps if _dep_pkg_name(s) in missing]
         to_install_soft = [s for s in optional if _dep_pkg_name(s) in soft_missing]
+        targets_tried: list[str] = []
+        errors: list[str] = []
+
+        # Target 1 (ADR 0093): host wheel-deps dir, opt-in.
+        if _allow_unbundled_deps():
+            from graph.plugins import wheel_installer
+
+            try:
+                wheel_installer.install(
+                    plugin_id, to_install + to_install_soft, already_satisfied=lambda n: _deps_satisfied([n])[0]
+                )
+                targets_tried.append("wheel-deps")
+            except wheel_installer.WheelInstallError as exc:
+                errors.append(f"wheel install: {exc}")
+
+        # Target 2 (ADR 0094 P2): managed runtime, when provisioned.
         from runtime.python_install import PythonRuntimeError, install_requirements_into_managed_runtime
 
         try:
             install_requirements_into_managed_runtime(to_install + to_install_soft)
+            targets_tried.append("managed-runtime")
         except PythonRuntimeError as exc:
-            # Hard deps can't be skipped; a bare optional-only gap degrades with a warning
-            # that NAMES the deps (the plugin runs without them, #1953).
+            errors.append(f"managed runtime: {exc}")
+
+        if not targets_tried:
+            # Nothing installed anywhere. Hard deps are fatal; a bare optional gap degrades.
+            hint = (
+                f"{plugin_id!r} needs {', '.join(missing)} which the desktop runtime doesn't have. "
+                "Enable Settings ▸ Plugins ▸ 'Install unbundled plugin deps' (pure-Python wheels) "
+                "and/or provision the Python runtime (Settings ▸ Tools), then retry."
+            )
             if to_install:
-                raise InstallError(str(exc)) from exc
+                raise InstallError(f"{hint} [{'; '.join(errors)}]" if errors else hint)
+            # Optional-only gap degrades with a warning that NAMES the deps (#1953).
             log.warning(
                 "[plugins] %s: optional dep(s) %s aren't in the desktop runtime — the plugin "
                 "degrades without them (%s)",
                 plugin_id,
                 ", ".join(soft_missing),
-                exc,
+                "; ".join(errors) or "no target",
             )
             return deps
-        _audit("install_deps", {"id": plugin_id, "deps": to_install, "target": "managed_runtime"}, "ok")
+        _audit("install_deps", {"id": plugin_id, "deps": to_install, "targets": targets_tried}, "ok")
         return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing or d in to_install_soft]
     installed: list[str] = []
     if deps:
