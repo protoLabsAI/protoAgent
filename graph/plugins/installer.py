@@ -620,6 +620,11 @@ def _install_bundle(
             # them into the workspace's `mcp.servers` via `_apply_bundle_mcp_servers` —
             # `config:`'s dict-leaf overlay can't merge the `mcp.servers` list.
             "mcp": list(bundle.get("mcp") or []),
+            # The bundle's declared secrets ({key, label, placeholder, secret, required} —
+            # same shape as an mcp-catalog input). Cached alongside `mcp` so the lock-only
+            # create path can prompt for / seed these inputs without re-parsing the bundle
+            # manifest (#2041, slice 1).
+            "secrets": list(bundle.get("secrets") or []),
             # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
             # this bundle as a starter type without re-reading its manifest.
             "archetype": bundle.get("archetype") or {},

@@ -191,10 +191,14 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
         installer._fetch(url, ref, staging)
         bundle = installer.load_bundle(staging)
         if bundle is None:
-            # Not a bundle — a single-plugin repo; preview it as one member.
+            # Not a bundle — a single-plugin repo; preview it as one member. A plain
+            # plugin declares no bundle-level mcp/secrets, so both are empty (the
+            # dialog can read these keys uniformly across bundle + plugin previews).
             result = {
                 "kind": "plugin",
                 "members": [_peek_member_from(staging, {"id": None, "url": url, "ref": ref})],
+                "mcp": [],
+                "secrets": [],
             }
             _peek_cache[url] = (now, result)
             return result
@@ -221,6 +225,12 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
             "verified_against": bundle.get("verified_against"),
             "enabled": list(bundle.get("enabled") or []),
             "members": members,
+            # Catalog-shaped MCP servers ({template, inputs: [{key, label, …}]}) and the
+            # secrets ({key, label, placeholder, secret, required}) this bundle will ask
+            # the operator to fill — surfaced so ArchetypePreviewDialog can show the inputs
+            # up front, WITHOUT installing (this is a read-only peek). Slice 1 of #2041.
+            "mcp": list(bundle.get("mcp") or []),
+            "secrets": list(bundle.get("secrets") or []),
         }
 
     _peek_cache[url] = (now, result)
