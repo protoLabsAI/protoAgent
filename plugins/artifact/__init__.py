@@ -5,7 +5,10 @@ console's Artifact panel, then iterates it with ``update_artifact`` (a targeted 
 edit) or ``rewrite_artifact`` (a full replacement) — the Claude "update vs rewrite" model, so an
 artifact is a VERSION CHAIN you can step back through, not a flood of near-duplicates.
 ``list_artifacts`` / ``get_artifact`` (read the current source — how you take over an artifact you
-didn't author) / ``delete_artifact`` manage them. The panel is a plugin-served shell page
+didn't author) / ``delete_artifact`` manage them. ``save_file_artifact`` (ADR 0092) versions a
+generated FILE (docx/xlsx/pptx/pdf/image) as a download artifact — bytes in a sidecar blob, a
+diffable text preview in ``code``, an image thumbnail — rendered as a download card, not iframed.
+The panel is a plugin-served shell page
 (iframed by the console, ADR 0026) that renders the generated code in a **nested sandboxed
 iframe** (``sandbox="allow-scripts"``, no same-origin) — the Claude Artifacts / Open WebUI
 isolation model: generated code runs, but can't touch the console, its cookies, or its APIs.
@@ -116,6 +119,19 @@ def _max_code_bytes() -> int:
     return _cfg_int("max_code_kb", "ARTIFACT_MAX_CODE_KB", 512) * 1024
 
 
+# The binary blob cap for `file` artifacts (ADR 0092 D2) — separate from max_code_kb
+# because a real .docx/.xlsx/.pdf is bytes on disk (sidecar file), not source text.
+def _max_blob_bytes() -> int:
+    return _cfg_int("max_blob_kb", "ARTIFACT_MAX_BLOB_KB", 25 * 1024) * 1024
+
+
+# The extracted-text PREVIEW cap for a `file` version — the diffable projection stored in
+# `code` (docx→text, xlsx→sheet table, pptx→outline, pdf→text). Kept well under
+# max_code_kb so a huge document can't bloat history.json (read on every panel poll).
+def _max_preview_bytes() -> int:
+    return _cfg_int("max_preview_kb", "ARTIFACT_MAX_PREVIEW_KB", 64) * 1024
+
+
 # Interactive artifacts (window.protoArtifact.ask → the agent). OPT-IN: letting
 # sandboxed artifact code trigger LLM calls is a cost surface. `ask_enabled` +
 # `ask_system` are Settings ▸ Plugins fields (manifest `settings:`); ask_max_chars caps.
@@ -147,6 +163,59 @@ def _store_path() -> Path:
         base = base / inst
     base.mkdir(parents=True, exist_ok=True)
     return base / "history.json"
+
+
+# ── binary blobs (ADR 0092 D2) ───────────────────────────────────────────────
+# A `file` artifact's BYTES live as sidecar files under <artifact-dir>/blobs/<id>/,
+# NOT inlined into history.json — the store is read on every panel poll, so a base64
+# .docx would bloat it badly. history.json keeps only {mime, filename, size, preview,
+# thumb, blob:"<token>.<ext>"}; the version's ``blob`` names the sidecar file. The name
+# is a random token (not the version index) so trimming to max_versions — which shifts
+# indices — never mis-points a version at another version's bytes.
+
+
+def _blob_root() -> Path:
+    return _store_path().parent / "blobs"
+
+
+def _blob_path(art_id: str, name: str) -> Path:
+    """The sidecar file for ``name`` (a version's ``blob`` token) under artifact ``art_id``.
+    ``name`` is sanitized to a bare filename — no path traversal out of the blob dir."""
+    safe = os.path.basename(str(name))
+    return _blob_root() / art_id / safe
+
+
+def _gc_blobs(store: dict) -> None:
+    """Delete sidecar blob files/dirs no longer referenced by a surviving version — the
+    retention sweep that pairs with _write_store's version/history trim. Best-effort: a
+    filesystem hiccup must never break a store write."""
+    root = _blob_root()
+    if not root.exists():
+        return
+    live: dict[str, set[str]] = {}
+    for a in store.get("artifacts", []):
+        names = {
+            v["blob"]
+            for v in a.get("versions", [])
+            if isinstance(v.get("blob"), str) and v["blob"]
+        }
+        if names:
+            live[a["id"]] = names
+    try:
+        for art_dir in root.iterdir():
+            if not art_dir.is_dir():
+                continue
+            keep = live.get(art_dir.name)
+            if keep is None:  # artifact gone (deleted / trimmed out) → drop its whole dir
+                for f in art_dir.iterdir():
+                    f.unlink(missing_ok=True)
+                art_dir.rmdir()
+                continue
+            for f in art_dir.iterdir():  # artifact lives; drop only orphaned versions' blobs
+                if f.name not in keep:
+                    f.unlink(missing_ok=True)
+    except OSError:
+        log.debug("[artifact] blob GC hiccup", exc_info=True)
 
 
 def _now() -> int:
@@ -208,6 +277,7 @@ def _write_store(store: dict) -> None:
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+    _gc_blobs(store)  # drop sidecar blobs orphaned by the version/history trim above
 
 
 def _find(store: dict, art_id: str | None) -> dict | None:
@@ -244,16 +314,23 @@ def _emit(event: str, data: dict) -> None:
         log.debug("[artifact] emit(%s) failed", event, exc_info=True)
 
 
-def _new_version(code: str, by: str = "agent") -> dict:
-    """A fresh version record. ``by`` is provenance: "agent" (a tool) or "user" (panel edit)."""
-    return {"code": code, "ts": _now(), "by": by}
+def _new_version(code: str, by: str = "agent", extra: dict | None = None) -> dict:
+    """A fresh version record. ``by`` is provenance: "agent" (a tool) or "user" (panel edit).
+    ``extra`` merges in kind-specific fields — for a `file` version, ``file`` metadata
+    ({mime, filename, size, thumb}) and the ``blob`` sidecar token (ADR 0092 D2)."""
+    v = {"code": code, "ts": _now(), "by": by}
+    if extra:
+        v.update(extra)
+    return v
 
 
-def _commit_version(store: dict, art: dict, code: str, by: str = "agent") -> int:
+def _commit_version(
+    store: dict, art: dict, code: str, by: str = "agent", extra: dict | None = None
+) -> int:
     """Append a version to ``art``, move it to the front, persist, broadcast ``updated``, and
     return the new 1-based version count. The shared tail of update/rewrite_artifact + the
     panel's user-edit PUT — one place owns append→touch→write→emit ordering."""
-    nv = _new_version(code, by)
+    nv = _new_version(code, by, extra)
     art["versions"].append(nv)
     art["updated"] = nv["ts"]
     _touch(store, art)
@@ -326,6 +403,218 @@ def _render_suffix(art_id: str, version: int) -> str:
         f"\n\n⚠ But it FAILED to render:\n  {err}\n"
         "Fix it with update_artifact / rewrite_artifact (the artifact still exists; "
         "this error is advisory)."
+    )
+
+
+# ── file artifacts (ADR 0092 D2) ─────────────────────────────────────────────
+# save_file_artifact turns a generated file (docx/xlsx/pptx/pdf/image/text) into a
+# VERSIONED artifact: bytes stored as a sidecar blob, a diffable text PREVIEW extracted
+# into `code`, and — for images only — a base64 thumbnail (the cheap win; rasterizing
+# Office/PDF pages needs LibreOffice/pdfium and is deferred). Every extractor imports its
+# lib lazily and degrades to a note if it's missing (a lean non-desktop env without the
+# doc stack), so the tool never hard-fails — it just stores the blob with a thin preview.
+_PREVIEW_TRUNC = "\n… (preview truncated — download the file for the full content)"
+
+
+def _guess_mime(path: Path) -> str:
+    import mimetypes
+
+    mime, _ = mimetypes.guess_type(str(path))
+    return mime or "application/octet-stream"
+
+
+def _clip(text: str) -> str:
+    """Clip an extracted preview to _max_preview_bytes (utf-8), with a truncation note."""
+    limit = _max_preview_bytes()
+    data = (text or "").encode("utf-8")
+    if len(data) <= limit:
+        return text or ""
+    return data[: max(0, limit - len(_PREVIEW_TRUNC.encode()))].decode(
+        "utf-8", "ignore"
+    ) + _PREVIEW_TRUNC
+
+
+def _extract_docx(path: Path) -> str:
+    from docx import Document  # python-docx
+
+    doc = Document(str(path))
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def _extract_xlsx(path: Path) -> str:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(path), read_only=True, data_only=True)
+    out: list[str] = []
+    for ws in wb.worksheets:
+        out.append(f"# {ws.title}")
+        for r, row in enumerate(ws.iter_rows(values_only=True)):
+            if r >= 200:  # cap rows per sheet — a preview, not the whole workbook
+                out.append("… (more rows — download for all)")
+                break
+            out.append(
+                ", ".join("" if c is None else str(c) for c in (row or ())[:50])
+            )
+    wb.close()
+    return "\n".join(out)
+
+
+def _extract_pptx(path: Path) -> str:
+    from pptx import Presentation  # python-pptx
+
+    prs = Presentation(str(path))
+    out: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        out.append(f"── Slide {i} ──")
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                out.append(shape.text_frame.text)
+    return "\n".join(out)
+
+
+def _extract_pdf(path: Path) -> str:
+    from pypdf import PdfReader  # already a core dep (pyproject)
+
+    reader = PdfReader(str(path))
+    out: list[str] = []
+    for i, page in enumerate(reader.pages):
+        if i >= 50:  # cap pages
+            out.append("… (more pages — download for all)")
+            break
+        out.append(page.extract_text() or "")
+    return "\n".join(out)
+
+
+# ext → (extractor, degrade-note). Text-ish kinds decode verbatim in _extract_preview.
+_EXTRACTORS = {
+    ".docx": (_extract_docx, "python-docx"),
+    ".xlsx": (_extract_xlsx, "openpyxl"),
+    ".pptx": (_extract_pptx, "python-pptx"),
+    ".pdf": (_extract_pdf, "pypdf"),
+}
+_TEXT_EXT = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml"}
+
+
+def _extract_preview(path: Path, data: bytes, mime: str) -> str:
+    """A readable, diffable text projection of the file, capped. Office/PDF via their lib
+    (lazy, degrades if absent); text/* decoded verbatim; anything else → a size note."""
+    ext = path.suffix.lower()
+    if ext in _EXTRACTORS:
+        fn, lib = _EXTRACTORS[ext]
+        try:
+            return _clip(fn(path))
+        except Exception:  # noqa: BLE001 — missing lib / corrupt file → thin preview, never crash
+            log.debug("[artifact] %s preview extract failed", ext, exc_info=True)
+            return (
+                f"({ext[1:].upper()} file — no text preview: {lib} unavailable or the file "
+                f"couldn't be parsed. Download it for the full content.)"
+            )
+    if mime.startswith("text/") or ext in _TEXT_EXT:
+        return _clip(data.decode("utf-8", "replace"))
+    if mime.startswith("image/"):
+        return f"(image · {mime})"
+    return f"(binary file · {mime} · {len(data)} bytes — download to open)"
+
+
+def _thumbnail(data: bytes, mime: str) -> str | None:
+    """A small base64 PNG data-URI thumbnail for IMAGE files only (Pillow, bundled on the
+    desktop runtime via ADR 0092 D1). Office/PDF thumbnails need a rasterizer we don't ship
+    — those show the file icon + text preview instead. Returns None on any failure."""
+    if not mime.startswith("image/"):
+        return None
+    try:
+        import base64
+        from io import BytesIO
+
+        from PIL import Image
+
+        im = Image.open(BytesIO(data))
+        im.thumbnail((320, 320))
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA")
+        buf = BytesIO()
+        im.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:  # noqa: BLE001 — Pillow absent (lean env) / undecodable → no thumb
+        log.debug("[artifact] thumbnail failed", exc_info=True)
+        return None
+
+
+@tool
+def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
+    """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
+    wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
+    the same edit-history + inspectable panel treatment as a rendered artifact, and the user
+    can download it or diff it across versions.
+
+    Use this right AFTER a skill writes a document to disk (e.g. cowork's docx/xlsx/pptx/pdf
+    skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
+    shows a download card with a readable text preview (docx→text, xlsx→sheet table,
+    pptx→slide outline, pdf→text; images get a thumbnail), and offers a Download button.
+
+    ``title`` is an optional label. To save a NEW revision of a file you saved before (so it
+    becomes v2, v3… of the same artifact rather than a new panel entry), pass that artifact's
+    ``artifact_id`` (see ``list_artifacts``). Returns the artifact id.
+
+    This is for FILES on disk. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
+    """
+    p = Path(os.path.expanduser(path or "")).resolve()
+    if not p.exists() or not p.is_file():
+        return f"No file at {path!r}. Write the file first, then pass its path."
+    data = p.read_bytes()
+    limit = _max_blob_bytes()
+    if len(data) > limit:
+        return (
+            f"File too large ({len(data) // 1024} KB > {limit // 1024} KB). Raise the artifact "
+            f"max_blob_kb setting if you really need to store a file this big."
+        )
+    mime = _guess_mime(p)
+    preview = _extract_preview(p, data, mime)
+    thumb = _thumbnail(data, mime)
+    ext = p.suffix.lower().lstrip(".") or "bin"
+
+    store = _read_store()
+    art = _find(store, artifact_id) if artifact_id else None
+    if artifact_id and art is None:
+        return f"No artifact {artifact_id!r} to revise. Use list_artifacts, or omit artifact_id for a new one."
+
+    art_id = art["id"] if art else _new_id()
+    blob_name = f"{secrets.token_hex(8)}.{ext}"
+    blob_file = _blob_path(art_id, blob_name)
+    blob_file.parent.mkdir(parents=True, exist_ok=True)
+    blob_file.write_bytes(data)
+
+    file_meta = {
+        "mime": mime,
+        "filename": p.name,
+        "size": len(data),
+        "thumb": thumb or "",
+    }
+    if art is None:
+        nv = _new_version(preview, extra={"file": file_meta, "blob": blob_name})
+        art = {
+            "id": art_id,
+            "title": title or p.name,
+            "kind": "file",
+            "versions": [nv],
+            "created": nv["ts"],
+            "updated": nv["ts"],
+        }
+        store["artifacts"].insert(0, art)
+        store["current"] = art_id
+        _write_store(store)
+        _emit("created", {"id": art_id, "kind": "file", "title": art["title"]})
+        v = 1
+    else:
+        if title:
+            art["title"] = title
+        v = _commit_version(
+            store, art, preview, extra={"file": file_meta, "blob": blob_name}
+        )
+    kb = len(data) // 1024
+    return (
+        f"Saved file artifact {art_id} → v{v}: {p.name} ({mime}, {kb} KB) — now in the "
+        f"Artifact panel with a preview and a Download button."
     )
 
 
@@ -684,6 +973,35 @@ def _build_data_router():
         v = _commit_version(store, art, code, by="user")
         return {"ok": True, "id": art_id, "version": v}
 
+    @router.get("/artifact/{art_id}/blob")
+    async def _blob(art_id: str, version: int = 0):
+        """Serve a `file` artifact version's stored BYTES for download (ADR 0092 D2). The
+        panel's Download button hits this with the operator bearer; ``version`` is 1-based
+        (0/absent = latest). Returns the sidecar blob with its stored mime + an attachment
+        filename. 404 if the artifact/version/blob is missing or isn't a file artifact."""
+        from fastapi.responses import FileResponse
+
+        store = _read_store()
+        art = _find(store, art_id)
+        if art is None:
+            raise HTTPException(404, f"unknown artifact {art_id}")
+        vers = art.get("versions") or []
+        idx = (version - 1) if version and 1 <= version <= len(vers) else len(vers) - 1
+        if idx < 0:
+            raise HTTPException(404, "no versions")
+        v = vers[idx]
+        blob_name, meta = v.get("blob"), v.get("file") or {}
+        if not blob_name:
+            raise HTTPException(404, "not a file artifact / no stored blob")
+        f = _blob_path(art_id, blob_name)
+        if not f.exists():
+            raise HTTPException(404, "blob missing")
+        return FileResponse(
+            f,
+            media_type=meta.get("mime") or "application/octet-stream",
+            filename=meta.get("filename") or f.name,
+        )
+
     @router.delete("/artifact/{art_id}")
     async def _delete(art_id: str) -> dict:
         """Delete an artifact (the panel's trash button). Gated like the rest."""
@@ -707,6 +1025,7 @@ def register(registry) -> None:
     _REGISTRY = registry
     for t in (
         show_artifact,
+        save_file_artifact,
         update_artifact,
         rewrite_artifact,
         list_artifacts,
@@ -982,6 +1301,33 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
       'document.getElementById("md").innerHTML = marked.parse(decodeURIComponent(escape(atob("' + b64 + '"))));' +
       mmRun + '<\/script></body>';
   }
+  // `file` artifacts (ADR 0092 D2) don't iframe generated code — they show a static,
+  // themed DOWNLOAD CARD: thumbnail (images) or a file glyph, name + mime + size, and the
+  // extracted text preview (v.code) in a scroll box. Self-contained srcdoc (no scripts, so
+  // the sandbox stays inert); tokens read from the live theme like base().
+  function fmtSize(n){ n=+n||0; return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
+  function fileCard(v){
+    var cs=getComputedStyle(document.documentElement);
+    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
+    var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
+        muted=tok("--pl-color-fg-muted","#9aa0aa"), border=tok("--pl-color-border","rgba(255,255,255,.12)");
+    var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
+    var thumb = f.thumb
+      ? '<img src="'+f.thumb+'" alt="" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid '+border+'">'
+      : '<div style="font-size:44px;line-height:1">📄</div>';
+    return '<!doctype html><meta charset="utf-8"><style>'
+      + 'html,body{margin:0;height:100%;background:'+bg+';color:'+fg+';font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}'
+      + '.wrap{display:flex;flex-direction:column;height:100%;box-sizing:border-box;padding:18px;gap:14px}'
+      + '.hd{display:flex;gap:14px;align-items:center}.meta{min-width:0}'
+      + '.nm{font-size:15px;font-weight:600;word-break:break-all}.mt{color:'+muted+';font-size:12px;margin-top:2px}'
+      + '.pvl{color:'+muted+';font-size:11px;text-transform:uppercase;letter-spacing:.05em}'
+      + 'pre.pv{flex:1;min-height:0;overflow:auto;margin:0;padding:12px;border:1px solid '+border+';border-radius:8px;'
+      + 'background:rgba(127,127,127,.08);white-space:pre-wrap;word-break:break-word;'
+      + 'font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);font-size:12px;line-height:1.5}'
+      + '</style><div class="wrap"><div class="hd">'+thumb
+      + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div></div>'
+      + '<div class="pvl">Preview</div><pre class="pv">'+esc(v.code||"")+'</pre></div>';
+  }
   var $art=document.getElementById("art"), $vprev=document.getElementById("vprev"),
       $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"),
       $dl=document.getElementById("dl"), $del=document.getElementById("del"),
@@ -1023,8 +1369,10 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     $vlabel.textContent="v"+(vi+1)+"/"+a.versions.length;
     $vprev.disabled = vi<=0; $vnext.disabled = vi>=a.versions.length-1;
     $empty.style.display="none";
+    $edit.style.display = a.kind==="file" ? "none" : "";  // a file's preview isn't user-editable
     var key=a.id+"@"+vi;  // re-srcdoc only when the shown version actually changes
-    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; $frame.srcdoc=srcdoc(a.kind, v.code); $frame.style.display="block"; }
+    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1;
+      $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code); $frame.style.display="block"; }
   }
 
   // Live re-theme (#1872): base() bakes the theme tokens into the srcdoc as literal
@@ -1053,11 +1401,18 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   $vnext.addEventListener("click", function(){ var a=selArt(); if(!a)return; var vi=verIdx(a);
     if(vi<a.versions.length-1){ selVer=vi+1; if(selVer===a.versions.length-1) selVer=null; saveSel(); render(); } });
 
-  $dl.addEventListener("click", function(){
+  function saveBlob(b, name){ var u=URL.createObjectURL(b);
+    var el=document.createElement("a"); el.href=u; el.download=name;
+    document.body.appendChild(el); el.click(); el.remove(); setTimeout(function(){URL.revokeObjectURL(u);},1000); }
+  $dl.addEventListener("click", async function(){
     var a=selArt(); if(!a)return; var vi=verIdx(a), v=a.versions[vi];
-    var blob=new Blob([v.code],{type:"text/plain"}); var u=URL.createObjectURL(blob);
-    var el=document.createElement("a"); el.href=u; el.download="artifact-"+a.id+"-v"+(vi+1)+"."+(EXT[a.kind]||"txt");
-    document.body.appendChild(el); el.click(); el.remove(); setTimeout(function(){URL.revokeObjectURL(u);},1000);
+    if(a.kind==="file"){  // download the STORED BYTES via the gated blob route (ADR 0092 D2)
+      try{ var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id)+"/blob?version="+(vi+1));
+        if(!r.ok) throw 0; saveBlob(await r.blob(), (v.file&&v.file.filename)||("artifact-"+a.id)); }
+      catch(e){ /* transient — the panel poll will re-sync */ }
+      return;
+    }
+    saveBlob(new Blob([v.code],{type:"text/plain"}), "artifact-"+a.id+"-v"+(vi+1)+"."+(EXT[a.kind]||"txt"));
   });
 
   // Inline two-click confirm (no confirm() — a sandboxed plugin iframe may block modals).

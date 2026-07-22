@@ -760,3 +760,189 @@ def test_live_theme_repush_is_wired(monkeypatch, tmp_path):
     # shell side: observe the kit re-theme + re-push after a fresh srcdoc load.
     assert "new MutationObserver(pushTheme).observe(document.documentElement" in html
     assert '$frame.addEventListener("load", pushTheme)' in html
+
+
+# ── file artifacts (ADR 0092 D2): save_file_artifact + sidecar blobs + blob route ─
+
+
+def test_save_file_artifact_missing_file(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    out = art.save_file_artifact.invoke({"path": str(tmp_path / "nope.docx")})
+    assert "No file at" in out
+    assert _arts(art) == []
+
+
+def test_save_file_artifact_creates_file_kind_with_blob_and_preview(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "notes.txt"
+    f.write_text("hello world\nsecond line", encoding="utf-8")
+    out = art.save_file_artifact.invoke({"path": str(f), "title": "My Notes"})
+    assert "Saved file artifact" in out
+    a = _arts(art)[0]
+    assert a["kind"] == "file" and a["title"] == "My Notes"
+    v = a["versions"][0]
+    # text preview lands verbatim in `code` (diffable); file metadata + blob token alongside.
+    assert "hello world" in v["code"]
+    assert v["file"]["filename"] == "notes.txt" and v["file"]["size"] == len(f.read_bytes())
+    assert v["file"]["mime"].startswith("text/")
+    assert v["blob"]  # sidecar token
+    # the bytes live on disk under blobs/<id>/<token>, NOT inlined in the store
+    blob = art._blob_path(a["id"], v["blob"])
+    assert blob.exists() and blob.read_bytes() == f.read_bytes()
+
+
+def test_save_file_artifact_revision_appends_version(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "r.txt"
+    f.write_text("v1 body", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    aid = _arts(art)[0]["id"]
+    f.write_text("v2 body changed", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f), "artifact_id": aid})
+    a = _arts(art)[0]
+    assert a["id"] == aid and len(a["versions"]) == 2
+    assert "v1 body" in a["versions"][0]["code"] and "v2 body changed" in a["versions"][1]["code"]
+    # each version keeps its OWN blob (distinct tokens), both on disk
+    b1, b2 = a["versions"][0]["blob"], a["versions"][1]["blob"]
+    assert b1 != b2
+    assert art._blob_path(aid, b1).exists() and art._blob_path(aid, b2).exists()
+
+
+def test_unknown_revision_target_is_rejected(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "x.txt"
+    f.write_text("x", encoding="utf-8")
+    out = art.save_file_artifact.invoke({"path": str(f), "artifact_id": "a-nope"})
+    assert "No artifact" in out and _arts(art) == []
+
+
+def test_oversized_file_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTIFACT_MAX_BLOB_KB", "1")
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"x" * 4096)
+    out = art.save_file_artifact.invoke({"path": str(f)})
+    assert "too large" in out.lower() and _arts(art) == []
+
+
+def test_blob_gc_drops_orphaned_and_deleted(monkeypatch, tmp_path):
+    """Trimming past max_versions and deleting an artifact both sweep their sidecar blobs."""
+    monkeypatch.setenv("ARTIFACT_MAX_VERSIONS", "2")
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "g.txt"
+    for i in range(3):  # 3 revisions, cap is 2 → the oldest version's blob is orphaned
+        f.write_text(f"rev {i}", encoding="utf-8")
+        art.save_file_artifact.invoke({"path": str(f), "artifact_id": (_arts(art)[0]["id"] if _arts(art) else "")})
+    a = _arts(art)[0]
+    assert len(a["versions"]) == 2  # trimmed
+    # exactly the 2 surviving version blobs remain on disk
+    live = {v["blob"] for v in a["versions"]}
+    on_disk = {p.name for p in (art._blob_root() / a["id"]).iterdir()}
+    assert on_disk == live
+    # deleting the artifact drops its whole blob dir
+    art.delete_artifact.invoke({"artifact_id": a["id"]})
+    assert not (art._blob_root() / a["id"]).exists()
+
+
+def test_blob_route_serves_bytes_with_filename(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "report.csv"
+    f.write_bytes(b"a,b\n1,2\n")
+    art.save_file_artifact.invoke({"path": str(f), "title": "Report"})
+    aid = _arts(art)[0]["id"]
+    c = TestClient(_app(art))
+    r = c.get(f"/api/plugins/artifact/artifact/{aid}/blob")
+    assert r.status_code == 200
+    assert r.content == b"a,b\n1,2\n"
+    assert "report.csv" in r.headers.get("content-disposition", "")
+    # unknown artifact / non-file artifact → 404
+    assert c.get("/api/plugins/artifact/artifact/nope/blob").status_code == 404
+    art.show_artifact.invoke({"kind": "html", "code": "<p>x</p>"})
+    html_id = _arts(art)[0]["id"]
+    assert c.get(f"/api/plugins/artifact/artifact/{html_id}/blob").status_code == 404
+
+
+def test_thumbnail_only_for_images(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    # a text file never gets a thumbnail
+    f = tmp_path / "t.txt"
+    f.write_text("plain", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    assert _arts(art)[0]["versions"][0]["file"]["thumb"] == ""
+    # an image gets a base64 PNG data-URI thumbnail (skip if Pillow isn't installed)
+    Image = pytest.importorskip("PIL.Image")
+    img = tmp_path / "pic.png"
+    Image.new("RGB", (64, 48), (200, 30, 30)).save(str(img))
+    art.save_file_artifact.invoke({"path": str(img)})
+    thumb = _arts(art)[0]["versions"][0]["file"]["thumb"]
+    assert thumb.startswith("data:image/png;base64,")
+
+
+def test_save_file_artifact_registered_and_shell_has_filecard(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    names = []
+
+    class _Reg:
+        def register_tool(self, t):
+            names.append(t.name)
+
+        def register_skill_dir(self, *a, **k):
+            pass
+
+        def register_router(self, *a, **k):
+            pass
+
+        def emit(self, *a, **k):
+            pass
+
+    art.register(_Reg())
+    assert "save_file_artifact" in names
+    # the shell renders file kinds as a download card, hides Edit, and downloads via the blob route
+    html = art._SHELL_HTML
+    assert "function fileCard(v)" in html
+    assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code)' in html
+    assert "/blob?version=" in html
+
+
+def test_docx_extraction_reads_paragraphs(monkeypatch, tmp_path):
+    docx = pytest.importorskip("docx")  # python-docx; present on the desktop stack (ADR 0092 D1)
+    art = _load(monkeypatch, tmp_path)
+    d = docx.Document()
+    d.add_paragraph("First para of the report.")
+    d.add_paragraph("Second para with detail.")
+    p = tmp_path / "r.docx"
+    d.save(str(p))
+    art.save_file_artifact.invoke({"path": str(p)})
+    v = _arts(art)[0]["versions"][0]
+    assert "First para of the report." in v["code"] and "Second para" in v["code"]
+    assert _arts(art)[0]["kind"] == "file"
+
+
+def test_xlsx_extraction_reads_sheet_cells(monkeypatch, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    art = _load(monkeypatch, tmp_path)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sales"
+    ws.append(["Region", "Total"])
+    ws.append(["West", 1200])
+    p = tmp_path / "s.xlsx"
+    wb.save(str(p))
+    art.save_file_artifact.invoke({"path": str(p)})
+    code = _arts(art)[0]["versions"][0]["code"]
+    assert "# Sales" in code and "Region" in code and "1200" in code
+
+
+def test_unparseable_office_file_degrades_not_crashes(monkeypatch, tmp_path):
+    """A .docx the extractor can't parse (corrupt, or python-docx absent in a lean env) still
+    saves — the preview is a readable degrade note, the bytes are stored, no crash."""
+    art = _load(monkeypatch, tmp_path)
+    p = tmp_path / "broken.docx"
+    p.write_bytes(b"not really a docx")
+    out = art.save_file_artifact.invoke({"path": str(p)})
+    assert "Saved file artifact" in out
+    v = _arts(art)[0]["versions"][0]
+    assert "no text preview" in v["code"].lower()
+    assert art._blob_path(_arts(art)[0]["id"], v["blob"]).read_bytes() == b"not really a docx"
