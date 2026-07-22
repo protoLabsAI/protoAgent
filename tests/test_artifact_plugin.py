@@ -249,7 +249,14 @@ def test_manifest_exposes_all_settings_fields(monkeypatch, tmp_path):
     # every operator knob is a Settings ▸ Plugins field, with the right type.
     assert by_key["ask_enabled"]["type"] == "bool"
     assert by_key["ask_system"]["type"] == "string"
-    for num in ("ask_max_chars", "history", "max_versions", "max_code_kb"):
+    for num in (
+        "ask_max_chars",
+        "history",
+        "max_versions",
+        "max_code_kb",
+        "max_blob_kb",
+        "max_preview_kb",
+    ):
         assert by_key[num]["type"] == "number", f"{num} should be a number field"
     # every settings key has a declared default in config:.
     assert set(by_key) <= set(m["config"])
@@ -946,3 +953,63 @@ def test_unparseable_office_file_degrades_not_crashes(monkeypatch, tmp_path):
     v = _arts(art)[0]["versions"][0]
     assert "no text preview" in v["code"].lower()
     assert art._blob_path(_arts(art)[0]["id"], v["blob"]).read_bytes() == b"not really a docx"
+
+
+def test_pptx_extraction_reads_slide_text(monkeypatch, tmp_path):
+    pptx = pytest.importorskip("pptx")  # python-pptx; present on the desktop stack (ADR 0092 D1)
+    art = _load(monkeypatch, tmp_path)
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])  # title-only layout
+    slide.shapes.title.text = "Quarterly Roadmap"
+    prs.save(str(tmp_path / "deck.pptx"))
+    art.save_file_artifact.invoke({"path": str(tmp_path / "deck.pptx")})
+    code = _arts(art)[0]["versions"][0]["code"]
+    assert "Slide 1" in code and "Quarterly Roadmap" in code
+
+
+def test_pdf_extraction_reads_text(monkeypatch, tmp_path):
+    pytest.importorskip("pypdf")
+    canvas = pytest.importorskip("reportlab.pdfgen.canvas")  # generate a real PDF to read back
+    art = _load(monkeypatch, tmp_path)
+    p = tmp_path / "doc.pdf"
+    c = canvas.Canvas(str(p))
+    c.drawString(72, 720, "Invoice total due")
+    c.save()
+    art.save_file_artifact.invoke({"path": str(p)})
+    assert "Invoice total due" in _arts(art)[0]["versions"][0]["code"]
+
+
+# ── kind-confusion guards (protoreview #2126: both _commit_version directions) ──
+
+
+def test_save_file_artifact_refuses_to_revise_a_non_file_artifact(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>hi</p>"})
+    html_id = _arts(art)[0]["id"]
+    f = tmp_path / "x.txt"
+    f.write_text("body", encoding="utf-8")
+    out = art.save_file_artifact.invoke({"path": str(f), "artifact_id": html_id})
+    assert "not a file" in out
+    a = art._find(art._read_store(), html_id)
+    assert a["kind"] == "html" and len(a["versions"]) == 1  # untouched, not corrupted
+
+
+def test_text_edits_refuse_a_file_artifact(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "r.txt"
+    f.write_text("original", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    fid = _arts(art)[0]["id"]
+    assert "file artifact" in art.update_artifact.invoke(
+        {"old_string": "original", "new_string": "x", "artifact_id": fid}
+    )
+    assert "file artifact" in art.rewrite_artifact.invoke({"code": "x", "artifact_id": fid})
+    # the panel PUT route is guarded too (the hidden Edit button is only a client mask)
+    c = TestClient(_app(art))
+    r = c.put(f"/api/plugins/artifact/artifact/{fid}", json={"code": "x"})
+    assert r.status_code == 409
+    # still a single, intact file version with its blob
+    a = _arts(art)[0]
+    assert a["kind"] == "file" and len(a["versions"]) == 1 and a["versions"][0]["blob"]

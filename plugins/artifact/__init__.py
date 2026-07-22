@@ -284,6 +284,15 @@ def _find(store: dict, art_id: str | None) -> dict | None:
     return next((a for a in store["artifacts"] if a["id"] == art_id), None)
 
 
+def _is_file(art: dict) -> bool:
+    """A `file` artifact (ADR 0092 D2) — bytes in a sidecar blob, `code` is a derived
+    preview. Text-source edits (update/rewrite/panel PUT) must NOT touch these (they'd
+    append a version with no blob → orphaned bytes + a broken card), and save_file_artifact
+    must NOT revise a non-file artifact (its kind stays wrong → renders the preview as raw
+    source). Both directions are guarded on this."""
+    return art.get("kind") == "file"
+
+
 def _too_big(code: str) -> str | None:
     limit = _max_code_bytes()
     if len(code.encode("utf-8")) > limit:
@@ -577,6 +586,11 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
     art = _find(store, artifact_id) if artifact_id else None
     if artifact_id and art is None:
         return f"No artifact {artifact_id!r} to revise. Use list_artifacts, or omit artifact_id for a new one."
+    if art is not None and not _is_file(art):
+        return (
+            f"Artifact {artifact_id!r} is a {art['kind']} artifact, not a file — save_file_artifact "
+            f"can only revise a file artifact. Omit artifact_id to create a new one."
+        )
 
     art_id = art["id"] if art else _new_id()
     blob_name = f"{secrets.token_hex(8)}.{ext}"
@@ -690,6 +704,11 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
     art = _find(store, artifact_id or store["current"])
     if art is None:
         return "No artifact to update. Create one with show_artifact first."
+    if _is_file(art):
+        return (
+            f"Artifact {art['id']} is a file artifact (its source is a file on disk, not "
+            f"editable text). Re-generate the file and re-save it with save_file_artifact."
+        )
     src = art["versions"][-1]["code"]
     n = src.count(old_string)
     if n == 0:
@@ -723,6 +742,11 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     art = _find(store, artifact_id or store["current"])
     if art is None:
         return "No artifact to rewrite. Create one with show_artifact first."
+    if _is_file(art):
+        return (
+            f"Artifact {art['id']} is a file artifact (its source is a file on disk, not "
+            f"editable text). Re-generate the file and re-save it with save_file_artifact."
+        )
     if title:
         art["title"] = title
     v = _commit_version(store, art, code)
@@ -970,6 +994,8 @@ def _build_data_router():
         art = _find(store, art_id)
         if art is None:
             raise HTTPException(404, f"unknown artifact {art_id}")
+        if _is_file(art):  # a file artifact's preview isn't user-editable (would orphan its blob)
+            raise HTTPException(409, "file artifacts are not editable — re-save the file")
         v = _commit_version(store, art, code, by="user")
         return {"ok": True, "id": art_id, "version": v}
 
@@ -1409,7 +1435,7 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     if(a.kind==="file"){  // download the STORED BYTES via the gated blob route (ADR 0092 D2)
       try{ var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id)+"/blob?version="+(vi+1));
         if(!r.ok) throw 0; saveBlob(await r.blob(), (v.file&&v.file.filename)||("artifact-"+a.id)); }
-      catch(e){ /* transient — the panel poll will re-sync */ }
+      catch(e){ $dl.textContent="Failed"; setTimeout(function(){ $dl.textContent="Download"; },1800); }
       return;
     }
     saveBlob(new Blob([v.code],{type:"text/plain"}), "artifact-"+a.id+"-v"+(vi+1)+"."+(EXT[a.kind]||"txt"));

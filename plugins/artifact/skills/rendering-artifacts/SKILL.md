@@ -133,7 +133,7 @@ guess; read the error and make the targeted edit.
 ## Saving a generated FILE (docx / xlsx / pptx / pdf / image)
 
 When a skill writes a real **file** to disk — a Word doc, a spreadsheet, a slide deck, a PDF, an
-image — call **`save_file_artifact(path, title?)`** right after, to put it in the Artifact panel as
+image — call **`save_file_artifact(path, title?, artifact_id?)`** right after, to put it in the Artifact panel as
 a **versioned download artifact**: the bytes are stored, a readable text preview is extracted
 (docx→text, xlsx→sheet table, pptx→slide outline, pdf→text; images get a thumbnail), and the panel
 shows a download card. Re-saving the same document as a new revision? Pass the prior
