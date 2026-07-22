@@ -1,0 +1,19 @@
+# Document-generation stack (ADR 0092) — bundled INTO the frozen desktop app so
+# the knowledge-work surface works out of the box: cowork's docx/xlsx/pptx/pdf
+# skills, careercoach's PDF packets, and any plugin that authors Office files.
+#
+# Why a committed extra (unlike the uncommitted requirements-google.txt): this
+# stack is ON by default in the shipped desktop build. CI installs it in the
+# sidecar-build step; build_sidecar.py's DOC_COLLECT_ALL then --collect-all's it
+# (find_spec-guarded, so a lean local freeze without this file still succeeds).
+#
+# Effect on the ADR 0058 D2 frozen gate: once these are importable in the bundle,
+# a plugin's `requires_pip` for them is simply satisfied — cowork installs and
+# WORKS on desktop with no manifest change, and protobanana's `pillow>=10`
+# refusal disappears (Pillow arrives transitively via python-pptx/reportlab).
+#
+# lxml, Pillow, et-xmlfile, XlsxWriter come transitively — not pinned here.
+python-docx>=1.1     # .docx authoring (imports as `docx`; ships default.docx template data)
+openpyxl>=3.1        # .xlsx authoring
+python-pptx>=0.6.23  # .pptx authoring (imports as `pptx`; pulls lxml + Pillow)
+reportlab>=4.0       # PDF authoring (compiled _rl_accel + bundled font/AFM data)

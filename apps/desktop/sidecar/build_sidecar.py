@@ -139,6 +139,27 @@ OPTIONAL_COLLECT_ALL = [
     "googleapiclient",
 ]
 
+# Document-generation stack (ADR 0092) — the knowledge-work baseline the desktop
+# app ships ON by default so first-party skill packs (cowork's docx/xlsx/pptx/pdf
+# skills) and plugins like protobanana (Pillow) actually produce files on the
+# frozen runtime instead of hitting the ADR 0058 D2 "install on a server/Docker"
+# refusal. Installed in CI from ``requirements-docs.txt``; a lean local freeze
+# without it still works (find_spec-guarded, like the Google tier). ``--collect-all``
+# is REQUIRED here — reportlab ships font/AFM data, python-docx/pptx ship their
+# default .docx/.pptx templates as package data, and a bare import-scan misses all
+# of it (the library raises at runtime opening its default template). Import names,
+# not pip names: python-docx→``docx``, python-pptx→``pptx``, Pillow→``PIL``. lxml +
+# PIL also arrive transitively, but naming them explicitly keeps a runtime-installed
+# plugin's lazy ``import PIL`` (protobanana) importable when nothing else pulled it.
+DOC_COLLECT_ALL = [
+    "docx",
+    "openpyxl",
+    "pptx",
+    "reportlab",
+    "lxml",
+    "PIL",
+]
+
 # tkinter is GUI dead weight in a headless server and a freeze hazard — exclude it.
 # (Gradio + the chat_ui module it backed were removed from the project entirely.)
 EXCLUDE = ["tkinter"]
@@ -168,16 +189,21 @@ def main() -> None:
     collect: list[str] = []
     for pkg in COLLECT_ALL:
         collect += ["--collect-all", pkg]
-    # Optional Google libs: collect only what's importable in this build env.
+    # Optional tiers: collect only what's importable in this build env, so a lean
+    # freeze (extra not installed) still succeeds instead of erroring on a --collect
+    # of a missing package.
     import importlib.util
 
-    for pkg in OPTIONAL_COLLECT_ALL:
-        if importlib.util.find_spec(pkg) is not None:
-            collect += ["--collect-all", pkg]
-        else:
-            print(f"note: optional package not installed, skipping: {pkg} "
-                  "(install requirements-google.txt to ship Gmail/Calendar)",
-                  file=sys.stderr)
+    def _collect_if_present(pkgs: list[str], hint: str) -> None:
+        for pkg in pkgs:
+            if importlib.util.find_spec(pkg) is not None:
+                collect.extend(["--collect-all", pkg])
+            else:
+                print(f"note: optional package not installed, skipping: {pkg} ({hint})",
+                      file=sys.stderr)
+
+    _collect_if_present(OPTIONAL_COLLECT_ALL, "install requirements-google.txt to ship Gmail/Calendar")
+    _collect_if_present(DOC_COLLECT_ALL, "install requirements-docs.txt to ship the document-generation stack")
     exclude: list[str] = []
     for mod in EXCLUDE:
         exclude += ["--exclude-module", mod]
