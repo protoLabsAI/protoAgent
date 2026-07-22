@@ -61,11 +61,11 @@ def secret_overlay() -> dict:
     return sec if isinstance(sec, dict) else {}
 
 
-def _env_secret_values(overlay: dict, name: str) -> dict:
+def env_secret_values(overlay: dict, name: str) -> dict:
     """The per-env secret VALUES stored for delegate ``name`` — i.e. every overlay
     entry keyed ``<name>.env.<VARNAME>`` returned as ``{VARNAME: value}``."""
     prefix = f"{name}{ENV_KEY_SEP}"
-    return {k[len(prefix):]: v for k, v in overlay.items() if k.startswith(prefix)}
+    return {k[len(prefix) :]: v for k, v in overlay.items() if k.startswith(prefix)}
 
 
 def merged_delegates() -> list:
@@ -87,7 +87,7 @@ def merged_delegates() -> list:
                 _set_dotted(raw, adapter.secret_field, val)
         # Overlay per-env secrets back into ``raw["env"]`` so the spawned child sees
         # real values while the tracked config held only empty references (#2114).
-        env_secrets = _env_secret_values(overlay, name) if name else {}
+        env_secrets = env_secret_values(overlay, name) if name else {}
         if env_secrets:
             if not copied:
                 raw = copy.deepcopy(raw)
@@ -150,11 +150,56 @@ def _route_secret(name: str, entry: dict) -> dict:
     return entry
 
 
+def _prune_secrets(name: str, keep_env: set[str] | None) -> None:
+    """Drop stored secrets for delegate ``name`` that are no longer referenced.
+
+    ``keep_env`` = the env var names still present on the entry (their
+    ``<name>.env.<VAR>`` values survive); ``None`` = the delegate is being deleted —
+    drop EVERYTHING under ``<name>.`` including the adapter secret_field. Removing a
+    secret row (or the whole delegate) MUST remove the stored value, or
+    ``merged_delegates`` silently re-injects it at every spawn forever (QA panel
+    major on #2150)."""
+    import os
+
+    import yaml as _yaml
+
+    from graph.config_io import load_secrets, secrets_yaml_path
+
+    path = secrets_yaml_path()
+    current = load_secrets()
+    section = current.get(SECRETS_SECTION)
+    if not isinstance(section, dict) or not section:
+        return
+    env_prefix = f"{name}{ENV_KEY_SEP}"
+    any_prefix = f"{name}."
+    doomed = []
+    for k in section:
+        if keep_env is None:
+            if k.startswith(any_prefix) or k.startswith(env_prefix):
+                doomed.append(k)
+        elif k.startswith(env_prefix) and k[len(env_prefix) :] not in keep_env:
+            doomed.append(k)
+    if not doomed:
+        return
+    for k in doomed:
+        del section[k]
+    if not section:
+        current.pop(SECRETS_SECTION, None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".yaml.tmp")
+    with open(tmp, "w") as f:
+        _yaml.safe_dump(current, f, sort_keys=False, default_flow_style=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
 def upsert_delegate(entry: dict) -> list:
     """Add or replace a delegate by name; route its secret; persist. Returns the
     new list (secret-free, as stored)."""
     name = str(entry.get("name", "")).strip()
     entry = _route_secret(name, entry)
+    env = entry.get("env")
+    _prune_secrets(name, set(env.keys()) if isinstance(env, dict) else set())
     lst = [e for e in read_delegates_raw() if not (isinstance(e, dict) and e.get("name") == name)]
     lst.append(entry)
     _save_list(lst)
@@ -162,6 +207,7 @@ def upsert_delegate(entry: dict) -> list:
 
 
 def delete_delegate(name: str) -> list:
+    _prune_secrets(name, None)  # a deleted delegate leaves no secrets behind
     lst = [e for e in read_delegates_raw() if not (isinstance(e, dict) and e.get("name") == name)]
     _save_list(lst)
     return lst

@@ -46,7 +46,7 @@ def _public_view(raw: dict) -> dict:
     has_secret = bool(adapter and adapter.secret_field and overlay.get(f"{name}.{adapter.secret_field}"))
     # Per-env secret var names stored for this delegate (`<name>.env.<VAR>`) — masked
     # in the returned env so the form shows them set-but-masked (#2114).
-    env_secret_keys = store._env_secret_values(overlay, name).keys() if name else set()
+    env_secret_keys = store.env_secret_values(overlay, name).keys() if name else set()
     # Drop any secret-bearing top-level field (api_key, *_token, auth, …).
     view = {k: v for k, v in raw.items() if not _is_secretish(k)}
     # keep auth.scheme (not the token) for a2a so the form can prefill it

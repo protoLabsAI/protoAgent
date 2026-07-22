@@ -21,8 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never sit in plaintext config. Values are verbatim (no `${VAR}` expansion) and merge over
   the inherited process env *after* `env_remove` strips it (a trailing `_` is a prefix
   match). Reads never echo a secret value — the form shows set-but-masked rows. (#2114)
-
-### Added
 - **Generated files are now versioned artifacts — `save_file_artifact`.** A new `file` artifact
   kind and `save_file_artifact(path, title?, artifact_id?)` turn a generated `.docx` / `.xlsx` /
   `.pptx` / `.pdf` / image into a first-class, versioned **download artifact**: the bytes are stored

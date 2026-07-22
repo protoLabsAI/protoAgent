@@ -406,3 +406,29 @@ def test_edit_keeps_stored_env_secret_when_row_left_masked(client, fake_io):
     assert r.status_code == 200
     assert fake_io["secrets"]["delegate_secrets"]["coder.env.ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
     assert store.merged_delegates()[0]["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
+
+
+def test_removing_a_secret_env_row_prunes_the_stored_value(tmp_path, monkeypatch):
+    """QA panel major on #2150: deleting a secret row must delete its stored value —
+    an orphaned delegate_secrets entry would re-inject at every spawn forever."""
+    import yaml
+
+    from plugins.delegates import store
+
+    sp = tmp_path / "secrets.yaml"
+    sp.write_text(
+        yaml.safe_dump({"delegate_secrets": {"d1.env.TOKEN": "sk-1", "d1.env.HOST": "h", "d2.env.TOKEN": "sk-2"}})
+    )
+    monkeypatch.setattr("graph.config_io.secrets_yaml_path", lambda: sp)
+    monkeypatch.setattr("graph.config_io.load_secrets", lambda path=None: yaml.safe_load(sp.read_text()) or {})
+
+    store._prune_secrets("d1", {"HOST"})  # TOKEN row removed by the operator
+    left = yaml.safe_load(sp.read_text())["delegate_secrets"]
+    assert "d1.env.TOKEN" not in left
+    assert left["d1.env.HOST"] == "h"  # kept row untouched
+    assert left["d2.env.TOKEN"] == "sk-2"  # other delegates untouched
+
+    store._prune_secrets("d1", None)  # delegate deleted → everything under d1. goes
+    left = yaml.safe_load(sp.read_text()).get("delegate_secrets", {})
+    assert not any(k.startswith("d1.") for k in left)
+    assert left["d2.TOKEN" if "d2.TOKEN" in left else "d2.env.TOKEN"]

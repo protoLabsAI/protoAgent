@@ -734,7 +734,9 @@ class AcpAdapter(Adapter):
             "deny_kinds": d.deny_kinds,
         }
 
-    async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None) -> str:
+    async def dispatch(
+        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+    ) -> str:
         if d.manage_git:
             return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id)
         return await self._prompt(d, query, timeout=timeout)
@@ -793,9 +795,7 @@ class AcpAdapter(Adapter):
             if prep.error:
                 return f"Error: managed-git setup for {d.name!r} failed: {prep.error}"
             reply = await self._prompt(d, query + harness.edit_only_directive(branch), timeout=timeout)
-            outcome = await harness.finish(
-                workdir, base=d.base_branch, branch=branch, item_id=iid, title=title
-            )
+            outcome = await harness.finish(workdir, base=d.base_branch, branch=branch, item_id=iid, title=title)
             notes = "".join(f"\n- note: {n}" for n in prep.notes)
             return f"{reply}\n\n{outcome.render()}{notes}"
         finally:

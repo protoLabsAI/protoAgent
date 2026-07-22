@@ -55,16 +55,23 @@ function coerce(field: DelegateFieldSpec, raw: unknown): unknown {
 // ── per-delegate env editor (#2114) ──────────────────────────────────────────
 // One env var as the form state models it. A `secret` row routes its value to
 // secrets.yaml on save; on edit it seeds masked (value blank) — blank = keep stored.
-type EnvRow = { key: string; value: string; secret: boolean };
+type EnvRow = { uid: string; key: string; value: string; secret: boolean };
+
+let _envRowUid = 0;
+const nextEnvRowUid = () => `row-${++_envRowUid}`;
 
 // Seed the env rows from a DelegateView. A masked value ("***") marks a stored
 // secret — seed the row secret + blank so we don't echo the mask back on save.
 function seedEnvRows(initial: DelegateView | null): EnvRow[] {
   const env = initial?.env;
   if (!env || typeof env !== "object" || Array.isArray(env)) return [];
-  return Object.entries(env as Record<string, unknown>).map(([key, v]) => {
-    const masked = v === "***";
-    return { key, value: masked ? "" : String(v ?? ""), secret: masked };
+  // "***" is only the mask sentinel when the API says this delegate HAS stored env
+  // secrets — a genuine literal "***" value on a secret-free delegate must round-trip
+  // as-is (QA panel on #2150).
+  const hasSecrets = Boolean(initial?.has_env_secrets);
+  return Object.entries(env as Record<string, unknown>).map(([key, v], i) => {
+    const masked = hasSecrets && v === "***";
+    return { uid: `seed-${i}-${key}`, key, value: masked ? "" : String(v ?? ""), secret: masked };
   });
 }
 
@@ -423,14 +430,14 @@ function EnvEditor({
   setEnvRemove: (v: string) => void;
 }) {
   const patch = (i: number, p: Partial<EnvRow>) => setRows((r) => r.map((row, j) => (j === i ? { ...row, ...p } : row)));
-  const addRow = () => setRows((r) => [...r, { key: "", value: "", secret: false }]);
+  const addRow = () => setRows((r) => [...r, { uid: nextEnvRowUid(), key: "", value: "", secret: false }]);
   const delRow = (i: number) => setRows((r) => r.filter((_, j) => j !== i));
   return (
     <div className="field delegate-envmap">
       <span>{field.label}</span>
       <div className="delegate-env-rows">
         {rows.map((row, i) => (
-          <div className="delegate-env-row" key={i}>
+          <div className="delegate-env-row" key={row.uid}>
             <Input
               aria-label="env name"
               placeholder="NAME"

@@ -59,8 +59,7 @@ class DelegateRegistry:
     def roster(self) -> list[dict]:
         """Structured one-entry-per-delegate roster (for the ``list_agents`` tool)."""
         return [
-            {"name": d.name, "type": d.type, "description": d.description, "url": d.url}
-            for d in self._items.values()
+            {"name": d.name, "type": d.type, "description": d.description, "url": d.url} for d in self._items.values()
         ]
 
     async def dispatch(self, name: str, query: str, *, item_id: str | None = None, raw: bool = False) -> str:
