@@ -150,15 +150,18 @@ def _route_secret(name: str, entry: dict) -> dict:
     return entry
 
 
-def _prune_secrets(name: str, keep_env: set[str] | None) -> None:
+def _prune_secrets(name: str, keep_env: set[str] | None, secret_field: str | None = None) -> None:
     """Drop stored secrets for delegate ``name`` that are no longer referenced.
 
-    ``keep_env`` = the env var names still present on the entry (their
-    ``<name>.env.<VAR>`` values survive); ``None`` = the delegate is being deleted —
-    drop EVERYTHING under ``<name>.`` including the adapter secret_field. Removing a
-    secret row (or the whole delegate) MUST remove the stored value, or
-    ``merged_delegates`` silently re-injects it at every spawn forever (QA panel
-    major on #2150)."""
+    ``keep_env`` = the env var names still SECRET-ROUTED on the entry (marked by the
+    operator or secret-ish by name) — their ``<name>.env.<VAR>`` values survive; every
+    other ``<name>.env.*`` entry is pruned, including a var whose secret toggle was
+    turned OFF (its stale stored value would otherwise overlay the operator's new
+    plaintext at every load — QA panel round 2 on #2150). ``keep_env=None`` = the
+    delegate is being deleted: all its env secrets go, plus its adapter
+    ``secret_field`` entry when given. Matching is STRUCTURED (``<name>.env.`` and the
+    exact ``<name>.<secret_field>`` key) — never a bare ``<name>.`` prefix, which
+    would swallow another delegate whose dotted name extends this one."""
     import os
 
     import yaml as _yaml
@@ -171,13 +174,12 @@ def _prune_secrets(name: str, keep_env: set[str] | None) -> None:
     if not isinstance(section, dict) or not section:
         return
     env_prefix = f"{name}{ENV_KEY_SEP}"
-    any_prefix = f"{name}."
     doomed = []
     for k in section:
-        if keep_env is None:
-            if k.startswith(any_prefix) or k.startswith(env_prefix):
+        if k.startswith(env_prefix):
+            if keep_env is None or k[len(env_prefix) :] not in keep_env:
                 doomed.append(k)
-        elif k.startswith(env_prefix) and k[len(env_prefix) :] not in keep_env:
+        elif keep_env is None and secret_field and k == f"{name}.{secret_field}":
             doomed.append(k)
     if not doomed:
         return
@@ -197,9 +199,13 @@ def upsert_delegate(entry: dict) -> list:
     """Add or replace a delegate by name; route its secret; persist. Returns the
     new list (secret-free, as stored)."""
     name = str(entry.get("name", "")).strip()
+    # Which env vars remain SECRET-routed after this save — captured BEFORE
+    # _route_secret pops the form's env_secret marker list.
+    marked = {str(k) for k in (entry.get("env_secret") or [])}
+    env_in = entry.get("env") if isinstance(entry.get("env"), dict) else {}
+    keep = {v for v in env_in if v in marked or is_secretish(v)}
     entry = _route_secret(name, entry)
-    env = entry.get("env")
-    _prune_secrets(name, set(env.keys()) if isinstance(env, dict) else set())
+    _prune_secrets(name, keep)
     lst = [e for e in read_delegates_raw() if not (isinstance(e, dict) and e.get("name") == name)]
     lst.append(entry)
     _save_list(lst)
@@ -207,7 +213,11 @@ def upsert_delegate(entry: dict) -> list:
 
 
 def delete_delegate(name: str) -> list:
-    _prune_secrets(name, None)  # a deleted delegate leaves no secrets behind
+    # A deleted delegate leaves no secrets behind — env entries plus its adapter's
+    # secret_field, matched structurally (never a bare name prefix).
+    doomed = next((e for e in read_delegates_raw() if isinstance(e, dict) and e.get("name") == name), None)
+    adapter = ADAPTERS.get(str(doomed.get("type", ""))) if isinstance(doomed, dict) else None
+    _prune_secrets(name, None, secret_field=adapter.secret_field if adapter else None)
     lst = [e for e in read_delegates_raw() if not (isinstance(e, dict) and e.get("name") == name)]
     _save_list(lst)
     return lst

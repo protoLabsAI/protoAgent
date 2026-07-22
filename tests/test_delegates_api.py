@@ -428,7 +428,42 @@ def test_removing_a_secret_env_row_prunes_the_stored_value(tmp_path, monkeypatch
     assert left["d1.env.HOST"] == "h"  # kept row untouched
     assert left["d2.env.TOKEN"] == "sk-2"  # other delegates untouched
 
-    store._prune_secrets("d1", None)  # delegate deleted → everything under d1. goes
+    store._prune_secrets("d1", None, secret_field="token")  # delegate deleted
     left = yaml.safe_load(sp.read_text()).get("delegate_secrets", {})
-    assert not any(k.startswith("d1.") for k in left)
-    assert left["d2.TOKEN" if "d2.TOKEN" in left else "d2.env.TOKEN"]
+    assert not any(k.startswith("d1.env.") or k == "d1.token" for k in left)
+    assert left["d2.env.TOKEN"] == "sk-2"  # exact value, exact key — neighbor intact
+
+
+def test_prune_never_swallows_a_dotted_neighbor(tmp_path, monkeypatch):
+    """Round-2 pin: deleting 'dev' must NOT touch 'dev.staging' — matching is
+    structured on <name>.env. / <name>.<secret_field>, never a bare name prefix."""
+    import yaml
+
+    from plugins.delegates import store
+
+    sp = tmp_path / "secrets.yaml"
+    sp.write_text(yaml.safe_dump({"delegate_secrets": {"dev.env.K": "a", "dev.token": "t", "dev.staging.env.K": "b"}}))
+    monkeypatch.setattr("graph.config_io.secrets_yaml_path", lambda: sp)
+    monkeypatch.setattr("graph.config_io.load_secrets", lambda path=None: yaml.safe_load(sp.read_text()) or {})
+
+    store._prune_secrets("dev", None, secret_field="token")
+    left = yaml.safe_load(sp.read_text())["delegate_secrets"]
+    assert left == {"dev.staging.env.K": "b"}
+
+
+def test_untoggling_a_secret_prunes_its_stale_stored_value(tmp_path, monkeypatch):
+    """Round-2 pin: a var whose secret toggle is turned OFF must lose its stored
+    value — otherwise merged_delegates overlays the stale secret over the operator's
+    new plaintext at every load."""
+    import yaml
+
+    from plugins.delegates import store
+
+    sp = tmp_path / "secrets.yaml"
+    sp.write_text(yaml.safe_dump({"delegate_secrets": {"d1.env.MYVAR": "old-secret"}}))
+    monkeypatch.setattr("graph.config_io.secrets_yaml_path", lambda: sp)
+    monkeypatch.setattr("graph.config_io.load_secrets", lambda path=None: yaml.safe_load(sp.read_text()) or {})
+
+    # MYVAR still exists on the entry but is no longer secret-routed → keep excludes it.
+    store._prune_secrets("d1", set())
+    assert not (yaml.safe_load(sp.read_text()) or {}).get("delegate_secrets", {})
