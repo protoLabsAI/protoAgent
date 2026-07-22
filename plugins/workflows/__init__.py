@@ -20,9 +20,9 @@ from typing import Any, Awaitable, Callable
 from langchain_core.tools import tool
 
 from graph import sdk
-from plugins.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
+from plugins.workflows.engine import execute_workflow, render_template, resolve_inputs, validate_recipe
 from plugins.workflows.registry import WorkflowRegistry
-from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, WorkflowRunStore
+from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_PAUSED, WorkflowRunStore
 
 _RECIPES = Path(__file__).parent / "recipes"
 
@@ -31,7 +31,7 @@ def _paused_message(result: dict) -> str:
     """Operator-facing pause notice — the ``run_workflow`` tool return and the chat
     ``/<recipe>`` reply. The console reads the structured ``paused``/``run_id`` fields."""
     return (
-        f"⚠️ Workflow paused at step {result['paused_at']!r} for operator approval. "
+        f"⚠️ Workflow paused at step {result['paused_step']!r} for operator approval. "
         f"Run id: {result['run_id']}. Resume from the Workflows panel."
     )
 
@@ -133,6 +133,129 @@ async def _safe(cb: Callable[[dict], Awaitable[None]], event: dict) -> None:
         await cb(event)
     except Exception:  # noqa: BLE001 — progress is best-effort, never fatal
         pass
+
+
+def _rendered_gate_prompt(recipe: dict, state: dict) -> str:
+    """The paused step's prompt, templated with the run's inputs + prior outputs — what
+    the operator actually approves (never raw ``{{...}}`` syntax)."""
+    pending = state.get("pending_step")
+    step = next((s for s in recipe.get("steps", []) if s.get("id") == pending), None) if recipe else None
+    if step is None:
+        return ""
+    return render_template(step.get("prompt", ""), state.get("inputs") or {}, state.get("step_outputs") or {})
+
+
+def _paused_run_view(reg: WorkflowRegistry, state: dict) -> dict:
+    """One paused run as the console's Pending Gates card consumes it: identity, the
+    step it's parked on, that step's RENDERED prompt, the prior outputs, timestamps."""
+    return {
+        "run_id": state.get("run_id"),
+        "recipe_name": state.get("recipe_name"),
+        "paused_step": state.get("pending_step"),
+        "prompt": _rendered_gate_prompt(reg.get(state.get("recipe_name")), state),
+        "step_outputs": state.get("step_outputs") or {},
+        "inputs": state.get("inputs") or {},
+        "created_at": state.get("created_at"),
+        "updated_at": state.get("updated_at"),
+    }
+
+
+def _list_paused_runs(reg: WorkflowRegistry, run_store: WorkflowRunStore | None = None) -> list[dict]:
+    """Every paused run (the Pending Gates queue), rendered for the console. Empty when
+    none are parked."""
+    if run_store is None:
+        run_store = WorkflowRunStore(_writable_dir() / ".runs")
+    return [_paused_run_view(reg, state) for state in run_store.paused()]
+
+
+async def _resume(
+    reg: WorkflowRegistry,
+    run_id: str,
+    action: str,
+    edits: dict | None = None,
+    run_store: WorkflowRunStore | None = None,
+) -> dict:
+    """Continue a paused run from its parked step. ``action``:
+
+    * ``approve`` — run the gated step with its original (templated) prompt.
+    * ``edit``    — run the gated step with ``edits["prompt"]`` verbatim; downstream
+      steps see the edited step's output.
+    * ``reject``  — mark the gated step failed (``rejected by operator``); the DAG
+      continues and dependents inherit the error (inline-failure semantics).
+
+    The stored state (recipe, inputs, completed outputs) is re-fed to
+    ``execute_workflow`` with the done steps seeded, so nothing already-run re-runs.
+    The run flips to ``running`` and then to ``done``/``failed`` (or re-``paused`` if a
+    *downstream* gate is hit). Raises ``ValueError`` on an unknown/non-paused run."""
+    if action not in ("approve", "edit", "reject"):
+        raise ValueError(f"unknown resume action {action!r} (approve | edit | reject)")
+    # Validate EVERYTHING up front — before the registry is consulted and long before
+    # the run flips to `running` on disk. Failing later would orphan the run: gone
+    # from the pending list, stuck `running`, unresumable (QA panel blocker).
+    if action == "edit" and not str((edits or {}).get("prompt", "")).strip():
+        raise ValueError("edit action requires a non-empty edits.prompt")
+    if run_store is None:
+        run_store = WorkflowRunStore(_writable_dir() / ".runs")
+
+    state = run_store.load(run_id)
+    if state is None:
+        raise ValueError(f"no run {run_id!r}")
+    if state.get("status") != STATUS_PAUSED:
+        raise ValueError(f"run {run_id!r} is not paused (status: {state.get('status')})")
+    pending_step = state.get("pending_step")
+    if not pending_step:
+        raise ValueError(f"run {run_id!r} has no pending step to resume")
+
+    name = state["recipe_name"]
+    recipe = reg.get(name)
+    if recipe is None:
+        raise ValueError(f"no workflow named {name!r}")
+    inputs = dict(state.get("inputs") or {})
+    completed = dict(state.get("step_outputs") or {})
+
+    # Re-attach the store to this run and flip it back to `running` before dispatching.
+    run_store.resume(run_id)
+
+    async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+        out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
+        run_store.step_done(step_id, out)
+        return out
+
+    def _gate_check(step: dict) -> str | None:
+        return "pause" if step.get("gate") == "human" else None
+
+    kwargs: dict[str, Any] = {
+        "run_step": _run_step,
+        "max_concurrency": getattr(sdk.config(), "subagent_max_concurrency", 3),
+        "gate_check": _gate_check,
+        "pause_fn": lambda step_id, done: run_store.pause(step_id, done),
+        "seed_outputs": completed,
+        "skip_gate": {pending_step},  # the operator already decided this gate's fate
+    }
+    if action == "reject":
+        kwargs["prefailed"] = {pending_step: "rejected by operator"}
+    elif action == "edit":
+        edited = (edits or {}).get("prompt")
+        if edited is None:
+            raise ValueError("edit resume requires edits.prompt")
+        kwargs["prompt_overrides"] = {pending_step: edited}
+
+    try:
+        result = await execute_workflow(recipe, inputs, **kwargs)
+    except Exception:
+        run_store.finish(STATUS_FAILED)
+        raise
+    if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal
+        result.setdefault("run_id", run_id)
+        result["output"] = _paused_message(result)
+        return result
+    # Failed steps (inline errors + a reject) never hit _run_step's step_done — mirror
+    # their error text into the record, matching _execute's finish path.
+    for sid in result["failed"]:
+        run_store.step_done(sid, result["steps"][sid])
+    run_store.finish(STATUS_FAILED if result["failed"] else STATUS_DONE)
+    result["run_id"] = run_id
+    return result
 
 
 def register(registry: Any) -> None:
@@ -263,6 +386,20 @@ def register(registry: Any) -> None:
             raise HTTPException(status_code=400, detail="invalid recipe: " + "; ".join(errs))
         path = _reg().save(body)
         return {"saved": True, "name": body.get("name"), "path": path}
+
+    @router.get("/runs")
+    async def _runs() -> dict:
+        # The Pending Gates queue — only PAUSED runs, each with its parked step's
+        # rendered prompt + prior outputs. Empty list when nothing is gated.
+        return {"runs": _list_paused_runs(_reg())}
+
+    @router.post("/runs/{run_id}/resume")
+    async def _resume_route(run_id: str, body: dict = Body(default={})) -> dict:
+        body = body or {}
+        try:
+            return await _resume(_reg(), run_id, body.get("action") or "approve", body.get("edits") or {})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.delete("/{name}")
     async def _delete(name: str) -> dict:

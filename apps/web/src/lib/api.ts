@@ -49,6 +49,7 @@ import type {
   ToolEvent,
   TurnUsage,
   WatchState,
+  WorkflowPausedRun,
   WorkflowRunResult,
   WorkflowSummary,
 } from "./types";
@@ -1383,6 +1384,25 @@ export const api = {
     return request<{ deleted: boolean }>(`/api/plugins/workflows/${encodeURIComponent(name)}`, {
       method: "DELETE",
     });
+  },
+
+  // Paused workflow runs (F3) — runs parked at a `gate: human` step, awaiting operator
+  // approval. The "Pending Gates" section polls this on mount + after each action.
+  workflowRuns() {
+    return request<{ runs: WorkflowPausedRun[] }>("/api/plugins/workflows/runs");
+  },
+
+  // Continue a paused run from its gated step: approve (original prompt), edit
+  // (`edits.prompt` runs verbatim), or reject (step marked failed, DAG continues).
+  // Resolves with the run's final output (or a paused envelope if a downstream gate hits).
+  resumeWorkflow(
+    runId: string,
+    body: { action: "approve" | "edit" | "reject"; edits?: { prompt?: string } },
+  ) {
+    return request<WorkflowRunResult>(
+      `/api/plugins/workflows/runs/${encodeURIComponent(runId)}/resume`,
+      { method: "POST", body },
+    );
   },
 
   // Save a flat {key: value} payload to a cascade layer (ADR 0047): "agent" (the

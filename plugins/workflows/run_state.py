@@ -107,6 +107,22 @@ class WorkflowRunStore:
         self._write()
         return self._state["run_id"]
 
+    def resume(self, run_id: str) -> dict[str, Any] | None:
+        """Re-attach this store to an on-disk run and flip it back to ``running``
+        (the F3 resume path: a paused run is being continued). Loads the persisted
+        state into ``self._state`` — so subsequent ``step_done`` / ``finish`` /
+        ``pause`` mutate the SAME record — clears ``pending_step``, and returns the
+        loaded state. ``None`` if the run is absent/corrupt (nothing to resume)."""
+        state = self.load(run_id)
+        if state is None:
+            return None
+        state["status"] = STATUS_RUNNING
+        state["pending_step"] = None
+        state["updated_at"] = _now()
+        self._state = state
+        self._write()
+        return state
+
     def load(self, run_id: str) -> dict[str, Any] | None:
         """Read a run's persisted state from disk (``None`` if absent/corrupt)."""
         try:
@@ -120,6 +136,13 @@ class WorkflowRunStore:
         if not self._dir.is_dir():
             return []
         return sorted(p.stem for p in self._dir.glob("*.json"))
+
+    def paused(self) -> list[dict[str, Any]]:
+        """Every ``paused`` run on disk (full state dicts), newest-updated first —
+        the operator's "Pending Gates" queue. Corrupt/absent files are skipped."""
+        runs = [state for rid in self.list_runs() if (state := self.load(rid)) and state.get("status") == STATUS_PAUSED]
+        runs.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
+        return runs
 
     def _write(self) -> None:
         try:

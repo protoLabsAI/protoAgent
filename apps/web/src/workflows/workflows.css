@@ -134,3 +134,99 @@
   font-family: var(--font-mono);
   font-size: 12px;
 }
+
+/* Pending Gates (F3) — paused runs awaiting operator approval, above the runner. */
+.workflow-gates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workflow-gates-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 12px 0;
+}
+
+.workflow-gates-head h2 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-secondary);
+}
+
+.workflow-gate-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--accent, #7c8cff);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.workflow-gate-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated, #111114);
+}
+
+.workflow-gate-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.workflow-gate-head svg {
+  color: var(--accent, #7c8cff);
+  flex: none;
+}
+
+.workflow-gate-head .workflow-step-sub {
+  margin-left: auto;
+}
+
+.workflow-gate-edit {
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.workflow-gate-busy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  color: var(--fg-secondary);
+  font-size: 12px;
+}
+
+.workflow-spin {
+  animation: workflow-spin 0.9s linear infinite;
+}
+
+@keyframes workflow-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

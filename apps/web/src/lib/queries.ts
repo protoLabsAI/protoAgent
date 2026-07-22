@@ -13,6 +13,9 @@ export const queryKeys = {
   watches: ["watches"] as const,
   tasks: ["tasks", "issues"] as const,
   workflows: ["workflows"] as const,
+  // Paused workflow runs (F3 Pending Gates) — a distinct top-level key so a recipe-list
+  // save/delete invalidation (["workflows"]) doesn't disturb this queue, and vice versa.
+  workflowRuns: ["workflow-runs"] as const,
   subagents: ["subagents"] as const,
   tools: ["tools"] as const,
   telemetry: ["telemetry"] as const,
@@ -117,6 +120,15 @@ export const workflowsQuery = () =>
   queryOptions({
     queryKey: queryKeys.workflows,
     queryFn: () => api.workflows(),
+  });
+
+// Paused workflow runs (F3 Pending Gates). Polled while the panel is mounted so a run the
+// agent parks mid-turn shows up, and invalidated after each approve/edit/reject action.
+export const workflowRunsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.workflowRuns,
+    queryFn: () => api.workflowRuns(),
+    refetchInterval: 5_000,
   });
 
 export const subagentsQuery = () =>

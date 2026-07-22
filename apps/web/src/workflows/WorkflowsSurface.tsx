@@ -4,23 +4,177 @@ import { DropdownSelect, Input } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
+import { Check, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, Workflow, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
-import { queryKeys, subagentsQuery, workflowsQuery } from "../lib/queries";
-import type { WorkflowRunResult } from "../lib/types";
+import { queryKeys, subagentsQuery, workflowRunsQuery, workflowsQuery } from "../lib/queries";
+import type { WorkflowPausedRun, WorkflowRunResult } from "../lib/types";
 import { WorkflowBuilder } from "./WorkflowBuilder";
 
 // Operator surface for declarative workflow recipes (ADR 0002), on the TanStack
 // Query data layer (ADR 0013): the recipe list + subagent registry are
 // `useSuspenseQuery` reads; run/delete are `useMutation`s; loading is a
 // <Suspense> fallback and errors a contained <ErrorBoundary>.
+
+// One paused run's card: recipe name, the parked step id, its RENDERED prompt (inputs +
+// prior outputs already substituted), and Approve / Edit / Reject. Edit swaps the prompt
+// for an inline textarea pre-filled with it; Save & run resumes with the edited text.
+function PendingGateCard({
+  run,
+  busy,
+  onApprove,
+  onReject,
+  onEdit,
+}: {
+  run: WorkflowPausedRun;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+  onEdit: (prompt: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(run.prompt);
+
+  return (
+    <div className="workflow-gate-card">
+      <div className="workflow-gate-head">
+        <Workflow size={14} />
+        <strong>{run.recipe_name}</strong>
+        <span className="workflow-step-sub">{run.paused_step}</span>
+      </div>
+
+      {editing ? (
+        <textarea
+          className="workflow-gate-edit"
+          value={draft}
+          rows={6}
+          onChange={(event) => setDraft(event.target.value)}
+          aria-label="edited prompt"
+        />
+      ) : (
+        <pre className="output-block">{run.prompt}</pre>
+      )}
+
+      {busy ? (
+        <div className="workflow-gate-busy">
+          <Loader2 size={16} className="workflow-spin" /> Resuming…
+        </div>
+      ) : editing ? (
+        <div className="panel-actions">
+          <Button variant="primary" type="button" onClick={() => onEdit(draft)} title="Run with the edited prompt">
+            <Check size={14} /> Save &amp; run
+          </Button>
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setDraft(run.prompt);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div className="panel-actions">
+          <Button variant="primary" type="button" onClick={onApprove} title="Approve — run the step as-is">
+            <Check size={14} /> Approve
+          </Button>
+          <Button variant="ghost" type="button" onClick={() => setEditing(true)} title="Edit the prompt">
+            <Pencil size={14} /> Edit
+          </Button>
+          <Button variant="ghost" type="button" onClick={onReject} title="Reject — mark the step failed">
+            <X size={14} /> Reject
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The resolved result of a resumed run — replaces its card in place after the action
+// (final output, plus any failed step ids).
+function ResolvedGateCard({ run, result }: { run: WorkflowPausedRun; result: WorkflowRunResult }) {
+  return (
+    <div className="workflow-gate-card">
+      <div className="workflow-gate-head">
+        <Check size={14} />
+        <strong>{run.recipe_name}</strong>
+        <span className="workflow-step-sub">{run.paused_step}</span>
+      </div>
+      {result.failed.length ? <p className="workflow-failed">Failed steps: {result.failed.join(", ")}</p> : null}
+      <pre className="output-block">{result.output}</pre>
+    </div>
+  );
+}
+
+// "Pending" — the queue of runs parked at a `gate: human` step. Polls
+// GET /api/plugins/workflows/runs (on mount + on the 5s interval) and, after each
+// approve/edit/reject, invalidates it so a resolved run drops out. A resolved run's
+// result stays pinned in place (its card is replaced by the output) until the next poll.
+function PendingGates() {
+  const queryClient = useQueryClient();
+  const { data } = useQuery(workflowRunsQuery());
+  const runs = data?.runs ?? [];
+  const [results, setResults] = useState<Record<string, { run: WorkflowPausedRun; result: WorkflowRunResult }>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const resume = useMutation({
+    mutationFn: (v: { run: WorkflowPausedRun; action: "approve" | "edit" | "reject"; edits?: { prompt?: string } }) =>
+      api.resumeWorkflow(v.run.run_id, { action: v.action, edits: v.edits }),
+    onMutate: (v) => setBusyId(v.run.run_id),
+    onSuccess: (result, v) => {
+      if (result.paused) {
+        // A downstream gate re-paused the SAME run — it must reappear as active, so a
+        // stale pinned result can't hide it (QA panel blocker: multi-gate workflows).
+        setResults((prev) => {
+          const next = { ...prev };
+          delete next[v.run.run_id];
+          return next;
+        });
+      } else {
+        setResults((prev) => ({ ...prev, [v.run.run_id]: { run: v.run, result } }));
+      }
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
+    },
+    onSettled: () => setBusyId(null),
+  });
+
+  // Active = still-paused runs we haven't resolved locally; resolved = their pinned output.
+  const active = runs.filter((r) => !(r.run_id in results));
+  const resolved = Object.values(results);
+  if (!active.length && !resolved.length) return null;
+
+  return (
+    <section className="workflow-gates">
+      <div className="workflow-gates-head">
+        <h2>Pending</h2>
+        {active.length ? <span className="workflow-gate-count">{active.length}</span> : null}
+      </div>
+      {active.map((run) => (
+        <PendingGateCard
+          key={run.run_id}
+          run={run}
+          busy={busyId === run.run_id}
+          onApprove={() => resume.mutate({ run, action: "approve" })}
+          onReject={() => resume.mutate({ run, action: "reject" })}
+          onEdit={(prompt) => resume.mutate({ run, action: "edit", edits: { prompt } })}
+        />
+      ))}
+      {resolved.map(({ run, result }) => (
+        <ResolvedGateCard key={run.run_id} run={run} result={result} />
+      ))}
+      {resume.isError ? <p className="workflow-failed">{(resume.error as Error).message}</p> : null}
+    </section>
+  );
+}
 
 function WorkflowsBody() {
   const queryClient = useQueryClient();
@@ -110,6 +264,8 @@ function WorkflowsBody() {
           />
         ) : (
           <>
+            <PendingGates />
+
             {!workflows.length ? (
               <div className="subagent-row">
                 <div>

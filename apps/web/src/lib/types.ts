@@ -346,6 +346,26 @@ export type WorkflowRunResult = {
   output: string;
   steps: Record<string, string>;
   failed: string[];
+  // Present on a run that reached a `gate: human` step (F2/F3): the run parked
+  // instead of finishing. `run_id` identifies the durable, resumable record.
+  run_id?: string;
+  paused?: boolean;
+  paused_step?: string;
+};
+
+// A workflow run parked at a `gate: human` step, awaiting operator approval (F3).
+// GET /api/plugins/workflows/runs returns these — the console's "Pending Gates" queue.
+// `prompt` is the parked step's RENDERED prompt (inputs + prior outputs substituted),
+// so the card shows what will actually run — never raw `{{...}}` template syntax.
+export type WorkflowPausedRun = {
+  run_id: string;
+  recipe_name: string;
+  paused_step: string;
+  prompt: string;
+  step_outputs: Record<string, string>;
+  inputs: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type InboxItem = {
