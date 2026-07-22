@@ -9,6 +9,7 @@ Contributes:
   • tools  `run_workflow`, `save_workflow` (the agent runs/saves recipes)
   • router `/api/plugins/workflows/{list, {name}/run, save, {name}}` (the console Studio surface)
   • recipe dir (its bundled recipes, also exposed to the shared registry per ADR 0027)
+  • run state — every execution persists a durable per-run audit record (`run_state.py`)
 """
 
 from __future__ import annotations
@@ -21,21 +22,17 @@ from langchain_core.tools import tool
 from graph import sdk
 from plugins.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
 from plugins.workflows.registry import WorkflowRegistry
+from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, WorkflowRunStore
 
 _RECIPES = Path(__file__).parent / "recipes"
 
 
-def _build_registry(extra_dirs: list[str] | None) -> WorkflowRegistry:
-    """Bundled recipes + other enabled plugins' recipe dirs (ADR 0027) + a writable dir
-    (user/agent-saved recipes win on a name clash). ``workflow_dir`` config is used
-    verbatim when an operator overrides it; the legacy ``/sandbox`` default maps to the
-    per-instance ``instance_root/workflows`` store."""
+def _writable_dir() -> Path:
+    """The writable workflow dir — saved recipes AND run state (``.runs/``) live here.
+    ``workflow_dir`` config is used verbatim when an operator overrides it; the legacy
+    ``/sandbox`` default maps to the per-instance ``instance_root/workflows`` store."""
     from infra.paths import instance_paths
 
-    dirs: list[str] = [str(_RECIPES)]
-    for d in extra_dirs or []:
-        if Path(d).is_dir():
-            dirs.append(str(d))
     cfg = sdk.config()
     configured = getattr(cfg, "workflow_dir", "") or ""
     if configured and not str(configured).startswith("/sandbox"):
@@ -43,13 +40,28 @@ def _build_registry(extra_dirs: list[str] | None) -> WorkflowRegistry:
     else:
         writable = instance_paths().store("workflows")
     writable.mkdir(parents=True, exist_ok=True)
+    return writable
+
+
+def _build_registry(extra_dirs: list[str] | None) -> WorkflowRegistry:
+    """Bundled recipes + other enabled plugins' recipe dirs (ADR 0027) + a writable dir
+    (user/agent-saved recipes win on a name clash)."""
+    dirs: list[str] = [str(_RECIPES)]
+    for d in extra_dirs or []:
+        if Path(d).is_dir():
+            dirs.append(str(d))
+    writable = _writable_dir()
     dirs.append(str(writable))
     return WorkflowRegistry(dirs, writable_dir=str(writable))
 
 
-async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None) -> dict:
+async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None, run_store=None) -> dict:
     """Validate → resolve → run a recipe over subagents (each step via the SDK). Raises
-    ValueError on unknown/invalid recipe or missing inputs."""
+    ValueError on unknown/invalid recipe or missing inputs.
+
+    Every execution gets a UUID run_id and a durable audit trail: a ``WorkflowRunStore``
+    (default: ``{writable_dir}/.runs/{run_id}.json``) is written on start, after each
+    completed step, and on finish — the run flow itself is unchanged."""
     recipe = reg.get(name)
     if recipe is None:
         raise ValueError(f"no workflow named {name!r}")
@@ -60,20 +72,36 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None)
     if missing:
         raise ValueError(f"missing required input(s): {', '.join(missing)}")
 
+    if run_store is None:
+        run_store = WorkflowRunStore(_writable_dir() / ".runs")
+    run_id = run_store.start(name, resolved)
+
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
         out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
+        run_store.step_done(step_id, out)
         if on_step:
             await _safe(on_step, {"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
         return out
 
-    return await execute_workflow(
-        recipe,
-        resolved,
-        run_step=_run_step,
-        max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
-    )
+    try:
+        result = await execute_workflow(
+            recipe,
+            resolved,
+            run_step=_run_step,
+            max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
+        )
+    except Exception:
+        run_store.finish(STATUS_FAILED)
+        raise
+    # Failed steps never reach _run_step's step_done (the engine records their error
+    # text inline) — mirror that error text into the run record.
+    for sid in result["failed"]:
+        run_store.step_done(sid, result["steps"][sid])
+    run_store.finish(STATUS_FAILED if result["failed"] else STATUS_DONE)
+    result["run_id"] = run_id
+    return result
 
 
 async def _safe(cb: Callable[[dict], Awaitable[None]], event: dict) -> None:
