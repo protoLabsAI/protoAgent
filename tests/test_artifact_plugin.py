@@ -1042,3 +1042,23 @@ def test_blob_gc_isolates_a_failing_dir(monkeypatch, tmp_path):
     art._gc_blobs({"artifacts": []})  # both are orphans (empty store)
     assert not good.exists()  # the good orphan was still swept despite bad failing (any order)
     assert bad.exists()  # bad couldn't be removed, but didn't abort the sweep
+
+
+def test_blob_route_version_bounds(monkeypatch, tmp_path):
+    """An explicit out-of-range version 404s per the route's docstring, not silently the
+    latest (protoreview #2126); absent/0 → latest, in-range → that version."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "d.txt"
+    f.write_text("v1", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    aid = _arts(art)[0]["id"]
+    f.write_text("v2", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f), "artifact_id": aid})
+    c = TestClient(_app(art))
+    base = f"/api/plugins/artifact/artifact/{aid}/blob"
+    assert c.get(base).content == b"v2"  # absent → latest
+    assert c.get(base + "?version=0").content == b"v2"  # 0 → latest
+    assert c.get(base + "?version=1").content == b"v1"  # explicit in-range
+    assert c.get(base + "?version=99").status_code == 404  # out of range → 404 (not latest)

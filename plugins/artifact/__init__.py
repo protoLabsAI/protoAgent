@@ -300,6 +300,14 @@ def _is_file(art: dict) -> bool:
     return art.get("kind") == "file"
 
 
+def _file_not_editable(art: dict) -> str:
+    """The refusal returned when a text-source edit tool targets a file artifact."""
+    return (
+        f"Artifact {art['id']} is a file artifact (its source is a file on disk, not "
+        f"editable text). Re-generate the file and re-save it with save_file_artifact."
+    )
+
+
 def _too_big(code: str) -> str | None:
     limit = _max_code_bytes()
     if len(code.encode("utf-8")) > limit:
@@ -716,10 +724,7 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
     if art is None:
         return "No artifact to update. Create one with show_artifact first."
     if _is_file(art):
-        return (
-            f"Artifact {art['id']} is a file artifact (its source is a file on disk, not "
-            f"editable text). Re-generate the file and re-save it with save_file_artifact."
-        )
+        return _file_not_editable(art)
     src = art["versions"][-1]["code"]
     n = src.count(old_string)
     if n == 0:
@@ -754,10 +759,7 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     if art is None:
         return "No artifact to rewrite. Create one with show_artifact first."
     if _is_file(art):
-        return (
-            f"Artifact {art['id']} is a file artifact (its source is a file on disk, not "
-            f"editable text). Re-generate the file and re-save it with save_file_artifact."
-        )
+        return _file_not_editable(art)
     if title:
         art["title"] = title
     v = _commit_version(store, art, code)
@@ -1023,9 +1025,14 @@ def _build_data_router():
         if art is None:
             raise HTTPException(404, f"unknown artifact {art_id}")
         vers = art.get("versions") or []
-        idx = (version - 1) if version and 1 <= version <= len(vers) else len(vers) - 1
-        if idx < 0:
+        if not vers:
             raise HTTPException(404, "no versions")
+        if version:  # an EXPLICIT version must be in range — don't silently fall back to latest
+            if not (1 <= version <= len(vers)):
+                raise HTTPException(404, f"no version {version} (have 1..{len(vers)})")
+            idx = version - 1
+        else:  # 0/absent → latest
+            idx = len(vers) - 1
         v = vers[idx]
         blob_name, meta = v.get("blob"), v.get("file") or {}
         if not blob_name:
