@@ -101,6 +101,9 @@
 .flr-feed__src--activity {
   color: var(--pl-color-fg);
 }
+.flr-feed__src--attn {
+  color: var(--pl-color-status-error);
+}
 .flr-feed__text {
   margin: 2px 0 0;
   font-size: 12.5px;

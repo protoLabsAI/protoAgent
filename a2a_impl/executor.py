@@ -117,10 +117,12 @@ def _notify_terminal(outcome: TurnOutcome) -> None:
 
 
 # A progress hook (ADR 0051) the host can register to observe a turn's realtime
-# frames — fired at turn start (``turn_started``, which carries the task_id) and on
-# each tool start/end with ``(context_id, task_id, frame)``. No-op when unset, so live
-# turns (which already stream over their own SSE) pay nothing; the background-subagents
-# publisher uses it to surface a detached turn's progress on the event bus.
+# frames — fired at turn start (``turn_started``, which carries the task_id + a
+# ``resumed`` flag for HITL continuations), on each tool start/end, and on a HITL
+# pause (``input_required``, with the human-readable prompt) with
+# ``(context_id, task_id, frame)``. No-op when unset, so live turns (which already
+# stream over their own SSE) pay nothing; the host publisher uses it to surface
+# detached-turn progress and HITL pauses on the event bus.
 _ON_PROGRESS: list[Callable[[str, str, dict], None] | None] = [None]
 
 
@@ -242,8 +244,12 @@ class ProtoAgentExecutor(AgentExecutor):
             )
         await updater.start_work()
         # Realtime: announce the turn (carries the task_id — the handle a host needs to
-        # control or re-attach to this turn) before any work runs (ADR 0051).
-        _notify_progress(context.context_id, context.task_id, {"phase": "turn_started"})
+        # control or re-attach to this turn) before any work runs (ADR 0051). `resumed`
+        # marks a HITL continuation (the parked task got its answer), so a host can flip
+        # a "needs approval" surface back to "running" (#2132).
+        _notify_progress(
+            context.context_id, context.task_id, {"phase": "turn_started", "resumed": resume}
+        )
 
         text = context.get_user_input()
         images = _extract_image_parts(context)
@@ -508,6 +514,15 @@ class ProtoAgentExecutor(AgentExecutor):
 
                 elif event_type == "input_required":
                     await _flush_text()  # persist any answer text streamed before the pause
+                    # Surface the pause to the host hook (ADR 0051) so it can publish a
+                    # "needs approval" bus event — a fleet console can then show a pending
+                    # HITL without polling. Best-effort by contract (_notify_progress
+                    # swallows everything), so it can never break the pause itself.
+                    _notify_progress(
+                        context.context_id,
+                        context.task_id,
+                        {"phase": "input_required", "prompt": _hitl_prompt(payload)},
+                    )
                     # Human-readable prompt for plain consumers; the full
                     # form/approval payload rides a protoAgent-local hitl-v1
                     # DataPart so the console renders the form / approval card.

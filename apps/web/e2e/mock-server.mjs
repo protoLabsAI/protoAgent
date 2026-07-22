@@ -537,7 +537,18 @@ const server = createServer(async (req, res) => {
       ? [setTimeout(() => frame("turn.started", { session_id: turnSession, origin: "scheduler" }), 300),
          setTimeout(() => frame("turn.finished", { session_id: turnSession }), 2500)]
       : [];
-    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); turns.forEach(clearTimeout); });
+    // Fleet Room HITL lifecycle (#2132), slug-gated: the spec names the member whose
+    // proxied stream should park a turn (x-e2e-hitl: <slug>) and ONLY that stream emits
+    // the sequence — pause → answer lands → terminal — so the roster pill walks
+    // needs-approval → running → cleared, deterministically per connection.
+    const memberSlug = (url.pathname.match(/^\/agents\/([^/]+)\//) || [])[1] || "";
+    const hitlSlug = req.headers["x-e2e-hitl"];
+    const hitl = hitlSlug && memberSlug === hitlSlug
+      ? [setTimeout(() => frame("turn.input_required", { task_id: "t-hitl", context_id: "sess-hitl", prompt: "Approve the deploy?" }), 400),
+         setTimeout(() => frame("turn.resumed", { task_id: "t-hitl", context_id: "sess-hitl" }), 1800),
+         setTimeout(() => frame("turn.usage", { task_id: "t-hitl", context_id: "sess-hitl", state: "completed", input_tokens: 10, output_tokens: 5 }), 3200)]
+      : [];
+    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); turns.forEach(clearTimeout); hitl.forEach(clearTimeout); });
     return;
   }
   if (pathname.startsWith("/api/")) {

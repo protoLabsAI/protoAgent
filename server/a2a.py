@@ -591,11 +591,30 @@ def _record_a2a_telemetry(outcome) -> None:
 
 
 def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
-    """Per-frame progress hook (ADR 0051). Only background turns get a bus push — live
-    turns already stream over their own SSE. On the opening ``turn_started`` frame it
-    records the A2A task id on the job row (the handle ``stop_task`` needs); on tool
-    frames it republishes ``background.progress`` for the console's live job card.
+    """Per-frame progress hook (ADR 0051). A HITL pause (``input_required``) is published
+    for EVERY context as ``turn.input_required`` so a fleet console can surface "needs your
+    approval" without polling. Otherwise only background turns get a bus push — live turns
+    already stream over their own SSE. On the opening ``turn_started`` frame it records the
+    A2A task id on the job row (the handle ``stop_task`` needs); on tool frames it
+    republishes ``background.progress`` for the console's live job card.
     Best-effort — never raises into the executor."""
+    if frame.get("phase") == "input_required":
+        # The turn is parked awaiting a human answer/approval. Carries a short prompt so a
+        # consumer can render "needs your approval — <what>" without fetching the task.
+        _event_bus.publish(
+            "turn.input_required",
+            {
+                "task_id": task_id,
+                "context_id": context_id,
+                "prompt": str(frame.get("prompt") or "")[:300],
+            },
+        )
+        return
+    if frame.get("phase") == "turn_started" and frame.get("resumed"):
+        # The parked turn got its answer and is running again — lets a console flip
+        # "needs approval" back to "running" without waiting for the terminal frame.
+        # Falls through: a resumed BACKGROUND turn still records its task id below.
+        _event_bus.publish("turn.resumed", {"task_id": task_id, "context_id": context_id})
     if not context_id.startswith("background:"):
         return
     mgr = getattr(STATE, "background_mgr", None)

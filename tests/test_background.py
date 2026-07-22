@@ -815,6 +815,80 @@ class TestProgressHook:
         assert published == []
 
 
+class TestHitlTurnEvents:
+    """``turn.input_required`` / ``turn.resumed`` publish for EVERY context (#2132):
+    a parked turn emits nothing terminal (no ``turn.usage``), so these frames are the
+    only bus signal the fleet room's "needs approval" pill ever gets."""
+
+    def test_live_input_required_publishes(self, monkeypatch):
+        import server.a2a as a2a
+
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress(
+            "chat-session-1", "task-9", {"phase": "input_required", "prompt": "Approve the merge?"}
+        )
+        assert published == [
+            (
+                "turn.input_required",
+                {"task_id": "task-9", "context_id": "chat-session-1", "prompt": "Approve the merge?"},
+            )
+        ]
+
+    def test_input_required_prompt_clipped(self, monkeypatch):
+        import server.a2a as a2a
+
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress("s", "t", {"phase": "input_required", "prompt": "x" * 1000})
+        assert len(published) == 1
+        assert len(published[0][1]["prompt"]) == 300
+
+    def test_background_input_required_publishes_and_skips_job_plumbing(self, monkeypatch):
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        monkeypatch.setattr(STATE, "background_mgr", None, raising=False)
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress("background:j1", "t1", {"phase": "input_required", "prompt": "?"})
+        # Publishes the pause (even with no background manager) and does NOT fall
+        # through into the background.progress tool-frame shape.
+        assert [t for t, _ in published] == ["turn.input_required"]
+
+    def test_resumed_turn_started_publishes_turn_resumed(self, monkeypatch):
+        import server.a2a as a2a
+
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress("chat-session-1", "task-9", {"phase": "turn_started", "resumed": True})
+        assert published == [("turn.resumed", {"task_id": "task-9", "context_id": "chat-session-1"})]
+
+    def test_fresh_turn_started_stays_silent_for_live_context(self, monkeypatch):
+        import server.a2a as a2a
+
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress("chat-session-1", "task-9", {"phase": "turn_started", "resumed": False})
+        assert published == []
+
+    def test_resumed_background_turn_started_still_records_task_id(self, tmp_path, monkeypatch):
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress(f"background:{jid}", "task-42", {"phase": "turn_started", "resumed": True})
+        # Both effects: the resume marker publishes AND the job row still gets its handle.
+        assert [t for t, _ in published] == ["turn.resumed"]
+        assert mgr.store.get(jid).a2a_task_id == "task-42"
+
+
 # ── drain into the spawning chat turn (server/chat.py) ───────────────────────
 
 

@@ -4,6 +4,7 @@
 // handlers. ONE preserved thread per agent (stable contextId + persisted transcript,
 // see paletteChatStore) — `/clear` wipes it (transcript + server checkpoint).
 import { useEffect, useRef, useState } from "react";
+import { create } from "zustand";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { ChatMessageView } from "../chat/ChatMessageView";
 import { addToolRef, appendReasoning, appendText, replaceText } from "../chat/parts";
@@ -60,7 +61,16 @@ function finalize(message: ChatMessage): ChatMessage {
 // Deterministic, client-side. `/clear` wipes the thread; typed or picked from the menu.
 const SLASH = [{ name: "clear", description: "Wipe this chat + its history" }];
 
-export function PaletteChat({ agentName, agentSlug }: { agentName: string; agentSlug?: string }) {
+export function PaletteChat({
+  agentName,
+  agentSlug,
+  initial,
+}: {
+  agentName: string;
+  agentSlug?: string;
+  /** A message to auto-send once on open (Fleet Room composer → DM a member). */
+  initial?: string;
+}) {
   // A Fleet Room DM streams to a SPECIFIC member (agentSlug) and keeps its own thread,
   // scoped so DMing different members never crosses transcripts. No slug = the normal
   // ⌘K chat with this window's agent (unchanged).
@@ -214,6 +224,19 @@ export function PaletteChat({ agentName, agentSlug }: { agentName: string; agent
   };
 
   const stop = () => abortRef.current?.abort();
+
+  // Auto-send the initial message once (Fleet Room composer → DM a member with a message).
+  // Skip it if this member's persisted thread has a turn still streaming — the self-heal
+  // below owns that reconnect, and a concurrent send would clobber the same message.
+  const initialSent = useRef(false);
+  useEffect(() => {
+    if (!initial || initialSent.current) return;
+    const last = messagesRef.current[messagesRef.current.length - 1];
+    if (last?.role === "assistant" && last.status === "streaming" && last.taskId) return;
+    initialSent.current = true;
+    void send(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const empty = messages.length === 0;
   // Minimal slash menu — `/clear` hint while the draft starts with "/".
   const slashMatches = draft.startsWith("/")
@@ -270,19 +293,36 @@ export function PaletteChat({ agentName, agentSlug }: { agentName: string; agent
   );
 }
 
+// The DS PaletteView title is fixed at registration — it can't read enter() props. A
+// tiny store bridges that: the DM body records who it's pointed at on mount, and the
+// title node (a component, which PaletteView.title accepts) re-renders to "@<member>".
+const useDmTarget = create<{ name: string }>(() => ({ name: "" }));
+
+function DmTitle() {
+  const name = useDmTarget((s) => s.name);
+  return <>{name ? `@${name}` : "Direct message"}</>;
+}
+
+function MemberDm({ slug, name, initial }: { slug?: string; name?: string; initial?: string }) {
+  useEffect(() => {
+    useDmTarget.setState({ name: name ?? "" });
+  }, [name]);
+  return <PaletteChat agentSlug={slug} agentName={name ?? "agent"} initial={initial} />;
+}
+
 /** The Fleet Room DM view — the SAME wired ⌘K chat (PaletteChat), pointed at a specific
  *  member. A member row does `ctx.enter("member-dm", { slug, name })`; the palette pushes
  *  it on the stack (so Back/Escape return to the roster) and the turn streams to that
  *  member via the hub proxy. Keyed by slug so switching members remounts a clean pane
- *  bound to that member's own thread. */
+ *  bound to that member's own thread. The header names the member (via DmTitle above). */
 export function memberDmView(): PaletteView {
   return {
     id: "member-dm",
-    title: "Direct message",
+    title: <DmTitle />,
     width: 620,
     render: (ctx) => {
-      const p = (ctx.props ?? {}) as { slug?: string; name?: string };
-      return <PaletteChat key={p.slug ?? "?"} agentSlug={p.slug} agentName={p.name ?? "agent"} />;
+      const p = (ctx.props ?? {}) as { slug?: string; name?: string; initial?: string };
+      return <MemberDm key={p.slug ?? "?"} slug={p.slug} name={p.name} initial={p.initial} />;
     },
   };
 }

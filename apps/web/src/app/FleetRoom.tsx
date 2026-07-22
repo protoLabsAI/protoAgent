@@ -19,7 +19,14 @@ import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import type { FleetAgent } from "../lib/types";
-import { FleetActivityFeed, pushFleetEvent } from "./FleetActivity";
+import {
+  FleetActivityFeed,
+  markMemberDone,
+  markMemberRunning,
+  pushFleetEvent,
+  useMemberAwaiting,
+  useMemberRunning,
+} from "./FleetActivity";
 import "./fleet-room.css";
 
 /** The routing slug for a member — the host entry is the reserved "host" (ADR 0042). */
@@ -42,6 +49,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   const qc = useQueryClient();
   const toast = useToast();
   const [draft, setDraft] = useState("");
+  const [target, setTarget] = useState<"broadcast" | string>("broadcast");
   const inputRef = useRef<HTMLInputElement>(null);
   const here = currentSlug();
 
@@ -65,6 +73,8 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     [roster, here],
   );
   const onlineCount = roster.filter((a) => a.running).length;
+  const running = useMemberRunning();
+  const awaiting = useMemberAwaiting();
 
   // DM a member = the wired chat, retargeted. Push it on the palette stack so Back/Escape
   // return here. Only running members are reachable.
@@ -92,18 +102,20 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       .catch((e) => toast({ tone: "error", title: "Couldn't toggle agent", message: errMsg(e) }));
   };
 
-  const broadcast = () => {
-    const msg = draft.trim();
+  const broadcast = (msg: string) => {
     if (!msg) return;
     if (!broadcastTargets.length) {
       toast({ tone: "error", title: "No one to broadcast to", message: "No other members are online." });
       return;
     }
     // Fire-and-forget fan-out — each member runs the turn durably on its own instance.
+    // Mark each busy now (optimistic "running" pill); its terminal turn.usage clears it.
     for (const a of broadcastTargets) {
-      api
-        .sendToAgent(slugOf(a), msg)
-        .catch((e) => toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) }));
+      markMemberRunning(slugOf(a));
+      api.sendToAgent(slugOf(a), msg).catch((e) => {
+        markMemberDone(slugOf(a)); // the send failed → no turn will run to clear the pill
+        toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) });
+      });
     }
     toast({
       tone: "success",
@@ -115,10 +127,85 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     inputRef.current?.focus();
   };
 
+  // @-mention in the composer: a trailing "@token" opens a member picker; picking sets the
+  // address target (a chip) and strips the token. No target chip = broadcast to all online.
+  const mention = (() => {
+    const m = draft.match(/(?:^|\s)@([\w-]*)$/);
+    return m ? m[1].toLowerCase() : null;
+  })();
+  const mentionMatches =
+    mention !== null
+      ? roster.filter((a) => slugOf(a) !== here && a.name.toLowerCase().includes(mention)).slice(0, 6)
+      : [];
+  const pickMention = (a: FleetAgent) => {
+    setTarget(slugOf(a));
+    setDraft((d) => d.replace(/(?:^|\s)@[\w-]*$/, ""));
+    inputRef.current?.focus();
+  };
+
+  const targetAgent = target === "broadcast" ? undefined : roster.find((a) => slugOf(a) === target);
+
+  // Send: an addressed member opens its DM with the message pre-sent (the wired chat streams
+  // the reply); otherwise broadcast to all online. ⌘↵ always broadcasts.
+  /** Resolve a typed leading "@name" even when the picker was never used — people type
+   *  "@scout do the thing" and expect it to address scout, not broadcast it verbatim.
+   *  Returns the member plus the message with the mention stripped. */
+  const resolveTypedMention = (text: string): { agent?: FleetAgent; rest: string } => {
+    const m = text.match(/^\s*@([\w-]+)[\s,:]*/);
+    if (!m) return { rest: text };
+    const typed = m[1].toLowerCase();
+    const others = roster.filter((a) => slugOf(a) !== here);
+    const agent =
+      others.find((a) => a.name.toLowerCase() === typed) ??
+      others.find((a) => a.name.toLowerCase().startsWith(typed));
+    return agent ? { agent, rest: text.slice(m[0].length) } : { rest: text };
+  };
+
+  const submit = (forceBroadcast: boolean) => {
+    const raw = draft.trim();
+    if (!raw) return;
+
+    if (!forceBroadcast) {
+      // An explicit chip wins; otherwise honor a typed "@name".
+      if (!targetAgent && target !== "broadcast") {
+        toast({ tone: "error", title: "That member left the fleet", message: "Pick another, or broadcast." });
+        setTarget("broadcast");
+        return;
+      }
+      let addressed = targetAgent;
+      let msg = raw;
+      if (!addressed) {
+        const r = resolveTypedMention(raw);
+        if (r.agent) {
+          addressed = r.agent;
+          msg = r.rest.trim();
+        }
+      }
+      if (addressed) {
+        if (!addressed.running) {
+          toast({ tone: "error", title: `${addressed.name} is offline`, message: "Start it first, or broadcast." });
+          return;
+        }
+        if (!msg) {
+          toast({ tone: "error", title: `Add a message for @${addressed.name}`, message: "e.g. “@name ship it”." });
+          return;
+        }
+        ctx.enter("member-dm", { slug: slugOf(addressed), name: addressed.name, initial: msg });
+        return;
+      }
+    }
+    broadcast(raw);
+  };
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (mentionMatches.length && (e.key === "Enter" || e.key === "Tab")) {
+      e.preventDefault();
+      pickMention(mentionMatches[0]);
+      return;
+    }
     if (e.key === "Enter") {
       e.preventDefault();
-      broadcast();
+      submit(e.metaKey || e.ctrlKey);
     }
   };
 
@@ -160,6 +247,15 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     </span>
                   </button>
                   <div className="flr__actions">
+                    {awaiting[slug] && a.running ? (
+                      <span className="flr__pill flr__pill--attn" title="A turn is parked awaiting your answer">
+                        needs approval
+                      </span>
+                    ) : running[slug] && a.running ? (
+                      <span className="flr__pill flr__pill--run" title="A turn is in flight">
+                        running
+                      </span>
+                    ) : null}
                     {local && (
                       <button
                         type="button"
@@ -194,25 +290,67 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       </div>
 
       <div className="flr__composer">
-        <span className="flr__target is-cast" title="Broadcast to all online members">
-          <Radio size={13} />
-          <span>All online · {broadcastTargets.length}</span>
-        </span>
+        {mentionMatches.length > 0 && (
+          <div className="flr__mentions" role="listbox" aria-label="Address a member">
+            {mentionMatches.map((a) => {
+              const mp = presenceOf(a);
+              return (
+                <button
+                  key={slugOf(a)}
+                  type="button"
+                  className="flr__mention"
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // keep input focus; fire before blur
+                    pickMention(a);
+                  }}
+                >
+                  <span className={`flr__dot flr__dot--${mp.key}`} aria-hidden />
+                  <span className="flr__mention-name">{a.name}</span>
+                  <span className="flr__mention-meta">{mp.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <button
+          type="button"
+          className={`flr__target${targetAgent ? "" : " is-cast"}`}
+          onClick={() => setTarget("broadcast")}
+          title={
+            targetAgent
+              ? `Messaging ${targetAgent.name} — click to broadcast instead`
+              : "Broadcast to every OTHER online member (not this instance, which you're already in)"
+          }
+        >
+          {targetAgent ? (
+            <>
+              <span>@{targetAgent.name}</span>
+              <span className="flr__target-x" aria-hidden>
+                ×
+              </span>
+            </>
+          ) : (
+            <>
+              <Radio size={13} />
+              <span>Everyone else · {broadcastTargets.length}</span>
+            </>
+          )}
+        </button>
         <input
           ref={inputRef}
           className="flr__input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Message everyone online…"
-          aria-label="Broadcast message"
+          placeholder={targetAgent ? `Message @${targetAgent.name}…` : "Message everyone…  (@ to address one)"}
+          aria-label={targetAgent ? `Message ${targetAgent.name}` : "Broadcast message"}
         />
         <button
           type="button"
           className="flr__send"
-          onClick={broadcast}
-          disabled={!draft.trim() || broadcastTargets.length === 0}
-          aria-label="Broadcast"
+          onClick={() => submit(false)}
+          disabled={!draft.trim() || (!targetAgent && broadcastTargets.length === 0)}
+          aria-label={targetAgent ? `Message ${targetAgent.name}` : "Broadcast"}
         >
           <Send size={15} />
         </button>
@@ -236,10 +374,10 @@ export function fleetRoomView(opts: { onOpenAgent: (slug: string) => void }): Pa
           <kbd className="flr__kbd">click</kbd> DM a member
         </span>
         <span>
-          <kbd className="flr__kbd">↵</kbd> broadcast
+          <kbd className="flr__kbd">@</kbd> address in composer
         </span>
         <span>
-          <kbd className="flr__kbd">esc</kbd> close
+          <kbd className="flr__kbd">↵</kbd> send · <kbd className="flr__kbd">⌘↵</kbd> broadcast
         </span>
       </span>
     ),
