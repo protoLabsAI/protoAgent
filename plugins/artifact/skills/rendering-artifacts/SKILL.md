@@ -130,6 +130,23 @@ guess; read the error and make the targeted edit.
 - **`delete_artifact(artifact_id)`** — remove one for cleanup. (The user can also delete from the
   panel's trash button.)
 
+## Saving a generated FILE (docx / xlsx / pptx / pdf / image)
+
+When a skill writes a real **file** to disk — a Word doc, a spreadsheet, a slide deck, a PDF, an
+image — call **`save_file_artifact(path, title?, artifact_id?)`** right after, to put it in the Artifact panel as
+a **versioned download artifact**: the bytes are stored, a readable text preview is extracted
+(docx→text, xlsx→sheet table, pptx→slide outline, pdf→text; images get a thumbnail), and the panel
+shows a download card. Re-saving the same document as a new revision? Pass the prior
+`artifact_id` so it becomes v2, v3… of the same artifact instead of a new panel entry.
+
+```text
+# after cowork's docx skill writes /work/report.docx
+save_file_artifact("/work/report.docx", "Q3 Report")
+```
+
+This is for files that already exist on disk. To *render* HTML/React/SVG/Markdown/charts, use
+`show_artifact` (above) — don't write those to a file first.
+
 ## Interactive artifacts (calling back to you)
 
 `html` and `react` artifacts can call **`window.protoArtifact.ask(prompt)`** — it returns a

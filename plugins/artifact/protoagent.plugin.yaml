@@ -1,6 +1,6 @@
 id: artifact
 name: Artifact
-version: 0.15.0
+version: 0.16.0
 # Needs the host to serve the DS plugin-kit at /_ds/ (protoAgent #893, v0.34.0) —
 # the shell page links it for theming + the authed handshake, and artifacts inject it
 # so `.pl-*` design-system classes work inside the sandbox.
@@ -11,6 +11,8 @@ description: >-
   WebUI do it. React artifacts can import a curated offline set (d3, chart.js, lucide) and the
   protoLabs design-system @pl/ui wrappers. The shell page is served by this plugin and iframed;
   the agent's generated code renders in a nested sandbox with no access to the console.
+  It also versions generated FILES (ADR 0092): save_file_artifact stores a .docx/.xlsx/.pptx/
+  .pdf/image as a download artifact with a diffable text preview and (for images) a thumbnail.
 # Bundled into core (protoAgent #1443) and ON by default — a first-party generative-UI
 # surface (like notes/docs). Turn it off per-instance with `plugins: { disabled: [artifact] }`.
 # Pulled in-tree so it ships with the agent and iterates in the monorepo.
@@ -19,7 +21,7 @@ capabilities:
   # Truly no network: the server makes no outbound calls, and the react/mermaid libs
   # are VENDORED + served same-origin, so artifacts render fully offline (no cdnjs).
   network: []
-  filesystem: scoped     # a small artifact history under the instance data dir
+  filesystem: scoped     # artifact history + sidecar file blobs under the instance data dir
 # Operator config (ADR 0019) — `config:` declares the defaults; `settings:` renders the
 # editable fields in Settings ▸ Plugins (no restart; an env var of the same knob still
 # overrides for headless/ACP setups, precedence env > UI > default).
@@ -29,6 +31,8 @@ config:
   history: 20
   max_versions: 50
   max_code_kb: 512
+  max_blob_kb: 25600
+  max_preview_kb: 64
   ask_max_chars: 4000
 settings:
   - { key: ask_enabled, label: "Interactive artifacts", type: bool, description: "Let artifacts call back to the agent via window.protoArtifact.ask() — turns them into mini-apps (game NPCs, tutors, generators). Off by default: it lets artifact code trigger LLM calls." }
@@ -37,6 +41,8 @@ settings:
   - { key: history, label: "Artifacts kept", type: number, description: "How many artifacts to keep in the panel; the oldest is evicted past this." }
   - { key: max_versions, label: "Versions per artifact", type: number, description: "Max edit-versions kept per artifact (oldest edits trimmed)." }
   - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
+  - { key: max_blob_kb, label: "Max file size (KB)", type: number, description: "Max size of a file saved via save_file_artifact (stored as a sidecar blob); a larger file is rejected." }
+  - { key: max_preview_kb, label: "Max file preview (KB)", type: number, description: "Max extracted-text preview kept per file version (the diffable projection shown in the panel)." }
 # The shell page is PUBLIC (an iframe page-load can't carry a bearer, and the page
 # derives its slug base from /plugins/…); its data routes are gated under
 # /api/plugins/artifact (plugin-view rule 2).

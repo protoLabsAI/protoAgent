@@ -249,7 +249,14 @@ def test_manifest_exposes_all_settings_fields(monkeypatch, tmp_path):
     # every operator knob is a Settings ▸ Plugins field, with the right type.
     assert by_key["ask_enabled"]["type"] == "bool"
     assert by_key["ask_system"]["type"] == "string"
-    for num in ("ask_max_chars", "history", "max_versions", "max_code_kb"):
+    for num in (
+        "ask_max_chars",
+        "history",
+        "max_versions",
+        "max_code_kb",
+        "max_blob_kb",
+        "max_preview_kb",
+    ):
         assert by_key[num]["type"] == "number", f"{num} should be a number field"
     # every settings key has a declared default in config:.
     assert set(by_key) <= set(m["config"])
@@ -760,3 +767,298 @@ def test_live_theme_repush_is_wired(monkeypatch, tmp_path):
     # shell side: observe the kit re-theme + re-push after a fresh srcdoc load.
     assert "new MutationObserver(pushTheme).observe(document.documentElement" in html
     assert '$frame.addEventListener("load", pushTheme)' in html
+
+
+# ── file artifacts (ADR 0092 D2): save_file_artifact + sidecar blobs + blob route ─
+
+
+def test_save_file_artifact_missing_file(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    out = art.save_file_artifact.invoke({"path": str(tmp_path / "nope.docx")})
+    assert "No file at" in out
+    assert _arts(art) == []
+
+
+def test_save_file_artifact_creates_file_kind_with_blob_and_preview(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "notes.txt"
+    f.write_text("hello world\nsecond line", encoding="utf-8")
+    out = art.save_file_artifact.invoke({"path": str(f), "title": "My Notes"})
+    assert "Saved file artifact" in out
+    a = _arts(art)[0]
+    assert a["kind"] == "file" and a["title"] == "My Notes"
+    v = a["versions"][0]
+    # text preview lands verbatim in `code` (diffable); file metadata + blob token alongside.
+    assert "hello world" in v["code"]
+    assert v["file"]["filename"] == "notes.txt" and v["file"]["size"] == len(f.read_bytes())
+    assert v["file"]["mime"].startswith("text/")
+    assert v["blob"]  # sidecar token
+    # the bytes live on disk under blobs/<id>/<token>, NOT inlined in the store
+    blob = art._blob_path(a["id"], v["blob"])
+    assert blob.exists() and blob.read_bytes() == f.read_bytes()
+
+
+def test_save_file_artifact_revision_appends_version(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "r.txt"
+    f.write_text("v1 body", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    aid = _arts(art)[0]["id"]
+    f.write_text("v2 body changed", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f), "artifact_id": aid})
+    a = _arts(art)[0]
+    assert a["id"] == aid and len(a["versions"]) == 2
+    assert "v1 body" in a["versions"][0]["code"] and "v2 body changed" in a["versions"][1]["code"]
+    # each version keeps its OWN blob (distinct tokens), both on disk
+    b1, b2 = a["versions"][0]["blob"], a["versions"][1]["blob"]
+    assert b1 != b2
+    assert art._blob_path(aid, b1).exists() and art._blob_path(aid, b2).exists()
+
+
+def test_unknown_revision_target_is_rejected(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "x.txt"
+    f.write_text("x", encoding="utf-8")
+    out = art.save_file_artifact.invoke({"path": str(f), "artifact_id": "a-nope"})
+    assert "No artifact" in out and _arts(art) == []
+
+
+def test_oversized_file_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTIFACT_MAX_BLOB_KB", "1")
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"x" * 4096)
+    out = art.save_file_artifact.invoke({"path": str(f)})
+    assert "too large" in out.lower() and _arts(art) == []
+
+
+def test_blob_gc_drops_orphaned_and_deleted(monkeypatch, tmp_path):
+    """Trimming past max_versions and deleting an artifact both sweep their sidecar blobs."""
+    monkeypatch.setenv("ARTIFACT_MAX_VERSIONS", "2")
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "g.txt"
+    for i in range(3):  # 3 revisions, cap is 2 → the oldest version's blob is orphaned
+        f.write_text(f"rev {i}", encoding="utf-8")
+        art.save_file_artifact.invoke({"path": str(f), "artifact_id": (_arts(art)[0]["id"] if _arts(art) else "")})
+    a = _arts(art)[0]
+    assert len(a["versions"]) == 2  # trimmed
+    # exactly the 2 surviving version blobs remain on disk
+    live = {v["blob"] for v in a["versions"]}
+    on_disk = {p.name for p in (art._blob_root() / a["id"]).iterdir()}
+    assert on_disk == live
+    # deleting the artifact drops its whole blob dir
+    art.delete_artifact.invoke({"artifact_id": a["id"]})
+    assert not (art._blob_root() / a["id"]).exists()
+
+
+def test_blob_route_serves_bytes_with_filename(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "report.csv"
+    f.write_bytes(b"a,b\n1,2\n")
+    art.save_file_artifact.invoke({"path": str(f), "title": "Report"})
+    aid = _arts(art)[0]["id"]
+    c = TestClient(_app(art))
+    r = c.get(f"/api/plugins/artifact/artifact/{aid}/blob")
+    assert r.status_code == 200
+    assert r.content == b"a,b\n1,2\n"
+    assert "report.csv" in r.headers.get("content-disposition", "")
+    # unknown artifact / non-file artifact → 404
+    assert c.get("/api/plugins/artifact/artifact/nope/blob").status_code == 404
+    art.show_artifact.invoke({"kind": "html", "code": "<p>x</p>"})
+    html_id = _arts(art)[0]["id"]
+    assert c.get(f"/api/plugins/artifact/artifact/{html_id}/blob").status_code == 404
+
+
+def test_thumbnail_only_for_images(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    # a text file never gets a thumbnail
+    f = tmp_path / "t.txt"
+    f.write_text("plain", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    assert _arts(art)[0]["versions"][0]["file"]["thumb"] == ""
+    # an image gets a base64 PNG data-URI thumbnail (skip if Pillow isn't installed)
+    Image = pytest.importorskip("PIL.Image")
+    img = tmp_path / "pic.png"
+    Image.new("RGB", (64, 48), (200, 30, 30)).save(str(img))
+    art.save_file_artifact.invoke({"path": str(img)})
+    thumb = _arts(art)[0]["versions"][0]["file"]["thumb"]
+    assert thumb.startswith("data:image/png;base64,")
+
+
+def test_save_file_artifact_registered_and_shell_has_filecard(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    names = []
+
+    class _Reg:
+        def register_tool(self, t):
+            names.append(t.name)
+
+        def register_skill_dir(self, *a, **k):
+            pass
+
+        def register_router(self, *a, **k):
+            pass
+
+        def emit(self, *a, **k):
+            pass
+
+    art.register(_Reg())
+    assert "save_file_artifact" in names
+    # the shell renders file kinds as a download card, hides Edit, and downloads via the blob route
+    html = art._SHELL_HTML
+    assert "function fileCard(v)" in html
+    assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code)' in html
+    assert "/blob?version=" in html
+
+
+def test_docx_extraction_reads_paragraphs(monkeypatch, tmp_path):
+    docx = pytest.importorskip("docx")  # python-docx; present on the desktop stack (ADR 0092 D1)
+    art = _load(monkeypatch, tmp_path)
+    d = docx.Document()
+    d.add_paragraph("First para of the report.")
+    d.add_paragraph("Second para with detail.")
+    p = tmp_path / "r.docx"
+    d.save(str(p))
+    art.save_file_artifact.invoke({"path": str(p)})
+    v = _arts(art)[0]["versions"][0]
+    assert "First para of the report." in v["code"] and "Second para" in v["code"]
+    assert _arts(art)[0]["kind"] == "file"
+
+
+def test_xlsx_extraction_reads_sheet_cells(monkeypatch, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    art = _load(monkeypatch, tmp_path)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sales"
+    ws.append(["Region", "Total"])
+    ws.append(["West", 1200])
+    p = tmp_path / "s.xlsx"
+    wb.save(str(p))
+    art.save_file_artifact.invoke({"path": str(p)})
+    code = _arts(art)[0]["versions"][0]["code"]
+    assert "# Sales" in code and "Region" in code and "1200" in code
+
+
+def test_unparseable_office_file_degrades_not_crashes(monkeypatch, tmp_path):
+    """A .docx the extractor can't parse (corrupt, or python-docx absent in a lean env) still
+    saves — the preview is a readable degrade note, the bytes are stored, no crash."""
+    art = _load(monkeypatch, tmp_path)
+    p = tmp_path / "broken.docx"
+    p.write_bytes(b"not really a docx")
+    out = art.save_file_artifact.invoke({"path": str(p)})
+    assert "Saved file artifact" in out
+    v = _arts(art)[0]["versions"][0]
+    assert "no text preview" in v["code"].lower()
+    assert art._blob_path(_arts(art)[0]["id"], v["blob"]).read_bytes() == b"not really a docx"
+
+
+def test_pptx_extraction_reads_slide_text(monkeypatch, tmp_path):
+    pptx = pytest.importorskip("pptx")  # python-pptx; present on the desktop stack (ADR 0092 D1)
+    art = _load(monkeypatch, tmp_path)
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])  # title-only layout
+    slide.shapes.title.text = "Quarterly Roadmap"
+    prs.save(str(tmp_path / "deck.pptx"))
+    art.save_file_artifact.invoke({"path": str(tmp_path / "deck.pptx")})
+    code = _arts(art)[0]["versions"][0]["code"]
+    assert "Slide 1" in code and "Quarterly Roadmap" in code
+
+
+def test_pdf_extraction_reads_text(monkeypatch, tmp_path):
+    pytest.importorskip("pypdf")
+    canvas = pytest.importorskip("reportlab.pdfgen.canvas")  # generate a real PDF to read back
+    art = _load(monkeypatch, tmp_path)
+    p = tmp_path / "doc.pdf"
+    c = canvas.Canvas(str(p))
+    c.drawString(72, 720, "Invoice total due")
+    c.save()
+    art.save_file_artifact.invoke({"path": str(p)})
+    assert "Invoice total due" in _arts(art)[0]["versions"][0]["code"]
+
+
+# ── kind-confusion guards (protoreview #2126: both _commit_version directions) ──
+
+
+def test_save_file_artifact_refuses_to_revise_a_non_file_artifact(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>hi</p>"})
+    html_id = _arts(art)[0]["id"]
+    f = tmp_path / "x.txt"
+    f.write_text("body", encoding="utf-8")
+    out = art.save_file_artifact.invoke({"path": str(f), "artifact_id": html_id})
+    assert "not a file" in out
+    a = art._find(art._read_store(), html_id)
+    assert a["kind"] == "html" and len(a["versions"]) == 1  # untouched, not corrupted
+
+
+def test_text_edits_refuse_a_file_artifact(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "r.txt"
+    f.write_text("original", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    fid = _arts(art)[0]["id"]
+    assert "file artifact" in art.update_artifact.invoke(
+        {"old_string": "original", "new_string": "x", "artifact_id": fid}
+    )
+    assert "file artifact" in art.rewrite_artifact.invoke({"code": "x", "artifact_id": fid})
+    # the panel PUT route is guarded too (the hidden Edit button is only a client mask)
+    c = TestClient(_app(art))
+    r = c.put(f"/api/plugins/artifact/artifact/{fid}", json={"code": "x"})
+    assert r.status_code == 409
+    # still a single, intact file version with its blob
+    a = _arts(art)[0]
+    assert a["kind"] == "file" and len(a["versions"]) == 1 and a["versions"][0]["blob"]
+
+
+def test_clip_truncates_on_a_codepoint_boundary(monkeypatch, tmp_path):
+    """_clip must not split a multi-byte char at the byte cut (protoreview #2126): a
+    4-byte emoji straddling the budget is excluded cleanly, not decoded to a broken char."""
+    art = _load(monkeypatch, tmp_path)
+    note_len = len(art._PREVIEW_TRUNC.encode())
+    monkeypatch.setattr(art, "_max_preview_bytes", lambda: note_len + 5)  # 5-byte body budget
+    out = art._clip("😀" * 30)  # 4-byte codepoints, well over budget — byte-5 cut splits the 2nd
+    assert out.endswith(art._PREVIEW_TRUNC)
+    body = out[: -len(art._PREVIEW_TRUNC)]
+    assert body == "😀"  # exactly one whole emoji fits; the straddling one is dropped, not mangled
+    body.encode("utf-8")  # valid utf-8 round-trips (no partial sequence)
+
+
+def test_blob_gc_isolates_a_failing_dir(monkeypatch, tmp_path):
+    """A failure sweeping one blob dir must not abort GC of the others (protoreview #2126):
+    per-directory error isolation, so a stray un-drainable dir can't strand every orphan."""
+    art = _load(monkeypatch, tmp_path)
+    root = art._blob_root()
+    bad = root / "a-bad"
+    bad.mkdir(parents=True)
+    (bad / "sub").mkdir()  # a subdir → f.unlink() raises OSError while draining this orphan
+    good = root / "a-good"
+    good.mkdir()
+    (good / "v.bin").write_bytes(b"x")
+    art._gc_blobs({"artifacts": []})  # both are orphans (empty store)
+    assert not good.exists()  # the good orphan was still swept despite bad failing (any order)
+    assert bad.exists()  # bad couldn't be removed, but didn't abort the sweep
+
+
+def test_blob_route_version_bounds(monkeypatch, tmp_path):
+    """An explicit out-of-range version 404s per the route's docstring, not silently the
+    latest (protoreview #2126); absent/0 → latest, in-range → that version."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "d.txt"
+    f.write_text("v1", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f)})
+    aid = _arts(art)[0]["id"]
+    f.write_text("v2", encoding="utf-8")
+    art.save_file_artifact.invoke({"path": str(f), "artifact_id": aid})
+    c = TestClient(_app(art))
+    base = f"/api/plugins/artifact/artifact/{aid}/blob"
+    assert c.get(base).content == b"v2"  # absent → latest
+    assert c.get(base + "?version=0").content == b"v2"  # 0 → latest
+    assert c.get(base + "?version=1").content == b"v1"  # explicit in-range
+    assert c.get(base + "?version=99").status_code == 404  # out of range → 404 (not latest)
