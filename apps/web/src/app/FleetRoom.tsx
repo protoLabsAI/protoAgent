@@ -19,7 +19,7 @@ import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import type { FleetAgent } from "../lib/types";
-import { FleetActivityFeed, pushFleetEvent } from "./FleetActivity";
+import { FleetActivityFeed, markMemberRunning, pushFleetEvent, useMemberRunning } from "./FleetActivity";
 import "./fleet-room.css";
 
 /** The routing slug for a member — the host entry is the reserved "host" (ADR 0042). */
@@ -66,6 +66,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     [roster, here],
   );
   const onlineCount = roster.filter((a) => a.running).length;
+  const running = useMemberRunning();
 
   // DM a member = the wired chat, retargeted. Push it on the palette stack so Back/Escape
   // return here. Only running members are reachable.
@@ -101,7 +102,9 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       return;
     }
     // Fire-and-forget fan-out — each member runs the turn durably on its own instance.
+    // Mark each busy now (optimistic "running" pill); its terminal turn.usage clears it.
     for (const a of broadcastTargets) {
+      markMemberRunning(slugOf(a));
       api
         .sendToAgent(slugOf(a), msg)
         .catch((e) => toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) }));
@@ -200,6 +203,11 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     </span>
                   </button>
                   <div className="flr__actions">
+                    {running[slug] ? (
+                      <span className="flr__pill flr__pill--run" title="A turn is in flight">
+                        running
+                      </span>
+                    ) : null}
                     {local && (
                       <button
                         type="button"

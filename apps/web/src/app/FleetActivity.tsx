@@ -29,7 +29,11 @@ export type FleetEvent = {
 
 type FleetActivityState = {
   events: FleetEvent[];
+  /** slug → count of turns currently in flight (drives the roster "running" pill). */
+  running: Record<string, number>;
   push: (e: Omit<FleetEvent, "id" | "ts">) => void;
+  markRunning: (slug: string) => void;
+  markDone: (slug: string) => void;
 };
 
 let seq = 0;
@@ -37,14 +41,28 @@ const MAX = 60;
 
 const useFleetActivity = create<FleetActivityState>((set) => ({
   events: [],
+  running: {},
   push: (e) =>
     set((s) => ({
       events: [{ ...e, id: `flev-${(seq += 1)}`, ts: Date.now() }, ...s.events].slice(0, MAX),
     })),
+  markRunning: (slug) => set((s) => ({ running: { ...s.running, [slug]: (s.running[slug] ?? 0) + 1 } })),
+  markDone: (slug) =>
+    set((s) => {
+      const n = Math.max(0, (s.running[slug] ?? 0) - 1);
+      const running = { ...s.running };
+      if (n === 0) delete running[slug];
+      else running[slug] = n;
+      return { running };
+    }),
 }));
 
 /** Append an event from anywhere (e.g. the Fleet Room broadcast). */
 export const pushFleetEvent = (e: Omit<FleetEvent, "id" | "ts">) => useFleetActivity.getState().push(e);
+/** Optimistically mark a member busy when you send to it (cleared by its turn.usage). */
+export const markMemberRunning = (slug: string) => useFleetActivity.getState().markRunning(slug);
+/** Members with a turn in flight — for the roster "running a turn" pill. */
+export const useMemberRunning = (): Record<string, number> => useFleetActivity((s) => s.running);
 
 const slugOf = (a: FleetAgent): string => (a.host ? "host" : a.id);
 const hhmm = (ts: number): string =>
@@ -109,6 +127,14 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
       return { text: "a goal failed", kind: "offline" };
     case "background.completed":
       return { text: "finished background work", kind: "activity" };
+    case "chat.resumed": {
+      const t = str(data.text);
+      return { text: t ? `resumed: “${shorten(t)}”` : "resumed a turn", kind: "activity" };
+    }
+    case "goal.changed": {
+      const c = str(data.condition) || str(data.title);
+      return { text: c ? `working a goal: ${shorten(c, 40)}` : "updated a goal", kind: "activity" };
+    }
     default:
       return null;
   }
@@ -157,6 +183,12 @@ function useFleetStreams() {
         seen.current.add(key);
         if (seen.current.size > 1500) seen.current.clear();
       }
+      // Live "running" state for the roster pill: an autonomous turn brackets with
+      // turn.started/finished; a direct turn (broadcast/DM) is marked optimistically on
+      // send and cleared by its terminal turn.usage.
+      const store = useFleetActivity.getState();
+      if (frame.topic === "turn.started") store.markRunning(slug);
+      else if (frame.topic === "turn.finished" || frame.topic === "turn.usage") store.markDone(slug);
       const m = mapTopic(frame.topic, frame.data ?? {});
       if (!m) return;
       pushFleetEvent({ source: nameBySlug.current.get(slug) ?? slug, text: m.text, kind: m.kind });

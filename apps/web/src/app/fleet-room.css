@@ -198,6 +198,20 @@
   cursor: default;
 }
 
+/* status pills on a member row (e.g. a turn in flight) */
+.flr__pill {
+  font: 600 10px inherit;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.flr__pill--run {
+  color: var(--pl-color-status-warning);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 16%, transparent);
+}
+
 /* composer */
 .flr__composer {
   position: relative;
