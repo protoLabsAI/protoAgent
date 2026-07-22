@@ -746,6 +746,10 @@
           "title": "ADR 0091 — Agent snapshot portability: a declarative, secret-free bundle (not a raw state dump)"
         },
         {
+          "path": "adr/0092-desktop-document-baseline-and-versioned-file-artifacts.md",
+          "title": "0092 — Desktop document-generation baseline + versioned file artifacts"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

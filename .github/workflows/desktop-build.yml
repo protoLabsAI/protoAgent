@@ -164,9 +164,13 @@ jobs:
         # mcp[cli] is a build-env requirement, not a runtime dep: --collect-all
         # mcp imports every mcp submodule, and mcp.cli hard-errors at import
         # when typer is missing (broke all legs once an unpinned mcp drifted).
+        # requirements-docs.txt is the ON-by-default document-generation stack
+        # (ADR 0092): installing it here makes build_sidecar's DOC_COLLECT_ALL
+        # bundle docx/xlsx/pptx/pdf so cowork's skills work on the frozen runtime.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller "mcp[cli]"
+          pip install -r apps/desktop/sidecar/requirements-docs.txt
           python apps/desktop/sidecar/build_sidecar.py
           ls -la apps/desktop/src-tauri/binaries/
 

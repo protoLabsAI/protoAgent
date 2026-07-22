@@ -139,6 +139,33 @@ OPTIONAL_COLLECT_ALL = [
     "googleapiclient",
 ]
 
+# Document-generation stack (ADR 0092) — the knowledge-work baseline the desktop
+# app ships ON by default so first-party skill packs (cowork's docx/xlsx/pptx/pdf
+# skills) and plugins like protobanana (Pillow) actually produce files on the
+# frozen runtime instead of hitting the ADR 0058 D2 "install on a server/Docker"
+# refusal. Installed in CI from ``requirements-docs.txt``; a lean local freeze
+# without it still works (find_spec-guarded, like the Google tier). ``--collect-all``
+# is REQUIRED here — reportlab ships font/AFM data, python-docx/pptx ship their
+# default .docx/.pptx templates as package data, and a bare import-scan misses all
+# of it (the library raises at runtime opening its default template).
+#
+# Each entry is (import_name, distribution_name) — they DIFFER for the ones that matter
+# (python-docx→``docx``, python-pptx→``pptx``, Pillow→``PIL``), and that gap is load-bearing:
+# the ADR 0058 D2 gate checks a plugin's ``requires_pip`` with installer._importable, which
+# tries ``importlib.metadata.version(<dist>)`` FIRST. So we ``--copy-metadata <dist>`` alongside
+# ``--collect-all <import>`` — otherwise cowork's ``requires_pip: [python-docx, …]`` could still
+# be refused on the frozen app even though ``import docx`` works, because the dist-info wasn't
+# bundled. (lxml + PIL also arrive transitively, but naming them keeps a runtime-installed
+# plugin's lazy ``import PIL`` — protobanana — importable when nothing else pulled it.)
+DOC_COLLECT_ALL = [
+    ("docx", "python-docx"),
+    ("openpyxl", "openpyxl"),
+    ("pptx", "python-pptx"),
+    ("reportlab", "reportlab"),
+    ("lxml", "lxml"),
+    ("PIL", "pillow"),
+]
+
 # tkinter is GUI dead weight in a headless server and a freeze hazard — exclude it.
 # (Gradio + the chat_ui module it backed were removed from the project entirely.)
 EXCLUDE = ["tkinter"]
@@ -168,15 +195,30 @@ def main() -> None:
     collect: list[str] = []
     for pkg in COLLECT_ALL:
         collect += ["--collect-all", pkg]
-    # Optional Google libs: collect only what's importable in this build env.
+    # Optional tiers: collect only what's importable in this build env, so a lean
+    # freeze (extra not installed) still succeeds instead of erroring on a --collect
+    # of a missing package.
     import importlib.util
 
-    for pkg in OPTIONAL_COLLECT_ALL:
-        if importlib.util.find_spec(pkg) is not None:
-            collect += ["--collect-all", pkg]
+    def _collect_if_present(pkgs: list[str], hint: str) -> None:
+        for pkg in pkgs:
+            if importlib.util.find_spec(pkg) is not None:
+                collect.extend(["--collect-all", pkg])
+            else:
+                print(f"note: optional package not installed, skipping: {pkg} ({hint})",
+                      file=sys.stderr)
+
+    _collect_if_present(OPTIONAL_COLLECT_ALL, "install requirements-google.txt to ship Gmail/Calendar")
+    # Doc stack: --collect-all the module AND --copy-metadata the distribution, so the ADR 0058
+    # D2 gate's metadata-first check (installer._importable → metadata.version(<dist>)) resolves
+    # in the frozen app despite the dist≠import name gap. Guarded on the import name being present
+    # (a lean local freeze without requirements-docs.txt just skips the tier).
+    for imp, dist in DOC_COLLECT_ALL:
+        if importlib.util.find_spec(imp) is not None:
+            collect.extend(["--collect-all", imp, "--copy-metadata", dist])
         else:
-            print(f"note: optional package not installed, skipping: {pkg} "
-                  "(install requirements-google.txt to ship Gmail/Calendar)",
+            print(f"note: optional package not installed, skipping: {imp} "
+                  "(install requirements-docs.txt to ship the document-generation stack)",
                   file=sys.stderr)
     exclude: list[str] = []
     for mod in EXCLUDE:
