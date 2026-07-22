@@ -241,6 +241,60 @@ def test_install_deps_missing_plugin(env):
         installer.install_deps("nope")
 
 
+# ── frozen desktop: deps route into the managed Python runtime (ADR 0094 P2) ──
+
+
+def test_deps_satisfied_honors_the_managed_runtime_when_frozen(env, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    # A dep that's NOT importable in the host is still "satisfied" if it's in the runtime.
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: {"python-docx"})
+    ok, missing = installer._deps_satisfied(["python-docx>=1.1", "nope-pkg"])
+    assert not ok and missing == ["nope-pkg"]  # python-docx satisfied via the runtime
+
+
+def test_frozen_install_deps_pips_into_managed_runtime(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
+    installer.install(str(repo))
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())  # not yet in the runtime
+    import runtime.python_install as pi
+
+    got = {}
+    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", lambda reqs, **k: got.setdefault("reqs", reqs))
+    deps = installer.install_deps("demo_ext")
+    assert got["reqs"] == ["python-docx>=1.1"]  # routed to the managed runtime, not host pip
+    assert deps == ["python-docx>=1.1"]
+
+
+def test_frozen_install_deps_noop_when_already_in_runtime(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
+    installer.install(str(repo))
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: {"python-docx"})
+    import runtime.python_install as pi
+
+    monkeypatch.setattr(
+        pi, "install_requirements_into_managed_runtime",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not install — already satisfied")),
+    )
+    assert installer.install_deps("demo_ext") == ["python-docx>=1.1"]
+
+
+def test_frozen_install_deps_refuses_when_runtime_unprovisioned(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
+    installer.install(str(repo))
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+    import runtime.python_install as pi
+
+    def _refuse(reqs, **k):
+        raise pi.PythonInstallError("the managed Python runtime isn't provisioned — install it first")
+
+    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _refuse)
+    with pytest.raises(installer.InstallError, match="isn't provisioned"):
+        installer.install_deps("demo_ext")
+
+
 def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [requests>=2, rich]\n")
     installer.install(str(repo))

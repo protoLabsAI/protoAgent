@@ -244,3 +244,43 @@ def test_extract_rejects_unsafe_members(box, req_file, monkeypatch):
     monkeypatch.setattr(pi, "_download_archive", lambda url, dest, p, t: Path(dest).write_bytes(archive))
     with pytest.raises(pi.PythonInstallError, match="unsafe archive member"):
         pi.install_managed_python()
+
+
+# ── managed runtime distributions + per-plugin dep install (ADR 0094 P2) ──────
+
+
+def test_managed_runtime_distributions_reads_and_normalizes(box):
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True)
+    (site / "python_docx-1.1.0.dist-info").mkdir()
+    (site / "openpyxl-3.1.5.dist-info").mkdir()
+    (site / "Some.Weird_Name-2.0.egg-info").mkdir()
+    dists = pr.managed_runtime_distributions()
+    assert "python-docx" in dists  # dist-info uses python_docx → normalized to python-docx
+    assert "openpyxl" in dists
+    assert "some-weird-name" in dists  # egg-info + PEP 503 normalization
+
+
+def test_managed_runtime_distributions_empty_when_unprovisioned(box):
+    assert pr.managed_runtime_distributions() == set()
+
+
+def test_install_requirements_refuses_when_unprovisioned(box):
+    with pytest.raises(pi.PythonInstallError, match="isn't provisioned"):
+        pi.install_requirements_into_managed_runtime(["python-docx>=1.1"])
+
+
+def test_install_requirements_pips_into_provisioned_runtime(box, monkeypatch):
+    _make_python(pr.managed_python_install_dir())
+    calls = []
+    monkeypatch.setattr(pi, "_pip_install", lambda exe, spec, *, what, timeout=600.0: calls.append(spec))
+    st = pi.install_requirements_into_managed_runtime(["python-docx>=1.1", "  ", ""])
+    assert calls == [["--", "python-docx>=1.1"]]  # blanks dropped, bare specs (not -r)
+    assert st["managed"] is True
+
+
+def test_install_requirements_empty_is_noop(box, monkeypatch):
+    _make_python(pr.managed_python_install_dir())
+    monkeypatch.setattr(pi, "_pip_install", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not pip")))
+    st = pi.install_requirements_into_managed_runtime([])
+    assert st["managed"] is True  # nothing to install → no pip, still returns status

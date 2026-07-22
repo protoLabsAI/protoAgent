@@ -418,9 +418,40 @@ def _importable(pkg: str) -> bool:
 
 
 def _deps_satisfied(deps: list[str]) -> tuple[bool, list[str]]:
-    """(all importable?, [missing dist names]) for a plugin's ``requires_pip``."""
-    missing = [n for spec in deps if (n := _dep_pkg_name(spec)) and not _importable(n)]
+    """(all satisfied?, [missing dist names]) for a plugin's ``requires_pip``.
+
+    A dep is satisfied when it's importable in THIS process — or, in the frozen desktop
+    app, when it's installed in the managed Python runtime (ADR 0094 P2). The two have
+    separate site-packages: a compute plugin's deps live in the child runtime (its
+    ``execute_code`` skills import them there), never in the host, so a host-only check
+    would report them forever-missing and the "Install deps" action could never clear."""
+    runtime_dists = _managed_runtime_dists()
+    missing = [
+        n
+        for spec in deps
+        if (n := _dep_pkg_name(spec)) and not _importable(n) and _normalize_dist(n) not in runtime_dists
+    ]
     return (not missing, missing)
+
+
+def _managed_runtime_dists() -> set[str]:
+    """Normalized dist names in the managed runtime — only consulted in the frozen app
+    (a source run's ``sys.executable`` IS the host, so host-importability already
+    covers it). Best-effort: never let a runtime read break dep resolution."""
+    if not _frozen_like():
+        return set()
+    try:
+        from infra.python_runtime import managed_runtime_distributions
+
+        return managed_runtime_distributions()
+    except Exception:  # noqa: BLE001 — runtime discovery must never break enable/install
+        return set()
+
+
+def _normalize_dist(name: str) -> str:
+    from infra.python_runtime import _normalize_dist as _norm
+
+    return _norm(name)
 
 
 def install(
@@ -794,25 +825,38 @@ def install_deps(plugin_id: str) -> list[str]:
     if not deps and not optional:
         return []
     _validate_pip_specs(plugin_id, [*deps, *optional])
-    # Frozen runtime (desktop): no pip. The HARD deps must already be bundled —
-    # confirm (nothing to install) or refuse with a clear message (ADR 0058 D2).
-    # A missing OPTIONAL dep only warns: the plugin degrades without it (#1953).
+    # Frozen runtime (desktop): the host has no pip. Deps that are already bundled or
+    # already in the managed runtime need nothing; anything still missing is installed
+    # INTO the managed Python runtime (ADR 0094 P2), where the plugin's execute_code
+    # skills import them — turning ADR 0058 D2's "install it on a server instead" refusal
+    # into a one-click install. A missing OPTIONAL dep only warns (#1953).
     if _frozen_like():
         ok, missing = _deps_satisfied(deps)
-        if not ok:
-            raise InstallError(
-                f"{plugin_id!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
-                f"install it on a server/Docker build instead."
-            )
         _, soft_missing = _deps_satisfied(optional)
-        if soft_missing:
+        if ok and not soft_missing:
+            log.info("[plugins] %s deps already satisfied (bundled or in the managed runtime)", plugin_id)
+            return deps + optional
+        to_install = [s for s in deps if _dep_pkg_name(s) in missing]
+        to_install_soft = [s for s in optional if _dep_pkg_name(s) in soft_missing]
+        from runtime.python_install import PythonRuntimeError, install_requirements_into_managed_runtime
+
+        try:
+            install_requirements_into_managed_runtime(to_install + to_install_soft)
+        except PythonRuntimeError as exc:
+            # Hard deps can't be skipped; a bare optional-only gap degrades with a warning
+            # that NAMES the deps (the plugin runs without them, #1953).
+            if to_install:
+                raise InstallError(str(exc)) from exc
             log.warning(
-                "[plugins] %s: optional dep(s) %s aren't in the desktop runtime — the plugin degrades without them",
+                "[plugins] %s: optional dep(s) %s aren't in the desktop runtime — the plugin "
+                "degrades without them (%s)",
                 plugin_id,
                 ", ".join(soft_missing),
+                exc,
             )
-        log.info("[plugins] %s deps already in the runtime — nothing to install", plugin_id)
-        return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing]
+            return deps
+        _audit("install_deps", {"id": plugin_id, "deps": to_install, "target": "managed_runtime"}, "ok")
+        return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing or d in to_install_soft]
     installed: list[str] = []
     if deps:
         proc = subprocess.run(

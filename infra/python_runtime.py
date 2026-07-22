@@ -64,3 +64,38 @@ def managed_python_exe() -> Path | None:
     install path instead of attempting a broken spawn."""
     exe = _python_exe_in(managed_python_install_dir())
     return exe if exe.exists() else None
+
+
+def _normalize_dist(name: str) -> str:
+    """PEP 503 normalized distribution name (``Python_DocX`` → ``python-docx``) so a
+    requirement spec and an installed ``.dist-info`` match regardless of case or the
+    ``-``/``_``/``.`` the two happen to use."""
+    import re
+
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def managed_runtime_distributions() -> set[str]:
+    """The normalized names of distributions installed in the managed runtime's own
+    site-packages (ADR 0094 P2) — read from the ``.dist-info``/``.egg-info`` dir names,
+    NOT by spawning the interpreter, so it's cheap enough for the per-plugin
+    ``deps_missing`` check on every ``/api/plugins/installed`` call.
+
+    Empty when no runtime is provisioned. This is how the frozen desktop app knows a
+    plugin's declared deps are already in the child runtime (installed there by
+    ``runtime.python_install``) even though they're NOT importable in the host process
+    — the two have separate site-packages."""
+    install_dir = managed_python_install_dir()
+    if not install_dir.exists():
+        return set()
+    dists: set[str] = set()
+    # install_only layout: POSIX ``lib/pythonX.Y/site-packages``, Windows ``Lib/site-packages``.
+    for site in (*install_dir.glob("lib/python3.*/site-packages"), install_dir / "Lib" / "site-packages"):
+        if not site.is_dir():
+            continue
+        for meta in (*site.glob("*.dist-info"), *site.glob("*.egg-info")):
+            # ``<name>-<version>.dist-info`` — wheel-normalized names replace project-name
+            # dashes with ``_``, so the only ``-`` is the name/version separator.
+            stem = meta.name.rsplit(".", 1)[0]
+            dists.add(_normalize_dist(stem.rsplit("-", 1)[0]))
+    return dists
