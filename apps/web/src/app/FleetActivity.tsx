@@ -80,6 +80,15 @@ const shorten = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n -
 function mapTopic(topic: string, data: Record<string, unknown>): { text: string; kind: FleetEventKind } | null {
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   switch (topic) {
+    // A live member turn only bus-pushes `turn.usage` at completion (started/tool frames
+    // stay on the turn's own SSE, not the event bus) — so this is the "member responded"
+    // signal for a DM or broadcast.
+    case "turn.usage": {
+      const state = str(data.state);
+      if (state === "failed") return { text: "hit an error on a turn", kind: "offline" };
+      if (state === "canceled" || state === "cancelled") return null;
+      return { text: "finished a turn", kind: "turn" };
+    }
     case "turn.started":
       return { text: "is running a turn", kind: "turn" };
     case "turn.finished":
