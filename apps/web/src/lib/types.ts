@@ -963,6 +963,12 @@ export type ArchetypePreview = {
     verified_against?: string;
     enabled?: string[];
     members: ArchetypePreviewMember[];
+    // What the bundle will ask the operator to fill (#2041): catalog-shaped MCP servers
+    // (each with `${input}` placeholders + their `inputs` spec) and the standalone secrets
+    // it declares. Surfaced up front so the preview can show them and the new-agent
+    // Configure step can collect them WITHOUT installing (read-only peek).
+    mcp?: McpCatalogEntry[];
+    secrets?: McpCatalogInput[];
   } | null;
 };
 

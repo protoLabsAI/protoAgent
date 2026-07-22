@@ -62,6 +62,46 @@ test("New agent → archetype picker → create returns to the list", async ({ p
   await expect(page.locator(".fleet-row", { hasText: "newbot" })).toBeVisible();
 });
 
+test("New agent → configure a bundle's MCP inputs → create seeds them (#2041)", async ({ page }) => {
+  await openAgents(page);
+
+  // Capture the create payload — the Configure step must carry the operator's inputs.
+  let posted = null;
+  await page.route("**/api/fleet", async (route) => {
+    if (route.request().method() === "POST") posted = route.request().postDataJSON();
+    return route.continue();
+  });
+
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.locator(".pl-radiocard", { hasText: "Product Manager" }).click();
+
+  // The picked bundle asks for a GitHub token (secret, masked) + declares a Brave secret;
+  // both surface in the inline Configure step (the preview peek supplies them).
+  const token = page.getByLabel("GitHub token");
+  await expect(token).toBeVisible();
+  await expect(page.getByLabel("Brave API key")).toBeVisible();
+  await token.fill("ghp_secret");
+
+  await page.getByLabel("Agent name").fill("ghbot");
+  await page.getByRole("button", { name: /Create/ }).click();
+
+  await expect(page.locator(".fleet-row", { hasText: "ghbot" })).toBeVisible();
+  expect(posted?.inputs).toEqual({ github_token: "ghp_secret" });
+  // The Brave secret was left blank → dropped (env-only fallback), not sent as an empty value.
+  expect(posted?.secrets ?? []).toEqual([]);
+});
+
+test("New agent preview dialog lists the bundle's MCP servers + secrets (#2041)", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.locator(".pl-radiocard", { hasText: "Product Manager" }).click();
+  await page.getByRole("button", { name: /See what.s included/ }).click();
+
+  const dialog = page.locator(".pl-dialog", { hasText: "What's included" });
+  await expect(dialog.getByText("MCP servers: GitHub (needs token)")).toBeVisible();
+  await expect(dialog.getByText("Secrets: Brave API key")).toBeVisible();
+});
+
 test("stop a running agent flips its status dot", async ({ page }) => {
   await openAgents(page);
   const ava = page.locator(".fleet-row", { hasText: "ava" });

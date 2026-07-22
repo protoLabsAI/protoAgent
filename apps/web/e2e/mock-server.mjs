@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   ACTIVITY_HISTORY,
   ARCHETYPES,
+  ARCHETYPE_PREVIEWS,
   buildFrames,
   DELEGATES,
   DELEGATE_TYPES,
@@ -584,6 +585,16 @@ const server = createServer(async (req, res) => {
           const sid = decodeURIComponent(m[1]);
           const goal = GOALS.goals.find((g) => g.session_id === sid) || null;
           return sendJson(res, { enabled: true, goal, plan: goal ? GOAL_PLAN : "" });
+        }
+      }
+      {
+        // Archetype bundle peek (#2041) — the enriched preview (mcp + secrets) the
+        // preview dialog and the new-agent Configure step both read. Unknown/code-free
+        // ids fall back to bundle:null.
+        const m = pathname.match(/^\/api\/archetypes\/([^/]+)\/preview$/);
+        if (m) {
+          const id = decodeURIComponent(m[1]);
+          return sendJson(res, ARCHETYPE_PREVIEWS[id] ?? { id, bundle: null });
         }
       }
       const payload = handleApiGet(pathname, fleetFor(req));
