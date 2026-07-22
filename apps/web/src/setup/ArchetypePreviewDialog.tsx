@@ -1,6 +1,7 @@
 import { Dialog } from "@protolabsai/ui/overlays";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { previewMcpSummary, previewSecretsSummary } from "../lib/archetypeConfig";
 import { errMsg } from "../lib/format";
 import type { Archetype, ArchetypePreviewMember } from "../lib/types";
 
@@ -90,6 +91,18 @@ export function ArchetypePreviewDialog({ archetype, onClose }: { archetype: Arch
                     <MemberCard key={m.id ?? i} member={m} />
                   ))}
                 </div>
+                {/* What the bundle asks the operator to supply (#2041) — pure display; the
+                    new-agent Configure step collects these. */}
+                {preview.data.bundle.mcp?.length ? (
+                  <p className="archetype-preview-muted">
+                    MCP servers: {previewMcpSummary(preview.data.bundle.mcp)}
+                  </p>
+                ) : null}
+                {preview.data.bundle.secrets?.length ? (
+                  <p className="archetype-preview-muted">
+                    Secrets: {previewSecretsSummary(preview.data.bundle.secrets)}
+                  </p>
+                ) : null}
               </>
             ) : null}
           </section>

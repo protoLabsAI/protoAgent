@@ -118,6 +118,53 @@ export const ARCHETYPES = [
   { id: "custom", label: "Custom", icon: "PenLine", blurb: "Write your own — fill in a template.", bundle: null, soul: "# Identity\n\n_Describe your agent in one paragraph._" },
 ];
 
+// GET /api/archetypes/{id}/preview — the read-only bundle peek (#2041). product-stack asks
+// for a GitHub MCP server (needs a token) + a standalone Brave secret, so it exercises the
+// enriched preview dialog AND the new-agent Configure step. Code-free ids return bundle:null.
+export const ARCHETYPE_PREVIEWS = {
+  "product-stack": {
+    id: "product-stack",
+    bundle: {
+      kind: "bundle",
+      id: "product-stack",
+      name: "Product Manager",
+      description: "Research, strategy, and specs.",
+      enabled: ["github"],
+      members: [
+        {
+          id: "github",
+          builtin: false,
+          ref: "v1.2.0",
+          name: "GitHub",
+          version: "1.2.0",
+          description: "GitHub issues + PR tools.",
+          skills: [{ name: "pr-review", description: "Review a pull request" }],
+        },
+      ],
+      mcp: [
+        {
+          id: "github",
+          name: "GitHub",
+          category: "Dev",
+          tagline: "GitHub issues + PRs over MCP.",
+          requires: "token",
+          template: {
+            name: "github",
+            transport: "stdio",
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-github"],
+            env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${github_token}" },
+          },
+          inputs: [
+            { key: "github_token", label: "GitHub token", placeholder: "ghp_…", secret: true, required: true },
+          ],
+        },
+      ],
+      secrets: [{ key: "BRAVE_API_KEY", label: "Brave API key", placeholder: "brv_…", secret: true, required: false }],
+    },
+  },
+};
+
 export const WORKFLOWS = [
   {
     name: "research-and-brief",

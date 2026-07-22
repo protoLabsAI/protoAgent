@@ -2060,6 +2060,35 @@ textarea {
 .archetype-name-field {
   max-width: 380px;
 }
+
+/* Inline Configure step (#2041) — the bundle's MCP inputs + declared secrets, collapsible. */
+.archetype-configure {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 380px;
+}
+.archetype-configure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.archetype-configure-toggle .field-hint {
+  font-weight: 400;
+}
+.archetype-configure-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 .field-hint {
   font-size: 11px;
   color: var(--fg-muted);

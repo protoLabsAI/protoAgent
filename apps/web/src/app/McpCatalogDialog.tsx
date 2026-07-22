@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
+import { fillTemplate } from "../lib/mcpTemplate";
 import { runtimeStatusQuery } from "../lib/queries";
 import type { McpCatalogEntry } from "../lib/types";
 
@@ -18,25 +19,6 @@ import type { McpCatalogEntry } from "../lib/types";
 // one click; the rest open a small configure step.
 
 const MCP_CATALOG_KEY = ["mcp-catalog"] as const;
-
-// Substitute ${key} placeholders in every string of the template (args, env,
-// url, headers) with the operator-supplied values.
-function fillTemplate(
-  template: Record<string, unknown>,
-  values: Record<string, string>,
-): Record<string, unknown> {
-  const sub = (v: unknown): unknown => {
-    if (typeof v === "string") return v.replace(/\$\{(\w+)\}/g, (_m, k: string) => values[k] ?? "");
-    if (Array.isArray(v)) return v.map(sub);
-    if (v && typeof v === "object") {
-      return Object.fromEntries(
-        Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, sub(val)]),
-      );
-    }
-    return v;
-  };
-  return sub(template) as Record<string, unknown>;
-}
 
 export function McpCatalogDialog({
   open,

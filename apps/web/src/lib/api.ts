@@ -1409,6 +1409,11 @@ export const api = {
     port?: number;
     start?: boolean;
     shared_skills?: boolean;
+    // Operator-supplied bundle-seed values (#2041): `inputs` fill the bundle's MCP
+    // `${input}` placeholders (an entry seeds ENABLED when its required inputs are here),
+    // `secrets` carry values for the bundle's declared secrets. Omitted → env-only.
+    inputs?: Record<string, string>;
+    secrets?: { key: string; value: string }[];
   }) {
     return request<{ ok: boolean; agent: FleetAgent; installed: string[] }>("/api/fleet", {
       method: "POST",
