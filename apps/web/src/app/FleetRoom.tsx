@@ -19,7 +19,14 @@ import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import type { FleetAgent } from "../lib/types";
-import { FleetActivityFeed, markMemberDone, markMemberRunning, pushFleetEvent, useMemberRunning } from "./FleetActivity";
+import {
+  FleetActivityFeed,
+  markMemberDone,
+  markMemberRunning,
+  pushFleetEvent,
+  useMemberAwaiting,
+  useMemberRunning,
+} from "./FleetActivity";
 import "./fleet-room.css";
 
 /** The routing slug for a member — the host entry is the reserved "host" (ADR 0042). */
@@ -67,6 +74,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   );
   const onlineCount = roster.filter((a) => a.running).length;
   const running = useMemberRunning();
+  const awaiting = useMemberAwaiting();
 
   // DM a member = the wired chat, retargeted. Push it on the palette stack so Back/Escape
   // return here. Only running members are reachable.
@@ -210,7 +218,11 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     </span>
                   </button>
                   <div className="flr__actions">
-                    {running[slug] && a.running ? (
+                    {awaiting[slug] && a.running ? (
+                      <span className="flr__pill flr__pill--attn" title="A turn is parked awaiting your answer">
+                        needs approval
+                      </span>
+                    ) : running[slug] && a.running ? (
                       <span className="flr__pill flr__pill--run" title="A turn is in flight">
                         running
                       </span>

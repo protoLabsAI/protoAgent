@@ -17,7 +17,15 @@ import { buildEventsUrl } from "../lib/events";
 import type { FleetAgent } from "../lib/types";
 import "./fleet-activity.css";
 
-export type FleetEventKind = "online" | "offline" | "added" | "removed" | "broadcast" | "turn" | "activity";
+export type FleetEventKind =
+  | "online"
+  | "offline"
+  | "added"
+  | "removed"
+  | "broadcast"
+  | "turn"
+  | "activity"
+  | "attn";
 
 export type FleetEvent = {
   id: string;
@@ -31,10 +39,14 @@ type FleetActivityState = {
   events: FleetEvent[];
   /** slug → count of turns currently in flight (drives the roster "running" pill). */
   running: Record<string, number>;
+  /** slug → a turn is parked awaiting a human answer (drives "needs approval"). */
+  awaiting: Record<string, true>;
   push: (e: Omit<FleetEvent, "id" | "ts">) => void;
   markRunning: (slug: string) => void;
   markDone: (slug: string) => void;
   clear: (slug: string) => void;
+  markAwaiting: (slug: string) => void;
+  clearAwaiting: (slug: string) => void;
 };
 
 let seq = 0;
@@ -43,6 +55,7 @@ const MAX = 60;
 const useFleetActivity = create<FleetActivityState>((set) => ({
   events: [],
   running: {},
+  awaiting: {},
   push: (e) =>
     set((s) => ({
       events: [{ ...e, id: `flev-${(seq += 1)}`, ts: Date.now() }, ...s.events].slice(0, MAX),
@@ -58,10 +71,22 @@ const useFleetActivity = create<FleetActivityState>((set) => ({
     }),
   clear: (slug) =>
     set((s) => {
-      if (!(slug in s.running)) return s;
+      const hadRun = slug in s.running;
+      const hadWait = slug in s.awaiting;
+      if (!hadRun && !hadWait) return s;
       const running = { ...s.running };
+      const awaiting = { ...s.awaiting };
       delete running[slug];
-      return { running };
+      delete awaiting[slug];
+      return { running, awaiting };
+    }),
+  markAwaiting: (slug) => set((s) => (s.awaiting[slug] ? s : { awaiting: { ...s.awaiting, [slug]: true as const } })),
+  clearAwaiting: (slug) =>
+    set((s) => {
+      if (!(slug in s.awaiting)) return s;
+      const awaiting = { ...s.awaiting };
+      delete awaiting[slug];
+      return { awaiting };
     }),
 }));
 
@@ -75,6 +100,8 @@ export const markMemberDone = (slug: string) => useFleetActivity.getState().mark
 export const clearMemberRunning = (slug: string) => useFleetActivity.getState().clear(slug);
 /** Members with a turn in flight — for the roster "running a turn" pill. */
 export const useMemberRunning = (): Record<string, number> => useFleetActivity((s) => s.running);
+/** Members parked on a HITL pause — for the roster "needs approval" pill. */
+export const useMemberAwaiting = (): Record<string, true> => useFleetActivity((s) => s.awaiting);
 
 const slugOf = (a: FleetAgent): string => (a.host ? "host" : a.id);
 const hhmm = (ts: number): string =>
@@ -121,6 +148,11 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
     }
     case "turn.started":
       return { text: "is running a turn", kind: "turn" };
+    // A turn parked on a HITL form/approval (ADR 0051) — the actionable row.
+    case "turn.input_required": {
+      const p = str(data.prompt);
+      return { text: p ? `⚠ needs your approval — ${shorten(p, 70)}` : "⚠ needs your approval", kind: "attn" };
+    }
     // turn.finished is intentionally unmapped — turn.usage (which fires for both autonomous
     // and direct turns) is the single "finished a turn" row, so autonomous turns don't
     // produce two.
@@ -140,6 +172,16 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
       return { text: "a goal failed", kind: "offline" };
     case "background.completed":
       return { text: "finished background work", kind: "activity" };
+    // GitHub plugin lifecycle (ADR 0039, namespaced by the plugin's registry.emit).
+    case "github.pr.opened": {
+      const n = str(data.number);
+      const t = str(data.title);
+      return { text: `opened PR${n ? ` #${n}` : ""}${t ? ` · ${shorten(t, 48)}` : ""}`, kind: "activity" };
+    }
+    case "github.pr.merged": {
+      const n = str(data.number);
+      return { text: `merged PR${n ? ` #${n}` : ""}`, kind: "activity" };
+    }
     case "chat.resumed": {
       const t = str(data.text);
       return { text: t ? `resumed: “${shorten(t)}”` : "resumed a turn", kind: "activity" };
@@ -207,7 +249,14 @@ function useFleetStreams() {
       // double-decrement that would corrupt a concurrently-running member's count.)
       const store = useFleetActivity.getState();
       if (frame.topic === "turn.started") store.markRunning(slug);
-      else if (frame.topic === "turn.usage") store.markDone(slug);
+      else if (frame.topic === "turn.usage") {
+        store.markDone(slug);
+        store.clearAwaiting(slug); // the parked turn reached a terminal state
+      } else if (frame.topic === "turn.input_required") {
+        // Parked awaiting a human answer — it's no longer "running", it's blocked on you.
+        store.markDone(slug);
+        store.markAwaiting(slug);
+      }
       const m = mapTopic(frame.topic, frame.data ?? {});
       if (!m) return;
       pushFleetEvent({ source: nameBySlug.current.get(slug) ?? slug, text: m.text, kind: m.kind });

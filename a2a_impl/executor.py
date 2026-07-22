@@ -508,6 +508,15 @@ class ProtoAgentExecutor(AgentExecutor):
 
                 elif event_type == "input_required":
                     await _flush_text()  # persist any answer text streamed before the pause
+                    # Surface the pause to the host hook (ADR 0051) so it can publish a
+                    # "needs approval" bus event — a fleet console can then show a pending
+                    # HITL without polling. Best-effort by contract (_notify_progress
+                    # swallows everything), so it can never break the pause itself.
+                    _notify_progress(
+                        context.context_id,
+                        context.task_id,
+                        {"phase": "input_required", "prompt": _hitl_prompt(payload)},
+                    )
                     # Human-readable prompt for plain consumers; the full
                     # form/approval payload rides a protoAgent-local hitl-v1
                     # DataPart so the console renders the form / approval card.

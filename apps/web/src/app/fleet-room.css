@@ -211,6 +211,10 @@
   color: var(--pl-color-status-warning);
   background: color-mix(in srgb, var(--pl-color-status-warning) 16%, transparent);
 }
+.flr__pill--attn {
+  color: var(--pl-color-status-error);
+  background: color-mix(in srgb, var(--pl-color-status-error) 16%, transparent);
+}
 
 /* composer */
 .flr__composer {
