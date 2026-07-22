@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.107.0",
+    "date": "2026-07-22",
+    "changes": [
+      "Generated files are now versioned artifacts — save_file_artifact.",
+      "The desktop app ships the document-generation stack, on by default.",
+      "Fleet agents accept operator inputs + secrets at create time.",
+      "Deterministic persona-drift detection.",
+      "Chat tab context menu — Close Others / Left / Right.",
+      "Cowork and every catalog archetype now appear in the new-agent picker on desktop and pip installs.",
+      "More reliable PyPI publishing — releases fire on the tag push."
+    ]
+  },
+  {
     "version": "v0.106.0",
     "date": "2026-07-21",
     "changes": [

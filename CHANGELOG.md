@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.107.0] - 2026-07-22
+
+### Added
+- **Generated files are now versioned artifacts — `save_file_artifact`.** A new `file` artifact
+  kind and `save_file_artifact(path, title?, artifact_id?)` turn a generated `.docx` / `.xlsx` /
+  `.pptx` / `.pdf` / image into a first-class, versioned **download artifact**: the bytes are stored
+  as a sidecar blob, a diffable **text preview** is extracted into the panel (docx → text, xlsx →
+  sheet table, pptx → slide outline, pdf → text), and images get a thumbnail. The panel renders a
+  download card; the text-source edit tools (`update_artifact` / `rewrite_artifact` and the panel
+  editor) are guarded off file artifacts so their stored bytes can't be orphaned.
+  ([ADR 0092](docs/adr/0092-desktop-document-baseline-and-versioned-file-artifacts.md) D2)
+- **The desktop app ships the document-generation stack, on by default.** `python-docx`, `openpyxl`,
+  `python-pptx`, and `reportlab` are baked into the frozen desktop bundle, so knowledge-work skill
+  packs like **cowork** produce `.docx` / `.xlsx` / `.pptx` / `.pdf` files on the desktop runtime
+  instead of being refused by the [ADR 0058](docs/adr/0058-runtime-plugin-install-frozen-app.md) D2
+  "install on a server/Docker" gate. The build `--copy-metadata`'s each distribution so the gate's
+  importability check resolves the distribution≠import name gap (`python-docx` → `docx`); a plugin
+  such as protobanana that declared `pillow` is unblocked as a side effect.
+  ([ADR 0092](docs/adr/0092-desktop-document-baseline-and-versioned-file-artifacts.md) D1)
+- **Fleet agents accept operator inputs + secrets at create time.** `peek_bundle` and the bundle
+  lock now expose a bundle's declared MCP **inputs** and **secrets**; the fleet-create backend
+  accepts and seeds them; and the new-agent panel gained an **input picker** with an enriched
+  preview dialog. Settings ▸ Secrets is available behind the `secrets-panel` developer flag.
+  (#2121, #2122, #2125, #2127)
+- **Deterministic persona-drift detection.** A deterministic check for when an agent's live persona
+  has drifted from its SOUL, pairing with the guarded self-SOUL-edit path (ADR 0081). (#2116)
+- **Chat tab context menu — Close Others / Left / Right.** (#2112)
+
 ### Fixed
 - **Cowork (and any catalog archetype) was missing from the new-agent picker on desktop and on
   `pip install`.** `config/archetype-catalog.json` was never added to either packaged-build asset
@@ -24,8 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_bundled_config_assets.py` now asserts, over a **glob** rather than a hardcoded list,
   that every `config/*catalog*.json` reaches both asset lists and that the two agree.
 
-
-### Fixed
 - **PyPI releases fire on the tag push, not the derivative `release` event.** `publish.yml`
   triggered on `release: published` — an event `release.yml` produces — and when that silently
   failed to fire, PyPI sat **five releases behind** (0.101.0) while the Docker images and GitHub
@@ -37,7 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the ref type, so any tag ref is checked. `skip-existing` makes an already-published version
   a no-op rather than a red job. The release guide gained the PyPI leg (it wasn't mentioned at
   all), the desktop-dispatch step, and a three-channel post-release verification snippet.
-
 
 ## [0.106.0] - 2026-07-21
 
