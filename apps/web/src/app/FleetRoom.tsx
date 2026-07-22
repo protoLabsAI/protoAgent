@@ -11,7 +11,7 @@
 // fleet-wide activity feed (aggregate each member's event bus, ADR 0039).
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ExternalLink, Play, Radio, Send, Square } from "lucide-react";
+import { Activity, ExternalLink, Play, Radio, Send, Square } from "lucide-react";
 import { useToast } from "@protolabsai/ui/overlays";
 import type { PaletteContext, PaletteView } from "@protolabsai/ui/command-palette";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +19,7 @@ import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import type { FleetAgent } from "../lib/types";
+import { openFleetActivity, pushFleetEvent } from "./FleetActivity";
 import "./fleet-room.css";
 
 /** The routing slug for a member — the host entry is the reserved "host" (ADR 0042). */
@@ -63,6 +64,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     () => roster.filter((a) => a.running && slugOf(a) !== here),
     [roster, here],
   );
+  const onlineCount = roster.filter((a) => a.running).length;
 
   // DM a member = the wired chat, retargeted. Push it on the palette stack so Back/Escape
   // return here. Only running members are reachable.
@@ -74,6 +76,11 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   const open = (a: FleetAgent) => {
     ctx.close();
     onOpenAgent(slugOf(a)); // routed through the palette nav chokepoint (launcher-safe)
+  };
+
+  const activity = () => {
+    ctx.close();
+    openFleetActivity(); // the drawer overlays the console once the palette closes
   };
 
   const toggle = (a: FleetAgent) => {
@@ -108,6 +115,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       title: `Broadcast to ${broadcastTargets.length} member${broadcastTargets.length > 1 ? "s" : ""}`,
       message: clip(msg),
     });
+    pushFleetEvent({ source: "you", text: `broadcast to ${broadcastTargets.length}: “${clip(msg, 48)}”`, kind: "broadcast" });
     setDraft("");
     inputRef.current?.focus();
   };
@@ -121,6 +129,15 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
 
   return (
     <div className="flr">
+      <div className="flr__topbar">
+        <span className="flr__count">
+          {onlineCount} online · {roster.length} member{roster.length === 1 ? "" : "s"}
+        </span>
+        <button type="button" className="flr__activity" onClick={activity} title="Open the live fleet activity feed">
+          <Activity size={13} />
+          Activity
+        </button>
+      </div>
       <div className="flr__list" role="group" aria-label="Fleet members">
         {roster.length === 0 && <div className="flr__empty">No members yet — add one from Settings ▸ Agents.</div>}
         {roster.map((a) => {
@@ -213,7 +230,15 @@ export function fleetRoomView(opts: { onOpenAgent: (slug: string) => void }): Pa
     width: 620,
     footerHint: (
       <span className="flr__hint">
-        click a member to <b>DM</b> · <b>↵</b> broadcasts to all online
+        <span>
+          <kbd className="flr__kbd">click</kbd> DM a member
+        </span>
+        <span>
+          <kbd className="flr__kbd">↵</kbd> broadcast
+        </span>
+        <span>
+          <kbd className="flr__kbd">esc</kbd> close
+        </span>
       </span>
     ),
     render: (ctx) => <FleetRoom ctx={ctx} onOpenAgent={opts.onOpenAgent} />,
