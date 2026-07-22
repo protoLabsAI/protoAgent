@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -233,6 +234,8 @@ def create(
     port: int | None = None,
     shared_skills: bool = False,
     soul: str | None = None,
+    inputs: Mapping[str, str] | None = None,
+    secrets: list[dict] | None = None,
 ) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
     an installed plugin bundle. Does not start it.
@@ -247,6 +250,14 @@ def create(
     ``soul`` (the picked archetype's base SOUL.md, ADR 0042) is written into the workspace's
     ``config/SOUL.md`` — the member's live persona — so an agent created from an archetype
     arrives with its persona, not just its tools. Blank leaves the agent on the default SOUL.
+
+    ``inputs`` (``{input_key: value}``) are operator-supplied MCP template values (#2041):
+    they fill a bundle ``mcp:`` template's ``${input}`` placeholders with priority over the
+    seed-time env, so an operator token seeds the server ENABLED instead of visible-but-inert.
+    ``secrets`` (``[{key, value}]``) are operator-supplied values for the bundle's *declared*
+    secrets, written to the member's ``config/secrets.yaml`` nested under the bundle's section.
+    Both are seeded AFTER install and only apply on the bundle path; operator-supplied only —
+    never auto-copied from the host's environment.
     """
     name = _safe(name)
     if name.lower() in _RESERVED_NAMES:
@@ -320,7 +331,12 @@ def create(
             # Seed the bundle's MCP servers (ADR 0083 D5, #2011). Separate from the config
             # defaults above because `mcp.servers` is a LIST — the dict-leaf overlay can't
             # merge it — and because its `${input}` placeholders resolve from the env here.
-            _apply_bundle_mcp_servers(cfg, ws / "plugins.lock")
+            # Operator-supplied `inputs` (#2041) fill those placeholders ahead of the env.
+            _apply_bundle_mcp_servers(cfg, ws / "plugins.lock", inputs or {})
+            # Seed operator-supplied values for the bundle's DECLARED secrets (#2041) into the
+            # member's secrets.yaml — separate from mcp because these are standalone secrets, not
+            # `${input}` fills, and land in the untracked 0600 overlay rather than the config.
+            _apply_bundle_secrets(cfg, ws / "plugins.lock", secrets or [])
     except Exception:
         shutil.rmtree(ws, ignore_errors=True)
         raise
@@ -406,7 +422,7 @@ def _apply_bundle_config_defaults(cfg: Path, lock: Path) -> dict:
     return overlay
 
 
-def _apply_bundle_mcp_servers(cfg: Path, lock: Path) -> list[str]:
+def _apply_bundle_mcp_servers(cfg: Path, lock: Path, inputs: Mapping[str, str] | None = None) -> list[str]:
     """Seed a freshly-installed bundle's ``mcp:`` servers into the workspace config
     (ADR 0083 D5, #2011). A bundle can carry catalog-shaped MCP templates
     (``{template, inputs}``); each is resolved against the seed-time environment (an
@@ -415,8 +431,13 @@ def _apply_bundle_mcp_servers(cfg: Path, lock: Path) -> list[str]:
     operator/template value is never clobbered — with ``mcp.enabled`` flipped on. An entry
     whose *required* inputs can't be resolved at seed time lands ``enabled: false``: visible
     in the console MCP panel but inert, so the operator supplies the secret there instead of
-    the agent booting a half-templated server. Best-effort — a malformed lock/config is a
-    no-op. Returns the server names added."""
+    the agent booting a half-templated server.
+
+    ``inputs`` (``{input_key: value}``) are the operator's create-time values (#2041); they
+    fill matching ``${input}`` placeholders with priority over the env, so a token supplied at
+    create time seeds the server ENABLED rather than visible-but-inert. Empty ``inputs`` keeps
+    the pre-existing env-only behavior. Best-effort — a malformed lock/config is a no-op.
+    Returns the server names added."""
     import json
     import os
 
@@ -445,7 +466,7 @@ def _apply_bundle_mcp_servers(cfg: Path, lock: Path) -> list[str]:
     added: list[str] = []
     for item in items:
         try:
-            entry, unresolved = resolve_bundle_mcp_item(item, os.environ)
+            entry, unresolved = resolve_bundle_mcp_item(item, os.environ, inputs or {})
         except ValueError:
             continue  # a malformed template is skipped, never fails the whole create()
         if entry["name"] in have:
@@ -461,6 +482,65 @@ def _apply_bundle_mcp_servers(cfg: Path, lock: Path) -> list[str]:
     mcp["enabled"] = True  # a bundle that ships servers wants MCP on (matches the add route)
     save_yaml_doc(doc, cfg)
     return added
+
+
+def _apply_bundle_secrets(cfg: Path, lock: Path, secrets_list: list[dict]) -> list[str]:
+    """Write operator-supplied values for a bundle's DECLARED secrets into the member's
+    ``secrets.yaml`` (#2041). The bundle declares its secrets in the lock
+    (``{key, label, placeholder, secret, required}`` per bundle, cached by the installer);
+    each declared key is anchored to its bundle's section (the bundle id). ``secrets_list`` is
+    the operator's create-time ``[{key, value}]``: for every entry whose ``key`` the bundle
+    actually declares, the value lands under that bundle's section via ``config_io.save_secrets``
+    (0600, atomic, merge-not-clobber — a sibling secret like the model API key survives).
+
+    Security: values come from ``secrets_list`` (the operator) only — this NEVER reads the host's
+    ``os.environ``, so a member never inherits a host secret it wasn't explicitly handed. An
+    entry whose key isn't a declared bundle secret, or with a blank value, is ignored. Writes to
+    the workspace overlay (``<ws>/config/secrets.yaml``), not the hub's. Best-effort — a
+    malformed lock is a no-op. Returns the secret keys written."""
+    if not secrets_list:
+        return []
+    import json
+
+    from graph.config_io import save_secrets
+
+    try:
+        data = json.loads(lock.read_text()) if lock.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return []
+    # Map each DECLARED secret key → its bundle's section (the bundle id). Only keys a bundle
+    # declares are writable; the operator can't smuggle an arbitrary key into the overlay.
+    section_of: dict[str, str] = {}
+    for b in data.get("bundles") or []:
+        section = str(b.get("id") or "").strip()
+        if not section:
+            continue
+        for dec in b.get("secrets") or []:
+            if isinstance(dec, dict):
+                key = str(dec.get("key", "")).strip()
+                if key:
+                    section_of.setdefault(key, section)
+    if not section_of:
+        return []
+
+    updates: dict[str, dict[str, str]] = {}
+    written: list[str] = []
+    for item in secrets_list:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key", "")).strip()
+        val = item.get("value")
+        section = section_of.get(key)
+        if not key or not val or section is None:
+            continue  # only declared secrets with an operator value are written
+        updates.setdefault(section, {})[key] = str(val)
+        written.append(key)
+    if not updates:
+        return []
+    # The member reads its secrets at <ws>/config/secrets.yaml (instance_root=<ws>), sibling of
+    # the config — write THERE, not the hub's overlay that save_secrets() would resolve by default.
+    save_secrets(updates, cfg.parent / "secrets.yaml")
+    return written
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
