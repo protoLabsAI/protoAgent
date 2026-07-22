@@ -225,12 +225,15 @@ export function PaletteChat({
   const stop = () => abortRef.current?.abort();
 
   // Auto-send the initial message once (Fleet Room composer → DM a member with a message).
+  // Skip it if this member's persisted thread has a turn still streaming — the self-heal
+  // below owns that reconnect, and a concurrent send would clobber the same message.
   const initialSent = useRef(false);
   useEffect(() => {
-    if (initial && !initialSent.current) {
-      initialSent.current = true;
-      void send(initial);
-    }
+    if (!initial || initialSent.current) return;
+    const last = messagesRef.current[messagesRef.current.length - 1];
+    if (last?.role === "assistant" && last.status === "streaming" && last.taskId) return;
+    initialSent.current = true;
+    void send(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const empty = messages.length === 0;

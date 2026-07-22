@@ -34,6 +34,7 @@ type FleetActivityState = {
   push: (e: Omit<FleetEvent, "id" | "ts">) => void;
   markRunning: (slug: string) => void;
   markDone: (slug: string) => void;
+  clear: (slug: string) => void;
 };
 
 let seq = 0;
@@ -55,12 +56,23 @@ const useFleetActivity = create<FleetActivityState>((set) => ({
       else running[slug] = n;
       return { running };
     }),
+  clear: (slug) =>
+    set((s) => {
+      if (!(slug in s.running)) return s;
+      const running = { ...s.running };
+      delete running[slug];
+      return { running };
+    }),
 }));
 
 /** Append an event from anywhere (e.g. the Fleet Room broadcast). */
 export const pushFleetEvent = (e: Omit<FleetEvent, "id" | "ts">) => useFleetActivity.getState().push(e);
-/** Optimistically mark a member busy when you send to it (cleared by its turn.usage). */
+/** Optimistically mark a member busy when you send to it (cleared by its terminal turn.usage). */
 export const markMemberRunning = (slug: string) => useFleetActivity.getState().markRunning(slug);
+/** Undo an optimistic mark when the send itself fails (no turn will run to clear it). */
+export const markMemberDone = (slug: string) => useFleetActivity.getState().markDone(slug);
+/** Reset a member's in-flight count entirely (its stream closed / it went offline). */
+export const clearMemberRunning = (slug: string) => useFleetActivity.getState().clear(slug);
 /** Members with a turn in flight — for the roster "running a turn" pill. */
 export const useMemberRunning = (): Record<string, number> => useFleetActivity((s) => s.running);
 
@@ -109,8 +121,9 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
     }
     case "turn.started":
       return { text: "is running a turn", kind: "turn" };
-    case "turn.finished":
-      return { text: "finished a turn", kind: "turn" };
+    // turn.finished is intentionally unmapped — turn.usage (which fires for both autonomous
+    // and direct turns) is the single "finished a turn" row, so autonomous turns don't
+    // produce two.
     case "activity.message": {
       const t = str(data.text) || str(data.message);
       return { text: t ? `“${shorten(t)}”` : "posted to Activity", kind: "activity" };
@@ -150,6 +163,8 @@ function useFleetStreams() {
   const opening = useRef<Set<string>>(new Set());
   const seen = useRef<Set<string>>(new Set());
   const nameBySlug = useRef<Map<string, string>>(new Map());
+  const wantRef = useRef<Set<string>>(new Set());
+  const disposed = useRef(false);
 
   const agents = data?.agents ?? [];
   const sig = agents
@@ -161,11 +176,13 @@ function useFleetStreams() {
   useEffect(() => {
     nameBySlug.current = new Map(agents.map((a) => [slugOf(a), a.name]));
     const want = new Set(agents.filter((a) => a.running).map(slugOf));
+    wantRef.current = want;
 
     for (const [slug, es] of streams.current) {
       if (!want.has(slug)) {
         es.close();
         streams.current.delete(slug);
+        useFleetActivity.getState().clear(slug); // member offline → reset its in-flight count
       }
     }
 
@@ -183,12 +200,14 @@ function useFleetStreams() {
         seen.current.add(key);
         if (seen.current.size > 1500) seen.current.clear();
       }
-      // Live "running" state for the roster pill: an autonomous turn brackets with
-      // turn.started/finished; a direct turn (broadcast/DM) is marked optimistically on
-      // send and cleared by its terminal turn.usage.
+      // Live "running" state for the roster pill. Count UP on turn.started (autonomous
+      // turns) or an optimistic broadcast mark; count DOWN only on the terminal turn.usage,
+      // which fires for BOTH autonomous and direct turns — so each turn is +1/−1 exactly
+      // once. (turn.finished also fires for autonomous turns but is NOT counted, to avoid a
+      // double-decrement that would corrupt a concurrently-running member's count.)
       const store = useFleetActivity.getState();
       if (frame.topic === "turn.started") store.markRunning(slug);
-      else if (frame.topic === "turn.finished" || frame.topic === "turn.usage") store.markDone(slug);
+      else if (frame.topic === "turn.usage") store.markDone(slug);
       const m = mapTopic(frame.topic, frame.data ?? {});
       if (!m) return;
       pushFleetEvent({ source: nameBySlug.current.get(slug) ?? slug, text: m.text, kind: m.kind });
@@ -204,12 +223,20 @@ function useFleetStreams() {
         /* open mode → tokenless */
       }
       opening.current.delete(slug);
-      if (streams.current.has(slug) || typeof EventSource === "undefined") return;
+      // Bail if we were torn down (or the member went offline) while awaiting the token.
+      if (disposed.current || !wantRef.current.has(slug) || streams.current.has(slug) || typeof EventSource === "undefined")
+        return;
       const es = new EventSource(buildEventsUrl(memberPath(slug, "/api/events"), token, null));
       es.onmessage = (e) => handle(slug, (e as MessageEvent).data);
       es.onerror = () => {
         es.close();
-        streams.current.delete(slug); // the next roster poll reopens with a fresh token
+        streams.current.delete(slug);
+        // Reopen with a fresh token after a backoff — the roster sig may not change, so we
+        // can't rely on the effect re-running. Only while still mounted + still a member.
+        if (!disposed.current)
+          setTimeout(() => {
+            if (!disposed.current && wantRef.current.has(slug)) void openStream(slug);
+          }, 3000);
       };
       streams.current.set(slug, es);
     };
@@ -220,9 +247,15 @@ function useFleetStreams() {
 
   useEffect(() => {
     const map = streams.current;
+    const flag = disposed;
     return () => {
+      flag.current = true;
       for (const es of map.values()) es.close();
       map.clear();
+      // Streams are closing, so terminal turn.usage frames won't arrive to clear in-flight
+      // counts — reset them (a reopen re-detects fresh turns via turn.started).
+      const st = useFleetActivity.getState();
+      for (const slug of Object.keys(st.running)) st.clear(slug);
     };
   }, []);
 }

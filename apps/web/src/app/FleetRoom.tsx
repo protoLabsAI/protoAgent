@@ -19,7 +19,7 @@ import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import type { FleetAgent } from "../lib/types";
-import { FleetActivityFeed, markMemberRunning, pushFleetEvent, useMemberRunning } from "./FleetActivity";
+import { FleetActivityFeed, markMemberDone, markMemberRunning, pushFleetEvent, useMemberRunning } from "./FleetActivity";
 import "./fleet-room.css";
 
 /** The routing slug for a member — the host entry is the reserved "host" (ADR 0042). */
@@ -105,9 +105,10 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     // Mark each busy now (optimistic "running" pill); its terminal turn.usage clears it.
     for (const a of broadcastTargets) {
       markMemberRunning(slugOf(a));
-      api
-        .sendToAgent(slugOf(a), msg)
-        .catch((e) => toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) }));
+      api.sendToAgent(slugOf(a), msg).catch((e) => {
+        markMemberDone(slugOf(a)); // the send failed → no turn will run to clear the pill
+        toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) });
+      });
     }
     toast({
       tone: "success",
@@ -142,7 +143,13 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   const submit = (forceBroadcast: boolean) => {
     const msg = draft.trim();
     if (!msg) return;
-    if (!forceBroadcast && targetAgent) {
+    if (!forceBroadcast && target !== "broadcast") {
+      // A specific member is addressed — never silently fall through to broadcast.
+      if (!targetAgent) {
+        toast({ tone: "error", title: "That member left the fleet", message: "Pick another, or broadcast." });
+        setTarget("broadcast");
+        return;
+      }
       if (!targetAgent.running) {
         toast({ tone: "error", title: `${targetAgent.name} is offline`, message: "Start it first, or broadcast." });
         return;
@@ -203,7 +210,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     </span>
                   </button>
                   <div className="flr__actions">
-                    {running[slug] ? (
+                    {running[slug] && a.running ? (
                       <span className="flr__pill flr__pill--run" title="A turn is in flight">
                         running
                       </span>
