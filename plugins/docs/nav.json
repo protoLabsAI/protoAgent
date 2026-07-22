@@ -750,6 +750,10 @@
           "title": "0092 — Desktop document-generation baseline + versioned file artifacts"
         },
         {
+          "path": "adr/0094-managed-python-runtime.md",
+          "title": "0094 — Managed Python runtime: execute_code on the frozen desktop app"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
