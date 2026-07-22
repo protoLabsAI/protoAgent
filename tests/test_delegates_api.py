@@ -198,3 +198,20 @@ def test_public_view_drops_top_level_secrets():
     raw2 = {"name": "h", "type": "a2a", "url": "https://h/a2a", "auth": {"scheme": "bearer", "token": "SEKRET-TOKEN"}}
     view2 = api._public_view(raw2)
     assert "SEKRET-TOKEN" not in str(view2) and view2["auth"] == {"scheme": "bearer"}
+
+
+def test_public_view_serializes_env_remove_without_redacting_names():
+    # env_remove holds env VAR NAMES, not secrets (#2117 acceptance #5) — they serialize
+    # through the public view intact, while secret-named `env` VALUES are still redacted.
+    raw = {
+        "name": "coder",
+        "type": "acp",
+        "command": "proto",
+        "workdir": "/tmp",
+        "env_remove": ["PROTOAGENT_", "A2A_AUTH_TOKEN"],
+        "env": {"HOME": "/h", "OPENAI_API_KEY": "sk-LEAK"},
+    }
+    view = api._public_view(raw)
+    assert view["env_remove"] == ["PROTOAGENT_", "A2A_AUTH_TOKEN"]  # names pass through, not "***"
+    assert view["env"]["OPENAI_API_KEY"] == "***"  # secret env value still redacted
+    assert "sk-LEAK" not in str(view)

@@ -95,6 +95,12 @@ class Delegate:
     args: list[str] = field(default_factory=list)
     workdir: str = ""
     env: dict[str, str] = field(default_factory=dict)
+    # Subtractive env seam (#2117): host var names/prefixes to strip from the spawned
+    # coder's inherited environment (trailing ``_`` ⇒ prefix-match, else exact-name),
+    # applied BEFORE the additive ``env`` overlay in acp_client `_launch_env`. Lets a
+    # caller sanitize host identity/credentials (``PROTOAGENT_*``, ``A2A_AUTH_TOKEN``)
+    # WITHOUT mutating ``os.environ``. Names are not secrets — no redaction needed.
+    env_remove: list[str] = field(default_factory=list)
     timeout_s: float = 600.0
     permissions: str = "auto"
     allow_kinds: list[str] = field(default_factory=list)
@@ -639,6 +645,10 @@ class AcpAdapter(Adapter):
             d.args = []
         env = raw.get("env") if isinstance(raw.get("env"), dict) else {}
         d.env = {str(k): str(v) for k, v in env.items()}
+        # Subtractive env seam (#2117): a list of host var names/prefixes to strip from the
+        # spawned coder before the additive ``env`` overlay applies (acp_client `_launch_env`).
+        env_remove = raw.get("env_remove")
+        d.env_remove = [str(x) for x in env_remove if str(x)] if isinstance(env_remove, (list, tuple)) else []
         try:
             d.timeout_s = float(raw.get("timeout_s") or 600)
         except (TypeError, ValueError):
@@ -665,6 +675,7 @@ class AcpAdapter(Adapter):
             "args": d.args,
             "workdir": d.workdir,
             "env": d.env or None,
+            "env_remove": d.env_remove,
             "permissions": d.permissions,
             "allow_kinds": d.allow_kinds,
             "deny_kinds": d.deny_kinds,

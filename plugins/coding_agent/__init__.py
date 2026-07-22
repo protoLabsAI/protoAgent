@@ -113,6 +113,10 @@ def _client_for(spec: dict) -> AcpClient:
             spec["args"],
             cwd=spec["workdir"],
             env=spec["env"],
+            # Subtractive env seam (#2117): strip host identity/credential vars from the
+            # spawned coder WITHOUT mutating os.environ. `.get` so a spec that predates the
+            # field (or an ad-hoc caller) is byte-identical — no removal, full inheritance.
+            env_remove=spec.get("env_remove"),
             name=spec["name"],
             permission=_make_permission(spec),
             session_id_path=_session_id_path(spec),
