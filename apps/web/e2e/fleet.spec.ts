@@ -307,15 +307,13 @@ test("⌘K → Fleet Room: presence, DM a member (the wired chat), broadcast", a
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to \d+ member/ })).toBeVisible();
 });
 
-test("⌘K → Fleet Room → Activity opens the live feed drawer", async ({ page }) => {
+test("⌘K → Fleet Room shows the roster + live activity feed side by side", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
-  // The Activity button closes the palette and pops the drawer over the console.
-  await page.locator(".flr__activity").click();
-  await expect(page.locator(".flact-root.is-open")).toHaveCount(1);
-  await expect(page.getByText("Fleet activity", { exact: true })).toBeVisible();
-  await expect(page.locator(".flact__empty")).toBeVisible(); // no events until presence changes
-  // Escape closes it.
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".flact-root.is-open")).toHaveCount(0);
+  const room = page.locator(".flr");
+  // Two columns inside the dialog: roster on the left, the activity feed on the right.
+  await expect(room.locator(".flr__roster")).toBeVisible();
+  await expect(room.locator(".flr__activity")).toBeVisible();
+  await expect(room.getByText("Fleet activity", { exact: true })).toBeVisible();
+  await expect(room.locator(".flr-feed__empty")).toBeVisible(); // no events until presence changes
 });

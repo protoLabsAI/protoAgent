@@ -130,7 +130,7 @@ import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
 import { PaletteChat } from "./PaletteChat";
-import { FleetActivityDrawer } from "./FleetActivity";
+import { FleetActivityCapture } from "./FleetActivity";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";
 
@@ -828,9 +828,9 @@ export function App() {
     {/* Command palette (⌘K, ADR 0057) — portals over the shell; the same component
         backs the desktop quick-command (step 4). */}
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
-    {/* Fleet Activity — a right-side popout drawer with the live fleet-wide event feed
-        (opened from the Fleet Room or the ⌘K "Fleet Activity" command). */}
-    <FleetActivityDrawer />
+    {/* Headless: keeps the fleet activity feed capturing continuously so the Fleet Room's
+        activity column has history even when the room is closed. */}
+    <FleetActivityCapture />
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       {/* protoLabs.studio brand bumper — DS Splash (@protolabsai/ui/splash). Holds
           2.5s then hands off via the View Transitions API cross-fade (the

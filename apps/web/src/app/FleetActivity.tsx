@@ -1,16 +1,15 @@
-// Fleet Activity — a right-side popout drawer showing a live, fleet-wide event feed
-// (the "one event log" idea from Buzz, on our own infra). Opened from the Fleet Room's
-// header or the ⌘K "Fleet Activity" command; slides over the console, independent of the
-// palette so it stays ambient.
+// Fleet Activity — the live, fleet-wide event feed that renders as the RIGHT COLUMN of
+// the Fleet Room dialog (next to the roster), matching the concept mockup. The capture
+// runs headless at the app root so the log accumulates even while the room is closed;
+// FleetActivityFeed is the column the Fleet Room renders.
 //
 // v1 sources REAL events only: member presence transitions (online/offline/added/removed,
 // diffed from the roster poll) + broadcasts you send. Richer cross-member events (PRs,
-// approvals, tool runs) are the next step — aggregate each member's event bus (ADR 0039)
-// through the hub proxy — and are deliberately NOT faked here.
+// approvals, a member's running turn) come next — aggregate each member's event bus
+// (ADR 0039) through the hub proxy — and are deliberately NOT faked here.
 import { useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
 import { create } from "zustand";
-import { Radio, X } from "lucide-react";
+import { Radio } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { fleetQuery } from "../lib/queries";
 import type { FleetAgent } from "../lib/types";
@@ -27,9 +26,7 @@ export type FleetEvent = {
 };
 
 type FleetActivityState = {
-  open: boolean;
   events: FleetEvent[];
-  setOpen: (open: boolean) => void;
   push: (e: Omit<FleetEvent, "id" | "ts">) => void;
 };
 
@@ -37,25 +34,21 @@ let seq = 0;
 const MAX = 60;
 
 const useFleetActivity = create<FleetActivityState>((set) => ({
-  open: false,
   events: [],
-  setOpen: (open) => set({ open }),
   push: (e) =>
     set((s) => ({
       events: [{ ...e, id: `flev-${(seq += 1)}`, ts: Date.now() }, ...s.events].slice(0, MAX),
     })),
 }));
 
-/** Open/close the drawer + append events from anywhere (Fleet Room, palette command). */
-export const openFleetActivity = () => useFleetActivity.getState().setOpen(true);
+/** Append an event from anywhere (e.g. the Fleet Room broadcast). */
 export const pushFleetEvent = (e: Omit<FleetEvent, "id" | "ts">) => useFleetActivity.getState().push(e);
 
 const slugOf = (a: FleetAgent): string => (a.host ? "host" : a.id);
 const hhmm = (ts: number): string =>
   new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
-/** Diff consecutive roster polls into presence events. Runs whenever the drawer is
- *  mounted (app root), so the log accumulates even while the drawer is closed. */
+/** Diff consecutive roster polls into presence events. */
 function useRosterCapture() {
   const { data } = useQuery(fleetQuery());
   const prev = useRef<Map<string, FleetAgent> | null>(null);
@@ -78,61 +71,43 @@ function useRosterCapture() {
   }, [data]);
 }
 
-/** Mounted once at the app root: captures the live feed continuously and renders the
- *  drawer when open. */
-export function FleetActivityDrawer() {
-  const open = useFleetActivity((s) => s.open);
-  const events = useFleetActivity((s) => s.events);
-  const setOpen = useFleetActivity((s) => s.setOpen);
+/** Mounted once at the app root: keeps the feed capturing continuously (headless). */
+export function FleetActivityCapture() {
   useRosterCapture();
+  return null;
+}
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, setOpen]);
-
-  if (typeof document === "undefined") return null;
-
-  return createPortal(
-    <div className={`flact-root${open ? " is-open" : ""}`} aria-hidden={!open}>
-      <button type="button" className="flact-scrim" aria-label="Close activity" tabIndex={open ? 0 : -1} onClick={() => setOpen(false)} />
-      <aside className="flact" role="complementary" aria-label="Fleet activity">
-        <header className="flact__head">
-          <span className="flact__title">Fleet activity</span>
-          <span className="flact__live">
-            <span className="flact__livedot" />
-            live
-          </span>
-          <span className="flact__spacer" />
-          <button type="button" className="flact__close" onClick={() => setOpen(false)} aria-label="Close">
-            <X size={15} />
-          </button>
-        </header>
-        <div className="flact__feed">
-          {events.length === 0 && (
-            <div className="flact__empty">
-              No activity yet. Start or stop a member, or broadcast from the Fleet Room, and it shows up here.
+/** The activity column rendered inside the Fleet Room dialog (right of the roster). */
+export function FleetActivityFeed() {
+  const events = useFleetActivity((s) => s.events);
+  return (
+    <div className="flr-feed">
+      <div className="flr-feed__head">
+        <h2>Fleet activity</h2>
+        <span className="flr-feed__live">
+          <span className="flr-feed__livedot" />
+          live
+        </span>
+      </div>
+      <div className="flr-feed__list">
+        {events.length === 0 && (
+          <div className="flr-feed__empty">
+            No activity yet. Start/stop a member or broadcast, and it shows up here.
+          </div>
+        )}
+        {events.map((e) => (
+          <div key={e.id} className="flr-feed__event">
+            <time className="flr-feed__time">{hhmm(e.ts)}</time>
+            <div className="flr-feed__body">
+              <span className={`flr-feed__src flr-feed__src--${e.kind}`}>
+                {e.kind === "broadcast" && <Radio size={12} />}
+                {e.source}
+              </span>
+              <p className="flr-feed__text">{e.text}</p>
             </div>
-          )}
-          {events.map((e) => (
-            <div key={e.id} className="flact__event">
-              <time className="flact__time">{hhmm(e.ts)}</time>
-              <div className="flact__body">
-                <span className={`flact__src flact__src--${e.kind}`}>
-                  {e.kind === "broadcast" && <Radio size={12} />}
-                  {e.source}
-                </span>
-                <p className="flact__text">{e.text}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </aside>
-    </div>,
-    document.body,
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

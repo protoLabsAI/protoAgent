@@ -1,17 +1,17 @@
 // The Fleet Room (⌘K, ADR 0042 + the palette-UX overhaul). A native palette morph-view
-// that makes the fleet feel like a Discord room: every workspace agent is a presence-aware
-// MEMBER. Click one to DM it — that's the wired ⌘K chat (PaletteChat) pointed at the
-// member (`ctx.enter("member-dm", …)`), streaming through the hub proxy, with Back to the
-// roster. The bottom bar broadcasts to everyone online (the @everyone announce — the only
+// that makes the fleet feel like a Discord room: a roster of presence-aware MEMBERS on the
+// left, the live fleet activity feed on the right, a broadcast bar below. Click a member
+// to DM it — that's the wired ⌘K chat (PaletteChat) pointed at the member
+// (`ctx.enter("member-dm", …)`), streaming through the hub proxy, with Back to the roster.
+// The bottom bar broadcasts to everyone online (the @everyone announce — the only
 // fire-and-forget path, since you can't stream N replies into one pane).
 //
 // Entered from the palette's "Agents" group; the DS CommandPalette supplies the
 // back/close chrome + footer. Ungated for now — it reflects whatever api.fleet() returns
-// for this window; host-scoping (cf. fleetSettingsGate) can follow. Deferred: a live
-// fleet-wide activity feed (aggregate each member's event bus, ADR 0039).
+// for this window; host-scoping (cf. fleetSettingsGate) can follow.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Activity, ExternalLink, Play, Radio, Send, Square } from "lucide-react";
+import { ExternalLink, Play, Radio, Send, Square } from "lucide-react";
 import { useToast } from "@protolabsai/ui/overlays";
 import type { PaletteContext, PaletteView } from "@protolabsai/ui/command-palette";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,7 +19,7 @@ import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
 import type { FleetAgent } from "../lib/types";
-import { openFleetActivity, pushFleetEvent } from "./FleetActivity";
+import { FleetActivityFeed, pushFleetEvent } from "./FleetActivity";
 import "./fleet-room.css";
 
 /** The routing slug for a member — the host entry is the reserved "host" (ADR 0042). */
@@ -78,11 +78,6 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     onOpenAgent(slugOf(a)); // routed through the palette nav chokepoint (launcher-safe)
   };
 
-  const activity = () => {
-    ctx.close();
-    openFleetActivity(); // the drawer overlays the console once the palette closes
-  };
-
   const toggle = (a: FleetAgent) => {
     const on = a.running;
     (on ? api.stopAgent(a.name) : api.startAgent(a.name))
@@ -129,66 +124,73 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
 
   return (
     <div className="flr">
-      <div className="flr__topbar">
-        <span className="flr__count">
-          {onlineCount} online · {roster.length} member{roster.length === 1 ? "" : "s"}
-        </span>
-        <button type="button" className="flr__activity" onClick={activity} title="Open the live fleet activity feed">
-          <Activity size={13} />
-          Activity
-        </button>
-      </div>
-      <div className="flr__list" role="group" aria-label="Fleet members">
-        {roster.length === 0 && <div className="flr__empty">No members yet — add one from Settings ▸ Agents.</div>}
-        {roster.map((a) => {
-          const slug = slugOf(a);
-          const p = presenceOf(a);
-          const local = !a.host && !a.remote; // only a local process can be started/stopped here
-          return (
-            <div key={slug} className={`flr__member${a.running ? "" : " is-down"}`}>
-              <span className={`flr__dot flr__dot--${p.key}`} aria-hidden />
-              <button
-                type="button"
-                className="flr__who"
-                onClick={() => dm(a)}
-                disabled={!a.running}
-                title={a.running ? `Message ${a.name}` : `${a.name} is offline`}
-              >
-                <span className="flr__name">
-                  {a.name}
-                  {a.host && <span className="flr__tag flr__tag--host">this instance</span>}
-                  {a.remote && <span className="flr__tag flr__tag--remote">remote</span>}
-                </span>
-                <span className="flr__meta">
-                  {[a.bundle, a.port ? `:${a.port}` : null, p.label].filter(Boolean).join(" · ")}
-                </span>
-              </button>
-              <div className="flr__actions">
-                {local && (
+      <div className="flr__cols">
+        <div className="flr__col flr__roster">
+          <div className="flr__colhead">
+            <h2>Members</h2>
+            <span className="flr__count">
+              {onlineCount} online · {roster.length}
+            </span>
+          </div>
+          <div className="flr__list" role="group" aria-label="Fleet members">
+            {roster.length === 0 && (
+              <div className="flr__empty">No members yet — add one from Settings ▸ Agents.</div>
+            )}
+            {roster.map((a) => {
+              const slug = slugOf(a);
+              const p = presenceOf(a);
+              const local = !a.host && !a.remote; // only a local process can be started/stopped here
+              return (
+                <div key={slug} className={`flr__member${a.running ? "" : " is-down"}`}>
+                  <span className={`flr__dot flr__dot--${p.key}`} aria-hidden />
                   <button
                     type="button"
-                    className="flr__icon"
-                    onClick={() => toggle(a)}
-                    title={a.running ? "Stop" : "Start"}
-                    aria-label={a.running ? `Stop ${a.name}` : `Start ${a.name}`}
+                    className="flr__who"
+                    onClick={() => dm(a)}
+                    disabled={!a.running}
+                    title={a.running ? `Message ${a.name}` : `${a.name} is offline`}
                   >
-                    {a.running ? <Square size={14} /> : <Play size={14} />}
+                    <span className="flr__name">
+                      {a.name}
+                      {a.host && <span className="flr__tag flr__tag--host">this instance</span>}
+                      {a.remote && <span className="flr__tag flr__tag--remote">remote</span>}
+                    </span>
+                    <span className="flr__meta">
+                      {[a.bundle, a.port ? `:${a.port}` : null, p.label].filter(Boolean).join(" · ")}
+                    </span>
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="flr__icon"
-                  onClick={() => open(a)}
-                  disabled={!a.running}
-                  title={a.running ? "Open full console" : "Offline"}
-                  aria-label={`Open ${a.name} console`}
-                >
-                  <ExternalLink size={14} />
-                </button>
-              </div>
-            </div>
-          );
-        })}
+                  <div className="flr__actions">
+                    {local && (
+                      <button
+                        type="button"
+                        className="flr__icon"
+                        onClick={() => toggle(a)}
+                        title={a.running ? "Stop" : "Start"}
+                        aria-label={a.running ? `Stop ${a.name}` : `Start ${a.name}`}
+                      >
+                        {a.running ? <Square size={14} /> : <Play size={14} />}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="flr__icon"
+                      onClick={() => open(a)}
+                      disabled={!a.running}
+                      title={a.running ? "Open full console" : "Offline"}
+                      aria-label={`Open ${a.name} console`}
+                    >
+                      <ExternalLink size={14} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flr__col flr__activity">
+          <FleetActivityFeed />
+        </div>
       </div>
 
       <div className="flr__composer">
@@ -227,7 +229,7 @@ export function fleetRoomView(opts: { onOpenAgent: (slug: string) => void }): Pa
   return {
     id: "fleet-room",
     title: "Fleet",
-    width: 620,
+    width: 780,
     footerHint: (
       <span className="flr__hint">
         <span>

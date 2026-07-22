@@ -24,7 +24,6 @@ import { fleetQuery, queryKeys } from "../lib/queries";
 import { fleetPaletteEntries, markAgentOpened, readAgentRecency, togglableFleetAgents } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { memberDmView } from "./PaletteChat";
-import { openFleetActivity } from "./FleetActivity";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -285,19 +284,6 @@ export function usePaletteRegistry(
         run: (c) => c.enter("fleet-room"),
       },
     ]);
-    const offFleetActivity = registry.registerCommands([
-      {
-        id: "fleet-activity",
-        label: "Fleet Activity",
-        hint: "live event feed",
-        group: "Agents",
-        keywords: ["fleet", "activity", "feed", "events", "log", "presence", "drawer"],
-        run: (c) => {
-          c.close();
-          openFleetActivity();
-        },
-      },
-    ]);
     // Fleet quick-chat (#1733): every OTHER agent, in the "Agents" group beneath "Chat with
     // <this>". Picking one navigates to its slug-routed console via a serializable `agent`
     // NavIntent (so it also works forwarded from the launcher window). A down agent is listed
@@ -410,7 +396,6 @@ export function usePaletteRegistry(
     return () => {
       offChat?.();
       offFleetRoom();
-      offFleetActivity();
       offFleet?.();
       offPlugins?.();
       offToggleView();
