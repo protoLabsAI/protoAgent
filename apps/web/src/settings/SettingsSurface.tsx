@@ -1,5 +1,6 @@
 import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
+import { visibleSections } from "./sectionGate";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -150,7 +151,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
   // Drop flag-off sections everywhere they'd be reachable — nav, active-id resolution, and
   // the ⌘K/deep-link path that reads the same persisted id.
   const flagOn = useFlagPredicate();
-  const shown = (list: Section[]) => list.filter((s) => !s.flag || flagOn(s.flag));
+  const shown = (list: Section[]) => visibleSections(list, flagOn);
   const agentSections = shown(AGENT_SECTIONS);
   const capabilitySections = shown(CAPABILITY_SECTIONS);
   const boxSections = onHost ? shown(BOX_SECTIONS) : [];
