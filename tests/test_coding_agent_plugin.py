@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 import pytest
@@ -25,6 +26,7 @@ from plugins.coding_agent.acp_client import (
     _launch_env,
     _missing_binary_message,
     _short_tool_name,
+    _split_env_remove,
     _split_tool_title,
     _version_sort_key,
 )
@@ -32,10 +34,7 @@ from plugins.coding_agent.acp_client import (
 
 def test_short_tool_name_peels_inline_args_and_mcp_source():
     # A verbose MCP tool title → a compact card label (args + source go to the body).
-    assert (
-        _short_tool_name('web_search (protoagent-operator MCP Server): {"query":"pdx weather"}')
-        == "web_search"
-    )
+    assert _short_tool_name('web_search (protoagent-operator MCP Server): {"query":"pdx weather"}') == "web_search"
     assert _short_tool_name('fetch_url (protoagent-operator MCP Server): {"url":"https://x"}') == "fetch_url"
     # No inline args / no parenthetical → left mostly as-is.
     assert _short_tool_name("Skill: Use skill: 'browser-automation'") == "Skill: Use skill: 'browser-automation'"
@@ -278,6 +277,138 @@ def test_launch_env_no_node_dirs_discovered_is_safe(monkeypatch):
     monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     assert _launch_env(None)["PATH"] == "/usr/bin:/bin"
+
+
+# ── env_remove: subtractive env seam (#2117) ──────────────────────────────────
+
+
+def test_split_env_remove_classifies_prefix_and_exact():
+    """A trailing underscore ⇒ prefix-match; no trailing underscore ⇒ exact-name.
+    Blanks are dropped; nothing configured ⇒ empty both."""
+    exact, prefixes = _split_env_remove(["PROTOAGENT_", "A2A_AUTH_TOKEN", "AGENT_NAME", ""])
+    assert exact == frozenset({"A2A_AUTH_TOKEN", "AGENT_NAME"})
+    assert prefixes == ("PROTOAGENT_",)
+    assert _split_env_remove(None) == (frozenset(), ())
+
+
+def test_launch_env_strips_env_remove_prefix_and_exact(monkeypatch):
+    """env_remove strips every PROTOAGENT_* var (prefix) and A2A_AUTH_TOKEN (exact) from
+    the child env, while PATH/HOME (and un-listed vars) survive (acceptance #1/#2)."""
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
+    monkeypatch.setattr(
+        os,
+        "environ",
+        {
+            "PROTOAGENT_HOME": "/srv/pa",
+            "PROTOAGENT_INSTANCE": "dev",
+            "A2A_AUTH_TOKEN": "sek",
+            "AGENT_NAME": "hub",
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/u",
+        },
+    )
+    env = _launch_env(None, ["PROTOAGENT_", "A2A_AUTH_TOKEN"])
+    assert "PROTOAGENT_HOME" not in env and "PROTOAGENT_INSTANCE" not in env  # prefix stripped
+    assert "A2A_AUTH_TOKEN" not in env  # exact-name stripped
+    assert env["AGENT_NAME"] == "hub"  # not listed ⇒ inherited
+    assert env["PATH"] == "/usr/bin:/bin" and env["HOME"] == "/home/u"  # host essentials kept
+
+
+def test_launch_env_additive_overlay_applies_after_removal(monkeypatch):
+    """The additive env overlay applies AFTER removal, so a var can be removed-then-set:
+    env_remove drops PROTOAGENT_HOME, then env: {PROTOAGENT_HOME: ...} sets the deliberate
+    override (acceptance #3)."""
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
+    monkeypatch.setattr(os, "environ", {"PROTOAGENT_HOME": "/srv/pa", "PATH": "/usr/bin"})
+    env = _launch_env({"PROTOAGENT_HOME": "/override"}, ["PROTOAGENT_HOME"])
+    assert env["PROTOAGENT_HOME"] == "/override"  # removed, then re-set by the overlay
+
+
+def test_launch_env_without_env_remove_is_byte_identical(monkeypatch):
+    """No env_remove ⇒ behavior is unchanged: everything inherited, only the hardcoded
+    CLAUDECODE markers stripped (acceptance #4 — no regression)."""
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
+    monkeypatch.setattr(
+        os,
+        "environ",
+        {"PROTOAGENT_HOME": "/srv/pa", "A2A_AUTH_TOKEN": "sek", "PATH": "/usr/bin", "CLAUDECODE": "1"},
+    )
+    env = _launch_env(None)  # env_remove defaults to None
+    assert env["PROTOAGENT_HOME"] == "/srv/pa" and env["A2A_AUTH_TOKEN"] == "sek"  # fully inherited
+    assert "CLAUDECODE" not in env  # hardcoded invariant still strips
+
+
+def test_launch_env_strips_claudecode_alongside_env_remove(monkeypatch):
+    """The hardcoded CLAUDECODE / CLAUDE_CODE_* strip stays put and runs BESIDE the
+    config-driven env_remove — both apply (acceptance #7)."""
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
+    monkeypatch.setattr(
+        os,
+        "environ",
+        {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s", "PROTOAGENT_HOME": "/srv", "PATH": "/usr/bin"},
+    )
+    env = _launch_env(None, ["PROTOAGENT_"])
+    assert "CLAUDECODE" not in env and "CLAUDE_CODE_SESSION_ID" not in env  # hardcoded strip
+    assert "PROTOAGENT_HOME" not in env  # env_remove strip
+
+
+# Records (to a marker) which of a set of probe var names are present in the child's env
+# at initialize time, so a test can prove env_remove stripped host vars from the SPAWNED
+# coder while PATH/HOME survived (end-to-end through create_subprocess_exec, #2117).
+_ENV_REMOVE_AGENT = r"""
+import sys, json, os
+MARKER = os.environ.get("ENV_MARKER", "")
+PROBE = ["PROTOAGENT_HOME", "PROTOAGENT_INSTANCE", "A2A_AUTH_TOKEN", "AGENT_NAME", "PATH", "HOME"]
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        present = sorted(k for k in PROBE if k in os.environ)
+        if MARKER:
+            with open(MARKER, "w") as fh:
+                fh.write(json.dumps(present))
+        send({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"protocolVersion": 1}})
+"""
+
+
+async def test_env_remove_strips_host_vars_from_spawned_child(tmp_path, monkeypatch):
+    """End-to-end: an AcpClient with env_remove spawns a child whose env lacks every
+    PROTOAGENT_* var and A2A_AUTH_TOKEN while PATH/HOME (and un-listed AGENT_NAME)
+    survive — the projectBoard-plugin sanitize case, WITHOUT mutating os.environ."""
+    script = tmp_path / "env_remove_agent.py"
+    script.write_text(_ENV_REMOVE_AGENT, encoding="utf-8")
+    marker = tmp_path / "present.marker"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PROTOAGENT_HOME", "/srv/pa")
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "dev")
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "sek")
+    monkeypatch.setenv("AGENT_NAME", "hub")
+    client = AcpClient(
+        sys.executable,
+        [str(script)],
+        cwd=str(tmp_path),
+        name="envrm",
+        env={"ENV_MARKER": str(marker)},
+        env_remove=["PROTOAGENT_", "A2A_AUTH_TOKEN"],
+    )
+    try:
+        await client.handshake()
+    finally:
+        await client.close()
+    present = json.loads(marker.read_text(encoding="utf-8"))
+    assert "PROTOAGENT_HOME" not in present and "PROTOAGENT_INSTANCE" not in present  # prefix stripped
+    assert "A2A_AUTH_TOKEN" not in present  # exact-name stripped
+    assert "AGENT_NAME" in present  # not listed ⇒ inherited
+    assert "PATH" in present and "HOME" in present  # host essentials survive
+    # The live host's os.environ is untouched — the whole point of the seam (#2117).
+    assert os.environ["PROTOAGENT_HOME"] == "/srv/pa" and os.environ["A2A_AUTH_TOKEN"] == "sek"
 
 
 def test_missing_binary_message_hints_at_service_path_for_node_tools():
@@ -760,3 +891,25 @@ async def test_evict_client_swallows_close_errors():
     P._CLIENTS[P._cache_key(spec)] = _BadClient()
     assert await P.evict_client(spec) is True  # did not raise
     assert P._cache_key(spec) not in P._CLIENTS
+
+
+def test_cache_key_distinguishes_env_and_env_remove():
+    """Panel pin (#2145): specs differing ONLY in env or env_remove must not share a
+    pooled client — the first caller's environment would stick for all."""
+    from plugins.coding_agent import _cache_key
+
+    base = {
+        "name": "c",
+        "command": "x",
+        "args": [],
+        "workdir": "/w",
+        "permissions": "auto",
+        "allow_kinds": [],
+        "deny_kinds": [],
+        "env": {},
+        "env_remove": [],
+    }
+    a = _cache_key(base)
+    b = _cache_key({**base, "env_remove": ["PROTOAGENT_"]})
+    c = _cache_key({**base, "env": {"ANTHROPIC_MODEL": "opus"}})
+    assert len({a, b, c}) == 3

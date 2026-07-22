@@ -193,18 +193,50 @@ def _discovered_node_dirs() -> tuple[str, ...]:
     return tuple(out)
 
 
-def _launch_env(extra: dict[str, str] | None) -> dict[str, str]:
-    """Build the subprocess environment for an ACP agent: the server's own ``os.environ``
-    with the nested-Claude markers stripped (see above), then the delegate's ``env``
-    overlaid last — so an operator who *deliberately* sets one of these in the delegate
+def _split_env_remove(env_remove: list[str] | None) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Split a delegate's ``env_remove`` list into (exact-name set, prefix tuple).
+
+    Prefix semantics (#2117): a trailing underscore (``PROTOAGENT_``) means "strip any var
+    whose name starts with this"; no trailing underscore (``A2A_AUTH_TOKEN``) means an
+    exact-name match. The simplest rule that covers both a whole family (``PROTOAGENT_*``)
+    and a single credential (``A2A_AUTH_TOKEN``)."""
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    for name in env_remove or ():
+        n = str(name)
+        if n.endswith("_"):
+            prefixes.append(n)
+        elif n:
+            exact.add(n)
+    return frozenset(exact), tuple(prefixes)
+
+
+def _launch_env(extra: dict[str, str] | None, env_remove: list[str] | None = None) -> dict[str, str]:
+    """Build the subprocess environment for an ACP agent: the server's own ``os.environ``,
+    minus the hardcoded nested-Claude markers (a host-side invariant, see above) AND minus
+    the delegate's ``env_remove`` matches, then the delegate's additive ``env`` overlaid LAST.
+
+    ``env_remove`` is a per-delegate *subtractive* seam (#2117): a caller can strip the host's
+    identity/credential vars (``PROTOAGENT_*``, ``A2A_AUTH_TOKEN``, ``AGENT_NAME``) from the
+    spawned coder WITHOUT mutating ``os.environ`` in place — the earlier in-place scrub cost
+    the live host its ``PROTOAGENT_HOME`` and re-execed a graceful restart as the default
+    instance. Removal happens FIRST and the additive overlay LAST, so a var can be deliberately
+    removed-then-set, and an operator who *deliberately* sets a stripped marker in the delegate
     env still wins. Finally, if ``node`` isn't resolvable on the resulting PATH, append the
     discovered node version-manager dirs so a service-launched server can still find npx."""
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in _NESTED_CLAUDE_ENV_EXACT and not k.startswith(_NESTED_CLAUDE_ENV_PREFIX)
-    }
-    env.update(extra or {})
+    exact_removals, prefix_removals = _split_env_remove(env_remove)
+
+    def _strip(k: str) -> bool:
+        # Hardcoded nested-Claude markers — always stripped (host-side invariant).
+        if k in _NESTED_CLAUDE_ENV_EXACT or k.startswith(_NESTED_CLAUDE_ENV_PREFIX):
+            return True
+        # Config-driven env_remove: exact-name or trailing-underscore prefix match.
+        if k in exact_removals:
+            return True
+        return any(k.startswith(p) for p in prefix_removals)
+
+    env = {k: v for k, v in os.environ.items() if not _strip(k)}
+    env.update(extra or {})  # additive overlay AFTER removal (remove-then-set wins)
 
     path = env.get("PATH") or os.defpath
     if shutil.which("node", path=path) is None:
@@ -260,6 +292,7 @@ class AcpClient:
         *,
         cwd: str,
         env: dict[str, str] | None = None,
+        env_remove: list[str] | None = None,
         name: str = "acp",
         permission: Callable[[dict], str | None] | None = None,
         mcp_servers: list[dict] | None = None,
@@ -269,6 +302,10 @@ class AcpClient:
         self.args = list(args or [])
         self.cwd = str(Path(cwd).expanduser())
         self.env = env
+        # Subtractive env seam (#2117): host var names/prefixes to strip from the
+        # spawned coder's inherited environment (see ``_launch_env``). Additive ``env``
+        # above is overlaid AFTER this removal, so a var can be removed-then-set.
+        self.env_remove = list(env_remove or [])
         self.name = name
         # Where the session id is persisted so a restart can ``session/load`` the
         # same thread instead of starting fresh (ADR 0024 / #970). ``None`` ⇒ the
@@ -342,9 +379,10 @@ class AcpClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 # Strip the inherited nested-Claude markers (CLAUDECODE / CLAUDE_CODE_*)
-                # so a spawned Claude backend doesn't refuse to launch "inside another
-                # Claude Code session" (#1296); the delegate's env is overlaid last.
-                env=_launch_env(self.env),
+                # AND the delegate's env_remove matches (#2117) so a spawned backend
+                # doesn't inherit host identity/credentials or refuse to launch "inside
+                # another Claude Code session" (#1296); the delegate's env is overlaid last.
+                env=_launch_env(self.env, self.env_remove),
                 # Put the agent in its OWN session/process group so teardown can kill
                 # the WHOLE tree (the adapter *and* the backend it spawns). Without
                 # this, terminate() signals only the adapter; its child reparents to

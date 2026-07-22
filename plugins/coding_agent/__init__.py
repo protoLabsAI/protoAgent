@@ -88,6 +88,11 @@ def _cache_key(spec: dict) -> tuple:
         spec["permissions"],
         tuple(sorted(spec["allow_kinds"])),
         tuple(sorted(spec["deny_kinds"])),
+        # Env shapes MUST key the pool: two specs differing only in env/env_remove
+        # would otherwise share a client and the first caller's environment sticks
+        # for everyone (QA panel on #2145; env itself had the same latent gap).
+        tuple(sorted((spec.get("env") or {}).items())),
+        tuple(sorted(spec.get("env_remove") or ())),  # sorted: order-insensitive identity
     )
 
 
@@ -113,6 +118,10 @@ def _client_for(spec: dict) -> AcpClient:
             spec["args"],
             cwd=spec["workdir"],
             env=spec["env"],
+            # Subtractive env seam (#2117): strip host identity/credential vars from the
+            # spawned coder WITHOUT mutating os.environ. `.get` so a spec that predates the
+            # field (or an ad-hoc caller) is byte-identical — no removal, full inheritance.
+            env_remove=spec.get("env_remove"),
             name=spec["name"],
             permission=_make_permission(spec),
             session_id_path=_session_id_path(spec),

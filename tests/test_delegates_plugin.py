@@ -95,6 +95,26 @@ def test_acp_parse_claude_code_alias():
     assert d.command == "claude-agent-acp" and d.args == []
 
 
+def test_acp_parse_env_remove_and_flows_to_spec():
+    # Subtractive env seam (#2117): env_remove parses to a clean list (stringified,
+    # blanks dropped) and rides the client spec — so a caller that scopes the delegate
+    # per-dispatch via dataclasses.replace gets the seam for free.
+    d = ADAPTERS["acp"].parse(
+        {
+            "name": "coder",
+            "type": "acp",
+            "command": "proto",
+            "workdir": "/tmp",
+            "env_remove": ["PROTOAGENT_", "A2A_AUTH_TOKEN", 123, ""],
+        }
+    )
+    assert d.env_remove == ["PROTOAGENT_", "A2A_AUTH_TOKEN", "123"]
+    assert ADAPTERS["acp"]._spec(d)["env_remove"] == ["PROTOAGENT_", "A2A_AUTH_TOKEN", "123"]
+    # A delegate WITHOUT env_remove defaults to [] and carries [] on the spec (no regression).
+    d2 = ADAPTERS["acp"].parse({"name": "c", "type": "acp", "command": "proto", "workdir": "/tmp"})
+    assert d2.env_remove == [] and ADAPTERS["acp"]._spec(d2)["env_remove"] == []
+
+
 async def test_acp_probe_bare_claude_hints_the_adapter():
     # `claude` is on PATH but has no native ACP mode — the probe must steer to the
     # adapter rather than show green (the false-green the old PATH check gave, #1116).
