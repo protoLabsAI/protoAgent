@@ -283,7 +283,7 @@ async function openFleetRoom(page) {
   await expect(page.locator(".pl-cmdk__title")).toHaveText("Fleet"); // morphed into the room
 }
 
-test("⌘K → Fleet Room lists members with presence and addresses one", async ({ page }) => {
+test("⌘K → Fleet Room: presence, DM a member (the wired chat), broadcast", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
@@ -294,13 +294,15 @@ test("⌘K → Fleet Room lists members with presence and addresses one", async 
   await expect(room.locator(".flr__member", { hasText: "ava" }).locator(".flr__dot--online")).toBeVisible();
   await expect(room.locator(".flr__member", { hasText: "roxy" }).locator(".flr__dot--stopped")).toBeVisible();
 
-  // The composer defaults to broadcast (all online); clicking a member re-addresses to it.
-  await expect(room.locator(".flr__target")).toContainText("All online");
+  // DM a running member — clicking it morphs into the wired chat, pointed at that member
+  // (placeholder names them). Back returns to the roster.
   await room.locator(".flr__member", { hasText: "ava" }).locator(".flr__who").click();
-  await expect(room.locator(".flr__target")).toContainText("ava");
+  await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+  await page.locator(".pl-cmdk__back").click();
+  await expect(room.locator(".flr__composer")).toBeVisible();
 
-  // Send lands on that member's /api/chat (through the hub slug proxy) → a success toast.
-  await room.locator(".flr__input").fill("ship it");
+  // The bottom bar broadcasts to everyone online → a success toast.
+  await room.locator(".flr__input").fill("standup in 5");
   await room.locator(".flr__send").click();
-  await expect(page.locator(".pl-toast", { hasText: "Sent to ava" })).toBeVisible();
+  await expect(page.locator(".pl-toast", { hasText: /Broadcast to \d+ member/ })).toBeVisible();
 });

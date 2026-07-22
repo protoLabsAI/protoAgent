@@ -1,14 +1,14 @@
-// The Fleet Room (⌘K, ADR 0042 + the palette-UX overhaul). A native palette morph-view —
-// a sibling of PaletteChat — that turns the fleet from a page-load switcher into a
-// co-present room: every workspace agent as a presence-aware member you can Open,
-// start/stop, or *address in place* (a slug-targeted /api/chat send), plus a one-key
-// broadcast to everyone online. Entered from the palette's "Agents" group; the DS
-// CommandPalette supplies the back/close chrome + footer, we render the body.
+// The Fleet Room (⌘K, ADR 0042 + the palette-UX overhaul). A native palette morph-view
+// that makes the fleet feel like a Discord room: every workspace agent is a presence-aware
+// MEMBER. Click one to DM it — that's the wired ⌘K chat (PaletteChat) pointed at the
+// member (`ctx.enter("member-dm", …)`), streaming through the hub proxy, with Back to the
+// roster. The bottom bar broadcasts to everyone online (the @everyone announce — the only
+// fire-and-forget path, since you can't stream N replies into one pane).
 //
-// v0 scope: roster + presence + address/broadcast. Deferred to v1 (additive layers on
-// this shell): the live fleet-wide activity feed (aggregate each member's event bus,
-// ADR 0039) and inline reply transcripts. Ungated for now — it reflects whatever
-// api.fleet() returns for this window; host-scoping (cf. fleetSettingsGate) can follow.
+// Entered from the palette's "Agents" group; the DS CommandPalette supplies the
+// back/close chrome + footer. Ungated for now — it reflects whatever api.fleet() returns
+// for this window; host-scoping (cf. fleetSettingsGate) can follow. Deferred: a live
+// fleet-wide activity feed (aggregate each member's event bus, ADR 0039).
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ExternalLink, Play, Radio, Send, Square } from "lucide-react";
@@ -36,14 +36,10 @@ function presenceOf(a: FleetAgent): { key: PresenceKey; label: string } {
 
 const clip = (s: string, n = 72): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-/** "broadcast" = fan out to every other online member; otherwise a specific member slug. */
-type Target = "broadcast" | string;
-
 function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (slug: string) => void }) {
   const { data: fleet } = useQuery(fleetQuery());
   const qc = useQueryClient();
   const toast = useToast();
-  const [target, setTarget] = useState<Target>("broadcast");
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const here = currentSlug();
@@ -68,6 +64,13 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     [roster, here],
   );
 
+  // DM a member = the wired chat, retargeted. Push it on the palette stack so Back/Escape
+  // return here. Only running members are reachable.
+  const dm = (a: FleetAgent) => {
+    if (!a.running) return;
+    ctx.enter("member-dm", { slug: slugOf(a), name: a.name });
+  };
+
   const open = (a: FleetAgent) => {
     ctx.close();
     onOpenAgent(slugOf(a)); // routed through the palette nav chokepoint (launcher-safe)
@@ -87,32 +90,24 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       .catch((e) => toast({ tone: "error", title: "Couldn't toggle agent", message: errMsg(e) }));
   };
 
-  const send = () => {
+  const broadcast = () => {
     const msg = draft.trim();
     if (!msg) return;
-    if (target === "broadcast") {
-      if (!broadcastTargets.length) {
-        toast({ tone: "error", title: "No one to broadcast to", message: "No other members are online." });
-        return;
-      }
-      // Fire-and-forget fan-out — each member runs the turn durably on its own instance.
-      for (const a of broadcastTargets) {
-        api
-          .sendToAgent(slugOf(a), msg)
-          .catch((e) => toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) }));
-      }
-      toast({
-        tone: "success",
-        title: `Broadcast to ${broadcastTargets.length} member${broadcastTargets.length > 1 ? "s" : ""}`,
-        message: clip(msg),
-      });
-    } else {
-      const a = roster.find((x) => slugOf(x) === target);
-      api
-        .sendToAgent(target, msg)
-        .then(() => toast({ tone: "success", title: `Sent to ${a?.name ?? target}`, message: clip(msg) }))
-        .catch((e) => toast({ tone: "error", title: `Couldn't reach ${a?.name ?? target}`, message: errMsg(e) }));
+    if (!broadcastTargets.length) {
+      toast({ tone: "error", title: "No one to broadcast to", message: "No other members are online." });
+      return;
     }
+    // Fire-and-forget fan-out — each member runs the turn durably on its own instance.
+    for (const a of broadcastTargets) {
+      api
+        .sendToAgent(slugOf(a), msg)
+        .catch((e) => toast({ tone: "error", title: `Couldn't reach ${a.name}`, message: errMsg(e) }));
+    }
+    toast({
+      tone: "success",
+      title: `Broadcast to ${broadcastTargets.length} member${broadcastTargets.length > 1 ? "s" : ""}`,
+      message: clip(msg),
+    });
     setDraft("");
     inputRef.current?.focus();
   };
@@ -120,15 +115,9 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (e.metaKey || e.ctrlKey) setTarget("broadcast"); // ⌘↵ always broadcasts
-      send();
+      broadcast();
     }
   };
-
-  const targetName =
-    target === "broadcast"
-      ? `All online · ${broadcastTargets.length}`
-      : (roster.find((a) => slugOf(a) === target)?.name ?? target);
 
   return (
     <div className="flr">
@@ -137,17 +126,16 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
         {roster.map((a) => {
           const slug = slugOf(a);
           const p = presenceOf(a);
-          const isTarget = target === slug;
           const local = !a.host && !a.remote; // only a local process can be started/stopped here
           return (
-            <div key={slug} className={`flr__member${isTarget ? " is-target" : ""}${a.running ? "" : " is-down"}`}>
+            <div key={slug} className={`flr__member${a.running ? "" : " is-down"}`}>
               <span className={`flr__dot flr__dot--${p.key}`} aria-hidden />
               <button
                 type="button"
                 className="flr__who"
-                onClick={() => setTarget(slug)}
-                aria-pressed={isTarget}
-                title={`Address ${a.name}`}
+                onClick={() => dm(a)}
+                disabled={!a.running}
+                title={a.running ? `Message ${a.name}` : `${a.name} is offline`}
               >
                 <span className="flr__name">
                   {a.name}
@@ -175,7 +163,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                   className="flr__icon"
                   onClick={() => open(a)}
                   disabled={!a.running}
-                  title={a.running ? "Open console" : "Offline"}
+                  title={a.running ? "Open full console" : "Offline"}
                   aria-label={`Open ${a.name} console`}
                 >
                   <ExternalLink size={14} />
@@ -187,30 +175,26 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       </div>
 
       <div className="flr__composer">
-        <button
-          type="button"
-          className={`flr__target${target === "broadcast" ? " is-cast" : ""}`}
-          onClick={() => setTarget("broadcast")}
-          title={target === "broadcast" ? "Broadcasting to all online members" : "Switch to broadcast"}
-        >
-          {target === "broadcast" ? <Radio size={13} /> : null}
-          <span>{targetName}</span>
-          {target !== "broadcast" && (
-            <span className="flr__target-x" aria-hidden>
-              ×
-            </span>
-          )}
-        </button>
+        <span className="flr__target is-cast" title="Broadcast to all online members">
+          <Radio size={13} />
+          <span>All online · {broadcastTargets.length}</span>
+        </span>
         <input
           ref={inputRef}
           className="flr__input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={target === "broadcast" ? "Message everyone online…" : `Message ${targetName}…`}
-          aria-label="Message"
+          placeholder="Message everyone online…"
+          aria-label="Broadcast message"
         />
-        <button type="button" className="flr__send" onClick={send} disabled={!draft.trim()} aria-label="Send">
+        <button
+          type="button"
+          className="flr__send"
+          onClick={broadcast}
+          disabled={!draft.trim() || broadcastTargets.length === 0}
+          aria-label="Broadcast"
+        >
           <Send size={15} />
         </button>
       </div>
@@ -226,10 +210,10 @@ export function fleetRoomView(opts: { onOpenAgent: (slug: string) => void }): Pa
   return {
     id: "fleet-room",
     title: "Fleet",
-    width: 680,
+    width: 620,
     footerHint: (
       <span className="flr__hint">
-        <b>↵</b> send · click a member to address · <b>⌘↵</b> broadcast to all online
+        click a member to <b>DM</b> · <b>↵</b> broadcasts to all online
       </span>
     ),
     render: (ctx) => <FleetRoom ctx={ctx} onOpenAgent={opts.onOpenAgent} />,

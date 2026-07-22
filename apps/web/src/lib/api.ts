@@ -258,6 +258,16 @@ export function apiUrl(path: string, opts?: { host?: boolean }) {
   return base ? `${base}${p.startsWith("/") ? p : `/${p}`}` : p;
 }
 
+/** Absolute URL for `rel` on a SPECIFIC fleet member, via the hub's per-agent proxy —
+ *  independent of which window is focused. `slug` is the member id, or "host" for this
+ *  instance. apiUrl() routes to the CURRENT window's slug; this targets an arbitrary
+ *  member (Fleet Room DMs + broadcast). */
+export function memberPath(slug: string, rel: string): string {
+  const base = defaultApiBase();
+  const p = slug === "host" ? rel : `/agents/${encodeURIComponent(slug)}${rel}`;
+  return base ? `${base}${p.startsWith("/") ? p : `/${p}`}` : p;
+}
+
 /** True inside the desktop (Tauri/WKWebView) shell. WKWebView does NOT deliver a
  * `text/event-stream` body through `fetch()` — neither via `body.getReader()` nor
  * a buffered `clone().text()` (both come back empty) — so the streaming chat turn
@@ -1486,10 +1496,7 @@ export const api = {
   // the promise for the single-send reply text. Bypasses request()/apiUrl() on purpose:
   // apiUrl routes to the CURRENT window's slug, and this targets an arbitrary member.
   sendToAgent(slug: string, message: string, sessionId?: string): Promise<{ response?: string }> {
-    const rel = "/api/chat";
-    const path = slug === "host" ? rel : `/agents/${encodeURIComponent(slug)}${rel}`;
-    const base = defaultApiBase();
-    const url = base ? `${base}${path}` : path;
+    const url = memberPath(slug, "/api/chat");
     return fetch(url, {
       method: "POST",
       headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
@@ -1615,8 +1622,16 @@ export const api = {
       // fresh turn. Unmarked messages sent while a form is pending are held server-side
       // until the form resolves.
       hitlResume?: boolean;
+      // Stream to a SPECIFIC fleet member (Fleet Room DM) instead of THIS window's agent:
+      // the turn runs on that member via the hub proxy (/agents/<slug>/a2a). "host" = this
+      // instance. Omitted → normal chat with the focused agent (apiUrl slug-routing).
+      agentSlug?: string;
     } = {},
   ) {
+    // DM target (opts.agentSlug) streams to that member through the hub proxy; a normal
+    // chat routes to THIS window's agent via apiUrl().
+    const a2aTarget = opts.agentSlug ? memberPath(opts.agentSlug, "/a2a") : apiUrl("/a2a");
+    const chatTarget = opts.agentSlug ? memberPath(opts.agentSlug, "/api/chat") : apiUrl("/api/chat");
     // One A2A SendStreamingMessage body + one frame dispatcher, shared by the desktop
     // (Tauri-relayed) and browser (fetch SSE) paths so both decode turns identically.
     const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1717,7 +1732,7 @@ export const api = {
         };
         const tok = authToken();
         await core.invoke("chat_stream", {
-          url: apiUrl("/a2a"),
+          url: a2aTarget,
           body: buildBody(),
           auth: tok ? `Bearer ${tok}` : null,
           onEvent: channel,
@@ -1728,7 +1743,7 @@ export const api = {
         console.warn("[desktop] native chat stream failed; falling back to /api/chat:", err);
       }
       try {
-        const res = await fetch(apiUrl("/api/chat"), {
+        const res = await fetch(chatTarget, {
           method: "POST",
           headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
           signal: handlers.signal,
@@ -1767,7 +1782,7 @@ export const api = {
       return;
     }
 
-    const response = await fetch(apiUrl("/a2a"), {
+    const response = await fetch(a2aTarget, {
       method: "POST",
       headers: applyAuth(new Headers({ "Content-Type": "application/json", "A2A-Version": "1.0" })),
       signal: handlers.signal,
@@ -1780,7 +1795,8 @@ export const api = {
     if (!response.ok) {
       // token-gated chat turn (#873) — but a member-scoped 401 is the focused remote's bad
       // token, not the hub's, so don't hijack the hub AuthGate (the boot gate owns that).
-      if (response.status === 401 && !isMemberScoped("/a2a")) notifyAuthRequired();
+      // A DM (opts.agentSlug) is member-scoped by construction.
+      if (response.status === 401 && !opts.agentSlug && !isMemberScoped("/a2a")) notifyAuthRequired();
       throw new Error(`${response.status} ${response.statusText}`);
     }
 

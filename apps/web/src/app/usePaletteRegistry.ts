@@ -23,6 +23,7 @@ import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { fleetPaletteEntries, markAgentOpened, readAgentRecency, togglableFleetAgents } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
+import { memberDmView } from "./PaletteChat";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -244,6 +245,7 @@ export function usePaletteRegistry(
         },
       }),
     );
+    vs.push(memberDmView()); // Fleet Room → DM a member (the wired chat, retargeted)
     vs.push({
       ...commandsView({ commands: openSurfaceCommands, placeholder: "Open a surface…" }),
       id: "open",

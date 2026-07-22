@@ -11,6 +11,7 @@ import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
 import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
+import type { PaletteView } from "@protolabsai/ui/command-palette";
 import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
 
 // Upsert a streaming tool event onto a message's toolCalls AND its ordered `parts`
@@ -59,8 +60,12 @@ function finalize(message: ChatMessage): ChatMessage {
 // Deterministic, client-side. `/clear` wipes the thread; typed or picked from the menu.
 const SLASH = [{ name: "clear", description: "Wipe this chat + its history" }];
 
-export function PaletteChat({ agentName }: { agentName: string }) {
-  const [boot] = useState(loadPaletteThread); // run once
+export function PaletteChat({ agentName, agentSlug }: { agentName: string; agentSlug?: string }) {
+  // A Fleet Room DM streams to a SPECIFIC member (agentSlug) and keeps its own thread,
+  // scoped so DMing different members never crosses transcripts. No slug = the normal
+  // ⌘K chat with this window's agent (unchanged).
+  const scope = agentSlug ? `dm:${agentSlug}` : undefined;
+  const [boot] = useState(() => loadPaletteThread(scope)); // run once
   const [messages, setMessages] = useState<ChatMessage[]>(boot.messages);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -80,15 +85,16 @@ export function PaletteChat({ agentName }: { agentName: string }) {
   // self-heal below reconnects to it on reopen. Abort last (it can't race the flush).
   useEffect(
     () => () => {
-      savePaletteThread({ contextId: contextRef.current, messages: messagesRef.current }, true);
+      savePaletteThread({ contextId: contextRef.current, messages: messagesRef.current }, true, scope);
       abortRef.current?.abort();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
   // Preserve the thread (debounced) — survives close/reopen and reload.
   useEffect(() => {
-    savePaletteThread({ contextId: contextRef.current, messages });
-  }, [messages]);
+    savePaletteThread({ contextId: contextRef.current, messages }, false, scope);
+  }, [messages, scope]);
 
   // Reconnect an interrupted turn (ADR 0057 durability). Runs once per open: if the last
   // assistant message is stuck "streaming" with a durable taskId — the palette was closed
@@ -141,8 +147,10 @@ export function PaletteChat({ agentName }: { agentName: string }) {
   // `/clear` — wipe the server checkpoint for the current thread (no attachments on a
   // palette chat, so the full retire is harmless) + start a fresh local thread.
   const clearThread = () => {
-    void api.deleteChatSession(contextRef.current, false).catch(() => {});
-    contextRef.current = freshPaletteThread().contextId;
+    // For a DM, api.deleteChatSession would target THIS window's agent, not the member —
+    // so skip the server-side wipe there and just mint a fresh local thread.
+    if (!agentSlug) void api.deleteChatSession(contextRef.current, false).catch(() => {});
+    contextRef.current = freshPaletteThread(scope).contextId;
     setMessages([]);
     setDraft("");
     inputRef.current?.focus();
@@ -192,7 +200,7 @@ export function PaletteChat({ agentName }: { agentName: string }) {
           onFailed: (detail) => update((m) => ({ ...m, content: m.content || detail, status: "error" })),
           onDone: () => update(finalize),
         },
-        { model, reasoningEffort: effectiveReasoningEffort(sess) },
+        { model, reasoningEffort: effectiveReasoningEffort(sess), agentSlug },
       );
     } catch (e) {
       if (!controller.signal.aborted) {
@@ -260,4 +268,21 @@ export function PaletteChat({ agentName }: { agentName: string }) {
       />
     </div>
   );
+}
+
+/** The Fleet Room DM view — the SAME wired ⌘K chat (PaletteChat), pointed at a specific
+ *  member. A member row does `ctx.enter("member-dm", { slug, name })`; the palette pushes
+ *  it on the stack (so Back/Escape return to the roster) and the turn streams to that
+ *  member via the hub proxy. Keyed by slug so switching members remounts a clean pane
+ *  bound to that member's own thread. */
+export function memberDmView(): PaletteView {
+  return {
+    id: "member-dm",
+    title: "Direct message",
+    width: 620,
+    render: (ctx) => {
+      const p = (ctx.props ?? {}) as { slug?: string; name?: string };
+      return <PaletteChat key={p.slug ?? "?"} agentSlug={p.slug} agentName={p.name ?? "agent"} />;
+    },
+  };
 }
