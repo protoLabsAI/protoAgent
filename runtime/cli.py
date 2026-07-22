@@ -339,6 +339,14 @@ def _cmd_list(_args) -> int:
         print(f"node:     {ns['version'] or '?'} ({ns['source']})")
     elif ns["supported"]:
         print("node:     not found — `protoagent runtime install-node` (needed for npx-based agents/MCP)")
+    from runtime.python_install import python_status
+
+    ps = python_status()
+    if ps["managed"]:
+        stale = "" if ps["baseline_current"] else " — doc baseline stale, re-run install-python"
+        print(f"python:   managed {ps['managed_version']} (execute_code child runtime){stale}")
+    elif ps["needed"] and ps["supported"]:
+        print("python:   not provisioned — `protoagent runtime install-python` (needed for execute_code on desktop)")
     print("options:")
     print("  native        (built-in LangGraph loop)")
     for a in acp_agent_catalog(getattr(cfg, "acp_agents", None)):
@@ -385,13 +393,55 @@ def _cmd_install_node(args) -> int:
     return 0
 
 
+def _cmd_install_python(args) -> int:
+    from runtime.python_install import (
+        PYTHON_VERSION,
+        PythonRuntimeError,
+        install_managed_python,
+        python_status,
+    )
+
+    st = python_status()
+    if not st["supported"]:
+        print("python: no managed CPython build for this platform/architecture.", file=sys.stderr)
+        return 2
+    if st["managed"] and st["managed_version"] == PYTHON_VERSION and st["baseline_current"] and not args.force:
+        print(f"python: managed runtime already installed ({st['managed_version']}) at {st['exe']}.")
+        return 0
+
+    print(f"python: provisioning managed CPython {PYTHON_VERSION} …")
+    last = [-1]
+
+    def _progress(done: int, total: int) -> None:
+        pct = int(done * 100 / total) if total else 0
+        if pct != last[0] and (pct % 5 == 0 or not total):
+            last[0] = pct
+            bar = f"{pct}%" if total else f"{done // (1 << 20)} MiB"
+            print(f"\r  downloading… {bar}   ", end="", file=sys.stderr, flush=True)
+
+    def _phase(name: str) -> None:
+        if name == "deps":
+            print(file=sys.stderr)
+            print("  installing the document baseline (python-docx, openpyxl, python-pptx, reportlab)…", file=sys.stderr)
+
+    try:
+        st = install_managed_python(force=args.force, on_progress=_progress, on_phase=_phase)
+    except PythonRuntimeError as exc:
+        print(file=sys.stderr)
+        print(f"python: install failed — {exc}", file=sys.stderr)
+        return 1
+    print(f"python: installed {st['managed_version']} at {st['exe']}")
+    print("        execute_code (and the cowork document skills) can now run on this machine.")
+    return 0
+
+
 def run_runtime_cli(argv: list[str]) -> int:
     """`protoagent runtime` — see module docstring. Returns a process exit code."""
     parser = argparse.ArgumentParser(
         prog="protoagent runtime",
         description="Select the agent runtime — native (LangGraph) or an ACP agent (ADR 0033).",
     )
-    sub = parser.add_subparsers(dest="cmd", metavar="<use|list|install-node>")
+    sub = parser.add_subparsers(dest="cmd", metavar="<use|list|install-node|install-python>")
 
     p_use = sub.add_parser("use", help="Switch runtime (writes the live config); `use hermes` runs the full preset")
     p_use.add_argument("runtime", help="native | hermes | acp:<agent>  (see `runtime list`)")
@@ -412,6 +462,13 @@ def run_runtime_cli(argv: list[str]) -> int:
     )
     p_node.add_argument("--force", action="store_true", help="Reinstall even if a Node is already available")
     p_node.set_defaults(fn=_cmd_install_node)
+
+    p_py = sub.add_parser(
+        "install-python",
+        help="Provision the managed CPython runtime (execute_code's child interpreter on the desktop app, ADR 0094)",
+    )
+    p_py.add_argument("--force", action="store_true", help="Reinstall even if the managed runtime is already present")
+    p_py.set_defaults(fn=_cmd_install_python)
 
     args = parser.parse_args(argv)
     fn = getattr(args, "fn", None)

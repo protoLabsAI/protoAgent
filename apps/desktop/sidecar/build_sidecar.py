@@ -59,6 +59,13 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     # (Cowork), and nothing errors. Same trap as the plugin/MCP catalogs above.
     ("config/archetype-catalog.json", "config"),
     ("config/soul-presets", "config/soul-presets"),
+    # The document-baseline pin list (ADR 0092 / ADR 0094). runtime/python_install.py
+    # reads it (→ _MEIPASS/sidecar/requirements-docs.txt when frozen) to pip the doc
+    # libs into the managed CPython the execute_code child spawns — the copies
+    # DOC_COLLECT_ALL bundles into the PYZ are host-process-only and unreachable from
+    # any external interpreter, so without this entry the provisioned runtime would
+    # have an interpreter but no python-docx/openpyxl/pptx/reportlab to import.
+    ("apps/desktop/sidecar/requirements-docs.txt", "sidecar"),
     # The bundled first-party skills (config/skills/*/SKILL.md — release-notes,
     # web-research). `_build_skills_index` (server/agent_init.py) seeds the skill
     # index from REPO_ROOT/config/skills (→ _MEIPASS/config/skills when frozen),

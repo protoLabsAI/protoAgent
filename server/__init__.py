@@ -777,6 +777,13 @@ def _main():
 
     register_node_routes(fastapi_app)
 
+    # Managed Python runtime (ADR 0094) — /api/runtime/python status + one-click install,
+    # so the console can provision the CPython the execute_code child spawns on the
+    # packaged desktop app (where sys.executable is the frozen server binary, #2137).
+    from operator_api.python_routes import register_python_routes
+
+    register_python_routes(fastapi_app)
+
     # Device pairing (ADR 0087) — /api/pairing/* + /api/devices. Lets the operator add a
     # phone by QR instead of hand-typing a bearer, and revoke it individually afterwards.
     # NOTE: /api/pairing/claim is on the auth allowlist by necessity (it mints the

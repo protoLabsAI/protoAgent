@@ -12,7 +12,9 @@ every intermediate payload). But the script is **not** limited to tool calls.
 
 How it runs
 -----------
-The script executes in a **child Python process** (``python -u <tmpfile>``) with:
+The script executes in a **child Python process** (``python -u <tmpfile>`` — the
+venv's own interpreter from source; the managed CPython runtime on the packaged
+desktop app, ADR 0094) with:
 
 - a **scrubbed environment** — only ``PATH`` + the bridge fds are passed, so
   gateway keys / auth tokens in the parent env are never visible to the script;
@@ -138,20 +140,33 @@ async def _connect_write(fd: int):
     return writer, transport
 
 
+def _resolve_child_interpreter() -> str | None:
+    """The interpreter that runs the child script.
+
+    Source/venv runs: this process's own interpreter — its site-packages ARE the
+    child's library surface, as they always have been. Packaged desktop (ADR 0094):
+    ``sys.executable`` is the frozen server binary (``<binary> -u <script>`` would
+    relaunch the server, not run the script), so spawn the managed CPython instead —
+    or None when it isn't provisioned yet, and ``run_code`` speaks the install path."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    from infra.python_runtime import managed_python_exe
+
+    exe = managed_python_exe()
+    return str(exe) if exe is not None else None
+
+
 async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate: int = 6000) -> str:
     """Run ``code`` in a child process with a tool-RPC bridge; return its stdout."""
-    if getattr(sys, "frozen", False):
-        # In a PyInstaller build (the desktop app) ``sys.executable`` is the frozen
-        # server binary, NOT a Python interpreter — ``<binary> -u <script>`` would
-        # relaunch the server, not run the script. There's no standalone Python to
-        # spawn. Refuse cleanly with a tool RESULT (so the tool_call is answered and
-        # the thread can't be left with a dangling tool_call that 400s every later
-        # turn) rather than attempting the broken spawn.
+    interpreter = _resolve_child_interpreter()
+    if interpreter is None:
+        # Refuse cleanly with a tool RESULT (so the tool_call is answered and the
+        # thread can't be left with a dangling tool_call that 400s every later turn)
+        # — and point at the one-time fix instead of a dead end (ADR 0094).
         return (
-            "Error: execute_code is unavailable in the packaged desktop app — it needs a "
-            "standalone Python interpreter to spawn, which the frozen build doesn't ship. "
-            "Run protoAgent from source or in Docker to use it, or turn it off under "
-            "Settings ▸ Tools ▸ Enable execute_code."
+            "Error: execute_code needs the managed Python runtime, which isn't provisioned "
+            "on this machine yet. Install it once from Settings ▸ Tools (a ~35 MB, "
+            "hash-verified download) or run `protoagent runtime install-python`, then retry."
         )
     path = _build_runner_file(code)
     # Pipes: child writes requests on req_w; parent writes responses on resp_w.
@@ -162,7 +177,7 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
     req_transport = resp_transport = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable,
+            interpreter,
             "-u",
             path,
             stdin=asyncio.subprocess.DEVNULL,

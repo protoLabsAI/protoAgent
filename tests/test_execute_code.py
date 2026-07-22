@@ -132,8 +132,41 @@ def test_plugin_register_wires_a_late_factory_that_builds_the_tool():
     assert "echo_tool" in ec.description and "boom_tool" not in ec.description
 
 
-def test_plugin_not_loaded_in_frozen_build(monkeypatch):
+def test_plugin_registers_in_frozen_build(monkeypatch):
+    # ADR 0094: the frozen desktop build registers the tool (the child runs on the
+    # managed CPython) — the old silent skip presented a toggle that did nothing (#2137).
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     reg = PluginRegistry("execute_code", Path("."), config={})
     register(reg)
-    assert reg.late_tool_factories == []  # no standalone Python in the packaged desktop build
+    assert len(reg.late_tool_factories) == 1
+
+
+# --- child interpreter resolution (ADR 0094) ---------------------------------
+
+
+def test_child_interpreter_is_own_python_when_not_frozen():
+    from plugins.execute_code.engine import _resolve_child_interpreter
+
+    assert _resolve_child_interpreter() == sys.executable
+
+
+def test_child_interpreter_uses_managed_python_when_frozen(monkeypatch, tmp_path):
+    from plugins.execute_code.engine import _resolve_child_interpreter
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe = tmp_path / "bin" / "python3"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("infra.python_runtime.managed_python_exe", lambda: exe)
+    assert _resolve_child_interpreter() == str(exe)
+
+
+@pytest.mark.asyncio
+async def test_frozen_without_runtime_answers_with_install_path(monkeypatch):
+    # No managed runtime provisioned: the tool must answer with the actionable install
+    # path — a RESULT, not a raise, so the thread never strands a dangling tool_call.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr("infra.python_runtime.managed_python_exe", lambda: None)
+    out = await run_code("print('hi')", {})
+    assert out.startswith("Error:")
+    assert "install-python" in out and "Settings" in out

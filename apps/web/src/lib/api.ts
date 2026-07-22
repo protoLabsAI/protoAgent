@@ -32,6 +32,7 @@ import type {
   MemoryInjectionRow,
   MemorySessionDigest,
   NodeRuntimePayload,
+  PythonRuntimePayload,
   RuntimeStatus,
   ScheduledJob,
   SecretsStatus,
@@ -803,6 +804,19 @@ export const api = {
   installNodeRuntime(force = false) {
     return request<{ ok: boolean } & NodeRuntimePayload>(
       `/api/runtime/node/install${force ? "?force=true" : ""}`,
+      { method: "POST", host: true },
+    );
+  },
+
+  // Managed Python runtime (ADR 0094) — status + one-click provisioning of the
+  // execute_code child interpreter for the packaged desktop app. HOST-targeted like
+  // nodeRuntime(): the box-shared runtime lives on the server process.
+  pythonRuntime() {
+    return request<PythonRuntimePayload>("/api/runtime/python", { host: true });
+  },
+  installPythonRuntime(force = false) {
+    return request<{ ok: boolean } & PythonRuntimePayload>(
+      `/api/runtime/python/install${force ? "?force=true" : ""}`,
       { method: "POST", host: true },
     );
   },

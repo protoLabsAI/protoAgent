@@ -15,7 +15,11 @@ model or inside a hardened container.
 
 It uses the late-tools seam (``register_late_tool_factory``) because the tool
 must proxy the FULLY assembled toolset, which a normal ``register_tool`` can't
-see. Not loaded in the packaged desktop build (no standalone Python interpreter).
+see. On the packaged desktop build the child runs on the managed CPython
+runtime (ADR 0094), provisioned once from Settings ▸ Tools; until then the tool
+answers with the install path instead of silently not existing — the old
+"don't register when frozen" gate presented a toggle that structurally did
+nothing (#2137).
 """
 
 from __future__ import annotations
@@ -32,12 +36,12 @@ def register(registry) -> None:
     """Wire execute_code as a late tool (ADR 0001 + the late-tools seam)."""
     cfg = registry.config  # the plugin's `execute_code` config section (ADR 0019)
 
-    # Frozen desktop build: spawning a Python subprocess needs a standalone
-    # interpreter the PyInstaller binary doesn't ship. Don't register the tool
-    # there at all — it simply won't exist (matches the old core behavior).
     if getattr(sys, "frozen", False):
-        log.info("[execute_code] packaged desktop build — no standalone Python, tool not loaded")
-        return
+        # Packaged desktop build: the child spawns the managed CPython (ADR 0094).
+        # Register regardless of provisioning state — an unprovisioned runtime answers
+        # every call with the actionable install path, which is honest-and-visible
+        # where the old skip was silent (#2137).
+        log.info("[execute_code] packaged desktop build — child runs on the managed Python runtime")
 
     def _factory(all_tools, config):
         return build_execute_code_tool(
