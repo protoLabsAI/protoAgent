@@ -319,3 +319,17 @@ test("⌘K → Fleet Room shows the roster + live activity feed side by side", a
   // pushes activity/inbox/goal frames, so a mapped event lands in the column.
   await expect(room.locator(".flr-feed__event").first()).toBeVisible({ timeout: 6000 });
 });
+
+test("⌘K → Fleet Room: @-address a member in the composer, then send opens its DM", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  // Typing "@" opens a member picker; picking sets the address chip.
+  await room.locator(".flr__input").fill("@ava");
+  await room.locator(".flr__mention", { hasText: "ava" }).click();
+  await expect(room.locator(".flr__target")).toContainText("@ava");
+  // Type a message and send → morphs into ava's DM (the wired chat), message pre-sent.
+  await room.locator(".flr__input").fill("ship it");
+  await room.locator(".flr__send").click();
+  await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+});

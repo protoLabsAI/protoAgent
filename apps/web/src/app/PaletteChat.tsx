@@ -60,7 +60,16 @@ function finalize(message: ChatMessage): ChatMessage {
 // Deterministic, client-side. `/clear` wipes the thread; typed or picked from the menu.
 const SLASH = [{ name: "clear", description: "Wipe this chat + its history" }];
 
-export function PaletteChat({ agentName, agentSlug }: { agentName: string; agentSlug?: string }) {
+export function PaletteChat({
+  agentName,
+  agentSlug,
+  initial,
+}: {
+  agentName: string;
+  agentSlug?: string;
+  /** A message to auto-send once on open (Fleet Room composer → DM a member). */
+  initial?: string;
+}) {
   // A Fleet Room DM streams to a SPECIFIC member (agentSlug) and keeps its own thread,
   // scoped so DMing different members never crosses transcripts. No slug = the normal
   // ⌘K chat with this window's agent (unchanged).
@@ -214,6 +223,16 @@ export function PaletteChat({ agentName, agentSlug }: { agentName: string; agent
   };
 
   const stop = () => abortRef.current?.abort();
+
+  // Auto-send the initial message once (Fleet Room composer → DM a member with a message).
+  const initialSent = useRef(false);
+  useEffect(() => {
+    if (initial && !initialSent.current) {
+      initialSent.current = true;
+      void send(initial);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const empty = messages.length === 0;
   // Minimal slash menu — `/clear` hint while the draft starts with "/".
   const slashMatches = draft.startsWith("/")
@@ -281,8 +300,8 @@ export function memberDmView(): PaletteView {
     title: "Direct message",
     width: 620,
     render: (ctx) => {
-      const p = (ctx.props ?? {}) as { slug?: string; name?: string };
-      return <PaletteChat key={p.slug ?? "?"} agentSlug={p.slug} agentName={p.name ?? "agent"} />;
+      const p = (ctx.props ?? {}) as { slug?: string; name?: string; initial?: string };
+      return <PaletteChat key={p.slug ?? "?"} agentSlug={p.slug} agentName={p.name ?? "agent"} initial={p.initial} />;
     },
   };
 }

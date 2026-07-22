@@ -200,11 +200,56 @@
 
 /* composer */
 .flr__composer {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--pl-color-border);
+}
+
+/* @-mention member picker (opens above the composer) */
+.flr__mentions {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% - 2px);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
+  border: 1px solid var(--pl-color-border-strong, var(--pl-color-border));
+  border-radius: 10px;
+  box-shadow: 0 -10px 28px -14px rgba(0, 0, 0, 0.45);
+}
+.flr__mention {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--pl-color-fg);
+}
+.flr__mention:hover {
+  background: var(--pl-color-bg-hover);
+}
+.flr__mention-name {
+  font-size: 13px;
+  font-weight: 550;
+}
+.flr__mention-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--pl-color-fg-subtle);
 }
 .flr__target {
   display: inline-flex;
