@@ -161,3 +161,16 @@ def test_validation_failure_creates_no_run_file(tmp_path, monkeypatch):
         pass
     assert store.list_runs() == []
     assert store.run_id is None
+
+
+def test_writable_dir_expands_tilde(monkeypatch):
+    """A `~` in workflow_dir must expand (pre-refactor behavior) — never a literal
+    `~` directory (QA panel finding on the slice-1 PR)."""
+    from types import SimpleNamespace
+
+    from plugins import workflows as wf
+
+    monkeypatch.setattr(wf.sdk, "config", lambda: SimpleNamespace(workflow_dir="~/wf-store"))
+    out = wf._writable_dir()
+    assert "~" not in str(out)
+    assert str(out).startswith("/")
