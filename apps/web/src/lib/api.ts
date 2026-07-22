@@ -778,6 +778,14 @@ export const api = {
   sseToken() {
     return request<{ token: string }>("/api/sse-token", { host: true });
   },
+  // SSE token for a SPECIFIC fleet member (Fleet Activity streams each member's
+  // /agents/<slug>/api/events). Best-effort: open-mode instances need none, so a
+  // failure resolves to "" and the caller connects tokenless.
+  sseTokenFor(slug: string): Promise<{ token: string }> {
+    return fetch(memberPath(slug, "/api/sse-token"), { headers: applyAuth(new Headers()) })
+      .then((r) => (r.ok ? (r.json() as Promise<{ token: string }>) : { token: "" }))
+      .catch(() => ({ token: "" }));
+  },
 
   // Gracefully restart the server process (POST /api/restart) — the server drains and
   // re-execs; the console reconnects via the boot gate. Always targets the HOST (the

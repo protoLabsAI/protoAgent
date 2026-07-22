@@ -12,10 +12,12 @@ import { create } from "zustand";
 import { Radio } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { fleetQuery } from "../lib/queries";
+import { api, memberPath } from "../lib/api";
+import { buildEventsUrl } from "../lib/events";
 import type { FleetAgent } from "../lib/types";
 import "./fleet-activity.css";
 
-export type FleetEventKind = "online" | "offline" | "added" | "removed" | "broadcast";
+export type FleetEventKind = "online" | "offline" | "added" | "removed" | "broadcast" | "turn" | "activity";
 
 export type FleetEvent = {
   id: string;
@@ -71,14 +73,126 @@ function useRosterCapture() {
   }, [data]);
 }
 
-/** Mounted once at the app root: keeps the feed capturing continuously (headless). */
-export function FleetActivityCapture() {
-  useRosterCapture();
-  return null;
+const shorten = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** Curated map of a member's event-bus topics → feed items. Noisy topics
+ *  (goal.iteration, task.changed, background.progress, watch.*) are skipped. */
+function mapTopic(topic: string, data: Record<string, unknown>): { text: string; kind: FleetEventKind } | null {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  switch (topic) {
+    case "turn.started":
+      return { text: "is running a turn", kind: "turn" };
+    case "turn.finished":
+      return { text: "finished a turn", kind: "turn" };
+    case "activity.message": {
+      const t = str(data.text) || str(data.message);
+      return { text: t ? `“${shorten(t)}”` : "posted to Activity", kind: "activity" };
+    }
+    case "inbox.item":
+      return { text: "received an inbox item", kind: "activity" };
+    case "scheduler.fired": {
+      const n = str(data.name) || str(data.title);
+      return { text: n ? `ran a scheduled task: ${n}` : "ran a scheduled task", kind: "activity" };
+    }
+    case "goal.achieved":
+      return { text: "achieved a goal", kind: "activity" };
+    case "goal.failed":
+      return { text: "a goal failed", kind: "offline" };
+    case "background.completed":
+      return { text: "finished background work", kind: "activity" };
+    default:
+      return null;
+  }
 }
 
-/** The activity column rendered inside the Fleet Room dialog (right of the roster). */
+/** Open an SSE stream per ONLINE member (/agents/<slug>/api/events, via the hub proxy)
+ *  and map its event-bus topics into the feed — this is the fleet-wide "one event log"
+ *  (ADR 0039). Streams open/close as members come online/go offline; a stream that errors
+ *  is dropped and reopened (with a fresh token) on the next roster poll. */
+function useFleetStreams() {
+  const { data } = useQuery(fleetQuery());
+  const streams = useRef<Map<string, EventSource>>(new Map());
+  const opening = useRef<Set<string>>(new Set());
+  const seen = useRef<Set<string>>(new Set());
+  const nameBySlug = useRef<Map<string, string>>(new Map());
+
+  const agents = data?.agents ?? [];
+  const sig = agents
+    .filter((a) => a.running)
+    .map(slugOf)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    nameBySlug.current = new Map(agents.map((a) => [slugOf(a), a.name]));
+    const want = new Set(agents.filter((a) => a.running).map(slugOf));
+
+    for (const [slug, es] of streams.current) {
+      if (!want.has(slug)) {
+        es.close();
+        streams.current.delete(slug);
+      }
+    }
+
+    const handle = (slug: string, raw: string) => {
+      let frame: { topic?: string; data?: Record<string, unknown>; seq?: number };
+      try {
+        frame = JSON.parse(raw || "{}");
+      } catch {
+        return;
+      }
+      if (!frame.topic) return;
+      if (typeof frame.seq === "number") {
+        const key = `${slug}:${frame.seq}`;
+        if (seen.current.has(key)) return;
+        seen.current.add(key);
+        if (seen.current.size > 1500) seen.current.clear();
+      }
+      const m = mapTopic(frame.topic, frame.data ?? {});
+      if (!m) return;
+      pushFleetEvent({ source: nameBySlug.current.get(slug) ?? slug, text: m.text, kind: m.kind });
+    };
+
+    const openStream = async (slug: string) => {
+      if (streams.current.has(slug) || opening.current.has(slug)) return;
+      opening.current.add(slug);
+      let token = "";
+      try {
+        token = (await api.sseTokenFor(slug)).token || "";
+      } catch {
+        /* open mode → tokenless */
+      }
+      opening.current.delete(slug);
+      if (streams.current.has(slug) || typeof EventSource === "undefined") return;
+      const es = new EventSource(buildEventsUrl(memberPath(slug, "/api/events"), token, null));
+      es.onmessage = (e) => handle(slug, (e as MessageEvent).data);
+      es.onerror = () => {
+        es.close();
+        streams.current.delete(slug); // the next roster poll reopens with a fresh token
+      };
+      streams.current.set(slug, es);
+    };
+
+    for (const slug of want) void openStream(slug);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
+
+  useEffect(() => {
+    const map = streams.current;
+    return () => {
+      for (const es of map.values()) es.close();
+      map.clear();
+    };
+  }, []);
+}
+
+/** The activity column rendered inside the Fleet Room dialog (right of the roster).
+ *  Captures WHILE MOUNTED (i.e. while the room is open) — presence transitions + each
+ *  online member's event-bus stream. The module-level store keeps the log across opens,
+ *  and closing the room tears the streams down so we don't hold SSE connections idle. */
 export function FleetActivityFeed() {
+  useRosterCapture();
+  useFleetStreams();
   const events = useFleetActivity((s) => s.events);
   return (
     <div className="flr-feed">

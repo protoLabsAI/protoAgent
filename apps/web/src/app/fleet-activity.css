@@ -94,8 +94,12 @@
 .flr-feed__src--removed {
   color: var(--pl-color-fg-muted);
 }
-.flr-feed__src--broadcast {
+.flr-feed__src--broadcast,
+.flr-feed__src--turn {
   color: var(--pl-color-accent);
+}
+.flr-feed__src--activity {
+  color: var(--pl-color-fg);
 }
 .flr-feed__text {
   margin: 2px 0 0;

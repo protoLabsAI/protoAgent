@@ -315,5 +315,7 @@ test("⌘K → Fleet Room shows the roster + live activity feed side by side", a
   await expect(room.locator(".flr__roster")).toBeVisible();
   await expect(room.locator(".flr__activity")).toBeVisible();
   await expect(room.getByText("Fleet activity", { exact: true })).toBeVisible();
-  await expect(room.locator(".flr-feed__empty")).toBeVisible(); // no events until presence changes
+  // The feed streams each online member's event bus (/agents/<slug>/api/events) — the mock
+  // pushes activity/inbox/goal frames, so a mapped event lands in the column.
+  await expect(room.locator(".flr-feed__event").first()).toBeVisible({ timeout: 6000 });
 });
