@@ -1,7 +1,7 @@
 # 0094 — Managed Python runtime: execute_code on the frozen desktop app
 
-Status: **Proposed** (design-first; supersedes nothing — completes ADR 0092's stated
-outcome and closes [#2137](https://github.com/protoLabsAI/protoAgent/issues/2137))
+Status: **Accepted** (P1 ships alongside — #2144; completes ADR 0092's stated outcome
+and closes [#2137](https://github.com/protoLabsAI/protoAgent/issues/2137))
 
 ## Context
 
