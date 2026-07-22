@@ -88,6 +88,11 @@ def _cache_key(spec: dict) -> tuple:
         spec["permissions"],
         tuple(sorted(spec["allow_kinds"])),
         tuple(sorted(spec["deny_kinds"])),
+        # Env shapes MUST key the pool: two specs differing only in env/env_remove
+        # would otherwise share a client and the first caller's environment sticks
+        # for everyone (QA panel on #2145; env itself had the same latent gap).
+        tuple(sorted((spec.get("env") or {}).items())),
+        tuple(spec.get("env_remove") or ()),
     )
 
 

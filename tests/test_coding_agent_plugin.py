@@ -34,10 +34,7 @@ from plugins.coding_agent.acp_client import (
 
 def test_short_tool_name_peels_inline_args_and_mcp_source():
     # A verbose MCP tool title → a compact card label (args + source go to the body).
-    assert (
-        _short_tool_name('web_search (protoagent-operator MCP Server): {"query":"pdx weather"}')
-        == "web_search"
-    )
+    assert _short_tool_name('web_search (protoagent-operator MCP Server): {"query":"pdx weather"}') == "web_search"
     assert _short_tool_name('fetch_url (protoagent-operator MCP Server): {"url":"https://x"}') == "fetch_url"
     # No inline args / no parenthetical → left mostly as-is.
     assert _short_tool_name("Skill: Use skill: 'browser-automation'") == "Skill: Use skill: 'browser-automation'"
@@ -894,3 +891,25 @@ async def test_evict_client_swallows_close_errors():
     P._CLIENTS[P._cache_key(spec)] = _BadClient()
     assert await P.evict_client(spec) is True  # did not raise
     assert P._cache_key(spec) not in P._CLIENTS
+
+
+def test_cache_key_distinguishes_env_and_env_remove():
+    """Panel pin (#2145): specs differing ONLY in env or env_remove must not share a
+    pooled client — the first caller's environment would stick for all."""
+    from plugins.coding_agent import _cache_key
+
+    base = {
+        "name": "c",
+        "command": "x",
+        "args": [],
+        "workdir": "/w",
+        "permissions": "auto",
+        "allow_kinds": [],
+        "deny_kinds": [],
+        "env": {},
+        "env_remove": [],
+    }
+    a = _cache_key(base)
+    b = _cache_key({**base, "env_remove": ["PROTOAGENT_"]})
+    c = _cache_key({**base, "env": {"ANTHROPIC_MODEL": "opus"}})
+    assert len({a, b, c}) == 3
