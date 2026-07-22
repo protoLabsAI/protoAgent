@@ -102,8 +102,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
       .catch((e) => toast({ tone: "error", title: "Couldn't toggle agent", message: errMsg(e) }));
   };
 
-  const broadcast = () => {
-    const msg = draft.trim();
+  const broadcast = (msg: string) => {
     if (!msg) return;
     if (!broadcastTargets.length) {
       toast({ tone: "error", title: "No one to broadcast to", message: "No other members are online." });
@@ -148,24 +147,54 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
 
   // Send: an addressed member opens its DM with the message pre-sent (the wired chat streams
   // the reply); otherwise broadcast to all online. ⌘↵ always broadcasts.
+  /** Resolve a typed leading "@name" even when the picker was never used — people type
+   *  "@scout do the thing" and expect it to address scout, not broadcast it verbatim.
+   *  Returns the member plus the message with the mention stripped. */
+  const resolveTypedMention = (text: string): { agent?: FleetAgent; rest: string } => {
+    const m = text.match(/^\s*@([\w-]+)[\s,:]*/);
+    if (!m) return { rest: text };
+    const typed = m[1].toLowerCase();
+    const others = roster.filter((a) => slugOf(a) !== here);
+    const agent =
+      others.find((a) => a.name.toLowerCase() === typed) ??
+      others.find((a) => a.name.toLowerCase().startsWith(typed));
+    return agent ? { agent, rest: text.slice(m[0].length) } : { rest: text };
+  };
+
   const submit = (forceBroadcast: boolean) => {
-    const msg = draft.trim();
-    if (!msg) return;
-    if (!forceBroadcast && target !== "broadcast") {
-      // A specific member is addressed — never silently fall through to broadcast.
-      if (!targetAgent) {
+    const raw = draft.trim();
+    if (!raw) return;
+
+    if (!forceBroadcast) {
+      // An explicit chip wins; otherwise honor a typed "@name".
+      if (!targetAgent && target !== "broadcast") {
         toast({ tone: "error", title: "That member left the fleet", message: "Pick another, or broadcast." });
         setTarget("broadcast");
         return;
       }
-      if (!targetAgent.running) {
-        toast({ tone: "error", title: `${targetAgent.name} is offline`, message: "Start it first, or broadcast." });
+      let addressed = targetAgent;
+      let msg = raw;
+      if (!addressed) {
+        const r = resolveTypedMention(raw);
+        if (r.agent) {
+          addressed = r.agent;
+          msg = r.rest.trim();
+        }
+      }
+      if (addressed) {
+        if (!addressed.running) {
+          toast({ tone: "error", title: `${addressed.name} is offline`, message: "Start it first, or broadcast." });
+          return;
+        }
+        if (!msg) {
+          toast({ tone: "error", title: `Add a message for @${addressed.name}`, message: "e.g. “@name ship it”." });
+          return;
+        }
+        ctx.enter("member-dm", { slug: slugOf(addressed), name: addressed.name, initial: msg });
         return;
       }
-      ctx.enter("member-dm", { slug: slugOf(targetAgent), name: targetAgent.name, initial: msg });
-      return;
     }
-    broadcast();
+    broadcast(raw);
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -287,7 +316,11 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
           type="button"
           className={`flr__target${targetAgent ? "" : " is-cast"}`}
           onClick={() => setTarget("broadcast")}
-          title={targetAgent ? `Messaging ${targetAgent.name} — click to broadcast instead` : "Broadcasting to all online members"}
+          title={
+            targetAgent
+              ? `Messaging ${targetAgent.name} — click to broadcast instead`
+              : "Broadcast to every OTHER online member (not this instance, which you're already in)"
+          }
         >
           {targetAgent ? (
             <>
@@ -299,7 +332,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
           ) : (
             <>
               <Radio size={13} />
-              <span>All online · {broadcastTargets.length}</span>
+              <span>Everyone else · {broadcastTargets.length}</span>
             </>
           )}
         </button>

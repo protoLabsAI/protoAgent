@@ -342,3 +342,15 @@ test("⌘K → Fleet Room: @-address a member in the composer, then send opens i
   await room.locator(".flr__send").click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
 });
+
+test("⌘K → Fleet Room: a TYPED @name addresses that member without using the picker", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  // Never touch the picker — just type "@ava <message>" and send, the way people actually
+  // type. It must address ava (open its DM), NOT broadcast the literal text.
+  await room.locator(".flr__input").fill("@ava ship it");
+  await room.locator(".flr__send").click();
+  await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+  await expect(page.locator(".pl-toast", { hasText: /Broadcast to/ })).toHaveCount(0);
+});
