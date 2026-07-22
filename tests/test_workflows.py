@@ -27,6 +27,24 @@ VALID = {
     "output": "{{steps.brief.output}}",
 }
 
+# A recipe with a `gate: human` step — the gated step (`analyze`) must pause for
+# operator approval before its subagent is spawned (F2, ADR 0002).
+GATED = {
+    "name": "gated",
+    "inputs": [{"name": "topic", "required": True}],
+    "steps": [
+        {"id": "gather", "subagent": "researcher", "prompt": "research {{inputs.topic}}"},
+        {
+            "id": "analyze",
+            "subagent": "researcher",
+            "depends_on": ["gather"],
+            "prompt": "analyze:\n{{steps.gather.output}}",
+            "gate": "human",
+        },
+    ],
+    "output": "{{steps.analyze.output}}",
+}
+
 
 def test_validate_accepts_valid_recipe():
     assert validate_recipe(VALID, known_subagents={"researcher"}) == []
@@ -136,6 +154,124 @@ def test_execute_records_failure_inline_and_continues():
     assert "Error: step 'gather'" in res["steps"]["brief"]
 
 
+# --- Step-level gate: human (F2) ---------------------------------------------
+
+
+def test_validate_accepts_human_gate():
+    assert validate_recipe(GATED, known_subagents={"researcher"}) == []
+
+
+def test_validate_rejects_unsupported_gate():
+    bad = {
+        "name": "x",
+        "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "gate": "robot"}],
+    }
+    errs = validate_recipe(bad, known_subagents={"researcher"})
+    assert any("unsupported gate" in e and "robot" in e for e in errs)
+    # A truthy-but-wrong value is still rejected (only the literal 'human' is accepted).
+    assert any("unsupported gate" in e for e in validate_recipe({**bad, "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "gate": True}]}, known_subagents={"researcher"}))
+
+
+def test_execute_pauses_before_gated_step_is_spawned():
+    """The gated step's subagent must never run — pause happens first (no wasted work)."""
+    spawned = []
+
+    async def run_step(subagent, prompt, sid):
+        spawned.append(sid)
+        return f"<{sid}-out>"
+
+    def gate_check(step):
+        return "pause" if step.get("gate") == "human" else None
+
+    def pause_fn(step_id, done):
+        return "run-abc"
+
+    res = asyncio.run(
+        execute_workflow(GATED, {"topic": "ai"}, run_step=run_step, gate_check=gate_check, pause_fn=pause_fn)
+    )
+    # gather (ungated) ran; analyze (gated) paused before spawning.
+    assert spawned == ["gather"]
+    assert res == {"paused": True, "paused_at": "analyze", "run_id": "run-abc", "steps": {"gather": "<gather-out>"}}
+
+
+def test_execute_pauses_at_the_very_first_step_when_gated():
+    """A gated first step pauses immediately — zero prior work."""
+    spawned = []
+
+    async def run_step(subagent, prompt, sid):
+        spawned.append(sid)
+        return sid
+
+    recipe = {
+        "name": "g",
+        "steps": [{"id": "first", "subagent": "researcher", "prompt": "p", "gate": "human"}],
+    }
+    res = asyncio.run(
+        execute_workflow(
+            recipe,
+            {},
+            run_step=run_step,
+            gate_check=lambda s: "pause" if s.get("gate") == "human" else None,
+            pause_fn=lambda sid, done: "rid",
+        )
+    )
+    assert spawned == []  # nothing spawned at all
+    assert res == {"paused": True, "paused_at": "first", "run_id": "rid", "steps": {}}
+
+
+def test_execute_multiple_gated_steps_pause_in_turn():
+    """Sequential gated steps pause one at a time — not all at once. Approving 'a'
+    lets it run; only then does the downstream gated 'b' become ready and pause."""
+    spawned = []
+    paused_with = []
+
+    async def run_step(subagent, prompt, sid):
+        spawned.append(sid)
+        return f"<{sid}>"
+
+    # Simulates a resume where 'a' was already approved (returns None) but 'b' is not.
+    def gate_check(step):
+        return "pause" if step.get("id") == "b" else None
+
+    def pause_fn(step_id, done):
+        paused_with.append((step_id, dict(done)))
+        return "run-seq"
+
+    recipe = {
+        "name": "seq",
+        "steps": [
+            {"id": "a", "subagent": "researcher", "prompt": "p", "gate": "human"},
+            {
+                "id": "b",
+                "subagent": "researcher",
+                "depends_on": ["a"],
+                "prompt": "{{steps.a.output}}",
+                "gate": "human",
+            },
+        ],
+    }
+    res = asyncio.run(
+        execute_workflow(recipe, {}, run_step=run_step, gate_check=gate_check, pause_fn=pause_fn)
+    )
+    assert res["paused_at"] == "b"  # paused at the *second* gate, in turn
+    assert spawned == ["a"]  # a ran (approved); b never spawned
+    assert res["steps"] == {"a": "<a>"}  # a's output carried into the paused envelope
+    assert paused_with == [("b", {"a": "<a>"})]  # pause_fn saw the completed outputs
+
+
+def test_execute_without_gate_check_ignores_gate_field():
+    """gate_check=None ⇒ the pre-gate code path: a recipe carrying gate:human still
+    runs straight through (this is the guarantee ungated workflows rely on)."""
+
+    async def run_step(subagent, prompt, sid):
+        return f"<{sid}-out>"
+
+    res = asyncio.run(execute_workflow(GATED, {"topic": "ai"}, run_step=run_step))
+    assert "paused" not in res
+    assert res["output"] == "<analyze-out>"
+    assert res["failed"] == []
+
+
 def test_registry_save_roundtrip_and_override(tmp_path):
     bundled = tmp_path / "bundled"
     writable = tmp_path / "writable"
@@ -223,3 +359,107 @@ def test_register_sees_plugin_workflow_dirs_added_after_load(tmp_path, monkeypat
 
     names = {s["name"] for s in rs.STATE.workflow_registry.list()}
     assert "late" in names  # no reload, no re-register — the proxy rescanned
+
+
+# --- _execute + run-state wiring for gated runs (F2) --------------------------
+
+
+class _GatedReg:
+    """Minimal registry that only knows the GATED recipe (for _execute wiring tests)."""
+
+    def get(self, name):
+        return GATED if name == GATED["name"] else None
+
+
+def _patch_sdk(monkeypatch, run_subagent, workflow_dir=""):
+    from types import SimpleNamespace
+
+    import plugins.workflows as wf
+
+    monkeypatch.setattr(wf.sdk, "subagent_types", lambda: {"researcher"})
+    monkeypatch.setattr(wf.sdk, "run_subagent", run_subagent)
+    monkeypatch.setattr(
+        wf.sdk, "config", lambda: SimpleNamespace(subagent_max_concurrency=2, workflow_dir=workflow_dir)
+    )
+
+
+def test_execute_pauses_at_gated_step_and_persists_paused_state(tmp_path, monkeypatch):
+    import plugins.workflows as wf
+    from plugins.workflows.run_state import STATUS_PAUSED, WorkflowRunStore
+
+    spawned = []
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        sid = description.rsplit(":", 1)[-1]
+        spawned.append(sid)
+        return f"<{sid}-out>"
+
+    _patch_sdk(monkeypatch, run_subagent)
+    store = WorkflowRunStore(tmp_path)
+    result = asyncio.run(wf._execute(_GatedReg(), "gated", {"topic": "ai"}, run_store=store))
+
+    # Structured envelope — what the /workflows/{name}/run API returns verbatim.
+    assert result["paused"] is True
+    assert result["paused_at"] == "analyze"
+    assert result["run_id"] == store.run_id
+    assert result["steps"] == {"gather": "<gather-out>"}
+    # Human-readable notice — the run_workflow tool return / chat /<recipe> reply.
+    assert result["output"] == wf._paused_message(result)
+    assert store.run_id in result["output"] and "analyze" in result["output"]
+    # No wasted work: the gated step's subagent was never spawned.
+    assert spawned == ["gather"]
+    # Durable paused record on disk: status, pending_step, and all prior outputs.
+    state = store.load(result["run_id"])
+    assert state["status"] == STATUS_PAUSED
+    assert state["pending_step"] == "analyze"
+    assert state["step_outputs"] == {"gather": "<gather-out>"}
+    assert state["inputs"] == {"topic": "ai"}
+
+
+def test_execute_ungated_recipe_still_finishes_done(tmp_path, monkeypatch):
+    """The gate wiring is inert for a recipe with no gated step — it runs to completion."""
+    import plugins.workflows as wf
+    from plugins.workflows.run_state import STATUS_DONE, WorkflowRunStore
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        return f"<{description.rsplit(':', 1)[-1]}-out>"
+
+    ungated = {**GATED, "name": "ungated", "steps": [dict(s) for s in GATED["steps"]]}
+    ungated["steps"][1].pop("gate")  # drop the gate from `analyze`
+
+    class _Reg:
+        def get(self, name):
+            return ungated if name == "ungated" else None
+
+    _patch_sdk(monkeypatch, run_subagent)
+    store = WorkflowRunStore(tmp_path)
+    result = asyncio.run(wf._execute(_Reg(), "ungated", {"topic": "ai"}, run_store=store))
+    assert "paused" not in result
+    assert result["output"] == "<analyze-out>"
+    assert store.load(result["run_id"])["status"] == STATUS_DONE
+
+
+def test_run_store_pause_persists_paused_status(tmp_path):
+    from plugins.workflows.run_state import STATUS_PAUSED, WorkflowRunStore
+
+    store = WorkflowRunStore(tmp_path)
+    run_id = store.start("gated", {"topic": "ai"})
+    store.step_done("gather", "found")
+    returned = store.pause("analyze", {"gather": "found"})
+    assert returned == run_id
+    state = store.load(run_id)
+    assert state["status"] == STATUS_PAUSED
+    assert state["pending_step"] == "analyze"
+    assert state["step_outputs"] == {"gather": "found"}
+    # pause() before start() is a no-op returning None.
+    assert WorkflowRunStore(tmp_path / "other").pause("x") is None
+
+
+def test_paused_message_matches_expected_shape():
+    import plugins.workflows as wf
+
+    msg = wf._paused_message({"paused_at": "analyze", "run_id": "abc123"})
+    assert msg == (
+        "⚠️ Workflow paused at step 'analyze' for operator approval. "
+        "Run id: abc123. Resume from the Workflows panel."
+    )

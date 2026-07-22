@@ -27,6 +27,15 @@ from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, WorkflowRunS
 _RECIPES = Path(__file__).parent / "recipes"
 
 
+def _paused_message(result: dict) -> str:
+    """Operator-facing pause notice — the ``run_workflow`` tool return and the chat
+    ``/<recipe>`` reply. The console reads the structured ``paused``/``run_id`` fields."""
+    return (
+        f"⚠️ Workflow paused at step {result['paused_at']!r} for operator approval. "
+        f"Run id: {result['run_id']}. Resume from the Workflows panel."
+    )
+
+
 def _writable_dir() -> Path:
     """The writable workflow dir — saved recipes AND run state (``.runs/``) live here.
     ``workflow_dir`` config is used verbatim when an operator overrides it; the legacy
@@ -85,16 +94,31 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None,
             await _safe(on_step, {"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
         return out
 
+    def _gate_check(step: dict) -> str | None:
+        # `gate: human` parks the run for operator approval before the step is dispatched.
+        # validate_recipe guarantees `human` is the only accepted value, so anything else
+        # (absent gate included) runs normally.
+        return "pause" if step.get("gate") == "human" else None
+
+    def _pause(step_id: str, completed: dict) -> str | None:
+        return run_store.pause(step_id, completed)
+
     try:
         result = await execute_workflow(
             recipe,
             resolved,
             run_step=_run_step,
             max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
+            gate_check=_gate_check,
+            pause_fn=_pause,
         )
     except Exception:
         run_store.finish(STATUS_FAILED)
         raise
+    if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
+        result.setdefault("run_id", run_id)
+        result["output"] = _paused_message(result)
+        return result
     # Failed steps never reach _run_step's step_done (the engine records their error
     # text inline) — mirror that error text into the run record.
     for sid in result["failed"]:
@@ -172,6 +196,8 @@ def register(registry: Any) -> None:
             result = await _execute(_reg(), name, inputs or {})
         except ValueError as exc:
             return f"Workflow {name!r}: {exc}"
+        if result.get("paused"):  # gated step reached — tell the operator how to resume
+            return _paused_message(result)
         return result["output"]
 
     @tool
@@ -190,8 +216,10 @@ def register(registry: Any) -> None:
             name: Unique slug.
             description: One-line summary.
             steps: Ordered step objects: ``id``, ``subagent`` (a configured subagent),
-                ``prompt`` (may reference {{inputs.x}} / {{steps.<id>.output}}), and
-                optional ``depends_on`` (earlier step ids; independent steps run in parallel).
+                ``prompt`` (may reference {{inputs.x}} / {{steps.<id>.output}}), optional
+                ``depends_on`` (earlier step ids; independent steps run in parallel), and
+                optional ``gate`` (``human`` pauses the run for operator approval before
+                this step runs).
             inputs: Optional [{name, required?, default?}] (referenced as {{inputs.name}}).
             output: Optional final-output template (default = last step's output).
         """
