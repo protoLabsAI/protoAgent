@@ -202,7 +202,14 @@ def _gc_blobs(store: dict) -> None:
         if names:
             live[a["id"]] = names
     try:
-        for art_dir in root.iterdir():
+        art_dirs = list(root.iterdir())
+    except OSError:
+        log.debug("[artifact] blob GC: cannot list %s", root, exc_info=True)
+        return
+    for art_dir in art_dirs:
+        # Per-directory isolation: a failure sweeping one dir (e.g. an unexpected subdir, a
+        # permissions/lock issue) must NOT abort the rest — it'd strand every other orphan.
+        try:
             if not art_dir.is_dir():
                 continue
             keep = live.get(art_dir.name)
@@ -214,8 +221,8 @@ def _gc_blobs(store: dict) -> None:
             for f in art_dir.iterdir():  # artifact lives; drop only orphaned versions' blobs
                 if f.name not in keep:
                     f.unlink(missing_ok=True)
-    except OSError:
-        log.debug("[artifact] blob GC hiccup", exc_info=True)
+        except OSError:
+            log.debug("[artifact] blob GC hiccup on %s", art_dir, exc_info=True)
 
 
 def _now() -> int:

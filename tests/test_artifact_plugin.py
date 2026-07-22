@@ -1026,3 +1026,19 @@ def test_clip_truncates_on_a_codepoint_boundary(monkeypatch, tmp_path):
     body = out[: -len(art._PREVIEW_TRUNC)]
     assert body == "😀"  # exactly one whole emoji fits; the straddling one is dropped, not mangled
     body.encode("utf-8")  # valid utf-8 round-trips (no partial sequence)
+
+
+def test_blob_gc_isolates_a_failing_dir(monkeypatch, tmp_path):
+    """A failure sweeping one blob dir must not abort GC of the others (protoreview #2126):
+    per-directory error isolation, so a stray un-drainable dir can't strand every orphan."""
+    art = _load(monkeypatch, tmp_path)
+    root = art._blob_root()
+    bad = root / "a-bad"
+    bad.mkdir(parents=True)
+    (bad / "sub").mkdir()  # a subdir → f.unlink() raises OSError while draining this orphan
+    good = root / "a-good"
+    good.mkdir()
+    (good / "v.bin").write_bytes(b"x")
+    art._gc_blobs({"artifacts": []})  # both are orphans (empty store)
+    assert not good.exists()  # the good orphan was still swept despite bad failing (any order)
+    assert bad.exists()  # bad couldn't be removed, but didn't abort the sweep
