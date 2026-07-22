@@ -178,7 +178,9 @@ def register_fleet_routes(app) -> None:
         # `secrets` carry values for the bundle's declared secrets. Coerced to plain str maps/list
         # here so a malformed field degrades to "not supplied" (env-only fallback) rather than 500.
         raw_inputs = body.get("inputs")
-        inputs = {str(k): str(v) for k, v in raw_inputs.items()} if isinstance(raw_inputs, dict) else None
+        # JSON null means "not provided" — drop it BEFORE str() coercion, or str(None) becomes
+        # the truthy literal "None" and bypasses resolve_bundle_mcp_item's env/default fallthrough.
+        inputs = {str(k): str(v) for k, v in raw_inputs.items() if v is not None} if isinstance(raw_inputs, dict) else None
         raw_secrets = body.get("secrets")
         secrets = [s for s in raw_secrets if isinstance(s, dict)] if isinstance(raw_secrets, list) else None
         # The archetype's base SOUL.md (the persona picked in the new-agent picker), written

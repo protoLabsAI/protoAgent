@@ -433,3 +433,24 @@ def test_archetype_preview_fetch_failure_is_502(client, monkeypatch):
 
     monkeypatch.setattr(plugin_ops, "peek_bundle", _boom)
     assert client.get("/api/archetypes/stacked/preview").status_code == 502
+
+
+def test_create_drops_null_input_values(client, monkeypatch):
+    """A JSON null input value means "not provided": it is dropped BEFORE str() coercion —
+    str(None) is the truthy literal "None", which would bypass resolve_bundle_mcp_item's
+    env/default fallthrough and fill templates with a garbage token (QA panel, #2125)."""
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(kwargs)
+        return {"id": f"{name}-0", "name": name, "port": 7999, "path": "/tmp", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    r = client.post(
+        "/api/fleet",
+        json={"name": "x", "start": False, "inputs": {"token": None, "host": "hq"}},
+    )
+    assert r.status_code == 200
+    assert captured["inputs"] == {"host": "hq"}  # null dropped, never the string "None"
