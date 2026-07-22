@@ -91,8 +91,11 @@ too and needs watcher/debounce/dedup infra for no gain over the explicit call.)
   (security bumps, per-platform wheel availability — all four ship mac arm64/x86_64 +
   Windows wheels).
 - **Verification:** the frozen sidecar smoke step (`scripts/live_smoke.py --bin`)
-  should assert `import docx, openpyxl, pptx, reportlab` succeeds in the *actual*
-  frozen binary — CI can only simulate the frozen path via `PROTOAGENT_PLUGIN_FROZEN=1`.
+  should assert both that `import docx, openpyxl, pptx, reportlab` works **and** that
+  `importlib.metadata.version("python-docx")` resolves in the *actual* frozen binary —
+  the latter is what the D2 gate (`installer._importable`) checks first, and the dist≠import
+  name gap (`python-docx`→`docx`) is why the build `--copy-metadata`'s each distribution
+  alongside `--collect-all`. CI can only simulate the frozen path via `PROTOAGENT_PLUGIN_FROZEN=1`.
 - **Scope boundary:** this is the *first-party flagship* answer. The **general**
   third-party dep story — installing *any* plugin's unbundled deps at runtime on the
   frozen app — stays the forthcoming **ADR 0093** (the pip-less wheel installer,

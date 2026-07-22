@@ -147,17 +147,23 @@ OPTIONAL_COLLECT_ALL = [
 # without it still works (find_spec-guarded, like the Google tier). ``--collect-all``
 # is REQUIRED here — reportlab ships font/AFM data, python-docx/pptx ship their
 # default .docx/.pptx templates as package data, and a bare import-scan misses all
-# of it (the library raises at runtime opening its default template). Import names,
-# not pip names: python-docx→``docx``, python-pptx→``pptx``, Pillow→``PIL``. lxml +
-# PIL also arrive transitively, but naming them explicitly keeps a runtime-installed
-# plugin's lazy ``import PIL`` (protobanana) importable when nothing else pulled it.
+# of it (the library raises at runtime opening its default template).
+#
+# Each entry is (import_name, distribution_name) — they DIFFER for the ones that matter
+# (python-docx→``docx``, python-pptx→``pptx``, Pillow→``PIL``), and that gap is load-bearing:
+# the ADR 0058 D2 gate checks a plugin's ``requires_pip`` with installer._importable, which
+# tries ``importlib.metadata.version(<dist>)`` FIRST. So we ``--copy-metadata <dist>`` alongside
+# ``--collect-all <import>`` — otherwise cowork's ``requires_pip: [python-docx, …]`` could still
+# be refused on the frozen app even though ``import docx`` works, because the dist-info wasn't
+# bundled. (lxml + PIL also arrive transitively, but naming them keeps a runtime-installed
+# plugin's lazy ``import PIL`` — protobanana — importable when nothing else pulled it.)
 DOC_COLLECT_ALL = [
-    "docx",
-    "openpyxl",
-    "pptx",
-    "reportlab",
-    "lxml",
-    "PIL",
+    ("docx", "python-docx"),
+    ("openpyxl", "openpyxl"),
+    ("pptx", "python-pptx"),
+    ("reportlab", "reportlab"),
+    ("lxml", "lxml"),
+    ("PIL", "pillow"),
 ]
 
 # tkinter is GUI dead weight in a headless server and a freeze hazard — exclude it.
@@ -203,7 +209,17 @@ def main() -> None:
                       file=sys.stderr)
 
     _collect_if_present(OPTIONAL_COLLECT_ALL, "install requirements-google.txt to ship Gmail/Calendar")
-    _collect_if_present(DOC_COLLECT_ALL, "install requirements-docs.txt to ship the document-generation stack")
+    # Doc stack: --collect-all the module AND --copy-metadata the distribution, so the ADR 0058
+    # D2 gate's metadata-first check (installer._importable → metadata.version(<dist>)) resolves
+    # in the frozen app despite the dist≠import name gap. Guarded on the import name being present
+    # (a lean local freeze without requirements-docs.txt just skips the tier).
+    for imp, dist in DOC_COLLECT_ALL:
+        if importlib.util.find_spec(imp) is not None:
+            collect.extend(["--collect-all", imp, "--copy-metadata", dist])
+        else:
+            print(f"note: optional package not installed, skipping: {imp} "
+                  "(install requirements-docs.txt to ship the document-generation stack)",
+                  file=sys.stderr)
     exclude: list[str] = []
     for mod in EXCLUDE:
         exclude += ["--exclude-module", mod]
