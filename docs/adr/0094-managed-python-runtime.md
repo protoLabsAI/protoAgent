@@ -81,7 +81,7 @@ Provision a **managed CPython runtime** with the ADR 0085 mechanics, and make it
   `protoagent runtime install-python`, and a one-click install button beside the
   execute_code toggle in Settings ▸ Tools. Enabling execute_code on desktop with no
   runtime present prompts the download (consent = the click; the plugin itself
-  remains **disabled by default** per [ADR 0071](./0071-plugin-trust-and-consent.md)).
+  remains **disabled by default** per [ADR 0071](./0071-plugin-permissions-trust-model.md)).
 - **D6 — Explicitly out of scope.** (a) PATH exposure of the managed python — Node
   augments PATH because many consumers need `npx`; this runtime is scoped to the
   `execute_code` spawn only, no ambient interpreter. (b) Superseding
