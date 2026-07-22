@@ -92,7 +92,7 @@ def _cache_key(spec: dict) -> tuple:
         # would otherwise share a client and the first caller's environment sticks
         # for everyone (QA panel on #2145; env itself had the same latent gap).
         tuple(sorted((spec.get("env") or {}).items())),
-        tuple(spec.get("env_remove") or ()),
+        tuple(sorted(spec.get("env_remove") or ())),  # sorted: order-insensitive identity
     )
 
 
