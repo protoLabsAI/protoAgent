@@ -17,10 +17,11 @@ import type { View } from "../lib/viewRegistry";
 import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import { useQuery } from "@tanstack/react-query";
-import { agentHref } from "../lib/api";
+import { agentHref, currentSlug } from "../lib/api";
 import { fleetQuery } from "../lib/queries";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
+import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
 import { memberDmView } from "./PaletteChat";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
@@ -273,11 +274,18 @@ export function usePaletteRegistry(
     // roster row carries DM / open-console / start / stop, and every member's name rides
     // this command's keywords — so typing "ava" still lands you one step from her.
     // (Re-registered on fleetSig, so the keyword list tracks the live roster.)
+    // Host-scoped (ADR 0042), mirroring the Fleet settings gate: the fleet is managed from
+    // its HOST instance. On a member window `/api/fleet` is a fleet-of-one by construction,
+    // so the room would be an empty, misleading surface (and its DM/broadcast targets would
+    // be nothing). Disable it there with a pointer at the host rather than hiding it, so the
+    // command stays discoverable and explains itself.
+    const fleetGate = fleetSettingsDisabledReason(agents, currentSlug());
     const offFleetRoom = registry.registerCommands([
       {
         id: "fleet-room",
         label: "Fleet Room",
-        hint: "members · DM · broadcast",
+        hint: fleetGate ? "host instance only" : "members · DM · broadcast",
+        disabled: !!fleetGate,
         group: "Agents",
         keywords: [
           "fleet",
