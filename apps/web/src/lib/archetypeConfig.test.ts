@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   archetypeConfigFields,
-  configMissingRequired,
+  isMissingRequiredConfig,
   fieldId,
   hasConfigFields,
   mcpItemLabel,
@@ -73,13 +73,13 @@ describe("archetypeConfigFields — flatten a bundle preview into form fields", 
   });
 });
 
-describe("configMissingRequired — required-input gate", () => {
+describe("isMissingRequiredConfig — required-input gate", () => {
   const fields = archetypeConfigFields(githubPreview());
 
   it("is true while any required field is blank or whitespace", () => {
-    expect(configMissingRequired(fields, {})).toBe(true);
+    expect(isMissingRequiredConfig(fields, {})).toBe(true);
     expect(
-      configMissingRequired(fields, { [fieldId({ origin: "input", key: "root" })]: "   " }),
+      isMissingRequiredConfig(fields, { [fieldId({ origin: "input", key: "root" })]: "   " }),
     ).toBe(true);
   });
 
@@ -89,7 +89,7 @@ describe("configMissingRequired — required-input gate", () => {
       [fieldId({ origin: "input", key: "github_token" })]: "ghp_1",
     };
     // BRAVE_API_KEY is not required, so leaving it blank is fine.
-    expect(configMissingRequired(fields, values)).toBe(false);
+    expect(isMissingRequiredConfig(fields, values)).toBe(false);
   });
 });
 

@@ -69,7 +69,7 @@ export function hasConfigFields(preview: ArchetypePreview | undefined): boolean 
 
 // A required field left blank blocks create while the form is OPEN — the operator either
 // fills it or collapses the form to skip (→ env-only). Trims so whitespace isn't "filled".
-export function configMissingRequired(fields: ConfigField[], values: Record<string, string>): boolean {
+export function isMissingRequiredConfig(fields: ConfigField[], values: Record<string, string>): boolean {
   return fields.some((f) => f.required && !(values[fieldId(f)] ?? "").trim());
 }
 

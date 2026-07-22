@@ -11,7 +11,7 @@ import { api } from "../lib/api";
 import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
 import { archetypesQuery, queryKeys } from "../lib/queries";
 import { lucideIcon } from "../lib/lucideIcon";
-import { archetypeConfigFields, configMissingRequired, fieldId, splitConfigValues } from "../lib/archetypeConfig";
+import { archetypeConfigFields, isMissingRequiredConfig, fieldId, splitConfigValues } from "../lib/archetypeConfig";
 import type { Archetype } from "../lib/types";
 
 const NAME_RE = /^[A-Za-z0-9-_]+$/;
@@ -53,7 +53,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
   const fields = useMemo(() => archetypeConfigFields(preview.data), [preview.data]);
   // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure step
   // (or an individual required field) is a first-class path that falls back to env-only.
-  const missingRequired = configOpen && configMissingRequired(fields, values);
+  const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
 
   function pick(id: string) {
     setPicked(id);
