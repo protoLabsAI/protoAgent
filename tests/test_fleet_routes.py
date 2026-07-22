@@ -143,6 +143,67 @@ def test_create_without_soul_leaves_default(client):
     assert not (Path(ws["path"]) / "config" / "SOUL.md").exists()
 
 
+def test_create_forwards_inputs_and_secrets(client, monkeypatch):
+    """POST /api/fleet threads operator `inputs` (MCP template values) and `secrets`
+    (bundle secret values) into manager.create so they seed the member after install (#2041)."""
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(name=name, **kwargs)
+        return {"id": f"{name}-0000", "name": name, "port": 7999, "path": "/tmp/x", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    r = client.post(
+        "/api/fleet",
+        json={
+            "name": "seeded",
+            "start": False,
+            "bundle": "https://github.com/x/stack",
+            "inputs": {"token": "ghp_x"},
+            "secrets": [{"key": "openai_api_key", "value": "sk-1"}],
+        },
+    )
+    assert r.status_code == 200
+    assert captured["inputs"] == {"token": "ghp_x"}
+    assert captured["secrets"] == [{"key": "openai_api_key", "value": "sk-1"}]
+
+
+def test_create_ignores_malformed_inputs_and_secrets(client, monkeypatch):
+    """A malformed `inputs`/`secrets` field degrades to None (env-only fallback), never a 500."""
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(kwargs)
+        return {"id": f"{name}-0", "name": name, "port": 7999, "path": "/tmp", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    r = client.post(
+        "/api/fleet",
+        json={"name": "x", "start": False, "inputs": ["not", "a", "map"], "secrets": "nope"},
+    )
+    assert r.status_code == 200
+    assert captured["inputs"] is None and captured["secrets"] is None
+
+
+def test_create_without_inputs_or_secrets_forwards_none(client, monkeypatch):
+    """No inputs/secrets in the body → None flows through (the seed phase is a pure no-op)."""
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(kwargs)
+        return {"id": f"{name}-0", "name": name, "port": 7999, "path": "/tmp", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    assert client.post("/api/fleet", json={"name": "plain", "start": False}).status_code == 200
+    assert captured["inputs"] is None and captured["secrets"] is None
+
+
 def test_create_bad_name_is_400(client):
     assert client.post("/api/fleet", json={"name": "bad name"}).status_code == 400
 

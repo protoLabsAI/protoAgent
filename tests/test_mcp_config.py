@@ -104,3 +104,55 @@ def test_resolve_bundle_item_bare_entry_no_inputs():
     assert unresolved == []
     assert entry["name"] == "plain"
     assert entry["command"] == "npx"
+
+
+# ── operator-supplied values take priority over env (#2041) ───────────────────
+def _gh_item():
+    return {
+        "template": {
+            "name": "gh",
+            "transport": "http",
+            "url": "https://h/",
+            "headers": {"Authorization": "Bearer ${token}"},
+        },
+        "inputs": [{"key": "token", "env": "TK", "required": True}],
+    }
+
+
+def test_resolve_bundle_item_operator_values_beat_env():
+    """An operator-supplied value wins over the input's declared env var."""
+    entry, unresolved = resolve_bundle_mcp_item(_gh_item(), {"TK": "from_env"}, {"token": "from_op"})
+    assert unresolved == []
+    assert entry["headers"]["Authorization"] == "Bearer from_op"
+
+
+def test_resolve_bundle_item_operator_value_resolves_required_without_env():
+    """A required input with no env value or default is resolved purely by the operator value —
+    so the entry seeds ENABLED instead of the env-only → unresolved (disabled) fallback."""
+    item = {
+        "template": {
+            "name": "gh",
+            "transport": "http",
+            "url": "https://h/",
+            "headers": {"Authorization": "Bearer ${token}"},
+        },
+        "inputs": [{"key": "token", "env": "MISSING", "required": True}],
+    }
+    entry, unresolved = resolve_bundle_mcp_item(item, {}, {"token": "op-token"})
+    assert unresolved == []
+    assert entry["headers"]["Authorization"] == "Bearer op-token"
+
+
+def test_resolve_bundle_item_blank_operator_value_falls_through_to_env():
+    """A blank/absent operator value doesn't shadow the env fallback."""
+    entry, unresolved = resolve_bundle_mcp_item(_gh_item(), {"TK": "envval"}, {"token": ""})
+    assert unresolved == []
+    assert entry["headers"]["Authorization"] == "Bearer envval"
+
+
+def test_resolve_bundle_item_no_values_is_env_only_fallback():
+    """Omitting `values` (the default) is the pre-existing env-only behavior: a required input
+    with no env value stays unresolved so the caller disables it."""
+    entry, unresolved = resolve_bundle_mcp_item(_gh_item(), {})
+    assert unresolved == ["token"]
+    assert entry["headers"]["Authorization"] == "Bearer "

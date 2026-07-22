@@ -157,15 +157,30 @@ def register_fleet_routes(app) -> None:
         """Create an agent (optionally from a bundle archetype) and start it.
 
         Body: ``{name, bundle?: <git-url>, soul?: str, port?: int, start?: bool=true,
-        shared_skills?: bool, inherit_config?: bool=true}``. ``soul`` is the archetype's base
-        SOUL.md (persona), written into the workspace so a bundle agent gets its persona too.
-        A blank ``bundle`` is the built-in
-        **Basic** archetype. By default a new agent is a **blank agent with the host's model
-        config + secrets popped over** (the gateway only — NOT the host's plugins/skills), so it
-        boots ready-to-chat. Set ``inherit_config: false`` for a fully blank agent you'll set up.
+        shared_skills?: bool, inherit_config?: bool=true, inputs?: {key: value},
+        secrets?: [{key, value}]}``. ``soul`` is the archetype's base SOUL.md (persona), written
+        into the workspace so a bundle agent gets its persona too. A blank ``bundle`` is the
+        built-in **Basic** archetype. By default a new agent is a **blank agent with the host's
+        model config + secrets popped over** (the gateway only — NOT the host's plugins/skills),
+        so it boots ready-to-chat. Set ``inherit_config: false`` for a fully blank agent you'll
+        set up.
+
+        ``inputs`` are operator-supplied values for the bundle's MCP ``${input}`` placeholders
+        (#2041) — an entry seeds ENABLED when its required inputs are filled here rather than
+        landing visible-but-inert. ``secrets`` are operator-supplied values for the bundle's
+        declared secrets, written to the new member's ``secrets.yaml`` under the bundle section.
+        Both apply only on the bundle path and are seeded after install; the operator supplies
+        them explicitly — nothing is auto-copied from the host's environment.
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
+        # Operator-supplied bundle-seed values (#2041): `inputs` fill MCP `${input}` placeholders,
+        # `secrets` carry values for the bundle's declared secrets. Coerced to plain str maps/list
+        # here so a malformed field degrades to "not supplied" (env-only fallback) rather than 500.
+        raw_inputs = body.get("inputs")
+        inputs = {str(k): str(v) for k, v in raw_inputs.items()} if isinstance(raw_inputs, dict) else None
+        raw_secrets = body.get("secrets")
+        secrets = [s for s in raw_secrets if isinstance(s, dict)] if isinstance(raw_secrets, list) else None
         # The archetype's base SOUL.md (the persona picked in the new-agent picker), written
         # into the workspace so a bundle agent arrives WITH its persona, not just its tools.
         soul = (str(body.get("soul") or "").strip()) or None
@@ -191,6 +206,8 @@ def register_fleet_routes(app) -> None:
                 shared_skills=shared,
                 inherit_model=inherit_model,
                 soul=soul,
+                inputs=inputs,
+                secrets=secrets,
             )
             agent = (
                 (await asyncio.to_thread(supervisor.start, name))

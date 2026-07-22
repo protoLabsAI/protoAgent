@@ -687,9 +687,14 @@ def strip_secrets_from_doc(doc: Any) -> Any:
     return doc
 
 
-def load_secrets() -> dict[str, Any]:
-    """Load the untracked secrets overlay (empty dict if absent/unreadable)."""
-    secrets_path = secrets_yaml_path()
+def load_secrets(path: Path | None = None) -> dict[str, Any]:
+    """Load the untracked secrets overlay (empty dict if absent/unreadable).
+
+    ``path`` defaults to ``secrets_yaml_path()`` (this instance's overlay); pass an explicit
+    path to read a DIFFERENT instance's file — the fleet create path (ADR 0042) reads a member
+    workspace's ``secrets.yaml`` from the hub process to merge operator-supplied values into.
+    """
+    secrets_path = path if path is not None else secrets_yaml_path()
     if not secrets_path.exists():
         return {}
     import yaml as _yaml
@@ -702,18 +707,24 @@ def load_secrets() -> dict[str, Any]:
         return {}
 
 
-def save_secrets(secret_updates: dict[str, Any]) -> None:
+def save_secrets(secret_updates: dict[str, Any], path: Path | None = None) -> None:
     """Merge non-blank secret updates into the untracked secrets file.
 
     Written with mode 0600 (owner-only). Merges rather than overwrites so a
     save that only changes the API key doesn't drop a stored bearer token.
+
+    ``path`` defaults to ``secrets_yaml_path()``; pass an explicit path to write a DIFFERENT
+    instance's overlay — the fleet create path (ADR 0042) seeds a member workspace's
+    ``secrets.yaml`` (``<ws>/config/secrets.yaml``) from the hub process, reusing this
+    function's 0600 + atomic-replace + merge-not-clobber guarantees.
     """
     if not secret_updates:
         return
     import os
     import yaml as _yaml
 
-    current = load_secrets()
+    secrets_path = path if path is not None else secrets_yaml_path()
+    current = load_secrets(secrets_path)
     for section, values in secret_updates.items():
         if not isinstance(values, dict):
             continue
@@ -721,7 +732,6 @@ def save_secrets(secret_updates: dict[str, Any]) -> None:
         for key, val in values.items():
             dest[key] = val
 
-    secrets_path = secrets_yaml_path()
     secrets_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = secrets_path.with_suffix(".yaml.tmp")
     with open(tmp, "w") as f:

@@ -127,26 +127,34 @@ def _sub_placeholders(obj: object, values: Mapping[str, str]) -> object:
     return obj
 
 
-def resolve_bundle_mcp_item(item: dict, env: Mapping[str, str]) -> tuple[dict, list[str]]:
+def resolve_bundle_mcp_item(
+    item: dict, env: Mapping[str, str], values: Mapping[str, str] | None = None
+) -> tuple[dict, list[str]]:
     """Resolve one bundle ``mcp:`` item into a clean ``mcp.servers`` entry (ADR 0083 D5).
 
     An item mirrors an MCP-catalog row: ``{template: {...}, inputs: [{key, env?, default?,
     required?}]}`` — a bare entry with no ``template`` key is treated as a template with no
-    inputs. Each input's ``${key}`` placeholder in the template is filled, at seed time,
-    from its ``env`` variable (read out of ``env``) or its ``default``; an unfilled
-    placeholder becomes ``""``.
+    inputs. Each input's ``${key}`` placeholder in the template is filled, at seed time, in
+    precedence order: an operator-supplied ``values[key]`` first, then the input's ``env``
+    variable (read out of ``env``), then its ``default``; an unfilled placeholder becomes ``""``.
+
+    ``values`` are the operator's create-time inputs (``POST /api/fleet``'s ``inputs`` field,
+    #2041) — keyed by input ``key``. They take priority over ``env`` so an operator who supplies
+    e.g. a GitHub token fills ``${token}`` and the entry seeds ENABLED, instead of the env-only
+    fallback that would leave a required-but-unfilled input disabled.
 
     Returns ``(entry, unresolved_required)`` — the list of *required* input keys that had no
-    seed-time value. The caller seeds an entry with any unresolved-required inputs as
-    ``enabled: false`` (visible in the console MCP panel but inert) so the operator finishes
-    it there, rather than booting a half-templated server. Raises ``ValueError`` if the
-    resolved template isn't a valid entry.
+    seed-time value (from operator, env, or default). The caller seeds an entry with any
+    unresolved-required inputs as ``enabled: false`` (visible in the console MCP panel but inert)
+    so the operator finishes it there, rather than booting a half-templated server. Raises
+    ``ValueError`` if the resolved template isn't a valid entry.
     """
     if not isinstance(item, dict):
         raise ValueError("mcp bundle item must be a mapping")
     template = item.get("template") if isinstance(item.get("template"), dict) else item
     inputs = item.get("inputs") if isinstance(item.get("inputs"), list) else []
-    values: dict[str, str] = {}
+    supplied = values or {}  # operator-supplied {input_key: value}, wins over env/default
+    resolved: dict[str, str] = {}
     unresolved: list[str] = []
     for inp in inputs:
         if not isinstance(inp, dict):
@@ -154,14 +162,16 @@ def resolve_bundle_mcp_item(item: dict, env: Mapping[str, str]) -> tuple[dict, l
         key = str(inp.get("key", "")).strip()
         if not key:
             continue
-        envvar = str(inp.get("env", "")).strip()
-        val = env.get(envvar) if envvar else None
+        val = supplied.get(key)  # operator value first — priority over the declared env var
+        if not val:
+            envvar = str(inp.get("env", "")).strip()
+            val = env.get(envvar) if envvar else None
         if not val and "default" in inp:
             val = str(inp["default"])
         if not val:
             if inp.get("required"):
                 unresolved.append(key)
             continue
-        values[key] = val
-    entry = clean_mcp_entry(_sub_placeholders(template, values))
+        resolved[key] = str(val)
+    entry = clean_mcp_entry(_sub_placeholders(template, resolved))
     return entry, unresolved

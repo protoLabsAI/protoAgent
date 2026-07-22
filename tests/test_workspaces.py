@@ -375,6 +375,162 @@ def test_apply_bundle_mcp_servers_noop_without_mcp(root):
     assert cfg.read_text() == before  # untouched
 
 
+# ── operator-supplied MCP inputs on create (#2041) ────────────────────────────
+def _gh_mcp_lock():
+    """A lock declaring one GitHub MCP template whose ${token} fills from an env var."""
+    import json
+
+    return json.dumps(
+        {
+            "bundles": [
+                {
+                    "id": "stack",
+                    "mcp": [
+                        {
+                            "template": {
+                                "name": "github",
+                                "transport": "http",
+                                "url": "https://api.githubcopilot.com/mcp/",
+                                "headers": {"Authorization": "Bearer ${token}"},
+                            },
+                            "inputs": [{"key": "token", "env": "GITHUB_MCP_TOKEN", "required": True}],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+
+def test_apply_bundle_mcp_servers_operator_input_seeds_enabled(root, monkeypatch):
+    """An operator-supplied input fills the required ${token} and the server seeds ENABLED —
+    even with no env var — replacing the env-only → disabled fallback."""
+    monkeypatch.delenv("GITHUB_MCP_TOKEN", raising=False)
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(_gh_mcp_lock())
+    added = manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock", {"token": "ghp_operator"})
+    assert added == ["github"]
+    gh = yaml.safe_load(cfg.read_text())["mcp"]["servers"][0]
+    assert "enabled" not in gh  # required input filled by the operator → left ENABLED
+    assert gh["headers"]["Authorization"] == "Bearer ghp_operator"
+
+
+def test_apply_bundle_mcp_servers_operator_input_beats_env(root, monkeypatch):
+    """An operator input wins over the seed-time env var for the same key."""
+    monkeypatch.setenv("GITHUB_MCP_TOKEN", "from_env")
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(_gh_mcp_lock())
+    manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock", {"token": "from_operator"})
+    gh = yaml.safe_load(cfg.read_text())["mcp"]["servers"][0]
+    assert gh["headers"]["Authorization"] == "Bearer from_operator"
+
+
+def test_apply_bundle_mcp_servers_no_input_still_disables_required(root, monkeypatch):
+    """No operator inputs + no env value → the required input stays unresolved and the server
+    lands `enabled: false`, exactly as before (#2041 leaves the env-only fallback intact)."""
+    monkeypatch.delenv("GITHUB_MCP_TOKEN", raising=False)
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(_gh_mcp_lock())
+    manager._apply_bundle_mcp_servers(cfg, ws / "plugins.lock", {})  # no operator inputs
+    gh = yaml.safe_load(cfg.read_text())["mcp"]["servers"][0]
+    assert gh["enabled"] is False
+
+
+# ── operator-supplied secrets on create (#2041) ───────────────────────────────
+def _secrets_lock():
+    """A lock declaring two bundle secrets under section `devkit`."""
+    import json
+
+    return json.dumps(
+        {
+            "bundles": [
+                {
+                    "id": "devkit",
+                    "secrets": [
+                        {"key": "openai_api_key", "label": "OpenAI API Key", "secret": True, "required": True},
+                        {"key": "extra_token", "label": "Extra", "secret": True},
+                    ],
+                }
+            ]
+        }
+    )
+
+
+def test_apply_bundle_secrets_writes_declared_under_bundle_section(root):
+    """Operator values for the bundle's DECLARED secrets land in the member's secrets.yaml
+    nested under the bundle's section (its id), 0600, merged with a pre-existing sibling."""
+    import os
+    import stat
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "secrets.yaml").write_text("model:\n  api_key: keep-me\n")  # pre-existing sibling secret
+    (ws / "plugins.lock").write_text(_secrets_lock())
+    written = manager._apply_bundle_secrets(
+        cfg,
+        ws / "plugins.lock",
+        [
+            {"key": "openai_api_key", "value": "sk-live"},
+            {"key": "undeclared", "value": "nope"},  # not declared by the bundle → ignored
+            {"key": "extra_token", "value": ""},  # blank value → ignored
+        ],
+    )
+    assert written == ["openai_api_key"]
+    doc = yaml.safe_load((ws / "secrets.yaml").read_text())
+    assert doc["devkit"] == {"openai_api_key": "sk-live"}  # nested under the bundle section
+    assert doc["model"] == {"api_key": "keep-me"}  # merge-not-clobber
+    assert stat.S_IMODE(os.stat(ws / "secrets.yaml").st_mode) == 0o600  # owner-only
+
+
+def test_apply_bundle_secrets_never_reads_host_environ(root, monkeypatch):
+    """Security: values come from the operator only. A declared secret with a matching HOST env
+    var is NOT auto-seeded — only what the operator explicitly passes is written."""
+    monkeypatch.setenv("OPENAI_API_KEY", "host-secret-must-not-leak")
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    import json
+
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "devkit",
+                        "secrets": [
+                            {"key": "openai_api_key", "env": "OPENAI_API_KEY", "required": True},
+                            {"key": "other", "required": True},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    written = manager._apply_bundle_secrets(cfg, ws / "plugins.lock", [{"key": "other", "value": "v"}])
+    assert written == ["other"]
+    body = (ws / "secrets.yaml").read_text()
+    assert yaml.safe_load(body) == {"devkit": {"other": "v"}}  # openai_api_key NOT auto-filled
+    assert "host-secret-must-not-leak" not in body
+
+
+def test_apply_bundle_secrets_noop_paths(root):
+    """No operator secrets, a bundle that declares none, or a missing lock all write nothing."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    # empty operator list → early no-op (never touches the lock/file)
+    assert manager._apply_bundle_secrets(cfg, ws / "plugins.lock", []) == []
+    # missing lock
+    assert manager._apply_bundle_secrets(cfg, ws / "nope.lock", [{"key": "x", "value": "y"}]) == []
+    # a bundle that declares no secrets
+    (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "stack", "plugins": ["a"]}]}))
+    assert manager._apply_bundle_secrets(cfg, ws / "plugins.lock", [{"key": "x", "value": "y"}]) == []
+    assert not (ws / "secrets.yaml").exists()  # nothing written
+
+
 def test_server_argv_frozen_vs_source(monkeypatch):
     """The spawn prefix must adapt to the frozen desktop sidecar: there
     ``sys.executable`` IS the server entrypoint, and a ``-m server`` prefix dies at
