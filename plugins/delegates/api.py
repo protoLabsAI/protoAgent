@@ -18,7 +18,6 @@ log = logging.getLogger("protoagent.plugins.delegates")
 
 # ``is_secretish`` (shared with the store) marks a config key — or a per-delegate
 # ``env`` var NAME — as secret-bearing; its value is never returned by the read API.
-_is_secretish = is_secretish
 
 
 def _redact_env(env: dict, secret_keys: set | None = None) -> dict:
@@ -26,7 +25,7 @@ def _redact_env(env: dict, secret_keys: set | None = None) -> dict:
     that carry a stored per-row secret (``secret_keys``, from the overlay) — so a
     secret with an innocuous name (an explicit per-row toggle) is masked too."""
     keys = secret_keys or set()
-    return {k: ("***" if (k in keys or _is_secretish(k)) else v) for k, v in env.items()}
+    return {k: ("***" if (k in keys or is_secretish(k)) else v) for k, v in env.items()}
 
 
 def _public_view(raw: dict) -> dict:
@@ -48,7 +47,7 @@ def _public_view(raw: dict) -> dict:
     # in the returned env so the form shows them set-but-masked (#2114).
     env_secret_keys = store.env_secret_values(overlay, name).keys() if name else set()
     # Drop any secret-bearing top-level field (api_key, *_token, auth, …).
-    view = {k: v for k, v in raw.items() if not _is_secretish(k)}
+    view = {k: v for k, v in raw.items() if not is_secretish(k)}
     # keep auth.scheme (not the token) for a2a so the form can prefill it
     if isinstance(raw.get("auth"), dict) and raw["auth"].get("scheme"):
         view["auth"] = {"scheme": raw["auth"]["scheme"]}

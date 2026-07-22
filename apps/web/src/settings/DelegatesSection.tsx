@@ -11,7 +11,7 @@ import { StatusPill } from "../app/StatusPill";
 import { HelpLink } from "../app/ui-kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -57,8 +57,8 @@ function coerce(field: DelegateFieldSpec, raw: unknown): unknown {
 // secrets.yaml on save; on edit it seeds masked (value blank) — blank = keep stored.
 type EnvRow = { uid: string; key: string; value: string; secret: boolean };
 
-let _envRowUid = 0;
-const nextEnvRowUid = () => `row-${++_envRowUid}`;
+// Row identity for React keys — component-scoped via useRef (a module-level counter
+// would persist across HMR and leak across instances).
 
 // Seed the env rows from a DelegateView. A masked value ("***") marks a stored
 // secret — seed the row secret + blank so we don't echo the mask back on save.
@@ -430,7 +430,8 @@ function EnvEditor({
   setEnvRemove: (v: string) => void;
 }) {
   const patch = (i: number, p: Partial<EnvRow>) => setRows((r) => r.map((row, j) => (j === i ? { ...row, ...p } : row)));
-  const addRow = () => setRows((r) => [...r, { uid: nextEnvRowUid(), key: "", value: "", secret: false }]);
+  const uidSeq = useRef(0);
+  const addRow = () => setRows((r) => [...r, { uid: `row-${++uidSeq.current}`, key: "", value: "", secret: false }]);
   const delRow = (i: number) => setRows((r) => r.filter((_, j) => j !== i));
   return (
     <div className="field delegate-envmap">
