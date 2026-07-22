@@ -433,14 +433,18 @@ def _guess_mime(path: Path) -> str:
 
 
 def _clip(text: str) -> str:
-    """Clip an extracted preview to _max_preview_bytes (utf-8), with a truncation note."""
+    """Clip an extracted preview to _max_preview_bytes (utf-8), with a truncation note.
+    Cuts on a codepoint boundary — back the byte cut off any trailing continuation byte
+    (0b10xxxxxx) so a multi-byte char is never split (no silently-dropped straddler)."""
+    text = text or ""
+    data = text.encode("utf-8")
     limit = _max_preview_bytes()
-    data = (text or "").encode("utf-8")
     if len(data) <= limit:
-        return text or ""
-    return data[: max(0, limit - len(_PREVIEW_TRUNC.encode()))].decode(
-        "utf-8", "ignore"
-    ) + _PREVIEW_TRUNC
+        return text
+    cut = max(0, limit - len(_PREVIEW_TRUNC.encode()))
+    while cut > 0 and (data[cut] & 0xC0) == 0x80:  # inside a multi-byte sequence → back off
+        cut -= 1
+    return data[:cut].decode("utf-8") + _PREVIEW_TRUNC
 
 
 def _extract_docx(path: Path) -> str:

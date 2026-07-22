@@ -1013,3 +1013,16 @@ def test_text_edits_refuse_a_file_artifact(monkeypatch, tmp_path):
     # still a single, intact file version with its blob
     a = _arts(art)[0]
     assert a["kind"] == "file" and len(a["versions"]) == 1 and a["versions"][0]["blob"]
+
+
+def test_clip_truncates_on_a_codepoint_boundary(monkeypatch, tmp_path):
+    """_clip must not split a multi-byte char at the byte cut (protoreview #2126): a
+    4-byte emoji straddling the budget is excluded cleanly, not decoded to a broken char."""
+    art = _load(monkeypatch, tmp_path)
+    note_len = len(art._PREVIEW_TRUNC.encode())
+    monkeypatch.setattr(art, "_max_preview_bytes", lambda: note_len + 5)  # 5-byte body budget
+    out = art._clip("😀" * 30)  # 4-byte codepoints, well over budget — byte-5 cut splits the 2nd
+    assert out.endswith(art._PREVIEW_TRUNC)
+    body = out[: -len(art._PREVIEW_TRUNC)]
+    assert body == "😀"  # exactly one whole emoji fits; the straddling one is dropped, not mangled
+    body.encode("utf-8")  # valid utf-8 round-trips (no partial sequence)
