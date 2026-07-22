@@ -873,6 +873,12 @@ async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
         result = await STATE.workflow_run(name, inputs, on_step=on_step)
     except ValueError as exc:
         return f"⚠️ {exc}"
+    if result.get("paused"):
+        # Parked at a `gate: human` step — surface the SAME status block the
+        # run_workflow tool returns (recipe, paused step, run id, prior step
+        # outputs, resume paths), verbatim: it's already operator-facing text,
+        # and the run isn't failed, so no failed-steps suffix applies.
+        return result.get("output") or "⏸️ Workflow paused for operator approval."
     raw = result.get("output") or ""
     # Strip subagent scratch_pad/output tags so the chat shows clean text,
     # matching how a normal turn is rendered.

@@ -27,13 +27,37 @@ from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_PAUSE
 _RECIPES = Path(__file__).parent / "recipes"
 
 
-def _paused_message(result: dict) -> str:
-    """Operator-facing pause notice — the ``run_workflow`` tool return and the chat
-    ``/<recipe>`` reply. The console reads the structured ``paused``/``run_id`` fields."""
-    return (
-        f"⚠️ Workflow paused at step {result['paused_step']!r} for operator approval. "
-        f"Run id: {result['run_id']}. Resume from the Workflows panel."
-    )
+_PAUSE_PREVIEW = 400  # chars of each prior step's output shown in the pause notice
+
+
+def _paused_message(name: str, result: dict) -> str:
+    """Operator-facing pause status block — the ``run_workflow`` tool return and the
+    chat ``/<recipe>`` reply (the console reads the structured ``paused``/``run_id``
+    fields instead). Self-sufficient by design: recipe, parked step, run id, the
+    prior steps' outputs (the operator's decision context), and both resume paths —
+    everything needed to act without opening the panel."""
+    run_id = result.get("run_id")
+    lines = [
+        f"⏸️ Workflow {name!r} paused — step {result['paused_step']!r} needs operator approval.",
+        "",
+        f"- Recipe: {name}",
+        f"- Paused step: {result['paused_step']}",
+        f"- Run id: {run_id}",
+    ]
+    prior = result.get("steps") or {}
+    if prior:
+        lines += ["", "Completed steps so far:"]
+        for sid, out in prior.items():
+            preview = " ".join(str(out).split())
+            if len(preview) > _PAUSE_PREVIEW:
+                preview = preview[:_PAUSE_PREVIEW] + "…"
+            lines.append(f"- {sid}: {preview}")
+    lines += [
+        "",
+        "Resume from the console's Workflows → Pending Gates panel, or via "
+        f"POST /api/plugins/workflows/runs/{run_id}/resume (action: approve | edit | reject).",
+    ]
+    return "\n".join(lines)
 
 
 def _writable_dir() -> Path:
@@ -117,7 +141,7 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None,
         raise
     if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
         result.setdefault("run_id", run_id)
-        result["output"] = _paused_message(result)
+        result["output"] = _paused_message(name, result)
         return result
     # Failed steps never reach _run_step's step_done (the engine records their error
     # text inline) — mirror that error text into the run record.
@@ -247,7 +271,7 @@ async def _resume(
         raise
     if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal
         result.setdefault("run_id", run_id)
-        result["output"] = _paused_message(result)
+        result["output"] = _paused_message(name, result)
         return result
     # Failed steps (inline errors + a reject) never hit _run_step's step_done — mirror
     # their error text into the record, matching _execute's finish path.
@@ -319,8 +343,8 @@ def register(registry: Any) -> None:
             result = await _execute(_reg(), name, inputs or {})
         except ValueError as exc:
             return f"Workflow {name!r}: {exc}"
-        if result.get("paused"):  # gated step reached — tell the operator how to resume
-            return _paused_message(result)
+        if result.get("paused"):  # gated step reached — the full status block (recipe, step, run id, prior outputs, resume paths)
+            return _paused_message(name, result)
         return result["output"]
 
     @tool
@@ -358,7 +382,14 @@ def register(registry: Any) -> None:
             path = _reg().save(recipe)
         except Exception as exc:  # noqa: BLE001 — readable tool error
             return f"Error saving workflow: {exc}"
-        return f"Saved workflow {name!r} ({len(steps)} step(s)) to {path}. Run it with run_workflow({name!r}, ...)."
+        # Surface `gate: human` steps in the confirmation so the author knows the
+        # saved recipe will park at them (the gate rides along verbatim in `steps`).
+        gated = [str(s.get("id")) for s in steps if isinstance(s, dict) and s.get("gate") == "human"]
+        gate_note = f" Gated step(s) {', '.join(gated)} will pause for operator approval when run." if gated else ""
+        return (
+            f"Saved workflow {name!r} ({len(steps)} step(s)) to {path}.{gate_note} "
+            f"Run it with run_workflow({name!r}, ...)."
+        )
 
     registry.register_tools([run_workflow, save_workflow])
     registry.register_workflow_dir(str(_RECIPES))

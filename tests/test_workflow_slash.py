@@ -45,3 +45,23 @@ def test_parse_workflow_command_returns_none_without_registry():
     assert server.STATE.workflow_registry is None
     assert server._parse_workflow_command("/research-and-brief topic=x") is None
     assert server._parse_workflow_command("hello") is None
+
+
+async def test_run_parsed_workflow_paused_shows_the_tool_status_block(monkeypatch):
+    """A gated /<recipe> run replies with the SAME status block the run_workflow tool
+    returns (F4) — verbatim, with no failed-steps suffix and no output re-extraction."""
+    import plugins.workflows as wf
+
+    result = {"paused": True, "paused_step": "analyze", "run_id": "abc123", "steps": {"gather": "found"}}
+    result["output"] = wf._paused_message("gated", result)
+
+    async def fake_run(name, inputs, on_step=None):
+        return result
+
+    monkeypatch.setattr(server.STATE, "workflow_run", fake_run, raising=False)
+    out = await server._run_parsed_workflow("gated", {})
+    assert out == result["output"]  # byte-for-byte the tool's pause message
+    assert "- Recipe: gated" in out and "- Run id: abc123" in out
+    assert "- gather: found" in out
+    assert "Pending Gates" in out and "POST /api/plugins/workflows/runs/abc123/resume" in out
+    assert "failed steps" not in out
