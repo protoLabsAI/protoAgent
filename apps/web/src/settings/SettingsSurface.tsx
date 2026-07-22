@@ -1,5 +1,6 @@
 import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
+import { visibleSections } from "./sectionGate";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -90,7 +91,10 @@ const AGENT_SECTIONS: Section[] = [
   { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
   { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
   // External secrets manager (ADR 0080) — schema fields + the status/test/sync card.
-  { id: "secrets", label: "Secrets", icon: Lock, render: () => <SecretsPanel /> },
+  // Behind `secrets-panel` (ADR 0068), dev channel only — see the flag in runtime/flags.py.
+  // Flag-off: `shown()` drops it from the nav AND from id resolution, so a persisted "secrets"
+  // id falls back to the first visible section instead of a blank pane.
+  { id: "secrets", label: "Secrets", icon: Lock, flag: "secrets-panel", render: () => <SecretsPanel /> },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
 ];
 
@@ -147,7 +151,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
   // Drop flag-off sections everywhere they'd be reachable — nav, active-id resolution, and
   // the ⌘K/deep-link path that reads the same persisted id.
   const flagOn = useFlagPredicate();
-  const shown = (list: Section[]) => list.filter((s) => !s.flag || flagOn(s.flag));
+  const shown = (list: Section[]) => visibleSections(list, flagOn);
   const agentSections = shown(AGENT_SECTIONS);
   const capabilitySections = shown(CAPABILITY_SECTIONS);
   const boxSections = onHost ? shown(BOX_SECTIONS) : [];

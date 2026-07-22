@@ -66,6 +66,17 @@ FLAGS: list[Flag] = [
         owner="kj",
         remove_by="2026-10-01",
     ),
+    Flag(
+        id="secrets-panel",
+        description=(
+            "Settings ▸ Secrets — external secrets manager panel (ADR 0080). Dev channel "
+            "only while the connect/test/sync flow stabilizes; graduate to `on` once it's "
+            "exercised end to end (#2120)."
+        ),
+        tier="dev",
+        owner="kj",
+        remove_by="2026-10-01",
+    ),
 ]
 
 

@@ -358,6 +358,10 @@ function handleApiGet(pathname, fleet = FLEET) {
           // The REAL chat.compact flag (runtime/flags.py) — enabled so commands.spec sees
           // /compact in the slash menu; the flag-off path is covered via ?flag:chat.compact=off.
           { id: "chat.compact", description: "/compact — summarize + archive a chat thread.", tier: "dev", owner: "kj", remove_by: "2026-09-01", enabled: true, source: "channel" },
+          // The REAL secrets-panel flag (runtime/flags.py) — tier "dev", so it resolves ON in
+          // this channel "dev" mock. Settings ▸ Secrets is visible in e2e exactly as on dev;
+          // its flag-off (prod) path is covered by the source-level secretsGate.test unit test.
+          { id: "secrets-panel", description: "Settings ▸ Secrets — external secrets manager panel.", tier: "dev", owner: "kj", remove_by: "2026-10-01", enabled: true, source: "channel" },
         ],
       };
     default:
