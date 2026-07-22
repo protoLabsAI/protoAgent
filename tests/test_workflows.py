@@ -403,9 +403,14 @@ def test_execute_pauses_at_gated_step_and_persists_paused_state(tmp_path, monkey
     assert result["paused_step"] == "analyze"
     assert result["run_id"] == store.run_id
     assert result["steps"] == {"gather": "<gather-out>"}
-    # Human-readable notice — the run_workflow tool return / chat /<recipe> reply.
-    assert result["output"] == wf._paused_message(result)
+    # Human-readable status block — the run_workflow tool return / chat /<recipe> reply.
+    assert result["output"] == wf._paused_message("gated", result)
     assert store.run_id in result["output"] and "analyze" in result["output"]
+    # Actionable without the console: recipe, prior outputs, and resume paths included.
+    assert "gated" in result["output"]
+    assert "<gather-out>" in result["output"]
+    assert "Pending Gates" in result["output"]
+    assert f"POST /api/plugins/workflows/runs/{store.run_id}/resume" in result["output"]
     # No wasted work: the gated step's subagent was never spawned.
     assert spawned == ["gather"]
     # Durable paused record on disk: status, pending_step, and all prior outputs.
@@ -456,10 +461,164 @@ def test_run_store_pause_persists_paused_status(tmp_path):
 
 
 def test_paused_message_matches_expected_shape():
+    """The pause notice is a full status block (F4): recipe, paused step, run id,
+    prior step outputs as decision context, and both resume paths — not a one-liner."""
     import plugins.workflows as wf
 
-    msg = wf._paused_message({"paused_step": "analyze", "run_id": "abc123"})
-    assert msg == (
-        "⚠️ Workflow paused at step 'analyze' for operator approval. "
-        "Run id: abc123. Resume from the Workflows panel."
+    msg = wf._paused_message(
+        "gated",
+        {"paused_step": "analyze", "run_id": "abc123", "steps": {"gather": "found things"}},
     )
+    assert msg == (
+        "⏸️ Workflow 'gated' paused — step 'analyze' needs operator approval.\n"
+        "\n"
+        "- Recipe: gated\n"
+        "- Paused step: analyze\n"
+        "- Run id: abc123\n"
+        "\n"
+        "Completed steps so far:\n"
+        "- gather: found things\n"
+        "\n"
+        "Resume from the console's Workflows → Pending Gates panel, or via "
+        "POST /api/plugins/workflows/runs/abc123/resume (action: approve | edit | reject)."
+    )
+
+
+def test_paused_message_truncates_long_outputs_and_skips_empty_steps():
+    import plugins.workflows as wf
+
+    long_out = "word " * 200  # collapses to 999 chars — over the preview cap
+    msg = wf._paused_message("gated", {"paused_step": "s2", "run_id": "r1", "steps": {"s1": long_out}})
+    line = next(ln for ln in msg.splitlines() if ln.startswith("- s1: "))
+    assert line.endswith("…") and len(line) < 450  # capped preview, whitespace collapsed
+    # A first-step gate has no prior outputs — the block omits the section entirely.
+    first = wf._paused_message("gated", {"paused_step": "s1", "run_id": "r1", "steps": {}})
+    assert "Completed steps so far" not in first
+    assert "- Run id: r1" in first
+
+
+# --- Tool-level UX for gated workflows (F4) -----------------------------------
+
+
+class _CapturingReg:
+    """Plugin registry double that captures the registered tools by name."""
+
+    def __init__(self):
+        self.tools = {}
+
+    def register_tools(self, tools):
+        self.tools.update({t.name: t for t in tools})
+
+    def register_workflow_dir(self, d):
+        pass
+
+    def register_router(self, router, prefix=None):
+        pass
+
+
+def _register_plugin(tmp_path, monkeypatch, run_subagent):
+    """Register the workflows plugin against a tmp writable dir + stubbed SDK and
+    return its tools ({name: tool}) — the run_workflow/save_workflow surface."""
+    import plugins.workflows as wf
+    import runtime.state as rs
+
+    _patch_sdk(monkeypatch, run_subagent, workflow_dir=str(tmp_path / "writable"))
+    monkeypatch.setattr(rs.STATE, "workflow_registry", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "workflow_run", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_workflow_dirs", [], raising=False)
+    reg = _CapturingReg()
+    wf.register(reg)
+    return reg.tools
+
+
+GATED_STEPS = [
+    {"id": "gather", "subagent": "researcher", "prompt": "read {{inputs.file}}"},
+    {
+        "id": "analyze",
+        "subagent": "researcher",
+        "depends_on": ["gather"],
+        "prompt": "analyze:\n{{steps.gather.output}}",
+        "gate": "human",
+    },
+]
+
+
+async def test_run_workflow_tool_pause_return_is_actionable_status_block(tmp_path, monkeypatch):
+    """On a gate the tool returns the full status block — recipe, paused step, run id,
+    prior step outputs, and where to resume — so the operator can act from chat
+    without opening the console panel."""
+    from plugins.workflows.run_state import WorkflowRunStore
+
+    spawned = []
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        sid = description.rsplit(":", 1)[-1]
+        spawned.append(sid)
+        return f"<{sid}-out>"
+
+    tools = _register_plugin(tmp_path, monkeypatch, run_subagent)
+    saved = await tools["save_workflow"].ainvoke(
+        {
+            "name": "careercoach-resume",
+            "description": "review a resume with a human gate before the writeup",
+            "steps": GATED_STEPS,
+            "inputs": [{"name": "file", "required": True}],
+        }
+    )
+    assert "Saved workflow 'careercoach-resume'" in saved
+
+    out = await tools["run_workflow"].ainvoke({"name": "careercoach-resume", "inputs": {"file": "cv.pdf"}})
+    (run_id,) = WorkflowRunStore(tmp_path / "writable" / ".runs").list_runs()
+    # Names the recipe and the paused step, carries the run id.
+    assert "'careercoach-resume'" in out
+    assert "- Paused step: analyze" in out
+    assert f"- Run id: {run_id}" in out
+    # Prior step outputs are included as decision context.
+    assert "- gather: <gather-out>" in out
+    # Says where to resume — panel AND API.
+    assert "Pending Gates" in out
+    assert f"POST /api/plugins/workflows/runs/{run_id}/resume" in out
+    # The gated step's subagent was never spawned.
+    assert spawned == ["gather"]
+
+
+async def test_save_workflow_round_trips_human_gate(tmp_path, monkeypatch):
+    """save_workflow recognizes `gate: human` on a step dict: the confirmation names
+    the gated step, and the saved recipe carries the gate — durably, on disk."""
+    import runtime.state as rs
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        return "unused"
+
+    tools = _register_plugin(tmp_path, monkeypatch, run_subagent)
+    msg = await tools["save_workflow"].ainvoke(
+        {
+            "name": "gated-save",
+            "description": "gate round-trip",
+            "steps": GATED_STEPS,
+            "inputs": [{"name": "file", "required": True}],
+        }
+    )
+    assert "Gated step(s) analyze will pause for operator approval when run." in msg
+
+    recipe = rs.STATE.workflow_registry.get("gated-save")
+    steps = {s["id"]: s for s in recipe["steps"]}
+    assert steps["analyze"]["gate"] == "human"  # preserved on the right step
+    assert "gate" not in steps["gather"]  # and not invented on ungated ones
+    # The YAML on disk carries it too — the round-trip survives a reload.
+    assert "gate: human" in (tmp_path / "writable" / "gated-save.yaml").read_text(encoding="utf-8")
+
+
+async def test_save_workflow_rejects_unsupported_gate(tmp_path, monkeypatch):
+    async def run_subagent(subagent_type, prompt, description=""):
+        return "unused"
+
+    tools = _register_plugin(tmp_path, monkeypatch, run_subagent)
+    msg = await tools["save_workflow"].ainvoke(
+        {
+            "name": "bad-gate",
+            "description": "x",
+            "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "gate": "robot"}],
+        }
+    )
+    assert "Cannot save" in msg and "unsupported gate" in msg
