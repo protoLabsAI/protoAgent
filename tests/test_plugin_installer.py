@@ -406,7 +406,15 @@ def _make_bundle_repo(root: Path, members: list[Path]) -> Path:
     for m in members:
         # id is read from each member's manifest on install; the bundle only needs url
         lines.append(f"  - {{ id: x, url: {m} }}")
-    lines += ["enabled: [delegates, demo_a, demo_b]", "config:", "  demo_a: { k: v }"]
+    lines += [
+        "enabled: [delegates, demo_a, demo_b]",
+        "config:",
+        "  demo_a: { k: v }",
+        "mcp:",
+        "  - { template: github, inputs: [ { key: token, label: Token } ] }",
+        "secrets:",
+        "  - { key: api_key, label: API Key, secret: true, required: true }",
+    ]
     (repo / "protoagent.bundle.yaml").write_text("\n".join(lines) + "\n")
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
@@ -443,6 +451,10 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     assert bundles[0]["enabled"] == ["delegates", "demo_a", "demo_b"]
     # ...and the recommended config defaults too (#1350), for the same consumer.
     assert bundles[0]["config"] == {"demo_a": {"k": "v"}}
+    # MCP servers + declared secrets are cached in the lock (#2041) so the lock-only
+    # create path can seed / prompt for these inputs without re-parsing the bundle.
+    assert bundles[0]["mcp"] == [{"template": "github", "inputs": [{"key": "token", "label": "Token"}]}]
+    assert bundles[0]["secrets"] == [{"key": "api_key", "label": "API Key", "secret": True, "required": True}]
 
 
 def test_bundle_reinstall_converges_instead_of_erroring(env):

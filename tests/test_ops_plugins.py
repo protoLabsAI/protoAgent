@@ -139,6 +139,10 @@ def _write_bundle_fixture(tmp_path):
         "  - { id: hello, builtin: true }\n"
         "  - { id: m1, url: https://example.test/m1, ref: v1.2.3 }\n"
         "enabled: [hello, m1]\n"
+        "mcp:\n"
+        "  - { template: github, inputs: [ { key: token, label: GitHub Token, secret: true, required: true } ] }\n"
+        "secrets:\n"
+        "  - { key: openai_api_key, label: OpenAI API Key, placeholder: 'sk-...', secret: true, required: true }\n"
     )
 
     def fake_fetch(url, ref, dest):
@@ -183,6 +187,60 @@ async def test_peek_bundle_survives_unreachable_member(tmp_path, monkeypatch):
     assert "clone failed" in m1["error"]
     hello = next(m for m in result["members"] if m["id"] == "hello")
     assert "error" not in hello
+
+
+async def test_peek_bundle_surfaces_mcp_and_secrets(tmp_path, monkeypatch):
+    """The preview exposes the bundle's MCP inputs + declared secrets so the
+    ArchetypePreviewDialog can show what this archetype will ask for (#2041)."""
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    monkeypatch.setattr(installer, "_fetch", _write_bundle_fixture(tmp_path))
+    result = await plugin_ops.peek_bundle("https://example.test/stack-inputs")
+
+    assert result["mcp"] == [
+        {
+            "template": "github",
+            "inputs": [{"key": "token", "label": "GitHub Token", "secret": True, "required": True}],
+        }
+    ]
+    assert result["secrets"] == [
+        {
+            "key": "openai_api_key",
+            "label": "OpenAI API Key",
+            "placeholder": "sk-...",
+            "secret": True,
+            "required": True,
+        }
+    ]
+
+
+async def test_peek_single_plugin_reports_empty_mcp_and_secrets(tmp_path, monkeypatch):
+    """A non-bundle (single-plugin repo) peek still carries the keys, both empty —
+    so the dialog reads mcp/secrets uniformly across bundle + plugin previews."""
+    import shutil
+    from pathlib import Path
+
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    plugin_src = tmp_path / "plugin-src"
+    plugin_src.mkdir()
+    (plugin_src / "protoagent.plugin.yaml").write_text(
+        "id: solo\nname: Solo\nversion: 0.1.0\ndescription: A lone plugin.\n"
+    )
+
+    def fake_fetch(url, ref, dest):
+        shutil.copytree(plugin_src, Path(dest))
+        return "cafef00d"
+
+    monkeypatch.setattr(installer, "_fetch", fake_fetch)
+    result = await plugin_ops.peek_bundle("https://example.test/solo")
+
+    assert result["kind"] == "plugin"
+    assert result["mcp"] == [] and result["secrets"] == []
 
 
 async def test_peek_bundle_caches_by_url(tmp_path, monkeypatch):
