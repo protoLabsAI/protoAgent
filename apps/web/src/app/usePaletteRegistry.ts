@@ -22,6 +22,8 @@ import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { fleetPaletteEntries, markAgentOpened, readAgentRecency, togglableFleetAgents } from "./fleetPalette";
+import { fleetRoomView } from "./FleetRoom";
+import { memberDmView } from "./PaletteChat";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -233,6 +235,17 @@ export function usePaletteRegistry(
       }),
     );
     if (chat) vs.push(chat.view);
+    // The ⌘K Fleet Room morph-view (sibling of the chat view). Opening a member routes
+    // through the shared nav chokepoint so it forwards from the launcher window too.
+    vs.push(
+      fleetRoomView({
+        onOpenAgent: (slug) => {
+          markAgentOpened(slug);
+          navigate({ kind: "agent", slug });
+        },
+      }),
+    );
+    vs.push(memberDmView()); // Fleet Room → DM a member (the wired chat, retargeted)
     vs.push({
       ...commandsView({ commands: openSurfaceCommands, placeholder: "Open a surface…" }),
       id: "open",
@@ -259,6 +272,18 @@ export function usePaletteRegistry(
           },
         ])
       : undefined;
+    // Fleet Room (⌘K palette overhaul) — the co-present roster + address/broadcast, opened
+    // as a morph-view. Top of the Agents group, right under "Chat with <this agent>".
+    const offFleetRoom = registry.registerCommands([
+      {
+        id: "fleet-room",
+        label: "Fleet Room",
+        hint: "members · DM · broadcast",
+        group: "Agents",
+        keywords: ["fleet", "room", "members", "agents", "team", "crew", "broadcast", "dm", "roster"],
+        run: (c) => c.enter("fleet-room"),
+      },
+    ]);
     // Fleet quick-chat (#1733): every OTHER agent, in the "Agents" group beneath "Chat with
     // <this>". Picking one navigates to its slug-routed console via a serializable `agent`
     // NavIntent (so it also works forwarded from the launcher window). A down agent is listed
@@ -370,6 +395,7 @@ export function usePaletteRegistry(
     ]);
     return () => {
       offChat?.();
+      offFleetRoom();
       offFleet?.();
       offPlugins?.();
       offToggleView();

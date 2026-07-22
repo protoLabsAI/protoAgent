@@ -274,3 +274,48 @@ test("⌘K → Toggle Fleet Agent starts a stopped member", async ({ page }) => 
   await openToggleFleet(page);
   await expect(row(page, "roxy", "on")).toBeVisible();
 });
+
+async function openFleetRoom(page) {
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+  await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Fleet Room");
+  await page.getByRole("option", { name: "Fleet Room" }).click();
+  await expect(page.locator(".pl-cmdk__title")).toHaveText("Fleet"); // morphed into the room
+}
+
+test("⌘K → Fleet Room: presence, DM a member (the wired chat), broadcast", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  // Roster with presence: the host is tagged "this instance"; a running member and a
+  // stopped one both appear, encoded in the dot class (success vs the stopped default).
+  await expect(room.locator(".flr__member", { hasText: "main" }).locator(".flr__tag--host")).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "ava" }).locator(".flr__dot--online")).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "roxy" }).locator(".flr__dot--stopped")).toBeVisible();
+
+  // DM a running member — clicking it morphs into the wired chat, pointed at that member
+  // (placeholder names them). Back returns to the roster.
+  await room.locator(".flr__member", { hasText: "ava" }).locator(".flr__who").click();
+  await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+  await page.locator(".pl-cmdk__back").click();
+  await expect(room.locator(".flr__composer")).toBeVisible();
+
+  // The bottom bar broadcasts to everyone online → a success toast.
+  await room.locator(".flr__input").fill("standup in 5");
+  await room.locator(".flr__send").click();
+  await expect(page.locator(".pl-toast", { hasText: /Broadcast to \d+ member/ })).toBeVisible();
+});
+
+test("⌘K → Fleet Room shows the roster + live activity feed side by side", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  // Two columns inside the dialog: roster on the left, the activity feed on the right.
+  await expect(room.locator(".flr__roster")).toBeVisible();
+  await expect(room.locator(".flr__activity")).toBeVisible();
+  await expect(room.getByText("Fleet activity", { exact: true })).toBeVisible();
+  // The feed streams each online member's event bus (/agents/<slug>/api/events) — the mock
+  // pushes activity/inbox/goal frames, so a mapped event lands in the column.
+  await expect(room.locator(".flr-feed__event").first()).toBeVisible({ timeout: 6000 });
+});
