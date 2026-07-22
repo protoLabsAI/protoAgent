@@ -274,3 +274,33 @@ test("⌘K → Toggle Fleet Agent starts a stopped member", async ({ page }) => 
   await openToggleFleet(page);
   await expect(row(page, "roxy", "on")).toBeVisible();
 });
+
+async function openFleetRoom(page) {
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+  await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Fleet Room");
+  await page.getByRole("option", { name: "Fleet Room" }).click();
+  await expect(page.locator(".pl-cmdk__title")).toHaveText("Fleet"); // morphed into the room
+}
+
+test("⌘K → Fleet Room lists members with presence and addresses one", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  // Roster with presence: the host is tagged "this instance"; a running member and a
+  // stopped one both appear, encoded in the dot class (success vs the stopped default).
+  await expect(room.locator(".flr__member", { hasText: "main" }).locator(".flr__tag--host")).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "ava" }).locator(".flr__dot--online")).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "roxy" }).locator(".flr__dot--stopped")).toBeVisible();
+
+  // The composer defaults to broadcast (all online); clicking a member re-addresses to it.
+  await expect(room.locator(".flr__target")).toContainText("All online");
+  await room.locator(".flr__member", { hasText: "ava" }).locator(".flr__who").click();
+  await expect(room.locator(".flr__target")).toContainText("ava");
+
+  // Send lands on that member's /api/chat (through the hub slug proxy) → a success toast.
+  await room.locator(".flr__input").fill("ship it");
+  await room.locator(".flr__send").click();
+  await expect(page.locator(".pl-toast", { hasText: "Sent to ava" })).toBeVisible();
+});

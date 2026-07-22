@@ -1477,6 +1477,37 @@ export const api = {
   fleetDown() {
     return request<{ ok: boolean; stopped: string[] }>("/api/fleet/down", { method: "POST" });
   },
+  // Address a specific fleet member from anywhere (Fleet Room, ⌘K). Delivers `message`
+  // to `slug`'s agent through the hub's per-agent proxy (/agents/<slug>/api/chat) — the
+  // NON-streaming chat endpoint, so it works in the browser and the desktop WKWebView
+  // shell alike (no SSE body to read). `slug` is the member's id, "host" for this
+  // instance. The turn runs durably on the member and its reply lands in that member's
+  // own chat session (`session_id`); callers fire-and-forget for a broadcast, or await
+  // the promise for the single-send reply text. Bypasses request()/apiUrl() on purpose:
+  // apiUrl routes to the CURRENT window's slug, and this targets an arbitrary member.
+  sendToAgent(slug: string, message: string, sessionId?: string): Promise<{ response?: string }> {
+    const rel = "/api/chat";
+    const path = slug === "host" ? rel : `/agents/${encodeURIComponent(slug)}${rel}`;
+    const base = defaultApiBase();
+    const url = base ? `${base}${path}` : path;
+    return fetch(url, {
+      method: "POST",
+      headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
+      body: JSON.stringify({ message, session_id: sessionId ?? `fleet-room-${Date.now()}` }),
+    }).then(async (res) => {
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+          const p = (await res.json()) as { detail?: string };
+          if (p?.detail) detail = p.detail;
+        } catch {
+          /* keep status text */
+        }
+        throw new Error(detail);
+      }
+      return (await res.json()) as { response?: string };
+    });
+  },
 
   // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the
   // server just round-trips JSON. These auto-route to the focused agent via the active prefix

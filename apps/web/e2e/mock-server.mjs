@@ -458,6 +458,14 @@ const server = createServer(async (req, res) => {
   // specific agent. The mock strips the /agents/<slug> prefix and serves the same handlers.
   const pathname = url.pathname.replace(/^\/agents\/[^/]+/, "") || url.pathname;
 
+  // Non-streaming chat send — the Fleet Room address/broadcast (/api/chat) and the desktop
+  // streaming fallback. A member send arrives here too: the /agents/<slug> prefix was already
+  // stripped above, so /agents/ava/api/chat proxies to this same handler.
+  if (pathname === "/api/chat" && req.method === "POST") {
+    const body = await readBody(req);
+    return sendJson(res, { response: `ack: ${String(body?.message ?? "").slice(0, 40)}` });
+  }
+
   if (pathname === "/a2a" && req.method === "POST") {
     const body = await readBody(req);
     // GetTask — the reconcile path (self-heal a stuck streaming turn + the cross-agent
