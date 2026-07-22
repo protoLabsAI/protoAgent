@@ -1096,7 +1096,14 @@ export const MEMORY_INJECTION_DETAILS = {
   },
 };
 
-// Delegate registry (ADR 0025) — types schema + a sample roster for the panel.
+// Delegate registry (ADR 0025) — types schema + a sample roster for the panel. Every
+// type carries the shared `env` (envmap) editor field (#2114) — the per-delegate env
+// map + env_remove list + per-row secret toggle.
+const ENV_FIELD = {
+  key: "env", label: "Environment", kind: "envmap", required: false,
+  help: "Extra environment variables. Values are verbatim (no ${VAR} expansion) and merge over the inherited env after the removals below.",
+  placeholder: "", options: [], default: null,
+};
 export const DELEGATE_TYPES = {
   types: [
     {
@@ -1105,6 +1112,7 @@ export const DELEGATE_TYPES = {
         { key: "url", label: "URL", kind: "text", required: true, help: "", placeholder: "https://peer/a2a", options: [], default: null },
         { key: "auth.scheme", label: "Auth scheme", kind: "select", required: false, help: "", placeholder: "", options: ["", "bearer", "apiKey"], default: null },
         { key: "auth.token", label: "Auth token", kind: "secret", required: false, help: "Stored in secrets.yaml.", placeholder: "", options: [], default: null },
+        ENV_FIELD,
       ],
     },
     {
@@ -1113,6 +1121,7 @@ export const DELEGATE_TYPES = {
         { key: "url", label: "Base URL", kind: "text", required: true, help: "", placeholder: "https://api/v1", options: [], default: null },
         { key: "model", label: "Model", kind: "text", required: true, help: "", placeholder: "protolabs/reasoning", options: [], default: null },
         { key: "api_key", label: "API key", kind: "secret", required: false, help: "", placeholder: "", options: [], default: null },
+        ENV_FIELD,
       ],
     },
     {
@@ -1121,6 +1130,7 @@ export const DELEGATE_TYPES = {
         { key: "command", label: "Command", kind: "text", required: true, help: "", placeholder: "proto", options: [], default: null },
         { key: "args", label: "Args", kind: "args", required: false, help: "", placeholder: "--acp", options: [], default: null },
         { key: "workdir", label: "Workdir", kind: "path", required: true, help: "", placeholder: "~/dev/repo", options: [], default: null },
+        ENV_FIELD,
       ],
     },
   ],
@@ -1133,6 +1143,16 @@ export const DELEGATES = {
       configured: true, error: null, has_secret: true,
       url: "https://api.proto-labs.ai/v1", model: "protolabs/reasoning",
       health: { ok: true, latency_ms: 42, detail: "endpoint reachable" },
+    },
+    // An env-carrying ACP coder (#2114) — a secret env value comes back masked
+    // ("***") so the edit form seeds that row set-but-masked; env_remove is a list.
+    {
+      name: "coder", type: "acp", description: "Claude Code via an alternate gateway.",
+      configured: true, error: null, has_secret: false, has_env_secrets: true,
+      command: "claude-agent-acp", args: [], workdir: "~/dev/repo",
+      env: { ANTHROPIC_BASE_URL: "https://gw/v1", ANTHROPIC_AUTH_TOKEN: "***" },
+      env_remove: ["PROTOAGENT_", "A2A_AUTH_TOKEN"],
+      health: { ok: true, latency_ms: 30, detail: "ACP handshake OK" },
     },
   ],
 };

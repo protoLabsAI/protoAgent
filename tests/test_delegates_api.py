@@ -215,3 +215,194 @@ def test_public_view_serializes_env_remove_without_redacting_names():
     assert view["env_remove"] == ["PROTOAGENT_", "A2A_AUTH_TOKEN"]  # names pass through, not "***"
     assert view["env"]["OPENAI_API_KEY"] == "***"  # secret env value still redacted
     assert "sk-LEAK" not in str(view)
+
+
+# ── per-delegate env editor + secret tier (#2114) ─────────────────────────────
+
+
+def test_every_adapter_type_exposes_the_env_editor_field(client):
+    # The env editor is available on ALL adapter types (a2a/openai/acp), so operators can
+    # author env-carrying delegates from the console form for any type.
+    for t in client.get("/api/delegate-types").json()["types"]:
+        kinds = {f["kind"] for f in t["fields"]}
+        assert "envmap" in kinds, f"{t['type']} is missing the env editor field"
+
+
+def test_upsert_routes_marked_env_secret_and_keeps_empty_reference(fake_io):
+    store.upsert_delegate(
+        {
+            "name": "coder",
+            "type": "acp",
+            "command": "claude-agent-acp",
+            "workdir": "/repo",
+            "env": {"ANTHROPIC_BASE_URL": "https://gw/v1", "ANTHROPIC_AUTH_TOKEN": "sk-secret"},
+            "env_secret": ["ANTHROPIC_AUTH_TOKEN"],
+        }
+    )
+    stored = fake_io["doc"]["delegates"][0]
+    assert stored["env"]["ANTHROPIC_BASE_URL"] == "https://gw/v1"  # non-secret pair intact
+    assert stored["env"]["ANTHROPIC_AUTH_TOKEN"] == ""  # empty reference in tracked config
+    assert "sk-secret" not in str(stored)
+    assert "env_secret" not in stored  # form-only marker never persisted
+    assert fake_io["secrets"]["delegate_secrets"]["coder.env.ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
+
+
+def test_upsert_routes_explicitly_marked_secret_with_innocuous_name(fake_io):
+    # A var whose NAME doesn't look secret-bearing still routes to secrets.yaml when the
+    # operator toggled the row secret (the explicit-marker path).
+    store.upsert_delegate(
+        {
+            "name": "coder",
+            "type": "acp",
+            "command": "c",
+            "workdir": "/repo",
+            "env": {"GATEWAY_ID": "g-123"},
+            "env_secret": ["GATEWAY_ID"],
+        }
+    )
+    stored = fake_io["doc"]["delegates"][0]
+    assert stored["env"]["GATEWAY_ID"] == ""
+    assert fake_io["secrets"]["delegate_secrets"]["coder.env.GATEWAY_ID"] == "g-123"
+
+
+def test_upsert_auto_routes_secret_named_env_without_a_marker(fake_io):
+    # A secret-NAMED env value (OPENAI_API_KEY) is routed even without the toggle, so a
+    # credential never lands in tracked config by accident.
+    store.upsert_delegate(
+        {"name": "coder", "type": "acp", "command": "c", "workdir": "/repo", "env": {"OPENAI_API_KEY": "sk-LEAK"}}
+    )
+    stored = fake_io["doc"]["delegates"][0]
+    assert stored["env"]["OPENAI_API_KEY"] == ""
+    assert "sk-LEAK" not in str(stored)
+    assert fake_io["secrets"]["delegate_secrets"]["coder.env.OPENAI_API_KEY"] == "sk-LEAK"
+
+
+def test_merged_delegates_overlays_env_secret_back(fake_io):
+    store.upsert_delegate(
+        {
+            "name": "coder",
+            "type": "acp",
+            "command": "c",
+            "workdir": "/repo",
+            "env": {"ANTHROPIC_BASE_URL": "https://gw/v1", "ANTHROPIC_AUTH_TOKEN": "sk-secret"},
+            "env_secret": ["ANTHROPIC_AUTH_TOKEN"],
+        }
+    )
+    assert "sk-secret" not in str(fake_io["doc"]["delegates"])  # not in tracked config
+    merged = store.merged_delegates()[0]
+    assert merged["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-secret"  # real value overlaid at load
+    assert merged["env"]["ANTHROPIC_BASE_URL"] == "https://gw/v1"
+
+
+def test_upsert_no_env_leaves_config_and_secrets_untouched(fake_io):
+    # Acceptance #4: an adapter with no env configured stores no `env` key and creates no
+    # secrets.yaml entry.
+    store.upsert_delegate({"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"})
+    stored = fake_io["doc"]["delegates"][0]
+    assert "env" not in stored
+    assert fake_io["secrets"].get("delegate_secrets", {}) == {}
+
+
+def test_upsert_persists_env_remove_as_a_list(fake_io):
+    store.upsert_delegate(
+        {
+            "name": "coder",
+            "type": "acp",
+            "command": "c",
+            "workdir": "/repo",
+            "env_remove": ["PROTOAGENT_", "A2A_AUTH_TOKEN"],
+        }
+    )
+    assert fake_io["doc"]["delegates"][0]["env_remove"] == ["PROTOAGENT_", "A2A_AUTH_TOKEN"]
+
+
+def test_a2a_and_openai_adapters_carry_env(fake_io):
+    # a2a/openai don't dispatch env themselves, but the field round-trips through config so
+    # forks/plugins that DO consume it can be authored from the console.
+    from plugins.delegates.adapters import ADAPTERS
+
+    store.upsert_delegate(
+        {"name": "peer", "type": "a2a", "url": "https://p/a2a", "env": {"HTTP_PROXY": "http://proxy:8080"}}
+    )
+    stored = fake_io["doc"]["delegates"][0]
+    assert stored["env"] == {"HTTP_PROXY": "http://proxy:8080"}
+    d = ADAPTERS["a2a"].parse(store.merged_delegates()[0])
+    assert d.env == {"HTTP_PROXY": "http://proxy:8080"}
+
+
+def test_public_view_masks_env_secret_by_overlay_and_flags_it(fake_io):
+    # A secret env value comes back as a stored empty reference; the view masks it (even
+    # with an innocuous name) using the overlay and sets has_env_secrets.
+    fake_io["secrets"]["delegate_secrets"] = {"coder.env.GATEWAY_ID": "g-123"}
+    raw = {
+        "name": "coder",
+        "type": "acp",
+        "command": "c",
+        "workdir": "/repo",
+        "env": {"GATEWAY_ID": "", "PLAIN": "v"},
+    }
+    view = api._public_view(raw)
+    assert view["env"]["GATEWAY_ID"] == "***"  # masked via the overlay, not the name
+    assert view["env"]["PLAIN"] == "v"
+    assert view["has_env_secrets"] is True
+    assert "g-123" not in str(view)
+
+
+def test_create_with_env_secret_routes_masks_and_merges(client, fake_io):
+    # End-to-end acceptance #1/#2/#3: create a delegate with a non-secret + secret env pair
+    # and an env_remove list; the value is routed, masked on read, and merged at load.
+    r = client.post(
+        "/api/delegates",
+        json={
+            "name": "coder",
+            "type": "acp",
+            "command": "claude-agent-acp",
+            "workdir": "/repo",
+            "env": {"ANTHROPIC_BASE_URL": "https://gw/v1", "ANTHROPIC_AUTH_TOKEN": "sk-secret"},
+            "env_secret": ["ANTHROPIC_AUTH_TOKEN"],
+            "env_remove": ["PROTOAGENT_"],
+        },
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert "sk-secret" not in str(r.json())  # value never echoed to the client
+    view = next(d for d in r.json()["delegates"] if d["name"] == "coder")
+    assert view["env"]["ANTHROPIC_AUTH_TOKEN"] == "***"  # set-but-masked
+    assert view["env"]["ANTHROPIC_BASE_URL"] == "https://gw/v1"
+    assert view["has_env_secrets"] is True
+    assert view["env_remove"] == ["PROTOAGENT_"]
+    # secret VALUE in secrets.yaml under the env key; config holds an empty reference.
+    assert fake_io["secrets"]["delegate_secrets"]["coder.env.ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
+    stored = next(d for d in fake_io["doc"]["delegates"] if d["name"] == "coder")
+    assert stored["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
+    # what the runtime sees (merged) carries the real secret value.
+    assert store.merged_delegates()[0]["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
+
+
+def test_edit_keeps_stored_env_secret_when_row_left_masked(client, fake_io):
+    # Acceptance #2 round-trip: on edit, a masked secret row comes back blank; re-saving with
+    # the key present + blank keeps the stored value rather than clobbering it.
+    client.post(
+        "/api/delegates",
+        json={
+            "name": "coder",
+            "type": "acp",
+            "command": "c",
+            "workdir": "/repo",
+            "env": {"ANTHROPIC_AUTH_TOKEN": "sk-secret"},
+            "env_secret": ["ANTHROPIC_AUTH_TOKEN"],
+        },
+    )
+    # The form re-sends the masked row as an empty value, still marked secret.
+    r = client.put(
+        "/api/delegates/coder",
+        json={
+            "type": "acp",
+            "command": "c",
+            "workdir": "/repo",
+            "env": {"ANTHROPIC_AUTH_TOKEN": ""},
+            "env_secret": ["ANTHROPIC_AUTH_TOKEN"],
+        },
+    )
+    assert r.status_code == 200
+    assert fake_io["secrets"]["delegate_secrets"]["coder.env.ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
+    assert store.merged_delegates()[0]["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-secret"

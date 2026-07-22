@@ -13,3 +13,15 @@
    are retired. */
 .delegate-field-help { font-size: 11px; color: var(--fg-muted); }
 /* .delegate-health* retired — the row health indicator is a DS <StatusDot> now. */
+
+/* Per-delegate env editor (#2114): key/value rows + a secret toggle + delete. */
+.delegate-envmap { display: grid; gap: 8px; }
+.delegate-env-rows { display: grid; gap: 6px; }
+.delegate-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.delegate-env-add { display: flex; align-items: center; gap: 6px; }
+.delegate-env-remove { margin-top: 4px; }
