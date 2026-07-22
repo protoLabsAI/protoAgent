@@ -13,6 +13,13 @@ Execution resolves the ``depends_on`` DAG, runs steps whose deps are satisfied
 later prompts via ``{{inputs.x}}`` / ``{{steps.id.output}}`` substitution, and
 returns the rendered ``output``. The engine is decoupled from the subagent
 runner via the injected ``run_step`` callback, so it's unit-testable.
+
+A step may carry an optional ``gate`` (only ``human`` is accepted for now). The
+engine itself is gate-agnostic: it consults the injected ``gate_check`` callback
+before dispatching each ready step, and if that returns ``"pause"`` it parks the
+run (via ``pause_fn``) and returns a paused envelope instead of running the step —
+so the gated step's subagent is never spawned. When ``gate_check`` is ``None`` the
+loop is byte-for-byte the pre-gate path.
 """
 
 from __future__ import annotations
@@ -59,6 +66,9 @@ def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) ->
             errors.append(f"step {sid!r}: unknown subagent {step['subagent']!r}")
         if not isinstance(step.get("prompt"), str) or not step["prompt"].strip():
             errors.append(f"step {sid!r}: missing 'prompt'")
+        gate = step.get("gate")
+        if gate is not None and gate != "human":
+            errors.append(f"step {sid!r}: unsupported gate {gate!r} (only 'human' is supported)")
 
     id_set = set(ids)
     # depends_on references + cycle check
@@ -144,12 +154,23 @@ async def execute_workflow(
     *,
     run_step: Callable[[str, str, str], Awaitable[str]],
     max_concurrency: int = 4,
+    gate_check: Callable[[dict], str | None] | None = None,
+    pause_fn: Callable[[str, dict], str | None] | None = None,
 ) -> dict:
     """Run the recipe's step DAG. ``run_step(subagent, prompt, step_id) -> output``.
 
     Returns ``{"output": str, "steps": {id: output}, "failed": [ids]}``. Step
     failures are recorded inline (the step's output becomes the error text) so
     independent branches still complete — matching task_batch semantics.
+
+    ``gate_check(step_dict) -> "pause" | None`` (optional) is consulted for each
+    ready step *before* it is dispatched. When it returns ``"pause"`` the run is
+    parked: ``pause_fn(step_id, completed_outputs)`` persists the paused state and
+    returns the run_id, and the engine returns ``{"paused": True, "paused_at":
+    step_id, "run_id": run_id, "steps": {...done...}}`` instead of the normal
+    envelope — the gated step's subagent is never spawned. Sequential gated steps
+    pause one at a time (a downstream gated step isn't ready until its deps run).
+    When ``gate_check`` is ``None`` the loop below is the exact pre-gate path.
     """
     steps = recipe["steps"]
     by_id = {s["id"]: s for s in steps}
@@ -175,6 +196,11 @@ async def execute_workflow(
                 done[sid] = f"Error: step {sid!r} skipped (unsatisfiable dependencies)"
                 failed.append(sid)
             break
+        if gate_check is not None:
+            gated = next((sid for sid in ready if gate_check(by_id[sid]) == "pause"), None)
+            if gated is not None:  # park BEFORE spawning any subagent → no wasted work
+                run_id = pause_fn(gated, done) if pause_fn is not None else None
+                return {"paused": True, "paused_at": gated, "run_id": run_id, "steps": dict(done)}
         for sid, out, err in await asyncio.gather(*(run_one(s) for s in ready)):
             done[sid] = out
             if err:

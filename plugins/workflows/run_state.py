@@ -11,8 +11,10 @@ Persistence is **best-effort by design**: a disk hiccup must never fail a
 workflow that would otherwise complete, so the mutators swallow ``OSError`` and
 keep the run going (state is held in memory and re-written on the next call).
 
-``pending_step`` is always ``None`` for now — it's the slot a future gating
-slice will use to park a run awaiting human input.
+``pending_step`` names the step a ``paused`` run is parked on, awaiting operator
+approval (a ``gate: human`` step) — ``None`` for running/terminal runs. ``pause()``
+sets it; the run then stays durably resumable (recipe, inputs, completed outputs
+are all on the record).
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ log = logging.getLogger(__name__)
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
+STATUS_PAUSED = "paused"
 
 
 def _now() -> str:
@@ -89,6 +92,20 @@ class WorkflowRunStore:
         self._state["status"] = status
         self._state["updated_at"] = _now()
         self._write()
+
+    def pause(self, pending_step: str, step_outputs: dict[str, str] | None = None) -> str | None:
+        """Park the run at ``pending_step`` (status ``paused``) awaiting operator
+        approval, recording any completed step outputs. Non-terminal — the run stays
+        resumable. Returns the run_id (``None`` before ``start()``)."""
+        if self._state is None:
+            return None
+        if step_outputs:
+            self._state["step_outputs"].update(step_outputs)
+        self._state["status"] = STATUS_PAUSED
+        self._state["pending_step"] = pending_step
+        self._state["updated_at"] = _now()
+        self._write()
+        return self._state["run_id"]
 
     def load(self, run_id: str) -> dict[str, Any] | None:
         """Read a run's persisted state from disk (``None`` if absent/corrupt)."""
