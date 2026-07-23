@@ -1752,6 +1752,44 @@ async def export_session(
     return {**result, "message": _export_message(result)}
 
 
+async def aside_session(
+    session_id: str,
+    question: str,
+    *,
+    request_metadata: dict | None = None,
+) -> dict:
+    """`/btw` — answer a side question about the session's context WITHOUT changing it
+    (the incognito side turn, #2180).
+
+    Resolves the session's checkpointer ``thread_id`` and runs ``run_aside``, which reads
+    that thread's messages and runs an incognito turn on a fresh EPHEMERAL thread — so the
+    main thread's checkpoint is never written. Returns ``{found, answer, reason, message}``.
+
+    Deliberately does NOT hold the per-thread lock across the turn: the aside never writes
+    the main thread (nothing to guard), and a side chat is meant to run *alongside* the main
+    conversation — locking would block the very thread it's supposed to sit beside."""
+    if STATE.graph is None:
+        return {"found": False, "answer": "", "reason": "setup", "message": "Setup required — finish the setup wizard first."}
+
+    from graph.aside_op import run_aside
+
+    tid = _resolve_thread_id(request_metadata, session_id)
+    result = await run_aside(
+        STATE.graph,
+        STATE.checkpointer,
+        tid,
+        question,
+        session_id=session_id,
+        db_path=getattr(STATE, "checkpoint_path", None),
+    )
+    reason = result.get("reason")
+    msg = {
+        "no_checkpointer": "No conversation yet — start chatting, then ask a side question.",
+        "empty_question": "Ask a question after /btw, e.g. `/btw what did we decide about the schema?`",
+    }.get(reason or "", "")
+    return {**result, "message": msg}
+
+
 def _rewind_message(result: dict) -> str:
     """Human-readable status line for a rewind result (surfaced to non-UI callers /
     logs; the console just truncates its own thread on success)."""

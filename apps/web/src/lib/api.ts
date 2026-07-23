@@ -1626,6 +1626,20 @@ export const api = {
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export${q}`, { method: "GET" });
   },
 
+  // `/btw` (#2180): ask a side question about this session's context WITHOUT changing
+  // it. The server runs an incognito turn on a fresh ephemeral thread seeded with the
+  // main thread's messages; the main thread's checkpoint is never written. The answer is
+  // rendered as an EPHEMERAL client-side note (it never goes back to the server as a real
+  // turn), so the side exchange leaves no trace in the conversation.
+  asideChatSession(sessionId: string, question: string) {
+    return request<{
+      found: boolean;
+      answer: string;
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/aside`, { method: "POST", body: { question } });
+  },
+
   // Rewind a chat session server-side (#1535): discard every message AFTER the
   // target and rewrite the LangGraph checkpoint in place, rolling the agent's live
   // context back to that point. The checkpoint is the agent's REAL context, so this

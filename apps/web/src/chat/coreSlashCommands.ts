@@ -56,6 +56,61 @@ registerSlashCommand({
 });
 
 registerSlashCommand({
+  name: "btw",
+  description: "Ask a side question about this chat — answered from context, saved nowhere",
+  usage: "/btw <question>",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    const sessionId = ctx.sessionId;
+    const question = ctx.rest.trim();
+    const messagesOf = () =>
+      chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? [];
+    const note = (content: string, tone: ChatMessage["noteTone"]): ChatMessage => ({
+      id: noteId(),
+      role: "system",
+      content,
+      noteTone: tone,
+      createdAt: Date.now(),
+      status: "done",
+    });
+
+    if (!question) {
+      chatStore.updateMessages(sessionId, [...messagesOf(),
+        note("Ask a side question after `/btw`, e.g. `/btw what did we decide about the schema?` — it's answered from this chat's context but never becomes part of it.", "info")]);
+      ctx.focusComposer();
+      return true;
+    }
+
+    // Optimistic ephemeral bubbles: the question + a pending answer, BOTH client-side only.
+    // They live in the chat store, never the server checkpoint — the side exchange is
+    // overlaid on the conversation, not saved into it.
+    const pendingId = noteId();
+    chatStore.updateMessages(sessionId, [
+      ...messagesOf(),
+      note(`**↪ Aside:** ${question}`, "info"),
+      { ...note("Thinking… (this won't be saved to the conversation)", "info"), id: pendingId },
+    ]);
+    ctx.focusComposer();
+
+    const withoutPending = () => messagesOf().filter((m) => m.id !== pendingId);
+    void api
+      .asideChatSession(sessionId, question)
+      .then((res) => {
+        if (!res.found) {
+          chatStore.updateMessages(sessionId, [...withoutPending(), note(res.message || "Nothing to answer against yet.", "warning")]);
+          return;
+        }
+        chatStore.updateMessages(sessionId, [...withoutPending(),
+          note(`**↩ Aside answer** _(not saved to the conversation)_\n\n${res.answer}`, "info")]);
+      })
+      .catch((e) => {
+        chatStore.updateMessages(sessionId, [...withoutPending(), note(`Aside failed — ${errMsg(e)}`, "danger")]);
+      });
+    return true;
+  },
+});
+
+registerSlashCommand({
   name: "compact",
   description: "Summarize & archive older history, keeping recent context",
   flag: "chat.compact", // pre-release (ADR 0068) — hidden + inert while the flag is off
