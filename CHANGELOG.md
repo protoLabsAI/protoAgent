@@ -11,25 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **The artifact panel's Download button works again.** A sandboxed iframe cannot start a
-  download without the `allow-downloads` token, so the file-artifact download (ADR 0092
-  D2/D3 — a plain `<a download>.click()` for the stored bytes) was refused outright with
-  *"Not allowed to download due to sandboxing"*: the feature's whole point is handing the
-  operator a `.docx`/`.xlsx`/`.pdf`, and it couldn't. Added to the console's plugin-view
-  frames only — the artifact plugin's NESTED frame stays without it, so model-generated
-  code still can't push a file at the operator.
-- **Plugin panels no longer render dead on a sister agent.** A plugin serving vendored ES
-  modules off its public view prefix (`notes`, `artifact`) had those assets left **gated**:
-  `_view_public_paths` auto-exempts a view's PAGE path, but an ES-module `import` carries no
-  `Authorization` header any more than the iframe navigation does. Unauthenticated means the
-  request never reaches ADR 0089 D3's operator-tier fleet-token swap, so a closed member
-  (rightly) 401s it — the panel loaded but the editor never initialised. Invisible until
-  ADR 0089 D5 closed members, since they used to run open on loopback. Both manifests now
-  declare their `vendor/` subtree in `public_paths` (safe: `_VENDOR_FILES` is an exact-name
-  allowlist, so the subtree can't be walked), and a test guards the whole class so the next
-  plugin to add a vendor route fails CI instead of someone's console.
-
 ### Added
 - **Export a chat thread to Markdown, with secret redaction.** `GET
   /api/chat/sessions/{id}/export` serializes one conversation to self-contained Markdown you
@@ -49,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Project Manager archetype in the new-agent picker.** The persona you've been working with — frozen from ~30 merged PRs of dogfooding — is now shipable as a one-click agent type. (#2178)
 
 ### Fixed
+- **The artifact panel's Download button works again.** A sandboxed iframe cannot start a
+  download without the `allow-downloads` token, so the file-artifact download (ADR 0092
+  D2/D3 — a plain `<a download>.click()` for the stored bytes) was refused outright with
+  *"Not allowed to download due to sandboxing"*: the feature's whole point is handing the
+  operator a `.docx`/`.xlsx`/`.pdf`, and it couldn't. Added to the console's plugin-view
+  frames only — the artifact plugin's NESTED frame stays without it, so model-generated
+  code still can't push a file at the operator.
+- **Plugin panels no longer render dead on a sister agent.** A plugin serving vendored ES
+  modules off its public view prefix (`notes`, `artifact`) had those assets left **gated**:
+  `_view_public_paths` auto-exempts a view's PAGE path, but an ES-module `import` carries no
+  `Authorization` header any more than the iframe navigation does. Unauthenticated means the
+  request never reaches ADR 0089 D3's operator-tier fleet-token swap, so a closed member
+  (rightly) 401s it — the panel loaded but the editor never initialised. Invisible until
+  ADR 0089 D5 closed members, since they used to run open on loopback. Both manifests now
+  declare their `vendor/` subtree in `public_paths` (safe: `_VENDOR_FILES` is an exact-name
+  allowlist, so the subtree can't be walked), and a test guards the whole class so the next
+  plugin to add a vendor route fails CI instead of someone's console.
 - Archetype catalog: the project-manager blurb said "Single-repo technical lead" — now "Single-repo project manager". (#2182)
 
 ## [0.108.0] - 2026-07-23
