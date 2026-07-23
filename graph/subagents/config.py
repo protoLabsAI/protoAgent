@@ -49,6 +49,14 @@ class SubagentConfig:
     # don't pollute the distilled-skills index. Default True preserves the
     # current behavior; honored wherever a runtime wires per-task skill emission.
     allow_skill_emission: bool = True
+    # Fallback user prompt for bare dispatch. Bare `/dream` / `/distill` (and
+    # their `schedule_task "/dream"` scheduled forms) arrive with an EMPTY user
+    # message — OpenAI-compat gateways reject empty content, and when they don't
+    # the model stalls. `_run_subagent` substitutes this when the incoming prompt
+    # is empty/whitespace. Set it only on self-contained subagents whose system
+    # prompt fully specifies the job (a user prompt is just an optional focus
+    # hint); blank (the default) keeps the empty prompt passing through unchanged.
+    default_prompt: str = ""
 
 
 RESEARCHER_CONFIG = SubagentConfig(
@@ -584,6 +592,11 @@ Output a short summary — what you consolidated (added) and what you pruned
         "forget_memory",
     ],
     max_turns=30,
+    default_prompt=(
+        "Run your standard consolidation pass over recent activity with your "
+        "conservative defaults: fold in the durable, verified new facts and "
+        "prune the superseded, duplicate, or stale ones."
+    ),
 )
 
 DISTILL_CONFIG = SubagentConfig(
@@ -652,6 +665,11 @@ bead ids) + what you skipped and why. Hard stop at max_turns.""",
         "task_create",
     ],
     max_turns=30,
+    default_prompt=(
+        "Run your standard distillation pass over recent activity with your "
+        "conservative defaults: package only clearly repeated workflows, "
+        "propose the thinner candidates, and skip the rest."
+    ),
 )
 
 

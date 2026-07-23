@@ -312,6 +312,15 @@ async def _run_subagent(
     if not sub_config:
         return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
 
+    # Bare dispatch (`/dream`, scheduled `schedule_task "/dream"`) arrives with an
+    # EMPTY user message — OpenAI-compat gateways reject empty content, and when
+    # they don't the model stalls. Self-contained subagents declare a
+    # `default_prompt`; substituting it HERE covers every dispatch path (slash,
+    # scheduler, task/task_batch, console) at one seam. A subagent without one
+    # keeps the empty prompt passing through unchanged.
+    if not (prompt or "").strip() and getattr(sub_config, "default_prompt", ""):
+        prompt = sub_config.default_prompt
+
     sub_tools = _subagent_tools(sub_config, tool_map)
     if not sub_tools:
         return f"Error: No tools available for subagent '{subagent_type}'."
