@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Create button off-screen. They now sit first (tab order follows), and the card list
   scrolls inside its own bounded container instead of growing the page. The preview link
   and the inline Configure step stay with the archetype section. (#2193)
+- **Success-toned system notes follow the workspace accent.** The left border on a
+  `noteTone:"success"` chat note (export done, ingestion confirmed, …) was pinned to literal
+  success green; it now uses the workspace accent — the same
+  `var(--pl-color-accent, var(--brand-indigo, #6366f1))` chain the HITL card adopted in
+  #2157 — so a "done" confirmation reads as themed automation chrome and follows a
+  ThemePanel accent override. Warning/danger/info notes keep their semantic colours on
+  purpose (the #2197 export-blocked note relies on danger reading red). A source-guard test
+  pins the chain and the untouched tones.
 
 ### Fixed
 - **The chat-export note now names the file it wrote — and admits when it couldn't.** The
