@@ -169,7 +169,13 @@ def test_validate_rejects_unsupported_gate():
     errs = validate_recipe(bad, known_subagents={"researcher"})
     assert any("unsupported gate" in e and "robot" in e for e in errs)
     # A truthy-but-wrong value is still rejected (only the literal 'human' is accepted).
-    assert any("unsupported gate" in e for e in validate_recipe({**bad, "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "gate": True}]}, known_subagents={"researcher"}))
+    assert any(
+        "unsupported gate" in e
+        for e in validate_recipe(
+            {**bad, "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "gate": True}]},
+            known_subagents={"researcher"},
+        )
+    )
 
 
 def test_execute_pauses_before_gated_step_is_spawned():
@@ -250,9 +256,7 @@ def test_execute_multiple_gated_steps_pause_in_turn():
             },
         ],
     }
-    res = asyncio.run(
-        execute_workflow(recipe, {}, run_step=run_step, gate_check=gate_check, pause_fn=pause_fn)
-    )
+    res = asyncio.run(execute_workflow(recipe, {}, run_step=run_step, gate_check=gate_check, pause_fn=pause_fn))
     assert res["paused_step"] == "b"  # paused at the *second* gate, in turn
     assert spawned == ["a"]  # a ran (approved); b never spawned
     assert res["steps"] == {"a": "<a>"}  # a's output carried into the paused envelope
@@ -622,3 +626,83 @@ async def test_save_workflow_rejects_unsupported_gate(tmp_path, monkeypatch):
         }
     )
     assert "Cannot save" in msg and "unsupported gate" in msg
+
+
+# ── fan-out width + timings ──────────────────────────────────────────────────
+
+
+def _fanout_recipe(n: int, width=None) -> dict:
+    r = {
+        "name": "fanout",
+        "steps": [{"id": f"s{i}", "subagent": "x", "prompt": "go"} for i in range(n)]
+        + [{"id": "join", "subagent": "x", "prompt": "j", "depends_on": [f"s{i}" for i in range(n)]}],
+    }
+    if width is not None:
+        r["max_concurrency"] = width
+    return r
+
+
+async def _peak_concurrency(recipe, caller_width):
+    """Run the recipe, returning the max number of steps in flight at once."""
+    live = 0
+    peak = 0
+
+    async def run_step(_sub, _prompt, sid):
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        await asyncio.sleep(0.01)
+        live -= 1
+        return sid
+
+    await execute_workflow(recipe, {}, run_step=run_step, max_concurrency=caller_width)
+    return peak
+
+
+async def test_a_stage_wider_than_the_callers_cap_is_serialized_without_a_declaration():
+    # The bug: a five-step parallel stage under a cap of four runs 4+1 and pays twice
+    # the slowest step. This is what a review panel was silently doing in production.
+    assert await _peak_concurrency(_fanout_recipe(5), caller_width=4) == 4
+
+
+async def test_a_declared_width_lets_the_whole_stage_run_at_once():
+    assert await _peak_concurrency(_fanout_recipe(5, width=5), caller_width=4) == 5
+
+
+async def test_a_declared_width_can_also_narrow_a_stage():
+    # Not only an escape hatch upward — a recipe hitting a rate-limited tool can ask
+    # for less than the caller would allow.
+    assert await _peak_concurrency(_fanout_recipe(5, width=2), caller_width=8) == 2
+
+
+async def test_an_absurd_width_is_a_validation_error_not_a_stampede():
+    from plugins.workflows.engine import MAX_FANOUT, validate_recipe
+
+    assert validate_recipe(_fanout_recipe(2, width=MAX_FANOUT + 1)) != []
+    assert validate_recipe(_fanout_recipe(2, width=0)) != []
+    assert validate_recipe(_fanout_recipe(2, width="lots")) != []
+    assert validate_recipe(_fanout_recipe(2, width=True)) != []  # bools are not widths
+    assert validate_recipe(_fanout_recipe(2, width=MAX_FANOUT)) == []
+    assert validate_recipe(_fanout_recipe(2)) == []  # absent stays valid
+
+
+async def test_timings_are_reported_per_step_and_exclude_queueing():
+    # A step held behind the semaphore must not be billed for the wait — otherwise a
+    # serialized wave reads as a slow step, hiding the very problem width fixes.
+    async def run_step(_sub, _prompt, sid):
+        await asyncio.sleep(0.05 if sid == "s0" else 0.01)
+        return sid
+
+    res = await execute_workflow(_fanout_recipe(3), {}, run_step=run_step, max_concurrency=1)
+    assert set(res["timings"]) == {"s0", "s1", "s2", "join"}
+    assert res["timings"]["s0"] >= 0.05
+    assert res["timings"]["s2"] < 0.04  # ran last, but is billed only for its own work
+
+
+async def test_a_failed_step_is_still_timed():
+    async def run_step(_sub, _prompt, sid):
+        raise RuntimeError("boom")
+
+    res = await execute_workflow(_fanout_recipe(1), {}, run_step=run_step, max_concurrency=2)
+    assert res["failed"]
+    assert "s0" in res["timings"]  # you especially want to know how long a failure took

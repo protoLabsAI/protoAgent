@@ -132,6 +132,8 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None,
             recipe,
             resolved,
             run_step=_run_step,
+            # Caller default only — a recipe declaring its own fan-out width wins inside
+            # the engine (a 5-step parallel stage must not be serialized by a cap of 4).
             max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
             gate_check=_gate_check,
             pause_fn=_pause,
@@ -349,7 +351,9 @@ def register(registry: Any) -> None:
             result = await _execute(_reg(), name, inputs or {})
         except ValueError as exc:
             return f"Workflow {name!r}: {exc}"
-        if result.get("paused"):  # gated step reached — the full status block (recipe, step, run id, prior outputs, resume paths)
+        if result.get(
+            "paused"
+        ):  # gated step reached — the full status block (recipe, step, run id, prior outputs, resume paths)
             return _paused_message(name, result)
         return result["output"]
 
