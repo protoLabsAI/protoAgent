@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.108.0] - 2026-07-23
+
 ### Added
 - **Human approval gates in workflows — `gate: human`.** A step-level `gate: human` parks a run
   for operator approval **before the gated step's subagent is spawned**, so no work is wasted.

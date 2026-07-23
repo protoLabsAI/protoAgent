@@ -1,5 +1,30 @@
 [
   {
+    "version": "v0.108.0",
+    "date": "2026-07-23",
+    "changes": [
+      "Human approval gates in workflows — gate: human.",
+      "execute_code works in the packaged desktop app — a managed Python runtime.",
+      "Plugin deps install into the managed runtime on desktop.",
+      "Pip-less wheel installer for frozen-app plugin deps.",
+      "Fleet Room — a ⌘K morph-view for the fleet.",
+      "Recipe-declared fan-out width + per-step timings for workflows.",
+      "agent_runtime now lives in the Model settings section.",
+      "Per-server input namespacing for multi-server MCP bundles.",
+      "env_remove for ACP delegates.",
+      "Bare /dream and /distill dispatch with no prompt.",
+      "Per-delegate environment editor in the console, with secret-tier rows.",
+      "HITL card accents follow the workspace theme.",
+      "Creating a Cowork agent on the desktop app — and a whole class of frozen-CLI breakage.",
+      "Recalled knowledge chunks are tagged with their source domain, not the table.",
+      "A null edit-prompt can no longer orphan a paused workflow run.",
+      "The installer's optional-only failure path no longer drops satisfied optional deps.",
+      "\"New agent\" in the header switcher is host-gated.",
+      "Workflow follow-ups from the fan-out/timings work",
+      "The composer is focused after creating a new chat session."
+    ]
+  },
+  {
     "version": "v0.107.0",
     "date": "2026-07-22",
     "changes": [
