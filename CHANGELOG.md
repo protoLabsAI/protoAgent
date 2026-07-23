@@ -12,6 +12,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Human approval gates in workflows — `gate: human`.** A step-level `gate: human` parks a run
+  for operator approval **before the gated step's subagent is spawned**, so no work is wasted.
+  Runs are now durable: each persists as one JSON file under
+  `{instance_store}/workflows/.runs/{run_id}.json` (atomic writes, best-effort so a disk hiccup
+  can never fail a run that would otherwise complete), carrying the run id, inputs, per-step
+  outputs and status — restart-safe and resumable indefinitely. `GET /api/plugins/workflows/runs`
+  lists paused runs with the parked step's **rendered** prompt (inputs + prior outputs
+  substituted, never raw `{{…}}`), and `POST …/runs/{run_id}/resume` takes `approve` (re-run with
+  the original prompt), `edit` (run an operator-supplied prompt verbatim; downstream steps see the
+  edited output), or `reject` (mark the step failed as `rejected by operator` and let the DAG carry
+  the error to dependents, matching inline-failure semantics). The console grows a **Pending Gates**
+  section, and `run_workflow` plus the `/<recipe>` slash command return the same self-contained
+  status block — recipe, paused step, run id, and every completed step's output — so an operator can
+  approve or deny without opening the panel. Ungated runs take the byte-identical pre-gate path.
+  (#2138, #2140, #2141, #2142)
+- **`execute_code` works in the packaged desktop app — a managed Python runtime (ADR 0094 P1).**
+  The desktop app provisions a pinned **CPython 3.12.13** (python-build-standalone, in-repo SHA256
+  table cross-checked against the GitHub per-asset digests, member-guarded extract, atomic swap) on
+  demand into a box-shared `runtime/python/current`, and the frozen `execute_code` spawns *that*
+  rather than the PyInstaller binary. Provisioning also pip-installs the ADR 0092 document baseline
+  (`requirements-docs.txt`) into the runtime's own site-packages, reproducing source-run semantics
+  exactly. No PATH exposure and no system-Python fallback — the runtime exists for exactly one
+  consumer, the `execute_code` child spawn. Net effect: compute-through-code capabilities that were
+  structurally dead on desktop — cowork's `docx`/`xlsx`/`pptx`/`pdf` skills above all — actually run
+  there. (#2144, closes #2137)
+- **Plugin deps install into the managed runtime on desktop (ADR 0094 P2).** ADR 0058 D2 used to
+  refuse a frozen-app plugin whose `requires_pip` wasn't bundled ("install it on a server/Docker
+  build instead"); those deps now install **into the managed Python runtime**, where the plugin's
+  `execute_code`-based skills import them. Zero console change — it reuses the existing
+  `/api/plugins/install-deps` route, the "Install deps" button and the `deps_missing` badge, by
+  making `_deps_satisfied()` count a dep present in the managed runtime and routing `install_deps()`
+  there when frozen. (#2149)
+- **Pip-less wheel installer for frozen-app plugin deps (ADR 0093 P1).** Behind the
+  `plugins.allow_unbundled_deps` opt-in, a third-party plugin's **pure-Python** deps install as
+  wheels into a writable per-instance dir on `sys.path`, where the plugin's own module imports
+  them — mirroring ADR 0058 D1's git-less archive fetch and closing the last `pip` gap on the
+  desktop app. It composes with the runtime work above: P2 routes deps to the **child** runtime (for
+  `execute_code` skills), this routes them to the **host** `sys.path` (for the plugin module
+  itself). (#2151, closing the Scope A half of #1631)
+- **Fleet Room — a ⌘K morph-view for the fleet.** ⌘K → **Fleet Room** turns the fleet from a
+  page-load switcher into a co-present room: every workspace agent appears as a presence-aware
+  member (dots encode running/idle), with DMs, broadcast, live activity, approval + running pills,
+  and `@`-addressing in the composer. Built on the existing A2A + fleet-proxy substrate — no new
+  infra. (#2129, #2132)
+- **Recipe-declared fan-out width + per-step timings for workflows.** A parallel stage wider than
+  the caller's concurrency cap was **silently serialized** — with `subagent_max_concurrency`
+  defaulting to 4, a five-step parallel stage ran 4 + 1, i.e. two waves. A recipe can now declare
+  its own fan-out width, and every step records a timing, so an author profiling a slow recipe can
+  see where the time actually goes. (#2168)
+- **`agent_runtime` now lives in the Model settings section (ADR 0033 D1 amended).** The runtime and
+  the model aren't independent for an operator: `create_llm` has an ACP-only fallback where an
+  `acp:*` runtime with no gateway configured is valid, while `native` requires a real gateway model
+  *and* key — so `agent_runtime` is a **precondition** of the model config, not a peer of Behavior.
+  First move of the settings-IA rework. (#2007)
+- **Per-server input namespacing for multi-server MCP bundles.** `resolve_bundle_mcp_item` now
+  prefers an operator-supplied `values["{server}:{key}"]` over the bare `values[key]`, so a bundle
+  whose servers share an input name (two `token` inputs, say) can seed each with its own value. The
+  lookup is scoped to the item being resolved, so a namespaced match never bleeds across servers,
+  and a server without one still falls back to bare key → env → default. The bundle-input picker is
+  collision-aware to match. (#2152, #2154)
+- **`env_remove` for ACP delegates.** A subtractive `env_remove` seam on the ACP delegate /
+  coding_agent spawn path lets a caller strip host identity and credential vars (`PROTOAGENT_*`,
+  `A2A_AUTH_TOKEN`, `AGENT_NAME`) from a spawned coder subprocess **without mutating `os.environ`** —
+  the regression that cost a live host its `PROTOAGENT_HOME` and re-exec'd a graceful restart as the
+  default instance. (#2145)
+- **Bare `/dream` and `/distill` dispatch with no prompt.** A new `SubagentConfig.default_prompt`
+  fallback means a bare (or whitespace-only) slash command runs the subagent's standard
+  instructions instead of dispatching an empty message; prompts with arguments pass through
+  unchanged. (#2166)
 - **Per-delegate environment editor in the console, with secret-tier rows.** Every delegate
   type's editor form (a2a / openai / acp) now exposes the per-delegate `env` map and the
   `env_remove` list, so operators author env-carrying delegates from the UI instead of
@@ -21,6 +90,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never sit in plaintext config. Values are verbatim (no `${VAR}` expansion) and merge over
   the inherited process env *after* `env_remove` strips it (a trailing `_` is a prefix
   match). Reads never echo a secret value — the form shows set-but-masked rows. (#2114)
+
+### Changed
+- **HITL card accents follow the workspace theme.** The human-in-the-loop cards' brand-indigo pins
+  are replaced with the `--pl-color-accent` chain, so an operator's workspace theme override
+  actually reaches them. (#2157)
+
+### Fixed
+- **Creating a Cowork agent on the desktop app — and a whole class of frozen-CLI breakage.**
+  Fleet ▸ Add Agent spawns `<frozen> plugin install <bundle>` → `server/cli.py::dispatch` → a
+  **dynamic** `importlib.import_module("graph.plugins.cli")`. PyInstaller's static scan can't follow
+  a dynamic string import, so the module never made it into the bundle and the dispatch failed. The
+  dynamically-dispatched CLI modules are now bundled explicitly. (#2160, fixes #2136)
+- **Recalled knowledge chunks are tagged with their source domain, not the table.** The always-on
+  auto-inject path rendered every RAG hit as `[{table}]` — always `"chunks"`, i.e. no signal — while
+  dropping the meaningful `domain` already present on each hit, so imported domains read back as the
+  agent's own memory. Recall now carries real provenance. (#2170, fixes #2161)
+- **A null edit-prompt can no longer orphan a paused workflow run.** `POST
+  /workflows/runs/{run_id}/resume` with `{"action":"edit","edits":{"prompt":null}}` permanently
+  orphaned the run — it vanished from Pending Gates, stuck `running` and unresumable by any API
+  path — because the guard used `.get("prompt","")`, which returns `None` for a JSON null. Resume
+  validation is hoisted above the registry lookup and rejects a null prompt up front. (#2164,
+  fixes #2143)
+- **The installer's optional-only failure path no longer drops satisfied optional deps.** (#2163,
+  fixes #2162)
+- **"New agent" in the header switcher is host-gated.** It was unconditionally clickable while
+  "Fleet settings" directly below it was already host-gated. Adding a member is the same host-only
+  operation, and in a member/slug window — whose `/api/fleet` is a fleet-of-one — it spawned a
+  nested fleet by accident. (#2156, the safe half of #1999)
+- **Workflow follow-ups from the fan-out/timings work** — a stray file, a stale docstring, and
+  paused-run timings. (#2169)
+- **The composer is focused after creating a new chat session.** (#2167)
 
 ## [0.107.0] - 2026-07-22
 
