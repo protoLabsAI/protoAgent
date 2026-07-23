@@ -173,9 +173,13 @@ async def execute_workflow(
 ) -> dict:
     """Run the recipe's step DAG. ``run_step(subagent, prompt, step_id) -> output``.
 
-    Returns ``{"output": str, "steps": {id: output}, "failed": [ids]}``. Step
-    failures are recorded inline (the step's output becomes the error text) so
-    independent branches still complete — matching task_batch semantics.
+    Returns ``{"output": str, "steps": {id: output}, "failed": [ids],
+    "timings": {id: seconds}}``. Step failures are recorded inline (the step's output
+    becomes the error text) so independent branches still complete — matching
+    task_batch semantics.
+
+    A recipe's own ``max_concurrency`` wins over the caller's, so a declared fan-out is
+    never serialized by a resource cap that knows nothing about this recipe's shape.
 
     ``gate_check(step_dict) -> "pause" | None`` (optional) is consulted for each
     ready step *before* it is dispatched. When it returns ``"pause"`` the run is
@@ -254,7 +258,16 @@ async def execute_workflow(
             )
             if gated is not None:  # park BEFORE spawning any subagent → no wasted work
                 run_id = pause_fn(gated, done) if pause_fn is not None else None
-                return {"paused": True, "paused_step": gated, "run_id": run_id, "steps": dict(done)}
+                return {
+                    "paused": True,
+                    "paused_step": gated,
+                    "run_id": run_id,
+                    "steps": dict(done),
+                    # Steps that ran before the gate are timed; omitting them here made
+                    # the two completion paths disagree about the result shape, and a
+                    # long step before a pause is exactly what you want to see.
+                    "timings": dict(timings),
+                }
         for sid, out, err in await asyncio.gather(*(run_one(s) for s in ready)):
             done[sid] = out
             if err:

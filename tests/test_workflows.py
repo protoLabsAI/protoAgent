@@ -197,7 +197,9 @@ def test_execute_pauses_before_gated_step_is_spawned():
     )
     # gather (ungated) ran; analyze (gated) paused before spawning.
     assert spawned == ["gather"]
-    assert res == {"paused": True, "paused_step": "analyze", "run_id": "run-abc", "steps": {"gather": "<gather-out>"}}
+    assert res["paused"] is True and res["paused_step"] == "analyze" and res["run_id"] == "run-abc"
+    assert res["steps"] == {"gather": "<gather-out>"}
+    assert "gather" in res["timings"]  # the step that ran before the gate is timed
 
 
 def test_execute_pauses_at_the_very_first_step_when_gated():
@@ -222,7 +224,8 @@ def test_execute_pauses_at_the_very_first_step_when_gated():
         )
     )
     assert spawned == []  # nothing spawned at all
-    assert res == {"paused": True, "paused_step": "first", "run_id": "rid", "steps": {}}
+    assert res["paused"] is True and res["paused_step"] == "first"
+    assert res["run_id"] == "rid" and res["steps"] == {} and res["timings"] == {}
 
 
 def test_execute_multiple_gated_steps_pause_in_turn():
