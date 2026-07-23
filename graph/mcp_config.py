@@ -139,8 +139,12 @@ def resolve_bundle_mcp_item(
     variable (read out of ``env``), then its ``default``; an unfilled placeholder becomes ``""``.
 
     ``values`` are the operator's create-time inputs (``POST /api/fleet``'s ``inputs`` field,
-    #2041) — keyed by input ``key``. They take priority over ``env`` so an operator who supplies
-    e.g. a GitHub token fills ``${token}`` and the entry seeds ENABLED, instead of the env-only
+    #2041) — keyed by input ``key``, or by ``"{server}:{key}"`` to target one server in a
+    multi-server bundle (#2128; ``server`` is the template's ``name``). The namespaced form
+    wins over the bare key *for that server only* — two servers that both declare a ``token``
+    input can each get their own value, and a bare ``token`` still fills any server without a
+    namespaced entry. ``values`` take priority over ``env`` so an operator who supplies e.g. a
+    GitHub token fills ``${token}`` and the entry seeds ENABLED, instead of the env-only
     fallback that would leave a required-but-unfilled input disabled.
 
     Returns ``(entry, unresolved_required)`` — the list of *required* input keys that had no
@@ -154,6 +158,7 @@ def resolve_bundle_mcp_item(
     template = item.get("template") if isinstance(item.get("template"), dict) else item
     inputs = item.get("inputs") if isinstance(item.get("inputs"), list) else []
     supplied = values or {}  # operator-supplied {input_key: value}, wins over env/default
+    item_name = str(template.get("name", "")).strip()  # scopes "{server}:{key}" lookups (#2128)
     resolved: dict[str, str] = {}
     unresolved: list[str] = []
     for inp in inputs:
@@ -162,7 +167,12 @@ def resolve_bundle_mcp_item(
         key = str(inp.get("key", "")).strip()
         if not key:
             continue
-        val = supplied.get(key)  # operator value first — priority over the declared env var
+        # Operator value first — priority over the declared env var. The server-namespaced
+        # "{name}:{key}" form beats the bare key, so two servers sharing an input key in one
+        # bundle can each receive their own value (#2128).
+        val = supplied.get(f"{item_name}:{key}") if item_name else None
+        if not val:
+            val = supplied.get(key)
         if not val:
             envvar = str(inp.get("env", "")).strip()
             val = env.get(envvar) if envvar else None

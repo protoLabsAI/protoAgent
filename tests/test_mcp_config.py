@@ -156,3 +156,63 @@ def test_resolve_bundle_item_no_values_is_env_only_fallback():
     entry, unresolved = resolve_bundle_mcp_item(_gh_item(), {})
     assert unresolved == ["token"]
     assert entry["headers"]["Authorization"] == "Bearer "
+
+
+# ── "{server}:{key}"-namespaced values scope one server in a bundle (#2128) ───
+def _token_item(name: str):
+    """A server item whose sole input key is ``token`` — two of these in a bundle
+    collide on the bare key, which is exactly what namespacing disambiguates."""
+    return {
+        "template": {
+            "name": name,
+            "transport": "http",
+            "url": "https://h/",
+            "headers": {"Authorization": "Bearer ${token}"},
+        },
+        "inputs": [{"key": "token", "env": "TK", "required": True}],
+    }
+
+
+def test_resolve_bundle_item_namespaced_values_scope_per_server():
+    """Two servers sharing an input key each get their own `{name}:{key}` value —
+    a namespaced match on one server never bleeds into the other."""
+    values = {"gh:token": "ghp_x", "bb:token": "bbp_y"}
+    gh, gh_unresolved = resolve_bundle_mcp_item(_token_item("gh"), {}, values)
+    bb, bb_unresolved = resolve_bundle_mcp_item(_token_item("bb"), {}, values)
+    assert gh_unresolved == [] and bb_unresolved == []
+    assert gh["headers"]["Authorization"] == "Bearer ghp_x"
+    assert bb["headers"]["Authorization"] == "Bearer bbp_y"
+
+
+def test_resolve_bundle_item_bare_key_unchanged_for_single_server():
+    """A bare-key caller resolves exactly as before — the namespaced lookup misses
+    and falls through to `values[key]`."""
+    entry, unresolved = resolve_bundle_mcp_item(_token_item("gh"), {}, {"token": "s3cr3t"})
+    assert unresolved == []
+    assert entry["headers"]["Authorization"] == "Bearer s3cr3t"
+
+
+def test_resolve_bundle_item_namespaced_beats_bare_without_shadowing_other_server():
+    """`gh:token` wins over the bare `token` for gh only; bb still falls back to
+    the bare key."""
+    values = {"gh:token": "ghp_x", "token": "shared"}
+    gh, _ = resolve_bundle_mcp_item(_token_item("gh"), {}, values)
+    bb, _ = resolve_bundle_mcp_item(_token_item("bb"), {}, values)
+    assert gh["headers"]["Authorization"] == "Bearer ghp_x"
+    assert bb["headers"]["Authorization"] == "Bearer shared"
+
+
+def test_resolve_bundle_item_blank_namespaced_value_falls_through():
+    """A blank namespaced value doesn't shadow the bare key or the env fallback —
+    same falsy fall-through the bare operator value already has."""
+    entry, unresolved = resolve_bundle_mcp_item(
+        _token_item("gh"), {}, {"gh:token": "", "token": "bare"}
+    )
+    assert unresolved == []
+    assert entry["headers"]["Authorization"] == "Bearer bare"
+
+    from_env, unresolved2 = resolve_bundle_mcp_item(
+        _token_item("gh"), {"TK": "envval"}, {"gh:token": ""}
+    )
+    assert unresolved2 == []
+    assert from_env["headers"]["Authorization"] == "Bearer envval"
