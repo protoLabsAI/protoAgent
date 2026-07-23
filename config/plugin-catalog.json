@@ -14,8 +14,8 @@
       "name": "Artifact (Generative UI)",
       "category": "Generative UI",
       "official": true,
-      "repo": "https://github.com/protoLabsAI/artifact-plugin",
-      "tagline": "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). The reference external plugin."
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/artifact",
+      "tagline": "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). Ships built-in with protoAgent."
     },
     {
       "id": "terminal",

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
+  The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
+  link still sent people to the archived external repo; it now links to the in-tree plugin and
+  the tagline says "ships built-in" instead of calling it the reference external plugin.
+
 ## [0.111.0] - 2026-07-23
 
 ### Added
