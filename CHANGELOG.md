@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`tools.hidden` — hide a tool from the console entirely, not just toggle it off.** A new
+  config list that's a **hard superset** of `tools.disabled`: a hidden tool is denied at the
+  graph (never bound, never callable) *and* dropped from the console's Tools inventory, so it
+  never renders as a row and can't be re-enabled from the UI. `disabled` stays
+  "off-but-visible-and-toggleable"; `hidden` is "gone". It's a setup-time / restricted-console
+  control (ADR 0071 — the UI is presentation, the config is the boundary): an archetype or a
+  compliance-bound console pins the set in `config.tools.hidden`. Enforced server-side at the
+  authoritative denylist sync, so no client can surface a hidden tool. (#2172)
 - **Export a chat as Markdown from the UI — `/export` and the tab context menu.** The
   chat-export endpoint (v0.109.0) now has real entry points: type `/export`, or right-click a
   chat tab → **Export as Markdown**. Both download a self-contained `.md` (named from the chat

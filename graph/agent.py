@@ -924,9 +924,14 @@ def create_agent_graph(
     # Sync the operator denylist from THIS config — the server boot/reload path already
     # set it, but out-of-server builders (eval sweeps, scripts) pass a config directly
     # and would otherwise silently keep whatever the process global last held.
+    # Hidden tools (#2172) are a HARD superset: denied here like disabled ones (never
+    # bound), and additionally dropped from the console inventory (console_handlers), so
+    # a hidden tool can't be re-enabled from the UI. This is THE authoritative sync point,
+    # so the union lives here (agent_init's earlier call is for the pre-graph path).
     from tools.lg_tools import set_disabled_tools
 
-    set_disabled_tools(getattr(config, "tools_disabled", []))
+    _denied = list(dict.fromkeys([*getattr(config, "tools_disabled", []), *getattr(config, "tools_hidden", [])]))
+    set_disabled_tools(_denied)
 
     # Everything the denylist drops, across every assembly seam below. Stamped on the
     # graph (like bound_tools) so the operator Tools tab can render disabled tools as

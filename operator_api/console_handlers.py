@@ -199,7 +199,12 @@ def _operator_tools_list():
     seen: set[str] = set()
     # The raw denylist, verbatim from config — NOT recomputed from the catalog.
     cfg = STATE.graph_config
-    denylist = [str(n) for n in (getattr(cfg, "tools_disabled", None) or [])]
+    # Hidden tools (#2172): dropped from the inventory ENTIRELY — not a disabled row, not
+    # in the denylist echo. They're denied at the graph too (agent_init), so this is only
+    # the presentation half: the console never shows a hidden tool, so it can't be toggled
+    # back on. `disabled` stays "off but visible"; `hidden` stays "gone".
+    hidden = {str(n) for n in (getattr(cfg, "tools_hidden", None) or [])}
+    denylist = [str(n) for n in (getattr(cfg, "tools_disabled", None) or []) if n not in hidden]
     # Source is derived by cross-referencing the plugin/mcp tool name sets;
     # everything else bound to the graph is core.
     plugin_names = {getattr(t, "name", None) for t in (getattr(STATE, "plugin_tools", None) or [])}
@@ -212,7 +217,7 @@ def _operator_tools_list():
 
     def add(tool, source=None, enabled=True):
         name = getattr(tool, "name", None)
-        if not name or name in seen:
+        if not name or name in seen or name in hidden:  # hidden → never surfaced (#2172)
             return
         seen.add(name)
         src = source or ("plugin" if name in plugin_names else "mcp" if name in mcp_names else "core")

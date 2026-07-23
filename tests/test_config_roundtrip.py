@@ -231,6 +231,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "tools_deferred_enabled": False,
     "tools_deferred_keep": [],
     "tools_disabled": [],
+    "tools_hidden": [],
     "top_k": -1,
     "top_p": None,
     "workflow_dir": "/sandbox/workflows",
