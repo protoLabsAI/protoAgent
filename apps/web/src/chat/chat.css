@@ -438,7 +438,11 @@
   box-shadow: var(--pl-shadow-card);
 }
 .chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-info, #3b82f6); }
-.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-success, #30a46c); }
+/* Success = "the agent did the thing", so it follows the workspace accent — the exact chain
+   the HITL card adopted in #2157 (see hitl.css / hitl-accent.test.ts) — not traffic-light
+   green. Warning/danger/info stay semantic: the #2197 export-blocked note relies on danger
+   reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
+.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent, var(--brand-indigo, #6366f1)); }
 .chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-warning, #d98324); }
 .chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-danger, #e5484d); }
 
