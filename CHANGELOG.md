@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catalog `soul_preset` resolves to a shipped file so a future retirement can't strand a
   catalog row. (#2192)
 
+### Changed
+- **New-agent panel: Name + Create moved above the archetype picker.** Every installed
+  bundle adds an archetype card, so on a busy host the list pushed the Name field and
+  Create button off-screen. They now sit first (tab order follows), and the card list
+  scrolls inside its own bounded container instead of growing the page. The preview link
+  and the inline Configure step stay with the archetype section. (#2193)
+
 ## [0.110.0] - 2026-07-23
 
 ### Added
