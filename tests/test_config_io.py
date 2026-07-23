@@ -662,16 +662,17 @@ def test_mark_setup_complete_creates_parent_dir(monkeypatch, tmp_path):
 
 
 def test_list_soul_presets_returns_shipped_starters():
-    """The template must ship four starter presets so the wizard's
-    dropdown is useful on day one. Add a file to config/soul-presets/
-    and it should appear here automatically — no registry."""
+    """The template ships the presets the archetype catalog seeds from,
+    plus ``blank`` for the write-your-own path. Add a file to
+    config/soul-presets/ and it should appear here automatically — no
+    registry."""
     from graph.config_io import list_soul_presets
 
     presets = list_soul_presets()
-    assert "generic-assistant" in presets
-    assert "research" in presets
-    assert "coding" in presets
+    assert "base" in presets
     assert "blank" in presets
+    assert "cowork" in presets
+    assert "project-manager" in presets
 
 
 def test_list_soul_presets_sorted():
@@ -684,9 +685,30 @@ def test_list_soul_presets_sorted():
 def test_read_soul_preset_returns_content():
     from graph.config_io import read_soul_preset
 
-    content = read_soul_preset("research")
-    assert "research" in content.lower()
+    content = read_soul_preset("base")
+    assert "protoagent" in content.lower()
     assert content.strip().startswith("#")  # markdown h1
+
+
+def test_archetype_catalog_soul_presets_resolve():
+    """Every ``soul_preset`` the archetype catalog names must resolve to a
+    shipped preset file — retiring a preset without updating the catalog
+    would make the wizard's persona step silently seed nothing (empty
+    string means 'user didn't pick a preset')."""
+    import json
+
+    from graph.config_io import read_soul_preset
+
+    catalog_path = Path(__file__).resolve().parents[1] / "config" / "archetype-catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    for row in catalog["archetypes"]:
+        preset = row.get("soul_preset")
+        if not preset:
+            continue  # inline-`soul` rows don't reference a preset file
+        assert read_soul_preset(preset) != "", (
+            f"archetype '{row['id']}' points at soul_preset '{preset}' "
+            "but it does not resolve under config/soul-presets/"
+        )
 
 
 def test_read_soul_preset_unknown_returns_empty():

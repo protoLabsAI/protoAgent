@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question + answer render as ephemeral client-side notes that never go back to the server as
   a real turn. A unit test pins the guarantee: the main thread is read, never written, and
   the turn runs on a different thread id. (#2180)
+### Removed
+- **The three orphan soul presets — `coding`, `research`, and `generic-assistant`.** No
+  archetype-catalog row ever pointed at them, so the wizard's persona step could never seed
+  from them — they were dead weight in `config/soul-presets/` that every fork carried along.
+  `base`, `blank`, `cowork`, and `project-manager` remain, and a new test asserts every
+  catalog `soul_preset` resolves to a shipped file so a future retirement can't strand a
+  catalog row. (#2192)
 
 ## [0.110.0] - 2026-07-23
 
