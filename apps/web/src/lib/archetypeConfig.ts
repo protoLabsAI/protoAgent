@@ -22,10 +22,20 @@ export type ConfigField = {
   server?: string;
 };
 
-// Form state is keyed by origin+key so an MCP input and a declared secret that happen to
-// share a `key` don't clobber each other in the value map.
-export function fieldId(f: Pick<ConfigField, "origin" | "key">): string {
-  return `${f.origin}:${f.key}`;
+// Form state is keyed by origin(+server)+key: an MCP input and a declared secret that
+// happen to share a `key` don't clobber each other, and two servers that both declare the
+// same input key (e.g. both need a `token`, #2128) each get their own form field. A
+// declared secret has no `server`, so its id stays "secret:key".
+export function fieldId(f: Pick<ConfigField, "origin" | "key" | "server">): string {
+  return f.server ? `${f.origin}:${f.server}:${f.key}` : `${f.origin}:${f.key}`;
+}
+
+// Read a field's collected value. The panel keys its state by the full fieldId; a bare
+// `origin:key` entry still fills a server-tagged field with no qualified entry. That
+// mirrors the backend's seed-time precedence (resolve_bundle_mcp_item, #2128): a
+// namespaced value wins for its server, a bare key fills any server without one.
+function fieldValue(values: Record<string, string>, f: ConfigField): string {
+  return (values[fieldId(f)] ?? values[`${f.origin}:${f.key}`] ?? "").trim();
 }
 
 // Flatten a bundle preview into the Configure form's fields: each MCP server's inputs
@@ -70,23 +80,41 @@ export function hasConfigFields(preview: ArchetypePreview | undefined): boolean 
 // A required field left blank blocks create while the form is OPEN — the operator either
 // fills it or collapses the form to skip (→ env-only). Trims so whitespace isn't "filled".
 export function isMissingRequiredConfig(fields: ConfigField[], values: Record<string, string>): boolean {
-  return fields.some((f) => f.required && !(values[fieldId(f)] ?? "").trim());
+  return fields.some((f) => f.required && !fieldValue(values, f));
 }
 
 // Split the collected form values back into the two create() channels. Blank values are
 // dropped so the backend's env/default fallthrough (#2041) still applies to whatever the
 // operator skipped — only explicitly-entered values are sent.
+//
+// When two servers declare the same input `key` (#2128), each colliding input goes on the
+// wire as `"server:key"` — resolve_bundle_mcp_item scopes that value to its server — so
+// both get their own value. A key owned by one server stays bare, keeping the wire format
+// identical to today's for the common single-server bundle.
 export function splitConfigValues(
   fields: ConfigField[],
   values: Record<string, string>,
 ): { inputs: Record<string, string>; secrets: { key: string; value: string }[] } {
+  // Distinct `server` values per bare input key; ≥2 ⇒ that key collides. Purely local —
+  // archetypeConfigFields already tagged every MCP input with its server.
+  const serversByKey = new Map<string, Set<string>>();
+  for (const f of fields) {
+    if (f.origin !== "input") continue;
+    const set = serversByKey.get(f.key) ?? new Set<string>();
+    set.add(f.server ?? "");
+    serversByKey.set(f.key, set);
+  }
   const inputs: Record<string, string> = {};
   const secrets: { key: string; value: string }[] = [];
   for (const f of fields) {
-    const v = (values[fieldId(f)] ?? "").trim();
+    const v = fieldValue(values, f);
     if (!v) continue;
-    if (f.origin === "secret") secrets.push({ key: f.key, value: v });
-    else inputs[f.key] = v;
+    if (f.origin === "secret") {
+      secrets.push({ key: f.key, value: v });
+    } else {
+      const collides = (serversByKey.get(f.key)?.size ?? 0) > 1;
+      inputs[collides && f.server ? `${f.server}:${f.key}` : f.key] = v;
+    }
   }
   return { inputs, secrets };
 }
