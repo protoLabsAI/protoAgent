@@ -5,8 +5,12 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
+import { StatusDot } from "@protolabsai/ui/data";
+import { useQuery } from "@tanstack/react-query";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
+import { pythonRuntimeQuery } from "../lib/queries";
+import { pythonRuntimeView } from "../app/pythonRuntime";
 import { McpPanel } from "../app/McpPanel";
 import { SubagentsPanel } from "../app/SubagentsPanel";
 import { ToolsPanel } from "../app/ToolsPanel";
@@ -163,7 +167,37 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     ...consoleSections,
   ];
   const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
-  const toItem = (s: Section) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> });
+
+  // #2186 — the managed Python runtime's state was computed for the Tools panel's
+  // install card, but nothing ADVERTISED it before a tool call failed: on a stock
+  // desktop install you learned the runtime was unprovisioned by tripping over it
+  // mid-task. Badge the Tools nav entry whenever the card is actionable
+  // (unprovisioned / stale baseline / failed install) so the state is met while
+  // browsing, not at failure time — the deps_missing-badge pattern (ADR 0094 D4).
+  const pyRuntime = pythonRuntimeView(useQuery(pythonRuntimeQuery()).data);
+  const toolsBadge =
+    pyRuntime.kind === "action" ? (
+      <span
+        title={
+          pyRuntime.installing
+            ? "Installing Python runtime…"
+            : pyRuntime.error
+              ? "Python runtime install failed — retry in Tools"
+              : pyRuntime.stale
+                ? "Python runtime needs a refresh"
+                : "Python runtime not provisioned — execute_code and the document skills can't run yet"
+        }
+      >
+        <StatusDot status="warning" pulse={pyRuntime.installing} />
+      </span>
+    ) : undefined;
+
+  const toItem = (s: Section) => ({
+    id: s.id,
+    label: s.label,
+    icon: <s.icon size={15} />,
+    badge: s.id === "tools" ? toolsBadge : undefined,
+  });
   const groups = [
     { label: "Agent", items: agentSections.map(toItem) },
     { label: "Capabilities", items: capabilitySections.map(toItem) },

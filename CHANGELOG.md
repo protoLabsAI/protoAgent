@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).**
+  The Settings nav's Tools entry carries a warning dot whenever the runtime install card
+  is actionable — not provisioned, stale document baseline, or a failed install (pulsing
+  while an install runs) — so on a stock desktop install you discover the one-click
+  provision while browsing, not by tripping over a dead `execute_code` mid-task. Mirrors
+  the `deps_missing` badge pattern (ADR 0094 D4's status-surface half; P1 shipped the
+  copy).
+
 ## [0.111.0] - 2026-07-23
 
 ### Added
