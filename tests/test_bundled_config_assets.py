@@ -166,3 +166,45 @@ def test_sidecar_bundles_every_forwarded_cli_module() -> None:
         f"_FORWARD CLI module(s) {missing} are dynamically imported but NOT in "
         f"build_sidecar.py::CLI_FORWARD_MODULES — they'd 'ModuleNotFoundError' in the frozen app."
     )
+
+
+def test_vendor_asset_routes_are_declared_public():
+    """A plugin that serves vendored ES modules off its PUBLIC view prefix must exempt
+    that subtree in ``public_paths``.
+
+    ``manifest._view_public_paths`` auto-exempts a view's PAGE path, but an ES-module
+    ``import`` carries no Authorization header any more than the iframe navigation does —
+    so a gated ``/plugins/<id>/vendor/*`` 401s and the panel renders as a dead box. This
+    stayed invisible while fleet members ran open on loopback; ADR 0089 D5 closed them, so
+    the proxy now forwards these unauthenticated requests to a member that rejects them
+    (notes + artifact both broke on sister agents this way).
+
+    Guarding the CLASS, not the two instances: any future plugin that adds a vendor route
+    without declaring it fails here rather than in someone's console.
+    """
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    plugins_dir = Path(__file__).parent.parent / "plugins"
+    offenders: list[str] = []
+    checked = 0
+
+    for entry in sorted(plugins_dir.iterdir()):
+        init, manifest_path = entry / "__init__.py", entry / "protoagent.plugin.yaml"
+        if not (init.is_file() and manifest_path.is_file()):
+            continue
+        # Serves a vendor asset route off the public (non-/api) view prefix?
+        if not re.search(r"""@\w+\.get\(\s*["']/vendor/""", init.read_text(encoding="utf-8")):
+            continue
+        checked += 1
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        pid = manifest.get("id") or entry.name
+        wanted = f"/plugins/{pid}/vendor/"
+        declared = [str(p) for p in (manifest.get("public_paths") or [])]
+        if not any(d.startswith(wanted) or wanted.startswith(d) for d in declared):
+            offenders.append(f"{entry.name} (needs public_paths entry {wanted!r}, has {declared})")
+
+    assert checked, "no vendor-serving plugins found — has the route shape changed?"
+    assert not offenders, "vendor assets gated behind auth — will 401 on a sister agent: " + "; ".join(offenders)
