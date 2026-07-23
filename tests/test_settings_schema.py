@@ -16,9 +16,14 @@ from graph.settings_schema import (
 def test_schema_groups_and_values():
     cfg = LangGraphConfig()
     groups = build_schema(cfg, model_options=["a", "b"])
-    # Grouped + ordered by domain (ADR 0048): Identity leads, then Model
-    # (Model/Favorite models/Routing/Caching — favorites joined in #1957).
-    assert [g["section"] for g in groups][:4] == ["Identity", "Model", "Favorite models", "Routing"]
+    # Grouped + ordered by domain (ADR 0048): Identity leads, then the Model domain — now
+    # "Model & runtime" (agent_runtime folded in from Behavior, ADR 0033 D1 amended) /
+    # Favorite models / Routing / Caching.
+    assert [g["section"] for g in groups][:4] == ["Identity", "Model & runtime", "Favorite models", "Routing"]
+    # The runtime selector now leads the model section, not a separate Behavior group.
+    model_runtime = next(g for g in groups if g["section"] == "Model & runtime")
+    assert [f["key"] for f in model_runtime["fields"]][:3] == ["agent_runtime", "operator_mcp.tools", "model.name"]
+    assert model_runtime["category"] == "Model"
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present — EXCEPT ui_hidden ones, which stay in FIELDS for
     # config round-trip but aren't rendered in the settings UI (e.g. identity.name,
@@ -97,7 +102,8 @@ def test_groups_carry_category_in_taxonomy_order():
     # Known domain mappings hold (ADR 0048).
     by_section = {g["section"]: g["category"] for g in groups}
     assert by_section["Middleware"] == "Behavior"
-    assert by_section["Model"] == "Model"
+    assert by_section["Model & runtime"] == "Model"
+    assert "Agent runtime" not in by_section  # folded into "Model & runtime" (ADR 0033 D1 amended)
     assert by_section["Telemetry"] == "Box"
     # Knowledge is split into Recall/Ingestion/History, all under the Knowledge domain.
     assert by_section["Recall"] == "Knowledge"

@@ -59,13 +59,19 @@ ACP_MODEL_OPTIONS = acp_runtime_options()
 
 # Ordered registry. Section order here is the order the UI renders groups in.
 FIELDS: list[Field] = [
-    # ── Agent runtime (ADR 0033) — leads the Agent settings: "who runs the turn?" ──
+    # ── Model & runtime — "what drives this turn, and on what model?" ────────────
+    # agent_runtime leads (ADR 0033 D1, amended 2026-07-16): the runtime is presented WITH the
+    # model, not in a separate section, because it decides whether a gateway model + key is even
+    # required — an `acp:*` runtime with no gateway is valid (create_llm's ACP-only fallback),
+    # while `native` needs a real key. Keeping the two in one section puts the runtime selector
+    # and the api_key it may require on the same screen. The axes stay separate in config +
+    # resolution; this is grouping only.
     Field(
         "agent_runtime",
         "agent_runtime",
         "Agent runtime",
         "select",
-        "Agent runtime",
+        "Model & runtime",
         "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
         "coding agent over ACP (needs its CLI installed + authenticated on the host).",
         # "runtime" = native + every ACP agent, resolved per-request from config.acp_agents so
@@ -78,33 +84,32 @@ FIELDS: list[Field] = [
         "operator_mcp_tools",
         "Restrict tools for the ACP brain",
         "string_list",
-        "Agent runtime",
+        "Model & runtime",
         "Optional restriction on which operator tools an external (ACP) brain may call via "
         "MCP — one per line, or `*` for all. Empty = the full toolset (parity with the native "
         "runtime, minus execute_code the coding agent already has). Ignored by native.",
     ),
-    # ── Model ────────────────────────────────────────────────────────────────
     Field(
         "model.name",
         "model_name",
         "Primary model",
         "select",
-        "Model",
+        "Model & runtime",
         "The main reasoning model (gateway alias).",
         options_source="models",
         scope="host",
     ),
-    Field("model.provider", "model_provider", "Provider", "string", "Model", scope="host"),
-    Field("model.api_base", "api_base", "API base URL", "string", "Model", scope="host"),
-    Field("model.api_key", "api_key", "API key", "secret", "Model", "Stored in secrets.yaml, never echoed back."),
-    Field("model.temperature", "temperature", "Temperature", "number", "Model", minimum=0, maximum=2),
-    Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model", minimum=1),
+    Field("model.provider", "model_provider", "Provider", "string", "Model & runtime", scope="host"),
+    Field("model.api_base", "api_base", "API base URL", "string", "Model & runtime", scope="host"),
+    Field("model.api_key", "api_key", "API key", "secret", "Model & runtime", "Stored in secrets.yaml, never echoed back."),
+    Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
+    Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model & runtime", minimum=1),
     Field(
         "model.thinking",
         "thinking",
         "Thinking mode",
         "select",
-        "Model",
+        "Model & runtime",
         "Reasoning models on an OpenAI-compatible gateway (e.g. DeepSeek) can toggle their "
         "thinking/reasoning step. Blank = inherit the provider default. Note: with thinking on, "
         "DeepSeek ignores temperature / top-p / penalties.",
@@ -115,7 +120,7 @@ FIELDS: list[Field] = [
         "reasoning_effort",
         "Reasoning effort",
         "select",
-        "Model",
+        "Model & runtime",
         "How hard a reasoning model thinks. Blank = inherit the provider default. DeepSeek maps "
         "low/medium to high and treats max as the ceiling; the OpenAI o-series uses these directly.",
         options=["", "low", "medium", "high", "max"],
@@ -125,7 +130,7 @@ FIELDS: list[Field] = [
         "model_vision",
         "Vision (native images)",
         "bool",
-        "Model",
+        "Model & runtime",
         "Turn on when the primary model accepts images (e.g. protolabs/fast, protolabs/smart). "
         "Chat then sends attached images straight to the model as native multimodal parts "
         "instead of through the extraction pipeline.",
@@ -136,7 +141,7 @@ FIELDS: list[Field] = [
         "max_iterations",
         "Max tool iterations",
         "number",
-        "Model",
+        "Model & runtime",
         "Hard cap on the agent loop per turn.",
         minimum=1,
     ),
@@ -1119,13 +1124,14 @@ _SECTION_CATEGORY = {
     # Identity — who the agent is (name + persona live in the dedicated Identity panel;
     # these are the operator/org/access fields rendered beneath it).
     "Identity": "Identity",
-    # Model — the LLM connection, sampling, and cache (the real "Model & Routing").
-    "Model": "Model",
+    # Model & runtime — the runtime selector (ADR 0033 D1, amended) leads, then the LLM
+    # connection, sampling, and cache. The runtime lives here, not in Behavior, because it
+    # decides whether the model config is even required (create_llm's ACP-only fallback).
+    "Model & runtime": "Model",
     "Favorite models": "Model",  # /model quick-switch pins (#1957)
     "Routing": "Model",
     "Caching": "Model",
     # Behavior — how the agent thinks, loops, and decides.
-    "Agent runtime": "Behavior",
     "Goal mode": "Behavior",
     "Compaction": "Behavior",
     "Middleware": "Behavior",
