@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control (ADR 0071 — the UI is presentation, the config is the boundary): an archetype or a
   compliance-bound console pins the set in `config.tools.hidden`. Enforced server-side at the
   authoritative denylist sync, so no client can surface a hidden tool. (#2172)
+- **Export a chat as Markdown from the UI — `/export` and the tab context menu.** The
+  chat-export endpoint (v0.109.0) now has real entry points: type `/export`, or right-click a
+  chat tab → **Export as Markdown**. Both download a self-contained `.md` (named from the chat
+  title) with secrets scrubbed, and post a note into the thread — including a warning listing
+  what redaction removed, since the operator is meant to review before sharing. Empty threads
+  say so instead of downloading. (#2158)
 
 ## [0.109.0] - 2026-07-23
 
