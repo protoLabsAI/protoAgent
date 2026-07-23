@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -128,11 +129,19 @@ def _secret(raw: dict, value_key: str, env_key: str) -> str:
 # secret-bearing. A matching env value is auto-routed to secrets.yaml on save and
 # redacted on read even without an explicit per-row secret toggle. Shared by the
 # API (redaction) and store (secret routing) so both agree on what counts.
-_SECRETISH = ("key", "token", "secret", "password", "passwd", "credential", "auth")
+_SECRETISH = ("key", "apikey", "token", "secret", "password", "passwd", "credential", "auth", "oauth", "bearer")
+
+_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
 
 def is_secretish(name: object) -> bool:
-    return any(s in str(name).lower() for s in _SECRETISH)
+    """Token-boundary match — `AUTH_TOKEN` and `API_KEY` are secretish; substrings
+    inside larger words are NOT (`GIT_AUTHOR_NAME` must never auto-route to
+    secrets.yaml — QA panel on #2150). camelCase isn't split; env vars are
+    conventionally SNAKE_CASE and a false negative just means the operator uses
+    the explicit secret toggle."""
+    parts = _TOKEN_SPLIT.split(str(name).lower())
+    return any(p in _SECRETISH for p in parts)
 
 
 # ── per-delegate environment (#2114) ──────────────────────────────────────────
