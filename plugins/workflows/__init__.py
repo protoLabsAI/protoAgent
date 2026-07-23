@@ -216,7 +216,13 @@ async def _resume(
     # Validate EVERYTHING up front — before the registry is consulted and long before
     # the run flips to `running` on disk. Failing later would orphan the run: gone
     # from the pending list, stuck `running`, unresumable (QA panel blocker).
-    if action == "edit" and not str((edits or {}).get("prompt", "")).strip():
+    # A non-empty STRING is required. `str(x).strip()` was the old check, but
+    # `str(None)` == "None" (truthy), so a JSON `null` prompt slipped past this up-front
+    # guard, flipped the run to `running`, then failed a second check too late —
+    # orphaning it (#2143). isinstance catches null / missing / non-string here, before
+    # the flip.
+    _edit_prompt = (edits or {}).get("prompt")
+    if action == "edit" and not (isinstance(_edit_prompt, str) and _edit_prompt.strip()):
         raise ValueError("edit action requires a non-empty edits.prompt")
     if run_store is None:
         run_store = WorkflowRunStore(_writable_dir() / ".runs")

@@ -275,3 +275,29 @@ def test_resume_edit_without_prompt_leaves_run_paused(tmp_path):
     with pytest.raises(ValueError, match="edits.prompt"):
         asyncio.run(_resume(_Reg(), run_id, "edit", edits={}, run_store=store))
     assert store.load(run_id)["status"] == "paused"  # still resumable
+
+
+def test_resume_edit_null_prompt_leaves_run_paused(tmp_path):
+    """#2143: `edits.prompt = null` (JSON null → None) must fail up front like a
+    missing prompt. The old guard did `str(edits.get("prompt","")).strip()`, and
+    `str(None)` == "None" (truthy) slipped None past it — the run then flipped to
+    running and a SECOND check raised too late, orphaning it. Pin: raises BEFORE the
+    flip (registry never consulted) and the run stays paused/resumable."""
+    import asyncio
+
+    import pytest
+
+    from plugins.workflows import _resume
+    from plugins.workflows.run_state import WorkflowRunStore
+
+    store = WorkflowRunStore(tmp_path)
+    run_id = store.start("r", {"x": "1"})
+    store.pause("analyze")
+
+    class _Reg:
+        def get(self, name):  # must not be reached — validation fires first
+            raise AssertionError("registry consulted before validation (run would orphan)")
+
+    with pytest.raises(ValueError, match="edits.prompt"):
+        asyncio.run(_resume(_Reg(), run_id, "edit", edits={"prompt": None}, run_store=store))
+    assert store.load(run_id)["status"] == "paused"  # not orphaned in `running`
