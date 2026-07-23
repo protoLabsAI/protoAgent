@@ -486,6 +486,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "enabled": list(config.plugins_enabled),
                 "disabled": list(config.plugins_disabled),
                 "dir": config.plugins_dir,
+                "allow_unbundled_deps": config.plugins_allow_unbundled_deps,
                 "sources": {"allow": list(config.plugins_sources_allow)},
                 "update_policy": dict(config.plugins_update_policy),
                 "autoupdate_interval_hours": config.plugins_autoupdate_interval_hours,

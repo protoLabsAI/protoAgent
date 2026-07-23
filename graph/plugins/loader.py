@@ -379,6 +379,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     plugin tools that would shadow them are skipped (the OpenClaw collision rule).
     """
     result = PluginLoadResult()
+    _prepend_plugin_deps_to_syspath()
     roots = _plugin_roots(config)
     enabled_ids = set(getattr(config, "plugins_enabled", []) or [])
     disabled_ids = set(getattr(config, "plugins_disabled", []) or [])
@@ -590,3 +591,19 @@ def _plugin_roots(config) -> list[Path]:
     live_override = getattr(config, "plugins_dir", "") or ""
     live_root = Path(live_override).expanduser() if live_override else ip.plugins_dir
     return [ip.app_root / "plugins", live_root]  # bundle first, live overrides
+
+
+def _prepend_plugin_deps_to_syspath() -> None:
+    """Put each provisioned per-plugin wheel-deps dir (ADR 0093) on ``sys.path`` before
+    any plugin imports, so a plugin whose ``requires_pip`` was installed as unbundled
+    wheels can import them in the frozen app — the same "writable dir on sys.path"
+    mechanism that already makes the live plugins root work when frozen. No-op (and
+    dependency-free) when nothing's been installed. Best-effort: never break plugin
+    loading over a deps-dir read."""
+    try:
+        from graph.plugins.wheel_installer import existing_deps_dirs, prepend_to_syspath
+
+        for d in existing_deps_dirs():
+            prepend_to_syspath(d)
+    except Exception:  # noqa: BLE001 — deps discovery must never break the loader
+        log.warning("[plugins] failed to add wheel-deps dirs to sys.path", exc_info=True)

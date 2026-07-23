@@ -1007,6 +1007,17 @@ FIELDS: list[Field] = [
         minimum=1,
         depends_on={"key": "secrets_manager.enabled"},
     ),
+    # ── Plugins ──────────────────────────────────────────────────────────────
+    Field(
+        "plugins.allow_unbundled_deps",
+        "plugins_allow_unbundled_deps",
+        "Install unbundled plugin deps (desktop)",
+        "bool",
+        "Plugins",
+        "Let the packaged desktop app install a plugin's declared pip deps as pure-Python "
+        "wheels into a writable per-instance dir (ADR 0093), instead of refusing them. Off by "
+        "default — installing packages runs code on import. No effect outside the frozen app.",
+    ),
 ]
 
 # Knowledge domain sub-sections (console grouping). The Knowledge fields are declared with
@@ -1133,6 +1144,9 @@ _SECTION_CATEGORY = {
     # Secrets — the external secrets manager (ADR 0080); the console renders this
     # category as its own sidenav section with a status/test/sync card.
     "Secrets manager": "Secrets",
+    # Plugins — the one core FIELD under the Plugins surface (ADR 0093 opt-in). Mapped
+    # explicitly (not via the default) so the core-section guard stays honest.
+    "Plugins": "Plugins",
     # Box — box-wide operational config (host console only): the telemetry store + the
     # host box-runtime knobs (network / discovery / keep-warm, ADR 0047 D8). Host-scoped;
     # a workspace-leaf override of these is a silent no-op (consumed by the host process).

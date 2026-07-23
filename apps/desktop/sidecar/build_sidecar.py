@@ -134,6 +134,11 @@ COLLECT_ALL = [
     # Markdown renderer for the bundled `docs` plugin's reader view — imported only by
     # the path-loaded plugin, so the import-scan misses it; collect explicitly.
     "markdown_it",
+    # The pip-less wheel installer (ADR 0093) resolves deps with packaging.markers /
+    # .specifiers / .requirements / .version at runtime in the frozen app. They're
+    # imported lazily inside wheel_installer, so collect the whole package (+ its
+    # vendored parser data) to be safe rather than rely on the import-scan.
+    "packaging",
 ]
 
 # Google client libraries (ADR 0017) — bundled only when installed in the build
