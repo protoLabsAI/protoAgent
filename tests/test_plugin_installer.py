@@ -295,6 +295,53 @@ def test_frozen_install_deps_refuses_when_runtime_unprovisioned(env, monkeypatch
         installer.install_deps("demo_ext")
 
 
+def test_frozen_install_deps_optional_only_failure_keeps_satisfied_optionals(env, monkeypatch, caplog):
+    """#2162: when no install target is available and only OPTIONAL deps are missing,
+    the degrade path must drop ONLY the missing optionals — hard deps AND the
+    already-satisfied optionals stay in the return, and the warning still NAMES the
+    missing deps (#1953 contract)."""
+    import logging as _logging
+
+    repo = _make_plugin_repo(
+        env,
+        manifest_extra=(
+            "requires_pip: [httpx>=0.27, {pkg: 'websockets>=12', optional: true}, "
+            "{pkg: 'definitely_not_real_xyz>=1', optional: true}]\n"
+        ),
+    )
+    installer.install(str(repo))
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+    import runtime.python_install as pi
+
+    def _refuse(reqs, **k):
+        raise pi.PythonInstallError("the managed Python runtime isn't provisioned — install it first")
+
+    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _refuse)
+    with caplog.at_level(_logging.WARNING):
+        deps = installer.install_deps("demo_ext")  # no raise: only an optional is missing
+    assert deps == ["httpx>=0.27", "websockets>=12"]  # satisfied optional kept, missing one dropped
+    assert "optional dep(s) definitely_not_real_xyz aren't in the desktop runtime" in caplog.text
+
+
+def test_managed_runtime_dists_read_failure_degrades_to_empty(monkeypatch, caplog):
+    """A broken managed-runtime read must never break dep resolution — the fallback
+    is 'nothing installed there' (empty set), with the swallow left visible in the log."""
+    import logging as _logging
+
+    import infra.python_runtime as pr
+
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(
+        pr,
+        "managed_runtime_distributions",
+        lambda: (_ for _ in ()).throw(OSError("unreadable site-packages")),
+    )
+    with caplog.at_level(_logging.DEBUG, logger="graph.plugins.installer"):
+        assert installer._managed_runtime_dists() == set()
+    assert "managed runtime read failed" in caplog.text
+
+
 def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [requests>=2, rich]\n")
     installer.install(str(repo))

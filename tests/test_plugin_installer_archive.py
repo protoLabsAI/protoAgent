@@ -97,6 +97,15 @@ def test_dep_pkg_name(spec, name):
     assert installer._dep_pkg_name(spec) == name
 
 
+def test_normalize_dist_is_public_and_shared():
+    # The installer's dep resolution normalizes through infra's PUBLIC helper —
+    # one PEP 503 notion of a dist name, so the two can never disagree.
+    from infra.python_runtime import normalize_dist
+
+    assert normalize_dist("Python_DocX") == "python-docx"
+    assert installer._normalize_dist("Python_DocX") == normalize_dist("Python_DocX")
+
+
 def test_deps_satisfied_against_runtime():
     # httpx + websockets are core deps (always importable in this test runtime).
     assert installer._deps_satisfied(["httpx>=0.27", "websockets>=12"]) == (True, [])
@@ -231,3 +240,31 @@ def test_install_deps_frozen_missing_optional_warns_not_refuses(env, monkeypatch
         deps = installer.install_deps("demo_ext")  # no raise
     assert deps == ["httpx>=0.27"]  # only the satisfied deps
     assert "definitely_not_real_xyz" in caplog.text
+
+
+def test_install_deps_frozen_optional_only_manifest_keeps_satisfied_optionals(env, monkeypatch, caplog):
+    """#2162: an optional-ONLY manifest (no hard deps) hitting the no-target degrade
+    path must return the satisfied optionals, dropping just the missing ones."""
+    import logging as _logging
+
+    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
+    monkeypatch.setattr(
+        installer,
+        "_http_get",
+        lambda url, **kw: _Resp(
+            content=_tarball(requires_pip=f"{{pkg: websockets>=12, optional: true}}, {_SOFT_MISSING}")
+        ),
+    )
+    installer.install("https://github.com/acme/demo_ext")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+    import runtime.python_install as pi
+
+    def _refuse(reqs, **k):
+        raise pi.PythonInstallError("the managed Python runtime isn't provisioned — install it first")
+
+    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _refuse)
+    with caplog.at_level(_logging.WARNING):
+        deps = installer.install_deps("demo_ext")  # no raise: nothing hard is missing
+    assert deps == ["websockets>=12"]  # satisfied optional kept; only the missing one dropped
+    assert "optional dep(s) definitely_not_real_xyz aren't in the desktop runtime" in caplog.text

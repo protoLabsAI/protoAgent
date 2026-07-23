@@ -66,10 +66,11 @@ def managed_python_exe() -> Path | None:
     return exe if exe.exists() else None
 
 
-def _normalize_dist(name: str) -> str:
+def normalize_dist(name: str) -> str:
     """PEP 503 normalized distribution name (``Python_DocX`` → ``python-docx``) so a
     requirement spec and an installed ``.dist-info`` match regardless of case or the
-    ``-``/``_``/``.`` the two happen to use."""
+    ``-``/``_``/``.`` the two happen to use. Public: the plugin installer's dep
+    resolution normalizes through this too, so the two can never disagree."""
     import re
 
     return re.sub(r"[-_.]+", "-", name).lower()
@@ -97,5 +98,5 @@ def managed_runtime_distributions() -> set[str]:
             # ``<name>-<version>.dist-info`` — wheel-normalized names replace project-name
             # dashes with ``_``, so the only ``-`` is the name/version separator.
             stem = meta.name.rsplit(".", 1)[0]
-            dists.add(_normalize_dist(stem.rsplit("-", 1)[0]))
+            dists.add(normalize_dist(stem.rsplit("-", 1)[0]))
     return dists
