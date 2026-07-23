@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`settings.hidden` — hide settings from the console entirely (#2172, the settings half
+  of `tools.hidden`).** List dotted field keys (`goal.max_iterations`) or whole groups
+  (`goal`, including plugin groups like `careercoach`) in config and they vanish from the
+  Settings UI *and* are refused by the settings save/reset APIs — hidden means gone, not
+  toggleable back on. Values stay live in config (hiding ≠ disabling); it's a setup-time
+  trust control for restricted consoles and archetypes (ADR 0071), same two-point pattern
+  as `tools.hidden`.
+
 ## [0.111.0] - 2026-07-23
 
 ### Added

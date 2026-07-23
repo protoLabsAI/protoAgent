@@ -442,6 +442,17 @@ class LangGraphConfig:
     # "not available, and not offered".
     tools_hidden: list[str] = field(default_factory=list)
 
+    # Settings HIDE list (config ``settings.hidden``, #2172) — the settings half of
+    # ``tools.hidden``. Entries are dotted field keys ("goal.max_iterations") or whole
+    # group prefixes ("goal", including plugin groups like "careercoach"). A hidden
+    # setting is dropped from the schema the console renders AND refused by the settings
+    # write/reset APIs, so it can't be seen or changed from the UI; its VALUE stays live
+    # in config (hiding ≠ disabling). Setup-time trust control (ADR 0071): the config
+    # file is the boundary, the UI is presentation. Contrast a field's static
+    # ``ui_hidden`` (dev-declared, #1076), which only moves rendering to a dedicated
+    # panel and locks nothing.
+    settings_hidden: list[str] = field(default_factory=list)
+
     # Model routing / failover — wires langchain's ModelFallbackMiddleware.
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
@@ -1108,6 +1119,7 @@ class LangGraphConfig:
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
+            settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
