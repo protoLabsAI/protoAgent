@@ -3,9 +3,9 @@
     "version": "v0.110.0",
     "date": "2026-07-23",
     "changes": [
-      "A friendlier date/time picker in the New Schedule dialog.",
-      "tools.hidden — hide a tool from the console entirely, not just toggle it off.",
-      "Export a chat as Markdown from the UI — /export and the tab context menu."
+      "Export a chat to Markdown — from /export or the tab's right-click menu, with secrets scrubbed.",
+      "A friendlier New Schedule dialog: an inline calendar for one-off runs and a 12/24-hour time toggle.",
+      "Hide a tool from the console entirely (not just disable it) — for restricted or archetype-locked setups."
     ]
   },
   {
