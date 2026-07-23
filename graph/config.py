@@ -433,6 +433,15 @@ class LangGraphConfig:
     # driven — no core edit that conflicts on upstream re-sync.
     tools_disabled: list[str] = field(default_factory=list)
 
+    # Tool HIDE list (config ``tools.hidden``, #2172) — a HARD superset of ``disabled``:
+    # a hidden tool is denied like a disabled one (never bound to the graph), AND it is
+    # dropped from the console's tool inventory entirely, so it never renders as a
+    # toggle and can't be re-enabled from the UI. This is a trust/setup-time control
+    # (ADR 0071) — an archetype or a restricted console pins the set in config; the UI
+    # is presentation, not the boundary. Disabled = "off but toggleable"; hidden =
+    # "not available, and not offered".
+    tools_hidden: list[str] = field(default_factory=list)
+
     # Model routing / failover — wires langchain's ModelFallbackMiddleware.
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
@@ -1098,6 +1107,7 @@ class LangGraphConfig:
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
+            tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),

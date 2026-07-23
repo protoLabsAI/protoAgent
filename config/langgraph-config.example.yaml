@@ -319,10 +319,14 @@ execute_code:
 # Tools — fork customization without editing tools/lg_tools.py.
 #   disabled: drop named core tools from the agent (a fork "keeps what it wants"
 #     by listing the rest here; plugins still ADD tools). Live-reloadable.
+#   hidden:   a HARD superset of disabled — denied like disabled AND dropped from the
+#     console entirely, so the tool never renders and can't be re-enabled from the UI
+#     (a setup-time / restricted-console control; ADR 0071). disabled = off-but-visible.
 #   deferred: withhold tool schemas until the agent searches for them (cuts the
 #     per-turn footprint past ~15 tools). OFF by default.
 tools:
   disabled: []
+  hidden: []
   # - calculator
   # - daily_log
   # deferred:

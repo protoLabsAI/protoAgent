@@ -1610,6 +1610,22 @@ export const api = {
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST", body: {} });
   },
 
+  // Export a chat session as self-contained Markdown (#2158 P1). Read-only — never
+  // touches the checkpoint (unlike compact/rewind). Secrets are scrubbed server-side
+  // (graph/export_op) and the kinds found come back in `redactions` so the caller can
+  // tell the operator what was removed. `title` names the document heading + file.
+  exportChatSession(sessionId: string, title?: string) {
+    const q = title ? `?title=${encodeURIComponent(title)}` : "";
+    return request<{
+      found: boolean;
+      markdown: string;
+      message_count: number;
+      redactions: string[];
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export${q}`, { method: "GET" });
+  },
+
   // Rewind a chat session server-side (#1535): discard every message AFTER the
   // target and rewrite the LangGraph checkpoint in place, rolling the agent's live
   // context back to that point. The checkpoint is the agent's REAL context, so this

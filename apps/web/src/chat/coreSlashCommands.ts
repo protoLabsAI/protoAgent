@@ -12,6 +12,7 @@ import { queryClient } from "../lib/queryClient";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
+import { exportChatToFile } from "./exportChat";
 import { buildGoalSetBody, goalFormPayload } from "./goalForm";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 
@@ -38,6 +39,17 @@ registerSlashCommand({
     if (!ctx.sessionId) return false; // no session → not handled (falls through)
     void api.deleteChatSession(ctx.sessionId, false).catch(() => {});
     chatStore.updateMessages(ctx.sessionId, []);
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "export",
+  description: "Download this chat as Markdown (secrets redacted)",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    void exportChatToFile(ctx.sessionId);
     ctx.focusComposer();
     return true;
   },
