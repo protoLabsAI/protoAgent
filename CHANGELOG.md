@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.109.0] - 2026-07-23
+
 ### Added
 - **Export a chat thread to Markdown, with secret redaction.** `GET
   /api/chat/sessions/{id}/export` serializes one conversation to self-contained Markdown you

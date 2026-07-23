@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.109.0",
+    "date": "2026-07-23",
+    "changes": [
+      "Export a chat thread to Markdown — secrets scrubbed, ready to read and share.",
+      "Project Manager archetype — a one-click agent type in the new-agent picker.",
+      "Generated documents download again from the artifact panel.",
+      "Plugin panels no longer render dead on a sister agent."
+    ]
+  },
+  {
     "version": "v0.108.0",
     "date": "2026-07-23",
     "changes": [
