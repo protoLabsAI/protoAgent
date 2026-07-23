@@ -27,6 +27,7 @@ is covered without anyone remembering this file exists.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,26 @@ def test_archetype_catalog_specifically() -> None:
     Cowork was unselectable on desktop and on any pip install)."""
     assert "config/archetype-catalog.json" in _wheel_seed_sources()
     assert "config/archetype-catalog.json" in _sidecar_bundled_sources()
+
+
+def test_project_manager_archetype_row() -> None:
+    """#2178 ships the Project Manager archetype as catalog data only (ADR 0042) —
+    pin the invariants the picker relies on: the id is unique (it's the RadioCard
+    value + React key), its `soul_preset` resolves to a preset file that is really
+    bundled, and `custom` is still the catch-all LAST row."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("project-manager") == 1, f"'project-manager' must appear exactly once, got {ids}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "project-manager")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'project-manager' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
 def _sidecar_cli_hidden_imports() -> set[str]:
