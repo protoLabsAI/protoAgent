@@ -463,11 +463,12 @@ def _managed_runtime_dists() -> set[str]:
 
         return managed_runtime_distributions()
     except Exception:  # noqa: BLE001 — runtime discovery must never break enable/install
+        log.debug("[plugins] managed runtime read failed (ignored)", exc_info=True)
         return set()
 
 
 def _normalize_dist(name: str) -> str:
-    from infra.python_runtime import _normalize_dist as _norm
+    from infra.python_runtime import normalize_dist as _norm
 
     return _norm(name)
 
@@ -896,6 +897,8 @@ def install_deps(plugin_id: str) -> list[str]:
             if to_install:
                 raise InstallError(f"{hint} [{'; '.join(errors)}]" if errors else hint)
             # Optional-only gap degrades with a warning that NAMES the deps (#1953).
+            # Only the MISSING optionals drop out of the return — already-satisfied
+            # ones stay, or callers would report the plugin degraded when it isn't.
             log.warning(
                 "[plugins] %s: optional dep(s) %s aren't in the desktop runtime — the plugin "
                 "degrades without them (%s)",
@@ -903,7 +906,7 @@ def install_deps(plugin_id: str) -> list[str]:
                 ", ".join(soft_missing),
                 "; ".join(errors) or "no target",
             )
-            return deps
+            return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing]
         _audit("install_deps", {"id": plugin_id, "deps": to_install, "targets": targets_tried}, "ok")
         return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing or d in to_install_soft]
     installed: list[str] = []
