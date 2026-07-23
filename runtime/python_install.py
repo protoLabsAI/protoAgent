@@ -326,6 +326,20 @@ def _ensure_pip(exe: Path) -> None:
         raise PythonInstallError(f"the managed runtime has no usable pip: {boot.stderr.strip()[-400:]}")
 
 
+def _pip_install(exe: Path, spec_args: list[str], *, what: str, timeout: float = 600.0) -> None:
+    """Pip-install ``spec_args`` (``-r <file>`` or bare specs) into the managed runtime's
+    own site-packages, binary wheels only. Shared by the doc baseline and the per-plugin
+    dep path (ADR 0094 P2). ``what`` names the operation for the error message."""
+    _ensure_pip(exe)
+    r = _run_python(
+        exe,
+        ["-m", "pip", "install", "--only-binary", ":all:", "--disable-pip-version-check", "--no-input", "-q", *spec_args],
+        timeout=timeout,
+    )
+    if r.returncode != 0:
+        raise PythonInstallError(f"{what} failed: {(r.stderr or r.stdout).strip()[-600:]}")
+
+
 def _install_baseline(exe: Path) -> bool:
     """Pip-install the document baseline into the managed runtime's own site-packages
     and stamp the baseline marker. Returns False (a logged no-op) when this build
@@ -334,17 +348,37 @@ def _install_baseline(exe: Path) -> bool:
     if req is None:
         log.info("[python] no requirements-docs.txt in this build — skipping the doc baseline")
         return False
-    _ensure_pip(exe)
-    r = _run_python(
-        exe,
-        ["-m", "pip", "install", "--only-binary", ":all:", "--disable-pip-version-check", "--no-input", "-q", "-r", str(req)],
-        timeout=600,
-    )
-    if r.returncode != 0:
-        raise PythonInstallError(f"document-baseline install failed: {(r.stderr or r.stdout).strip()[-600:]}")
+    _pip_install(exe, ["-r", str(req)], what="document-baseline install")
     (managed_python_install_dir() / _BASELINE_MARKER).write_text(_baseline_hash(req), encoding="utf-8")
     log.info("[python] document baseline installed into the managed runtime")
     return True
+
+
+def install_requirements_into_managed_runtime(
+    requirements: list[str], *, on_phase: PhaseCb | None = None, timeout: float = 600.0
+) -> dict:
+    """Pip-install arbitrary ``requirements`` into the managed runtime's site-packages
+    (ADR 0094 P2) — the entry point behind "a plugin's declared deps run its
+    execute_code skills on the desktop app". Requires the runtime already provisioned:
+    installing deps needs an interpreter, and provisioning it is a separate consented
+    step (Settings ▸ Tools). Returns ``python_status()``.
+
+    Raises ``PythonInstallError`` if the runtime isn't provisioned (pointing at the
+    install), and lets a real pip failure propagate."""
+    exe = managed_python_exe()
+    if exe is None:
+        raise PythonInstallError(
+            "the managed Python runtime isn't provisioned — install it first "
+            "(Settings ▸ Tools or `protoagent runtime install-python`), then install plugin deps."
+        )
+    reqs = [r for r in (requirements or []) if r and r.strip()]
+    if not reqs:
+        return python_status()
+    if on_phase is not None:
+        on_phase("deps")
+    _pip_install(exe, ["--", *reqs], what="plugin dependency install", timeout=timeout)
+    log.info("[python] installed %d plugin requirement(s) into the managed runtime", len(reqs))
+    return python_status()
 
 
 def install_managed_python(
