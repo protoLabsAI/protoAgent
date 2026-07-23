@@ -43,6 +43,37 @@ function githubPreview(): ArchetypePreview {
   };
 }
 
+// A bundle wiring TWO MCP servers that both declare a `token` input (#2128) — the
+// collision case: the form must collect two distinct values and the wire must namespace
+// them per server so resolve_bundle_mcp_item can scope each to its server.
+function twoServerPreview(): ArchetypePreview {
+  return {
+    id: "two-tokens",
+    bundle: {
+      kind: "bundle",
+      name: "Two tokens",
+      members: [],
+      mcp: [
+        {
+          id: "gh",
+          name: "gh",
+          template: { env: { GITHUB_TOKEN: "${token}" } },
+          inputs: [{ key: "token", label: "GitHub token", secret: true, required: true }],
+        },
+        {
+          id: "bb",
+          name: "bb",
+          template: { env: { BITBUCKET_TOKEN: "${token}" }, args: ["--workspace", "${workspace}"] },
+          inputs: [
+            { key: "token", label: "Bitbucket token", secret: true, required: true },
+            { key: "workspace", label: "Workspace" },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 describe("archetypeConfigFields — flatten a bundle preview into form fields", () => {
   it("emits MCP inputs first, then declared secrets, tagged by origin", () => {
     const fields = archetypeConfigFields(githubPreview());
@@ -134,6 +165,56 @@ describe("splitConfigValues — collected form values back into create() channel
     expect(splitConfigValues(clashFields, values)).toEqual({
       inputs: { TOKEN: "from-input" },
       secrets: [{ key: "TOKEN", value: "from-secret" }],
+    });
+  });
+});
+
+describe("collision-aware fieldId + splitConfigValues — two servers sharing a key (#2128)", () => {
+  const fields = archetypeConfigFields(twoServerPreview());
+
+  it("namespaces an MCP input's id by its server; a declared secret stays origin:key", () => {
+    expect(fieldId({ origin: "input", server: "gh", key: "token" })).toBe("input:gh:token");
+    expect(fieldId({ origin: "secret", key: "token" })).toBe("secret:token");
+  });
+
+  it("gives the two `token` inputs distinct form ids, so both values are collected", () => {
+    const ids = fields.map((f) => fieldId(f));
+    expect(ids).toEqual(["input:gh:token", "input:bb:token", "input:bb:workspace"]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("emits `server:key` on the wire for the colliding key only; unshared keys stay bare", () => {
+    const values = {
+      [fieldId({ origin: "input", server: "gh", key: "token" })]: "ghp_1",
+      [fieldId({ origin: "input", server: "bb", key: "token" })]: "bbp_2",
+      [fieldId({ origin: "input", server: "bb", key: "workspace" })]: "acme",
+    };
+    expect(splitConfigValues(fields, values)).toEqual({
+      inputs: { "gh:token": "ghp_1", "bb:token": "bbp_2", workspace: "acme" },
+      secrets: [],
+    });
+  });
+
+  it("gates each server's required `token` independently", () => {
+    const ghOnly = { [fieldId({ origin: "input", server: "gh", key: "token" })]: "ghp_1" };
+    expect(isMissingRequiredConfig(fields, ghOnly)).toBe(true);
+    expect(
+      isMissingRequiredConfig(fields, {
+        ...ghOnly,
+        [fieldId({ origin: "input", server: "bb", key: "token" })]: "bbp_2",
+      }),
+    ).toBe(false);
+  });
+
+  it("single-server bundle: server-qualified form ids still emit today's bare wire keys", () => {
+    const single = archetypeConfigFields(githubPreview());
+    const values = {
+      [fieldId({ origin: "input", server: "GitHub", key: "root" })]: "/work",
+      [fieldId({ origin: "input", server: "GitHub", key: "github_token" })]: "ghp_1",
+    };
+    expect(splitConfigValues(single, values)).toEqual({
+      inputs: { root: "/work", github_token: "ghp_1" },
+      secrets: [],
     });
   });
 });
