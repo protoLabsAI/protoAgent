@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.108.0",
+    "date": "2026-07-23",
+    "changes": [
+      "Human approval gates for workflows — pause a run at any step, then approve, edit, or reject.",
+      "execute_code runs in the packaged desktop app — a managed Python runtime, provisioned on demand.",
+      "Cowork's document skills (Word, Excel, PowerPoint, PDF) now work on the desktop app.",
+      "Plugins install their own dependencies on desktop — into the managed runtime, or as pure-Python wheels.",
+      "Fleet Room — summon the fleet from ⌘K, with presence, DMs, and broadcast.",
+      "Workflows honor a recipe's own fan-out width, with per-step timings.",
+      "The agent runtime setting now sits with the model it depends on.",
+      "Multi-server MCP bundles can seed each server with its own input value.",
+      "Fixes: creating a Cowork agent on desktop, knowledge-recall provenance, orphaned paused runs, and a host-gated \"New agent\"."
+    ]
+  },
+  {
     "version": "v0.107.0",
     "date": "2026-07-22",
     "changes": [
