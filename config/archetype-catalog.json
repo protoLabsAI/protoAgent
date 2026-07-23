@@ -22,7 +22,7 @@
       "label": "Project Manager",
       "icon": "ClipboardList",
       "bundle": "https://github.com/protoLabsAI/project-manager-stack",
-      "blurb": "Single-repo technical lead — reads deeply, never holds the keyboard; ships every change through a board of coding agents and reports back as it merges.",
+      "blurb": "Single-repo project manager — reads deeply, never holds the keyboard; ships every change through a board of coding agents and reports back as it merges.",
       "soul_preset": "project-manager"
     },
     {
