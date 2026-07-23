@@ -782,14 +782,20 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         )
 
     @tool
-    async def memory_recall(query: str, k: int = 5) -> str:
+    async def memory_recall(query: str, k: int = 5, domain: str | None = None) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
         Returns the top-k matches, one per line, each citing its provenance
-        when known — source session, stored date, namespace. Pull this when
-        the operator asks something where stored context is more reliable
-        than the model's own training data ("what's my coffee order?",
+        when known — source **domain** (in brackets), stored date, namespace.
+        Pull this when the operator asks something where stored context is more
+        reliable than the model's own training data ("what's my coffee order?",
         "remind me what we decided about the auth migration").
+
+        ``domain`` scopes the search to ONE domain — use it to deliberately
+        separate your own record from inherited/imported knowledge. A domain
+        like ``claude-import`` is inherited reference (another codebase's or
+        agent's history), not your own actions; pass the domain you actually
+        want (e.g. your own, or ``claude-import`` to inspect the inherited set).
 
         Returns ``"No matches."`` when the store is empty or nothing
         scores above the keyword threshold.
@@ -798,7 +804,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # search embeds the query over HTTP on hybrid stores — keep it off the loop.
         import asyncio
 
-        results = await asyncio.to_thread(knowledge_store.search, query, k=clamped_k)
+        results = await asyncio.to_thread(
+            knowledge_store.search, query, k=clamped_k, domain=(domain or None)
+        )
         if not results:
             return "No matches."
         lines = [
