@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Project Manager archetype in the new-agent picker.** The persona you've been working with — frozen from ~30 merged PRs of dogfooding — is now shipable as a one-click agent type. (#2178)
 
+### Fixed
+- Archetype catalog: the project-manager blurb said "Single-repo technical lead" — now "Single-repo project manager". (#2182)
+
 ## [0.108.0] - 2026-07-23
 
 ### Added
