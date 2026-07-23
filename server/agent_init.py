@@ -121,7 +121,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # get_all_tools() call so dropped tools never reach the graph.
     from tools.lg_tools import set_disabled_tools
 
-    set_disabled_tools(STATE.graph_config.tools_disabled)
+    # Hidden tools (#2172) are a HARD superset of disabled — deny them here too, so a
+    # hidden tool is never bound to the graph regardless of the disabled list. The console
+    # inventory then also drops them (console_handlers), so they never render or toggle.
+    _denied = list(dict.fromkeys([*STATE.graph_config.tools_disabled, *STATE.graph_config.tools_hidden]))
+    set_disabled_tools(_denied)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     from security import egress
 
