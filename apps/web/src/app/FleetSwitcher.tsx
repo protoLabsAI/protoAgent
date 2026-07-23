@@ -70,9 +70,20 @@ export function FleetSwitcher({
         );
       })}
       {agents.length > 0 ? <MenuSeparator /> : null}
-      <MenuItem icon={<Plus size={14} />} onSelect={() => onNewAgent?.()}>
-        New agent
-      </MenuItem>
+      {fleetSettingsBlocked ? (
+        // Adding a member is a host-only op, same as Fleet settings (a member window's
+        // /api/fleet is a fleet-of-one — "New agent" there would spawn a nested fleet by
+        // accident, #1999). Disabled + tooltip, not hidden, so it stays discoverable.
+        <Tooltip label={fleetSettingsBlocked} side="left">
+          <MenuItem icon={<Plus size={14} />} disabled>
+            New agent
+          </MenuItem>
+        </Tooltip>
+      ) : (
+        <MenuItem icon={<Plus size={14} />} onSelect={() => onNewAgent?.()}>
+          New agent
+        </MenuItem>
+      )}
       {fleetSettingsBlocked ? (
         // Disabled, not hidden — discoverable: the tooltip says WHERE fleet settings live.
         // The DS Tooltip's own wrapper span is the hover target (a disabled Radix menu item
