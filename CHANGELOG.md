@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.110.0] - 2026-07-23
+
 ### Added
 - **A friendlier date/time picker in the New Schedule dialog.** One-off scheduling gets an
   inline month calendar — click a day (it seeds a sensible time), or still type the date and

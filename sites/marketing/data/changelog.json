@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.110.0",
+    "date": "2026-07-23",
+    "changes": [
+      "A friendlier date/time picker in the New Schedule dialog.",
+      "tools.hidden — hide a tool from the console entirely, not just toggle it off.",
+      "Export a chat as Markdown from the UI — /export and the tab context menu."
+    ]
+  },
+  {
     "version": "v0.109.0",
     "date": "2026-07-23",
     "changes": [
