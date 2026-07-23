@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.111.0",
+    "date": "2026-07-23",
+    "changes": [
+      "/btw — ask a side question about the chat without changing it."
+    ]
+  },
+  {
     "version": "v0.110.0",
     "date": "2026-07-23",
     "changes": [

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.111.0] - 2026-07-23
+
 ### Added
 - **`/btw` — ask a side question about the chat without changing it.** Type
   `/btw <question>` and the agent answers *from* the current conversation's context, but the
