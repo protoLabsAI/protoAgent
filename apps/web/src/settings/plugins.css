@@ -70,19 +70,33 @@
 .plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-muted); text-decoration: none; }
 .plugin-card-repo:hover { color: var(--fg-secondary); }
 
-/* Installed plugin row. Configure now opens a per-plugin settings dialog (ADR 0059) —
-   the row is a single line; the icon action cluster shouldn't shrink under a long name. */
-.plugin-row-wrap { display: flex; flex-direction: column; }
+/* Installed plugins TABLE — the list outgrew the two-section row layout once a box
+   could hold dozens of plugins; now one sortable/filterable table (search + status
+   chips in a controls row above it). Configure still opens the per-plugin settings
+   dialog (ADR 0059); the action cluster lives in the last cell. */
+.plugin-installed-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 12px; }
+.plugin-table-wrap { overflow-x: auto; }
+.plugin-table { width: 100%; }
+.plugin-table td { vertical-align: middle; }
+/* Sortable headers: the whole header is one button (a11y: real focus + aria-sort on
+   the th); the chevron only renders on the active column. */
+.plugin-th-sortable { white-space: nowrap; }
+.plugin-th-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+}
+.plugin-th-btn:hover { color: var(--fg-primary); }
+/* Chips live in an inner flex wrapper — flexing the <td> itself would knock it out
+   of table-cell layout. */
+.plugin-status-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.plugin-cell-contrib { font-size: 12px; color: var(--fg-secondary); white-space: nowrap; }
 /* Name · version · badge on one baseline-aligned line with real breathing room
    (the old layout jammed the version + badge straight against the name). */
 .plugin-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .plugin-row-head > strong { min-width: 0; }
 .plugin-row-head .plugin-ver { font-weight: 400; }
-/* Keep the action cluster a tight HORIZONTAL row. `.subagent-row > div { display: grid }`
-   (theme.css) otherwise out-specifies the base `.plugin-row-actions { display: flex }` and
-   stacks the buttons into a column — the bulk this rework is removing. This selector
-   (two classes) wins that specificity battle. */
-.subagent-row > .plugin-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.plugin-cell-actions .plugin-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-shrink: 0; }
 .plugin-row-danger:hover:not(:disabled) { color: var(--danger); }
 .settings-flat-group { display: flex; flex-direction: column; }
 .plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }

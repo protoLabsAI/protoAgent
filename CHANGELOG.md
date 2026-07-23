@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Plugins ▸ Installed is a real table now — with search, status filter, and sortable
+  columns.** The old two-section list (Loaded/Disabled, fixed alphabetical) didn't scale
+  past a handful of plugins. The tab now renders one table (Plugin / Status / Contributes /
+  actions) with free-text search that also matches **tool names** ("which plugin ships
+  `search_jobs`?"), status chips (All · Loaded · Disabled · Attention — attention =
+  error, needs-setup, update available, or missing deps), and click-to-sort headers.
+  Default order keeps the old semantics: loaded first, attention floats up, then name.
+  All the row actions (update / install deps / set up / configure / enable / uninstall)
+  are unchanged.
+
 ## [0.111.0] - 2026-07-23
 
 ### Added
