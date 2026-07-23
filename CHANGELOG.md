@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disclosed in the document itself — it's a safety net, not a guarantee, so the operator
   reviews before sharing. P1 of the share-a-thread work; the hosted viewer is deferred to
   #2179. (#2158)
+- **Project Manager archetype in the new-agent picker.** The persona you've been working with — frozen from ~30 merged PRs of dogfooding — is now shipable as a one-click agent type. (#2178)
 
 ## [0.108.0] - 2026-07-23
 
