@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugin panels no longer render dead on a sister agent.** A plugin serving vendored ES
+  modules off its public view prefix (`notes`, `artifact`) had those assets left **gated**:
+  `_view_public_paths` auto-exempts a view's PAGE path, but an ES-module `import` carries no
+  `Authorization` header any more than the iframe navigation does. Unauthenticated means the
+  request never reaches ADR 0089 D3's operator-tier fleet-token swap, so a closed member
+  (rightly) 401s it — the panel loaded but the editor never initialised. Invisible until
+  ADR 0089 D5 closed members, since they used to run open on loopback. Both manifests now
+  declare their `vendor/` subtree in `public_paths` (safe: `_VENDOR_FILES` is an exact-name
+  allowlist, so the subtree can't be walked), and a test guards the whole class so the next
+  plugin to add a vendor route fails CI instead of someone's console.
+
 ### Added
 - **Project Manager archetype in the new-agent picker.** The persona you've been working with — frozen from ~30 merged PRs of dogfooding — is now shipable as a one-click agent type. (#2178)
 
