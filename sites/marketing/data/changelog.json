@@ -3,11 +3,10 @@
     "version": "v0.109.0",
     "date": "2026-07-23",
     "changes": [
-      "Export a chat thread to Markdown, with secret redaction.",
-      "Project Manager archetype in the new-agent picker.",
-      "The artifact panel's Download button works again.",
-      "Plugin panels no longer render dead on a sister agent.",
-      "Archetype catalog: the project-manager blurb said \"Single-repo technical lead\""
+      "Export a chat thread to Markdown — secrets scrubbed, ready to read and share.",
+      "Project Manager archetype — a one-click agent type in the new-agent picker.",
+      "Generated documents download again from the artifact panel.",
+      "Plugin panels no longer render dead on a sister agent."
     ]
   },
   {
