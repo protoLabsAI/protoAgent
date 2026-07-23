@@ -63,7 +63,10 @@ registerKeybinding({
   defaultKeys: "mod+t",
   scope: "chat",
   allowInInput: true,
-  run: () => chatStore.createSession(),
+  run: () => {
+    chatStore.createSession();
+    useKbIntents.getState().focusComposer();
+  },
 });
 registerKeybinding({
   id: "chat.clear",
