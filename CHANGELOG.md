@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A friendlier date/time picker in the New Schedule dialog.** One-off scheduling gets an
+  inline month calendar — click a day (it seeds a sensible time), or still type the date and
+  time by hand. Repeat scheduling gets a **24h / 12h** toggle with an AM/PM control for people
+  who don't think in 24-hour time. The live "Runs …" preview updates as you go. No DS
+  date-picker existed, so the calendar is hand-rolled, with the fiddly month/ISO math kept
+  pure and unit-tested. (#2159)
 - **`tools.hidden` — hide a tool from the console entirely, not just toggle it off.** A new
   config list that's a **hard superset** of `tools.disabled`: a hidden tool is denied at the
   graph (never bound, never callable) *and* dropped from the console's Tools inventory, so it

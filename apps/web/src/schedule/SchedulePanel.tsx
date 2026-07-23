@@ -11,6 +11,9 @@ import {
 import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { from12h, joinLocal, nowTime, to12h } from "./dateParts";
+import { MonthCalendar } from "./MonthCalendar";
+
 import { StagePanel } from "../app/ErrorBoundary";
 import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
@@ -47,9 +50,11 @@ export function ScheduleModal({
   busy: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("once");
-  const [onceAt, setOnceAt] = useState("");
+  const [onceDate, setOnceDate] = useState(""); // "YYYY-MM-DD"
+  const [onceTime, setOnceTime] = useState(""); // "HH:mm"
   const [freq, setFreq] = useState<RepeatFreq>("daily");
   const [time, setTime] = useState("09:00");
+  const [hour12, setHour12] = useState(false); // repeat-time display: 24h (default) | 12h AM/PM
   const [dow, setDow] = useState(1);
   const [cronRaw, setCronRaw] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -64,10 +69,10 @@ export function ScheduleModal({
   }, []);
 
   const schedule = useMemo(() => {
-    if (mode === "once") return buildOnce(onceAt);
+    if (mode === "once") return buildOnce(joinLocal(onceDate, onceTime));
     if (mode === "repeat") return buildRepeat(freq, time, dow);
     return cronRaw.trim();
-  }, [mode, onceAt, freq, time, dow, cronRaw]);
+  }, [mode, onceDate, onceTime, freq, time, dow, cronRaw]);
 
   const preview = describeSchedule(schedule);
 
@@ -103,11 +108,29 @@ export function ScheduleModal({
         />
 
         {mode === "once" && (
-          <label className="field">
-            <span>Date &amp; time</span>
-            <Input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)}
-                   data-testid="schedule-once" />
-          </label>
+          <div className="schedule-once">
+            <div className="schedule-once-fields">
+              {/* Typed fallback (acceptance: "user can still type a date manually"). */}
+              <label className="field">
+                <span>Date</span>
+                <Input type="date" value={onceDate} onChange={(e) => setOnceDate(e.target.value)}
+                       data-testid="schedule-once-date" />
+              </label>
+              <label className="field">
+                <span>Time</span>
+                <Input type="time" value={onceTime} onChange={(e) => setOnceTime(e.target.value)}
+                       data-testid="schedule-once-time" />
+              </label>
+            </div>
+            {/* Inline month grid — click a day to pick it; seeds a sensible time if none set yet. */}
+            <MonthCalendar
+              selected={onceDate}
+              onSelect={(iso) => {
+                setOnceDate(iso);
+                if (!onceTime) setOnceTime(nowTime(new Date()));
+              }}
+            />
+          </div>
         )}
 
         {mode === "repeat" && (
@@ -137,8 +160,45 @@ export function ScheduleModal({
               </label>
             )}
             <label className="field">
-              <span>{freq === "hourly" ? "Minute" : "Time"}</span>
-              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
+              <span className="field-label-row">
+                {freq === "hourly" ? "Minute" : "Time"}
+                {freq !== "hourly" && (
+                  <button
+                    type="button"
+                    className="hour-toggle"
+                    onClick={() => setHour12((v) => !v)}
+                    title="Switch between 24-hour and 12-hour input"
+                  >
+                    {hour12 ? "12h" : "24h"}
+                  </button>
+                )}
+              </span>
+              {hour12 && freq !== "hourly" ? (
+                (() => {
+                  const { h12, minute, ampm } = to12h(time);
+                  return (
+                    <div className="time-12h" data-testid="schedule-time-12h">
+                      <DropdownSelect
+                        value={String(h12)}
+                        onValueChange={(v) => setTime(from12h(Number(v), minute, ampm))}
+                        options={Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))}
+                      />
+                      <DropdownSelect
+                        value={minute}
+                        onValueChange={(v) => setTime(from12h(h12, v, ampm))}
+                        options={["00", "15", "30", "45"].map((mm) => ({ value: mm, label: mm }))}
+                      />
+                      <DropdownSelect
+                        value={ampm}
+                        onValueChange={(v) => setTime(from12h(h12, minute, v as "AM" | "PM"))}
+                        options={[{ value: "AM", label: "AM" }, { value: "PM", label: "PM" }]}
+                      />
+                    </div>
+                  );
+                })()
+              ) : (
+                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
+              )}
             </label>
           </div>
         )}
