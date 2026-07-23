@@ -17,13 +17,6 @@
         ]
       },
       {
-        "title": "Plugin Python deps in the desktop app",
-        "detail": "opt-in install of a plugin's requires_pip packages inside the frozen desktop build.",
-        "refs": [
-          "#1631"
-        ]
-      },
-      {
         "title": "Federation token follow-ups",
         "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
         "refs": [
@@ -60,6 +53,13 @@
   {
     "status": "Shipped",
     "items": [
+      {
+        "title": "Plugin Python deps in the desktop app",
+        "detail": "opt-in install of a plugin's requires_pip packages inside the frozen desktop build: pure-Python wheels onto the host path, or into the managed Python runtime that also gives the desktop app a working execute_code.",
+        "refs": [
+          "v0.108.0"
+        ]
+      },
       {
         "title": "Production traces → training flywheel",
         "detail": "per-turn trajectory export from production agents into the lab for downstream training-data collection.",
