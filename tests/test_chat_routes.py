@@ -453,3 +453,34 @@ def test_openai_streaming(monkeypatch):
     first = json.loads(frames[0][len("data: ") :])
     assert first["choices"][0]["delta"]["content"] == "echo:yo"
     assert frames[-1] == "data: [DONE]"
+
+
+def test_export_session_route(monkeypatch):
+    # Thin pass-through to server.chat.export_session — forwards the path session_id
+    # plus the optional ?title, and returns the export result dict verbatim. No
+    # developer-flag gate: export is read-only (unlike /compact), so there's nothing
+    # to guard behind a pre-release flag.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_export(session_id, *, title=None):
+        seen.append((session_id, title))
+        return {
+            "found": True,
+            "markdown": "# Chat export\n\n## User\n\nhi\n",
+            "message_count": 2,
+            "redactions": ["openai-key"],
+            "reason": "ok",
+            "message": "Exported 2 message(s) as Markdown.",
+        }
+
+    monkeypatch.setattr(cr, "export_session", _fake_export)
+    c = _client(monkeypatch)
+    body = c.get("/api/chat/sessions/s1/export?title=My%20Chat").json()
+    assert seen == [("s1", "My Chat")]
+    assert body["found"] is True and body["message_count"] == 2
+    assert body["markdown"].startswith("# Chat export")
+    # The redaction summary must survive to the caller — it's what the operator
+    # reviews before sharing.
+    assert body["redactions"] == ["openai-key"]
