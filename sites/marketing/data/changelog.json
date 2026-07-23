@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.111.0",
+    "date": "2026-07-23",
+    "changes": [
+      "/btw — ask a quick side question about the chat: answered from its context, saved nowhere and never changing the conversation.",
+      "New-agent panel: Name and Create now sit above the archetype picker, over a scrollable card list.",
+      "Chat export tells you the filename it saved — and says so plainly when a download is blocked."
+    ]
+  },
+  {
     "version": "v0.110.0",
     "date": "2026-07-23",
     "changes": [
