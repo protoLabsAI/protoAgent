@@ -3,7 +3,7 @@
     "version": "v0.111.0",
     "date": "2026-07-23",
     "changes": [
-      "/btw — ask a side question about the chat without changing it."
+      "/btw — ask a quick side question about the chat: answered from its context, saved nowhere and never changing the conversation."
     ]
   },
   {
