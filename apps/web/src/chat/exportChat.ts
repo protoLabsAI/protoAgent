@@ -43,11 +43,22 @@ export async function exportChatToFile(sessionId: string): Promise<void> {
       append(note(res.message, "warning"));
       return;
     }
-    downloadTextFile(`${safeFilename(title ?? "chat")}.md`, res.markdown);
+    const filename = `${safeFilename(title ?? "chat")}.md`;
+    if (!downloadTextFile(filename, res.markdown)) {
+      // Programmatic downloads blocked (sandbox / policy) — say so instead of claiming
+      // success; the operator would otherwise hunt for a file that was never written.
+      append(note("Export blocked on this surface — no file was written", "danger"));
+      return;
+    }
     const redacted = res.redactions?.length
       ? ` **${res.redactions.length} secret pattern(s) were redacted** (${res.redactions.join(", ")}) — read the file before sharing.`
       : "";
-    append(note(`**Exported ${res.message_count} message(s) to Markdown.**${redacted}`, res.redactions?.length ? "warning" : "success"));
+    append(
+      note(
+        `**Exported ${res.message_count} message(s) → \`${filename}\` (check your browser downloads).**${redacted}`,
+        res.redactions?.length ? "warning" : "success",
+      ),
+    );
   } catch (e) {
     append(note(`Export failed — ${errMsg(e)}`, "danger"));
   }

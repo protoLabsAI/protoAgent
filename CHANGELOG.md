@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a real turn. A unit test pins the guarantee: the main thread is read, never written, and
   the turn runs on a different thread id. (#2180)
 
+### Fixed
+- **The chat-export note now names the file it wrote — and admits when it couldn't.** The
+  success note reads "Exported N message(s) → `<filename>.md` (check your browser
+  downloads)." so the operator knows what to look for (the redaction warning still rides
+  along). And on a surface that blocks programmatic downloads (sandboxed webview / policy),
+  the note is a danger note — "Export blocked on this surface — no file was written" —
+  instead of a success message pointing at a file that doesn't exist: `downloadTextFile` now
+  returns whether the anchor click actually dispatched (still never throws). The
+  Tauri-native save dialog is a follow-on. (#2197)
+
 ## [0.110.0] - 2026-07-23
 
 ### Added

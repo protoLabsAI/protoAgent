@@ -1,8 +1,9 @@
 // Trigger a client-side file download from in-memory text — a plain <a download>.click()
 // on a Blob URL. Used by the chat-export gesture (#2158) to save a thread's Markdown; kept
 // generic (mime defaults to Markdown) so other text exports can reuse it. Best-effort: on a
-// surface that blocks programmatic downloads it no-throws (the caller still has the data).
-export function downloadTextFile(filename: string, text: string, mime = "text/markdown"): void {
+// surface that blocks programmatic downloads it no-throws (the caller still has the data);
+// returns whether the click dispatched so callers can report a blocked download (#2197).
+export function downloadTextFile(filename: string, text: string, mime = "text/markdown"): boolean {
   try {
     const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
     const a = document.createElement("a");
@@ -13,8 +14,10 @@ export function downloadTextFile(filename: string, text: string, mime = "text/ma
     a.remove();
     // Revoke after the click has been dispatched so the download isn't cancelled.
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
   } catch {
     /* download blocked (sandbox / policy) — caller keeps the payload */
+    return false;
   }
 }
 
