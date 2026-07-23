@@ -9,8 +9,12 @@ paths = [
   '''.*\.example\.ya?ml$''',
   '''(^|/)(package-lock\.json|uv\.lock|plugins\.lock)$''',
   '''^docs/''',
-  # These two test the secret-REDACTION middleware, so they hold fake sk-…-shaped strings by
+  # These test the secret-REDACTION paths, so they hold fake sk-…-shaped strings by
   # design — flagging them is a false positive (they're what proves we redact real secrets).
   '''^tests/middleware/test_redaction\.py$''',
   '''^tests/middleware/test_audit_redaction_integration\.py$''',
+  # Same deal for the chat-export redaction pass (#2158): its fixtures are deliberately
+  # shaped like real credentials, because a test that only used obviously-fake strings
+  # wouldn't prove the patterns catch the real thing.
+  '''^tests/test_export_op\.py$''',
 ]

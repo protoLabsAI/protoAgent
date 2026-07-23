@@ -21,7 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code still can't push a file at the operator.
 
 ### Added
+- **Export a chat thread to Markdown, with secret redaction.** `GET
+  /api/chat/sessions/{id}/export` serializes one conversation to self-contained Markdown you
+  can read, review, and send — roles as headings, tool calls summarized rather than dumped,
+  multi-part content flattened, and the system prompt excluded (that's agent configuration,
+  not conversation). **Read-only**: unlike its `/compact` and `/rewind` siblings it never
+  touches the checkpoint, so there's no developer-flag gate; it still takes the per-thread
+  lock so an export can't capture a half-written turn. Secrets are scrubbed first — vendor
+  key shapes, JWTs, bearer headers, private-key blocks, `KEY=value` assignments, and home
+  paths that would otherwise leak the operator's username. That pass is **pattern-level over
+  free text on purpose**: `strip_secrets_from_doc` / `secret_paths` are config-shaped and
+  only strip known secret *keys* out of structured YAML, which never sees a token pasted into
+  a message or an `env` dump in tool output. The kinds found are reported back **and**
+  disclosed in the document itself — it's a safety net, not a guarantee, so the operator
+  reviews before sharing. P1 of the share-a-thread work; the hosted viewer is deferred to
+  #2179. (#2158)
 - **Project Manager archetype in the new-agent picker.** The persona you've been working with — frozen from ~30 merged PRs of dogfooding — is now shipable as a one-click agent type. (#2178)
+
+### Fixed
+- Archetype catalog: the project-manager blurb said "Single-repo technical lead" — now "Single-repo project manager". (#2182)
 
 ## [0.108.0] - 2026-07-23
 
