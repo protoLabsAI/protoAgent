@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **One source of truth for every curated plugin listing.** `config/plugin-directory.yaml`
+  now drives both the in-app Plugins ▸ Discover catalog (`config/plugin-catalog.json`) and
+  the marketing site's plugin-page overlay (`sites/marketing/data/plugins.json`) via
+  `scripts/plugin_directory.py build`, with a `check` mode and a pytest drift guard — the
+  two files had diverged badly (each listed plugins the other didn't; the "keep in sync"
+  comment had no teeth). The Discover catalog grows from 12 to 20 plugins: GitHub, Google
+  Workspace, Cowork document skills, Claude Bridge, Computer Use, Learning Wiki,
+  protoBanana, and PR Reviewer join it. A `status: deprecated|internal` flag on a directory
+  entry pulls a plugin from every surface in one line.
+
 ### Fixed
 - **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
   The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
