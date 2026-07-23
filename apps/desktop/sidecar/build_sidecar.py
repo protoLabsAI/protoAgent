@@ -182,6 +182,28 @@ DOC_COLLECT_ALL = [
 # (Gradio + the chat_ui module it backed were removed from the project entirely.)
 EXCLUDE = ["tkinter"]
 
+# CLI subcommand modules that `server/cli.py::dispatch` reaches ONLY via a dynamic
+# `importlib.import_module(...)` string (the `_FORWARD` table) — e.g. Fleet ▸ Add Agent
+# spawns `<frozen> plugin install <bundle>` → `import_module("graph.plugins.cli")`.
+# PyInstaller's static import scan can't follow a string import, so without an explicit
+# hidden-import each of these is ABSENT from the bundle and the verb dies with
+# `ModuleNotFoundError` in the frozen app (#2136 — cowork create; also fleet/skills/
+# runtime/operator-mcp, i.e. ACP). MUST stay in sync with `server.cli._FORWARD` — the
+# test `test_sidecar_bundles_every_forwarded_cli_module` fails if a new verb is added
+# without collecting it here. --hidden-import pulls the module + its static import chain.
+CLI_FORWARD_MODULES = [
+    "graph.plugins.cli",
+    "graph.workspaces.cli",
+    "graph.skills.cli",
+    "graph.fleet.cli",
+    "graph.config_explain",
+    "graph.model_cli",
+    "runtime.cli",
+    "ops.cli",
+    "server.knowledge_cli",
+    "server.operator_mcp",
+]
+
 
 def target_triple() -> str:
     """Tauri names sidecars ``<bin>-<rustc-host-triple>``; match it."""
@@ -236,6 +258,11 @@ def main() -> None:
     for mod in EXCLUDE:
         exclude += ["--exclude-module", mod]
 
+    # Collect the dynamically-dispatched CLI modules (#2136) — the static scan misses them.
+    hidden: list[str] = []
+    for mod in CLI_FORWARD_MODULES:
+        hidden += ["--hidden-import", mod]
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile", "--noconfirm", "--clean",
@@ -243,7 +270,7 @@ def main() -> None:
         "--distpath", str(work / "dist"),
         "--workpath", str(work / "build"),
         "--specpath", str(work),
-        *exclude, *add_data, *collect,
+        *exclude, *hidden, *add_data, *collect,
         # ADR 0023: server.py is now the `server` package; freeze its module
         # entry point. PyInstaller bundles the whole `server` package and the
         # `--add-data` assets land at _MEIPASS top level (server/_bundle_root

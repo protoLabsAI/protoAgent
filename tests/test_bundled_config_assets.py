@@ -112,3 +112,36 @@ def test_archetype_catalog_specifically() -> None:
     Cowork was unselectable on desktop and on any pip install)."""
     assert "config/archetype-catalog.json" in _wheel_seed_sources()
     assert "config/archetype-catalog.json" in _sidecar_bundled_sources()
+
+
+def _sidecar_cli_hidden_imports() -> set[str]:
+    """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
+    the dynamically-dispatched CLI modules the frozen build must hidden-import."""
+    tree = ast.parse((ROOT / "apps" / "desktop" / "sidecar" / "build_sidecar.py").read_text())
+    for node in ast.walk(tree):
+        is_it = (
+            isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "CLI_FORWARD_MODULES"
+        ) or (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "CLI_FORWARD_MODULES" for t in node.targets))
+        if is_it:
+            return {el.value for el in node.value.elts}  # type: ignore[attr-defined]
+    raise AssertionError("could not find CLI_FORWARD_MODULES in build_sidecar.py")
+
+
+def test_sidecar_bundles_every_forwarded_cli_module() -> None:
+    """Every CLI verb `server.cli.dispatch` reaches via a dynamic `import_module`
+    string (the `_FORWARD` table) MUST be a hidden-import in the sidecar build, or
+    PyInstaller's static scan misses it and the verb dies with ModuleNotFoundError
+    in the frozen app — #2136 (Fleet ▸ Add Agent → `plugin install` → no
+    `graph.plugins.cli`), and the whole class: fleet / skills / runtime / operator-mcp.
+
+    A new `_FORWARD` verb added without collecting it here reproduces the bug on the
+    next desktop build; this pins the two lists together."""
+    from server.cli import _FORWARD
+
+    forwarded = {module for module, _func in _FORWARD.values()}
+    collected = _sidecar_cli_hidden_imports()
+    missing = sorted(forwarded - collected)
+    assert not missing, (
+        f"_FORWARD CLI module(s) {missing} are dynamically imported but NOT in "
+        f"build_sidecar.py::CLI_FORWARD_MODULES — they'd 'ModuleNotFoundError' in the frozen app."
+    )
