@@ -484,3 +484,22 @@ def test_export_session_route(monkeypatch):
     # The redaction summary must survive to the caller — it's what the operator
     # reviews before sharing.
     assert body["redactions"] == ["openai-key"]
+
+
+def test_aside_session_route(monkeypatch):
+    # Thin pass-through to server.chat.aside_session — forwards the path session_id +
+    # the body's question, returns the result verbatim. POST (it runs a turn), no
+    # developer-flag gate.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_aside(session_id, question, **_k):
+        seen.append((session_id, question))
+        return {"found": True, "answer": "42", "reason": "ok", "message": ""}
+
+    monkeypatch.setattr(cr, "aside_session", _fake_aside)
+    c = _client(monkeypatch)
+    body = c.post("/api/chat/sessions/s1/aside", json={"question": "what's the answer?"}).json()
+    assert seen == [("s1", "what's the answer?")]
+    assert body["found"] is True and body["answer"] == "42"

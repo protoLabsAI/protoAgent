@@ -10,7 +10,7 @@ import { SLASH_COMMANDS } from "./fixtures.mjs";
 // everything else falls through to the SERVER `/goal`. The menu DEDUPS by token, so a command
 // that's both a client command and a server skill (`/goal`, `/clear`) appears ONCE, client-first
 // — the server duplicate is dropped.
-const CLIENT_SLASH = ["/new", "/clear", "/export", "/compact", "/effort", "/model", "/incognito", "/help", "/bypass", "/goal"];
+const CLIENT_SLASH = ["/new", "/clear", "/export", "/btw", "/compact", "/effort", "/model", "/incognito", "/help", "/bypass", "/goal"];
 // The server rows the menu shows, with client-token duplicates deduped away.
 const serverRows = () => SLASH_COMMANDS.map((c) => `/${c.name}`).filter((n) => !CLIENT_SLASH.includes(n));
 

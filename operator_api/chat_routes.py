@@ -28,7 +28,7 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
-from server.chat import chat, compact_session, export_session, rewind_session
+from server.chat import aside_session, chat, compact_session, export_session, rewind_session
 
 
 class ChatRequest(BaseModel):
@@ -175,6 +175,16 @@ def register_chat_routes(app, ui: str) -> None:
         machine, so the operator reviews rather than trusting a silent filter.
         Redaction is a safety net, not a guarantee."""
         return await export_session(session_id, title=title)
+
+    @app.post("/api/chat/sessions/{session_id}/aside")
+    async def _api_aside_session(session_id: str, body: dict | None = None):
+        """`/btw` (#2180) — answer a side question about this session's context WITHOUT
+        touching it. The turn runs incognito on a fresh EPHEMERAL thread seeded with the
+        main thread's messages; the main thread's checkpoint is never written (the
+        isolation is structural — see graph/aside_op). Returns
+        ``{found, answer, reason, message}``. Body: ``{"question": "..."}``."""
+        question = str((body or {}).get("question") or "")
+        return await aside_session(session_id, question)
 
     @app.post("/api/chat/sessions/{session_id}/rewind")
     async def _api_rewind_session(session_id: str, body: dict | None = None):

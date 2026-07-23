@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/btw` — ask a side question about the chat without changing it.** Type
+  `/btw <question>` and the agent answers *from* the current conversation's context, but the
+  exchange is never saved into it: no message added to the thread, no memory trail. The
+  isolation is **structural, not a flag** — the side turn runs incognito on a fresh
+  ephemeral thread seeded (read-only) with the main thread's messages, so the main thread's
+  checkpoint is never written (setting `incognito=true` on the *current* thread wouldn't do
+  this — incognito suppresses memory, but the turn still checkpoints its own thread). The
+  question + answer render as ephemeral client-side notes that never go back to the server as
+  a real turn. A unit test pins the guarantee: the main thread is read, never written, and
+  the turn runs on a different thread id. (#2180)
+
 ## [0.110.0] - 2026-07-23
 
 ### Added
