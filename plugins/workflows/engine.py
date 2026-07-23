@@ -7,6 +7,7 @@ A recipe is a dict (parsed from YAML):
     inputs: [{name, required?, default?}]   (optional)
     steps:  [{id, subagent, prompt, depends_on?}]
     output: str (optional template; default = last step's output)
+    max_concurrency: int (optional; the recipe's fan-out width — see below)
 
 Execution resolves the ``depends_on`` DAG, runs steps whose deps are satisfied
 **in parallel** (bounded by a semaphore), threads each step's output into
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any, Awaitable, Callable
 
 # {{ inputs.name }} | {{ steps.id.output }}
@@ -34,6 +36,11 @@ _REF_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 
 def _refs(text: str) -> list[str]:
     return _REF_RE.findall(text or "")
+
+
+# Ceiling on a recipe-declared fan-out. High enough for any realistic panel, low
+# enough that a typo (``max_concurrency: 500``) can't stampede the gateway.
+MAX_FANOUT = 16
 
 
 def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) -> list[str]:
@@ -46,6 +53,9 @@ def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) ->
     steps = recipe.get("steps")
     if not isinstance(steps, list) or not steps:
         return errors + ["'steps' must be a non-empty list"]
+    width = recipe.get("max_concurrency")
+    if width is not None and (not isinstance(width, int) or isinstance(width, bool) or not 1 <= width <= MAX_FANOUT):
+        errors.append(f"'max_concurrency' must be an int in 1..{MAX_FANOUT}")
 
     input_names = {i.get("name") for i in (recipe.get("inputs") or []) if isinstance(i, dict)}
     ids: list[str] = []
@@ -186,6 +196,13 @@ async def execute_workflow(
     from-scratch run is byte-for-byte the pre-resume path.
     """
     steps = recipe["steps"]
+    # A recipe's declared fan-out width wins over the caller's default: the caller's cap
+    # is a resource guard that knows nothing about this recipe's shape, and a parallel
+    # stage wider than it gets silently serialized into waves (5 steps under a cap of 4
+    # runs 4+1 and pays twice the slowest step for nothing).
+    declared = recipe.get("max_concurrency")
+    if isinstance(declared, int) and not isinstance(declared, bool) and 1 <= declared <= MAX_FANOUT:
+        max_concurrency = declared
     by_id = {s["id"]: s for s in steps}
     pending = {s["id"]: set(s.get("depends_on", []) or []) for s in steps}
     done: dict[str, str] = dict(seed_outputs or {})
@@ -206,15 +223,22 @@ async def execute_workflow(
         if sid in done:
             pending.pop(sid)
 
+    timings: dict[str, float] = {}
+
     async def run_one(sid: str) -> tuple[str, str, bool]:
         step = by_id[sid]
         prompt = prompt_overrides[sid] if sid in prompt_overrides else render_template(step["prompt"], inputs, done)
         async with sem:
+            started = time.monotonic()
             try:
                 out = await run_step(step["subagent"], prompt, sid)
                 return sid, str(out), False
             except Exception as exc:  # noqa: BLE001 — record inline, keep the DAG going
                 return sid, f"Error: step {sid!r} raised {type(exc).__name__}: {exc}", True
+            finally:
+                # Time spent RUNNING, not queued behind the semaphore — otherwise a
+                # serialized wave reads as a slow step and hides the width problem.
+                timings[sid] = round(time.monotonic() - started, 2)
 
     while pending:
         ready = [sid for sid, deps in pending.items() if deps <= set(done)]
@@ -239,4 +263,9 @@ async def execute_workflow(
             pending.pop(sid)
 
     output_tpl = recipe.get("output") or f"{{{{steps.{steps[-1]['id']}.output}}}}"
-    return {"output": render_template(output_tpl, inputs, done), "steps": done, "failed": failed}
+    return {
+        "output": render_template(output_tpl, inputs, done),
+        "steps": done,
+        "failed": failed,
+        "timings": timings,
+    }
