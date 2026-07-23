@@ -276,12 +276,18 @@ export function PluginView({ view }: { view: PluginViewType }) {
               // Esc always releases it.
               // allow: clipboard + pointer-lock via Permissions-Policy (no sandbox token
               // exists for clipboard) so copy/paste + pointer capture work in plugin UIs.
+              // allow-downloads: a sandboxed frame cannot start a download without it, so
+              // the artifact panel's Download button (ADR 0092 D2/D3 file artifacts — a
+              // plain <a download>.click()) was refused outright: "Not allowed to download
+              // due to sandboxing". Scoped to the plugin-view frame, which already carries
+              // allow-same-origin + allow-scripts; the artifact plugin's NESTED frame stays
+              // without it, so model-generated code still can't push a file at the operator.
               <iframe
                 ref={frameRef}
                 className="plugin-view-frame"
                 src={apiUrl(src)}
                 title={view.label}
-                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
+                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock allow-downloads"
                 allow="clipboard-read; clipboard-write; pointer-lock"
                 onLoad={handleLoad}
                 onError={() => setError(`The plugin page at ${src} didn’t respond.`)}
