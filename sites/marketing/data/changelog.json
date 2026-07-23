@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.111.0",
+    "date": "2026-07-23",
+    "changes": [
+      "/btw — ask a side question about the chat without changing it.",
+      "The three orphan soul presets — coding, research, and generic-assistant.",
+      "New-agent panel: Name + Create moved above the archetype picker.",
+      "The chat-export note now names the file it wrote — and admits when it couldn't."
+    ]
+  },
+  {
     "version": "v0.110.0",
     "date": "2026-07-23",
     "changes": [
