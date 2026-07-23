@@ -28,7 +28,7 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
-from server.chat import chat, compact_session, rewind_session
+from server.chat import chat, compact_session, export_session, rewind_session
 
 
 class ChatRequest(BaseModel):
@@ -159,6 +159,22 @@ def register_chat_routes(app, ui: str) -> None:
                 detail="/compact is pre-release — enable the chat.compact developer flag (ADR 0068)",
             )
         return await compact_session(session_id)
+
+    @app.get("/api/chat/sessions/{session_id}/export")
+    async def _api_export_session(session_id: str, title: str | None = None):
+        """Export a chat session's conversation as Markdown (#2158 P1) — the
+        "share this thread" gesture.
+
+        **Read-only**: unlike its compact/rewind siblings this never touches the
+        checkpoint, so it needs no developer-flag gate. Returns
+        ``{found, markdown, message_count, redactions, reason, message}``.
+
+        Secrets are scrubbed before the Markdown is produced (see
+        ``graph.export_op``) and the kinds found are reported in ``redactions``
+        AND disclosed in the document itself — an export is meant to leave the
+        machine, so the operator reviews rather than trusting a silent filter.
+        Redaction is a safety net, not a guarantee."""
+        return await export_session(session_id, title=title)
 
     @app.post("/api/chat/sessions/{session_id}/rewind")
     async def _api_rewind_session(session_id: str, body: dict | None = None):
