@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Per-delegate environment editor in the console, with secret-tier rows.** Every delegate
+  type's editor form (a2a / openai / acp) now exposes the per-delegate `env` map and the
+  `env_remove` list, so operators author env-carrying delegates from the UI instead of
+  hand-editing YAML. A per-row **secret** toggle routes a value to `secrets.yaml` under
+  `delegate_secrets.<name>.env.<KEY>` (the tracked config keeps only an empty reference) —
+  the same posture as `auth.token` / `api_key`, so API tokens like `ANTHROPIC_AUTH_TOKEN`
+  never sit in plaintext config. Values are verbatim (no `${VAR}` expansion) and merge over
+  the inherited process env *after* `env_remove` strips it (a trailing `_` is a prefix
+  match). Reads never echo a secret value — the form shows set-but-masked rows. (#2114)
+
 ## [0.107.0] - 2026-07-22
 
 ### Added

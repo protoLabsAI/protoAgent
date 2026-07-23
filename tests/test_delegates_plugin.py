@@ -256,14 +256,16 @@ def test_register_exposes_delegate_to_and_list_agents(monkeypatch):
 
 
 def test_registry_roster_shape():
-    reg = DelegateRegistry([{"name": "opus", "type": "openai", "url": "https://g/v1",
-                             "model": "m", "description": "a model"}])
+    reg = DelegateRegistry(
+        [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "description": "a model"}]
+    )
     assert reg.roster() == [{"name": "opus", "type": "openai", "description": "a model", "url": "https://g/v1"}]
 
 
 def test_list_agents_lists_roster_with_health(monkeypatch):
-    r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1",
-                    "model": "m", "description": "a model"}], monkeypatch)
+    r = _register(
+        [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "description": "a model"}], monkeypatch
+    )
     la = next(t for t in r.tools if t.name == "list_agents")
     monkeypatch.setattr("plugins.delegates.health.health_snapshot", lambda: {"opus": {"ok": True}})
     assert "🟢 opus (openai) — a model" in la.invoke({})
@@ -666,3 +668,14 @@ async def test_health_backoff_state_pruned_with_delegate(monkeypatch):
     monkeypatch.setattr(store, "merged_delegates", lambda: [])
     await H._probe_all(now=1.0)
     assert "p" not in H._HEALTH and "p" not in H._FAILURES and "p" not in H._NEXT_DUE
+
+
+def test_is_secretish_matches_tokens_not_substrings():
+    """Panel on #2150: 'auth' inside 'author' must not classify GIT_AUTHOR_NAME as a
+    secret (it was being auto-routed to secrets.yaml); real secret names still match."""
+    from plugins.delegates.adapters import is_secretish
+
+    assert not is_secretish("GIT_AUTHOR_NAME")
+    assert not is_secretish("AUTHORITATIVE_DNS")
+    for good in ("AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "API_KEY", "MY_PASSWORD", "OAUTH_CLIENT", "GH_BEARER"):
+        assert is_secretish(good), good

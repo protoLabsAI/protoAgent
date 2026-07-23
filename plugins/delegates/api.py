@@ -12,23 +12,20 @@ from __future__ import annotations
 import logging
 
 from . import store
-from .adapters import ADAPTERS, DelegateError, delegate_types
+from .adapters import ADAPTERS, DelegateError, delegate_types, is_secretish
 
 log = logging.getLogger("protoagent.plugins.delegates")
 
-
-# Substrings that mark a config key (or an env-var name) as secret-bearing — its
-# value is never returned by the read API.
-_SECRETISH = ("key", "token", "secret", "password", "passwd", "credential", "auth")
+# ``is_secretish`` (shared with the store) marks a config key — or a per-delegate
+# ``env`` var NAME — as secret-bearing; its value is never returned by the read API.
 
 
-def _is_secretish(k) -> bool:
-    return any(s in str(k).lower() for s in _SECRETISH)
-
-
-def _redact_env(env: dict) -> dict:
-    """Redact env values whose name looks secret-bearing (e.g. OPENAI_API_KEY)."""
-    return {k: ("***" if _is_secretish(k) else v) for k, v in env.items()}
+def _redact_env(env: dict, secret_keys: set | None = None) -> dict:
+    """Redact env values whose name looks secret-bearing (e.g. OPENAI_API_KEY) OR
+    that carry a stored per-row secret (``secret_keys``, from the overlay) — so a
+    secret with an innocuous name (an explicit per-row toggle) is masked too."""
+    keys = secret_keys or set()
+    return {k: ("***" if (k in keys or is_secretish(k)) else v) for k, v in env.items()}
 
 
 def _public_view(raw: dict) -> dict:
@@ -44,15 +41,19 @@ def _public_view(raw: dict) -> dict:
         except DelegateError as e:
             configured, error = False, str(e)
     name = raw.get("name")
-    has_secret = bool(adapter and adapter.secret_field and store.secret_overlay().get(f"{name}.{adapter.secret_field}"))
+    overlay = store.secret_overlay()
+    has_secret = bool(adapter and adapter.secret_field and overlay.get(f"{name}.{adapter.secret_field}"))
+    # Per-env secret var names stored for this delegate (`<name>.env.<VAR>`) — masked
+    # in the returned env so the form shows them set-but-masked (#2114).
+    env_secret_keys = store.env_secret_values(overlay, name).keys() if name else set()
     # Drop any secret-bearing top-level field (api_key, *_token, auth, …).
-    view = {k: v for k, v in raw.items() if not _is_secretish(k)}
+    view = {k: v for k, v in raw.items() if not is_secretish(k)}
     # keep auth.scheme (not the token) for a2a so the form can prefill it
     if isinstance(raw.get("auth"), dict) and raw["auth"].get("scheme"):
         view["auth"] = {"scheme": raw["auth"]["scheme"]}
-    # the acp env dict is free-form — redact secret-named values inside it too.
+    # the env dict is free-form — redact secret-named + per-row-secret values inside it.
     if isinstance(view.get("env"), dict):
-        view["env"] = _redact_env(view["env"])
+        view["env"] = _redact_env(view["env"], set(env_secret_keys))
     view.update(
         {
             "name": name,
@@ -61,6 +62,7 @@ def _public_view(raw: dict) -> dict:
             "configured": configured,
             "error": error,
             "has_secret": has_secret,
+            "has_env_secrets": bool(env_secret_keys),
         }
     )
     return view

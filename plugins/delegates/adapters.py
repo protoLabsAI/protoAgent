@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -46,7 +47,7 @@ def _is_loopback_url(url: str) -> bool:
 class FieldSpec:
     key: str  # dotted config key, e.g. "auth.token"
     label: str
-    kind: str = "text"  # text | secret | args | path | number | textarea | select
+    kind: str = "text"  # text | secret | args | path | number | textarea | select | envmap
     required: bool = False
     help: str = ""
     placeholder: str = ""
@@ -122,6 +123,67 @@ def _secret(raw: dict, value_key: str, env_key: str) -> str:
         return val
     env_name = str(raw.get(env_key) or "").strip()
     return os.environ.get(env_name, "") if env_name else ""
+
+
+# Substrings that mark a config key — or a per-delegate ``env`` var NAME — as
+# secret-bearing. A matching env value is auto-routed to secrets.yaml on save and
+# redacted on read even without an explicit per-row secret toggle. Shared by the
+# API (redaction) and store (secret routing) so both agree on what counts.
+_SECRETISH = ("key", "apikey", "token", "secret", "password", "passwd", "credential", "auth", "oauth", "bearer")
+
+_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def is_secretish(name: object) -> bool:
+    """Token-boundary match — `AUTH_TOKEN` and `API_KEY` are secretish; substrings
+    inside larger words are NOT (`GIT_AUTHOR_NAME` must never auto-route to
+    secrets.yaml — QA panel on #2150). camelCase isn't split; env vars are
+    conventionally SNAKE_CASE and a false negative just means the operator uses
+    the explicit secret toggle."""
+    parts = _TOKEN_SPLIT.split(str(name).lower())
+    return any(p in _SECRETISH for p in parts)
+
+
+# ── per-delegate environment (#2114) ──────────────────────────────────────────
+#
+# The env editor is available on EVERY adapter type: the built-in a2a/openai
+# dispatchers don't consume ``env``/``env_remove`` (only acp's spawn does), but
+# plugins and forks do, and authoring an env-carrying delegate from the console
+# beats hand-editing YAML. A per-row **secret** toggle routes a value to
+# secrets.yaml (see ``store._route_secret``) so API tokens never sit in plaintext
+# config — the same posture as ``auth.token`` / ``api_key``.
+
+
+def _env_fields() -> list[FieldSpec]:
+    """The shared env editor fields appended to every adapter's schema. One
+    ``envmap`` field drives the whole editor (key/value rows + a per-row secret
+    toggle + the ``env_remove`` list) on the console form."""
+    return [
+        FieldSpec(
+            "env",
+            "Environment",
+            "envmap",
+            help=(
+                "Extra environment variables for the spawned delegate. Values are verbatim — no "
+                "${VAR} expansion — and merge OVER the inherited process env AFTER the removals "
+                "below strip it (remove-then-add). Toggle a row **secret** to store its value in "
+                "secrets.yaml (gitignored), never in tracked config; on edit a secret row shows "
+                "set-but-masked — leave it blank to keep the stored value."
+            ),
+        ),
+    ]
+
+
+def _parse_env(raw: dict, d: Delegate) -> None:
+    """Parse ``env`` / ``env_remove`` off a raw config dict onto ``d``. Shared by
+    every adapter so the console-authored env round-trips for all types (the
+    ``Delegate`` dataclass already carries both fields)."""
+    env = raw.get("env") if isinstance(raw.get("env"), dict) else {}
+    d.env = {str(k): str(v) for k, v in env.items()}
+    # Subtractive env seam (#2117): host var names/prefixes to strip from the spawned
+    # coder before the additive ``env`` overlay applies (acp_client `_launch_env`).
+    env_remove = raw.get("env_remove")
+    d.env_remove = [str(x) for x in env_remove if str(x)] if isinstance(env_remove, (list, tuple)) else []
 
 
 # ── adapters ──────────────────────────────────────────────────────────────────
@@ -267,6 +329,7 @@ class A2aAdapter(Adapter):
                 "may legitimately take up to this long to reply — the old flat 60s hard-failed "
                 "every member turn beyond it (#1778). Raise it for slow agents (e.g. a code build).",
             ),
+            *_env_fields(),
         ]
 
     def parse(self, raw: dict) -> Delegate:
@@ -281,6 +344,7 @@ class A2aAdapter(Adapter):
             d.poll_timeout_s = float(raw.get("poll_timeout_s") or 300.0)
         except (TypeError, ValueError):
             d.poll_timeout_s = 300.0
+        _parse_env(raw, d)
         return d
 
     async def dispatch(
@@ -496,6 +560,7 @@ class OpenAiAdapter(Adapter):
             FieldSpec("system_prompt", "System prompt", "textarea", placeholder="Answer thoroughly but concisely."),
             FieldSpec("max_tokens", "Max tokens", "number", default=1024),
             FieldSpec("temperature", "Temperature", "number", default=0.4),
+            *_env_fields(),
         ]
 
     def parse(self, raw: dict) -> Delegate:
@@ -514,6 +579,7 @@ class OpenAiAdapter(Adapter):
             d.temperature = float(raw.get("temperature") if raw.get("temperature") is not None else 0.4)
         except (TypeError, ValueError):
             d.temperature = 0.4
+        _parse_env(raw, d)
         return d
 
     async def dispatch(
@@ -625,6 +691,7 @@ class AcpAdapter(Adapter):
                 placeholder="(delegate name)",
                 help="Managed git: branch names are <prefix>/<slug>-<id7>. Empty ⇒ the delegate's name.",
             ),
+            *_env_fields(),
         ]
 
     def parse(self, raw: dict) -> Delegate:
@@ -643,12 +710,7 @@ class AcpAdapter(Adapter):
         if d.command in ("claude-code", "claude-acp"):
             d.command = "claude-agent-acp"
             d.args = []
-        env = raw.get("env") if isinstance(raw.get("env"), dict) else {}
-        d.env = {str(k): str(v) for k, v in env.items()}
-        # Subtractive env seam (#2117): a list of host var names/prefixes to strip from the
-        # spawned coder before the additive ``env`` overlay applies (acp_client `_launch_env`).
-        env_remove = raw.get("env_remove")
-        d.env_remove = [str(x) for x in env_remove if str(x)] if isinstance(env_remove, (list, tuple)) else []
+        _parse_env(raw, d)
         try:
             d.timeout_s = float(raw.get("timeout_s") or 600)
         except (TypeError, ValueError):
@@ -681,7 +743,9 @@ class AcpAdapter(Adapter):
             "deny_kinds": d.deny_kinds,
         }
 
-    async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None) -> str:
+    async def dispatch(
+        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+    ) -> str:
         if d.manage_git:
             return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id)
         return await self._prompt(d, query, timeout=timeout)
@@ -740,9 +804,7 @@ class AcpAdapter(Adapter):
             if prep.error:
                 return f"Error: managed-git setup for {d.name!r} failed: {prep.error}"
             reply = await self._prompt(d, query + harness.edit_only_directive(branch), timeout=timeout)
-            outcome = await harness.finish(
-                workdir, base=d.base_branch, branch=branch, item_id=iid, title=title
-            )
+            outcome = await harness.finish(workdir, base=d.base_branch, branch=branch, item_id=iid, title=title)
             notes = "".join(f"\n- note: {n}" for n in prep.notes)
             return f"{reply}\n\n{outcome.render()}{notes}"
         finally:

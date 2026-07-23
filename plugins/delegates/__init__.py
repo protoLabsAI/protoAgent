@@ -230,5 +230,8 @@ def register(registry) -> None:
         return
     registry.register_tool(_build_delegate_to(reg))
     registry.register_tool(_build_list_agents(reg))
-    log.info("[delegates] registered delegate_to + list_agents for %d delegate(s): %s",
-             len(reg.names()), ", ".join(reg.names()))
+    log.info(
+        "[delegates] registered delegate_to + list_agents for %d delegate(s): %s",
+        len(reg.names()),
+        ", ".join(reg.names()),
+    )

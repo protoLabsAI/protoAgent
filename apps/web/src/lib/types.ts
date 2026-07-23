@@ -897,7 +897,7 @@ export type MemoryInjectionDetail = {
 export type DelegateFieldSpec = {
   key: string;
   label: string;
-  kind: string; // text | secret | args | path | number | textarea | select
+  kind: string; // text | secret | args | path | number | textarea | select | envmap
   required: boolean;
   help: string;
   placeholder: string;
@@ -916,6 +916,9 @@ export type DelegateView = {
   configured: boolean;
   error: string | null;
   has_secret: boolean;
+  // True when any per-row env secret is stored (#2114) — the form shows those rows
+  // set-but-masked. The masked env values come back as "***" in the `env` map.
+  has_env_secrets?: boolean;
   health?: DelegateProbe;
   [key: string]: unknown;
 };

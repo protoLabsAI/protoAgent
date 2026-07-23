@@ -10,8 +10,8 @@ import { StatusDot } from "@protolabsai/ui/data";
 import { StatusPill } from "../app/StatusPill";
 import { HelpLink } from "../app/ui-kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Lock, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -50,6 +50,35 @@ function coerce(field: DelegateFieldSpec, raw: unknown): unknown {
     return raw === "" || raw == null ? undefined : Number(raw);
   }
   return typeof raw === "string" ? raw : raw == null ? "" : String(raw);
+}
+
+// ── per-delegate env editor (#2114) ──────────────────────────────────────────
+// One env var as the form state models it. A `secret` row routes its value to
+// secrets.yaml on save; on edit it seeds masked (value blank) — blank = keep stored.
+type EnvRow = { uid: string; key: string; value: string; secret: boolean };
+
+// Row identity for React keys — component-scoped via useRef (a module-level counter
+// would persist across HMR and leak across instances).
+
+// Seed the env rows from a DelegateView. A masked value ("***") marks a stored
+// secret — seed the row secret + blank so we don't echo the mask back on save.
+function seedEnvRows(initial: DelegateView | null): EnvRow[] {
+  const env = initial?.env;
+  if (!env || typeof env !== "object" || Array.isArray(env)) return [];
+  // "***" is only the mask sentinel when the API says this delegate HAS stored env
+  // secrets — a genuine literal "***" value on a secret-free delegate must round-trip
+  // as-is (QA panel on #2150).
+  const hasSecrets = Boolean(initial?.has_env_secrets);
+  return Object.entries(env as Record<string, unknown>).map(([key, v], i) => {
+    const masked = hasSecrets && v === "***";
+    return { uid: `seed-${i}-${key}`, key, value: masked ? "" : String(v ?? ""), secret: masked };
+  });
+}
+
+// env_remove seeds as a comma-separated string for the list editor.
+function seedEnvRemove(initial: DelegateView | null): string {
+  const er = initial?.env_remove;
+  return Array.isArray(er) ? er.map((x) => String(x)).join(", ") : "";
 }
 
 function probeLine(p: DelegateProbe): string {
@@ -197,6 +226,10 @@ function DelegateForm({
   const [name, setName] = useState(initial?.name || "");
   const [description, setDescription] = useState(initial?.description || "");
   const [vals, setVals] = useState<Record<string, string>>(() => seed(initial, spec));
+  // The env editor (#2114) is form-level state (not in `vals`): the `envmap` field
+  // drives key/value/secret rows plus the env_remove list.
+  const [envRows, setEnvRows] = useState<EnvRow[]>(() => seedEnvRows(initial));
+  const [envRemove, setEnvRemove] = useState(() => seedEnvRemove(initial));
   const [preset, setPreset] = useState(""); // ACP coding-agent preset (fills command/args)
   const [probe, setProbe] = useState<DelegateProbe | null>(null);
   const [err, setErr] = useState("");
@@ -205,14 +238,36 @@ function DelegateForm({
   // The canonical ACP coding-agent catalog (single source — /api/acp-agents).
   const acpAgents = useQuery({ ...acpAgentsQuery(), enabled: type === "acp" });
 
+  const hasEnvField = (current?.fields ?? []).some((f) => f.kind === "envmap");
+
   function buildEntry(): Record<string, unknown> {
     const entry: Record<string, unknown> = { name, type, description };
     for (const f of current?.fields ?? []) {
+      if (f.kind === "envmap") continue; // serialized from form-level env state below
       const v = coerce(f, vals[f.key]);
       // skip blank secrets on edit so we don't overwrite a stored one with ""
       if (f.kind === "secret" && (v === "" || v == null)) continue;
       if (v === "" || v == null) continue;
       setDotted(entry, f.key, v);
+    }
+    if (hasEnvField) {
+      // env: {NAME: value} for every keyed row; a value verbatim (blank secret row =
+      // keep stored). env_secret lists the toggled keys — the backend routes those (+
+      // any secret-named key) to secrets.yaml and keeps an empty reference in config.
+      const env: Record<string, string> = {};
+      const envSecret: string[] = [];
+      for (const row of envRows) {
+        const k = row.key.trim();
+        if (!k) continue;
+        env[k] = row.value;
+        if (row.secret) envSecret.push(k);
+      }
+      if (Object.keys(env).length) {
+        entry.env = env;
+        if (envSecret.length) entry.env_secret = envSecret;
+      }
+      const removeList = envRemove.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+      if (removeList.length) entry.env_remove = removeList;
     }
     return entry;
   }
@@ -276,15 +331,26 @@ function DelegateForm({
         </label>
       ) : null}
 
-      {(current?.fields ?? []).map((f) => (
-        <DelegateField
-          key={f.key}
-          field={f}
-          value={vals[f.key] ?? ""}
-          hasStoredSecret={editing && f.kind === "secret" && Boolean(initial?.has_secret)}
-          onChange={(v) => setVals((m) => ({ ...m, [f.key]: v }))}
-        />
-      ))}
+      {(current?.fields ?? []).map((f) =>
+        f.kind === "envmap" ? (
+          <EnvEditor
+            key={f.key}
+            field={f}
+            rows={envRows}
+            setRows={setEnvRows}
+            envRemove={envRemove}
+            setEnvRemove={setEnvRemove}
+          />
+        ) : (
+          <DelegateField
+            key={f.key}
+            field={f}
+            value={vals[f.key] ?? ""}
+            hasStoredSecret={editing && f.kind === "secret" && Boolean(initial?.has_secret)}
+            onChange={(v) => setVals((m) => ({ ...m, [f.key]: v }))}
+          />
+        ),
+      )}
 
       {probe ? <p className="settings-inline-status">{probeLine(probe)}</p> : null}
       {err ? <p className="settings-status">{err}</p> : null}
@@ -348,11 +414,100 @@ function DelegateField({
   );
 }
 
+// The per-delegate env editor (#2114): key/value rows with a per-row secret toggle,
+// plus the env_remove list. Rendered in place of a plain field for the `envmap` kind.
+function EnvEditor({
+  field,
+  rows,
+  setRows,
+  envRemove,
+  setEnvRemove,
+}: {
+  field: DelegateFieldSpec;
+  rows: EnvRow[];
+  setRows: React.Dispatch<React.SetStateAction<EnvRow[]>>;
+  envRemove: string;
+  setEnvRemove: (v: string) => void;
+}) {
+  const patch = (i: number, p: Partial<EnvRow>) => setRows((r) => r.map((row, j) => (j === i ? { ...row, ...p } : row)));
+  const uidSeq = useRef(0);
+  const addRow = () => setRows((r) => [...r, { uid: `row-${++uidSeq.current}`, key: "", value: "", secret: false }]);
+  const delRow = (i: number) => setRows((r) => r.filter((_, j) => j !== i));
+  return (
+    <div className="field delegate-envmap">
+      <span>{field.label}</span>
+      <div className="delegate-env-rows">
+        {rows.map((row, i) => (
+          <div className="delegate-env-row" key={row.uid}>
+            <Input
+              aria-label="env name"
+              placeholder="NAME"
+              value={row.key}
+              onChange={(e) => patch(i, { key: e.target.value })}
+            />
+            {row.secret ? (
+              <SecretInput
+                aria-label="env value"
+                autoComplete="new-password"
+                placeholder="•••••••• (secret — blank keeps stored)"
+                value={row.value}
+                onChange={(e) => patch(i, { value: e.target.value })}
+              />
+            ) : (
+              <Input
+                aria-label="env value"
+                placeholder="value"
+                value={row.value}
+                onChange={(e) => patch(i, { value: e.target.value })}
+              />
+            )}
+            <Button
+              icon
+              variant={row.secret ? "primary" : "ghost"}
+              type="button"
+              title={row.secret ? "Secret — stored in secrets.yaml" : "Store as secret"}
+              aria-pressed={row.secret}
+              onClick={() => patch(i, { secret: !row.secret })}
+            >
+              <Lock size={14} />
+            </Button>
+            <Button icon variant="ghost" type="button" title="Remove variable" onClick={() => delRow(i)}>
+              <Trash2 size={14} />
+            </Button>
+          </div>
+        ))}
+      </div>
+      <div className="delegate-env-add">
+        <Button icon variant="ghost" type="button" title="Add variable" onClick={addRow}>
+          <Plus size={14} />
+        </Button>
+        <span className="delegate-field-help">Add variable</span>
+      </div>
+      {field.help ? <small className="delegate-field-help">{field.help}</small> : null}
+      <label className="field delegate-env-remove">
+        <span>Remove from inherited env</span>
+        <Textarea
+          rows={2}
+          placeholder="PROTOAGENT_, A2A_AUTH_TOKEN"
+          value={envRemove}
+          onChange={(e) => setEnvRemove(e.target.value)}
+        />
+        <small className="delegate-field-help">
+          Host env var names stripped from the child <em>before</em> the additions above merge in
+          (remove-then-add). Comma-separated or one per line. A trailing underscore is a prefix
+          match — <code>PROTOAGENT_</code> strips every <code>PROTOAGENT_*</code> var.
+        </small>
+      </label>
+    </div>
+  );
+}
+
 function seed(initial: DelegateView | null, spec: DelegateTypeSpec[]): Record<string, string> {
   const out: Record<string, string> = {};
   if (!initial) return out;
   const t = spec.find((s) => s.type === initial.type);
   for (const f of t?.fields ?? []) {
+    if (f.kind === "envmap") continue; // env editor seeds from form-level state (seedEnvRows)
     const v = getDotted(initial, f.key);
     if (f.kind === "args" && Array.isArray(v)) out[f.key] = v.join(" ");
     else if (f.kind === "secret") out[f.key] = ""; // redacted; blank = keep stored
