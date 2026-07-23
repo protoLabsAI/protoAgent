@@ -66,3 +66,35 @@ def test_memory_list_cites_source_and_namespace(tmp_path):
     out = asyncio.run(memory_list.ainvoke({}))
     assert "src: a2a:chat-9" in out
     assert "ns: proj-y" in out
+
+
+# ── #2161: recall can be scoped to one domain (separate own record from imports) ──
+
+
+def test_memory_recall_domain_filter_scopes_results(tmp_path):
+    """`memory_recall(query, domain=...)` restricts to ONE domain, so an agent can
+    deliberately separate its own record from inherited/imported knowledge (#2161)."""
+    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    ks.add_chunk("my own note: shipped the parser refactor", domain="general")
+    ks.add_chunk("this codebase shipped ADR 0033 (imported)", domain="claude-import")
+
+    recall = _by_name(_build_memory_tools(ks))["memory_recall"]
+    # Scoped to the imported domain → only that domain's chunk, tagged [claude-import].
+    imported = asyncio.run(recall.ainvoke({"query": "shipped", "domain": "claude-import"}))
+    assert "ADR 0033" in imported and "[claude-import]" in imported
+    assert "my own note" not in imported
+
+    # Scoped to the agent's own domain → the imported chunk is excluded.
+    own = asyncio.run(recall.ainvoke({"query": "shipped", "domain": "general"}))
+    assert "my own note" in own
+    assert "ADR 0033" not in own
+
+
+def test_memory_recall_unscoped_still_returns_all_domains(tmp_path):
+    """Default (no domain) is unchanged — searches every domain, each hit tagged."""
+    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    ks.add_chunk("own: shipped the parser", domain="general")
+    ks.add_chunk("imported: shipped ADR 0033", domain="claude-import")
+    recall = _by_name(_build_memory_tools(ks))["memory_recall"]
+    out = asyncio.run(recall.ainvoke({"query": "shipped"}))
+    assert "[general]" in out and "[claude-import]" in out
