@@ -185,8 +185,8 @@ async def execute_workflow(
     ready step *before* it is dispatched. When it returns ``"pause"`` the run is
     parked: ``pause_fn(step_id, completed_outputs)`` persists the paused state and
     returns the run_id, and the engine returns ``{"paused": True, "paused_step":
-    step_id, "run_id": run_id, "steps": {...done...}}`` instead of the normal
-    envelope — the gated step's subagent is never spawned. Sequential gated steps
+    step_id, "run_id": run_id, "steps": {...done...}, "timings": {...}}`` instead of
+    the normal envelope — the gated step's subagent is never spawned. Sequential gated steps
     pause one at a time (a downstream gated step isn't ready until its deps run).
     When ``gate_check`` is ``None`` the loop below is the exact pre-gate path.
 

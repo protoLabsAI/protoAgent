@@ -19,6 +19,9 @@ config/langgraph-config.yaml
 # Setup-wizard completion marker — per-deployment runtime state, written once
 # the wizard has been run. Not config to commit.
 config/.setup-complete
+# Local UI theme overrides — a runtime artifact, not source. It was committed by
+# accident once (#2168) and should not be committable again.
+config/theme.json
 
 # Git-installed plugins (ADR 0027) — code fetched from a URL into the live plugins
 # dir. NOT committed; it's reproducible from the committed `plugins.lock` via
