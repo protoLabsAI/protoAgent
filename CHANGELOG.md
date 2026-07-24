@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Docs
+- **Managed Python runtime gets its guide, and the front doors catch up with the product.**
+  New `guides/python-runtime.md` covers the desktop one-click interpreter install
+  (ADR 0094) end to end — what needs it, both install paths, the pre-failure status
+  surfaces, the stale-baseline refresh, and the API. The README and docs landing now
+  mention archetypes (the wizard picks one, not a "persona preset"), the `execute_code`/
+  `coder`/`friction`/`orgchart` plugins, workflow `gate: human` approval steps, the ⌘K
+  palette + Fleet Room, and `/export` + `/btw`. protobanana left the core roadmap (it's a
+  plugin, tracked in its own repo and the directory), and the internal `plans/`/`design/`
+  working docs are excluded from the published site.
 - **Documentation audit — stale claims fixed, missing reference material added.** The docs
   landing no longer claims Discord/Google ship first-party (they're official external
   installs) or that cost-v1 rides a DataPart (it's the artifact metadata map); the README

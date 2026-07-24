@@ -78,6 +78,7 @@ Surface the agent to people — the operator console, or no UI at all.
 | Guide | When to read |
 |---|---|
 | [Operator console (React/Tauri)](/guides/react-tauri-ui) | You want the multi-chat React console and to package it for desktop |
+| [Managed Python runtime (desktop)](/guides/python-runtime) | You're on the desktop app and `execute_code` / the document skills (docx · xlsx · pptx · pdf) need their one-click interpreter install |
 | [Command palette (⌘K)](/guides/command-palette) | You want the fast keyboard path to jump between surfaces + inline chat |
 | [Developer flags](/guides/developer-flags) | You want to merge a half-built feature behind a tiered flag (off/dev/beta/on) instead of a long-lived branch |
 | [Access from your phone (LAN / Tailscale)](/guides/phone-access) | You want to drive the agent from your phone — installable PWA over your LAN or tailnet, add-to-home-screen |

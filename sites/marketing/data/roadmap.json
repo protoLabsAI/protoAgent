@@ -43,8 +43,8 @@
     "status": "In progress",
     "items": [
       {
-        "title": "Image generation plugin (protobanana)",
-        "detail": "generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.",
+        "title": "Design-system alignment",
+        "detail": "migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).",
         "refs": []
       }
     ]

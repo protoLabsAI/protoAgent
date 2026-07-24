@@ -133,6 +133,10 @@ parallel with engine startup** (#2203): the in-app UpdateNotice pulls that resul
 it mounts and opens the changelog modal if a newer build exists — so the prompt lands before
 the engine finishes booting, then the normal 10s-settle + 6h re-check cycle takes over.
 
+On a frozen build, `execute_code` (and the document skills behind it) need the one-click
+[managed Python runtime](/guides/python-runtime) — Settings ▸ Tools shows the install card
+until it's provisioned.
+
 On macOS, `spawn_sidecar` augments the sidecar's `PATH` with the user's login-shell `PATH`
 (via `$SHELL -ilc`, plus the Homebrew/local fallbacks) before spawning. A Finder/Dock launch
 otherwise inherits only `launchd`'s minimal `PATH`, so `npx`/`node`/ACP coding-agent adapters
