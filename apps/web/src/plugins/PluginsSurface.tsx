@@ -20,6 +20,7 @@ import { PluginFreshness } from "./PluginFreshness";
 import { usePluginManage, usePluginRefresh } from "./usePluginManage";
 import { catalogCategories, filterCatalog } from "./catalog";
 import {
+  bundleLabel,
   filterInstalled,
   needsAttention,
   sortInstalled,
@@ -51,6 +52,7 @@ function contributionsLabel(p: Plugin): string {
 
 function PluginRow({
   p,
+  bundleName,
   update,
   busy,
   onToggle,
@@ -65,6 +67,8 @@ function PluginRow({
   installingDeps,
 }: {
   p: Plugin;
+  /** bundle provenance label (ADR 0040) — set when a bundle installed this plugin */
+  bundleName?: string | null;
   update?: PluginUpdate;
   busy: boolean;
   onToggle: (p: Plugin) => void;
@@ -82,11 +86,16 @@ function PluginRow({
   const [configOpen, setConfigOpen] = useState(false);
   return (
     <Tr>
-      {/* Name · version · (only-when-actionable) freshness badge. */}
+      {/* Name · version · bundle chip · (only-when-actionable) freshness badge. */}
       <Td className="plugin-cell-name">
         <div className="plugin-row-head">
           <strong>{p.name}</strong>
           {p.version ? <span className="plugin-ver">v{p.version}</span> : null}
+          {bundleName ? (
+            <span className="plugin-chip" title={`Installed by the ${bundleName} bundle`}>
+              {bundleName}
+            </span>
+          ) : null}
           <PluginFreshness update={update} />
         </div>
       </Td>
@@ -358,31 +367,36 @@ function LocalTab() {
   // add-ons — they always load, can't be toggled, and are configured in Workspace
   // settings — so they don't belong in the install/enable list.
   const plugins = (runtime.plugins ?? []).filter((p) => !p.builtin);
+  const installedById = new Map((installed.data?.plugins ?? []).map((e) => [e.id, e]));
   const depsById = new Map((installed.data?.plugins ?? []).map((e) => [e.id, e.deps_missing ?? []]));
   const rows: InstalledRow[] = plugins.map((p) => ({
     p,
     behind: Boolean(updateById.get(p.id)?.behind),
     depsMissing: depsById.get(p.id) ?? [],
+    // Bundle provenance (ADR 0040) — labels rows a bundle installed, so a stack's
+    // members stop reading as anonymous individual plugins.
+    bundle: installedById.get(p.id)?.bundle,
   }));
   const counts = statusCounts(rows);
   const shown = sortInstalled(filterInstalled(rows, q, status), sort);
 
-  const renderRow = ({ p }: InstalledRow) => (
+  const renderRow = (row: InstalledRow) => (
     <PluginRow
-      key={p.id}
-      p={p}
-      update={updateById.get(p.id)}
-      busy={pendingId === p.id}
+      key={row.p.id}
+      p={row.p}
+      bundleName={bundleLabel(row)}
+      update={updateById.get(row.p.id)}
+      busy={pendingId === row.p.id}
       onToggle={onToggle}
       onUpdate={onUpdate}
-      updating={updatingId === p.id}
-      configurable={configurableIds.has(p.id)}
-      removable={removableIds.has(p.id)}
+      updating={updatingId === row.p.id}
+      configurable={configurableIds.has(row.p.id)}
+      removable={removableIds.has(row.p.id)}
       onRemove={onRemove}
-      removing={removingId === p.id}
-      depsMissing={depsById.get(p.id) ?? []}
+      removing={removingId === row.p.id}
+      depsMissing={row.depsMissing}
       onInstallDeps={(pl) => installDeps.mutate(pl)}
-      installingDeps={installDeps.isPending && installDeps.variables?.id === p.id}
+      installingDeps={installDeps.isPending && installDeps.variables?.id === row.p.id}
     />
   );
 

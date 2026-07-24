@@ -546,6 +546,9 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     assert any(e["by"] == "bundle:demo_stack" for e in lock["plugins"])
     bundles = lock.get("bundles") or []
     assert bundles and bundles[0]["id"] == "demo_stack"
+    # display name persisted so the console can label member rows without re-parsing
+    # the bundle manifest (older locks lack it — consumers fall back to the id)
+    assert bundles[0]["name"] == "Demo Stack"
     assert set(bundles[0]["plugins"]) == {"demo_a", "demo_b"}
     # the curated turn-on list is persisted in the lock (#1346) so a lock-only consumer
     # (the fleet new-agent path) can auto-enable exactly what the author intended.

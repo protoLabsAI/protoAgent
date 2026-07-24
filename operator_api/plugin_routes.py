@@ -103,6 +103,19 @@ def register_plugin_routes(app) -> None:
         # enabled + incomplete state come from the loader's per-plugin meta (#1719)
         meta_by_id = {p["id"]: p for p in (STATE.plugin_meta or [])}
         root = installer.live_plugins_dir()
+        # Bundle provenance (ADR 0040): the lock already links members to their bundle
+        # (`by: "bundle:<id>"` + the top-level bundles[] registry) — join it here so the
+        # Installed table can label bundle-installed rows instead of showing them as
+        # anonymous individual plugins. `name` is absent on locks written before it was
+        # persisted; consumers fall back to the id.
+        bundle_by_member: dict[str, dict] = {}
+        for b in installer._read_lock().get("bundles") or []:
+            for member_id in b.get("plugins") or []:
+                bundle_by_member[member_id] = {
+                    "id": b.get("id") or "",
+                    "name": b.get("name") or "",
+                    "url": b.get("source_url") or "",
+                }
         out = []
         for e in installer.list_installed():
             mt = meta_by_id.get(e["id"], {})
@@ -112,6 +125,8 @@ def register_plugin_routes(app) -> None:
                 "incomplete": bool(mt.get("incomplete")),
                 "needs_config": list(mt.get("needs_config") or []),
             }
+            if e["id"] in bundle_by_member:
+                item["bundle"] = bundle_by_member[e["id"]]
             m = load_manifest(root / e["id"]) if e.get("present") else None
             if m is not None:
                 item["manifest"] = {
