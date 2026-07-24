@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Desktop: the update prompt now lands at launch, not after engine boot (#2203).** The
+  shell runs one update check in parallel with sidecar startup and stores the outcome;
+  the in-app UpdateNotice pulls it the moment it mounts (a state read, no network) and
+  auto-opens the changelog modal when a newer build exists — so you can update *instead
+  of* sitting through engine startup, rather than being told 10+ seconds after it
+  finishes. Nothing blocks: the check is fire-and-forget, the modal is dismissible, the
+  10s-settle + 6h re-check cycle and the tray's manual check are unchanged, and the shell
+  still never shows its own dialog for an available update (single prompt path).
+
 ### Changed
 - **Plugins ▸ Installed is a real table now — with search, status filter, and sortable
   columns.** The old two-section list (Loaded/Disabled, fixed alphabetical) didn't scale

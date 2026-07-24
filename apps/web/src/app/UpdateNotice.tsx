@@ -5,13 +5,15 @@ import { api, isDesktopWebview } from "../lib/api";
 import { Markdown } from "../chat/LazyMarkdown";
 
 /**
- * In-app update notice for the desktop shell (Tauri). Periodically checks the signed
- * `latest.json`; when a newer build is published it surfaces an ambient pill — click it
- * for a **full modal** with the release **changelog rendered as markdown** + a one-click
- * "Update & Restart". User-driven (we notify; you choose when to apply — no silent
- * background install). Silent in dev / browser / offline / when up to date. The updater
- * work runs in the Rust shell (`updater_check` / `updater_install`); this is the UX.
- * Mirrors the orbis `UpdateNotice` pattern.
+ * In-app update notice for the desktop shell (Tauri). Seeds from the shell's LAUNCH
+ * check (#2203 — run in parallel with engine startup, pulled via
+ * `updater_launch_result` the moment this mounts, auto-opening the modal), then
+ * periodically re-checks the signed `latest.json`; a newer build surfaces an ambient
+ * pill — click it for a **full modal** with the release **changelog rendered as
+ * markdown** + a one-click "Update & Restart". User-driven (we notify; you choose when
+ * to apply — no silent background install). Silent in dev / browser / offline / when up
+ * to date. The updater work runs in the Rust shell (`updater_check` /
+ * `updater_install`); this is the UX. Mirrors the orbis `UpdateNotice` pattern.
  */
 
 const FIRST_CHECK_MS = 10_000; // let the boot settle
@@ -26,6 +28,40 @@ export function UpdateNotice() {
   const [phase, setPhase] = useState<Phase>("available");
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  // Launch check (#2203): the Rust shell runs ONE update check in parallel with engine
+  // startup and stores the outcome; we poll that stored result (a state read, no
+  // network) from mount, so the prompt lands seconds after the window opens instead of
+  // after engine boot + the 10s settle. A launch-found update auto-opens the modal —
+  // that's the "you're about to sit through startup; update instead?" moment. Timer-
+  // found updates keep today's pill-only, don't-interrupt behavior.
+  useEffect(() => {
+    if (!isDesktopWebview()) return;
+    let cancelled = false;
+    let retry: number | undefined;
+    const poll = async (tries: number) => {
+      if (cancelled) return;
+      const r = await api.launchUpdateResult();
+      if (cancelled) return;
+      if (r === null) return; // not desktop / older shell — the timer cycle below covers it
+      if (!r.done) {
+        // Check still in flight (it races the webview boot) — cheap re-read, bounded.
+        if (tries < 20) retry = window.setTimeout(() => poll(tries + 1), 1_000);
+        return;
+      }
+      if (r.update) {
+        setUpdate(r.update);
+        setOpen(true);
+      }
+    };
+    poll(0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retry);
+    };
+    // Mount-only on purpose: the launch result is immutable once done.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!isDesktopWebview()) return;
