@@ -60,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template gained a matching two-item checklist (changelog entry, `Fixes #N`).
   Marking the check *required* in branch protection is a follow-on operator
   action. (#2174)
+- **Design System Engineer archetype in the new-agent picker (#2217).** A new
+  `design-system` soul preset + catalog row (same ADR 0042 data-only pattern as
+  cowork and project-manager, generalized from the fleet's dogfooded frontend
+  engineer): owns a design system end to end — reads tokens and components live,
+  watches for drift, enforces accessibility, and ships every change as a reviewed
+  PR by directing builder delegates. The row installs the
+  `design-system-stack` bundle on create.
 
 ### Changed
 - **Plugins ▸ Installed is a real table now — with search, status filter, and sortable

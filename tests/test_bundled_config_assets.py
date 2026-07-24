@@ -135,6 +135,27 @@ def test_project_manager_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+def test_design_system_archetype_row() -> None:
+    """#2217 ships the Design System Engineer archetype as catalog data only (same
+    ADR 0042 pattern as project-manager above) — pin the same picker invariants:
+    the id is unique (it's the RadioCard value + React key), its `soul_preset`
+    resolves to a preset file that is really bundled, and `custom` is still the
+    catch-all LAST row."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("design-system") == 1, f"'design-system' must appear exactly once, got {ids}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "design-system")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'design-system' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def _sidecar_cli_hidden_imports() -> set[str]:
     """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""

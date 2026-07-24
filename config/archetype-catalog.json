@@ -27,6 +27,14 @@
       "soul_preset": "project-manager"
     },
     {
+      "id": "design-system",
+      "label": "Design System Engineer",
+      "icon": "Component",
+      "bundle": "https://github.com/protoLabsAI/design-system-stack",
+      "blurb": "Owns a design system end to end — reads tokens and components live, watches for drift, enforces accessibility, and ships every change as a reviewed PR by directing builder delegates.",
+      "soul_preset": "design-system"
+    },
+    {
       "id": "custom",
       "label": "Custom",
       "icon": "PenLine",
