@@ -319,7 +319,10 @@ def register_config_routes(app) -> None:
         need a full process restart to take effect."""
         from graph.settings_schema import nest_updates, restart_keys, validate_flat
 
-        ok, err = validate_flat(req.updates)
+        # settings.hidden (#2172): hidden keys are absent from the schema AND refused
+        # here — the UI is presentation, this is the write-side half of the lock.
+        hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
+        ok, err = validate_flat(req.updates, hidden=hidden)
         if not ok:
             return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
         # Validation + restart-key reporting are this surface's; the apply itself goes through
@@ -341,10 +344,15 @@ def register_config_routes(app) -> None:
         agent leaf YAML + reload, so each falls back to the Host/App layer. Only
         known settings keys are accepted (existence-gated against the registry —
         a reset carries no value, so the per-type validate_flat checks don't apply)."""
-        from graph.settings_schema import is_known_key
+        from graph.settings_schema import is_hidden_setting, is_known_key
 
+        hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
         for k in req.keys:
             if not is_known_key(k):
                 return {"ok": False, "messages": [f"validation: unknown setting: {k}"]}
+            # settings.hidden (#2172): a reset writes too (pops the leaf → the value
+            # falls back to Host/App), so a hidden key is just as locked here.
+            if is_hidden_setting(k, hidden):
+                return {"ok": False, "messages": [f"validation: {k} is locked by settings.hidden"]}
         ok, messages = await asyncio.to_thread(_reset_settings_keys, req.keys)
         return {"ok": ok, "messages": messages}

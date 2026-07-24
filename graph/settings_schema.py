@@ -1091,6 +1091,15 @@ def is_known_key(key: str) -> bool:
     return any(full == key for _, full, _, _ in _plugin_field_specs())
 
 
+def is_hidden_setting(key: str, hidden: list[str] | None) -> bool:
+    """``settings.hidden`` (#2172) — True when ``key`` is covered by the operator's
+    hide list: an exact dotted key, or anything under a listed group prefix
+    ("goal" hides every ``goal.*`` field; plugin groups like "careercoach" work the
+    same). Used by ``build_schema`` (never rendered) and the settings write/reset
+    APIs (never changed from the UI) — the two-point ``tools.hidden`` pattern."""
+    return any(key == h or key.startswith(h + ".") for h in (hidden or []))
+
+
 def _plugin_field_specs():
     """Plugin-declared settings fields (ADR 0019) as (schema, full_key, key, spec)
     — ``full_key`` is the dotted YAML path ``<section>.<key>`` the save writes to.
@@ -1227,10 +1236,15 @@ def build_schema(
     # `acp.agents.<id>`, so a custom coding agent shows in the runtime + aux-model
     # dropdowns. Empty config ⇒ exactly ACP_MODEL_OPTIONS (the built-in list).
     acp_opts = acp_runtime_options(getattr(config, "acp_agents", None))
+    # Operator hide list (#2172): dropped from the schema entirely — the write path
+    # refuses these keys too (validate_flat / reset), so gone means gone.
+    hidden = list(getattr(config, "settings_hidden", None) or [])
     groups: dict[str, dict[str, Any]] = {}
     for f in FIELDS:
         if f.ui_hidden:
             continue  # in FIELDS for config round-trip, but a dedicated panel owns the UI (#1076)
+        if is_hidden_setting(f.key, hidden):
+            continue  # settings.hidden (#2172) — never rendered, never toggleable back on
         current = getattr(config, f.attr, None)
         entry: dict[str, Any] = {
             "key": f.key,
@@ -1274,6 +1288,8 @@ def build_schema(
     # YAML path, so apply_updates_to_yaml + secret routing handle it for free).
     plugin_cfg = getattr(config, "plugin_config", {}) or {}
     for sch, full_key, key, spec in _plugin_field_specs():
+        if is_hidden_setting(full_key, hidden):
+            continue  # settings.hidden (#2172) covers plugin-declared fields/groups too
         section_cfg = plugin_cfg.get(sch.section) or sch.defaults
         current = section_cfg.get(key)
         ftype = spec.get("type", "string")
@@ -1335,10 +1351,19 @@ def build_schema(
     return out
 
 
-def validate_flat(updates: dict[str, Any]) -> tuple[bool, str | None]:
-    """Light per-field validation against the registry before persisting."""
+def validate_flat(
+    updates: dict[str, Any], hidden: list[str] | None = None
+) -> tuple[bool, str | None]:
+    """Light per-field validation against the registry before persisting.
+
+    ``hidden`` is the live ``settings.hidden`` list (#2172): a hidden key is refused
+    outright — the schema never rendered it, so any write to it is either a stale
+    client or an attempt to change a setup-time-locked value through the UI.
+    """
     plugin_keys = {full: spec for _, full, _, spec in _plugin_field_specs()}
     for key, val in updates.items():
+        if is_hidden_setting(key, hidden):
+            return False, f"{key} is locked by settings.hidden"
         f = _BY_KEY.get(key)
         if f is None:
             spec = plugin_keys.get(key)

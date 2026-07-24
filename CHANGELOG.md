@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Workspace, Cowork document skills, Claude Bridge, Computer Use, Learning Wiki,
   protoBanana, and PR Reviewer join it. A `status: deprecated|internal` flag on a directory
   entry pulls a plugin from every surface in one line.
+- **`settings.hidden` — hide settings from the console entirely (#2172, the settings half
+  of `tools.hidden`).** List dotted field keys (`goal.max_iterations`) or whole groups
+  (`goal`, including plugin groups like `careercoach`) in config and they vanish from the
+  Settings UI *and* are refused by the settings save/reset APIs — hidden means gone, not
+  toggleable back on. Values stay live in config (hiding ≠ disabling); it's a setup-time
+  trust control for restricted consoles and archetypes (ADR 0071), same two-point pattern
+  as `tools.hidden`.
 - **CI now enforces the CHANGELOG [Unreleased] entry on every PR.** A new
   `changelog` job in `checks.yml` fails any PR whose merge-base diff doesn't touch
   `CHANGELOG.md` — so release notes stop depending on end-of-cycle archaeology.
@@ -54,12 +61,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template gained a matching two-item checklist (changelog entry, `Fixes #N`).
   Marking the check *required* in branch protection is a follow-on operator
   action. (#2174)
-
-### Fixed
-- **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
-  The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
-  link still sent people to the archived external repo; it now links to the in-tree plugin and
-  the tagline says "ships built-in" instead of calling it the reference external plugin.
 
 ## [0.111.0] - 2026-07-23
 
