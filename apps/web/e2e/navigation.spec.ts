@@ -81,17 +81,18 @@ test("plugins section: Installed / Discover (config + advanced install folded in
   // Two sections only now (ADR 0059 D4) — no separate "Install URL" tab.
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Install URL", exact: true })).toHaveCount(0);
 
-  // Installed (default tab) — both status groups + the enable toggle.
+  // Installed (default tab) — one table now (loaded + disabled rows, status pills) with
+  // the enable toggle in the row's action cell.
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
   await expect(page.getByText("Zzz Disabled", { exact: false })).toBeVisible();
-  await page.locator(".subagent-row", { hasText: "Zzz Disabled" })
+  await page.locator(".plugin-table tbody tr", { hasText: "Zzz Disabled" })
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".pl-toast", { hasText: "Zzz Disabled" })).toBeVisible();
 
   // Configure opens a per-plugin settings DIALOG now (2026-06) — not an inline row expander.
   // The (icon-only) Configure button is labelled "Configure <name>"; the dialog is
   // role="dialog" named by the plugin.
-  const demoRow = page.locator(".plugin-row-wrap", { hasText: "Demo Plugin" });
+  const demoRow = page.locator(".plugin-table tbody tr", { hasText: "Demo Plugin" });
   await demoRow.getByRole("button", { name: "Configure" }).click();
   const configDialog = page.getByRole("dialog", { name: "Demo Plugin" });
   await expect(configDialog.locator('.setting-row[data-key="demo.greeting"]')).toBeVisible();

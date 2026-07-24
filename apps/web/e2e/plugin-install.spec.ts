@@ -23,7 +23,7 @@ test("install a plugin from a git URL, then uninstall it from its row", async ({
   await page.getByRole("button", { name: "Install", exact: true }).click();
   await expect(page.getByLabel("plugin git URL")).toHaveCount(0);
 
-  const row = page.locator(".plugin-row-wrap", { hasText: "protoagent-plugin-widgets" });
+  const row = page.locator(".plugin-table tbody tr", { hasText: "protoagent-plugin-widgets" });
   await expect(row).toBeVisible();
 
   // #1643 — the fresh install is configurable IMMEDIATELY (no page refresh): install
@@ -39,7 +39,7 @@ test("install a plugin from a git URL, then uninstall it from its row", async ({
   const confirm = page.getByRole("dialog", { name: "Uninstall plugin?" });
   await expect(confirm).toBeVisible();
   await confirm.getByRole("button", { name: "Uninstall", exact: true }).click();
-  await expect(page.locator(".plugin-row-wrap", { hasText: "protoagent-plugin-widgets" })).toHaveCount(0);
+  await expect(page.locator(".plugin-table tbody tr", { hasText: "protoagent-plugin-widgets" })).toHaveCount(0);
 });
 
 test("the install dialog's form guards an empty URL", async ({ page }) => {
@@ -55,7 +55,7 @@ test("Discover install → Configure dialog hydrates without a page refresh (#16
   // Land on Installed first so the settings schema is fetched + cached WITHOUT the new
   // plugin's group — the bug's precondition (the schema query has a 5-min staleTime, so
   // without the install-side invalidation the stale cache serves the Configure dialog).
-  await expect(page.locator(".plugin-row-wrap", { hasText: "Demo Plugin" })).toBeVisible();
+  await expect(page.locator(".plugin-table tbody tr", { hasText: "Demo Plugin" })).toBeVisible();
 
   // Install from the Discover directory (this path used to skip the schema refetch).
   await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
@@ -66,7 +66,7 @@ test("Discover install → Configure dialog hydrates without a page refresh (#16
   // Back on Installed: the new row offers Configure NOW — no page refresh — and the
   // dialog carries the plugin's fields (the schema was refetched after install).
   await page.locator(".pl-tabs").getByRole("tab", { name: "Installed", exact: true }).click();
-  const row = page.locator(".plugin-row-wrap", { hasText: "artifact-plugin" });
+  const row = page.locator(".plugin-table tbody tr", { hasText: "artifact-plugin" });
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Configure artifact-plugin" }).click();
   const config = page.getByRole("dialog", { name: "artifact-plugin" });
@@ -77,5 +77,5 @@ test("Discover install → Configure dialog hydrates without a page refresh (#16
   await row.getByRole("button", { name: /uninstall/i }).click();
   const confirm = page.getByRole("dialog", { name: "Uninstall plugin?" });
   await confirm.getByRole("button", { name: "Uninstall", exact: true }).click();
-  await expect(page.locator(".plugin-row-wrap", { hasText: "artifact-plugin" })).toHaveCount(0);
+  await expect(page.locator(".plugin-table tbody tr", { hasText: "artifact-plugin" })).toHaveCount(0);
 });
