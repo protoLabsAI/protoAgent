@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The original six curated keys ride along unchanged, so older plugin-kits keep working.
 
 ### Fixed
+- **The eval client no longer races push-config registration (#2230).** A task started
+  over ``SendStreamingMessage`` is live slightly before its store write lands, so an
+  immediate ``CreateTaskPushNotificationConfig`` could bounce with TASK_NOT_FOUND —
+  the source of the flaky ``test_set_push_config_round_trips`` (and its event-loop
+  teardown noise). The push-config helpers now retry exactly that error with a short
+  bounded backoff (5 attempts, ~0.75s worst case); any other JSON-RPC error, or a
+  genuinely unknown task id, still fails immediately/after the bound.
 - **Six status tones now actually theme (#2224).** Chat notes, the keybindings conflict
   state, and the knowledge delete-armed state referenced `--pl-color-info/warning/danger`
   — names the design package never defines — so their hex fallbacks rendered permanently:
