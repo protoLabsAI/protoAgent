@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Plugin views now receive the console's full theme, not six curated colors (#2225).**
+  The ADR 0026 theming bridge — `consoleTheme()`, carried by the `protoagent:init` and
+  `protoagent:theme` postMessage payloads — now includes the complete computed `--pl-*`
+  token map (keyed off `@protolabsai/design`'s tokens.json, so the list tracks the design
+  package) plus the active light/dark `mode`. The plugin-kit already passes `--pl-*`-form
+  keys straight onto a page's `:root`, so an embedded view inherits the operator's whole
+  active theme — spacing, radii, status colors, fonts — not just the six bridged slots.
+  The original six curated keys ride along unchanged, so older plugin-kits keep working.
+
 ### Fixed
 - **The header menu drawer is a real modal now (#2222).** It claimed `aria-modal` but
   kept none of the contract: Tab escaped to the page behind it, the background kept
