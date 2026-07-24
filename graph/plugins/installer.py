@@ -473,6 +473,39 @@ def _normalize_dist(name: str) -> str:
     return _norm(name)
 
 
+def _frozen_install_missing_deps(pid: str, requires_pip: list[str], missing: list[str]) -> None:
+    """Frozen desktop, hard deps missing at install/update time: pip them into the
+    managed Python runtime (ADR 0094 P2) — the same target ``install_deps`` uses —
+    instead of the pre-ADR-0093 flat refusal (#2226). Refuses only when the runtime
+    isn't provisioned (naming the install route) or the install itself fails
+    (surfacing pip's real error)."""
+    from infra.python_runtime import managed_python_exe
+    from runtime.python_install import PythonRuntimeError, install_requirements_into_managed_runtime
+
+    to_install = [s for s in requires_pip if _dep_pkg_name(s) in missing]
+    _validate_pip_specs(pid, to_install)
+    if managed_python_exe() is None:
+        raise InstallError(
+            f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
+            f"provision the managed Python runtime first (POST /api/runtime/python/install "
+            f"or Settings ▸ Tools), then retry."
+        )
+    try:
+        install_requirements_into_managed_runtime(to_install)
+    except PythonRuntimeError as exc:
+        _audit(
+            "install_deps",
+            {"id": pid, "deps": to_install, "targets": ["managed-runtime"]},
+            "managed runtime install failed",
+            success=False,
+        )
+        raise InstallError(
+            f"{pid!r} needs {', '.join(missing)} — installing into the managed runtime failed: {exc}"
+        ) from exc
+    _audit("install_deps", {"id": pid, "deps": to_install, "targets": ["managed-runtime"]}, "ok")
+    log.info("[plugins] %s: installed %d missing dep(s) into the managed runtime", pid, len(to_install))
+
+
 def install(
     url: str, ref: str | None = None, *, force: bool = False, by: str = "cli", allow: list[str] | None = None
 ) -> dict:
@@ -512,9 +545,11 @@ def install(
         if _is_builtin(pid):
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
 
-        # Frozen runtime (desktop): no pip — a plugin can only run if its declared
-        # deps are already importable in the bundle. Refuse early with a clear
-        # message instead of a cryptic enable-time ImportError (ADR 0058 D2).
+        # Frozen runtime (desktop): no host pip — a missing hard dep used to be a flat
+        # ADR 0058 D2 refusal ("install it on a server instead"). The managed Python
+        # runtime (ADR 0094 P2) is a real install target now, so when it's provisioned
+        # the missing deps are pip'd into it right here (#2226), and we refuse only when
+        # the runtime is absent or that install actually fails.
         # OPTIONAL deps (#1953) don't gate: the plugin degrades gracefully without
         # them, so a missing one warns (in the summary + log) and install proceeds.
         warnings: list[str] = []
@@ -522,10 +557,7 @@ def install(
             if manifest.requires_pip:
                 ok, missing = _deps_satisfied(manifest.requires_pip)
                 if not ok:
-                    raise InstallError(
-                        f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
-                        f"install it on a server/Docker build instead."
-                    )
+                    _frozen_install_missing_deps(pid, manifest.requires_pip, missing)
             if manifest.optional_pip:
                 _, soft_missing = _deps_satisfied(manifest.optional_pip)
                 if soft_missing:

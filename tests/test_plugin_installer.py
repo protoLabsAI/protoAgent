@@ -324,6 +324,68 @@ def test_frozen_install_deps_optional_only_failure_keeps_satisfied_optionals(env
     assert "optional dep(s) definitely_not_real_xyz aren't in the desktop runtime" in caplog.text
 
 
+# ── frozen install/update gate routes deps into the managed runtime (#2226) ──
+
+
+def test_frozen_install_pips_missing_deps_into_managed_runtime(env, monkeypatch):
+    """#2226: a frozen install/update with a provisioned managed runtime no longer
+    refuses on missing hard deps with the pre-ADR-0093 message — it pips them into
+    the runtime (the install_deps target) and the install proceeds."""
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")  # frozen forces archive fetch; keep the local-repo clone
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())  # dep not satisfied anywhere
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: Path("/fake/runtime/bin/python3"))
+    got = {}
+    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", lambda reqs, **k: got.setdefault("reqs", reqs))
+    summary = installer.install(str(repo))
+    assert got["reqs"] == ["python-docx>=1.1"]  # wheel install attempted, into the managed runtime
+    assert summary["id"] == "demo_ext"
+    assert (installer.live_plugins_dir() / "demo_ext" / "protoagent.plugin.yaml").exists()
+
+
+def test_frozen_install_refuses_without_managed_runtime_and_names_the_install_route(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: None)  # runtime absent
+    monkeypatch.setattr(
+        pi, "install_requirements_into_managed_runtime",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not attempt an install without a runtime")),
+    )
+    with pytest.raises(installer.InstallError, match="POST /api/runtime/python/install"):
+        installer.install(str(repo))
+    assert not (installer.live_plugins_dir() / "demo_ext").exists()  # refused before landing code
+
+
+def test_frozen_install_surfaces_the_real_error_when_runtime_install_fails(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: Path("/fake/runtime/bin/python3"))
+
+    def _boom(reqs, **k):
+        raise pi.PythonInstallError(
+            "plugin dependency install failed: No matching distribution found for python-docx>=1.1"
+        )
+
+    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _boom)
+    with pytest.raises(installer.InstallError, match="No matching distribution found"):
+        installer.install(str(repo))
+    assert not (installer.live_plugins_dir() / "demo_ext").exists()
+
+
 def test_managed_runtime_dists_read_failure_degrades_to_empty(monkeypatch, caplog):
     """A broken managed-runtime read must never break dep resolution — the fallback
     is 'nothing installed there' (empty set), with the swallow left visible in the log."""
