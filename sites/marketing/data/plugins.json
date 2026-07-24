@@ -1,5 +1,354 @@
 [
   {
+    "id": "discord",
+    "name": "Discord",
+    "category": "Communication",
+    "official": true,
+    "tagline": "Run your agent as a Discord bot — inbound DMs + @-mentions, outbound send/read/react tools.",
+    "adds": [
+      "surface",
+      "tool",
+      "secrets"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/discord-plugin",
+    "enable": "discord",
+    "links": {
+      "source": "https://github.com/protoLabsAI/discord-plugin",
+      "docs": "/docs/guides/communication-plugins"
+    }
+  },
+  {
+    "id": "artifact",
+    "name": "Artifact (Generative UI)",
+    "category": "Generative UI",
+    "official": true,
+    "tagline": "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). Ships built-in with protoAgent.",
+    "adds": [
+      "tool",
+      "view"
+    ],
+    "bundled": true,
+    "enable": "artifact",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/artifact",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
+    "id": "terminal",
+    "name": "Terminal",
+    "category": "Tools",
+    "official": true,
+    "tagline": "A full terminal (xterm.js + a real PTY over WebSocket) as a console view, themed from the design system.",
+    "adds": [
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/terminal-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/terminal-plugin",
+      "docs": "https://github.com/protoLabsAI/terminal-plugin#readme"
+    }
+  },
+  {
+    "id": "agent-browser",
+    "name": "Agent Browser",
+    "category": "Automation",
+    "official": true,
+    "tagline": "Browser automation backed by vercel-labs/agent-browser: tools + skill + workflows + a live browser panel.",
+    "adds": [
+      "tool",
+      "skill",
+      "workflow",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/agent-browser-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/agent-browser-plugin",
+      "docs": "https://github.com/protoLabsAI/agent-browser-plugin#readme"
+    }
+  },
+  {
+    "id": "projectBoard",
+    "name": "Project Board",
+    "category": "Orchestration",
+    "official": true,
+    "tagline": "Board-driven coding orchestration — a beads board + ACP spawn loop + planning layer + console view.",
+    "adds": [
+      "tool",
+      "workflow",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/projectBoard-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/projectBoard-plugin",
+      "docs": "https://github.com/protoLabsAI/projectBoard-plugin#readme"
+    }
+  },
+  {
+    "id": "portfolio",
+    "name": "Portfolio",
+    "category": "Orchestration",
+    "official": true,
+    "tagline": "Multi-team orchestration — one PM across many project boards over A2A (ADR 0055).",
+    "adds": [
+      "tool",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/portfolio-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/portfolio-plugin",
+      "docs": "https://github.com/protoLabsAI/portfolio-plugin#readme"
+    }
+  },
+  {
+    "id": "pm",
+    "name": "Product Manager",
+    "category": "Product",
+    "official": true,
+    "tagline": "PM toolkit — 65 PM skills, a provenance-enforced PM Brain, specialist subagents, and a brain dashboard.",
+    "adds": [
+      "tool",
+      "subagent",
+      "skill",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/pm-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/pm-plugin",
+      "docs": "https://github.com/protoLabsAI/pm-plugin#readme"
+    }
+  },
+  {
+    "id": "spacetraders",
+    "name": "SpaceTraders",
+    "category": "Examples",
+    "official": true,
+    "tagline": "An autonomous SpaceTraders fleet commander — crew subagents, navigation/mining/trading tools, workflows, and a Fleet dashboard. The reference full-bundle plugin.",
+    "adds": [
+      "tool",
+      "subagent",
+      "workflow",
+      "skill",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/spacetraders-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/spacetraders-plugin",
+      "docs": "https://github.com/protoLabsAI/spacetraders-plugin#readme"
+    }
+  },
+  {
+    "id": "prototrader-finance",
+    "name": "protoTrader Finance",
+    "category": "Finance",
+    "official": true,
+    "tagline": "Trading research as a full bundle — market data, backtesting, factor IC, a behavioral journal, a gated paper broker, the research desk, and a Quant Desk dashboard.",
+    "adds": [
+      "tool",
+      "subagent",
+      "workflow",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/prototrader-finance",
+    "links": {
+      "source": "https://github.com/protoLabsAI/prototrader-finance",
+      "docs": "https://github.com/protoLabsAI/prototrader-finance#readme"
+    }
+  },
+  {
+    "id": "monarch-money",
+    "name": "Monarch Money",
+    "category": "Finance",
+    "official": true,
+    "tagline": "Give your agent access to Monarch Money via its MCP server.",
+    "adds": [
+      "tool"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/monarch-money-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/monarch-money-plugin",
+      "docs": "https://github.com/protoLabsAI/monarch-money-plugin#readme"
+    }
+  },
+  {
+    "id": "doom",
+    "name": "DOOM",
+    "category": "Examples",
+    "official": true,
+    "tagline": "But can it run DOOM? Play shareware DOOM in a console view via WebAssembly (prboom).",
+    "adds": [
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/doom-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/doom-plugin",
+      "docs": "https://github.com/protoLabsAI/doom-plugin#readme"
+    }
+  },
+  {
+    "id": "careercoach",
+    "name": "Career Coach",
+    "category": "Productivity",
+    "official": true,
+    "tagline": "Your career coach & job-hunt copilot — strategy, mock interviews, honest CV feedback, and offer/negotiation coaching, plus an autonomous evaluate→tailor→apply pipeline. A full-surface plugin showcase.",
+    "adds": [
+      "tool",
+      "subagent",
+      "skill",
+      "workflow",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/careercoach-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/careercoach-plugin",
+      "docs": "https://github.com/protoLabsAI/careercoach-plugin#readme"
+    }
+  },
+  {
+    "id": "github",
+    "name": "GitHub (read/write tools)",
+    "category": "Integrations",
+    "official": true,
+    "tagline": "Read AND write GitHub over the gh CLI — PRs, issues, diffs, CI, repo files; plus gated create/edit/merge/close, comments, labels (per-agent write gating). Ships a read-only Issues/PRs board, a util-bar New-issue widget, and the user-only /issue command.",
+    "adds": [
+      "tool",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/github-plugin",
+    "enable": "github",
+    "links": {
+      "source": "https://github.com/protoLabsAI/github-plugin",
+      "docs": "https://github.com/protoLabsAI/github-plugin#readme"
+    }
+  },
+  {
+    "id": "google",
+    "name": "Google Workspace",
+    "category": "Integrations",
+    "official": true,
+    "tagline": "Google Workspace for your agent, built to grow — Gmail (read + draft-only, never sends, plus mailbox hygiene) and Calendar (read + free/busy + search).",
+    "adds": [
+      "tool",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/google-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/google-plugin",
+      "docs": "https://github.com/protoLabsAI/google-plugin#readme"
+    }
+  },
+  {
+    "id": "cowork",
+    "name": "Cowork (document skills)",
+    "category": "Productivity",
+    "official": true,
+    "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus schedule, memory-consolidation, and writing-voice habits (ADR 0083).",
+    "adds": [
+      "skill"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/cowork-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/cowork-plugin",
+      "docs": "https://github.com/protoLabsAI/cowork-plugin#readme"
+    }
+  },
+  {
+    "id": "claude-bridge",
+    "name": "Claude Bridge",
+    "category": "Tools",
+    "official": true,
+    "tagline": "Explore Claude Code's on-disk state — sessions, memory, scratchpads — and translate its skills, subagents, and MCP config over to protoAgent.",
+    "adds": [
+      "tool",
+      "skill"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/claude-bridge-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/claude-bridge-plugin",
+      "docs": "https://github.com/protoLabsAI/claude-bridge-plugin#readme"
+    }
+  },
+  {
+    "id": "cua",
+    "name": "Computer Use",
+    "category": "Automation",
+    "official": true,
+    "tagline": "Drive native GUI apps on this machine — snapshot a window's accessibility tree, then click/type/scroll by element without stealing focus. Wraps the cua-driver binary.",
+    "adds": [
+      "tool"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/cua-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/cua-plugin",
+      "docs": "https://github.com/protoLabsAI/cua-plugin#readme"
+    }
+  },
+  {
+    "id": "learningWiki",
+    "name": "Learning Wiki",
+    "category": "Productivity",
+    "official": true,
+    "tagline": "An adaptive learning wiki — an LLM-maintained, interlinked concept wiki plus a learner ledger: per-concept strength, misconceptions, and FSRS-scheduled review.",
+    "adds": [
+      "tool",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/learningWiki-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/learningWiki-plugin",
+      "docs": "https://github.com/protoLabsAI/learningWiki-plugin#readme"
+    }
+  },
+  {
+    "id": "protobanana",
+    "name": "protoBanana (image gen)",
+    "category": "Media",
+    "official": true,
+    "tagline": "Native image generation and editing via the protoBanana gateway — text-to-image, instruction edits, and identity-preserving edits over self-hosted ComfyUI workflows.",
+    "adds": [
+      "tool"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/protobanana-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protobanana-plugin",
+      "docs": "https://github.com/protoLabsAI/protobanana-plugin#readme"
+    }
+  },
+  {
+    "id": "pr-reviewer",
+    "name": "PR Reviewer (protoPatch)",
+    "category": "Engineering",
+    "official": true,
+    "tagline": "The deterministic half of the PR-review QA tier — budgeted protoPatch structural reviews as a fifth review-panel member (ADR 0078).",
+    "adds": [
+      "tool"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/pr-reviewer-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/pr-reviewer-plugin",
+      "docs": "https://github.com/protoLabsAI/pr-reviewer-plugin#readme"
+    }
+  },
+  {
     "id": "plugin-devkit",
     "name": "Plugin Devkit",
     "category": "Authoring",
@@ -53,24 +402,6 @@
     }
   },
   {
-    "id": "discord",
-    "name": "Discord",
-    "category": "Communication",
-    "official": true,
-    "tagline": "Run your agent as a Discord bot — an inbound DM/channel gateway plus outbound posting tools.",
-    "adds": [
-      "surface",
-      "tool",
-      "secrets"
-    ],
-    "bundled": false,
-    "enable": "discord",
-    "links": {
-      "source": "https://github.com/protoLabsAI/discord-plugin",
-      "docs": "/docs/guides/plugins"
-    }
-  },
-  {
     "id": "telegram",
     "name": "Telegram",
     "category": "Communication",
@@ -85,63 +416,6 @@
     "links": {
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/telegram",
       "docs": "/docs/guides/communication-plugins"
-    }
-  },
-  {
-    "id": "github",
-    "name": "GitHub (read/write tools)",
-    "category": "Integrations",
-    "official": true,
-    "tagline": "Read AND write GitHub over the gh CLI — PRs, issues, diffs, CI, repo files; plus gated create/edit/merge/close, comments, labels (per-agent write gating). Ships a read-only Issues/PRs board, a util-bar New-issue widget, and the user-only /issue command.",
-    "adds": [
-      "tool",
-      "view"
-    ],
-    "bundled": false,
-    "install": "https://github.com/protoLabsAI/github-plugin",
-    "enable": "github",
-    "links": {
-      "source": "https://github.com/protoLabsAI/github-plugin",
-      "docs": "https://github.com/protoLabsAI/github-plugin#readme"
-    }
-  },
-  {
-    "id": "spacetraders",
-    "name": "SpaceTraders",
-    "category": "Examples",
-    "official": true,
-    "tagline": "An autonomous SpaceTraders fleet commander — crew subagents, navigation/mining/trading tools, workflows, and a Fleet dashboard. The reference full-bundle plugin.",
-    "adds": [
-      "tool",
-      "subagent",
-      "workflow",
-      "skill",
-      "view"
-    ],
-    "bundled": false,
-    "install": "https://github.com/protoLabsAI/spacetraders-plugin",
-    "links": {
-      "source": "https://github.com/protoLabsAI/spacetraders-plugin",
-      "docs": "https://github.com/protoLabsAI/spacetraders-plugin#readme"
-    }
-  },
-  {
-    "id": "prototrader-finance",
-    "name": "protoTrader Finance",
-    "category": "Finance",
-    "official": true,
-    "tagline": "Trading research as a full bundle — market data, backtesting, factor IC, a behavioral journal, a gated paper broker, the research desk, and a Quant Desk dashboard.",
-    "adds": [
-      "tool",
-      "subagent",
-      "workflow",
-      "view"
-    ],
-    "bundled": false,
-    "install": "https://github.com/protoLabsAI/prototrader-finance",
-    "links": {
-      "source": "https://github.com/protoLabsAI/prototrader-finance",
-      "docs": "https://github.com/protoLabsAI/prototrader-finance#readme"
     }
   },
   {
@@ -160,26 +434,6 @@
     "links": {
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello",
       "docs": "/docs/guides/plugins"
-    }
-  },
-  {
-    "id": "careercoach",
-    "name": "Career Coach",
-    "category": "Productivity",
-    "official": true,
-    "tagline": "Your career coach & job-hunt copilot — strategy, mock interviews, honest CV feedback, and offer/negotiation coaching, plus an autonomous evaluate→tailor→apply pipeline. A full-surface plugin showcase.",
-    "adds": [
-      "tool",
-      "subagent",
-      "skill",
-      "workflow",
-      "view"
-    ],
-    "bundled": false,
-    "install": "https://github.com/protoLabsAI/careercoach-plugin",
-    "links": {
-      "source": "https://github.com/protoLabsAI/careercoach-plugin",
-      "docs": "https://github.com/protoLabsAI/careercoach-plugin#quick-start"
     }
   }
 ]

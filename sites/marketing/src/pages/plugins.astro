@@ -17,7 +17,9 @@ const lavender = 'var(--pl-color-brand-lavender)';
 // (2) ECOSYSTEM plugins: GitHub repos in the org tagged `protoagent-plugin`, so a newly-
 //     tagged repo lands here on the next build — no PR.
 // data/plugins.json is now just OPTIONAL editorial polish, keyed by id (nicer category /
-// tagline). Everything degrades gracefully: a YAML/FS/GitHub hiccup never breaks the build.
+// tagline). It is GENERATED from config/plugin-directory.yaml (scripts/plugin_directory.py,
+// which also derives the in-app Discover catalog) — edit the YAML, not the JSON.
+// Everything degrades gracefully: a YAML/FS/GitHub hiccup never breaks the build.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 

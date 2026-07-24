@@ -179,10 +179,16 @@ Anyone can install your plugin from its git URL once it's a public repo. To make
 **discoverable** and feature it on the [plugin directory](https://agent.protolabs.studio/plugins):
 
 1. **Tag the repo** with the [`protoagent-plugin`](https://github.com/topics/protoagent-plugin)
-   GitHub topic — that surfaces it in the topic search across GitHub.
+   GitHub topic — that surfaces it in the topic search across GitHub, and the plugin
+   directory auto-discovers it on the next site deploy (bundles also tag
+   `protoagent-bundle` to group under Bundles).
 2. **Open a PR** adding an entry to
-   [`sites/marketing/data/plugins.json`](https://github.com/protoLabsAI/protoAgent/blob/main/sites/marketing/data/plugins.json)
-   (`name`, `tagline`, `adds`, `install` = your git URL, `links`). It renders as a card on the directory.
+   [`config/plugin-directory.yaml`](https://github.com/protoLabsAI/protoAgent/blob/main/config/plugin-directory.yaml)
+   and run `python scripts/plugin_directory.py build`. That one entry drives every
+   curated surface: the site card's polish (`name`, `tagline`, `adds`) **and** the
+   in-app Plugins ▸ Discover catalog (`GET /api/plugins/catalog`). The derived files
+   (`config/plugin-catalog.json`, `sites/marketing/data/plugins.json`) are generated —
+   don't edit them by hand; CI fails on drift.
 
 ## Safety
 

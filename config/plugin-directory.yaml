@@ -1,0 +1,225 @@
+# The canonical plugin directory — ONE hand-edited source for every curated plugin
+# listing surface. `scripts/plugin_directory.py build` derives:
+#
+#   config/plugin-catalog.json            — the in-app Discover catalog (GET /api/plugins/catalog)
+#   sites/marketing/data/plugins.json     — the marketing site's editorial overlay
+#
+# Do not edit the derived JSON files by hand — CI fails when they drift (the same
+# source→derived pattern as ROADMAP.md → roadmap.json and CHANGELOG.md → changelog.json).
+#
+# Entry fields:
+#   id        (required)  canonical plugin id — the manifest id, used by the in-app catalog
+#   site_id   (optional)  overlay key when it differs from id: the marketing page folds an
+#                         override onto its auto-scraped card by `<repo-name minus -plugin>`
+#                         (see sites/marketing/src/pages/plugins.astro, #1772)
+#   name / category / tagline (required)  display copy, shared by both surfaces
+#   status    (optional)  active (default) | deprecated | internal — only active entries
+#                         are emitted anywhere; flipping this pulls a plugin from every
+#                         surface in one line while keeping the record
+#   bundled   (optional)  true = ships in-tree under plugins/<id> (source link derived);
+#                         mutually exclusive with repo
+#   repo      (required unless bundled)  the external git URL — install URL + source link
+#   enable    (optional)  the `plugin enable <id>` name (bundled entries default to id)
+#   adds      (optional)  contribution chips for the site card (tool/skill/view/…)
+#   docs      (optional)  docs link; defaults: bundled → /docs/guides/plugins,
+#                         external → <repo>#readme
+#   app       (optional, default true)   include in the in-app Discover catalog
+#   site      (optional, default true)   include in the marketing overlay
+#
+# To list a new plugin: tag the repo `protoagent-plugin` (the site auto-discovers it),
+# then add an entry here and run the build for the curated surfaces.
+
+plugins:
+  # ── The in-app Discover catalog (plus site polish) ─────────────────────────────
+  - id: discord
+    name: Discord
+    category: Communication
+    repo: https://github.com/protoLabsAI/discord-plugin
+    tagline: "Run your agent as a Discord bot — inbound DMs + @-mentions, outbound send/read/react tools."
+    enable: discord
+    adds: [surface, tool, secrets]
+    docs: /docs/guides/communication-plugins
+
+  - id: artifact
+    name: Artifact (Generative UI)
+    category: Generative UI
+    bundled: true
+    tagline: "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). Ships built-in with protoAgent."
+    adds: [tool, view]
+
+  - id: terminal
+    name: Terminal
+    category: Tools
+    repo: https://github.com/protoLabsAI/terminal-plugin
+    tagline: "A full terminal (xterm.js + a real PTY over WebSocket) as a console view, themed from the design system."
+    adds: [view]
+
+  - id: agent_browser
+    site_id: agent-browser
+    name: Agent Browser
+    category: Automation
+    repo: https://github.com/protoLabsAI/agent-browser-plugin
+    tagline: "Browser automation backed by vercel-labs/agent-browser: tools + skill + workflows + a live browser panel."
+    adds: [tool, skill, workflow, view]
+
+  - id: project_board
+    site_id: projectBoard
+    name: Project Board
+    category: Orchestration
+    repo: https://github.com/protoLabsAI/projectBoard-plugin
+    tagline: "Board-driven coding orchestration — a beads board + ACP spawn loop + planning layer + console view."
+    adds: [tool, workflow, view]
+
+  - id: portfolio
+    name: Portfolio
+    category: Orchestration
+    repo: https://github.com/protoLabsAI/portfolio-plugin
+    tagline: "Multi-team orchestration — one PM across many project boards over A2A (ADR 0055)."
+    adds: [tool, view]
+
+  - id: pm
+    name: Product Manager
+    category: Product
+    repo: https://github.com/protoLabsAI/pm-plugin
+    tagline: "PM toolkit — 65 PM skills, a provenance-enforced PM Brain, specialist subagents, and a brain dashboard."
+    adds: [tool, subagent, skill, view]
+
+  - id: spacetraders
+    name: SpaceTraders
+    category: Examples
+    repo: https://github.com/protoLabsAI/spacetraders-plugin
+    tagline: "An autonomous SpaceTraders fleet commander — crew subagents, navigation/mining/trading tools, workflows, and a Fleet dashboard. The reference full-bundle plugin."
+    adds: [tool, subagent, workflow, skill, view]
+
+  - id: prototrader-finance
+    name: protoTrader Finance
+    category: Finance
+    repo: https://github.com/protoLabsAI/prototrader-finance
+    tagline: "Trading research as a full bundle — market data, backtesting, factor IC, a behavioral journal, a gated paper broker, the research desk, and a Quant Desk dashboard."
+    adds: [tool, subagent, workflow, view]
+
+  - id: monarch_money
+    site_id: monarch-money
+    name: Monarch Money
+    category: Finance
+    repo: https://github.com/protoLabsAI/monarch-money-plugin
+    tagline: "Give your agent access to Monarch Money via its MCP server."
+    adds: [tool]
+
+  - id: doom
+    name: DOOM
+    category: Examples
+    repo: https://github.com/protoLabsAI/doom-plugin
+    tagline: "But can it run DOOM? Play shareware DOOM in a console view via WebAssembly (prboom)."
+    adds: [view]
+
+  - id: careercoach
+    name: Career Coach
+    category: Productivity
+    repo: https://github.com/protoLabsAI/careercoach-plugin
+    tagline: "Your career coach & job-hunt copilot — strategy, mock interviews, honest CV feedback, and offer/negotiation coaching, plus an autonomous evaluate→tailor→apply pipeline. A full-surface plugin showcase."
+    adds: [tool, subagent, skill, workflow, view]
+
+  - id: github
+    name: GitHub (read/write tools)
+    category: Integrations
+    repo: https://github.com/protoLabsAI/github-plugin
+    tagline: "Read AND write GitHub over the gh CLI — PRs, issues, diffs, CI, repo files; plus gated create/edit/merge/close, comments, labels (per-agent write gating). Ships a read-only Issues/PRs board, a util-bar New-issue widget, and the user-only /issue command."
+    enable: github
+    adds: [tool, view]
+
+  - id: google
+    name: Google Workspace
+    category: Integrations
+    repo: https://github.com/protoLabsAI/google-plugin
+    tagline: "Google Workspace for your agent, built to grow — Gmail (read + draft-only, never sends, plus mailbox hygiene) and Calendar (read + free/busy + search)."
+    adds: [tool, view]
+
+  - id: cowork
+    name: Cowork (document skills)
+    category: Productivity
+    repo: https://github.com/protoLabsAI/cowork-plugin
+    tagline: "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus schedule, memory-consolidation, and writing-voice habits (ADR 0083)."
+    adds: [skill]
+
+  - id: claude_bridge
+    site_id: claude-bridge
+    name: Claude Bridge
+    category: Tools
+    repo: https://github.com/protoLabsAI/claude-bridge-plugin
+    tagline: "Explore Claude Code's on-disk state — sessions, memory, scratchpads — and translate its skills, subagents, and MCP config over to protoAgent."
+    adds: [tool, skill]
+
+  - id: cua
+    name: Computer Use
+    category: Automation
+    repo: https://github.com/protoLabsAI/cua-plugin
+    tagline: "Drive native GUI apps on this machine — snapshot a window's accessibility tree, then click/type/scroll by element without stealing focus. Wraps the cua-driver binary."
+    adds: [tool]
+
+  - id: learning_wiki
+    site_id: learningWiki
+    name: Learning Wiki
+    category: Productivity
+    repo: https://github.com/protoLabsAI/learningWiki-plugin
+    tagline: "An adaptive learning wiki — an LLM-maintained, interlinked concept wiki plus a learner ledger: per-concept strength, misconceptions, and FSRS-scheduled review."
+    adds: [tool, view]
+
+  - id: protobanana
+    name: protoBanana (image gen)
+    category: Media
+    repo: https://github.com/protoLabsAI/protobanana-plugin
+    tagline: "Native image generation and editing via the protoBanana gateway — text-to-image, instruction edits, and identity-preserving edits over self-hosted ComfyUI workflows."
+    adds: [tool]
+
+  - id: pr-reviewer
+    name: PR Reviewer (protoPatch)
+    category: Engineering
+    repo: https://github.com/protoLabsAI/pr-reviewer-plugin
+    tagline: "The deterministic half of the PR-review QA tier — budgeted protoPatch structural reviews as a fifth review-panel member (ADR 0078)."
+    adds: [tool]
+
+  # ── Bundled built-ins curated for the marketing site only (not in in-app Discover:
+  #    built-ins are enabled via config, not installed) ─────────────────────────────
+  - id: plugin-devkit
+    name: Plugin Devkit
+    category: Authoring
+    bundled: true
+    app: false
+    tagline: "Build your own plugins — the authoring kit + reference plugin. A scaffold tool, an architect subagent, the building-plugins skill, and a console guide, in one bundle."
+    adds: [tool, subagent, skill, workflow, view]
+
+  - id: delegates
+    name: Delegate Registry
+    category: Orchestration
+    bundled: true
+    app: false
+    tagline: "A hot-swappable registry of the agents and endpoints your agent can talk to — fleet A2A agents, OpenAI-compatible endpoints, ACP coding agents — managed from the console."
+    adds: [tool, settings]
+    docs: /docs/guides/delegates
+
+  - id: coding_agent
+    name: CLI Coding Agent (ACP)
+    category: Orchestration
+    bundled: true
+    app: false
+    tagline: "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol."
+    adds: [tool]
+    docs: /docs/guides/coding-agents
+
+  - id: telegram
+    name: Telegram
+    category: Communication
+    bundled: true
+    app: false
+    tagline: "Run your agent as a Telegram bot — inbound DMs and groups, replies back out. A tiny reference communication plugin."
+    adds: [surface, config]
+    docs: /docs/guides/communication-plugins
+
+  - id: hello
+    name: Hello (example)
+    category: Examples
+    bundled: true
+    app: false
+    tagline: "A minimal starting point — one tool, one bundled skill, and a console view. Copy it to scaffold your own plugin by hand."
+    adds: [tool, skill, view]
