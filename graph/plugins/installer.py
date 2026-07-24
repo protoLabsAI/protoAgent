@@ -652,6 +652,10 @@ def _install_bundle(
     lock["bundles"].append(
         {
             "id": bid,
+            # Display name persisted so the console's Installed table can label member
+            # rows with their bundle without re-fetching the manifest (older locks lack
+            # it — consumers fall back to the id).
+            "name": str(bundle.get("name") or ""),
             "source_url": bundle_url,
             "requested_ref": ref or "",
             "resolved_sha": bundle_sha,

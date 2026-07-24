@@ -11,7 +11,17 @@ export type InstalledRow = {
   behind: boolean;
   /** declared pip deps not importable (installedPluginsQuery → deps_missing) */
   depsMissing: string[];
+  /** bundle provenance (installedPluginsQuery → bundle, ADR 0040): this plugin was
+   *  installed by a bundle — label shown as a chip, searchable below. */
+  bundle?: { id: string; name?: string };
 };
+
+/** Display label for a row's bundle chip — the bundle's name, falling back to its id
+ *  (locks written before the name was persisted only carry the id). */
+export function bundleLabel(r: InstalledRow): string | null {
+  if (!r.bundle) return null;
+  return r.bundle.name || r.bundle.id || null;
+}
 
 export type InstalledStatus = "All" | "Loaded" | "Disabled" | "Attention";
 export type InstalledSortKey = "name" | "status" | "contributions";
@@ -28,7 +38,8 @@ export function contributionCount(p: Plugin): number {
 }
 
 // Free-text search + status chip. Tool NAMES are searchable on purpose — "which
-// plugin ships tool X?" is a real question once dozens of plugins are installed.
+// plugin ships tool X?" is a real question once dozens of plugins are installed —
+// and so is the BUNDLE ("show me everything cowork-stack installed").
 export function filterInstalled(rows: InstalledRow[], q: string, status: InstalledStatus): InstalledRow[] {
   const needle = q.trim().toLowerCase();
   return rows.filter((r) => {
@@ -36,7 +47,7 @@ export function filterInstalled(rows: InstalledRow[], q: string, status: Install
     if (status === "Disabled" && r.p.loaded) return false;
     if (status === "Attention" && !needsAttention(r)) return false;
     if (!needle) return true;
-    return `${r.p.name} ${r.p.id} ${r.p.version ?? ""} ${r.p.tools.join(" ")}`
+    return `${r.p.name} ${r.p.id} ${r.p.version ?? ""} ${r.p.tools.join(" ")} ${r.bundle?.name ?? ""} ${r.bundle?.id ?? ""}`
       .toLowerCase()
       .includes(needle);
   });

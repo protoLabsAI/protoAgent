@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugins ▸ Installed shows bundle provenance (ADR 0040).** Plugins installed by a
+  bundle carry the bundle's name as a chip on their row — a stack's members stop reading
+  as anonymous individual plugins — and the table's search matches the bundle name/id, so
+  "show me everything cowork-stack installed" is one query. The lock already recorded the
+  linkage (`by: "bundle:<id>"` + the `bundles[]` registry); the installer now persists the
+  bundle's display name too, and `GET /api/plugins/installed` joins it onto member rows
+  (older locks fall back to the bundle id).
+
+### Added
 - **Desktop: the update prompt now lands at launch, not after engine boot (#2203).** The
   shell runs one update check in parallel with sidecar startup and stores the outcome;
   the in-app UpdateNotice pulls it the moment it mounts (a state read, no network) and
