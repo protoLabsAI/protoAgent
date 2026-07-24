@@ -17,6 +17,8 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## In progress
 
+- **Design-system conformance & full-token theming** — the console-vs-DS audit's structural tier, and a lossless `--pl-*` theme bridge so plugin views and artifacts stop approximating the console look. (#2072, #2225)
+
 
 ## Shipped
 

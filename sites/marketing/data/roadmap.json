@@ -40,6 +40,19 @@
     ]
   },
   {
+    "status": "In progress",
+    "items": [
+      {
+        "title": "Design-system conformance & full-token theming",
+        "detail": "the console-vs-DS audit's structural tier, and a lossless --pl-* theme bridge so plugin views and artifacts stop approximating the console look.",
+        "refs": [
+          "#2072",
+          "#2225"
+        ]
+      }
+    ]
+  },
+  {
     "status": "Shipped",
     "items": [
       {
