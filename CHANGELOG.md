@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An empty Attention view in Plugins ▸ Installed now says the good news.** Clicking the
+  Attention chip with nothing wrong showed the generic "No plugins match in Attention." —
+  which read like a problem. It now says "Nothing needs attention — no errors, unfinished
+  setup, available updates, or missing deps."
+
 ## [0.112.0] - 2026-07-24
 
 ### Added
