@@ -721,6 +721,69 @@ struct UpdateInfo {
     notes: String,
 }
 
+/// The launch-time update check's outcome (#2203), held for the webview to pull.
+/// `done: false` = still in flight; `done + update: None` = up to date / check failed
+/// (both mean "nothing to prompt"); `done + update: Some` = prompt immediately.
+#[derive(serde::Serialize, Clone, Default)]
+struct LaunchUpdateResult {
+    done: bool,
+    update: Option<UpdateInfo>,
+}
+
+/// Managed state for the launch check — written once by `spawn_launch_update_check`,
+/// read (cheaply, no network) by the `updater_launch_result` command.
+#[derive(Default)]
+struct LaunchUpdateState(Mutex<LaunchUpdateResult>);
+
+/// Kick off the update check CONCURRENTLY with sidecar/engine startup (#2203): the old
+/// silent launch check was removed to avoid double-prompting (native dialog + web pill),
+/// which left the first prompt waiting on webview boot + a 10s settle timer — you sat
+/// through engine startup before learning a newer build existed. This check runs in
+/// parallel with `spawn_sidecar`, never blocks window creation, and shows NO native
+/// dialog: the result lands in `LaunchUpdateState`, where the web `UpdateNotice` pulls
+/// it as soon as it mounts and owns the entire prompt UX (one prompt path, unchanged).
+fn spawn_launch_update_check<R: Runtime>(app: AppHandle<R>) {
+    tauri::async_runtime::spawn(async move {
+        let outcome = match app.updater() {
+            Ok(updater) => match updater.check().await {
+                Ok(Some(update)) => {
+                    let current = app.package_info().version.to_string();
+                    log::info!("updater: {} available at launch (running {current})", update.version);
+                    Some(UpdateInfo {
+                        version: update.version.clone(),
+                        current,
+                        notes: update.body.clone().unwrap_or_default(),
+                    })
+                }
+                Ok(None) => {
+                    log::info!("updater: up to date (launch check)");
+                    None
+                }
+                Err(e) => {
+                    log::warn!("updater: launch check failed: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                log::info!("updater: unavailable for this install: {e}");
+                None
+            }
+        };
+        if let Some(state) = app.try_state::<LaunchUpdateState>() {
+            *state.0.lock().unwrap() = LaunchUpdateResult { done: true, update: outcome };
+        }
+    });
+}
+
+/// The launch check's stored outcome — a mutex read, safe for the webview to poll
+/// while `done` is false. Complements `updater_check` (a fresh network check).
+#[tauri::command]
+fn updater_launch_result<R: Runtime>(app: AppHandle<R>) -> LaunchUpdateResult {
+    app.try_state::<LaunchUpdateState>()
+        .map(|s| s.0.lock().unwrap().clone())
+        .unwrap_or_default()
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DownloadProgress {
@@ -780,6 +843,7 @@ pub fn run() {
             chat_stream,
             updater_check,
             updater_install,
+            updater_launch_result,
             hide_launcher,
             focus_main,
             hotkeys_status,
@@ -870,6 +934,10 @@ pub fn run() {
                 );
             }
             spawn_sidecar(app.handle(), port);
+            // Update check in PARALLEL with engine startup (#2203) — result stored for
+            // the web UpdateNotice to pull the moment it mounts; see the fn docs.
+            app.manage(LaunchUpdateState::default());
+            spawn_launch_update_check(app.handle().clone());
             let app_url = || WebviewUrl::App(format!("index.html?__apiPort={port}").into());
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
@@ -951,11 +1019,13 @@ pub fn run() {
                 Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
             }
 
-            // Ambient update checks are now owned by the web UpdateNotice (an in-app
-            // pill + changelog, polling `updater_check` ~10s after boot then every 6h) —
-            // so the old silent launch check is gone, to avoid double-prompting (a native
-            // dialog AND the pill). The tray "Check for updates" still does an interactive
-            // native check (see the tray handler) as a manual fallback.
+            // Update-prompt ownership: the web UpdateNotice owns ALL ambient prompting
+            // (the pill + changelog modal). It seeds from the launch check above
+            // (`updater_launch_result`, #2203 — prompt lands before engine startup
+            // finishes) and keeps its own 10s-settle + 6h `updater_check` cycle. The
+            // shell never dialogs an available update on its own — that double-prompt
+            // is why the old silent launch check was removed. The tray "Check for
+            // Updates…" stays as the interactive native fallback.
             Ok(())
         })
         .on_window_event(|window, event| match event {

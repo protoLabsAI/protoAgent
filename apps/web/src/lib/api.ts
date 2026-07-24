@@ -1911,6 +1911,26 @@ export const api = {
       return null; // not in Tauri / no manifest / offline — stay quiet
     }
   },
+  /** The LAUNCH check's stored outcome (#2203) — the shell runs one update check in
+   * parallel with engine startup; this pulls its result (a state read, no network).
+   * `done: false` while the check is still in flight. Null outside the shell or on an
+   * older shell without the command — callers must treat null as "no launch check". */
+  async launchUpdateResult(): Promise<{
+    done: boolean;
+    update: { version: string; current: string; notes: string } | null;
+  } | null> {
+    const core = tauriCore();
+    if (!core) return null;
+    try {
+      return (
+        (await core.invoke<{ done: boolean; update: { version: string; current: string; notes: string } | null }>(
+          "updater_launch_result",
+        )) ?? null
+      );
+    } catch {
+      return null; // older shell without the command — UpdateNotice falls back to its timers
+    }
+  },
   async installUpdate(
     onProgress: (e: { chunkLength: number; contentLength: number | null }) => void,
   ): Promise<void> {
