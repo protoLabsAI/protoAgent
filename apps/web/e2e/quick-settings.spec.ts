@@ -12,7 +12,10 @@ import type { Page } from "@playwright/test";
 test("the header hamburger opens the app drawer → Settings dialog", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
-  const drawer = page.getByTestId("app-drawer");
+  // The whole sheet (head/body/FOOTER) — the DS Drawer dialog, named by its title
+  // (#2222). The `app-drawer` testid now rides the body wrapper only, so footer
+  // assertions below need the dialog scope; using the role also pins the a11y name.
+  const drawer = page.getByRole("dialog", { name: "Menu" });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   // The drawer is a single Settings door now (ADR 0048) — no separate Telemetry shortcut.
