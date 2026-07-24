@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **One bad work folder no longer takes away every filesystem tool (#2251).** Saving a work
+  folder that wasn't an existing absolute directory silently unbound the whole fenced fs
+  toolset: the unusable root was skipped, the registry came out empty, and because an
+  explicit `filesystem.projects` list suppresses the default `workspace` fallback, the agent
+  lost `read_file` / `list_dir` / `write_file` altogether — with one INFO log line to say why.
+  A relative path made it worse, resolving against the *server's* cwd (`/` under the desktop
+  sidecar) rather than the operator's. `POST /api/settings/filesystem-projects` now refuses
+  relative, missing, and not-a-directory paths with a reason; `GET` reports per-row `exists`
+  so the Work-folders editor warns when a saved folder goes missing later (renamed, unmounted
+  volume), including the "none of these exist, the tools are unbound" case; and the
+  all-unusable path logs at WARNING naming the folders. Plugin-iframe `postMessage` posts are
+  also gated on the frame having navigated — an unloaded iframe is still `about:blank`, which
+  inherits the console's origin (`tauri://localhost` in the desktop app), so every pre-load
+  post was refused by the browser and only ever produced console noise.
+
 ### Added
 - **See the exact system prompt for any turn (#2243, P1).** Most agent systems hide the
   prompt; protoAgent now captures what each model call ACTUALLY received. A new
