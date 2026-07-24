@@ -48,7 +48,7 @@
   text-decoration: none;
 }
 .telemetry-table .trace-link:hover {
-  color: var(--fg-primary);
+  color: var(--fg);
   text-decoration: underline;
 }
 .telemetry-table .trace-copy {

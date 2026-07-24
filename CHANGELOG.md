@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Design-system conformance pass over the console CSS (#2072, mechanical tier).** The
+  bounded audit found several latent bugs, all fixed: two `var(--fg-primary)` references
+  (undefined, no fallback — the browser silently dropped the declarations, so the
+  Plugins/Telemetry sortable-header hover never applied), a typo'd `var(--mono)` that lost
+  the themed mono font, a hardcoded white-on-dark hover and a frozen-purple focus outline
+  that didn't flip in light mode, `#fff` badge text and raw `#000` drawer/mobile scrims
+  swapped for the `fg-on-accent` / `overlay` tokens, the devices panel's intended-but-
+  undefined `--bg-inset` pointed at the real token, one raw error-red literal tokenized,
+  and ~50 lines of dead hand-rolled confirm-modal CSS deleted (every call site moved to
+  the DS ConfirmDialog long ago).
+
 ### Added
 - **Desktop: the update prompt now lands at launch, not after engine boot (#2203).** The
   shell runs one update check in parallel with sidecar startup and stores the outcome;
