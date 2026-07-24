@@ -374,6 +374,41 @@ def test_fs_projects_set_normalizes_and_enables(monkeypatch):
     assert fs["projects"][1] == {"name": "inbox", "path": "/tmp/inbox", "write": False}
 
 
+def test_fs_projects_set_offloads_apply_off_the_event_loop(monkeypatch):
+    """#2210 — the fs-projects settings write must run _apply_settings_changes via
+    asyncio.to_thread like every sibling call site (#497): the apply does file I/O plus
+    a full graph reload, and calling it synchronously stalls the whole event loop. The
+    fake detects the loop by thread: get_running_loop() raises in a to_thread worker."""
+    import asyncio as aio
+
+    captured = {}
+
+    def _apply(config=None, soul=None):
+        try:
+            aio.get_running_loop()
+            captured["on_event_loop"] = True
+        except RuntimeError:
+            captured["on_event_loop"] = False
+        return True, ["reloaded"]
+
+    # Complete fake (all three names config_routes imports at module level), so this
+    # test also passes when run solo — unlike the sibling fakes, which rely on an
+    # earlier test having imported config_routes against the real server.agent_init.
+    monkeypatch.setitem(
+        sys.modules,
+        "server.agent_init",
+        _fake_module(
+            "server.agent_init",
+            _apply_settings_changes=_apply,
+            _build_settings_callbacks=lambda: {},
+            _reset_settings_keys=lambda keys: (True, []),
+        ),
+    )
+    body = _client().post("/api/settings/filesystem-projects", json={"projects": [{"path": "/tmp/x"}]}).json()
+    assert body["ok"] is True
+    assert captured["on_event_loop"] is False, "apply ran synchronously on the event loop"
+
+
 def test_fs_projects_set_rejections(monkeypatch):
     monkeypatch.setitem(
         sys.modules,

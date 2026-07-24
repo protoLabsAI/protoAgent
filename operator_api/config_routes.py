@@ -268,7 +268,9 @@ def register_config_routes(app) -> None:
         updates: dict = {"filesystem": {"projects": projects}}
         if projects and (body or {}).get("enable", True):
             updates["filesystem"]["enabled"] = True
-        ok, messages = _apply_settings_changes(config=updates)
+        # Offloaded like every sibling call site (#497): config-YAML write + full graph
+        # reload must not run on the event loop. This was the one site that didn't (#2210).
+        ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "projects": projects}

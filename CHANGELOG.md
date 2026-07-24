@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   All the row actions (update / install deps / set up / configure / enable / uninstall)
   are unchanged.
 ### Fixed
+- **The filesystem-projects settings write no longer stalls the event loop (#2210).** The
+  fs-projects route was the one `_apply_settings_changes` call site not offloaded via
+  `asyncio.to_thread` (#497 pattern) — a config write + full graph reload ran synchronously
+  on the event loop, freezing every concurrent request for its duration. Now offloaded like
+  its four siblings, with a regression test that detects an on-loop apply.
 - **The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).**
   The Settings nav's Tools entry carries a warning dot whenever the runtime install card
   is actionable — not provisioned, stale document baseline, or a failed install (pulsing
