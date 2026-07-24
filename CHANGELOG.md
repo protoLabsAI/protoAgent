@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Plugins ▸ Installed is a real table now — with search, status filter, and sortable
+  columns.** The old two-section list (Loaded/Disabled, fixed alphabetical) didn't scale
+  past a handful of plugins. The tab now renders one table (Plugin / Status / Contributes /
+  actions) with free-text search that also matches **tool names** ("which plugin ships
+  `search_jobs`?"), status chips (All · Loaded · Disabled · Attention — attention =
+  error, needs-setup, update available, or missing deps), and click-to-sort headers.
+  Default order keeps the old semantics: loaded first, attention floats up, then name.
+  All the row actions (update / install deps / set up / configure / enable / uninstall)
+  are unchanged.
+### Fixed
+- **The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).**
+  The Settings nav's Tools entry carries a warning dot whenever the runtime install card
+  is actionable — not provisioned, stale document baseline, or a failed install (pulsing
+  while an install runs) — so on a stock desktop install you discover the one-click
+  provision while browsing, not by tripping over a dead `execute_code` mid-task. Mirrors
+  the `deps_missing` badge pattern (ADR 0094 D4's status-surface half; P1 shipped the
+  copy).
+- **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
+  The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
+  link still sent people to the archived external repo; it now links to the in-tree plugin and
+  the tagline says "ships built-in" instead of calling it the reference external plugin.
+
 ### Added
 - **One source of truth for every curated plugin listing.** `config/plugin-directory.yaml`
   now drives both the in-app Plugins ▸ Discover catalog (`config/plugin-catalog.json`) and
