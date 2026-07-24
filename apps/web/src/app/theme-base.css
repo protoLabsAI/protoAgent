@@ -38,6 +38,10 @@
   --border-strong: var(--pl-color-border-strong, rgba(255, 255, 255, 0.18));
   --accent: var(--pl-color-accent, #7c8cff);
 
+  /* Status tones alias the DS --pl-color-status-* set — the ONLY names the design
+     package defines; bare --pl-color-{info,warning,danger} are phantoms (#2224).
+     app/statusTokenGuard.test.ts sweeps the whole console for them and exempts only
+     this bridge, so if a compat alias is ever needed, it belongs here. */
   --success: var(--pl-color-status-success, #41c48d);
   --warning: var(--pl-color-status-warning, #d4bd4f);
   --error: var(--pl-color-status-error, #f07458);
