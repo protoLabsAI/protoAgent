@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert } from "@protolabsai/ui/data";
+import { Alert, Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { ConfirmDialog, Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
@@ -445,17 +445,17 @@ function InjectionsPanel({ filter, setFilter }: { filter: string; setFilter: (v:
           }
         />
       ) : (
-        <table className="memory-injections">
-          <thead>
-            <tr>
-              <th>when</th>
-              <th>what it used</th>
-              <th>context</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table className="memory-injections">
+          <THead>
+            <Tr>
+              <Th>when</Th>
+              <Th>what it used</Th>
+              <Th>context</Th>
+            </Tr>
+          </THead>
+          <TBody>
             {rows.map((r) => (
-              <tr
+              <Tr
                 key={r.id}
                 className="memory-injections-row"
                 role="button"
@@ -469,18 +469,18 @@ function InjectionsPanel({ filter, setFilter }: { filter: string; setFilter: (v:
                   }
                 }}
               >
-                <td>
+                <Td>
                   {/* DS Tooltip (never HTML title=) surfaces the exact timestamp. */}
                   <Tooltip label={r.ts}>
                     <span>{ago(r.ts)}</span>
                   </Tooltip>
-                </td>
-                <td className="memory-injections-what">{injectionSummary(r)}</td>
-                <td className="memory-injections-context">~{r.approx_tokens} tokens</td>
-              </tr>
+                </Td>
+                <Td className="memory-injections-what">{injectionSummary(r)}</Td>
+                <Td className="memory-injections-context">~{r.approx_tokens} tokens</Td>
+              </Tr>
             ))}
-          </tbody>
-        </table>
+          </TBody>
+        </Table>
       )}
       {openRow ? <InjectionDetailDialog row={openRow} onClose={() => setOpenRow(null)} /> : null}
     </>

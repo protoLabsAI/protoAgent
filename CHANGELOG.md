@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Installed table, archetype `requires`, and launch-time update check.
 
 ### Changed
+- **The last two raw `<table>`s now use the DS `Table` primitives (#2232).** The chat
+  generative-UI table renderer (`ChatComponent`) and the memory injection-record table
+  (`MemorySurface`) rendered bare `<table>`/`<th>`/`<td>`, so they didn't inherit DS table
+  theming and drifted from the Plugins/Telemetry surfaces that already use `Table/THead/
+  TBody/Tr/Th/Td`. Swapped both; `MemorySurface`'s clickable rows keep their role /
+  keyboard / aria behaviour via `Tr`'s prop pass-through (and pick up `pl-tr--interactive`
+  automatically). Retired the now-redundant per-file table CSS — only genuine deltas
+  remain (a keyboard `:focus-visible` row style the DS doesn't cover, two column tweaks),
+  which also drops two dead `--pl-color-text-muted`/`--pl-color-surface-2` var refs.
 - **Plugin views now receive the console's full theme, not six curated colors (#2225).**
   The ADR 0026 theming bridge — `consoleTheme()`, carried by the `protoagent:init` and
   `protoagent:theme` postMessage payloads — now includes the complete computed `--pl-*`
