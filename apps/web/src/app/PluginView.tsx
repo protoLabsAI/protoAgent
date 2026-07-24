@@ -1,3 +1,4 @@
+import designTokens from "@protolabsai/design/tokens.json";
 import { Spinner } from "@protolabsai/ui/data";
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -16,17 +17,67 @@ function pluginIdFromPath(path: string): string {
   return path.match(/\/api\/plugins\/([^/]+)\b/)?.[1] ?? "";
 }
 
-// Curated console theme tokens forwarded to a plugin view so it can match the
-// console look (ADR 0026 theming bridge). Exported so the command palette (ADR 0057)
-// can hand the same 6-key theme to an inline-morphed plugin iframe.
+// The `--pl-*` custom-property names the design package publishes, derived from its
+// tokens.json exactly the way the DS build generates tokens.css: kebab-case each key
+// path under a `--pl` prefix. The top-level `light` block is the light-MODE override
+// set (same names, different values), not extra tokens — skip it. Exported so tests
+// can pin the derived list against the shipped token set.
+const kebab = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+function collectTokenVars(node: Record<string, unknown>, prefix: string, acc: string[]): string[] {
+  for (const [key, value] of Object.entries(node)) {
+    if (prefix === "--pl" && key === "light") continue;
+    const name = `${prefix}-${kebab(key)}`;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      collectTokenVars(value as Record<string, unknown>, name, acc);
+    } else {
+      acc.push(name);
+    }
+  }
+  return acc;
+}
+export const PL_TOKEN_VARS: readonly string[] = collectTokenVars(
+  designTokens as Record<string, unknown>, "--pl", [],
+);
+
+// The active light/dark mode: the explicit `data-theme` force on <html> when the theme
+// machinery set one (agentTheme.ts / the DS ThemePanel), else the OS preference.
+function themeMode(): string {
+  const forced = document.documentElement.getAttribute("data-theme");
+  if (forced) return forced;
+  try {
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+// Console theme forwarded to a plugin view so it can match the console look (ADR 0026
+// theming bridge). One flat record, three layers:
+//   • the original curated six keys (bg/bgPanel/fg/fgMuted/brand/border) — unchanged;
+//     older plugin-kits bridge ONLY these onto --pl-* tokens, so they're the
+//     backward-compat contract (#2225);
+//   • the FULL computed --pl-* snapshot, keyed off @protolabsai/design's tokens.json —
+//     the kit passes --pl-*-form keys straight onto the page's :root, so a view inherits
+//     the operator's whole active theme (spacing, radii, status colors, fonts), not just
+//     the six curated slots;
+//   • `mode` — the current data-theme ("light"/"dark"), so a page can pick
+//     mode-appropriate assets/color-scheme (an unknown key to older kits — ignored).
+// Exported so the command palette (ADR 0057) can hand the same theme to an
+// inline-morphed plugin iframe.
 export function consoleTheme(): Record<string, string> {
   if (typeof window === "undefined") return {};
   const s = getComputedStyle(document.documentElement);
   const g = (n: string) => s.getPropertyValue(n).trim();
-  return {
+  const theme: Record<string, string> = {
     bg: g("--bg"), bgPanel: g("--bg-panel"), fg: g("--fg"),
     fgMuted: g("--fg-muted"), brand: g("--brand-violet-light"), border: g("--border"),
+    mode: themeMode(),
   };
+  for (const name of PL_TOKEN_VARS) {
+    const v = g(name);
+    if (v) theme[name] = v; // an unresolvable var is omitted — the kit skips empties anyway
+  }
+  return theme;
 }
 
 // Host for a plugin-contributed console surface (ADR 0026): a same-origin iframe
@@ -198,7 +249,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
 
   // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
   // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's
-  // style/data-theme). Re-post the FRESH curated theme to the mounted iframe so an embedded
+  // style/data-theme). Re-post the FRESH theme payload to the mounted iframe so an embedded
   // plugin view repaints WITHOUT a reload — its plugin-kit listens for `protoagent:theme`
   // and re-skins the --pl-* tokens. `handleLoad` only covers the first paint; this covers
   // every subsequent switch. (consoleTheme() reads the now-updated :root vars at fire time.)

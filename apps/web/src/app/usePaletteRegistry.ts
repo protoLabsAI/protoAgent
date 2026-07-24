@@ -42,7 +42,8 @@ export type InlinePluginView = {
   /** Slug-aware resolved page URL (`apiUrl(view.path)`). */
   url: string;
   icon?: ReactNode;
-  /** The curated 6-key console theme (`consoleTheme()`), posted on init. */
+  /** The console theme payload (`consoleTheme()`) — the curated six keys plus the
+   *  full `--pl-*` snapshot and `mode` (#2225) — posted on init. */
   theme: Record<string, string>;
   /** Operator bearer (`authToken()`) for the page's same-origin authed calls. */
   token: string;
