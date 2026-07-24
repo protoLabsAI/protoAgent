@@ -13,26 +13,8 @@
   margin-bottom: 8px;
 }
 
-/* table */
-.chat-comp-table table {
-  border-collapse: collapse;
-  width: 100%;
-}
-.chat-comp-table th,
-.chat-comp-table td {
-  text-align: left;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border, #2a2a31);
-  vertical-align: top;
-}
-.chat-comp-table th {
-  font-weight: 600;
-  color: var(--fg-secondary);
-  font-size: 12px;
-}
-.chat-comp-table tr:last-child td {
-  border-bottom: 0;
-}
+/* table — chrome comes from the DS `Table` primitives (.pl-table); this wrapper
+   only owns the surrounding card layout (.chat-comp / .chat-comp-table). */
 
 /* key-value */
 .chat-comp-kv dl {
