@@ -460,7 +460,11 @@ function LocalTab() {
                   {!shown.length ? (
                     <Tr>
                       <Td colSpan={4} className="muted">
-                        No plugins match{q ? ` "${q}"` : ""}{status !== "All" ? ` in ${status}` : ""}.
+                        {/* An empty Attention view is the HEALTHY state — say so, instead of
+                            the generic no-match line reading like something's wrong. */}
+                        {status === "Attention" && !q.trim()
+                          ? "Nothing needs attention — no errors, unfinished setup, available updates, or missing deps."
+                          : `No plugins match${q ? ` "${q}"` : ""}${status !== "All" ? ` in ${status}` : ""}.`}
                       </Td>
                     </Tr>
                   ) : null}
