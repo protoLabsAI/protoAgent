@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Workspace, Cowork document skills, Claude Bridge, Computer Use, Learning Wiki,
   protoBanana, and PR Reviewer join it. A `status: deprecated|internal` flag on a directory
   entry pulls a plugin from every surface in one line.
+- **CI now enforces the CHANGELOG [Unreleased] entry on every PR.** A new
+  `changelog` job in `checks.yml` fails any PR whose merge-base diff doesn't touch
+  `CHANGELOG.md` — so release notes stop depending on end-of-cycle archaeology.
+  Escape hatches: the `skip-changelog` label (read from the event snapshot, so
+  apply-then-re-run), a `release/*` head branch (release PRs roll [Unreleased]
+  themselves), or a `dependabot[bot]` actor. Pure git + jq/shell, no dependency
+  install; the logic lives in `scripts/changelog_gate.sh` with tests, and the PR
+  template gained a matching two-item checklist (changelog entry, `Fixes #N`).
+  Marking the check *required* in branch protection is a follow-on operator
+  action. (#2174)
 
 ### Fixed
 - **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
