@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Design System Engineer joins the new-agent picker (#2218).** A fourth shipped
+  archetype: reads a design system live (tokens, component inventory, visual-identity
+  rules via the design-system plugin), watches for drift, enforces accessibility, and
+  ships every change as a reviewed PR by directing builder delegates — never
+  hand-coding, never merging its own work. Installs the `design-system-stack` bundle;
+  the persona ships as the `design-system` soul preset.
 - **Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).**
   An archetype can declare `requires: [python_runtime]` (the Cowork catalog entry now
   does; a bundle's `archetype:` block can too), and the new-agent picker shows a notice

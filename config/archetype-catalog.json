@@ -16,7 +16,9 @@
       "bundle": "https://github.com/protoLabsAI/cowork-stack",
       "blurb": "A knowledge-work copilot — office-document skills, Google connectors, schedules, and memory, prepackaged.",
       "soul_preset": "cowork",
-      "requires": ["python_runtime"]
+      "requires": [
+        "python_runtime"
+      ]
     },
     {
       "id": "project-manager",
@@ -25,6 +27,14 @@
       "bundle": "https://github.com/protoLabsAI/project-manager-stack",
       "blurb": "Single-repo project manager — reads deeply, never holds the keyboard; ships every change through a board of coding agents and reports back as it merges.",
       "soul_preset": "project-manager"
+    },
+    {
+      "id": "design-system",
+      "label": "Design System Engineer",
+      "icon": "Component",
+      "bundle": "https://github.com/protoLabsAI/design-system-stack",
+      "blurb": "Owns a design system end to end — reads tokens and components live, watches for drift, enforces accessibility, and ships every change as a reviewed PR by directing builder delegates.",
+      "soul_preset": "design-system"
     },
     {
       "id": "custom",
