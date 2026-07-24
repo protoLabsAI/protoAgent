@@ -9,7 +9,8 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
 import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
-import { archetypesQuery, queryKeys } from "../lib/queries";
+import { pythonRuntimeView } from "../app/pythonRuntime";
+import { archetypesQuery, pythonRuntimeQuery, queryKeys } from "../lib/queries";
 import { lucideIcon } from "../lib/lucideIcon";
 import { archetypeConfigFields, isMissingRequiredConfig, fieldId, splitConfigValues } from "../lib/archetypeConfig";
 import type { Archetype } from "../lib/types";
@@ -53,6 +54,21 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
     retry: 1,
   });
   const fields = useMemo(() => archetypeConfigFields(preview.data), [preview.data]);
+
+  // Runtime requirement at CHOOSE-time (#2186 follow-on): an archetype declaring
+  // `requires: [python_runtime]` (cowork — its document skills route through
+  // execute_code) gets a warning here when this host's managed runtime isn't ready,
+  // so the ADR-0092 first-run doesn't end at a failed docx on the new agent's first
+  // task. The new-agent flow is a HOST operation and the runtime is box-shared
+  // (ADR 0094), so the host's runtime state is exactly the state the new agent gets.
+  // `stale` (provisioned, old doc baseline) still works — no warning for it here.
+  const pyRuntime = pythonRuntimeView(useQuery(pythonRuntimeQuery()).data);
+  const runtimeWarning =
+    pickedArchetype?.requires?.includes("python_runtime") && pyRuntime.kind === "action" && !pyRuntime.stale
+      ? pyRuntime.installing
+        ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
+        : `${pickedArchetype.label} needs the managed Python runtime for its document skills — install it in Settings ▸ Tools first, or create the agent now and provision later.`
+      : null;
   // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure step
   // (or an individual required field) is a first-class path that falls back to env-only.
   const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
@@ -145,6 +161,11 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         ) : null}
         {previewOpen && pickedArchetype ? (
           <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
+        ) : null}
+        {runtimeWarning ? (
+          <p className="archetype-runtime-notice" role="note">
+            {runtimeWarning}
+          </p>
         ) : null}
 
         {/* Inline Configure step (#2041) — appears only when the picked bundle has MCP inputs

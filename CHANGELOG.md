@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the DS ConfirmDialog long ago).
 
 ### Added
+- **Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).**
+  An archetype can declare `requires: [python_runtime]` (the Cowork catalog entry now
+  does; a bundle's `archetype:` block can too), and the new-agent picker shows a notice
+  when that requirement isn't provisioned on this host — so someone who picks Cowork
+  *specifically to produce documents* learns about the one-click runtime install before
+  their first docx fails, not after. Silent on source runs, when provisioned, and for a
+  stale-but-working doc baseline.
 - **Plugins ▸ Installed shows bundle provenance (ADR 0040).** Plugins installed by a
   bundle carry the bundle's name as a chip on their row — a stack's members stop reading
   as anonymous individual plugins — and the table's search matches the bundle name/id, so

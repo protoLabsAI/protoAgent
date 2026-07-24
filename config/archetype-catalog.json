@@ -15,7 +15,8 @@
       "icon": "Briefcase",
       "bundle": "https://github.com/protoLabsAI/cowork-stack",
       "blurb": "A knowledge-work copilot — office-document skills, Google connectors, schedules, and memory, prepackaged.",
-      "soul_preset": "cowork"
+      "soul_preset": "cowork",
+      "requires": ["python_runtime"]
     },
     {
       "id": "project-manager",
