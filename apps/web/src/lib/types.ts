@@ -183,7 +183,10 @@ export type InstalledPlugin = {
 };
 
 // A fenced filesystem root (ADR 0007) — one entry of `filesystem.projects`.
-export type FsProject = { name?: string; path: string; write: boolean };
+// `exists` is READ-ONLY liveness from GET /api/settings/filesystem-projects: a root whose
+// folder is gone gets skipped when the fs tools are built, and if that empties the registry
+// the whole toolset unbinds. Absent on rows the editor is composing.
+export type FsProject = { name?: string; path: string; write: boolean; exists?: boolean };
 
 // An entry in the official-plugin directory (GET /api/plugins/catalog, ADR 0059),
 // merged with install state. `repo` is the install URL — one-click install runs

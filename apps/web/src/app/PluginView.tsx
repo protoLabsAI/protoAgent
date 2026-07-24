@@ -103,6 +103,14 @@ export function PluginView({ view }: { view: PluginViewType }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
+  // `loaded` for the long-lived listeners below, without making them re-subscribe on load.
+  // A mounted-but-not-yet-navigated iframe is still on about:blank, which INHERITS the
+  // console's origin — under the desktop app that's `tauri://localhost`, so a post targeted
+  // at the sidecar origin is refused outright: "Unable to post message to
+  // http://127.0.0.1:7870. Recipient has origin tauri://localhost." The frame had no
+  // listener yet either way, so the post was always a no-op; gate it and drop the noise.
+  const loadedRef = useRef(false);
+  loadedRef.current = loaded;
   const pluginId = useMemo(() => pluginIdFromPath(view.path), [view.path]);
   // Background delivery (#1640): a `background: true` subscribe from the page asks App
   // to keep this view mounted (hidden) when another surface is active. Store-reported;
@@ -196,8 +204,10 @@ export function PluginView({ view }: { view: PluginViewType }) {
     // Pattern matching + since-replay + seq dedupe live in the pure relay
     // (lib/pluginEventRelay.ts) — this effect only wires postMessage to it.
     const relay = createPluginEventRelay({
-      post: (frame) =>
-        frameRef.current?.contentWindow?.postMessage({ type: "protoagent:event", ...frame }, origin),
+      post: (frame) => {
+        if (!loadedRef.current) return; // pre-navigation frame — see loadedRef
+        frameRef.current?.contentWindow?.postMessage({ type: "protoagent:event", ...frame }, origin);
+      },
       replaySince,
     });
 
@@ -256,7 +266,9 @@ export function PluginView({ view }: { view: PluginViewType }) {
   useEffect(() => {
     const onThemeChange = () => {
       const win = frameRef.current?.contentWindow;
-      if (!win) return;
+      // Not loaded yet → about:blank, wrong origin, nobody listening (see loadedRef).
+      // handleLoad posts the FRESH theme on load, so nothing is lost by skipping here.
+      if (!win || !loadedRef.current) return;
       try {
         const origin = new URL(apiUrl(src), window.location.href).origin;
         win.postMessage({ type: "protoagent:theme", theme: consoleTheme() }, origin);

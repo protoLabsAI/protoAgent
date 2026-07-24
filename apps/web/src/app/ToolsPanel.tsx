@@ -4,7 +4,7 @@ import { Input, Switch } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { FolderTree, TerminalSquare } from "lucide-react";
+import { AlertTriangle, FolderTree, TerminalSquare } from "lucide-react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
@@ -296,8 +296,17 @@ function FsProjectsEditor() {
   });
 
   if (query.isLoading || rows === null) return null;
-  const saved = JSON.stringify(query.data?.projects ?? []);
-  const dirty = JSON.stringify(rows) !== saved;
+  // Compare on the EDITABLE fields only — the server also returns `exists`, which a
+  // refetch would fold into query.data but never into the row the editor round-trips,
+  // leaving Save falsely armed right after a successful save.
+  const editable = (list: FsProject[]) => JSON.stringify(list.map((r) => [r.path, r.write, r.name ?? ""]));
+  const savedRows = query.data?.projects ?? [];
+  const dirty = editable(rows) !== editable(savedRows);
+  // A folder that vanished after it was saved (renamed / unmounted / external drive) is
+  // dropped when the tools are built; if that was the last one the agent loses the whole
+  // filesystem toolset. The API can't refuse it after the fact, so say it here.
+  const missing = savedRows.filter((r) => r.exists === false);
+  const allMissing = savedRows.length > 0 && missing.length === savedRows.length;
 
   return (
     <div className="fs-projects">
@@ -306,12 +315,24 @@ function FsProjectsEditor() {
         The folders the filesystem tools may read{" "}
         (and, per-folder, write). The agent can't reach anything outside this list.
       </p>
+      {missing.length ? (
+        <p className="fs-projects-warning" role="alert">
+          <AlertTriangle size={14} />
+          <span>
+            {allMissing
+              ? "None of these folders exist, so the filesystem tools are unbound — the agent has no read_file / list_dir at all. Fix or remove the paths below."
+              : `${missing.length} folder${missing.length > 1 ? "s are" : " is"} missing and skipped — the agent can't reach ${missing.length > 1 ? "them" : "it"}.`}
+          </span>
+        </p>
+      ) : null}
       {rows.map((row, i) => (
         <div key={i} className="fs-projects-row">
           <Input
             value={row.path}
             placeholder="~/Documents"
             aria-label="Folder path"
+            aria-invalid={savedRows[i]?.exists === false && savedRows[i]?.path === row.path}
+            title={savedRows[i]?.exists === false && savedRows[i]?.path === row.path ? "Folder not found" : undefined}
             onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)))}
           />
           <label className="fs-projects-write">

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 import pytest
@@ -67,6 +68,16 @@ def test_no_tools_without_valid_projects():
     assert build_fs_tools(_Cfg(filesystem_projects=[])) == []
     # Nonexistent path → skipped → no tools.
     assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}])) == []
+
+
+def test_all_folders_unusable_warns_with_paths(caplog):
+    """Configured-but-all-unusable unbinds every fs tool. That's an operator
+    mistake, so it logs at WARNING and names the offending folder; the inert default
+    (nothing configured) stays quiet at INFO."""
+    with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
+        assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}])) == []
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("NOT bound" in m and "/nope/zzz" in m for m in msgs), msgs
 
 
 def test_read_list_find_search(workspace):

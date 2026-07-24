@@ -348,33 +348,54 @@ def _fs_state(monkeypatch, **attrs):
     monkeypatch.setattr(rs.STATE, "graph_config", types.SimpleNamespace(**attrs), raising=False)
 
 
-def test_fs_projects_get(monkeypatch):
-    _fs_state(monkeypatch, filesystem_enabled=True, filesystem_projects=[{"name": "docs", "path": "/d", "write": False}])
+def test_fs_projects_get(monkeypatch, tmp_path):
+    _fs_state(monkeypatch, filesystem_enabled=True, filesystem_projects=[{"name": "docs", "path": str(tmp_path), "write": False}])
     body = _client().get("/api/settings/filesystem-projects").json()
     assert body["enabled"] is True and body["projects"][0]["name"] == "docs"
 
 
-def test_fs_projects_set_normalizes_and_enables(monkeypatch):
+def test_fs_projects_get_reports_missing_folders(monkeypatch, tmp_path):
+    """A root whose folder is gone is SKIPPED when the fs tools are built, and if
+    it was the last one the whole toolset unbinds with only a log line. GET reports
+    liveness per row so the editor can say which folder went missing."""
+    _fs_state(
+        monkeypatch,
+        filesystem_enabled=True,
+        filesystem_projects=[
+            {"name": "here", "path": str(tmp_path), "write": False},
+            {"name": "gone", "path": str(tmp_path / "nope"), "write": False},
+        ],
+    )
+    rows = _client().get("/api/settings/filesystem-projects").json()["projects"]
+    assert [r["exists"] for r in rows] == [True, False]
+
+
+def test_fs_projects_set_normalizes_and_enables(monkeypatch, tmp_path):
     captured = {}
 
     def _apply(config=None, soul=None):
         captured["config"] = config
         return True, ["reloaded"]
 
+    docs = tmp_path / "Documents"
+    inbox = tmp_path / "inbox"
+    docs.mkdir()
+    inbox.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setitem(sys.modules, "server.agent_init", _fake_module("server.agent_init", _apply_settings_changes=_apply))
     body = _client().post(
         "/api/settings/filesystem-projects",
-        json={"projects": [{"path": "~/Documents", "write": True}, {"name": "inbox", "path": "/tmp/inbox"}]},
+        json={"projects": [{"path": "~/Documents", "write": True}, {"name": "inbox", "path": str(inbox)}]},
     ).json()
     assert body["ok"] is True
     fs = captured["config"]["filesystem"]
     assert fs["enabled"] is True
     assert fs["projects"][0]["name"] == "Documents" and fs["projects"][0]["write"] is True
     assert not fs["projects"][0]["path"].startswith("~"), "paths are ~-expanded"
-    assert fs["projects"][1] == {"name": "inbox", "path": "/tmp/inbox", "write": False}
+    assert fs["projects"][1] == {"name": "inbox", "path": str(inbox), "write": False}
 
 
-def test_fs_projects_set_offloads_apply_off_the_event_loop(monkeypatch):
+def test_fs_projects_set_offloads_apply_off_the_event_loop(monkeypatch, tmp_path):
     """#2210 — the fs-projects settings write must run _apply_settings_changes via
     asyncio.to_thread like every sibling call site (#497): the apply does file I/O plus
     a full graph reload, and calling it synchronously stalls the whole event loop. The
@@ -404,24 +425,51 @@ def test_fs_projects_set_offloads_apply_off_the_event_loop(monkeypatch):
             _reset_settings_keys=lambda keys: (True, []),
         ),
     )
-    body = _client().post("/api/settings/filesystem-projects", json={"projects": [{"path": "/tmp/x"}]}).json()
+    body = _client().post("/api/settings/filesystem-projects", json={"projects": [{"path": str(tmp_path)}]}).json()
     assert body["ok"] is True
     assert captured["on_event_loop"] is False, "apply ran synchronously on the event loop"
 
 
-def test_fs_projects_set_rejections(monkeypatch):
+def test_fs_projects_set_rejections(monkeypatch, tmp_path):
     monkeypatch.setitem(
         sys.modules,
         "server.agent_init",
         _fake_module("server.agent_init", _apply_settings_changes=lambda config=None, soul=None: (True, [])),
     )
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
     c = _client()
     assert c.post("/api/settings/filesystem-projects", json={"projects": "nope"}).status_code == 400
     assert c.post("/api/settings/filesystem-projects", json={"projects": [{"path": " "}]}).status_code == 400
     assert (
         c.post(
             "/api/settings/filesystem-projects",
-            json={"projects": [{"name": "x", "path": "/a"}, {"name": "x", "path": "/b"}]},
+            json={"projects": [{"name": "x", "path": str(a)}, {"name": "x", "path": str(b)}]},
         ).status_code
         == 400
     )
+
+
+def test_fs_projects_set_refuses_unusable_folders(monkeypatch, tmp_path):
+    """The save path used to accept ANY non-blank string. build_fs_tools drops
+    every root that isn't a directory, and an empty registry unbinds the ENTIRE fs
+    toolset, so one fat-fingered folder silently took read_file/list_dir/write_file
+    away from the agent. Reject at the door instead, with a reason."""
+    monkeypatch.setitem(
+        sys.modules,
+        "server.agent_init",
+        _fake_module("server.agent_init", _apply_settings_changes=lambda config=None, soul=None: (True, [])),
+    )
+    c = _client()
+    # Relative — would resolve against the SERVER's cwd ("/" under the desktop sidecar).
+    rel = c.post("/api/settings/filesystem-projects", json={"projects": [{"path": "daf sda f s"}]})
+    assert rel.status_code == 400 and "absolute" in rel.json()["detail"]
+    # Absolute but nonexistent.
+    missing = c.post("/api/settings/filesystem-projects", json={"projects": [{"path": str(tmp_path / "nope")}]})
+    assert missing.status_code == 400 and "no such folder" in missing.json()["detail"]
+    # Absolute and existing, but a FILE — resolve() succeeds, the fence needs a dir.
+    f = tmp_path / "notes.txt"
+    f.write_text("x")
+    assert c.post("/api/settings/filesystem-projects", json={"projects": [{"path": str(f)}]}).status_code == 400

@@ -110,6 +110,13 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
     }
     const frame = container.querySelector("iframe");
     expect(frame).not.toBeNull();
+    // Fire the iframe's load — jsdom never navigates it, but a real frame always loads
+    // before the operator can touch the theme, and posts are gated on it: an unnavigated
+    // frame is still about:blank on the CONSOLE's origin (`tauri://localhost` in the
+    // desktop app), so a post targeted at the sidecar origin is refused by the browser.
+    await act(async () => {
+      frame!.dispatchEvent(new Event("load"));
+    });
     const post = vi
       .spyOn(frame!.contentWindow!, "postMessage")
       .mockImplementation(() => {});
@@ -131,5 +138,41 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
     expect(theme.bg).toBe("resolved(--bg:1)");
     expect(theme.brand).toBe("resolved(--brand-violet-light:1)");
     for (const name of PL_TOKEN_VARS) expect(theme[name]).toBe(varValue(name));
+  });
+
+  it("posts nothing to a frame that hasn't loaded yet (about:blank inherits the console origin)", async () => {
+    // Before the frame navigates it's about:blank, which INHERITS the console's origin —
+    // `tauri://localhost` in the desktop app. Posting there targeted at the sidecar origin
+    // is refused by the browser ("Unable to post message to http://127.0.0.1:7870.
+    // Recipient has origin tauri://localhost") and nothing is listening anyway, so the
+    // only effect was console noise. handleLoad posts the fresh theme once it loads.
+    const view: PluginViewType = {
+      id: "main", label: "Test", path: "/api/plugins/testplug/main", key: "plugin:testplug:main",
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    const frame = container.querySelector("iframe");
+    expect(frame).not.toBeNull();
+    const post = vi.spyOn(frame!.contentWindow!, "postMessage").mockImplementation(() => {});
+
+    act(() => {
+      window.dispatchEvent(new Event("protoagent:theme"));
+    });
+    expect(post).not.toHaveBeenCalled();
+
+    // …and once it loads, the same event lands.
+    await act(async () => {
+      frame!.dispatchEvent(new Event("load"));
+    });
+    act(() => {
+      window.dispatchEvent(new Event("protoagent:theme"));
+    });
+    expect(post.mock.calls.some((c) => (c[0] as { type?: string })?.type === "protoagent:theme")).toBe(true);
   });
 });

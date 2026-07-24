@@ -105,6 +105,26 @@
   display: flex;
   gap: 8px;
 }
+/* A saved root whose folder is gone gets skipped when the fs tools are built, and if it was
+   the last one the whole toolset unbinds — so this sits ABOVE the folder list, loud enough
+   to read. `--warning` is the local alias theme-base.css maps to the DS status token. */
+.fs-projects-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.fs-projects-warning svg {
+  flex: none;
+  margin-top: 1px;
+}
 
 /* Contextual group settings (ADR 0048) — a compact chip row at the top of a group's body; each
    chip opens a DIALOG (shell/fs policy, Work folders), contextual to the tools it governs.

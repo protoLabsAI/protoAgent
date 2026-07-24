@@ -140,7 +140,17 @@ def build_fs_tools(config) -> list:
     projects are registered (so the primitive is inert by default)."""
     registry = _registry_from_config(config)
     if not registry.names():
-        log.info("[fs] filesystem enabled but no valid projects registered — no tools")
+        # Configured-but-all-unusable is an OPERATOR MISTAKE, not the inert default: every
+        # fs tool unbinds and the agent just... can't read files anymore. Warn, and
+        # name the folders, so the log says why instead of only that it happened.
+        configured = [e for e in (getattr(config, "filesystem_projects", []) or []) if isinstance(e, dict)]
+        if configured:
+            log.warning(
+                "[fs] no usable work folders — filesystem tools NOT bound. Fix or remove: %s",
+                ", ".join(str(e.get("path") or e.get("name") or "?") for e in configured),
+            )
+        else:
+            log.info("[fs] filesystem enabled but no valid projects registered — no tools")
         return []
     allow_run = bool(getattr(config, "filesystem_allow_run", False))
     # run_command is unsandboxed (arbitrary argv as the server user), so by

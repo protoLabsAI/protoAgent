@@ -229,11 +229,28 @@ def register_config_routes(app) -> None:
     async def _api_fs_projects():
         """The fenced fs roots (ADR 0007): the explicit ``filesystem.projects`` list
         plus whether filesystem tools are enabled. Backs the Tools-panel folder
-        editor — previously this collection had no UI or API at all (YAML-only)."""
+        editor — previously this collection had no UI or API at all (YAML-only).
+
+        Each row carries ``exists``: ``build_fs_tools`` silently SKIPS a root whose
+        path is no longer a directory, and when that empties the registry the whole
+        fs toolset disappears with only a log line. Reporting liveness here
+        lets the editor say which folder went missing instead of the operator having
+        to diff the tool list against the YAML."""
+        from pathlib import Path
+
         cfg = STATE.graph_config
+        projects = []
+        for entry in list(getattr(cfg, "filesystem_projects", []) or []):
+            row = dict(entry) if isinstance(entry, dict) else {}
+            raw = str(row.get("path") or "").strip()
+            try:
+                row["exists"] = bool(raw) and Path(raw).expanduser().is_dir()
+            except OSError:  # unreadable mount / bad path — same as gone for our purposes
+                row["exists"] = False
+            projects.append(row)
         return {
             "enabled": bool(getattr(cfg, "filesystem_enabled", False)),
-            "projects": list(getattr(cfg, "filesystem_projects", []) or []),
+            "projects": projects,
         }
 
     @app.post("/api/settings/filesystem-projects")
@@ -242,7 +259,15 @@ def register_config_routes(app) -> None:
         POST /api/mcp/servers): each entry ``{name?, path, write?}`` — name defaults
         from the folder basename, paths are ~-expanded, blanks and duplicate names
         are rejected. An empty list clears explicit roots (fs falls back to the
-        workspace default when enabled)."""
+        workspace default when enabled).
+
+        Every path must be an ABSOLUTE, EXISTING directory. ``build_fs_tools`` drops
+        roots that don't resolve to a directory, and once every configured root is
+        dropped the registry is empty and the entire fs toolset unbinds — so saving
+        one unusable folder here used to silently take read_file/list_dir/write_file
+        away from the agent, with nothing but a log warning to say why. A
+        relative path is refused for the same reason: it would resolve against the
+        server's CWD (``/`` under the desktop sidecar), never the operator's."""
         from pathlib import Path
 
         raw = (body or {}).get("projects")
@@ -257,6 +282,20 @@ def register_config_routes(app) -> None:
             if not path:
                 raise HTTPException(status_code=400, detail="each project needs a path")
             expanded = Path(path).expanduser()
+            if not expanded.is_absolute():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"folder path must be absolute (start with / or ~): {path!r}",
+                )
+            try:
+                is_dir = expanded.is_dir()
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail=f"can't read folder {expanded}: {exc}") from exc
+            if not is_dir:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"no such folder: {expanded} — create it first, or fix the path",
+                )
             name = str(entry.get("name", "")).strip() or expanded.name or "folder"
             if name in seen:
                 raise HTTPException(status_code=400, detail=f"duplicate project name: {name}")
