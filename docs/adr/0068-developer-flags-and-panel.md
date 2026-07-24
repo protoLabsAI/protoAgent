@@ -1,6 +1,6 @@
 # 0068 — Developer flags & the Developer panel (gating pre-release functionality)
 
-Status: **Proposed**
+Status: **Accepted** (shipped — #1506, Developer panel + flag backend)
 
 > Resolves #1506. Features pass through stages — internal-testing → opt-in preview → GA — but
 > the repo has **no first-class way to gate a half-built feature**. Today it either ships

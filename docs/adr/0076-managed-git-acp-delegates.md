@@ -1,6 +1,6 @@
 # 0076 — Managed git for `acp` delegates: framework-owned branch/commit/push/PR
 
-- Status: Proposed
+- Status: Accepted (shipped #1845/#1846/#1847)
 - Date: 2026-07-05
 - Builds on: ADR 0024 (spawn CLI coding agents over ACP — superseded; ACP lives on as
   the `acp` delegate), ADR 0025 (unified delegate registry — `delegate_to`), ADR 0033

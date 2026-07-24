@@ -637,9 +637,13 @@ or `enabled: true` in the plugin's own manifest (author opt-in for plugins you
 wrote/dropped in). Discovered-but-disabled plugins still appear in runtime
 status so you can see what's available.
 
-From the console, the **Plugins** panel has a one-click **Enable / Disable** toggle per
-plugin — it edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers
-apply immediately. A plugin that serves a **console view** or runs a **background surface**
+From the console, the **Plugins ▸ Installed** panel is a sortable table: free-text search
+matches plugin names, ids, versions, **and tool names** ("which plugin ships `search_jobs`?"),
+status chips filter to All / Loaded / Disabled / **Attention** (error, unfinished setup,
+update available, or missing pip deps), and plugins installed by a bundle carry the bundle's
+name as a chip (searchable too). Each row has a one-click **Enable / Disable** toggle — it
+edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers apply
+immediately. A plugin that serves a **console view** or runs a **background surface**
 (its router mounts at startup) needs a restart to finish — the toggle says so.
 
 Plugin tools that would shadow a core or MCP tool name are skipped (logged).

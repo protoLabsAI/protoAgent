@@ -126,7 +126,7 @@ deprecated alias for `console`. See [Run headless](./docs/guides/headless.md).
 ┌──────────────┐     A2A JSON-RPC + SSE      ┌─────────────────┐
 │   Consumer   │ ──────────────────────────▶ │  A2A handler    │
 │  (any A2A    │                             │  (FastAPI)      │
-│   client)    │ ◀──── cost-v1 DataPart ─────│                 │
+│   client)    │ ◀─── cost-v1 (metadata) ────│                 │
 └──────────────┘                             └────────┬────────┘
                                                       │
                                                       ▼
@@ -188,8 +188,11 @@ you. See [Build a communication plugin](./docs/guides/communication-plugins.md)
 ([ADR 0029](./docs/adr/0029-communication-plugins-standard.md)).
 
 **Publish your own:** tag your repo with the [`protoagent-plugin`](https://github.com/topics/protoagent-plugin)
-GitHub topic, then open a PR adding it to [`plugins.json`](./sites/marketing/data/plugins.json)
-to list it on the directory. See [Install & publish plugins](./docs/guides/plugin-registry.md),
+GitHub topic, then open a PR adding an entry to
+[`config/plugin-directory.yaml`](./config/plugin-directory.yaml) and run
+`python scripts/plugin_directory.py build` — that one entry drives both the in-app
+Discover catalog and the website directory (the JSON files are generated; CI fails on
+drift). See [Install & publish plugins](./docs/guides/plugin-registry.md),
 [Plugins](./docs/guides/plugins.md), [Console views](./docs/guides/plugin-views.md).
 
 ## A2A extensions shipped by default

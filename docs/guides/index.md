@@ -21,6 +21,7 @@ Shape how the agent's loop behaves — standing goals, timers, middleware hooks,
 | [Watches](/guides/watches) | You want the agent to supervise many external conditions at once — poll a metric, react when it trips |
 | [Schedule future work](/guides/scheduler) | You want the agent to defer tasks to itself ("remind me tomorrow", recurring sweeps) — bundled local sqlite |
 | [Middleware](/guides/middleware) | You want pre/post hooks on the agent turn (plugin-contributed) |
+| [System lifecycle events](/guides/lifecycle-events) | You want plugins/skills to react to boot, idle-wake, or the desktop shell coming to the foreground (event-bus broadcasts) |
 | [Run on a coding agent (ACP runtime)](/guides/acp-runtime) | You want an external coding agent (proto/Codex/Claude/Copilot/OpenCode) to *be* the runtime brain, with protoAgent as the shell |
 | [Run on Hermes (preset)](/guides/hermes) | You already run Hermes Agent and want protoAgent's console/A2A/scheduler wrapped around it — one command |
 
@@ -34,6 +35,7 @@ Give the agent reusable, named capabilities and delegates.
 | [Add a custom skill (A2A card)](/guides/add-a-skill) | You want A2A callers to dispatch a named capability — a *card* skill, distinct from the `SKILL.md` skills above |
 | [Configure subagents](/guides/subagents) | You want specialized delegates beyond the shipped `researcher` |
 | [Reusable workflows](/guides/workflows) | You want declarative multi-step recipes (`*.yaml`) the agent can run on demand |
+| [Verifier-grounded coder (`coder_solve`)](/guides/coder) | You want the agent to solve a verifiable coding task via an execution-grounded search ladder (the `coder` plugin) |
 
 ## Knowledge & memory
 
@@ -67,6 +69,7 @@ Add capability without forking — external tools, drop-in packages, channels.
 | [Build a communication plugin](/guides/communication-plugins) | You want a new inbound/outbound channel (like Discord) as a plugin surface |
 | [Install & publish plugins (git URLs)](/guides/plugin-registry) | You want to install a plugin from a git URL, or publish one as a shareable repo (tools + skills + subagents + workflows + views) |
 | [Discord surface](/guides/discord) | You want the agent reachable from Discord (the first-party `discord` plugin) |
+| [File GitHub issues (`/issue`)](/guides/file-github-issues) | You want to file a GitHub issue straight from the console — the `/issue` command or the util-bar widget |
 
 ## Console & UI
 
@@ -86,7 +89,9 @@ Ship it, isolate it, fence it in, and watch it.
 
 | Guide | When to read |
 |---|---|
+| [The `protoagent` command (CLI)](/guides/cli) | You want the terminal control plane — install, run, and manage an instance without the console |
 | [Deploy via GHCR](/guides/deploy) | You're ready to ship and want auto-deploy wired up |
+| [Deploy in Docker (config-as-code)](/guides/deploy-docker) | You want a container that boots pre-configured from a baked seed while console edits still persist |
 | [Deploy on Proxmox (reusable LXC template)](/guides/deploy-proxmox) | You run Proxmox and want a clone-in-seconds template for test/fleet instances |
 | [Releasing](/guides/releasing) | You're cutting a versioned release (semver bump → image → GitHub release) |
 | [Run multiple instances](/guides/multi-instance) | You want several scoped agents (data isolation) on one host |

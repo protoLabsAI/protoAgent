@@ -128,7 +128,10 @@ frozen build bundles the `plugins/` tree and `--collect-all`s `tools`/`websocket
 plugin, ADR 0058, can only import what's bundled). Signed macOS DMG / Linux AppImage+deb /
 Windows NSIS artifacts + an in-app updater ship from the desktop-build CI, dispatched
 manually per release (`gh workflow run desktop-build.yml -f tag=vX.Y.Z`) — see
-`docs/guides/releasing.md` § Desktop.
+`docs/guides/releasing.md` § Desktop. The shell also runs one update check **at launch, in
+parallel with engine startup** (#2203): the in-app UpdateNotice pulls that result the moment
+it mounts and opens the changelog modal if a newer build exists — so the prompt lands before
+the engine finishes booting, then the normal 10s-settle + 6h re-check cycle takes over.
 
 On macOS, `spawn_sidecar` augments the sidecar's `PATH` with the user's login-shell `PATH`
 (via `$SHELL -ilc`, plus the Homebrew/local fallbacks) before spawning. A Finder/Dock launch

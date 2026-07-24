@@ -152,6 +152,7 @@ export default defineConfig({
           text: "Operate & deploy",
           collapsed: true,
           items: [
+            { text: "The protoagent command (CLI)", link: "/guides/cli" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
             { text: "Deploy in Docker (seed + UI override)", link: "/guides/deploy-docker" },
             { text: "Deploy on Proxmox (reusable LXC template)", link: "/guides/deploy-proxmox" },

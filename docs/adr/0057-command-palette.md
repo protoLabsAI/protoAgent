@@ -1,6 +1,6 @@
 # ADR 0057 — Command palette (⌘K): plugin-extensible quick command
 
-- **Status:** Proposed (2026-06-18)
+- **Status:** Accepted (proposed 2026-06-18; shipped v0.48.0)
 - **Date:** 2026-06-18
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** ux, command-palette, plugins, desktop, navigation, extensibility, ds

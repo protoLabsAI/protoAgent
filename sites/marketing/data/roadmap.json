@@ -34,8 +34,7 @@
         "title": "Ollama & Hugging Face listings",
         "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
         "refs": [
-          "#1833",
-          "#1834"
+          "#1990"
         ]
       }
     ]
