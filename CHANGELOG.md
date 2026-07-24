@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — names the design package never defines — so their hex fallbacks rendered permanently:
   never following operator theme overrides, never flipping to light mode. All six point at
   the real `--pl-color-status-*` tokens now (and the test that had pinned the phantom
-  names pins the real ones).
+  names pins the real ones). A repo-wide source guard (`statusTokenGuard.test.ts`) now
+  sweeps every console stylesheet and TS/TSX file and fails the unit suite if a bare
+  phantom name reappears anywhere outside the `theme-base.css` legacy-var bridge.
 - **The header menu drawer is a real modal now (#2222).** It claimed `aria-modal` but
   kept none of the contract: Tab escaped to the page behind it, the background kept
   scrolling, and the sheet mounted inside the header's DOM subtree. It's the DS Drawer

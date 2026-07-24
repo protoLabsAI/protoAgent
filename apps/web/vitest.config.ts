@@ -10,11 +10,13 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     globals: false,
     // By default Vitest stubs every CSS import to an empty module (so a `?raw` import yields
-    // ""). mobileBottomInset.test.ts reads mobile-shell.css/theme.css as raw text to guard
-    // the mobile safe-area insets (#2086), hitl-accent.test.ts reads hitl.css to guard
-    // the HITL accent chain (#2153), and chat/__tests__/hitl-accent.test.ts reads chat.css
-    // to guard the success-note accent chain; processing ONLY them keeps every other CSS
-    // import stubbed, so the rest of the suite is unaffected.
-    css: { include: [/mobile-shell\.css/, /theme\.css/, /hitl\.css/, /chat\.css/] },
+    // ""). The source-guard tests read stylesheets as raw text — mobileBottomInset.test.ts
+    // (mobile safe-area insets, #2086), the two hitl-accent tests (accent chains, #2153),
+    // and app/statusTokenGuard.test.ts, which sweeps EVERY console stylesheet for phantom
+    // status tokens (#2224) — so all of src's CSS is opted into processing (the path anchor
+    // keeps node_modules CSS stubbed, so DS component imports are unaffected). The sweep
+    // asserts each file's raw text is non-empty, so narrowing this back to a per-file list
+    // fails loudly instead of silently blinding the guard.
+    css: { include: [/apps\/web\/src\/.*\.css/] },
   },
 });
