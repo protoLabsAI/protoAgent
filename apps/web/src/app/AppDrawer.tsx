@@ -1,8 +1,7 @@
-import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { BookOpen, Bug, Github, ScrollText, Settings2, X } from "lucide-react";
+import { BookOpen, Bug, Github, ScrollText, Settings2 } from "lucide-react";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Drawer } from "@protolabsai/ui/overlays";
 
 import "./app-drawer.css";
 
@@ -37,33 +36,36 @@ export function AppDrawer({
    *  operator loses any indication of which agent they're talking to. */
   identity?: ReactNode;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
   // Each action closes the drawer after running.
   const act = (fn: () => void) => () => {
     fn();
     onClose();
   };
 
+  // DS Drawer (#2222) — the hand-rolled sheet asserted aria-modal without keeping the
+  // contract (no focus trap, no scroll-lock, mounted inside the header subtree). The DS
+  // Drawer owns all of that plus Esc/backdrop dismiss and the <body> portal (#463), so
+  // this component is just the menu content now. The e2e hook (data-testid) rides the
+  // body wrapper — every spec targets body content through it, never the chrome.
   return (
-    <div className="app-drawer-root" role="dialog" aria-modal="true" aria-label="Menu">
-      <div className="app-drawer-backdrop" onClick={onClose} />
-      <aside className="app-drawer" data-testid="app-drawer">
-        <header className="app-drawer-head">
-          <strong>Menu</strong>
-          <Button icon variant="ghost" type="button" aria-label="Close menu" onClick={onClose}>
-            <X size={16} />
-          </Button>
-        </header>
-        <div className="app-drawer-body">
+    <Drawer open={open} onClose={onClose} side="right" title="Menu" width="min(320px, 88vw)"
+      footer={
+        <div className="app-drawer-foot">
+          {version ? <span className="app-drawer-version">v{version}</span> : null}
+          {/* P4: the wordmark is sacred — protoLabs.studio, exactly. */}
+          <a
+            className="app-drawer-built"
+            href="https://protolabs.studio"
+            target="_blank"
+            rel="noreferrer"
+            onClick={onClose}
+          >
+            built by <strong>protoLabs.studio</strong>
+          </a>
+        </div>
+      }
+    >
+      <div className="app-drawer-body" data-testid="app-drawer">
           {mobile && identity ? <div className="app-drawer-identity">{identity}</div> : null}
           {mobile && surfaces.length ? (
             <section className="app-drawer-group">
@@ -135,21 +137,7 @@ export function AppDrawer({
               Report a bug
             </a>
           </section>
-        </div>
-        <footer className="app-drawer-foot">
-          {version ? <span className="app-drawer-version">v{version}</span> : null}
-          {/* P4: the wordmark is sacred — protoLabs.studio, exactly. */}
-          <a
-            className="app-drawer-built"
-            href="https://protolabs.studio"
-            target="_blank"
-            rel="noreferrer"
-            onClick={onClose}
-          >
-            built by <strong>protoLabs.studio</strong>
-          </a>
-        </footer>
-      </aside>
-    </div>
+      </div>
+    </Drawer>
   );
 }

@@ -1,45 +1,7 @@
-/* The app menu drawer (header hamburger). A right-side sheet over a dim backdrop;
-   doubles as the mobile "more" view. Themed from the design-system tokens. */
-.app-drawer-root {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-}
-.app-drawer-backdrop {
-  position: absolute;
-  inset: 0;
-  background: var(--pl-color-overlay);
-}
-.app-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 100%;
-  width: min(320px, 88vw);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-raised);
-  border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px color-mix(in srgb, #000 25%, transparent);
-  animation: app-drawer-in 0.16s ease;
-}
-@keyframes app-drawer-in {
-  from { transform: translateX(12px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
-}
-.app-drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: 14px;
-}
-.app-drawer-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
+/* The app menu drawer (header hamburger); doubles as the mobile "more" view.
+   The sheet itself is the DS Drawer (#2222) — scrim, right-side panel, focus trap,
+   scroll-lock, Esc/backdrop dismiss, and the <body> portal all come from
+   @protolabsai/ui. Only the menu CONTENT styling lives here. */
 .app-drawer-group {
   display: flex;
   flex-direction: column;
@@ -83,14 +45,15 @@
   color: var(--fg-muted);
 }
 
-/* Footer: version badge + "built by protoLabs.studio" branding (pinned to the bottom). */
+/* Footer content: version badge + "built by protoLabs.studio" branding. Lives inside
+   the DS Drawer's footer slot (.pl-drawer__foot owns padding + border); this wrapper
+   only spreads the two ends apart. */
 .app-drawer-foot {
   display: flex;
+  flex: 1;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
   font-size: 12px;
 }
 .app-drawer-version {

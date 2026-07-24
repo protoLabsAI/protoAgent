@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The header menu drawer is a real modal now (#2222).** It claimed `aria-modal` but
+  kept none of the contract: Tab escaped to the page behind it, the background kept
+  scrolling, and the sheet mounted inside the header's DOM subtree. It's the DS Drawer
+  now — focus trap, body scroll-lock, Esc/backdrop dismiss, and the `<body>` portal all
+  come from `@protolabsai/ui`; the component is just the menu content. (~60 lines of
+  hand-rolled overlay chrome deleted.)
 - **An empty Attention view in Plugins ▸ Installed now says the good news.** Clicking the
   Attention chip with nothing wrong showed the generic "No plugins match in Attention." —
   which read like a problem. It now says "Nothing needs attention — no errors, unfinished
