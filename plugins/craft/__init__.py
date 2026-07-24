@@ -1,7 +1,9 @@
-"""Craft — engineering rituals as user-only slash skills, plus a skill-writer subagent.
+"""Craft — engineering rituals as slash commands, plus a skill-writer subagent.
 
-Prompt-only plugin: four ``user_only`` skills (``/grill``, ``/standup``,
-``/code-review``, ``/writing-skills``) and one delegate (``skill_writer``).
+Prompt-only plugin. Five ``user_only`` skills the operator types (``/grill``,
+``/standup``, ``/code-review``, ``/due-diligence``, ``/writing-skills``), one
+agent-retrievable skill (``adr-authoring`` — deliberately NOT user_only, so
+agent-authored ADRs meet the house bar), and one delegate (``skill_writer``).
 No tools, routes, surfaces, or config — the skills are the product. The
 grilling / code-review / skill-authoring material is adapted from
 mattpocock/skills (MIT); see README.md for attribution.

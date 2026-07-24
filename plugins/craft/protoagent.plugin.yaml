@@ -1,19 +1,23 @@
 id: craft
-name: Craft
-version: 0.3.0
+# The console's plugin table renders only this name, so it has to say what you
+# get — "Craft" alone told nobody anything (same reason as "Coder (…)").
+name: Craft (engineering slash commands)
+version: 0.3.1
 # user_only skills (withheld from agent retrieval, slash-only) landed 2026-06;
 # first host release carrying them is 0.85.0.
 min_protoagent_version: "0.85.0"
 description: >-
-  Engineering rituals as skills: /grill (relentless plan interview), /standup
-  (operational status report), /code-review (adversarial review-workflow
-  driver, ADR 0077), /due-diligence (adopt/build/defer verdict via the
-  due-diligence workflow), /writing-skills (the skill-authoring discipline),
-  and adr-authoring (the house ADR/plan-doc conventions — agent-retrievable,
-  so agent-authored ADRs meet the bar) — plus a skill_writer subagent that
-  drafts SKILL.md skills to that discipline. Prompt-only: no tools, routes, network,
-  or filesystem access. The grilling, code-review, and skill-authoring
-  material is adapted from mattpocock/skills (MIT).
+  Engineering rituals you invoke by typing them: /grill (stress-test a plan
+  before anything is built), /standup (status on everything the agent owns),
+  /code-review (adversarial N-angle review of a diff, ADR 0077),
+  /due-diligence (cited adopt/build/defer verdict on a technology choice),
+  /writing-skills (the house skill-authoring discipline). Plus two the agent
+  reaches for on its own: the adr-authoring skill (house ADR/plan-doc
+  conventions — agent-retrievable, so agent-authored ADRs meet the bar) and
+  the skill_writer subagent, which drafts SKILL.md skills to that discipline.
+  Prompt-only: no tools, routes, network, or filesystem access. The grilling,
+  code-review, and skill-authoring material is adapted from mattpocock/skills
+  (MIT).
 # First-party and ON by default, like artifact/notes/docs — pure prompt content,
 # nothing to trust. Turn it off per-instance with `plugins: { disabled: [craft] }`.
 enabled: true

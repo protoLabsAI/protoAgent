@@ -1,10 +1,11 @@
-"""Craft plugin — bundled user-only skills + the skill_writer subagent.
+"""Craft plugin — bundled slash skills + the skill_writer subagent.
 
 The plugin is prompt-only, so the tests pin its whole contract: the manifest
 parses, ``register()`` contributes exactly a skill dir + one subagent, every
-bundled SKILL.md is loader-valid and ``user_only`` with the expected slash
-token, and no token is shadowed by a core subagent (slash precedence puts
-subagents above skills).
+bundled SKILL.md is loader-valid and lands in the right invocation class
+(``user_only`` with the expected slash token, except the agent-retrievable
+ones below), and no token is shadowed by a core subagent (slash precedence
+puts subagents above skills).
 """
 
 from __future__ import annotations
