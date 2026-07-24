@@ -249,6 +249,11 @@ def register_plugin_routes(app) -> None:
                 activate=not _install_no_enable(),
                 ctx=OpContext.from_state(),
                 apply_settings=lambda updates: _apply_settings_changes(config=updates),
+                # Bundle services (#2118): optional create-time values for a bundle's
+                # declared mcp `${input}`s / `secrets:` — same body shapes as POST
+                # /api/fleet ({key: value} / [{key, value}]). Absent = env-only seeding.
+                mcp_inputs=body.get("inputs") or None,
+                bundle_secrets=body.get("secrets") or None,
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -266,6 +271,8 @@ def register_plugin_routes(app) -> None:
             # live router serves stale routes until restart (#942).
             "restart_recommended": bool(stale_after_reload),
             "enable_error": result.enable_error,
+            # Bundle mcp: servers seeded into the host config this install (#2118).
+            "mcp_seeded": result.mcp_seeded,
         }
 
     @app.post("/api/plugins/{plugin_id}/enabled")

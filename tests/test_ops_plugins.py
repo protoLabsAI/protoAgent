@@ -260,3 +260,118 @@ async def test_peek_bundle_caches_by_url(tmp_path, monkeypatch):
     first = calls["n"]
     await plugin_ops.peek_bundle("https://example.test/stack3")
     assert calls["n"] == first, "second peek must hit the TTL cache"
+
+
+def _host_bundle_lock(tmp_path, monkeypatch):
+    """Point the HOST config + lock paths at tmp files carrying a bundle with one
+    mcp: template (required ${token} from env/input) — the #2118 seeding fixture."""
+    import json
+
+    from graph import config_io
+    from graph.plugins import installer as inst
+
+    cfg = tmp_path / "langgraph-config.yaml"
+    cfg.write_text("model:\n  name: m\n")
+    lock = tmp_path / "plugins.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "plugins": [],
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "mcp": [
+                            {
+                                "template": {
+                                    "name": "github",
+                                    "transport": "http",
+                                    "url": "https://api.githubcopilot.com/mcp/",
+                                    "headers": {"Authorization": "Bearer ${token}"},
+                                },
+                                "inputs": [{"key": "token", "env": "GH_MCP_TOK", "required": True}],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: cfg)
+    monkeypatch.setattr(inst, "lock_path", lambda: lock)
+    return cfg
+
+
+async def test_host_bundle_install_seeds_declared_mcp_servers(tmp_path, monkeypatch):
+    """#2118 — a bundle installed on the HOST seeds its mcp: templates into the host
+    config with the same semantics as workspace create: operator input → enabled;
+    unresolved required input → visible-but-inert (enabled: false)."""
+    import yaml
+
+    cfg = _host_bundle_lock(tmp_path, monkeypatch)
+    monkeypatch.delenv("GH_MCP_TOK", raising=False)
+    monkeypatch.setattr(
+        installer, "install", lambda url, ref=None, **k: {"bundle": "stack", "installed": [{"id": "a"}], "enabled": []}
+    )
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    captured, apply = _capture_apply()
+
+    # No operator input, no env → seeded but disabled (visible-but-inert).
+    res = await install_and_activate("https://x/stack", ctx=_ctx(), apply_settings=apply)
+    assert res.mcp_seeded == ["github"]
+    doc = yaml.safe_load(cfg.read_text())
+    by_name = {s["name"]: s for s in doc["mcp"]["servers"]}
+    assert by_name["github"]["enabled"] is False and doc["mcp"]["enabled"] is True
+
+    # Operator create-time input → seeded ENABLED, and name-union never clobbers:
+    # re-install with an input leaves the existing (disabled) entry alone.
+    res2 = await install_and_activate(
+        "https://x/stack", ctx=_ctx(), apply_settings=apply, mcp_inputs={"token": "ghp_x"}
+    )
+    assert res2.mcp_seeded == []  # name already present — config wins, no clobber
+    assert yaml.safe_load(cfg.read_text())["mcp"]["servers"][0].get("enabled") is False
+
+
+async def test_host_bundle_secrets_reach_host_overlay(tmp_path, monkeypatch):
+    """#2118 — supplied values for a bundle's DECLARED secrets land in the host
+    secrets.yaml (save_secrets path); undeclared keys are ignored."""
+    import json
+
+    import yaml
+
+    from graph.plugins import installer as inst
+
+    cfg = _host_bundle_lock(tmp_path, monkeypatch)
+    lock = inst.lock_path()
+    data = json.loads(lock.read_text())
+    data["bundles"][0]["secrets"] = [{"key": "api_key", "label": "API Key", "secret": True, "required": True}]
+    lock.write_text(json.dumps(data))
+    monkeypatch.setattr(
+        installer, "install", lambda url, ref=None, **k: {"bundle": "stack", "installed": [{"id": "a"}], "enabled": []}
+    )
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    _, apply = _capture_apply()
+
+    await install_and_activate(
+        "https://x/stack",
+        ctx=_ctx(),
+        apply_settings=apply,
+        bundle_secrets=[{"key": "api_key", "value": "s3cr3t"}, {"key": "undeclared", "value": "nope"}],
+    )
+    overlay = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
+    assert overlay["stack"]["api_key"] == "s3cr3t"
+    assert "undeclared" not in str(overlay)
+
+
+async def test_activate_false_skips_bundle_service_seeding(tmp_path, monkeypatch):
+    """The CLI's fetch-only install (activate=False) must stay fetch-only — no mcp
+    seeding, config untouched (#2118 keeps the ADR 0027 install ≠ enable line)."""
+    cfg = _host_bundle_lock(tmp_path, monkeypatch)
+    before = cfg.read_text()
+    monkeypatch.setattr(
+        installer, "install", lambda url, ref=None, **k: {"bundle": "stack", "installed": [{"id": "a"}], "enabled": ["a"]}
+    )
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+
+    res = await install_and_activate("https://x/stack", ctx=_ctx(), activate=False, apply_settings=None)
+    assert res.mcp_seeded == [] and res.reloaded is False
+    assert cfg.read_text() == before  # not even opened for write

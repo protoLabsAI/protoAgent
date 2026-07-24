@@ -17,7 +17,7 @@ about the live HTTP app, so it stays in the REST adapter — computed there from
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +31,9 @@ class InstallResult:
     enabled: list[str]  # ids added to plugins.enabled + reloaded (empty when not activated)
     reloaded: bool
     enable_error: str | None = None
+    # Bundle mcp: servers seeded into the HOST config this install (#2118) — empty for
+    # single plugins, non-activated installs, and bundles that declare no servers.
+    mcp_seeded: list[str] = field(default_factory=list)
 
 
 def _enabled_ids_from_summary(summary: dict) -> list[str]:
@@ -68,11 +71,18 @@ async def install_and_activate(
     activate: bool = True,
     ctx: OpContext,
     apply_settings: Callable[[dict], tuple[bool, list]] | None = None,
+    mcp_inputs: dict | None = None,
+    bundle_secrets: list | None = None,
 ) -> InstallResult:
     """Clone + pin the plugin (blocking git work off the event loop), then — when
     ``activate`` and an ``apply_settings`` applier is given — add it to ``plugins.enabled``,
-    seed the bundle's config defaults, and apply (hot-reload). Raises
-    ``installer.InstallError`` on a failed install (the adapter maps it to its surface)."""
+    seed the bundle's config defaults, seed the bundle's declared ``mcp:`` servers +
+    supplied ``secrets:`` values into the HOST config (#2118, same helpers/semantics as
+    the workspace-create path), and apply (hot-reload). ``mcp_inputs`` (``{key: value}``)
+    fills ``${input}`` placeholders with priority over the env; ``bundle_secrets``
+    (``[{key, value}]``) writes DECLARED bundle secrets via ``save_secrets`` (0600,
+    merge-not-clobber). Raises ``installer.InstallError`` on a failed install (the
+    adapter maps it to its surface)."""
     from graph.plugins import installer
     from graph.plugins.loader import purge_plugin_modules
 
@@ -108,9 +118,30 @@ async def install_and_activate(
         overlay = bundle_config_overlay(bundle_config, current if isinstance(current, dict) else {})
         config_updates.update(overlay)
 
+    # Bundle services (#2118): the workspace-create path seeds a bundle's declared
+    # `mcp:` templates + supplied `secrets:` values — the HOST path silently dropped
+    # both. Same helpers, host paths (live config + host plugins.lock). Gated on the
+    # activate path (the CLI's fetch-only `plugin install` stays fetch-only) and run
+    # BEFORE apply_settings so the hot-reload boots any seeded servers. Union is by
+    # name — a server the config already has always wins, so re-installs (and earlier
+    # bundles in the same lock) never clobber operator values. File I/O + template
+    # resolution run off the event loop (#497).
+    mcp_seeded: list[str] = []
+    if "bundle" in summary:
+        from graph.config_io import config_yaml_path
+        from graph.workspaces.manager import apply_bundle_mcp_servers, apply_bundle_secrets
+
+        cfg_path = config_yaml_path()
+        lock = installer.lock_path()
+        mcp_seeded = await asyncio.to_thread(apply_bundle_mcp_servers, cfg_path, lock, mcp_inputs or {})
+        if bundle_secrets:
+            await asyncio.to_thread(apply_bundle_secrets, cfg_path, lock, list(bundle_secrets))
+
     ok, messages = apply_settings(config_updates)
     if ok:
-        return InstallResult(summary=summary, installed_ids=installed_ids, enabled=ids, reloaded=True)
+        return InstallResult(
+            summary=summary, installed_ids=installed_ids, enabled=ids, reloaded=True, mcp_seeded=mcp_seeded
+        )
     # The install itself succeeded (code on disk + locked); surface the enable-reload
     # failure without failing the whole op — it can be enabled manually.
     return InstallResult(
@@ -118,6 +149,7 @@ async def install_and_activate(
         installed_ids=installed_ids,
         enabled=[],
         reloaded=False,
+        mcp_seeded=mcp_seeded,
         enable_error="; ".join(messages) or "reload failed",
     )
 
