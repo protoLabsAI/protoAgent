@@ -820,6 +820,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.102.0] - 2026-07-16
 
 ### Added
+- **Hot-swap an ACP coding agent into a single chat from the model picker (ADR 0082).**
+  A chat tab's model dropdown now lists your ACP coding agents (Claude Code, Codex, proto, …)
+  alongside gateway models — pick one and *that chat* runs on that agent for the turn, while
+  other tabs stay on the gateway. The native-vs-ACP decision is now **per-turn**: a per-tab
+  `model=acp:<agent>` (A2A metadata / `/v1` / `/api/chat`) routes the turn to the real ACP
+  runtime for that agent, overriding the global `agent_runtime` even when it's native
+  (`resolve_turn_runtime`). ACP sessions are keyed per **(thread, agent)**, so swapping mid-chat
+  builds a fresh session while the previous agent's survives for a resumable swap-back; the
+  picker drops an explicit **context-boundary note** on a swap ("earlier context isn't carried
+  across runtimes") since native history (checkpointer) and ACP history (the agent's own session)
+  don't sync — the honest Option-C boundary, not faked continuity. A guard keeps an `acp:*` value
+  from ever building the text-only aux relay as a lead model. Under a global ACP runtime the
+  picker offers coding agents only (a gateway pick would be inert). Groundwork shipped as the
+  agent-registration surface (#1993); design in ADR 0082.
 - **Registered ACP coding agents now surface in the runtime + model pickers (ADR 0033).**
   A custom `acp.agents.<id>` in config — a wholly-new coding agent, or a launch-spec override
   of a built-in — now appears everywhere the built-in ACP agents do: the Settings ▸ Agent

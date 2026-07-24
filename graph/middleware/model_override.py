@@ -51,6 +51,13 @@ class ModelOverrideMiddleware(AgentMiddleware):
         state = getattr(request, "state", None) or {}
         want = (state.get("model") or "").strip()
         effort = (state.get("reasoning_effort") or "").strip()
+        # ADR 0082 Trap A: an `acp:<agent>` is a RUNTIME selection, not a gateway lead model.
+        # The chat dispatch routes it to the real ACP runtime before this middleware; if one
+        # still reaches here (stale checkpointer state, an internal caller), ignore it so we
+        # never build create_llm's text-only aux relay AS THE LEAD MODEL. `acp:*` stays valid
+        # for the explicit aux slots (aux_model/compaction/goal-eval) via create_llm directly.
+        if want.startswith("acp:"):
+            want = ""
         if not want and not effort:
             return request  # nothing selected — use the compiled default
         cur = _model_name_of(getattr(request, "model", None))

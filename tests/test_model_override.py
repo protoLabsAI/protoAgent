@@ -92,6 +92,31 @@ def test_noop_when_already_on_selected_model(monkeypatch):
     assert built == []  # no rebuild — already on it
 
 
+def test_ignores_acp_lead_model(monkeypatch):
+    """ADR 0082 Trap A — an ``acp:<agent>`` in ``state["model"]`` is a RUNTIME selection, not
+    a gateway lead model. The middleware must NEVER build a client for it (that would be
+    create_llm's text-only aux relay as the lead). It falls through to the compiled default."""
+    built: list = []
+    _patch_create_llm(monkeypatch, built)
+    mw = mo.ModelOverrideMiddleware(config=object())
+    seen = {}
+    req = _FakeReq(state={"model": "acp:claude"}, model=_FakeModel("protolabs/reasoning"))
+    mw.wrap_model_call(req, lambda r: seen.setdefault("model", r.model))
+    assert built == []  # create_llm never called with acp:*
+    assert seen["model"].model_name == "protolabs/reasoning"  # unchanged
+
+
+def test_acp_lead_model_ignored_but_effort_still_applies(monkeypatch):
+    """The acp:* model is dropped, but a co-set reasoning_effort still rebuilds the CURRENT
+    gateway model with that effort — acp:* just never becomes the target."""
+    built: list = []
+    _patch_create_llm(monkeypatch, built)
+    mw = mo.ModelOverrideMiddleware(config=object())
+    req = _FakeReq(state={"model": "acp:claude", "reasoning_effort": "high"}, model=_FakeModel("protolabs/reasoning"))
+    mw.wrap_model_call(req, lambda r: None)
+    assert built == [("protolabs/reasoning", "high")]  # current model + effort, NOT acp:claude
+
+
 def test_caches_built_clients(monkeypatch):
     built: list = []
     _patch_create_llm(monkeypatch, built)

@@ -13,6 +13,7 @@ from runtime.acp_runtime import (
     make_acp_aux_model,
     operator_mcp_server_spec,
     resolve_runtime,
+    resolve_turn_runtime,
 )
 from runtime.context import AssembledContext
 
@@ -28,6 +29,23 @@ def test_resolve_runtime_variants():
     assert resolve_runtime(types.SimpleNamespace(agent_runtime="acp:codex")) == ("acp", "codex")
     assert resolve_runtime(types.SimpleNamespace(agent_runtime="acp")) == ("native", "")  # needs an agent
     assert resolve_runtime(types.SimpleNamespace(agent_runtime="bogus")) == ("native", "")
+
+
+def test_resolve_turn_runtime_per_tab_overrides_global():
+    """ADR 0082 D1 — a per-tab `model=acp:<agent>` selects the ACP runtime FOR THIS TURN,
+    overriding the global agent_runtime; anything else falls back to the global."""
+    native = types.SimpleNamespace(agent_runtime="native")
+    acp_codex = types.SimpleNamespace(agent_runtime="acp:codex")
+    # A per-tab acp:<agent> wins over a native global AND over a different global ACP agent.
+    assert resolve_turn_runtime("acp:claude", native) == ("acp", "claude")
+    assert resolve_turn_runtime("acp:claude", acp_codex) == ("acp", "claude")
+    # A gateway alias / blank / None falls back to the global runtime.
+    assert resolve_turn_runtime("protolabs/fast", acp_codex) == ("acp", "codex")
+    assert resolve_turn_runtime("protolabs/fast", native) == ("native", "")
+    assert resolve_turn_runtime(None, acp_codex) == ("acp", "codex")
+    assert resolve_turn_runtime("", native) == ("native", "")
+    # Malformed `acp:` (no agent) is not a runtime switch → global.
+    assert resolve_turn_runtime("acp:", native) == ("native", "")
 
 
 def test_make_acp_aux_model_honors_explicit_agent():
@@ -145,6 +163,19 @@ def test_constructing_for_native_raises():
         AcpRuntime(types.SimpleNamespace(agent_runtime="native"))
 
 
+def test_explicit_agent_bypasses_native_global_guard():
+    """ADR 0082 D1/D2 — an explicit ``agent=`` lets AcpRuntime run on a thread even when the
+    GLOBAL agent_runtime is native (per-tab hot-swap picks the agent), overriding it."""
+    import tempfile
+
+    native_cfg = types.SimpleNamespace(agent_runtime="native", operator_mcp_tools=[], acp_agents={})
+    rt = AcpRuntime(native_cfg, agent="claude", cwd=tempfile.mkdtemp(), context=_FakeCtx())
+    assert rt.agent == "claude"
+    # An explicit agent also overrides a DIFFERENT global ACP agent.
+    rt2 = AcpRuntime(_cfg(agent_runtime="acp:codex"), agent="claude", cwd=tempfile.mkdtemp(), context=_FakeCtx())
+    assert rt2.agent == "claude"
+
+
 async def test_chat_caches_acp_runtime_per_thread(monkeypatch):
     import importlib
 
@@ -159,12 +190,17 @@ async def test_chat_caches_acp_runtime_per_thread(monkeypatch):
     )
     chat._ACP_RUNTIMES.clear()
     chat._ACP_RUNTIME_ACCESS.clear()
-    r1 = await chat._get_acp_runtime("t1")
-    r2 = await chat._get_acp_runtime("t1")
-    r3 = await chat._get_acp_runtime("t2")
-    assert r1 is r2  # same thread → same stateful ACP session
+    r1 = await chat._get_acp_runtime("t1", "codex")
+    r2 = await chat._get_acp_runtime("t1", "codex")
+    r3 = await chat._get_acp_runtime("t2", "codex")
+    assert r1 is r2  # same (thread, agent) → same stateful ACP session
     assert r1 is not r3  # different thread → its own session
     assert r1.agent == "codex"
+    # ADR 0082 D2 — a DIFFERENT agent on the SAME thread gets its OWN session (a mid-chat swap
+    # doesn't clobber the first agent's history), and swapping back RESUMES it.
+    r_claude = await chat._get_acp_runtime("t1", "claude")
+    assert r_claude is not r1 and r_claude.agent == "claude"
+    assert await chat._get_acp_runtime("t1", "codex") is r1  # swap-back resumes codex's session
 
 
 def test_gateway_configured_detection(monkeypatch):
@@ -456,14 +492,15 @@ async def test_acp_acquire_release_refcount():
     chat._ACP_BUSY.clear()
 
     rt = _MockRuntime("x")
-    chat._ACP_RUNTIMES["t"] = rt
-    chat._ACP_RUNTIME_ACCESS["t"] = time.monotonic()  # warm so eviction leaves it
+    key = ("t", "x")
+    chat._ACP_RUNTIMES[key] = rt
+    chat._ACP_RUNTIME_ACCESS[key] = time.monotonic()  # warm so eviction leaves it
 
-    got = await chat._acp_acquire("t")
+    got = await chat._acp_acquire("t", "x")
     assert got is rt
-    assert chat._ACP_BUSY.get("t") == 1
-    await chat._acp_release("t")
-    assert "t" not in chat._ACP_BUSY
+    assert chat._ACP_BUSY.get(key) == 1
+    await chat._acp_release("t", "x")
+    assert key not in chat._ACP_BUSY
     chat._ACP_BUSY.clear()
 
 
@@ -482,12 +519,12 @@ async def test_get_acp_runtime_bumps_access(monkeypatch):
         raising=False,
     )
 
-    rt1 = await chat._get_acp_runtime("bump-test")
-    ts1 = chat._ACP_RUNTIME_ACCESS["bump-test"]
+    rt1 = await chat._get_acp_runtime("bump-test", "codex")
+    ts1 = chat._ACP_RUNTIME_ACCESS[("bump-test", "codex")]
 
     # Nudge monotonic forward (any subsequent call will have a later timestamp).
-    rt2 = await chat._get_acp_runtime("bump-test")
-    ts2 = chat._ACP_RUNTIME_ACCESS["bump-test"]
+    rt2 = await chat._get_acp_runtime("bump-test", "codex")
+    ts2 = chat._ACP_RUNTIME_ACCESS[("bump-test", "codex")]
 
     assert rt1 is rt2  # same runtime returned
     assert ts2 >= ts1  # access timestamp bumped
@@ -512,18 +549,18 @@ async def test_eviction_during_get_acp_runtime(monkeypatch):
     # clock that _get_acp_runtime reads — an absolute 0.0 only evicts when time.monotonic()
     # already exceeds the TTL (true on a long-up dev box, false on a fresh CI runner).
     stale = _MockRuntime("stale")
-    chat._ACP_RUNTIMES["stale-thread"] = stale
-    chat._ACP_RUNTIME_ACCESS["stale-thread"] = time.monotonic() - chat._ACP_IDLE_TTL_S - 1  # ancient
+    chat._ACP_RUNTIMES[("stale-thread", "codex")] = stale
+    chat._ACP_RUNTIME_ACCESS[("stale-thread", "codex")] = time.monotonic() - chat._ACP_IDLE_TTL_S - 1  # ancient
 
-    rt = await chat._get_acp_runtime("new-thread")
+    rt = await chat._get_acp_runtime("new-thread", "codex")
 
     # The stale entry was evicted.
-    assert "stale-thread" not in chat._ACP_RUNTIMES
+    assert ("stale-thread", "codex") not in chat._ACP_RUNTIMES
     assert stale.closed is True
 
     # The requested runtime was created and returned.
-    assert rt is chat._ACP_RUNTIMES["new-thread"]
-    assert "new-thread" in chat._ACP_RUNTIME_ACCESS
+    assert rt is chat._ACP_RUNTIMES[("new-thread", "codex")]
+    assert ("new-thread", "codex") in chat._ACP_RUNTIME_ACCESS
 
 
 def test_adapters_derived_from_canonical_catalog():
@@ -590,16 +627,16 @@ async def test_acp_turn_collected_returns_single_message_with_usage(monkeypatch)
 
     rt = _MockRuntime()
 
-    async def fake_acquire(tid):
+    async def fake_acquire(tid, agent):
         return rt
 
-    async def fake_release(tid):
+    async def fake_release(tid, agent):
         return None
 
     monkeypatch.setattr(chat, "_acp_acquire", fake_acquire)
     monkeypatch.setattr(chat, "_acp_release", fake_release)
     monkeypatch.setattr(chat, "_acp_drive_turn", fake_drive)
-    out = await chat._acp_turn_collected("s1", "hi")
+    out = await chat._acp_turn_collected("s1", "hi", "codex")
     assert out == [
         {
             "role": "assistant",
@@ -615,16 +652,16 @@ async def test_acp_turn_collected_surfaces_error(monkeypatch):
     async def fake_drive(rt, message):
         yield ("error", "ACP runtime (mock) failed: boom")
 
-    async def fake_acquire(tid):
+    async def fake_acquire(tid, agent):
         return _MockRuntime()
 
-    async def fake_release(tid):
+    async def fake_release(tid, agent):
         return None
 
     monkeypatch.setattr(chat, "_acp_acquire", fake_acquire)
     monkeypatch.setattr(chat, "_acp_release", fake_release)
     monkeypatch.setattr(chat, "_acp_drive_turn", fake_drive)
-    out = await chat._acp_turn_collected("s1", "hi")
+    out = await chat._acp_turn_collected("s1", "hi", "codex")
     assert "boom" in out[0]["content"] and "usage" not in out[0]
 
 
@@ -645,12 +682,39 @@ async def test_nonstreaming_impl_routes_to_acp(monkeypatch):
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
     sentinel = [{"role": "assistant", "content": "via-acp"}]
 
-    async def fake_collected(session_id, message):
+    async def fake_collected(session_id, message, agent):
         return sentinel
 
     monkeypatch.setattr(chat, "_acp_turn_collected", fake_collected)
     out = await chat._chat_langgraph_impl("plain message", "sess-x")
     assert out is sentinel  # switched before any graph/native-path work
+
+
+async def test_nonstreaming_impl_per_tab_acp_overrides_native(monkeypatch):
+    """ADR 0082 — under a NATIVE global runtime, a per-tab `model=acp:<agent>` still routes
+    this turn to the ACP path, with that agent."""
+    import types as _types
+
+    chat = _chat_module()
+    from runtime.state import STATE
+
+    monkeypatch.setattr(
+        STATE,
+        "graph_config",
+        _types.SimpleNamespace(agent_runtime="native", operator_mcp_tools=[], acp_agents={}),
+        raising=False,
+    )
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    seen: dict = {}
+
+    async def fake_collected(session_id, message, agent):
+        seen["agent"] = agent
+        return [{"role": "assistant", "content": "via-acp"}]
+
+    monkeypatch.setattr(chat, "_acp_turn_collected", fake_collected)
+    out = await chat._chat_langgraph_impl("plain message", "sess-x", model="acp:claude")
+    assert out == [{"role": "assistant", "content": "via-acp"}]
+    assert seen["agent"] == "claude"  # per-tab selection picked the agent, over the native global
 
 
 async def test_acp_client_records_usage_update():

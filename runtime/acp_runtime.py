@@ -54,6 +54,25 @@ def is_acp_runtime(config) -> bool:
     return resolve_runtime(config)[0] == "acp"
 
 
+def resolve_turn_runtime(model: str | None, config) -> tuple[str, str]:
+    """Per-turn runtime resolution (ADR 0082 D1). A per-tab **model** of the form
+    ``acp:<agent>`` selects the ACP runtime FOR THIS TURN — overriding the global
+    ``agent_runtime`` — so an operator can hot-swap a coding agent into a single chat from
+    the model picker. Anything else (a gateway alias, blank) falls back to the global
+    :func:`resolve_runtime`. Returns ``("native", "")`` or ``("acp", "<agent>")``.
+
+    The chat dispatch calls this at the top of the turn (streaming + non-streaming), so an
+    ``acp:*`` per-tab selection routes to the real ACP runtime rather than being handed to
+    ``ModelOverrideMiddleware`` as a lead model (which would build the text-only aux relay —
+    ADR 0082 Trap A)."""
+    want = (model or "").strip()
+    if want.startswith("acp:"):
+        agent = want.split(":", 1)[1].strip()
+        if agent:
+            return ("acp", agent)
+    return resolve_runtime(config)
+
+
 def adapter_for(agent: str, config=None) -> dict:
     """Launch spec ({command, args}) for *agent* — config override beats the default."""
     overrides = (getattr(config, "acp_agents", None) or {}) if config else {}
@@ -163,19 +182,27 @@ def persona_doc(config) -> str:
 class AcpRuntime:
     """Drives turns through an external coding agent over ACP.
 
-    One instance per session/thread (the ACP session is stateful — the agent holds
-    history). Persona is authoritative via files (ADR 0033 / due-diligence): SOUL.md is
-    written as AGENTS.md (+ a vendor file) into the session cwd, which the coding agent
+    One instance per (session/thread, agent) — the ACP session is stateful (the agent
+    holds history), so it's reused across turns and kept apart per agent so a mid-chat
+    swap builds a fresh session while the previous agent's survives for a swap-back
+    (ADR 0082 D2). Persona is authoritative via files (ADR 0033 / due-diligence): SOUL.md
+    is written as AGENTS.md (+ a vendor file) into the session cwd, which the coding agent
     loads into ITS system prompt — beating its built-in "I'm <agent>" identity. So each
     turn's prompt carries only the per-turn delta (retrieved knowledge/skills) + message.
     """
 
-    def __init__(self, config, *, cwd: str | None = None, client_factory=None, context=None):
+    def __init__(self, config, *, agent: str | None = None, cwd: str | None = None, client_factory=None, context=None):
         self.config = config
-        kind, agent = resolve_runtime(config)
-        if kind != "acp":
-            raise ValueError("AcpRuntime constructed for a non-ACP runtime")
-        self.agent = agent
+        if agent:
+            # Explicit per-turn agent (ADR 0082 D1): the operator selected this ACP agent for
+            # THIS thread from the model picker, even if the GLOBAL agent_runtime is native or a
+            # different agent. Bypasses the global-runtime guard on purpose.
+            self.agent = agent
+        else:
+            kind, resolved = resolve_runtime(config)
+            if kind != "acp":
+                raise ValueError("AcpRuntime constructed for a non-ACP runtime")
+            self.agent = resolved
         # A dedicated, instance-scoped workspace — NOT the repo cwd (we write AGENTS.md
         # there and don't want to clobber the project's own).
         if cwd:
