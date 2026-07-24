@@ -11,18 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Design-system conformance pass over the console CSS (#2072, mechanical tier).** The
-  bounded audit found several latent bugs, all fixed: two `var(--fg-primary)` references
-  (undefined, no fallback — the browser silently dropped the declarations, so the
-  Plugins/Telemetry sortable-header hover never applied), a typo'd `var(--mono)` that lost
-  the themed mono font, a hardcoded white-on-dark hover and a frozen-purple focus outline
-  that didn't flip in light mode, `#fff` badge text and raw `#000` drawer/mobile scrims
-  swapped for the `fg-on-accent` / `overlay` tokens, the devices panel's intended-but-
-  undefined `--bg-inset` pointed at the real token, one raw error-red literal tokenized,
-  and ~50 lines of dead hand-rolled confirm-modal CSS deleted (every call site moved to
-  the DS ConfirmDialog long ago).
-
 ### Added
 - **Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).**
   An archetype can declare `requires: [python_runtime]` (the Cowork catalog entry now
@@ -38,8 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   linkage (`by: "bundle:<id>"` + the `bundles[]` registry); the installer now persists the
   bundle's display name too, and `GET /api/plugins/installed` joins it onto member rows
   (older locks fall back to the bundle id).
-
-### Added
 - **Desktop: the update prompt now lands at launch, not after engine boot (#2203).** The
   shell runs one update check in parallel with sidecar startup and stores the outcome;
   the in-app UpdateNotice pulls it the moment it mounts (a state read, no network) and
@@ -48,36 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finishes. Nothing blocks: the check is fire-and-forget, the modal is dismissible, the
   10s-settle + 6h re-check cycle and the tray's manual check are unchanged, and the shell
   still never shows its own dialog for an available update (single prompt path).
-
-### Changed
-- **Plugins ▸ Installed is a real table now — with search, status filter, and sortable
-  columns.** The old two-section list (Loaded/Disabled, fixed alphabetical) didn't scale
-  past a handful of plugins. The tab now renders one table (Plugin / Status / Contributes /
-  actions) with free-text search that also matches **tool names** ("which plugin ships
-  `search_jobs`?"), status chips (All · Loaded · Disabled · Attention — attention =
-  error, needs-setup, update available, or missing deps), and click-to-sort headers.
-  Default order keeps the old semantics: loaded first, attention floats up, then name.
-  All the row actions (update / install deps / set up / configure / enable / uninstall)
-  are unchanged.
-### Fixed
-- **The filesystem-projects settings write no longer stalls the event loop (#2210).** The
-  fs-projects route was the one `_apply_settings_changes` call site not offloaded via
-  `asyncio.to_thread` (#497 pattern) — a config write + full graph reload ran synchronously
-  on the event loop, freezing every concurrent request for its duration. Now offloaded like
-  its four siblings, with a regression test that detects an on-loop apply.
-- **The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).**
-  The Settings nav's Tools entry carries a warning dot whenever the runtime install card
-  is actionable — not provisioned, stale document baseline, or a failed install (pulsing
-  while an install runs) — so on a stock desktop install you discover the one-click
-  provision while browsing, not by tripping over a dead `execute_code` mid-task. Mirrors
-  the `deps_missing` badge pattern (ADR 0094 D4's status-surface half; P1 shipped the
-  copy).
-- **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
-  The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
-  link still sent people to the archived external repo; it now links to the in-tree plugin and
-  the tagline says "ships built-in" instead of calling it the reference external plugin.
-
-### Added
 - **One source of truth for every curated plugin listing.** `config/plugin-directory.yaml`
   now drives both the in-app Plugins ▸ Discover catalog (`config/plugin-catalog.json`) and
   the marketing site's plugin-page overlay (`sites/marketing/data/plugins.json`) via
@@ -104,6 +60,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template gained a matching two-item checklist (changelog entry, `Fixes #N`).
   Marking the check *required* in branch protection is a follow-on operator
   action. (#2174)
+
+### Changed
+- **Plugins ▸ Installed is a real table now — with search, status filter, and sortable
+  columns.** The old two-section list (Loaded/Disabled, fixed alphabetical) didn't scale
+  past a handful of plugins. The tab now renders one table (Plugin / Status / Contributes /
+  actions) with free-text search that also matches **tool names** ("which plugin ships
+  `search_jobs`?"), status chips (All · Loaded · Disabled · Attention — attention =
+  error, needs-setup, update available, or missing deps), and click-to-sort headers.
+  Default order keeps the old semantics: loaded first, attention floats up, then name.
+  All the row actions (update / install deps / set up / configure / enable / uninstall)
+  are unchanged.
+
+### Fixed
+- **Design-system conformance pass over the console CSS (#2072, mechanical tier).** The
+  bounded audit found several latent bugs, all fixed: two `var(--fg-primary)` references
+  (undefined, no fallback — the browser silently dropped the declarations, so the
+  Plugins/Telemetry sortable-header hover never applied), a typo'd `var(--mono)` that lost
+  the themed mono font, a hardcoded white-on-dark hover and a frozen-purple focus outline
+  that didn't flip in light mode, `#fff` badge text and raw `#000` drawer/mobile scrims
+  swapped for the `fg-on-accent` / `overlay` tokens, the devices panel's intended-but-
+  undefined `--bg-inset` pointed at the real token, one raw error-red literal tokenized,
+  and ~50 lines of dead hand-rolled confirm-modal CSS deleted (every call site moved to
+  the DS ConfirmDialog long ago).
+- **The filesystem-projects settings write no longer stalls the event loop (#2210).** The
+  fs-projects route was the one `_apply_settings_changes` call site not offloaded via
+  `asyncio.to_thread` (#497 pattern) — a config write + full graph reload ran synchronously
+  on the event loop, freezing every concurrent request for its duration. Now offloaded like
+  its four siblings, with a regression test that detects an on-loop apply.
+- **The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).**
+  The Settings nav's Tools entry carries a warning dot whenever the runtime install card
+  is actionable — not provisioned, stale document baseline, or a failed install (pulsing
+  while an install runs) — so on a stock desktop install you discover the one-click
+  provision while browsing, not by tripping over a dead `execute_code` mid-task. Mirrors
+  the `deps_missing` badge pattern (ADR 0094 D4's status-surface half; P1 shipped the
+  copy).
+- **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
+  The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
+  link still sent people to the archived external repo; it now links to the in-tree plugin and
+  the tagline says "ships built-in" instead of calling it the reference external plugin.
 
 ## [0.111.0] - 2026-07-23
 
