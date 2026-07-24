@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bundleLabel,
   contributionCount,
   filterInstalled,
   needsAttention,
@@ -9,12 +10,19 @@ import {
   type InstalledRow,
 } from "./installed";
 
-const mk = (over: Partial<InstalledRow["p"]> & { behind?: boolean; depsMissing?: string[] }): InstalledRow => {
-  const { behind = false, depsMissing = [], ...p } = over;
+const mk = (
+  over: Partial<InstalledRow["p"]> & {
+    behind?: boolean;
+    depsMissing?: string[];
+    bundle?: InstalledRow["bundle"];
+  },
+): InstalledRow => {
+  const { behind = false, depsMissing = [], bundle, ...p } = over;
   return {
     p: { id: "x", name: "X", enabled: true, loaded: true, tools: [], skills: 0, ...p },
     behind,
     depsMissing,
+    bundle,
   };
 };
 
@@ -78,6 +86,26 @@ describe("sortInstalled", () => {
     const ids = sortInstalled(ROWS, { key: "contributions", dir: "asc" }).map((r) => r.p.id);
     expect(ids.slice(0, 2)).toEqual(["careercoach", "github"]); // 5 vs 2
     expect(contributionCount(ROWS[1].p)).toBe(0); // doom is disabled
+  });
+});
+
+describe("bundle provenance", () => {
+  const ROWS_B = [
+    mk({ id: "board", name: "Project Board", bundle: { id: "pm_stack", name: "Project Manager" } }),
+    mk({ id: "docs2", name: "Docs2", bundle: { id: "old_stack" } }), // pre-name lock
+    mk({ id: "solo", name: "Solo" }),
+  ];
+
+  it("bundleLabel prefers name, falls back to id, null without a bundle", () => {
+    expect(bundleLabel(ROWS_B[0])).toBe("Project Manager");
+    expect(bundleLabel(ROWS_B[1])).toBe("old_stack"); // locks written before name was persisted
+    expect(bundleLabel(ROWS_B[2])).toBeNull();
+  });
+
+  it("search matches bundle name AND id — 'everything this stack installed'", () => {
+    expect(filterInstalled(ROWS_B, "project manager", "All").map((r) => r.p.id)).toEqual(["board"]);
+    expect(filterInstalled(ROWS_B, "pm_stack", "All").map((r) => r.p.id)).toEqual(["board"]);
+    expect(filterInstalled(ROWS_B, "old_stack", "All").map((r) => r.p.id)).toEqual(["docs2"]);
   });
 });
 

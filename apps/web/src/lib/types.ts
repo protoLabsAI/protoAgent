@@ -164,6 +164,10 @@ export type InstalledPlugin = {
   // Declared requires_pip entries missing from the runtime — drives the one-click
   // "Install deps" action (POST /api/plugins/install-deps).
   deps_missing?: string[];
+  // Bundle provenance (ADR 0040): present when this plugin was installed BY a bundle —
+  // joined server-side from the lock's bundles[] registry. `name` may be empty on locks
+  // written before it was persisted; fall back to `id`.
+  bundle?: { id: string; name?: string; url?: string };
   manifest?: {
     name: string;
     version: string;
