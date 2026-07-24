@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Design System Engineer joins the new-agent picker (#2218).** A fourth shipped
+- **Design System Engineer joins the new-agent picker (#2219).** A fourth shipped
   archetype: reads a design system live (tokens, component inventory, visual-identity
   rules via the design-system plugin), watches for drift, enforces accessibility, and
   ships every change as a reviewed PR by directing builder delegates — never
