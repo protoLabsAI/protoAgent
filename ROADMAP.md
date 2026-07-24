@@ -17,7 +17,6 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## In progress
 
-- **Image generation plugin (protobanana)** — generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.
 
 ## Shipped
 

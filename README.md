@@ -53,7 +53,7 @@ rename / release-pipeline wiring.
 | Tracing | `observability/tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
 | Observability | `observability/metrics.py`, `observability/audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
 | Output protocol | `graph/output_format.py` | `<scratch_pad>` / `<output>` parsing so the model can think without it leaking to users |
-| UI | `apps/web/` (React console) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), plugin-contributed rail views, and a PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
+| UI | `apps/web/` (React console) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), plugin-contributed rail views, a ⌘K command palette + presence-aware Fleet Room, `/export` (save a chat to Markdown) and `/btw` (a side question answered from the chat's context, saved nowhere), and a PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
 | Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
 
 ## Quickstart — from zero to chatting in 5 minutes
@@ -74,8 +74,9 @@ uv sync && uv run python -m server          # core, serves the React console (--
 #   python -m server
 
 # 3. Open the wizard — pick your endpoint, pick a model, name the
-#    agent, pick a persona preset, hit Launch. The console chat appears
-#    once setup completes.
+#    agent, pick an archetype (Basic, Cowork, Project Manager, Design System
+#    Engineer — or any installed bundle that declares one), hit Launch. The
+#    console chat appears once setup completes.
 open http://localhost:7870
 ```
 
@@ -172,9 +173,13 @@ First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `
 | [`artifact`](./plugins/artifact/) | tools · view · skill | **On by default** — generative UI; `show_artifact` renders charts, diagrams, Mermaid, Markdown, or live React into a sandboxed panel ([ADR 0038](./docs/adr/0038-generative-ui-artifacts-two-mode.md)) |
 | [`craft`](./plugins/craft/) | skills · subagent | **On by default** — engineering rituals as user-only slash commands (`/grill`, `/standup`, `/code-review`, `/writing-skills`) + the `skill_writer` subagent; prompt-only |
 | [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
-| [`workflows`](./plugins/workflows/) | tools | Declarative multi-step subagent workflows (DAG recipes) |
+| [`workflows`](./plugins/workflows/) | tools | Declarative multi-step subagent workflows (DAG recipes) — a step can carry `gate: human`, pausing for operator approval before it runs |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
 | [`github`](./plugins/github/) | tools | Read-only GitHub tools over the `gh` CLI |
+| [`execute_code`](./plugins/execute_code/) | tool · settings | A Python interpreter the agent runs code in — on desktop, provision the one-click [managed runtime](./docs/guides/python-runtime.md) and the document skills (docx · xlsx · pptx · pdf) light up |
+| [`coder`](./plugins/coder/) | tool · settings | Verifier-grounded code-solve (`coder_solve`) — an execution-grounded search ladder for testable coding tasks ([guide](./docs/guides/coder.md)) |
+| [`friction`](./plugins/friction/) | tools | Friction log — the agent records its own missing/awkward tooling and confusing errors, so you can fix the sharp edges |
+| [`orgchart`](./plugins/orgchart/) | view | Live diagram of the agent fleet — every agent a node, delegation edges drawn as they happen |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
 
 Integrations like **Discord**, **Slack** (Socket Mode `ChatAdapter`) and **Google**

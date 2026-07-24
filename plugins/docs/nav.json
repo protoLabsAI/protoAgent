@@ -184,6 +184,10 @@
           "title": "Operator console (React/Tauri)"
         },
         {
+          "path": "guides/python-runtime.md",
+          "title": "Managed Python runtime (desktop)"
+        },
+        {
           "path": "guides/command-palette.md",
           "title": "Command palette (⌘K)"
         },

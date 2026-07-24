@@ -40,16 +40,6 @@
     ]
   },
   {
-    "status": "In progress",
-    "items": [
-      {
-        "title": "Image generation plugin (protobanana)",
-        "detail": "generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.",
-        "refs": []
-      }
-    ]
-  },
-  {
     "status": "Shipped",
     "items": [
       {

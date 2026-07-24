@@ -21,6 +21,8 @@ features:
     details: DuckDuckGo web search, URL fetch, safe calculator, and IANA-timezone clock — zero API keys, enough to demo a real research loop on a fresh clone.
   - title: A lean core, opt-in plugins
     details: Start small; add tools, skills, subagents, workflows, FastAPI routes, console dashboards, memory backends, and managed MCP servers as git-URL plugins (python -m server plugin install, pinned in plugins.lock) — without touching core. Telegram and the plugin-devkit ship in-tree; Discord, Google (Gmail+Calendar), and more install as official external plugins from the directory.
+  - title: Archetypes + real documents
+    details: Spin up agents from starter types — Cowork, Project Manager, Design System Engineer, or any bundle that declares one. Cowork's document skills produce real .docx/.xlsx/.pptx/.pdf via execute_code and the one-click managed Python runtime on desktop.
   - title: Release pipeline
     details: Dispatch prepare-release → semver bump PR → merge → tag → GHCR image → GitHub release → Discord embed. Flip the RELEASE_ENABLED repo variable to enable it on a fork.
 ---
