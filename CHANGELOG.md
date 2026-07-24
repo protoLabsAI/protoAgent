@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   teardown noise). The push-config helpers now retry exactly that error with a short
   bounded backoff (5 attempts, ~0.75s worst case); any other JSON-RPC error, or a
   genuinely unknown task id, still fails immediately/after the bound.
+- **Frozen plugin install/update pips missing deps into the managed runtime (#2226).**
+  On the desktop app, installing (or updating) a plugin with unmet `requires_pip`
+  still answered with the pre-ADR-0093 refusal — "install it on a server/Docker
+  build instead" — even when the managed Python runtime (ADR 0094 P2) was
+  provisioned and one `install_deps` click away from satisfying them. The frozen
+  gate now routes the missing hard deps through
+  `install_requirements_into_managed_runtime` (with the same `install_deps` audit
+  trail) and proceeds; it refuses only when the runtime isn't provisioned (the
+  message points at `POST /api/runtime/python/install`) or the install genuinely
+  fails (pip's real error is surfaced). Optional-dep semantics (#1953/#2162) are
+  unchanged.
 - **Six status tones now actually theme (#2224).** Chat notes, the keybindings conflict
   state, and the knowledge delete-armed state referenced `--pl-color-info/warning/danger`
   — names the design package never defines — so their hex fallbacks rendered permanently:
