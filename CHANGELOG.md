@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Docs
+- **The craft plugin now says what it is (#2247).** Its README, module docstring, and the
+  root README row all claimed four skills; there are six — `/due-diligence` and
+  `adr-authoring` were undocumented everywhere. The `adr-authoring` omission mattered
+  most: it's the one skill in the plugin deliberately left agent-retrievable (not
+  `user_only`), so agent-authored ADRs meet the house bar unprompted, and nothing said
+  so. Docs now split the set into the five slashes you type vs. what the agent reaches
+  for on its own. The manifest name became `Craft (engineering slash commands)` —
+  following `Coder (execution-grounded code-solve)` — because the console's plugin table
+  renders only `name` and no view shows the description, so "Craft" alone was the whole
+  user-facing signal. `id: craft` is unchanged, so `plugins: { disabled: [craft] }` keeps
+  working.
 - **Spec: system prompt viewer (#2243).** `docs/plans/system-prompt-viewer.md` — the
   researched plan for per-turn exact-prompt visibility: capture-at-call-time in a
   middleware slot directly after PromptCache (the one seam where the final request
