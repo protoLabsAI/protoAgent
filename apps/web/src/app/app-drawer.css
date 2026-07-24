@@ -8,7 +8,7 @@
 .app-drawer-backdrop {
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, #000 38%, transparent);
+  background: var(--pl-color-overlay);
 }
 .app-drawer {
   position: absolute;

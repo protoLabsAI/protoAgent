@@ -212,7 +212,7 @@
   cursor: default;
 }
 .bg-jobs-rowmain:not(:disabled):hover {
-  background: var(--bg-elevated-hover, rgba(255, 255, 255, 0.03));
+  background: var(--bg-hover);
 }
 .bg-jobs-stop {
   flex: none;
@@ -228,7 +228,7 @@
 }
 .bg-jobs-stop:hover {
   color: var(--pl-color-status-error, #e5484d);
-  background: var(--bg-elevated-hover, rgba(255, 255, 255, 0.03));
+  background: var(--bg-hover);
 }
 .bg-jobs-toolbar {
   display: flex;
@@ -971,7 +971,7 @@ textarea {
 }
 
 .field-warn {
-  color: var(--danger, var(--fg-warning, #d97706));
+  color: var(--danger, #d97706);
   opacity: 1;
 }
 
@@ -1096,7 +1096,7 @@ textarea {
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 8px;
-  color: #fff;
+  color: var(--pl-color-fg-on-accent);
 }
 
 .inbox-pri-now {
@@ -1468,56 +1468,6 @@ textarea {
   overflow: auto;
   background: color-mix(in srgb, var(--pl-color-bg) 98%, transparent);
   padding: 24px;
-}
-
-/* Custom confirmation modal (destructive actions). */
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  display: grid;
-  place-items: center;
-  background: var(--pl-color-overlay);
-  padding: 24px;
-}
-
-.confirm-card {
-  width: min(420px, 100%);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-elevated, #16161a);
-  padding: 18px 18px 14px;
-  box-shadow: var(--pl-shadow-popover);
-}
-
-.confirm-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.confirm-head svg {
-  color: var(--warning, #d29922);
-  flex: none;
-}
-
-.confirm-head h2 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.confirm-message {
-  margin: 10px 0 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--fg-secondary);
-}
-
-.confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 18px;
 }
 
 /* New-schedule modal (friendly builder, .schedule-*) — moved to src/schedule/schedule.css (#832). */
@@ -2041,7 +1991,7 @@ textarea {
 .federated-error strong { color: var(--fg); }
 .federated-error-detail {
   margin: 4px 0 8px;
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--fg-muted);
   word-break: break-word;
@@ -2228,7 +2178,7 @@ textarea {
 .update-notice-err {
   margin-top: 8px;
   font-size: 12px;
-  color: #e5484d;
+  color: var(--pl-color-status-error);
 }
 
 /* Setup wizard — post-install dependency report (finish step) */

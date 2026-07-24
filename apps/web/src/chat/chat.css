@@ -390,7 +390,7 @@
   height: 1.2em;
   border-radius: 4px;
   background: var(--brand-violet);
-  color: #fff;
+  color: var(--pl-color-fg-on-accent);
   font-weight: 600;
   line-height: 1;
 }
