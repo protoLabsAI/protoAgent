@@ -35,15 +35,15 @@ describe("success-toned system notes follow the workspace accent, other tones st
   });
 
   it("info note keeps its semantic colour", () => {
-    expect(note("info")).toMatch(/border-left-color:\s*var\(--pl-color-info,\s*#3b82f6\)/);
+    expect(note("info")).toMatch(/border-left-color:\s*var\(--pl-color-status-info\)/);
   });
 
   it("warning note keeps its semantic colour", () => {
-    expect(note("warning")).toMatch(/border-left-color:\s*var\(--pl-color-warning,\s*#d98324\)/);
+    expect(note("warning")).toMatch(/border-left-color:\s*var\(--pl-color-status-warning\)/);
   });
 
   it("danger note keeps its semantic colour (the #2197 distinction is load-bearing)", () => {
-    expect(note("danger")).toMatch(/border-left-color:\s*var\(--pl-color-danger,\s*#e5484d\)/);
+    expect(note("danger")).toMatch(/border-left-color:\s*var\(--pl-color-status-error\)/);
   });
 
   it("keeps every chat.css comment free of the glued `*` `/` minifier trap", () => {

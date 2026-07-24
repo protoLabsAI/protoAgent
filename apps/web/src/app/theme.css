@@ -1893,7 +1893,7 @@ textarea {
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
 .knowledge-chunk-actions { display: flex; gap: 2px; }
 /* Shift held → the delete button arms red (chat-tab quick-delete parity, #1582). */
-.knowledge-del-armed, .knowledge-del-armed svg { color: var(--pl-color-danger, #e5484d); }
+.knowledge-del-armed, .knowledge-del-armed svg { color: var(--pl-color-status-error); }
 
 /* Collapsible source groups in the Knowledge Base (#1575). A group is a plain
    list item holding a full-width header button + (when open) a nested card list. */

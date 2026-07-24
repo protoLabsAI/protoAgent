@@ -276,7 +276,7 @@
    fewer accidental clicks. Swap the DS ✕ svg for a trash silhouette (mask tinted via
    currentColor). The Shift+click handler is unchanged; this only narrows the visual cue. */
 .chat-tabbar-wrap--del .pl-tabbar__close:hover {
-  color: var(--pl-color-danger, #e5484d);
+  color: var(--pl-color-status-error);
 }
 
 /* Bypass-permissions indicator in the composer toolbar — a DS warning Badge (outline tone) in a
@@ -437,14 +437,14 @@
   background: var(--pl-color-bg-raised);
   box-shadow: var(--pl-shadow-card);
 }
-.chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-info, #3b82f6); }
+.chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-status-info); }
 /* Success = "the agent did the thing", so it follows the workspace accent — the exact chain
    the HITL card adopted in #2157 (see hitl.css / hitl-accent.test.ts) — not traffic-light
    green. Warning/danger/info stay semantic: the #2197 export-blocked note relies on danger
    reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
 .chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent, var(--brand-indigo, #6366f1)); }
-.chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-warning, #d98324); }
-.chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-danger, #e5484d); }
+.chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-status-warning); }
+.chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-status-error); }
 
 /* No "loading side-bar" on streaming answer text. The DS pulses a 2px accent left-border +
    10px inset on a streaming message body (ai.css) — but the streaming text itself is the cue,
