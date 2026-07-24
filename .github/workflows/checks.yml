@@ -65,6 +65,33 @@ jobs:
           fi
           echo "ok: no stale single-file launches in deploy artifacts or launchers"
 
+  changelog:
+    name: Changelog entry
+    # Every PR must touch CHANGELOG.md (the [Unreleased] entry PROTO.md asks
+    # for) so release notes stop depending on archaeology at release time.
+    # Logic lives in scripts/changelog_gate.sh (covered by
+    # tests/test_changelog_gate.py); this job just wires the PR context in.
+    # Escape hatches: the skip-changelog label, a release/* head branch, or a
+    # dependabot[bot] actor. The label is read from the event payload SNAPSHOT —
+    # adding it after the run started needs a re-run (or a synchronize push) to
+    # be picked up, because `pull_request` here doesn't trigger on labeled.
+    # Push-to-main runs have no PR diff to judge, so the job is PR-only.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so base...HEAD resolves a merge-base — the gate judges
+          # only the PR's own diff, not entries that landed on main since fork.
+          fetch-depth: 0
+      - name: Require a CHANGELOG [Unreleased] entry (or an escape hatch)
+        # Pure git + jq/shell — no dependency install, fails in seconds.
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_ACTOR: ${{ github.actor }}
+        run: bash scripts/changelog_gate.sh "origin/${{ github.base_ref }}"
+
   lint:
     name: Lint (ruff + import contracts)
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
