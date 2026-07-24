@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Six status tones now actually theme (#2224).** Chat notes, the keybindings conflict
+  state, and the knowledge delete-armed state referenced `--pl-color-info/warning/danger`
+  — names the design package never defines — so their hex fallbacks rendered permanently:
+  never following operator theme overrides, never flipping to light mode. All six point at
+  the real `--pl-color-status-*` tokens now (and the test that had pinned the phantom
+  names pins the real ones).
 - **The header menu drawer is a real modal now (#2222).** It claimed `aria-modal` but
   kept none of the contract: Tab escaped to the page behind it, the background kept
   scrolling, and the sheet mounted inside the header's DOM subtree. It's the DS Drawer
