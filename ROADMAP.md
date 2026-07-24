@@ -17,7 +17,7 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## In progress
 
-- **Design-system conformance & full-token theming** — the console-vs-DS audit's structural tier, and a lossless `--pl-*` theme bridge so plugin views and artifacts stop approximating the console look. (#2072, #2225)
+- **Design-system alignment** — migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).
 
 
 ## Shipped
