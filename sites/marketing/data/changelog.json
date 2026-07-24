@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.112.0",
+    "date": "2026-07-24",
+    "changes": [
+      "Design System Engineer joins the new-agent picker (#2219).",
+      "Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).",
+      "Plugins ▸ Installed shows bundle provenance.",
+      "Desktop: the update prompt now lands at launch, not after engine boot (#2203).",
+      "One source of truth for every curated plugin listing.",
+      "settings.hidden — hide settings from the console entirely (#2172, the settings half of tools.hidden).",
+      "CI now enforces the CHANGELOG [Unreleased] entry on every PR.",
+      "Plugins ▸ Installed is a real table now — with search, status filter, and sortable columns.",
+      "Design-system conformance pass over the console CSS (#2072, mechanical tier).",
+      "The filesystem-projects settings write no longer stalls the event loop (#2210).",
+      "The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).",
+      "Plugin catalog: the Artifact entry no longer points at the archived artifact-plugin repo."
+    ]
+  },
+  {
     "version": "v0.111.0",
     "date": "2026-07-23",
     "changes": [
