@@ -86,7 +86,7 @@ def test_save_settings_rejects_invalid(monkeypatch):
         "graph.settings_schema",
         _fake_module(
             "graph.settings_schema",
-            validate_flat=lambda u: (False, "bad key"),
+            validate_flat=lambda u, hidden=None: (False, "bad key"),
             nest_updates=lambda u: u,
             restart_keys=lambda u: [],
         ),
@@ -104,7 +104,7 @@ def test_save_settings_threads_layer(monkeypatch):
         "graph.settings_schema",
         _fake_module(
             "graph.settings_schema",
-            validate_flat=lambda u: (True, None),
+            validate_flat=lambda u, hidden=None: (True, None),
             nest_updates=lambda u: {"nested": u},
             restart_keys=lambda u: [],
         ),
@@ -131,7 +131,7 @@ def test_save_settings_defaults_to_agent_layer(monkeypatch):
         "graph.settings_schema",
         _fake_module(
             "graph.settings_schema",
-            validate_flat=lambda u: (True, None),
+            validate_flat=lambda u, hidden=None: (True, None),
             nest_updates=lambda u: u,
             restart_keys=lambda u: [],
         ),
@@ -154,7 +154,7 @@ def test_reset_settings_pops_known_keys(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: k == "model.name"),
+        _fake_module("graph.settings_schema", is_known_key=lambda k: k == "model.name", is_hidden_setting=lambda k, hidden=None: False),
     )
     captured = {}
 
@@ -173,11 +173,24 @@ def test_reset_settings_rejects_unknown_key(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: False),
+        _fake_module("graph.settings_schema", is_known_key=lambda k: False, is_hidden_setting=lambda k, hidden=None: False),
     )
     resp = _client().post("/api/settings/reset", json={"keys": ["bogus.key"]}).json()
     assert resp["ok"] is False
     assert any("unknown setting: bogus.key" in m for m in resp["messages"])
+
+
+def test_reset_settings_rejects_hidden_key(monkeypatch):
+    """A settings.hidden-locked key can't be reset back to inherited (#2172) — a reset
+    writes too (pops the leaf), so the lock covers it like a save."""
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module("graph.settings_schema", is_known_key=lambda k: True, is_hidden_setting=lambda k, hidden=None: True),
+    )
+    resp = _client().post("/api/settings/reset", json={"keys": ["goal.eval_model"]}).json()
+    assert resp["ok"] is False
+    assert any("locked by settings.hidden" in m for m in resp["messages"])
 
 
 class _BreakerStore:
