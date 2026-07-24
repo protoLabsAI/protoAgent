@@ -479,20 +479,22 @@ def _frozen_install_missing_deps(pid: str, requires_pip: list[str], missing: lis
     instead of the pre-ADR-0093 flat refusal (#2226). Refuses only when the runtime
     isn't provisioned (naming the install route) or the install itself fails
     (surfacing pip's real error)."""
-    from infra.python_runtime import managed_python_exe
-    from runtime.python_install import PythonRuntimeError, install_requirements_into_managed_runtime
+    # Module (not from-) imports: callables resolve through the source module at call
+    # time, so test monkeypatches on infra.python_runtime / runtime.python_install bind.
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
 
     to_install = [s for s in requires_pip if _dep_pkg_name(s) in missing]
     _validate_pip_specs(pid, to_install)
-    if managed_python_exe() is None:
+    if pr.managed_python_exe() is None:
         raise InstallError(
             f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
             f"provision the managed Python runtime first (POST /api/runtime/python/install "
             f"or Settings ▸ Tools), then retry."
         )
     try:
-        install_requirements_into_managed_runtime(to_install)
-    except PythonRuntimeError as exc:
+        pi.install_requirements_into_managed_runtime(to_install)
+    except pi.PythonRuntimeError as exc:
         _audit(
             "install_deps",
             {"id": pid, "deps": to_install, "targets": ["managed-runtime"]},
