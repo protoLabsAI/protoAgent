@@ -223,9 +223,10 @@ After forking, review the skill loop lifecycle:
    drop them in by hand; the agent can also distill a proven workflow into a new
    one via `/distill`. All land in the skill index (`/sandbox/skills.db`, SQLite
    + FTS5) as `source=disk`.
-2. **Retrieval** — `KnowledgeMiddleware` injects the top-k most relevant skills
-   before each LLM call (shown as a "skills loaded" chip in chat), so the agent
-   reuses proven workflows.
+2. **Retrieval** — progressive disclosure (ADR 0060): `KnowledgeMiddleware`
+   keeps an always-on `<available_skills>` index of every skill's name + summary
+   (most-recently-used first), and the agent pulls a full procedure on demand
+   with `load_skill` — full skill bodies are never bulk-injected.
 3. **Curation** — run `python -m graph.skills.curator` periodically (or via
    cron) to deduplicate near-identical skills, apply the 90-day confidence
    half-life decay, and prune stale non-pinned entries below confidence 0.2.

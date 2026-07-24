@@ -1,6 +1,6 @@
 # 0059 — Unified plugin manager: in-app directory (Discover) + folded config (Installed)
 
-Status: **Proposed**
+Status: **Accepted** (shipped v0.48.0; extended through v0.112.0)
 
 ## Context
 

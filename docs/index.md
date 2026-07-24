@@ -16,11 +16,11 @@ features:
   - title: A2A-native, built for fleets
     details: Every agent is a spec-compliant A2A 1.0 server — agent card, JSON-RPC over /a2a, SSE streaming, tasks/* lifecycle, push. Delegate to other a2a / openai / acp endpoints; run one or orchestrate many.
   - title: cost-v1 + trace propagation
-    details: Every terminal task emits a cost-v1 DataPart with token usage and wall time. a2a.trace metadata nests this agent's Langfuse trace under the caller's.
+    details: Every terminal task carries cost-v1 (token usage + wall time) on the artifact's metadata map, keyed by extension URI. a2a.trace metadata nests this agent's Langfuse trace under the caller's.
   - title: Free starter tools
     details: DuckDuckGo web search, URL fetch, safe calculator, and IANA-timezone clock — zero API keys, enough to demo a real research loop on a fresh clone.
   - title: A lean core, opt-in plugins
-    details: Start small; add tools, skills, subagents, workflows, FastAPI routes, console dashboards, memory backends, and managed MCP servers as git-URL plugins (python -m server plugin install, pinned in plugins.lock) — without touching core. Discord, Google (Gmail+Calendar), and the plugin-devkit ship first-party.
+    details: Start small; add tools, skills, subagents, workflows, FastAPI routes, console dashboards, memory backends, and managed MCP servers as git-URL plugins (python -m server plugin install, pinned in plugins.lock) — without touching core. Telegram and the plugin-devkit ship in-tree; Discord, Google (Gmail+Calendar), and more install as official external plugins from the directory.
   - title: Release pipeline
     details: Dispatch prepare-release → semver bump PR → merge → tag → GHCR image → GitHub release → Discord embed. Flip the RELEASE_ENABLED repo variable to enable it on a fork.
 ---

@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- **Documentation audit — stale claims fixed, missing reference material added.** The docs
+  landing no longer claims Discord/Google ship first-party (they're official external
+  installs) or that cost-v1 rides a DataPart (it's the artifact metadata map); the README
+  points plugin publishers at `config/plugin-directory.yaml` instead of the generated
+  overlay; the desktop README's retired `PROTOAGENT_CONFIG_DIR` → `PROTOAGENT_HOME`; the
+  releasing guide's branch-protection table lists the real seven CI checks (incl. the
+  changelog gate) instead of three; `tools.hidden` + `settings.hidden` are documented in
+  the configuration reference at last; the ADR index gains its five missing rows
+  (0079/0086/0087/0088/0092), corrects eight shipped ADRs still marked Proposed, and is
+  re-sorted; the orphaned `protoagent` CLI guide joins the sidebar and the guides overview
+  (with four other unlisted guides); and the plugins/fleet/desktop guides pick up the
+  Installed table, archetype `requires`, and launch-time update check.
+
 ### Changed
 - **Plugin views now receive the console's full theme, not six curated colors (#2225).**
   The ADR 0026 theming bridge — `consoleTheme()`, carried by the `protoagent:init` and

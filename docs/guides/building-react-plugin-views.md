@@ -335,7 +335,7 @@ React + Babel from a CDN inside its sandbox). The console just iframes your `pat
 - **[`examples/plugins/chat_example`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/plugins/chat_example)** —
   the **gold-standard copy-me view**: a single-page chat panel covering all four rules + the
   handshake + live re-theme + slug-aware routing + a real turn over a gated route. Start here.
-- **artifact-plugin** (external — github.com/protoLabsAI/artifact-plugin) — generative UI: the agent
+- **[`plugins/artifact`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/artifact)** (ships built-in; the old external artifact-plugin repo is archived) — generative UI: the agent
   calls `show_artifact(kind, code)`; renders in a **nested, no-same-origin** sandboxed iframe (the
   untrusted-content posture above). Uses a **custom router prefix** — a good example of RULE 1 with a
   non-default prefix.

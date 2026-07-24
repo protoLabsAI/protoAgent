@@ -205,6 +205,10 @@
       "label": "Operate & deploy",
       "items": [
         {
+          "path": "guides/cli.md",
+          "title": "The protoagent command (CLI)"
+        },
+        {
           "path": "guides/deploy.md",
           "title": "Deploy via GHCR"
         },

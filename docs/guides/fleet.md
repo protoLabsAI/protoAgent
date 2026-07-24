@@ -72,6 +72,10 @@ archetype:
   label: Product Manager
   icon: Compass
   blurb: Researches, strategizes, and specs products from evidence — renders roadmaps and personas inline.
+  # optional: host capabilities the archetype needs to be USEFUL — the picker warns at
+  # choose-time when one isn't provisioned (e.g. cowork's document skills route through
+  # execute_code, which on the desktop app needs the managed Python runtime, ADR 0094)
+  requires: [python_runtime]
 ```
 
 The picker draws from **two** sources:
