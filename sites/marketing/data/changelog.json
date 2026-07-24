@@ -3,18 +3,14 @@
     "version": "v0.112.0",
     "date": "2026-07-24",
     "changes": [
-      "Design System Engineer joins the new-agent picker (#2219).",
-      "Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).",
-      "Plugins ▸ Installed shows bundle provenance.",
-      "Desktop: the update prompt now lands at launch, not after engine boot (#2203).",
-      "One source of truth for every curated plugin listing.",
-      "settings.hidden — hide settings from the console entirely (#2172, the settings half of tools.hidden).",
-      "CI now enforces the CHANGELOG [Unreleased] entry on every PR.",
-      "Plugins ▸ Installed is a real table now — with search, status filter, and sortable columns.",
-      "Design-system conformance pass over the console CSS (#2072, mechanical tier).",
-      "The filesystem-projects settings write no longer stalls the event loop (#2210).",
-      "The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).",
-      "Plugin catalog: the Artifact entry no longer points at the archived artifact-plugin repo."
+      "The plugin manager is a real table now — search plugins (and the tools they ship), filter by status, sort any column.",
+      "One plugin directory everywhere: the in-app catalog and the website now share a single curated source — and Discover grew from 12 to 20 plugins.",
+      "Plugins installed by a bundle now say so — a chip names the bundle, and search finds everything it installed.",
+      "Design System Engineer joins the new-agent picker.",
+      "Archetype cards warn at choose-time when this machine still needs the one-click Python runtime install — and Settings flags it with a dot until it's provisioned.",
+      "settings.hidden — keep chosen settings out of the console entirely: hidden means gone, not toggleable back (the settings counterpart to tools.hidden).",
+      "Desktop: the update prompt lands at launch, before the engine loads — update first instead of sitting through startup.",
+      "Fixed: saving filesystem projects no longer stalls the server while it applies."
     ]
   },
   {
