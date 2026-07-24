@@ -208,3 +208,13 @@ def test_vendor_asset_routes_are_declared_public():
 
     assert checked, "no vendor-serving plugins found — has the route shape changed?"
     assert not offenders, "vendor assets gated behind auth — will 401 on a sister agent: " + "; ".join(offenders)
+
+
+def test_cowork_archetype_requires_python_runtime() -> None:
+    """The Cowork archetype's document skills route through execute_code, which on the
+    desktop app needs the managed Python runtime (ADR 0094) — the catalog row declares
+    it (#2186 follow-on) so the new-agent picker can warn at choose-time instead of the
+    operator's first docx failing (the exact ADR 0092 first-run this exists for)."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "cowork")
+    assert row.get("requires") == ["python_runtime"]

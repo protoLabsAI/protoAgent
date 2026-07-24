@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).**
+  An archetype can declare `requires: [python_runtime]` (the Cowork catalog entry now
+  does; a bundle's `archetype:` block can too), and the new-agent picker shows a notice
+  when that requirement isn't provisioned on this host — so someone who picks Cowork
+  *specifically to produce documents* learns about the one-click runtime install before
+  their first docx fails, not after. Silent on source runs, when provisioned, and for a
+  stale-but-working doc baseline.
+
+### Added
 - **Desktop: the update prompt now lands at launch, not after engine boot (#2203).** The
   shell runs one update check in parallel with sidecar startup and stores the outcome;
   the in-app UpdateNotice pulls it the moment it mounts (a state read, no network) and

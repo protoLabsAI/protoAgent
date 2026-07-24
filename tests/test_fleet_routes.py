@@ -454,3 +454,44 @@ def test_create_drops_null_input_values(client, monkeypatch):
     )
     assert r.status_code == 200
     assert captured["inputs"] == {"host": "hq"}  # null dropped, never the string "None"
+
+
+def test_archetypes_carry_requires(client, monkeypatch):
+    """`requires` (#2186 follow-on) passes through from BOTH sources — the catalog
+    entry and a bundle's archetype: block — and degrades to [] when absent, so the
+    picker can warn at choose-time about unprovisioned host capabilities."""
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(
+        fleet_routes,
+        "_load_archetype_catalog",
+        lambda: [
+            {"id": "basic", "label": "Basic", "bundle": None, "soul_preset": "base"},
+            {
+                "id": "docsy",
+                "label": "Docsy",
+                "bundle": "https://github.com/x/docsy-stack",
+                "soul": "x",
+                "requires": ["python_runtime"],
+            },
+            {"id": "custom", "label": "Custom", "bundle": None, "soul_preset": "blank"},
+        ],
+    )
+    monkeypatch.setattr(
+        "graph.plugins.installer._read_lock",
+        lambda: {
+            "bundles": [
+                {
+                    "id": "labsy",
+                    "source_url": "https://github.com/x/labsy",
+                    "archetype": {"label": "Labsy", "requires": ["python_runtime"]},
+                },
+                {"id": "plain", "source_url": "https://github.com/x/plain", "archetype": {"label": "Plain"}},
+            ]
+        },
+    )
+    by_id = {a["id"]: a for a in client.get("/api/archetypes").json()["archetypes"]}
+    assert by_id["docsy"]["requires"] == ["python_runtime"]  # catalog entry
+    assert by_id["labsy"]["requires"] == ["python_runtime"]  # bundle archetype: block
+    assert by_id["basic"]["requires"] == []  # absent → [] (older entries)
+    assert by_id["plain"]["requires"] == []

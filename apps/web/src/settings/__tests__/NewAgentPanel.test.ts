@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NewAgentPanel } from "../NewAgentPanel";
 import { api } from "../../lib/api";
-import type { Archetype } from "../../lib/types";
+import type { Archetype, PythonRuntimePayload } from "../../lib/types";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -23,11 +23,28 @@ const ARCHETYPES: Archetype[] = [
   { id: "scout", label: "Scout", icon: "search", blurb: "Research bundle", bundle: "https://example.com/scout.git", soul: "persona" },
 ];
 
+// Managed-runtime payloads for the choose-time warning (#2186 follow-on).
+const runtimePayload = (over: Partial<PythonRuntimePayload["python"]>): PythonRuntimePayload => ({
+  python: {
+    needed: true,
+    managed: true,
+    managed_version: "3.12.13",
+    exe: "/x/python",
+    baseline_installed: true,
+    baseline_current: true,
+    supported: true,
+    target_version: "3.12.13",
+    ...over,
+  },
+  install: { state: "idle", pct: 0, message: "", error: null },
+});
+
 let container: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
   vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: ARCHETYPES });
+  vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({})); // provisioned by default
   vi.spyOn(api, "archetypePreview").mockResolvedValue({ id: "scout", bundle: null });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -123,5 +140,52 @@ describe("NewAgentPanel — name + create above the archetype section (#2193)", 
     const nameInput = container.querySelector('input[aria-label="Agent name"]');
     expect(nameInput).not.toBeNull();
     expect(precedes(nameInput!, createButton())).toBe(true);
+  });
+});
+
+describe("NewAgentPanel — choose-time runtime warning (#2186 follow-on)", () => {
+  const DOCSY: Archetype = {
+    id: "docsy",
+    label: "Docsy",
+    icon: "briefcase",
+    blurb: "Documents",
+    bundle: "https://example.com/docsy.git",
+    soul: "d",
+    requires: ["python_runtime"],
+  };
+
+  async function pickDocsy() {
+    const radio = [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
+      (r) => r.value === "docsy",
+    );
+    if (!radio) throw new Error("no docsy radio card rendered");
+    await act(async () => {
+      radio.click();
+    });
+  }
+
+  it("warns when the picked archetype requires the runtime and it isn't provisioned", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, DOCSY] });
+    vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({ managed: false, baseline_current: false }));
+    await mountPanel();
+    await pickDocsy();
+
+    const note = container.querySelector(".archetype-runtime-notice");
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain("Docsy needs the managed Python runtime");
+    expect(note!.textContent).toContain("Settings ▸ Tools");
+  });
+
+  it("stays silent when the runtime is provisioned, and for archetypes without the requirement", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, DOCSY] });
+    await mountPanel(); // default mock: provisioned
+    await pickDocsy();
+    expect(container.querySelector(".archetype-runtime-notice")).toBeNull();
+  });
+
+  it("stays silent for a non-requiring archetype even when the runtime is missing", async () => {
+    vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({ managed: false, baseline_current: false }));
+    await mountPanel(); // default pick = basic, no requires
+    expect(container.querySelector(".archetype-runtime-notice")).toBeNull();
   });
 });

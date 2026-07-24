@@ -958,6 +958,11 @@ export type Archetype = {
   blurb: string;
   bundle: string | null; // null = Basic; else the bundle git URL
   soul: string; // base SOUL.md the wizard seeds when this archetype is picked ("" = none)
+  // Host capabilities the archetype needs to be USEFUL (#2186 follow-on) — e.g.
+  // "python_runtime" (cowork's document skills route through execute_code, which on
+  // the desktop app needs the managed CPython). The picker warns at choose-time when
+  // a requirement isn't provisioned. Optional: absent on older hosts.
+  requires?: string[];
 };
 
 // What an archetype's bundle would set up — the read-only pre-install peek

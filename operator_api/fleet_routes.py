@@ -378,6 +378,11 @@ def _archetypes() -> list[dict]:
             "bundle": bundle,
             "blurb": entry.get("blurb", ""),
             "soul": soul,
+            # Host capabilities this archetype needs to be USEFUL (#2186 follow-on) —
+            # e.g. "python_runtime": cowork's document skills route through execute_code,
+            # which on the desktop app needs the managed CPython. The new-agent picker
+            # warns at choose-time when a requirement isn't provisioned.
+            "requires": list(entry.get("requires") or []),
         }
         seen_ids.add(aid)
         if bundle:
@@ -412,6 +417,9 @@ def _archetypes() -> list[dict]:
                     "blurb": arch.get("blurb", ""),
                     "bundle": url or None,
                     "soul": arch.get("soul", ""),
+                    # A bundle's archetype: block can declare host requirements too —
+                    # same shape as the catalog field (#2186 follow-on).
+                    "requires": list(arch.get("requires") or []),
                 }
             )
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort
