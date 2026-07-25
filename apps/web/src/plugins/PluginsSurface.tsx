@@ -53,6 +53,7 @@ function contributionsLabel(p: Plugin): string {
 function PluginRow({
   p,
   bundleName,
+  description,
   update,
   busy,
   onToggle,
@@ -69,6 +70,8 @@ function PluginRow({
   p: Plugin;
   /** bundle provenance label (ADR 0040) — set when a bundle installed this plugin */
   bundleName?: string | null;
+  /** manifest description (#2248) — what the plugin does, under the name */
+  description?: string;
   update?: PluginUpdate;
   busy: boolean;
   onToggle: (p: Plugin) => void;
@@ -98,6 +101,15 @@ function PluginRow({
           ) : null}
           <PluginFreshness update={update} />
         </div>
+        {/* What it DOES (#2248) — the manifest already carried this and the row dropped it,
+            so the display NAME had to smuggle it ("Coder (execution-grounded code-solve)").
+            Clamped to two lines: a manifest can write a paragraph, and a row is not the
+            place to read one — the full text is the title. */}
+        {description ? (
+          <p className="plugin-row-desc" title={description}>
+            {description}
+          </p>
+        ) : null}
       </Td>
       {/* The loaded/disabled state was the SECTION a row sat under before the table
           rework; now it's a per-row pill (and a sortable/filterable column). */}
@@ -376,6 +388,10 @@ function LocalTab() {
     // Bundle provenance (ADR 0040) — labels rows a bundle installed, so a stack's
     // members stop reading as anonymous individual plugins.
     bundle: installedById.get(p.id)?.bundle,
+    // What the plugin DOES (#2248). The runtime status has no manifest, so the answer
+    // only exists on the inventory side of this join — which is why the row used to
+    // render a bare name and manifests smuggled their purpose into it.
+    description: installedById.get(p.id)?.manifest?.description,
   }));
   const counts = statusCounts(rows);
   const shown = sortInstalled(filterInstalled(rows, q, status), sort);
@@ -385,6 +401,7 @@ function LocalTab() {
       key={row.p.id}
       p={row.p}
       bundleName={bundleLabel(row)}
+      description={row.description}
       update={updateById.get(row.p.id)}
       busy={pendingId === row.p.id}
       onToggle={onToggle}

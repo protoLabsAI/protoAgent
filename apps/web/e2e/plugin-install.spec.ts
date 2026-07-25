@@ -26,6 +26,10 @@ test("install a plugin from a git URL, then uninstall it from its row", async ({
   const row = page.locator(".plugin-table tbody tr", { hasText: "protoagent-plugin-widgets" });
   await expect(row).toBeVisible();
 
+  // #2248 — the row says what the plugin DOES, not just its name. The description comes
+  // from the manifest (the inventory side of the join); the runtime status has none.
+  await expect(row.locator(".plugin-row-desc")).toHaveText("installed via console");
+
   // #1643 — the fresh install is configurable IMMEDIATELY (no page refresh): install
   // invalidates the settings schema, so the row grows a Configure button and the
   // dialog opens with the plugin's fields, not empty.

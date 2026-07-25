@@ -15,14 +15,16 @@ const mk = (
     behind?: boolean;
     depsMissing?: string[];
     bundle?: InstalledRow["bundle"];
+    description?: string;
   },
 ): InstalledRow => {
-  const { behind = false, depsMissing = [], bundle, ...p } = over;
+  const { behind = false, depsMissing = [], bundle, description, ...p } = over;
   return {
     p: { id: "x", name: "X", enabled: true, loaded: true, tools: [], skills: 0, ...p },
     behind,
     depsMissing,
     bundle,
+    description,
   };
 };
 
@@ -55,6 +57,18 @@ describe("filterInstalled", () => {
     expect(filterInstalled(ROWS, "DOOM", "All").map((r) => r.p.id)).toEqual(["doom"]);
     // which plugin ships tool X — the point of searching tool names
     expect(filterInstalled(ROWS, "tailor_cv", "All").map((r) => r.p.id)).toEqual(["careercoach"]);
+  });
+
+  it("matches the manifest DESCRIPTION — 'which plugin does X?' in prose (#2248)", () => {
+    // Local rows, not ROWS: the shared fixture pins exact sort orders and status counts.
+    const rows = [
+      mk({ id: "notes", name: "Notes", description: "A shared scratch document the agent appends to." }),
+      mk({ id: "doom", name: "DOOM" }), // no description at all
+    ];
+    // "scratch" appears nowhere in the name, id, or tools — only in the description.
+    expect(filterInstalled(rows, "scratch", "All").map((r) => r.p.id)).toEqual(["notes"]);
+    // A row without a description stays inert — no "undefined" leaking into the haystack.
+    expect(filterInstalled(rows, "undefined", "All")).toEqual([]);
   });
 
   it("filters by status chip", () => {

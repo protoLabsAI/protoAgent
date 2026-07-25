@@ -14,6 +14,9 @@ export type InstalledRow = {
   /** bundle provenance (installedPluginsQuery → bundle, ADR 0040): this plugin was
    *  installed by a bundle — label shown as a chip, searchable below. */
   bundle?: { id: string; name?: string };
+  /** manifest description (installedPluginsQuery → manifest.description, #2248): what the
+   *  plugin DOES. The runtime status carries no manifest, so this is the join's job. */
+  description?: string;
 };
 
 /** Display label for a row's bundle chip — the bundle's name, falling back to its id
@@ -39,7 +42,9 @@ export function contributionCount(p: Plugin): number {
 
 // Free-text search + status chip. Tool NAMES are searchable on purpose — "which
 // plugin ships tool X?" is a real question once dozens of plugins are installed —
-// and so is the BUNDLE ("show me everything cowork-stack installed").
+// and so is the BUNDLE ("show me everything cowork-stack installed") and the manifest
+// DESCRIPTION (#2248): "which plugin does X?" is the same question asked in prose, and
+// it only became answerable once the description was on the row.
 export function filterInstalled(rows: InstalledRow[], q: string, status: InstalledStatus): InstalledRow[] {
   const needle = q.trim().toLowerCase();
   return rows.filter((r) => {
@@ -47,7 +52,7 @@ export function filterInstalled(rows: InstalledRow[], q: string, status: Install
     if (status === "Disabled" && r.p.loaded) return false;
     if (status === "Attention" && !needsAttention(r)) return false;
     if (!needle) return true;
-    return `${r.p.name} ${r.p.id} ${r.p.version ?? ""} ${r.p.tools.join(" ")} ${r.bundle?.name ?? ""} ${r.bundle?.id ?? ""}`
+    return `${r.p.name} ${r.p.id} ${r.p.version ?? ""} ${r.p.tools.join(" ")} ${r.bundle?.name ?? ""} ${r.bundle?.id ?? ""} ${r.description ?? ""}`
       .toLowerCase()
       .includes(needle);
   });
