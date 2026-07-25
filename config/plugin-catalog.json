@@ -160,6 +160,94 @@
       "official": true,
       "repo": "https://github.com/protoLabsAI/pr-reviewer-plugin",
       "tagline": "The deterministic half of the PR-review QA tier — budgeted protoPatch structural reviews as a fifth review-panel member (ADR 0078)."
+    },
+    {
+      "id": "plugin-devkit",
+      "name": "Plugin Devkit",
+      "category": "Authoring",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/plugin-devkit",
+      "tagline": "Build your own plugins — the authoring kit + reference plugin. A scaffold tool, an architect subagent, the building-plugins skill, and a console guide, in one bundle."
+    },
+    {
+      "id": "coding_agent",
+      "name": "CLI Coding Agent (ACP)",
+      "category": "Orchestration",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coding_agent",
+      "tagline": "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol."
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "category": "Communication",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/telegram",
+      "tagline": "Run your agent as a Telegram bot — inbound DMs and groups, replies back out. A tiny reference communication plugin."
+    },
+    {
+      "id": "notes",
+      "name": "Notes",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/notes",
+      "tagline": "A single shared markdown note the agent and the operator both read and write, with a live-preview editor the plugin serves itself. The flagship reference plugin — on by default."
+    },
+    {
+      "id": "docs",
+      "name": "Docs",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/docs",
+      "tagline": "Answer questions about protoAgent from its own documentation — a keyword index over the bundled docs, docs_search / docs_read tools, and a console reader view. On by default."
+    },
+    {
+      "id": "craft",
+      "name": "Craft (engineering slash commands)",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/craft",
+      "tagline": "Engineering rituals you invoke by typing them — /grill, /standup, /code-review, /due-diligence — plus an ADR-authoring skill and a skill_writer subagent. Prompt-only: no tools, routes, network, or filesystem access."
+    },
+    {
+      "id": "workflows",
+      "name": "Workflows",
+      "category": "Automation",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/workflows",
+      "tagline": "Declarative multi-step subagent workflows — chain subagent steps, some running in parallel, into repeatable recipes defined once as YAML. Off by default (lean core)."
+    },
+    {
+      "id": "coder",
+      "name": "Coder (execution-grounded code-solve)",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coder",
+      "tagline": "Turns 'implement X, here are the tests' into a TEST-VERIFIED solution via a difficulty-gated search ladder — gated on the tests passing, not an LLM judge. Off by default; needs a declared delegate."
+    },
+    {
+      "id": "execute_code",
+      "name": "Execute Code",
+      "category": "Tools",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/execute_code",
+      "tagline": "A Python interpreter the agent runs code in — headline use is programmatic tool-calling: call several tools, compose the results in code, return only what matters. Ships disabled: a scrubbed-env subprocess is isolation, not a true sandbox."
+    },
+    {
+      "id": "orgchart",
+      "name": "Org Chart",
+      "category": "Orchestration",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/orgchart",
+      "tagline": "Live diagram of the agent fleet — every agent a node, a directed edge wherever one agent can delegate to another. Crawls outward from this agent's delegates. Off by default."
+    },
+    {
+      "id": "friction",
+      "name": "Friction Log",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/friction",
+      "tagline": "The agent records its own friction — missing or awkward tools, confusing errors, wrong paths — alongside auto-captured tool errors, so the improvement backlog writes itself from real use. Off by default."
     }
   ]
 }
