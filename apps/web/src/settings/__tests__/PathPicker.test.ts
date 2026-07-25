@@ -17,7 +17,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PathPicker } from "../PathPicker";
 import { api } from "../../lib/api";
+import * as desktop from "../../lib/desktop";
 import type { BrowseListing } from "../../lib/types";
+
+// Only the two shell-touching functions are faked; `canPickNatively` stays REAL so the
+// component is exercised through the same predicate the tests below assert directly.
+vi.mock("../../lib/desktop", async (importActual) => ({
+  ...(await importActual<typeof import("../../lib/desktop")>()),
+  hasDesktopShell: vi.fn(() => false), // a plain browser unless a test says otherwise
+  pickPathNative: vi.fn(async () => undefined),
+}));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -45,6 +54,9 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.restoreAllMocks();
+  // restoreAllMocks only unwinds spies — the module-factory mocks above keep their call
+  // history, which a `not.toHaveBeenCalled()` in a later test would read as a real call.
+  vi.clearAllMocks();
 });
 
 async function mount(props: { value?: string; kind?: "dir" | "file"; onChange?: (v: string) => void } = {}) {
@@ -57,6 +69,18 @@ async function mount(props: { value?: string; kind?: "dir" | "file"; onChange?: 
         onChange: props.onChange ?? (() => {}),
       })),
     );
+  });
+}
+
+/** Click Browse… and flush the async handler, WITHOUT waiting for an in-app dialog —
+ *  the native path (#2265) deliberately never opens one, so waiting would just stall. */
+async function clickBrowse() {
+  const browse = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Browse"))!;
+  await act(async () => {
+    browse.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await act(async () => {
+    await Promise.resolve(); // let the awaited native pick resolve
   });
 }
 
@@ -164,5 +188,104 @@ describe("PathPicker", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(onChange).toHaveBeenCalledWith("/srv/data");
+  });
+});
+
+// The native OS chooser (#2265) is a progressive enhancement over the server-side
+// browser above — strictly better where it's correct, and NOT correct everywhere. These
+// pin both halves: that it takes over where it applies, and that it stays out of the way
+// (leaving #2264's behavior exactly as tested above) everywhere else.
+describe("PathPicker — native OS chooser (#2265)", () => {
+  // jsdom's default URL carries no `/agent/<slug>`, so the window is already the HOST
+  // console — the only other half of the gate is whether a shell is present.
+  const asDesktopHost = () => vi.mocked(desktop.hasDesktopShell).mockReturnValue(true);
+
+  it("uses the OS chooser instead of the in-app browser, and commits what it returns", async () => {
+    asDesktopHost();
+    const native = vi.mocked(desktop.pickPathNative).mockResolvedValue("/Volumes/work/projects");
+    const browseDir = vi.spyOn(api, "browseDir").mockResolvedValue(listing());
+    const onChange = vi.fn();
+
+    await mount({ value: "/Users/kj", onChange });
+    await clickBrowse();
+
+    expect(native).toHaveBeenCalledWith({ start: "/Users/kj", files: false });
+    expect(onChange).toHaveBeenCalledWith("/Volumes/work/projects");
+    // The server was never asked, and no dialog opened over the settings form.
+    expect(browseDir).not.toHaveBeenCalled();
+    expect(document.querySelector(".path-browser")).toBeNull();
+  });
+
+  it("treats cancel as a decision — field untouched, and no in-app dialog behind it", async () => {
+    asDesktopHost();
+    vi.mocked(desktop.pickPathNative).mockResolvedValue(null); // operator dismissed it
+    const browseDir = vi.spyOn(api, "browseDir").mockResolvedValue(listing());
+    const onChange = vi.fn();
+
+    await mount({ value: "/Users/kj", onChange });
+    await clickBrowse();
+
+    expect(onChange).not.toHaveBeenCalled();
+    // The trap this guards: falling through on cancel would re-open a picker the
+    // operator just dismissed, making Browse… feel un-cancellable.
+    expect(document.querySelector(".path-browser")).toBeNull();
+    expect(browseDir).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the in-app browser when the shell has no such command", async () => {
+    asDesktopHost();
+    vi.mocked(desktop.pickPathNative).mockResolvedValue(undefined); // shell too old
+    vi.spyOn(api, "browseDir").mockResolvedValue(listing());
+
+    await mount({ value: "/Users/kj" });
+    await openBrowser();
+
+    expect(api.browseDir).toHaveBeenCalled(); // Browse… is never a dead button
+    expect(rows().map((r) => r.textContent)).toEqual(["dev", "Documents"]);
+  });
+
+  it("stays out of a plain browser — the server-side browser is the only correct one there", async () => {
+    vi.mocked(desktop.hasDesktopShell).mockReturnValue(false);
+    vi.spyOn(api, "browseDir").mockResolvedValue(listing());
+
+    await mount({ value: "/Users/kj" });
+    await openBrowser();
+
+    expect(desktop.pickPathNative).not.toHaveBeenCalled();
+    expect(api.browseDir).toHaveBeenCalled();
+  });
+
+  it("stays out of a FLEET-MEMBER window even on the desktop — the box may not be this one", async () => {
+    asDesktopHost(); // shell present…
+    window.history.pushState({}, "", "/app/agent/ava/"); // …but focused on a member
+    vi.spyOn(api, "browseDir").mockResolvedValue(listing());
+    try {
+      await mount({ value: "/Users/kj" });
+      await openBrowser();
+      // A member can be proxied to another machine entirely; only the server it belongs
+      // to can name its paths.
+      expect(desktop.pickPathNative).not.toHaveBeenCalled();
+      expect(api.browseDir).toHaveBeenCalled();
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+});
+
+describe("canPickNatively — where a local chooser is allowed to answer (#2265)", () => {
+  it("allows it only in the desktop shell's HOST window", () => {
+    expect(desktop.canPickNatively(true, true)).toBe(true);
+  });
+
+  it("refuses a fleet-member window even inside the desktop shell", () => {
+    // The member may be proxied to another box entirely (a registered remote, a tailnet
+    // peer, a container) — a locally-chosen path wouldn't exist on the machine that has
+    // to resolve it, which is the exact bug the server-side browser prevents.
+    expect(desktop.canPickNatively(true, false)).toBe(false);
+  });
+
+  it("refuses a plain browser, host window or not", () => {
+    expect(desktop.canPickNatively(false, true)).toBe(false);
+    expect(desktop.canPickNatively(false, false)).toBe(false);
   });
 });

@@ -8,7 +8,8 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api } from "../lib/api";
+import { api, isHostConsole } from "../lib/api";
+import { canPickNatively, hasDesktopShell, pickPathNative } from "../lib/desktop";
 import { errMsg } from "../lib/format";
 import type { BrowseEntry } from "../lib/types";
 
@@ -43,6 +44,25 @@ export function PathPicker({
   invalid?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+
+  // Desktop host window only (#2265) — see canPickNatively for why a fleet-member window
+  // keeps the server-side browser. Read once per render: both inputs are fixed for the
+  // life of the window (the Tauri global and the URL slug).
+  const native = canPickNatively(hasDesktopShell(), isHostConsole());
+
+  const browse = async () => {
+    if (native) {
+      const picked = await pickPathNative({ start: value, files: kind === "file" });
+      // undefined = no usable native picker after all (a shell too old for the command);
+      // fall through to the in-app browser so Browse… is never a dead button.
+      if (picked !== undefined) {
+        if (picked) onChange(picked); // null = cancelled → leave the field alone
+        return;
+      }
+    }
+    setOpen(true);
+  };
+
   return (
     <>
       <div className="path-picker">
@@ -55,7 +75,7 @@ export function PathPicker({
           aria-invalid={invalid}
           onChange={(e) => onChange(e.target.value)}
         />
-        <Button variant="ghost" size="sm" type="button" onClick={() => setOpen(true)}>
+        <Button variant="ghost" size="sm" type="button" onClick={() => void browse()}>
           <FolderOpen size={15} /> Browse…
         </Button>
       </div>

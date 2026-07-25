@@ -31,6 +31,13 @@ export function isLauncherWindow(): boolean {
   }
 }
 
+/** True when this webview is running inside the desktop shell (so `invoke` reaches a
+ *  command rather than no-opping). Callers that need to tell "the shell said no" from
+ *  "there is no shell" have to ask this FIRST — `invoke` collapses both to undefined. */
+export function hasDesktopShell(): boolean {
+  return Boolean(tauri()?.core);
+}
+
 /** Invoke a Tauri command; resolves to undefined (no-op) outside the desktop shell. */
 export async function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T | undefined> {
   const core = tauri()?.core;
@@ -59,6 +66,52 @@ export async function listen<T = unknown>(
     return await ev.listen<T>(event, (e) => handler(e.payload));
   } catch {
     return () => {};
+  }
+}
+
+/**
+ * Whether the NATIVE OS chooser is a safe answer for a path setting (#2265), or the
+ * in-app server-side browser (#2264) has to be used.
+ *
+ * A native chooser can only name a path on THIS machine, so it's correct only when the
+ * config being edited belongs to an agent whose filesystem IS this machine. The desktop
+ * app guarantees that for its own host window and nowhere else: a slug window focused on
+ * a fleet member may be proxied to another box entirely — a registered remote, a tailnet
+ * peer, a container — and picking a local folder there writes a path that doesn't exist
+ * on the machine that has to resolve it. That's precisely the failure the server-side
+ * browser was built to prevent, and re-introducing it for a nicer dialog is a bad trade.
+ *
+ * Local members share this filesystem too, but the console can't tell local from remote
+ * without the fleet list, and a leaf form field shouldn't acquire one. The fallback is
+ * never WRONG — only less pleasant — so the ambiguous case takes it.
+ */
+export function canPickNatively(inDesktopShell: boolean, onHostConsole: boolean): boolean {
+  return inDesktopShell && onHostConsole;
+}
+
+/**
+ * Open the OS folder/file chooser (#2265). Three outcomes, and callers must keep them
+ * apart:
+ *   - `string`    — the chosen path.
+ *   - `null`      — the operator CANCELLED. Leave the field as it is; a cancel is a
+ *                   decision, not a failure, so it must not fall through to the in-app
+ *                   browser and make the dialog feel un-dismissable.
+ *   - `undefined` — no native picker here (no shell, or a shell too old to know the
+ *                   command). Fall back to the in-app browser.
+ */
+export async function pickPathNative(opts: { start?: string; files?: boolean }): Promise<string | null | undefined> {
+  const core = tauri()?.core;
+  if (!core) return undefined;
+  try {
+    const picked = await core.invoke<string | null>("pick_path", {
+      start: opts.start ?? "",
+      files: Boolean(opts.files),
+    });
+    return typeof picked === "string" && picked ? picked : null;
+  } catch {
+    // An older shell without the command, or a denied capability — degrade to the
+    // in-app browser rather than leaving Browse… dead. (Same posture as auth_token.)
+    return undefined;
   }
 }
 

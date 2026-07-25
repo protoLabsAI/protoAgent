@@ -539,6 +539,58 @@ fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
     found
 }
 
+/// The real OS folder/file chooser for the console's path settings (#2265).
+///
+/// #2264 gave every path field a **Browse…** that walks the SERVER's filesystem over
+/// `GET /api/fs/browse` — the only mechanism that works everywhere, because the console
+/// routinely configures a machine it isn't running on (tailnet, fleet members, Docker),
+/// and the browser-native pickers can't name a server path at all. That stays the
+/// fallback and the default. This is the progressive enhancement for the one case where
+/// the two machines are provably the same: the desktop app's HOST window, configuring
+/// the instance the app itself runs. There the operator gets back everything the real
+/// chooser gives for free — typing with autocomplete, `~` and `/` jumps, Finder/Explorer
+/// favourites, network volumes.
+///
+/// The webview decides when to call this (see `pickPathNative` in lib/desktop.ts); the
+/// shell just answers. Returns None when the operator cancels — the caller leaves the
+/// field untouched rather than falling through to the in-app browser, since a cancel is
+/// a decision, not a failure.
+#[tauri::command]
+async fn pick_path<R: Runtime>(app: AppHandle<R>, start: Option<String>, files: bool) -> Option<String> {
+    let mut builder = app.dialog().file();
+    // Seed the chooser at the field's current value when it names a real directory. A
+    // stale or mistyped path is exactly when someone reaches for Browse, so a bad seed
+    // must not dead-end the dialog — drop it and let the OS pick its own default.
+    if let Some(dir) = start
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+    {
+        builder = builder.set_directory(dir);
+    }
+
+    // The dialog is callback-based and fires on the UI thread. A capacity-1 channel plus
+    // `try_send` bridges it to this async command without ever blocking that thread —
+    // the blocking_* variants panic when called from the main thread, and there is
+    // exactly one send, so try_send cannot drop the result.
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    let reply = move |picked: Option<tauri_plugin_dialog::FilePath>| {
+        let _ = tx.try_send(picked);
+    };
+    if files {
+        builder.pick_file(reply);
+    } else {
+        builder.pick_folder(reply);
+    }
+
+    let picked = rx.recv().await.flatten()?;
+    // A native pick is always a real local path; `into_path` only fails for the
+    // Android/iOS content-URI form, which this desktop-only command never sees.
+    picked.into_path().ok().map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Check the GitHub Release updater manifest (latest.json) for a newer build;
 /// prompt, download + install, then relaunch. Signatures are verified against
 /// the org minisign pubkey baked into tauri.conf.json.
@@ -848,7 +900,8 @@ pub fn run() {
             focus_main,
             hotkeys_status,
             hotkeys_set,
-            auth_token
+            auth_token,
+            pick_path
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
