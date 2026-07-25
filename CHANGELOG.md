@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The generated OpenShell sandbox policy no longer locks the agent out of its own
+  workspace (#2281).** `scripts/gen_openshell_policy.py` read the raw
+  `filesystem.projects` config field, which is *empty* on a default install — the fs fence
+  falls back to the workspace directory rather than listing it explicitly. So the emitted
+  policy carried no project paths at all, and because Landlock is deny-by-default, it
+  denied the agent read/write on the one directory its filesystem toolset is actually
+  fenced to. The generator now reads the effective fence
+  (`effective_filesystem_projects()`), which also picks up the ADR 0095 `projects:`
+  registry — including its `fs: false` opt-out — for free.
+
 ### Changed
 - **Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).**
   The archetype preset gains a fix-round rule as the last **How I work** bullet: a fix to
