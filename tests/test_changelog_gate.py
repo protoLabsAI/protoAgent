@@ -144,15 +144,40 @@ def test_dependabot_skips_the_gate(tmp_path: Path) -> None:
     assert _run_gate(repo, actor="dependabot[bot]").returncode == 0
 
 
-def test_checks_yml_wires_the_gate_as_a_fast_pr_only_job() -> None:
+def test_changelog_yml_wires_the_gate_as_a_fast_pr_only_job() -> None:
     """Source guard on the workflow: the job exists, is PR-only, calls the
-    script, and installs nothing (the whole point is failing in seconds)."""
-    workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "checks.yml").read_text(encoding="utf-8")
+    script, and installs nothing (the whole point is failing in seconds).
+
+    Lives in its OWN workflow rather than checks.yml so that applying the
+    `skip-changelog` label re-triggers it — see the labeled/unlabeled guard below."""
+    wf_dir = Path(__file__).parent.parent / ".github" / "workflows"
+    workflow = (wf_dir / "changelog.yml").read_text(encoding="utf-8")
     assert "\n  changelog:\n" in workflow
-    job = workflow.split("\n  changelog:\n", 1)[1].split("\n  lint:\n", 1)[0]
-    assert "github.event_name == 'pull_request'" in job
+    job = workflow.split("\n  changelog:\n", 1)[1]
+    # PR-only by TRIGGER now (the workflow has no push:), not by a per-job `if`.
+    assert "push:" not in workflow
+    assert "pull_request:" in workflow
     assert "scripts/changelog_gate.sh" in job
     # fetch-depth: 0 so base...HEAD can resolve a merge-base on the PR checkout.
     assert "fetch-depth: 0" in job
     for install in ("pip install", "npm ci", "npm install", "setup-python", "setup-node"):
         assert install not in job, f"changelog job must stay install-free, found {install!r}"
+    # checks.yml must NOT also define it — two jobs with the same check name would
+    # race and report twice.
+    assert "\n  changelog:\n" not in (wf_dir / "checks.yml").read_text(encoding="utf-8")
+
+
+def test_labeling_retriggers_the_gate() -> None:
+    """The whole reason the gate has its own workflow.
+
+    The label is read from the event SNAPSHOT and neither `gh pr create --label`
+    (labels are applied in a second api call, after `opened` fires) nor
+    `gh run rerun` (replays the original payload) can get it in there. Without
+    `labeled` in the trigger types, applying `skip-changelog` does nothing until
+    someone pushes an empty commit."""
+    workflow = (
+        Path(__file__).parent.parent / ".github" / "workflows" / "changelog.yml"
+    ).read_text(encoding="utf-8")
+    types = workflow.split("types:", 1)[1].split("\n", 1)[0]
+    for action in ("opened", "synchronize", "reopened", "labeled", "unlabeled"):
+        assert action in types, f"changelog.yml must trigger on {action!r}, got {types.strip()}"
