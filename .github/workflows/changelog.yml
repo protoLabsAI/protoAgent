@@ -1,0 +1,60 @@
+name: Changelog
+
+# The CHANGELOG gate, split out of checks.yml so that applying the
+# `skip-changelog` label RE-TRIGGERS it.
+#
+# Why its own file. The gate reads the label from $GITHUB_EVENT_PATH — the event
+# SNAPSHOT taken when the run was created — so the label has to already be on the PR
+# when the run starts. Neither obvious shortcut achieves that: `gh pr create --label`
+# applies labels in a SECOND api call, after `opened` has already fired with none,
+# and `gh run rerun` replays the original payload by definition. Before this split
+# the only fix was to label the PR and then push an empty commit, which is a silly
+# thing to make people do (and both the script and the workflow used to document a
+# remedy — the re-run — that could never work; corrected in #2292).
+#
+# Adding `labeled`/`unlabeled` below makes the act of labeling fire a fresh
+# pull_request event whose payload carries the label, so the gate re-runs on its own
+# and goes green. No API call and no extra token scope: `permissions: contents: read`
+# still covers it, because the label arrives IN the event rather than being fetched.
+#
+# It has to live here rather than as extra trigger types on checks.yml: a label
+# change would otherwise re-run the whole Python suite, fleet integration and web E2E
+# on every PR. Guarding those jobs with `if: github.event.action != 'labeled'` is not
+# an alternative — a SKIPPED required check sits pending and wedges the PR instead of
+# passing it.
+#
+# The check name is unchanged (`Changelog entry`), which is what any required-checks
+# config would key on. As of the split it is NOT in main's ruleset
+# (`required_status_checks`), so this move carries no protection migration.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: Changelog entry
+    # Every PR must touch CHANGELOG.md (the [Unreleased] entry PROTO.md asks
+    # for) so release notes stop depending on archaeology at release time.
+    # Logic lives in scripts/changelog_gate.sh (covered by
+    # tests/test_changelog_gate.py); this job just wires the PR context in.
+    # Escape hatches: the skip-changelog label, a release/* head branch, or a
+    # dependabot[bot] actor.
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so base...HEAD resolves a merge-base — the gate judges
+          # only the PR's own diff, not entries that landed on main since fork.
+          fetch-depth: 0
+      - name: Require a CHANGELOG [Unreleased] entry (or an escape hatch)
+        # Pure git + jq/shell — no dependency install, fails in seconds.
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_ACTOR: ${{ github.actor }}
+        run: bash scripts/changelog_gate.sh "origin/${{ github.base_ref }}"
