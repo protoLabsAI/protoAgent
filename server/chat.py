@@ -302,7 +302,18 @@ async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, A
                     error = payload
     finally:
         await _acp_release(tid)
-    content = error or answer or "_(The agent ended the turn without a textual reply.)_"
+    # No error frame AND no `done` payload — the runtime ended the turn having said
+    # nothing. Same reason as the native path's fallback (#2300): a caller must be able
+    # to tell "no answer" from "an answer", and the old wording read as a deliberate
+    # quiet turn rather than something to retry. Deliberately NOT the native path's exact
+    # text: this path reads the answer from the runtime's `done` frame rather than by
+    # scanning messages, so it never carried the stale-answer defect, and promising "this
+    # is not the previous turn's answer" here would reassure against a risk that doesn't
+    # exist on it.
+    content = error or answer or (
+        "**Error:** the ACP runtime ended the turn without a reply and without an error. "
+        "Nothing was returned for this request; retry it."
+    )
     out: dict[str, Any] = {"role": "assistant", "content": content}
     if usage is not None:
         out["usage"] = usage
