@@ -6,9 +6,14 @@ OpenShell's **v1 policy schema** (validated against OpenShell v0.0.59) —
 derived from what the agent is actually configured to use, not hand-rolled
 guesses:
 
-- ``filesystem_policy`` (Landlock) ← the ``filesystem.projects`` registry
-  (read-only vs read-write per project) + the agent data root + a read-only
-  OS baseline.
+- ``filesystem_policy`` (Landlock) ← the **effective** fs fence
+  (``LangGraphConfig.effective_filesystem_projects`` — explicit
+  ``filesystem.projects``, else the ADR 0095 ``projects:`` registry, else the
+  default workspace dir), read-only vs read-write per project, + the agent data
+  root + a read-only OS baseline. Reading the raw ``filesystem.projects`` field
+  instead was #2281: it's empty on a default install, so the emitted policy
+  carried no project paths and — Landlock being deny-by-default — locked the
+  agent out of the one directory its fs toolset is fenced to.
 - ``network_policies`` (per-binary, deny-by-default egress proxy) ←
   ``egress.allowed_hosts`` + ``model.api_base``.
 - ``process`` ← runs as the unprivileged ``sandbox`` user from the image.
@@ -113,7 +118,8 @@ def build_policy(cfg: LangGraphConfig) -> str:
 #
 # v1 policy schema, validated against OpenShell v0.0.59. Re-verify on upgrade
 # (`openshell policy prove` can check properties of this file). Single source
-# of truth: filesystem_policy ← filesystem.projects; network_policies ←
+# of truth: filesystem_policy ← the effective fs fence (filesystem.projects, else
+# the projects: registry, else the default workspace); network_policies ←
 # egress.allowed_hosts + model.api_base.
 
 version: 1
