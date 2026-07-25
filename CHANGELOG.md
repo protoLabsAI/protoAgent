@@ -72,6 +72,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suppressed (you just got `app.loaded`). Foreground-focus is the v1 signal — true OS sleep/wake
   needs native power observers, a later lift.
 
+- **One place to declare a project (ADR 0095).** protoAgent asked for the same project in
+  four different boxes — its path as a work folder, its `owner/name` in the GitHub repo
+  list, its path *again* as the board's repo — with nothing cross-checking that the three
+  named the same thing. Move a checkout and the board points at the old path while the fs
+  fence points at the new one, silently. A new top-level `projects:` list is now the one
+  place: `{name, path, github, default_branch}` plus the access bits, and the other
+  settings read from it.
+
+  A registered project is fenced **read-write by default**; `write: false` makes it
+  read-only, `no_delete: true` allows create/edit but never delete, and `fs: false`
+  registers a project for GitHub/board purposes with no filesystem reach at all. An
+  explicit `filesystem.projects` still wins over the registry, so existing config and
+  forks load byte-identically and nothing migrates on upgrade.
+
+  This release wires the filesystem fence; the GitHub and board projections follow in
+  those plugins.
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
   location were all free-text boxes, and typing is the one input method that can't tell

@@ -342,6 +342,27 @@ operator:
   allowed_dirs: []
   # - /home/kj/projects/my-other-repo
 
+# Managed projects (ADR 0095) — the ONE place a project is declared. Each entry is a
+# project's binding on THIS host: where it lives, what it is on GitHub, what the agent
+# may do to it. Consumers project from it instead of re-declaring — the filesystem fence
+# (ADR 0007), the github plugin's repo picker, the board's repo/base branch. An explicit
+# `filesystem.projects` (or `github.repos`, or `project_board.repo`) still wins, so
+# existing config is untouched by this.
+#
+# A registered project is fenced READ-WRITE by default; opt out per entry.
+# projects:
+#   - name: protoAgent                  # the identifier the fs tools address it by
+#     path: /home/kj/dev/protoAgent
+#     github: protoLabsAI/protoAgent    # feeds the github repo picker
+#     default_branch: main              # feeds the board's worktrees/PRs
+#   - name: notes
+#     path: /home/kj/dev/notes
+#     write: false                      # read-only
+#   - name: someone-elses-repo
+#     path: /home/kj/dev/theirs
+#     github: them/theirs
+#     fs: false                         # tracked for github/board only — no fs reach
+
 # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs every agent this machine
 # owns inherits. These are HOST defaults: best set once in host-config.yaml or the
 # Settings ▸ Host / App home (a per-agent value here is a silent no-op — the host

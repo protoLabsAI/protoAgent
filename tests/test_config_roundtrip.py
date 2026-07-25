@@ -201,6 +201,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "prompt_cache_enabled": True,
     "prompt_cache_force": False,
     "prompt_cache_ttl": "5m",
+    "projects": [],  # managed projects registry (ADR 0095) — top-level list of dicts
     "reasoning_effort": None,
     "repetition_penalty": None,
     "request_timeout": 120,
@@ -321,6 +322,7 @@ _LEGACY_EMITTED_ATTRS = {
     "researcher",  # subagents.researcher (a SubagentDef)
     "lifecycle_hooks",  # top-level lifecycle_hooks list (ADR 0074) — a list of dicts, config_io.py §B
     "filesystem_projects",  # filesystem.projects (registry of {name,path,write} dicts)
+    "projects",  # top-level projects registry (ADR 0095) — a list of dicts, config_io.py §B
     "checkpoint_background_keep",
     "knowledge_db_path",
     "knowledge_embed_breaker_threshold",

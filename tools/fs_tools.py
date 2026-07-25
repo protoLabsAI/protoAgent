@@ -93,15 +93,24 @@ def _approved(decision) -> bool:
     return str(decision).strip().lower() in {"approve", "approved", "yes", "y", "true", "ok"}
 
 
+def _configured_entries(config, *, create: bool = False) -> list[dict]:
+    """The fence entries this config actually asks for — explicit
+    ``filesystem.projects``, else the ADR 0095 ``projects:`` registry projected
+    onto the fence, else the default workspace. The warning path below reports
+    against this same list, so a bad entry is named wherever it was declared."""
+    entries = (
+        config.effective_filesystem_projects(create=create)
+        if hasattr(config, "effective_filesystem_projects")
+        else (getattr(config, "filesystem_projects", []) or [])
+    )
+    return [e for e in entries or [] if isinstance(e, dict)]
+
+
 def _registry_from_config(config) -> ProjectRegistry:
     projects: list[Project] = []
     # Explicit projects, or the default workspace dir (created) when none are
     # configured — the on-by-default fenced workspace.
-    entries = (
-        config.effective_filesystem_projects(create=True)
-        if hasattr(config, "effective_filesystem_projects")
-        else (getattr(config, "filesystem_projects", []) or [])
-    )
+    entries = _configured_entries(config, create=True)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -143,7 +152,7 @@ def build_fs_tools(config) -> list:
         # Configured-but-all-unusable is an OPERATOR MISTAKE, not the inert default: every
         # fs tool unbinds and the agent just... can't read files anymore. Warn, and
         # name the folders, so the log says why instead of only that it happened.
-        configured = [e for e in (getattr(config, "filesystem_projects", []) or []) if isinstance(e, dict)]
+        configured = _configured_entries(config)
         if configured:
             log.warning(
                 "[fs] no usable work folders — filesystem tools NOT bound. Fix or remove: %s",

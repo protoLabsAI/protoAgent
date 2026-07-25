@@ -939,6 +939,32 @@ class LangGraphConfig:
     filesystem_bypass_allowed: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
 
+    # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
+    # top-level ``projects:`` list of ``{name, path, github?, default_branch?, write?,
+    # no_delete?, fs?}`` dicts, keyed on ``name`` (the identifier the fs tools already
+    # address projects by — deliberately no separate slug). It describes a project's
+    # binding on THIS host: where it lives, what it is on GitHub, what the agent may do
+    # to it. Deliberately holds no planning state (goals/milestones/issues) — that lives
+    # in whatever board owns the work.
+    #
+    # Consumers project from it rather than re-declaring: the fs fence via
+    # ``effective_filesystem_projects`` below, the github plugin's repo picker via
+    # ``github``, the board's repo/base branch via ``name``. An EXPLICIT
+    # ``filesystem.projects`` (or ``github.repos``, or ``project_board.repo``) still
+    # wins, so every existing config and fork loads unchanged.
+    #
+    # ADR 0095 D3: a registered project is fenced READ-WRITE by default. That's the
+    # reverse of the cautious default, and deliberate — the case for "membership grants
+    # nothing until separately opted in" needs entries to arrive from somewhere other
+    # than the operator (a sync feed / org registry / onboarding webhook), and no such
+    # source exists. Opt out per entry: ``write: false`` (read-only), ``no_delete: true``
+    # (create/edit, never delete), ``fs: false`` (registered, but NOT in the fence at
+    # all — for a project tracked only for github/board purposes).
+    #
+    # A list of dicts, so it round-trips via config_io.py §B (like ``lifecycle_hooks`` /
+    # ``filesystem_projects``), not the string_list-typed FIELDS.
+    projects: list[dict] = field(default_factory=list)
+
     # Core media output store (#1929) — tool-generated binary artifacts
     # (images/audio/video) persisted via ``registry.save_media()`` and served on
     # ``/media/<file>``. Gated by default: each saved URL carries a per-file HMAC
@@ -991,15 +1017,43 @@ class LangGraphConfig:
         if env_model:
             self.model_name = env_model
 
+    def fenced_projects(self) -> list[dict]:
+        """The ADR 0095 ``projects:`` registry projected onto the fs-fence shape.
+
+        Entries opt out with ``fs: false``; everything else is fenced read-write
+        by default (D3). Only the fence keys are emitted — ``github`` /
+        ``default_branch`` are identity for other consumers and have no business
+        in the fence's vocabulary."""
+        fenced: list[dict] = []
+        for entry in self.projects or []:
+            if not isinstance(entry, dict) or entry.get("fs") is False:
+                continue
+            name = str(entry.get("name") or "").strip()
+            path = str(entry.get("path") or "").strip()
+            if not name or not path:
+                continue  # tools/fs_tools.py logs the skip when it builds the registry
+            projected = {"name": name, "path": path, "write": bool(entry.get("write", True))}
+            if entry.get("no_delete"):
+                projected["no_delete"] = True
+            fenced.append(projected)
+        return fenced
+
     def effective_filesystem_projects(self, *, create: bool = False) -> list[dict]:
         """The fs project registry the agent actually gets. Explicit
-        ``filesystem_projects`` win; otherwise (when filesystem is enabled) a
+        ``filesystem_projects`` win; then the ADR 0095 ``projects:`` registry
+        projected onto the fence; otherwise (when filesystem is enabled) a
         single default ``workspace`` project so the on-by-default fs toolset has a
         fenced place to work. ``create=True`` mkdirs the workspace dir."""
         if self.filesystem_projects:
             return self.filesystem_projects
         if not self.filesystem_enabled:
             return []
+        # A registry whose entries ALL opt out (``fs: false``) projects to nothing —
+        # fall through to the workspace default rather than handing back an empty
+        # fence, which unbinds the whole fs toolset with no visible cause (#2251).
+        fenced = self.fenced_projects()
+        if fenced:
+            return fenced
         from infra.paths import workspace_dir
 
         return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
@@ -1293,6 +1347,8 @@ class LangGraphConfig:
             # System lifecycle reactions (ADR 0074) — top-level ``lifecycle_hooks:`` list.
             # Opt-in: absent/empty ⇒ [] ⇒ nothing fires beyond the bus broadcast.
             lifecycle_hooks=list(data.get("lifecycle_hooks", []) or []),
+            # Managed projects registry (ADR 0095) — top-level ``projects:`` list.
+            projects=list(data.get("projects", []) or []),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
