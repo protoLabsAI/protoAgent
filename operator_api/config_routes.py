@@ -278,7 +278,17 @@ def register_config_routes(app) -> None:
                 row["exists"] = bool(raw) and Path(raw).expanduser().is_dir()
             except OSError:  # unreadable mount / bad path — same as gone for our purposes
                 row["exists"] = False
-            row["fenced"] = fence_source == "registry" and str(row.get("name") or "") in fenced_names
+            # `exists` is part of "feeds the live fence", not a separate nicety:
+            # fenced_projects() is a pure CONFIG projection, while the real fence
+            # (tools/fs_tools.py::_registry_from_config) drops any root whose path
+            # isn't a directory. So a registered-but-missing folder contributes
+            # nothing, and reporting it as fenced would be the same declared-vs-
+            # enforced lie this endpoint exists to expose.
+            row["fenced"] = bool(
+                fence_source == "registry"
+                and row["exists"]
+                and str(row.get("name") or "") in fenced_names
+            )
             projects.append(row)
         return {
             "enabled": enabled,

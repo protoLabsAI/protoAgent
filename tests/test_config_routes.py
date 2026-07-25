@@ -499,7 +499,11 @@ def test_projects_get_reports_registry_and_liveness(monkeypatch, tmp_path):
     assert body["fence_source"] == "registry"
     assert [r["exists"] for r in body["projects"]] == [True, False]
     assert body["projects"][0]["github"] == "o/here"  # identity fields survive
-    assert [r["fenced"] for r in body["projects"]] == [True, True]
+    # A registered folder that isn't there contributes NOTHING to the real fence —
+    # fenced_projects() is a pure config projection, but _registry_from_config drops
+    # roots that aren't directories. Reporting it as fenced would be the same
+    # declared-vs-enforced lie this endpoint exists to expose.
+    assert [r["fenced"] for r in body["projects"]] == [True, False]
 
 
 def test_projects_get_flags_fs_false_as_unfenced(monkeypatch, tmp_path):

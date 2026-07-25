@@ -334,6 +334,7 @@ function ManagedProjectsList() {
 // as the MCP servers editor. Saving with any folder present also enables fs tools.
 function FsProjectsEditor() {
   const toast = useToast();
+  const qc = useQueryClient();
   const query = useQuery({ queryKey: ["fs-projects"], queryFn: () => api.fsProjects() });
   const [rows, setRows] = useState<FsProject[] | null>(null);
   useEffect(() => {
@@ -345,6 +346,12 @@ function FsProjectsEditor() {
     onSuccess: (res) => {
       setRows(res.projects);
       void query.refetch();
+      // Saving here is the very thing that flips the registry's fence_source: adding
+      // explicit folders SHADOWS the registry, clearing them hands the fence back. The
+      // Managed projects list sits directly above in this dialog, so without this it
+      // would keep showing the pre-save shadowing state — stale about the action the
+      // operator just took.
+      void qc.invalidateQueries({ queryKey: ["managed-projects"] });
       toast({ tone: "success", title: "Folders saved", message: "Filesystem tools cover the listed folders." });
     },
     onError: (e: Error) => toast({ tone: "error", title: "Couldn't save folders", message: errMsg(e) }),
