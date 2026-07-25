@@ -132,3 +132,8 @@ def test_project_dir_still_renders_and_is_not_an_access_grant():
 
     cfg = LangGraphConfig.from_dict({"operator": {"project_dir": "/tmp/whatever"}})
     assert cfg.filesystem_projects == [], "project_dir must not seed the fs fence"
+    # And check the EFFECTIVE fence, not just the raw field: with no explicit projects
+    # the agent still gets the default `workspace` root, so the claim that matters is
+    # that the project dir is not among the roots it can reach.
+    effective = cfg.effective_filesystem_projects()
+    assert all(p["path"] != "/tmp/whatever" for p in effective), effective
