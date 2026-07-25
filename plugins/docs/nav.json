@@ -766,6 +766,10 @@
           "title": "0094 — Managed Python runtime: execute_code on the frozen desktop app"
         },
         {
+          "path": "adr/0095-managed-projects-registry.md",
+          "title": "0095 — Managed projects registry: one place to declare a project"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
