@@ -11,16 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **The generated OpenShell sandbox policy no longer locks the agent out of its own
-  workspace (#2281).** `scripts/gen_openshell_policy.py` read the raw
-  `filesystem.projects` config field, which is *empty* on a default install — the fs fence
-  falls back to the workspace directory rather than listing it explicitly. So the emitted
-  policy carried no project paths at all, and because Landlock is deny-by-default, it
-  denied the agent read/write on the one directory its filesystem toolset is actually
-  fenced to. The generator now reads the effective fence
-  (`effective_filesystem_projects()`), which also picks up the ADR 0095 `projects:`
-  registry — including its `fs: false` opt-out — for free.
 ### Added
 - **Managed projects are visible in the console, and it tells you when they aren't in
   effect (ADR 0095 D5).** `GET /api/projects` plus a read-only **Managed projects** list at
@@ -37,19 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `filesystem.projects` and writing back a registry-derived list would silently materialize
   the projection and sever the registry link.
 
-### Changed
-- **Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).**
-  The archetype preset gains a fix-round rule as the last **How I work** bullet: a fix to
-  an open PR routes to that feature (the loop's CI-bounce requeues gate/CI failures, the
-  board's review requeue carries review findings to the same branch), never a fresh card —
-  so check the board and open PRs before creating any feature. The "pain points get filed
-  as issues" line, which assumed every PM has a write tool, is replaced with file-it-or-
-  hand-it-over: file myself when I have the tool, hand the operator a finished body when I
-  don't, never let the finding evaporate. A new honesty rule follows — an untooled action
-  is reported as a request with a ready body, never claimed as a finished filing. Generic
-  to any repo the PM is pointed at; distilled from a dogfood arc.
-
-### Added
 - **New guide — Build out your protoAgent with a coding agent.** A narrative how-to
   (`docs/guides/build-with-a-coding-agent.md`) for growing a forked agent through a
   pipeline instead of a keyboard: operator → project-manager agent → board → ACP coder
@@ -144,7 +121,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declarative flag rather than a per-field hack — plugin-declared path fields get the
   picker for free.
 
-### Added
 - **Middleware warnings now reach the console feed (#2262).** New `activity.emit()` seam:
   the server binds the per-instance Activity feed at boot, and anything below it (graph
   middleware, infra) appends operator-relevant notices best-effort — a no-op before
@@ -152,7 +128,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not engaging for <model>" and "provider rejected cache_control" now show up in the
   Activity surface instead of dying in agent.log.
 
-### Added
 - **Artifacts nudge away from the save-loop (#2257).** The field pattern behind one
   1.5M-token turn: eleven `save_file_artifact` revisions of the same file, each one
   round-tripping the full body through the conversation. The tools now teach
@@ -162,6 +137,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exempt). A nudge, never a block — turns keep working.
 
 ### Changed
+- **Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).**
+  The archetype preset gains a fix-round rule as the last **How I work** bullet: a fix to
+  an open PR routes to that feature (the loop's CI-bounce requeues gate/CI failures, the
+  board's review requeue carries review findings to the same branch), never a fresh card —
+  so check the board and open PRs before creating any feature. The "pain points get filed
+  as issues" line, which assumed every PM has a write tool, is replaced with file-it-or-
+  hand-it-over: file myself when I have the tool, hand the operator a finished body when I
+  don't, never let the finding evaporate. A new honesty rule follows — an untooled action
+  is reported as a request with a ready body, never claimed as a finished filing. Generic
+  to any repo the PM is pointed at; distilled from a dogfood arc.
+
 - **Prompt caching is attempt-by-default, and failure is loud (#2255).** Caching used to
   be gated on an Anthropic-looking model NAME, which silently disabled it for every
   gateway alias — one field turn on `protolabs/fast` burned 1.5M input tokens with zero
@@ -187,6 +173,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of naming `operator.allowed_dirs` as "the filesystem security fence".
 
 ### Fixed
+- **The generated OpenShell sandbox policy no longer locks the agent out of its own
+  workspace (#2281).** `scripts/gen_openshell_policy.py` read the raw
+  `filesystem.projects` config field, which is *empty* on a default install — the fs fence
+  falls back to the workspace directory rather than listing it explicitly. So the emitted
+  policy carried no project paths at all, and because Landlock is deny-by-default, it
+  denied the agent read/write on the one directory its filesystem toolset is actually
+  fenced to. The generator now reads the effective fence
+  (`effective_filesystem_projects()`), which also picks up the ADR 0095 `projects:`
+  registry — including its `fs: false` opt-out — for free.
+
 - **The artifact panel stops hammering /history (#2256).** The shell polled the full
   store every 1.5s flat while visible — 157 requests in one 7-minute field session, 44%
   of the member's log lines. The route is conditional now (weak mtime+size ETag; a
@@ -204,6 +200,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limit) when the turn hard-stopped: the thread ends in a `ToolMessage`, or in an
   `AIMessage` still carrying unresolved `tool_calls` — the shape of both real captures on
   the issue. Clean turns keep `"stop"`; the streaming path is unchanged.
+
 ## [0.114.0] - 2026-07-24
 
 ### Fixed
