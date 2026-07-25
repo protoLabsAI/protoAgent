@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arrival). And adding a member as a delegate was one click while *undoing* it meant a trip to
   Settings → Capabilities, because the row showed a `delegate` badge and no action; the badge now
   carries an unlink button on the same registry.
+- **The desktop app uses the real OS folder chooser for path settings (#2265).** The in-app browser
+  added in #2264 walks the *server's* filesystem, which is the only thing that can work when the
+  console is configuring a machine it isn't running on — and it stays the default. But in the desktop
+  app's own window the two machines are the same, and there you now get the actual system chooser:
+  path autocomplete, `~` expansion, `/` to jump, Finder/Explorer favourites, network volumes. Only in
+  that window — a console focused on a fleet member may be pointed at another box entirely, so it
+  keeps the server-side browser rather than name a folder that machine doesn't have.
 
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
