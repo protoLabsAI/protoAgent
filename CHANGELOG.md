@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A Social Marketing archetype — the fifth starter agent.** Pick it in the new-agent
+  picker or the setup wizard and you get a social marketing manager: it holds the brand's
+  voice, plans a balanced calendar, drafts native to each platform, lints its own copy
+  against per-surface rules, and hands back a copy-ready pack. Data only, per ADR 0042 —
+  a soul preset plus one catalog row pointing at the
+  [social-stack](https://github.com/protoLabsAI/social-stack) bundle (social-plugin +
+  the builtin artifact and notes surfaces), no new core seams. Standard tier and
+  deliberately **not** gated behind a document runtime, since it drives none.
+
+  **It never posts.** No platform credentials, no API keys, no outbound calls — the
+  agent produces the content and a person publishes it. That's a decision, not a gap:
+  platform APIs are the expensive, brittle half (each its own OAuth app, review, and
+  bill), and an autonomous poster's failure mode isn't a typo, it's a confident wrong
+  post that's permanent and screenshot-able. Everything the stack builds is identical
+  whether a person or an API sends it.
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
   location were all free-text boxes, and typing is the one input method that can't tell
