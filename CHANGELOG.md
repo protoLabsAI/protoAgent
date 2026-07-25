@@ -39,6 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel's cadence is adaptive: fast while the store is actually changing or a render
   verdict just posted, decaying to an 8s idle tick, with an immediate refresh kick on
   window re-focus. Idle cost drops from ~40 full-store reads a minute to ~7 empty 304s.
+### Changed
+- **Settings stops describing two dead directory fences.** *Project directory* and
+  *Allowed project dirs* read like they gate the agent's file access; neither does, and
+  their copy promised a tasks/notes sandbox that no longer exists — tasks became one
+  instance-scoped store (the routes take `project_path` and discard it) and notes moved
+  to a plugin with its own store. `operator.allowed_dirs` is now **deprecated and
+  hidden**: its only enforcement was `operator_api.paths.resolve_project_path`, which no
+  in-tree caller invokes, so the field gated nothing while looking like a security knob.
+  The key stays in `FIELDS` (ui_hidden) so existing YAML round-trips untouched.
+  *Project directory* keeps its editor and now says what it really does — names the
+  console's project for the setup wizard and runtime status, grants no file access. The
+  one fence that decides what the agent may read and write is **Work folders**
+  (`filesystem.projects`, ADR 0007), and the guide + env-var reference now say so
+  instead of naming `operator.allowed_dirs` as "the filesystem security fence".
 
 ## [0.114.0] - 2026-07-24
 

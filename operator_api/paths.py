@@ -21,12 +21,18 @@ def resolve_project_path(
 ) -> Path:
     """Resolve and validate a project directory path from the UI.
 
+    NOTE: no in-tree caller uses this anymore. It was the operator-console sandbox for
+    the tasks/notes ``project_path`` argument; tasks became one instance-scoped store
+    that ignores that argument and notes moved to a plugin, so ``operator.allowed_dirs``
+    now fences nothing. What gates the agent's file access is the ADR 0007 registry in
+    ``tools/fs_tools.py`` (``filesystem.projects``). Kept as a working helper for forks
+    that still hand a caller-supplied directory to a filesystem API.
+
     When ``allowed_dirs`` is provided, the resolved path must be equal to
-    or nested under one of those directories. This is the operator-console
-    sandbox: the React client sends a free-text ``project_path``, so the
-    server — not the client — decides which directories tasks/notes may
-    touch. ``None`` means "no allowlist configured" and stays permissive
-    so non-operator callers and tests keep the old behavior.
+    or nested under one of those directories: the client sends a free-text
+    ``project_path``, so the server — not the client — decides which
+    directories may be touched. ``None`` means "no allowlist configured"
+    and stays permissive so non-operator callers and tests keep the old behavior.
 
     Resolution happens before the containment check (``Path.resolve`` walks
     symlinks and normalizes ``..``), so neither ``../../etc`` nor a symlink

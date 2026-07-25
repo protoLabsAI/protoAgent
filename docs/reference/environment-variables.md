@@ -101,8 +101,9 @@ To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools
 The agent's notebook, task board, and goals are **agent-global** — one
 persistent, instance-scoped store each, shared by the agent's tools and the
 operator console. They are *not* per-project (there's no `.automaker/notes/` or
-`.beads/` inside project directories); `operator.allowed_dirs` is purely the
-filesystem fence for file/shell tools, unrelated to these stores. Each falls
+`.beads/` inside project directories). The filesystem fence for the file/shell
+tools is `filesystem.projects` (ADR 0007, the console's **Work folders**), not
+`operator.allowed_dirs` — that key is inert and unrelated to these stores. Each falls
 back from a non-writable `/sandbox` to `~/.protoagent/…` for local dev and is
 instance-scoped via `PROTOAGENT_INSTANCE`.
 

@@ -112,11 +112,19 @@ The agent's stores are **agent-global** — one instance-scoped store each, shar
 agent's tools and the console (no per-project selector). Tasks lives at `$BEADS_DB_PATH`;
 notes ship as the `notes` plugin (`/api/plugins/notes/note`).
 
-`operator.allowed_dirs` in `langgraph-config.yaml` is the **filesystem security fence**
-for the agent's file/shell tools (unrelated to notes/tasks): the repo root is always
-allowed; add other roots, or set the working dir in the setup wizard's Workspace step.
-Out-of-allowlist paths are rejected before any I/O (`..` and symlinks resolved before the
-containment check).
+`filesystem.projects` in `langgraph-config.yaml` — the **Work folders** editor under
+Tools ▸ Filesystem — is the **filesystem security fence** for the agent's file/shell
+tools (unrelated to notes/tasks). Each entry is a named root with its own `write` flag;
+every `read_file` / `write_file` / `run_command` path is joined to a root and re-resolved,
+so out-of-fence paths are rejected before any I/O (`..` and symlinks resolved before the
+containment check). Configure none and the agent gets a single default `workspace` root.
+See [ADR 0007](../adr/0007-directory-aware-operator-agent.md).
+
+> `operator.allowed_dirs` and `operator.project_dir` are **not** that fence, despite the
+> names. `allowed_dirs` is inert (its enforcement helper has no callers since tasks went
+> instance-global and notes became a plugin); `project_dir` only names the console's
+> current project for the setup wizard and runtime status. Neither grants the agent any
+> file access.
 
 ## Desktop app (Tauri)
 

@@ -896,18 +896,21 @@ class LangGraphConfig:
     # (like ``filesystem_projects`` / ``mcp_servers``), not the string_list-typed FIELDS.
     lifecycle_hooks: list[dict] = field(default_factory=list)
 
-    # Operator-console directory allowlist — the extra directories the
-    # React console's tasks/notes APIs may read and write. The protoAgent
-    # repo root is always allowed implicitly (it's the default project);
-    # add other project roots here to operate on them. Empty = repo root
-    # only. The client sends a free-text project path, so this server-side
-    # list — not the UI — is the security boundary. See operator_api/paths.
+    # DEPRECATED / INERT — was the operator-console path sandbox for the tasks/notes
+    # APIs, enforced by ``operator_api.paths.resolve_project_path``. Nothing calls that
+    # helper anymore: tasks became a single instance-scoped store (the routes accept
+    # ``project_path`` and ignore it) and notes moved to a plugin with its own store, so
+    # this list gates nothing. The agent's filesystem fence is ``filesystem_projects``
+    # (ADR 0007). Kept in FIELDS + ui_hidden so existing YAML round-trips unchanged;
+    # don't wire new behavior to it.
     operator_allowed_dirs: list[str] = field(default_factory=list)
 
-    # The operator console's working directory — where its tasks/notes live, and
-    # the agent's default project. Set in the setup wizard / Settings. Blank =
-    # the resolver's default (PROTOAGENT_PROJECT_DIR env, else the protoAgent
-    # dir). Read by ``server._resolve_operator_project_root``; always allowed.
+    # Which directory the console calls "this project". Set in the setup wizard /
+    # Settings; blank = the resolver's default (PROTOAGENT_PROJECT_DIR env, else the
+    # protoAgent dir). Read by ``server._resolve_operator_project_root`` and surfaced as
+    # ``project.path`` in runtime status, which the console uses to prefill the wizard.
+    # NOT an access grant — it gives the agent no reach into that directory; only
+    # ``filesystem_projects`` (ADR 0007) does that.
     operator_project_dir: str = ""
 
     # Fenced filesystem toolset (ADR 0007 — operator primitives). ON by default,

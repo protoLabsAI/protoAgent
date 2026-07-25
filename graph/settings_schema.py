@@ -733,23 +733,34 @@ FIELDS: list[Field] = [
     Field("identity.name", "identity_name", "Agent name", "string", "Identity", ui_hidden=True),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
     Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
+    # These two predate the ADR 0007 fence and are NOT access control — the copy used to
+    # promise a tasks/notes sandbox that no longer exists (tasks went instance-global:
+    # the routes take `project_path` and discard it, `operator_api/routes.py`; notes moved
+    # to a plugin with its own store). Work folders (`filesystem.projects`) is the one
+    # thing that decides what the agent may touch, so say so here — an operator who
+    # reads "allowed dirs" as a grant looks in the wrong place for the wrong knob.
     Field(
         "operator.project_dir",
         "operator_project_dir",
         "Project directory",
         "string",
         "Identity",
-        "Working directory for the console's tasks/notes (and the agent's "
-        "default project). Always allowed. Blank = the protoAgent directory.",
+        "Which folder the console calls 'this project' — it prefills the setup wizard and "
+        "shows in runtime status. It does NOT grant the agent access to anything: file "
+        "access is Work folders (Tools ▸ Filesystem). Blank = the protoAgent directory.",
     ),
+    # Inert, kept for round-trip: its only enforcement was
+    # `operator_api.paths.resolve_project_path`, which no in-tree caller invokes anymore.
+    # Hidden rather than deleted so existing YAML (and forks reading the key) still load.
     Field(
         "operator.allowed_dirs",
         "operator_allowed_dirs",
         "Allowed project dirs",
         "string_list",
         "Identity",
-        "Extra directories the tasks/notes APIs may touch, beyond the project "
-        "directory and protoAgent (which are always allowed).",
+        "Deprecated and inert — the old operator-console path sandbox, superseded by Work "
+        "folders (`filesystem.projects`, ADR 0007). Kept so existing config still loads.",
+        ui_hidden=True,
     ),
     Field(
         "auth.token",
