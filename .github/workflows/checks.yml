@@ -72,9 +72,11 @@ jobs:
     # Logic lives in scripts/changelog_gate.sh (covered by
     # tests/test_changelog_gate.py); this job just wires the PR context in.
     # Escape hatches: the skip-changelog label, a release/* head branch, or a
-    # dependabot[bot] actor. The label is read from the event payload SNAPSHOT —
-    # adding it after the run started needs a re-run (or a synchronize push) to
-    # be picked up, because `pull_request` here doesn't trigger on labeled.
+    # dependabot[bot] actor. The label is read from the event payload SNAPSHOT, and
+    # `pull_request` here doesn't trigger on labeled — so a label applied after the
+    # run started is invisible to it. A re-run does NOT fix that (it replays the
+    # original payload); only a new pull_request event does — a synchronize push or
+    # close+reopen. Pass it at creation instead: `gh pr create --label skip-changelog`.
     # Push-to-main runs have no PR diff to judge, so the job is PR-only.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
