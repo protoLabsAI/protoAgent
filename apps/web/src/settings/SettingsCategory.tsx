@@ -17,6 +17,7 @@ import { api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
+import { PathPicker } from "./PathPicker";
 import { fieldVisible } from "./visibility";
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
@@ -593,6 +594,18 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
         rows={4}
         value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
         onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  if (field.type === "path") {
+    // Free text still works (paste a path you know), but Browse… makes the common case
+    // impossible to get wrong — you can only choose something that exists.
+    return (
+      <PathPicker
+        id={id}
+        kind={field.path_kind === "file" ? "file" : "dir"}
+        value={typeof value === "string" ? value : ""}
+        onChange={onChange}
       />
     );
   }

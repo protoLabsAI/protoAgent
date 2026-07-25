@@ -25,7 +25,7 @@ class Field:
     key: str  # dotted YAML path, e.g. "model.temperature"
     attr: str  # LangGraphConfig attribute holding the value
     label: str
-    type: str  # string|text|number|bool|select|string_list|secret
+    type: str  # string|text|number|bool|select|string_list|secret|path
     section: str
     description: str = ""
     restart: bool = False  # True = needs a full process restart (not hot-reload)
@@ -49,6 +49,14 @@ class Field:
     # writer) but DON'T render it in the generic Settings UI — for a key a dedicated
     # panel already owns. `build_schema` skips it; `config_to_dict` keeps it. (#1076)
     ui_hidden: bool = False
+    # What a `type: "path"` field points at — "dir" (default) or "file". The console
+    # renders the same text input plus a Browse… button opening the server-side picker
+    # (/api/fs/browse), and this says whether picking ENDS on a folder or a file. Typing
+    # a path is the one input method that can't tell you it doesn't exist, and a bad
+    # path here is expensive (an unusable work folder unbinds the whole fs toolset), so
+    # the picker is the point. Value stays a plain string — `path` is a rendering hint,
+    # nothing downstream treats it differently.
+    path_kind: str = "dir"
 
 
 # ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
@@ -480,10 +488,11 @@ FIELDS: list[Field] = [
         "checkpoint.db_path",
         "checkpoint_db_path",
         "Conversation history DB",
-        "string",
+        "path",
         "Knowledge",
         "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
         restart=True,
+        path_kind="file",
     ),
     Field(
         "checkpoint.keep_per_thread",
@@ -557,7 +566,7 @@ FIELDS: list[Field] = [
         "commons.path",
         "commons_path",
         "Shared skills location",
-        "string",
+        "path",
         "Skills",
         "Box-shared skill library read by every agent on this machine. Blank = ~/.protoagent/commons.",
         scope="host",
@@ -743,7 +752,7 @@ FIELDS: list[Field] = [
         "operator.project_dir",
         "operator_project_dir",
         "Project directory",
-        "string",
+        "path",
         "Identity",
         "Which folder the console calls 'this project' — it prefills the setup wizard and "
         "shows in runtime status. It does NOT grant the agent access to anything: file "
@@ -1288,6 +1297,9 @@ def build_schema(
             "key": f.key,
             "label": f.label,
             "type": f.type,
+            # Only meaningful for `type: "path"` — whether Browse… ends on a folder or a
+            # file. Always emitted so the client can read it without a type check.
+            "path_kind": f.path_kind,
             "section": f.section,
             "description": f.description,
             "restart": f.restart,
@@ -1336,6 +1348,10 @@ def build_schema(
             "key": full_key,
             "label": spec.get("label", key),
             "type": ftype,
+            # A plugin can declare `type: path` too and gets the same Browse… picker —
+            # plugins hold as many local paths as the core does (vaults, repos, export
+            # dirs), and none of them should be a free-text box either.
+            "path_kind": "file" if spec.get("path_kind") == "file" else "dir",
             "section": group,
             "description": spec.get("description", ""),
             "restart": bool(spec.get("restart", False)),
@@ -1426,6 +1442,12 @@ def validate_flat(
             return False, f"{key} must be a list of strings"
         if f.type == "select" and f.options and val not in f.options:
             return False, f"{key} must be one of {f.options}"
+        # `path` saves a plain string like `string` does — the picker is a rendering
+        # affordance, not a new value shape. Pin the type anyway so a client that sends
+        # the picker's whole entry object ({name, path, kind}) fails loudly here instead
+        # of writing a dict into the YAML.
+        if f.type == "path" and not isinstance(val, str):
+            return False, f"{key} must be a string path"
     return True, None
 
 

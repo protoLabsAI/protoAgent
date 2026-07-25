@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Folder pickers for every path setting — no more typing a path and hoping.** Work
+  folders, the project directory, the conversation-history DB, and the shared-skills
+  location were all free-text boxes, and typing is the one input method that can't tell
+  you the path doesn't exist. That's expensive here: an unusable work folder is skipped
+  when the fs tools are built, and if it was the only root the agent loses `read_file` /
+  `list_dir` / `write_file` entirely. Each of these now carries a **Browse…** button
+  opening a folder browser; picking can only ever produce a directory that's really
+  there. Typing/pasting still works for anyone who knows the path.
+
+  The browser lists the **server's** filesystem (`GET /api/fs/browse`, read-only, names
+  and kinds, never contents), because the console routinely configures a machine it
+  isn't running on — tailnet, fleet members, Docker. The browser-native pickers can't
+  serve this: `webkitdirectory` yields the *client's* files under a fake root and
+  `showDirectoryPicker()` an opaque handle with no path at all. Listing necessarily
+  reaches outside the fs fence — you're choosing what to fence — which grants nothing
+  new: the same operator could already type any absolute path into the same field.
+
+  Settings gains a `path` field type (with `path_kind: dir|file`), so this is one
+  declarative flag rather than a per-field hack — plugin-declared path fields get the
+  picker for free.
+
+### Added
 - **Middleware warnings now reach the console feed (#2262).** New `activity.emit()` seam:
   the server binds the per-instance Activity feed at boot, and anything below it (graph
   middleware, infra) appends operator-relevant notices best-effort — a no-op before

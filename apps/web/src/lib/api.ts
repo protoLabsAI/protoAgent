@@ -5,6 +5,7 @@ import type {
   Archetype,
   ArchetypePreview,
   BackgroundJobDTO,
+  BrowseListing,
   FsProject,
   Task,
   ChatMessage,
@@ -2114,6 +2115,17 @@ export const api = {
       "/api/plugins/install",
       { method: "POST", body: { url, ref: ref || undefined, force: force || undefined } },
     );
+  },
+  // Server-side directory listing behind the path pickers. Deliberately the SERVER's
+  // filesystem: the console may be configuring a different machine, and the browser's
+  // own pickers can't produce an absolute path on it.
+  browseDir(opts: { path?: string; files?: boolean; hidden?: boolean } = {}) {
+    const qs = new URLSearchParams();
+    if (opts.path) qs.set("path", opts.path);
+    if (opts.files) qs.set("files", "true");
+    if (opts.hidden) qs.set("hidden", "true");
+    const q = qs.toString();
+    return request<BrowseListing>(`/api/fs/browse${q ? `?${q}` : ""}`);
   },
   uninstallPlugin(id: string) {
     return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });

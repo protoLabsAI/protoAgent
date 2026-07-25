@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
 import type { FsProject } from "../lib/types";
+import { PathPicker } from "../settings/PathPicker";
 import { QuickSetting } from "../settings/QuickSetting";
 import { useUI } from "../state/uiStore";
 import { StagePanel } from "./ErrorBoundary";
@@ -327,13 +328,11 @@ function FsProjectsEditor() {
       ) : null}
       {rows.map((row, i) => (
         <div key={i} className="fs-projects-row">
-          <Input
+          <PathPicker
             value={row.path}
-            placeholder="~/Documents"
-            aria-label="Folder path"
-            aria-invalid={savedRows[i]?.exists === false && savedRows[i]?.path === row.path}
-            title={savedRows[i]?.exists === false && savedRows[i]?.path === row.path ? "Folder not found" : undefined}
-            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)))}
+            ariaLabel="Folder path"
+            invalid={savedRows[i]?.exists === false && savedRows[i]?.path === row.path}
+            onChange={(v) => setRows(rows.map((r, j) => (j === i ? { ...r, path: v } : r)))}
           />
           <label className="fs-projects-write">
             <Switch

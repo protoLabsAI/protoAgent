@@ -183,6 +183,16 @@ export type InstalledPlugin = {
 };
 
 // A fenced filesystem root (ADR 0007) — one entry of `filesystem.projects`.
+// One row from the server-side directory browser (GET /api/fs/browse). `path` is
+// absolute — it's handed straight back as the saved setting.
+export type BrowseEntry = { name: string; path: string; kind: "dir" | "file" };
+export type BrowseListing = {
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+  roots: { label: string; path: string }[];
+};
+
 // `exists` is READ-ONLY liveness from GET /api/settings/filesystem-projects: a root whose
 // folder is gone gets skipped when the fs tools are built, and if that empties the registry
 // the whole toolset unbinds. Absent on rows the editor is composing.
@@ -276,7 +286,12 @@ export type SettingsField = {
   key: string;
   label: string;
   // "text" = a scalar multiline string (#964), rendered as a textarea but saved like "string".
-  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "secret";
+  // "path" = a filesystem path: same string value, rendered with a Browse… picker over the
+  // SERVER's filesystem (the console often configures a machine it isn't running on).
+  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "secret" | "path";
+  // Whether a "path" field ends on a folder or a file. Emitted for every field; only read
+  // when type is "path".
+  path_kind?: "dir" | "file";
   section: string;
   description?: string;
   restart: boolean;

@@ -109,6 +109,31 @@ test("Tools panel: the Filesystem group's Work folders chip opens the fenced-roo
   await expect(dialog.getByRole("button", { name: "Add folder" })).toBeVisible();
 });
 
+test("Work folders: Browse… picks a real folder from the SERVER, no typing", async ({ page }) => {
+  // Typing was the only way to fill this field, and a path that doesn't exist is skipped
+  // at graph build — if it was the only root, every filesystem tool unbinds. The picker
+  // lists the SERVER's directories (a browser-native picker would describe the client's
+  // machine, which is frequently not the one being configured) so the value is always
+  // real. Walk a level down and confirm the chosen path lands in the row.
+  await openToolsTab(page);
+  await page.getByRole("button", { name: /Filesystem/ }).click();
+  await page.getByRole("button", { name: "Work folders" }).click();
+  const folders = page.getByRole("dialog", { name: "Work folders" });
+  await folders.getByRole("button", { name: "Add folder" }).click();
+  await folders.getByRole("button", { name: /Browse/ }).click();
+
+  const picker = page.getByRole("dialog", { name: "Choose a folder" });
+  await expect(picker).toBeVisible();
+  await expect(picker.locator(".path-browser-cwd")).toHaveText("/home/op");
+  // A folder row navigates on ONE click — no select-then-descend gesture.
+  await picker.getByRole("option", { name: "dev" }).click();
+  await expect(picker.locator(".path-browser-cwd")).toHaveText("/home/op/dev");
+  await picker.getByRole("button", { name: "Use this folder" }).click();
+
+  await expect(picker).toBeHidden();
+  await expect(folders.getByLabel("Folder path")).toHaveValue("/home/op/dev");
+});
+
 // The old "Disabled tools" chip (a raw tools.disabled textarea) is gone — every row
 // in the list carries an on/off switch writing the same denylist. These specs pin the
 // row-toggle contract: the POST edits the RAW denylist (preserving entries it didn't

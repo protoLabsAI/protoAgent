@@ -815,6 +815,13 @@ def _main():
     from operator_api.theme_routes import register_theme_routes
 
     register_theme_routes(fastapi_app)
+
+    # Server-side directory listing behind the console's folder pickers. The console
+    # may be on a different machine than the server it configures, so a browser-native
+    # picker can't produce these paths — see operator_api/browse_routes.py.
+    from operator_api.browse_routes import register_browse_routes
+
+    register_browse_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------

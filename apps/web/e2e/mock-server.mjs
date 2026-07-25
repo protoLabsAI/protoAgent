@@ -171,7 +171,9 @@ function removePluginSchemaGroup(id) {
   }
 }
 
-function handleApiGet(pathname, fleet = FLEET) {
+// `params` = the request URL's searchParams (empty by default) — the folder picker
+// route reads ?path=/?files= from it to serve a NAVIGABLE tree.
+function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams()) {
   switch (pathname) {
     case "/api/runtime/status":
       return RUNTIME_STATUS;
@@ -215,6 +217,27 @@ function handleApiGet(pathname, fleet = FLEET) {
     case "/api/settings/filesystem-projects":
       // Empty fenced-roots list → the Work-folders dialog renders its editor (Add folder / Save).
       return { enabled: true, projects: [] };
+    case "/api/fs/browse": {
+      // The server-side directory listing behind every path field's Browse… picker.
+      // Two levels deep so a test can prove NAVIGATION (click a folder → new listing),
+      // not just that the first page renders.
+      const at = params.get("path") || "/home/op";
+      const dirs = at === "/home/op/dev"
+        ? [{ name: "protoAgent", path: "/home/op/dev/protoAgent", kind: "dir" }]
+        : [
+            { name: "dev", path: "/home/op/dev", kind: "dir" },
+            { name: "Documents", path: "/home/op/Documents", kind: "dir" },
+          ];
+      const files = params.get("files") === "true"
+        ? [{ name: "chat.db", path: `${at}/chat.db`, kind: "file" }]
+        : [];
+      return {
+        path: at,
+        parent: at === "/home/op" ? "/home" : "/home/op",
+        entries: [...dirs, ...files],
+        roots: [{ label: "Home", path: "/home/op" }],
+      };
+    }
     case "/api/chat/commands":
       return { commands: SLASH_COMMANDS };
     case "/api/scheduler/jobs":
@@ -621,7 +644,7 @@ const server = createServer(async (req, res) => {
           return sendJson(res, ARCHETYPE_PREVIEWS[id] ?? { id, bundle: null });
         }
       }
-      const payload = handleApiGet(pathname, fleetFor(req));
+      const payload = handleApiGet(pathname, fleetFor(req), url.searchParams);
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
     }
