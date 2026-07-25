@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code-solve)`. Each row now carries its manifest description under the name (clamped to two lines,
   full text on hover), and the row search matches it: "which plugin does X?" is the same question the
   tool-name search already answered, asked in prose.
+- **Fleet rows are clickable, and a delegate can be unlinked where you linked it (#2240, #2266).**
+  Settings → Fleet listed every agent and gave you no way to reach one — the name is now a link to
+  that agent's own window (cmd/middle-click opens it in a new one; a stopped member resumes on
+  arrival). And adding a member as a delegate was one click while *undoing* it meant a trip to
+  Settings → Capabilities, because the row showed a `delegate` badge and no action; the badge now
+  carries an unlink button on the same registry.
 
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
