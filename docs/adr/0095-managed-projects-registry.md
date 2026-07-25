@@ -53,9 +53,9 @@ projects:
     # no_delete: true                     # fence: create/edit, never delete
     # fs: false                           # registered, but NOT in the fs fence
 
-  - name: protoMaker
-    path: /Users/kj/dev/protomaker
-    github: protoLabsAI/protoMaker
+  - name: github-plugin
+    path: /Users/kj/dev/github-plugin
+    github: protoLabsAI/github-plugin
     default_branch: main
     write: false                          # read-only
 ```
