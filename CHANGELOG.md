@@ -143,6 +143,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel's cadence is adaptive: fast while the store is actually changing or a render
   verdict just posted, decaying to an 8s idle tick, with an immediate refresh kick on
   window re-focus. Idle cost drops from ~40 full-store reads a minute to ~7 empty 304s.
+- **/v1 non-streaming returns the final message with an honest `finish_reason` (#2234).**
+  A turn cut off by LangGraph's recursion limit / the tool loop's `max_iterations` came
+  back with every assistant message of the turn joined together — presenting a mid-loop
+  narration as the completed answer — and always claimed `finish_reason: "stop"`, so a
+  stateless driver couldn't tell "finished" from "died mid-flight". The non-streaming
+  handler now returns only the LAST assistant message, and reads the thread's
+  checkpointed state to report `finish_reason: "length"` (the OpenAI value for hitting a
+  limit) when the turn hard-stopped: the thread ends in a `ToolMessage`, or in an
+  `AIMessage` still carrying unresolved `tool_calls` — the shape of both real captures on
+  the issue. Clean turns keep `"stop"`; the streaming path is unchanged.
 ## [0.114.0] - 2026-07-24
 
 ### Fixed

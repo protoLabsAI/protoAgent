@@ -28,7 +28,7 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
-from server.chat import aside_session, chat, compact_session, export_session, rewind_session
+from server.chat import _resolve_thread_id, aside_session, chat, compact_session, export_session, rewind_session
 
 
 class ChatRequest(BaseModel):
@@ -88,6 +88,55 @@ def _split_openai_content(content) -> tuple[str, list[tuple[str, str]]]:
                     mt = url[5:].split(";", 1)[0].split(",", 1)[0]
                 images.append((mt, url))
     return "\n".join(texts), images
+
+
+def _has_unresolved_tool_calls(msg) -> bool:
+    """True when ``msg`` is an ``AIMessage`` still carrying ``tool_calls`` — the
+    model requested tools but no tool ever answered, i.e. the turn was cut off
+    between the request and the tool node running. Both real captures in #2234
+    end in exactly this shape: a narration-bearing ``AIMessage`` with unresolved
+    ``tool_calls`` as the thread's last checkpointed message."""
+    from langchain_core.messages import AIMessage
+
+    return isinstance(msg, AIMessage) and bool(getattr(msg, "tool_calls", None))
+
+
+async def _v1_finish_reason(session_id: str) -> str:
+    """How a non-streaming /v1 turn terminated, as an OpenAI ``finish_reason`` (#2234).
+
+    ``"length"`` (the OpenAI value for "ran into a limit") when the thread's
+    checkpointed state shows a hard-stop — the turn ended mid-execution
+    (LangGraph ``recursion_limit`` / tool-loop ``max_iterations``) rather than
+    at a natural synthesis point:
+
+    - the last checkpointed message is a ``ToolMessage`` — the loop stopped
+      right after a tool resolved, before the model synthesized; or
+    - the last message is an ``AIMessage`` with unresolved ``tool_calls``
+      (``_has_unresolved_tool_calls``) — cut off after the model requested
+      tools but before the tool node ran.
+
+    ``"stop"`` for a clean synthesis, and as the FAIL-SAFE whenever the state
+    can't be read (no graph / no ``aget_state`` / snapshot error / empty
+    thread) — introspection must never fail or misflag a good response."""
+    from langchain_core.messages import ToolMessage
+
+    aget_state = getattr(STATE.graph, "aget_state", None)
+    if aget_state is None:
+        return "stop"
+    try:
+        config = {"configurable": {"thread_id": _resolve_thread_id(None, session_id)}}
+        snapshot = await aget_state(config)
+        messages = (getattr(snapshot, "values", None) or {}).get("messages") or []
+    except Exception:  # noqa: BLE001 — fail-safe; see docstring
+        return "stop"
+    if not messages:
+        return "stop"
+    last = messages[-1]
+    if isinstance(last, ToolMessage):
+        return "length"
+    if _has_unresolved_tool_calls(last):
+        return "length"
+    return "stop"
 
 
 def register_chat_routes(app, ui: str) -> None:
@@ -313,6 +362,18 @@ def register_chat_routes(app, ui: str) -> None:
     # OpenWebUI without any protocol adapter.
     @app.post("/v1/chat/completions")
     async def _openai_chat_completions(req: dict):
+        """OpenAI-compatible chat completion over one agent turn.
+
+        Non-streaming ``finish_reason`` semantics (#2234): ``"stop"`` means the
+        turn ended at its natural synthesis point and the message is the final
+        answer; ``"length"`` (the OpenAI value for "ran into a limit") means the
+        turn was cut off by a hard-stop — LangGraph ``recursion_limit`` or the
+        tool loop's ``max_iterations`` — so the content is the last thing said
+        mid-turn, NOT a completed answer, and a stateless driver must not treat
+        it as one. Detection reads the thread's checkpointed state (see
+        ``_v1_finish_reason``). The non-streaming message carries only the LAST
+        assistant message of the turn — intermediate narrations between tool
+        calls are never joined in. The streaming path is unchanged."""
         messages = req.get("messages", [])
         user_msgs = [m for m in messages if m.get("role") == "user"]
         if not user_msgs:
@@ -336,6 +397,8 @@ def register_chat_routes(app, ui: str) -> None:
         incognito = bool(req.get("incognito", False))
 
         result = await chat(prompt, session_id, model=model, incognito=incognito, images=images or None)
+        # Joined parts feed the streaming path only (its historical shape); the
+        # non-streaming body is rebuilt below from the LAST assistant message.
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         content = "\n\n".join(parts)
         created = int(time.time())
@@ -390,6 +453,12 @@ def register_chat_routes(app, ui: str) -> None:
 
             return StreamingResponse(_stream(), media_type="text/event-stream")
 
+        # Non-streaming (#2234): the turn's answer is the LAST assistant message
+        # ONLY. A limit-terminated turn returns several assistant messages — the
+        # earlier ones are mid-loop narrations between tool calls, and joining
+        # them presented a fragment as if it were the completed answer.
+        final = next((m for m in reversed(result) if m.get("role") == "assistant" and m.get("content")), None)
+        content = str(final["content"]) if final else ""
         return {
             "id": completion_id,
             "object": "chat.completion",
@@ -399,7 +468,9 @@ def register_chat_routes(app, ui: str) -> None:
                 {
                     "index": 0,
                     "message": {"role": "assistant", "content": content},
-                    "finish_reason": "stop",
+                    # "length" when the turn hit a limit mid-execution; "stop"
+                    # only for a clean synthesis (docstring above).
+                    "finish_reason": await _v1_finish_reason(session_id),
                 }
             ],
             "usage": usage,
