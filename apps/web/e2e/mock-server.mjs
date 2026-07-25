@@ -219,22 +219,27 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams()) {
       return { enabled: true, projects: [] };
     case "/api/fs/browse": {
       // The server-side directory listing behind every path field's Browse… picker.
-      // Two levels deep so a test can prove NAVIGATION (click a folder → new listing),
-      // not just that the first page renders.
+      // A real (if tiny) TREE, not a per-path guess: every directory this emits has its
+      // own listing and a correct parent, so navigating anywhere the UI offers behaves
+      // like the real endpoint. A fixture that answered the same two folders at every
+      // depth would let broken navigation still look right.
+      const TREE = {
+        "/home/op": ["dev", "Documents"],
+        "/home/op/dev": ["protoAgent"],
+        "/home/op/dev/protoAgent": [],
+        "/home/op/Documents": [],
+      };
       const at = params.get("path") || "/home/op";
-      const dirs = at === "/home/op/dev"
-        ? [{ name: "protoAgent", path: "/home/op/dev/protoAgent", kind: "dir" }]
-        : [
-            { name: "dev", path: "/home/op/dev", kind: "dir" },
-            { name: "Documents", path: "/home/op/Documents", kind: "dir" },
-          ];
+      if (!(at in TREE)) return null; // → 404, like the real endpoint's "no such folder"
+      const dirs = TREE[at].map((name) => ({ name, path: `${at}/${name}`, kind: "dir" }));
       const files = params.get("files") === "true"
         ? [{ name: "chat.db", path: `${at}/chat.db`, kind: "file" }]
         : [];
       return {
         path: at,
-        parent: at === "/home/op" ? "/home" : "/home/op",
+        parent: at === "/home/op" ? "/home" : at.slice(0, at.lastIndexOf("/")),
         entries: [...dirs, ...files],
+        truncated: false,
         roots: [{ label: "Home", path: "/home/op" }],
       };
     }

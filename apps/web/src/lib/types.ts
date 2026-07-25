@@ -190,6 +190,10 @@ export type BrowseListing = {
   path: string;
   parent: string | null;
   entries: BrowseEntry[];
+  // The listing hit the server's cap. Surfaced rather than swallowed — a silently
+  // truncated list reads as "that's everything", which is how you conclude a folder
+  // isn't there when it is.
+  truncated?: boolean;
   roots: { label: string; path: string }[];
 };
 

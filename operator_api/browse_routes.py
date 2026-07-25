@@ -41,10 +41,19 @@ def _safe_name(entry) -> str:
         return ""
 
 
-def _listing(target: Path, *, files: bool, hidden: bool) -> list[dict]:
+def _listing(target: Path, *, files: bool, hidden: bool) -> tuple[list[dict], bool]:
+    """The visible entries plus whether the cap dropped any.
+
+    Consumes ``iterdir()`` lazily rather than materializing it — a /nix/store-sized
+    directory shouldn't cost a list of 100k Path objects to show 1000 rows. The cap is
+    applied AFTER the sort on purpose: truncating mid-scan would show an arbitrary
+    subset, where this shows the first N in the order the operator is looking at. That
+    keeps a bounded worst case for the FILTERED set only, which is the right trade for
+    a picker — and `truncated` tells the UI to say so rather than imply completeness.
+    """
     out: list[dict] = []
     try:
-        entries = list(target.iterdir())
+        entries = target.iterdir()
     except PermissionError as exc:
         raise PermissionError(f"permission denied: {target}") from exc
     for entry in entries:
@@ -64,7 +73,7 @@ def _listing(target: Path, *, files: bool, hidden: bool) -> list[dict]:
     # Directories first, then case-insensitive by name — Finder/Explorer ordering, so
     # the list reads the way the operator expects it to.
     out.sort(key=lambda e: (e["kind"] != "dir", e["name"].casefold()))
-    return out[:_MAX_ENTRIES]
+    return out[:_MAX_ENTRIES], len(out) > _MAX_ENTRIES
 
 
 def register_browse_routes(app) -> None:
@@ -80,26 +89,39 @@ def register_browse_routes(app) -> None:
         """
         import asyncio
 
-        raw = (path or "").strip()
-        target = Path(raw).expanduser() if raw else Path.home()
         try:
-            target = target.resolve()
-        except OSError as exc:  # pragma: no cover — resolve rarely raises on posix
-            raise HTTPException(status_code=400, detail=f"can't resolve {raw}: {exc}") from exc
-        if not target.exists():
-            raise HTTPException(status_code=404, detail=f"no such folder: {target}")
-        if not target.is_dir():
-            raise HTTPException(status_code=400, detail=f"not a folder: {target}")
-
-        try:
-            # Listing a cold/large/network directory blocks; keep it off the event loop
-            # like every other filesystem call in this package.
-            entries = await asyncio.to_thread(_listing, target, files=files, hidden=hidden)
+            # EVERY filesystem call goes in one worker — resolve/exists/is_dir block just
+            # as hard as the listing does on a cold or network mount, so leaving those
+            # three on the event loop would stall the whole server for the same reason
+            # the listing would.
+            return await asyncio.to_thread(_browse, path, files=files, hidden=hidden)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except NotADirectoryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except OSError as exc:  # pragma: no cover — resolve rarely raises on posix
+            raise HTTPException(status_code=400, detail=f"can't read {path}: {exc}") from exc
 
+    def _browse(path: str, *, files: bool, hidden: bool) -> dict:
+        """Resolve + validate + list, entirely inside the worker thread. Raises the
+        stdlib OSError subclasses; the handler maps them to status codes."""
+        raw = (path or "").strip()
+        target = (Path(raw).expanduser() if raw else Path.home()).resolve()
+        if not target.exists():
+            raise FileNotFoundError(f"no such folder: {target}")
+        if not target.is_dir():
+            raise NotADirectoryError(f"not a folder: {target}")
+        entries, truncated = _listing(target, files=files, hidden=hidden)
         parent = str(target.parent) if target.parent != target else None
-        return {"path": str(target), "parent": parent, "entries": entries, "roots": _roots()}
+        return {
+            "path": str(target),
+            "parent": parent,
+            "entries": entries,
+            "truncated": truncated,
+            "roots": _roots(),
+        }
 
     def _roots() -> list[dict]:
         """Jump-off points for the picker, so a first open isn't a walk up from wherever.

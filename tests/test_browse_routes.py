@@ -125,3 +125,19 @@ def test_listing_is_capped(tmp_path, monkeypatch):
         (tmp_path / f"d{i:02d}").mkdir()
     body = _client().get("/api/fs/browse", params={"path": str(tmp_path)}).json()
     assert len(body["entries"]) == 5
+
+
+def test_truncation_is_reported_not_swallowed(tmp_path, monkeypatch):
+    """A silently truncated listing reads as "that's everything" — which is how you
+    conclude a folder isn't there when it is. The flag lets the picker say so."""
+    import operator_api.browse_routes as br
+
+    monkeypatch.setattr(br, "_MAX_ENTRIES", 3)
+    for i in range(5):
+        (tmp_path / f"d{i}").mkdir()
+    body = _client().get("/api/fs/browse", params={"path": str(tmp_path)}).json()
+    assert body["truncated"] is True and len(body["entries"]) == 3
+
+    (tmp_path / "solo").mkdir()
+    small = _client().get("/api/fs/browse", params={"path": str(tmp_path / "solo")}).json()
+    assert small["truncated"] is False

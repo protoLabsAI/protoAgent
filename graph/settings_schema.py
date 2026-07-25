@@ -1428,6 +1428,11 @@ def validate_flat(
                 return False, f"{key} must be a boolean"
             if t == "number" and (not isinstance(val, (int, float)) or isinstance(val, bool)):
                 return False, f"{key} must be a number"
+            # Same guard the core `path` fields get below — a plugin path field is fed by
+            # the same picker, so the same "client sent the whole entry object" mistake
+            # must fail here rather than write a dict into the plugin's config.
+            if t == "path" and not isinstance(val, str):
+                return False, f"{key} must be a string path"
             continue
         if f.type == "bool" and not isinstance(val, bool):
             return False, f"{key} must be a boolean"

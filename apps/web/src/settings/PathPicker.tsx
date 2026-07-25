@@ -161,6 +161,15 @@ function BrowseDialog({
             <AlertTriangle size={13} /> <span>That path doesn’t exist — starting from your home folder.</span>
           </p>
         ) : null}
+        {data?.truncated ? (
+          <p className="path-browser-note" role="status">
+            <AlertTriangle size={13} />{" "}
+            <span>
+              Showing the first {data.entries.length} entries — this folder has more. Type the path
+              directly if what you want isn’t listed.
+            </span>
+          </p>
+        ) : null}
 
         <div className="path-browser-list" role="listbox" aria-label="Folder contents">
           {q.isFetching && !data ? (
