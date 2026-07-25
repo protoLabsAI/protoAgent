@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.115.0] - 2026-07-25
+
 ### Added
 - **Managed projects are visible in the console, and it tells you when they aren't in
   effect (ADR 0095 D5).** `GET /api/projects` plus a read-only **Managed projects** list at

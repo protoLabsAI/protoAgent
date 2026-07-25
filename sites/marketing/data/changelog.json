@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.115.0",
+    "date": "2026-07-25",
+    "changes": [
+      "Managed projects are visible in the console, and it tells you when they aren't in effect.",
+      "New guide — Build out your protoAgent with a coding agent.",
+      "A Social Marketing archetype — the fifth starter agent.",
+      "The plugins that ship with protoAgent now appear in Discover (#2249).",
+      "Installed plugins say what they do (#2248).",
+      "Fleet rows are clickable, and a delegate can be unlinked where you linked it (#2240, #2266).",
+      "The desktop app uses the real OS folder chooser for path settings (#2265).",
+      "The desktop app now emits system.wake (#1932, ADR 0074).",
+      "One place to declare a project.",
+      "Folder pickers for every path setting — no more typing a path and hoping.",
+      "Middleware warnings now reach the console feed (#2262).",
+      "Artifacts nudge away from the save-loop (#2257).",
+      "Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).",
+      "Prompt caching is attempt-by-default, and failure is loud (#2255).",
+      "Settings stops describing two dead directory fences.",
+      "The generated OpenShell sandbox policy no longer locks the agent out of its own workspace (#2281).",
+      "The artifact panel stops hammering /history (#2256).",
+      "/v1 non-streaming returns the final message with an honest finish_reason (#2234)."
+    ]
+  },
+  {
     "version": "v0.114.0",
     "date": "2026-07-24",
     "changes": [
