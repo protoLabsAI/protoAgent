@@ -226,3 +226,111 @@ def test_attachment_bridge_skips_incognito_remote_and_garbage(monkeypatch, tmp_p
     assert _bridge_attachment_ids([("image/png", "https://example.com/x.png")]) == ""
     assert _bridge_attachment_ids([("image/png", "data:image/png;base64,%%%not-b64%%%")]) == ""
     assert _ATTACHMENT_REFS_MARKER not in _vision_human_message("look", None).content
+
+
+# ── #2300: a stalled turn must not answer with the PREVIOUS turn's reply ──────
+#
+# graph.ainvoke returns the whole accumulated conversation, so "the last assistant
+# message" is only this turn's while every turn produces one. A turn whose stream
+# dies after its first chunk appends its HumanMessage and nothing else — an
+# unbounded reverse scan then returns the prior turn's answer: complete, coherent,
+# plausible, and about the wrong question. Verified in the field twice, both times
+# caught only by checking side effects rather than reading the reply.
+
+
+def _stalled_state():
+    """Accumulated state after a turn that died mid-stream: turn 1 answered, turn 2
+    contributed only its HumanMessage."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    return {
+        "messages": [
+            HumanMessage(content="board this issue"),
+            AIMessage(content="Boarded the card."),  # turn 1's answer
+            HumanMessage(content="adjudicate and merge that card's PR"),  # turn 2, then nothing
+        ]
+    }
+
+
+def test_this_turn_messages_excludes_earlier_turns():
+    from server.chat import this_turn_messages
+
+    assert this_turn_messages(_stalled_state()) == []
+
+
+def test_a_stalled_turn_finds_no_assistant_text_of_its_own():
+    """The regression: the previous turn's answer must NOT be reachable."""
+    from langchain_core.messages import AIMessage
+
+    from server.chat import this_turn_messages
+
+    mine = this_turn_messages(_stalled_state())
+    assert not [m for m in mine if isinstance(m, AIMessage) and m.content]
+
+
+def test_this_turn_messages_returns_the_current_turns_output():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from server.chat import this_turn_messages
+
+    state = {
+        "messages": [
+            HumanMessage(content="first"),
+            AIMessage(content="first answer"),
+            HumanMessage(content="second"),
+            AIMessage(content="second answer"),
+        ]
+    }
+    assert [m.content for m in this_turn_messages(state)] == ["second answer"]
+
+
+def test_last_tool_text_does_not_reach_back_a_turn():
+    """The same bug one fallback tier down: with no assistant text this turn, the
+    tool-result fallback must not surface a PRIOR turn's tool output."""
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from server.chat import _last_tool_text
+
+    state = {
+        "messages": [
+            HumanMessage(content="first"),
+            ToolMessage(content="merged PR #137", tool_call_id="t1"),
+            AIMessage(content="Merged it."),
+            HumanMessage(content="second"),  # stalled — nothing after
+        ]
+    }
+    assert _last_tool_text(state) == ""
+
+
+def test_hitl_resume_shape_still_sees_the_interrupted_turns_work():
+    """A hitl_resume turn adds no new HumanMessage (it resumes via Command), so the
+    slice must still cover the interrupted turn's output rather than going empty."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from server.chat import this_turn_messages
+
+    state = {
+        "messages": [
+            HumanMessage(content="do the thing"),
+            AIMessage(content="asked a question"),
+            AIMessage(content="finished after the operator answered"),
+        ]
+    }
+    assert [m.content for m in this_turn_messages(state)][-1] == "finished after the operator answered"
+
+
+def test_no_human_message_at_all_falls_back_to_everything():
+    from langchain_core.messages import AIMessage
+
+    from server.chat import this_turn_messages
+
+    state = {"messages": [AIMessage(content="only message")]}
+    assert [m.content for m in this_turn_messages(state)] == ["only message"]
+
+
+def test_empty_and_missing_state_are_safe():
+    from server.chat import this_turn_messages
+
+    assert this_turn_messages(None) == []
+    assert this_turn_messages({}) == []
+    assert this_turn_messages({"messages": []}) == []

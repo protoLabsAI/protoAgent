@@ -481,13 +481,39 @@ async def _clear_pending_interrupt(config: dict) -> None:
         log.debug("[hitl] could not clear pending interrupt on autonomous give-up", exc_info=True)
 
 
+def this_turn_messages(result) -> list:
+    """The messages THIS turn produced — everything after the last ``HumanMessage``.
+
+    ``graph.ainvoke`` returns the whole accumulated conversation from the
+    checkpointer, not just the turn's additions. Scanning all of it for "the last
+    assistant message" is only correct while every turn actually produces one:
+    a turn whose model call dies mid-stream appends its HumanMessage and nothing
+    else, so an unbounded reverse scan walks straight past it and returns the
+    PREVIOUS turn's answer — a complete, coherent, plausible reply to the wrong
+    question, with no error to give it away (#2300).
+
+    The last HumanMessage is the boundary: the turn's own input. A ``hitl_resume``
+    turn adds no new HumanMessage (it resumes via ``Command``), so the slice
+    correctly still covers the interrupted turn's work, which is this turn's too.
+    """
+    messages = (result or {}).get("messages", []) or []
+    from langchain_core.messages import HumanMessage
+
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            return list(messages[i + 1 :])
+    return list(messages)
+
+
 def _last_tool_text(result) -> str:
-    """The last tool result's text in a turn — the fallback when a turn produced
+    """The last tool result's text in THIS turn — the fallback when a turn produced
     no assistant text (e.g. a ``wait`` yield, whose 'Wait scheduled…' confirmation
-    is a ToolMessage, not an AIMessage)."""
+    is a ToolMessage, not an AIMessage). Bounded to the current turn for the same
+    reason as ``this_turn_messages`` (#2300): an unbounded scan would answer with a
+    prior turn's tool output."""
     from langchain_core.messages import ToolMessage
 
-    for msg in reversed((result or {}).get("messages", [])):
+    for msg in reversed(this_turn_messages(result)):
         if isinstance(msg, ToolMessage) and msg.content:
             return msg.content if isinstance(msg.content, str) else str(msg.content)
     return ""
@@ -1982,7 +2008,11 @@ async def _chat_langgraph_impl(
             }
 
             def _last_ai(result) -> str:
-                for msg in reversed(result.get("messages", [])):
+                # Bounded to THIS turn (#2300). An unbounded reverse scan over the
+                # accumulated conversation returns the PREVIOUS turn's answer whenever
+                # this one produced no assistant message — which is exactly what a turn
+                # whose stream dies after its first chunk looks like.
+                for msg in reversed(this_turn_messages(result)):
                     if isinstance(msg, AIMessage) and msg.content:
                         return msg.content if isinstance(msg.content, str) else str(msg.content)
                 return ""
@@ -2083,8 +2113,17 @@ async def _chat_langgraph_impl(
 
             # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
             # to the last tool result so the caller gets a signal, not a blank.
+            # Both lookups are scoped to THIS turn, so reaching the final string means
+            # the turn genuinely produced nothing — most likely it died mid-stream. Say
+            # that plainly: the whole point of #2300 is that a caller must be able to
+            # tell "no answer" from "an answer", and the previous wording read like a
+            # deliberate quiet turn rather than a failure worth retrying.
             if not response:
-                response = _last_tool_text(result) or "_(The agent ended the turn without a textual reply.)_"
+                response = _last_tool_text(result) or (
+                    "**Error:** the turn produced no reply — it may have stalled or been "
+                    "interrupted. Nothing was returned for this request; retry it. "
+                    "(This is not the previous turn's answer.)"
+                )
 
             # Goal mode: verify after the agent stops; re-invoke with a
             # continuation prompt until met / exhausted / unachievable.

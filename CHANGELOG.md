@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`/api/chat` no longer answers with the *previous* turn's reply after a stalled turn
+  (#2300).** When a turn's model stream died partway through, the request came back with a
+  complete, coherent, entirely plausible answer — to the question you asked *before*. No
+  error, nothing truncated, nothing malformed. A caller reading the reply could not tell it
+  from a correct one, and would conclude work had happened that never ran; both field
+  sightings were caught only because the operator checked GitHub and the store instead of
+  trusting the response.
+
+  The cause: the reply was taken from the last assistant message in the conversation, but
+  the graph returns the *whole* accumulated conversation, not just what this turn added. A
+  turn that dies mid-stream adds only your message, so the search walked straight past it
+  into the previous turn's answer. The reply is now taken from this turn's messages only,
+  and a turn that genuinely produced nothing says so and asks you to retry — a visible
+  failure is recoverable, a plausible wrong answer isn't. The same fix covers the
+  tool-result fallback, which could otherwise have surfaced a prior turn's tool output.
 - **An agent you just added from network discovery no longer lingers in the "found" list.**
   Adding a discovered protoAgent as a remote member dropped it from the found list only on
   the follow-up re-scan, so for one round-trip it sat in both lists — still offering an "Add
