@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugins do. Twelve of the fourteen in-tree plugins are now listed, each with a `bundled` pill
   instead of an Install button (enabling one is a config change, not an install). `delegates` (always
   loaded, not toggleable) and `hello` (the copy-me scaffold) stay out, with the reason recorded.
+- **Installed plugins say what they do (#2248).** The Plugins table rendered a plugin's *name* and
+  nothing else descriptive, so the name had to smuggle in its purpose — hence `Coder (execution-grounded
+  code-solve)`. Each row now carries its manifest description under the name (clamped to two lines,
+  full text on hover), and the row search matches it: "which plugin does X?" is the same question the
+  tool-name search already answered, asked in prose.
 
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
