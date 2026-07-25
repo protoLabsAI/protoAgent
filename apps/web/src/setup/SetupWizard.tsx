@@ -6,6 +6,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import {
   Bot,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Cpu,
@@ -167,6 +168,9 @@ export function SetupWizard({
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Advanced archetypes (tier: "advanced") collapse below the standard persona cards
+  // behind a chevron toggle, so the persona step leads with the everyday choices.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Starter archetypes (the archetype-catalog: Basic + Custom, plus any installed bundle
   // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
   // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
@@ -305,6 +309,10 @@ export function SetupWizard({
   // block a retry, leaving it blank until the user toggles a card. Never clobbers an
   // in-session edit (soul already non-empty).
   const archetypeList = archetypes.data?.archetypes ?? [];
+  // Split by tier: standard cards render inline as today; advanced ones (tier: "advanced")
+  // collapse under a toggle. Absent tier = standard, so nothing moves unless it opts in.
+  const standardArchetypes = archetypeList.filter((a) => a.tier !== "advanced");
+  const advancedArchetypes = archetypeList.filter((a) => a.tier === "advanced");
   const seededSoul = useRef(false);
   useEffect(() => {
     if (!loaded || seededSoul.current || !archetypeList.length || state.soul.trim()) return;
@@ -527,10 +535,41 @@ export function SetupWizard({
                   if (a) pickArchetype(a);
                 }}
               >
-                {archetypeList.map((a) => (
+                {standardArchetypes.map((a) => (
                   <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
                 ))}
               </RadioCardGroup>
+              {/* Advanced personas collapse behind a chevron toggle — a separate group sharing
+                  the same picked value + pickArchetype(), so choosing one here seeds the SOUL
+                  editor exactly like a standard card. Hidden when the catalog has none. */}
+              {advancedArchetypes.length ? (
+                <div className="archetype-advanced">
+                  <button
+                    type="button"
+                    className="archetype-configure-toggle"
+                    aria-expanded={advancedOpen}
+                    onClick={() => setAdvancedOpen((o) => !o)}
+                  >
+                    {advancedOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                    <span>Advanced ({advancedArchetypes.length})</span>
+                  </button>
+                  {advancedOpen ? (
+                    <RadioCardGroup
+                      name="archetype-advanced"
+                      min="160px"
+                      value={state.archetype}
+                      onValueChange={(id) => {
+                        const a = archetypeList.find((x) => x.id === id);
+                        if (a) pickArchetype(a);
+                      }}
+                    >
+                      {advancedArchetypes.map((a) => (
+                        <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
+                      ))}
+                    </RadioCardGroup>
+                  ) : null}
+                </div>
+              ) : null}
               {pickedArchetype ? (
                 <button type="button" className="archetype-preview-link" onClick={() => setPreviewOpen(true)}>
                   See what&apos;s included in {pickedArchetype.label} →

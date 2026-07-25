@@ -17,7 +17,7 @@ import type { View } from "../lib/viewRegistry";
 import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import { useQuery } from "@tanstack/react-query";
-import { agentHref, currentSlug } from "../lib/api";
+import { agentHref } from "../lib/api";
 import { fleetQuery } from "../lib/queries";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
@@ -42,7 +42,8 @@ export type InlinePluginView = {
   /** Slug-aware resolved page URL (`apiUrl(view.path)`). */
   url: string;
   icon?: ReactNode;
-  /** The curated 6-key console theme (`consoleTheme()`), posted on init. */
+  /** The console theme payload (`consoleTheme()`) — the curated six keys plus the
+   *  full `--pl-*` snapshot and `mode` (#2225) — posted on init. */
   theme: Record<string, string>;
   /** Operator bearer (`authToken()`) for the page's same-origin authed calls. */
   token: string;
@@ -274,12 +275,12 @@ export function usePaletteRegistry(
     // roster row carries DM / open-console / start / stop, and every member's name rides
     // this command's keywords — so typing "ava" still lands you one step from her.
     // (Re-registered on fleetSig, so the keyword list tracks the live roster.)
-    // Host-scoped (ADR 0042), mirroring the Fleet settings gate: the fleet is managed from
-    // its HOST instance. On a member window `/api/fleet` is a fleet-of-one by construction,
-    // so the room would be an empty, misleading surface (and its DM/broadcast targets would
-    // be nothing). Disable it there with a pointer at the host rather than hiding it, so the
-    // command stays discoverable and explains itself.
-    const fleetGate = fleetSettingsDisabledReason(agents, currentSlug());
+    // Open in every sister agent's window, mirroring the Fleet settings gate: `/api/fleet` is
+    // a HUB path (never slug-scoped), so a member window's room shows the hub's real roster
+    // and its DM/broadcast targets are the real siblings. Only a member reached DIRECTLY on
+    // its own port sees a fleet-of-one — there the command disables with a pointer at the
+    // host rather than hiding, so it stays discoverable and explains itself.
+    const fleetGate = fleetSettingsDisabledReason(agents);
     const offFleetRoom = registry.registerCommands([
       {
         id: "fleet-room",

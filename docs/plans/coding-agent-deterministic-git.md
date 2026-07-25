@@ -1,7 +1,8 @@
 # Plan: deterministic, framework-owned git for ACP coder delegates
 
-**Status:** validated by due diligence (2026-07-05); Phase 0 done — ADR drafted as
-[ADR 0076](../adr/0076-managed-git-acp-delegates.md) (Proposed). Next: Phase 1.
+**Status:** Executed — [ADR 0076](../adr/0076-managed-git-acp-delegates.md) Accepted;
+shipped #1845/#1846/#1847 (`plugins/coding_agent/git_harness.py`, `manage_git` wired
+through the delegates registry).
 Supersedes the 2026-07 draft that targeted `code_with`.
 **Owner:** protoAgent `delegates`/`coding_agent` surface (general capability → contribute
 upstream; test on roxy).

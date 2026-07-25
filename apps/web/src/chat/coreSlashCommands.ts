@@ -12,8 +12,10 @@ import { queryClient } from "../lib/queryClient";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
+import { exportChatToFile } from "./exportChat";
 import { buildGoalSetBody, goalFormPayload } from "./goalForm";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
+import { promptNoteMarkdown } from "./promptView";
 
 // Local id for the system notes /compact posts (the command manages messages
 // directly, like /clear, so it needs to own the ids it can later replace).
@@ -38,6 +40,111 @@ registerSlashCommand({
     if (!ctx.sessionId) return false; // no session → not handled (falls through)
     void api.deleteChatSession(ctx.sessionId, false).catch(() => {});
     chatStore.updateMessages(ctx.sessionId, []);
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "export",
+  description: "Download this chat as Markdown (secrets redacted)",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    void exportChatToFile(ctx.sessionId);
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "btw",
+  description: "Ask a side question about this chat — answered from context, saved nowhere",
+  usage: "/btw <question>",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    const sessionId = ctx.sessionId;
+    const question = ctx.rest.trim();
+    const messagesOf = () =>
+      chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? [];
+    const note = (content: string, tone: ChatMessage["noteTone"]): ChatMessage => ({
+      id: noteId(),
+      role: "system",
+      content,
+      noteTone: tone,
+      createdAt: Date.now(),
+      status: "done",
+    });
+
+    if (!question) {
+      chatStore.updateMessages(sessionId, [...messagesOf(),
+        note("Ask a side question after `/btw`, e.g. `/btw what did we decide about the schema?` — it's answered from this chat's context but never becomes part of it.", "info")]);
+      ctx.focusComposer();
+      return true;
+    }
+
+    // Optimistic ephemeral bubbles: the question + a pending answer, BOTH client-side only.
+    // They live in the chat store, never the server checkpoint — the side exchange is
+    // overlaid on the conversation, not saved into it.
+    const pendingId = noteId();
+    chatStore.updateMessages(sessionId, [
+      ...messagesOf(),
+      note(`**↪ Aside:** ${question}`, "info"),
+      { ...note("Thinking… (this won't be saved to the conversation)", "info"), id: pendingId },
+    ]);
+    ctx.focusComposer();
+
+    const withoutPending = () => messagesOf().filter((m) => m.id !== pendingId);
+    void api
+      .asideChatSession(sessionId, question)
+      .then((res) => {
+        if (!res.found) {
+          chatStore.updateMessages(sessionId, [...withoutPending(), note(res.message || "Nothing to answer against yet.", "warning")]);
+          return;
+        }
+        chatStore.updateMessages(sessionId, [...withoutPending(),
+          note(`**↩ Aside answer** _(not saved to the conversation)_\n\n${res.answer}`, "info")]);
+      })
+      .catch((e) => {
+        chatStore.updateMessages(sessionId, [...withoutPending(), note(`Aside failed — ${errMsg(e)}`, "danger")]);
+      });
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "prompt",
+  // NB: the slash menu filters on name OR description (ChatSurface) — keep every
+  // other command's NAME out of this text, or typing that command surfaces /prompt
+  // above it and Enter runs the wrong one (the /model e2e caught exactly this).
+  description: "Show the exact system prompt behind this session's latest reply — never saved",
+  usage: "/prompt",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    // Honest framing (#2243): this is the prompt AS OF the last captured call —
+    // a true "next call" preview would need speculative retrieval (P3). The
+    // fetch is a local read, so no optimistic pending note (unlike /btw).
+    void api
+      .promptLast(ctx.sessionId)
+      .then((res) => {
+        if (!res.enabled) {
+          ctx.noteToThread(
+            "Prompt capture is off — enable `prompts.capture` in Settings ▸ Telemetry to record what each model call receives.",
+            { tone: "warning" },
+          );
+          return;
+        }
+        if (!res.call) {
+          ctx.noteToThread(
+            "Nothing captured for this session yet — send a message first, then `/prompt` shows what the model received.",
+            { tone: "info" },
+          );
+          return;
+        }
+        ctx.noteToThread(promptNoteMarkdown(res.call), { tone: "info" });
+      })
+      .catch((e) => {
+        ctx.noteToThread(`Prompt fetch failed — ${errMsg(e)}`, { tone: "danger" });
+      });
     ctx.focusComposer();
     return true;
   },

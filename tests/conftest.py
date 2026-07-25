@@ -47,6 +47,22 @@ def _isolate_injection_log(tmp_path, monkeypatch):
     reset_injection_log()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_prompt_snapshots(tmp_path, monkeypatch):
+    """Point the prompt snapshot store (#2243) at a per-test temp DB.
+
+    ``PromptCaptureMiddleware`` records a snapshot on every wrapped model call
+    and capture is default-ON — so, like the injection log above, any test that
+    drives the middleware stack would otherwise write into the developer's REAL
+    instance store. Lazy: only tests that actually record create the DB."""
+    from observability.prompt_snapshots import reset_prompt_snapshots
+
+    monkeypatch.setenv("PROTOAGENT_PROMPT_SNAPSHOTS", str(tmp_path / "prompt-snapshots.db"))
+    reset_prompt_snapshots()
+    yield
+    reset_prompt_snapshots()
+
+
 def pytest_configure(config):  # noqa: ARG001
     """Prepend site-packages to sys.path before any test imports occur."""
     site_dirs = site.getsitepackages()

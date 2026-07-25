@@ -82,7 +82,7 @@ polls) and promotes the release to **Latest**. See `apps/desktop/README.md` §§
 2. The workflow bumps the version, rolls the changelog, and opens
    `chore: release vX.Y.Z`. It **does not merge or tag** — that's deliberate
    (fleet policy: auto-merge fired on stale SHAs and broke stacked PRs).
-3. **Merge the release PR** once the three checks pass (squash).
+3. **Merge the release PR** once CI passes (squash).
 4. **Push the tag** on the merged release commit — this is what triggers the
    release:
    ```sh
@@ -121,6 +121,9 @@ We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
 
 - **In your feature PR**, add a bullet under `## [Unreleased]` in the right
   group (`### Added` / `### Changed` / `### Fixed` / `### Removed` / `### Docs`).
+  CI **enforces** this (#2174): the `Changelog entry` check fails any PR whose
+  diff doesn't touch `CHANGELOG.md` — escape hatches are the `skip-changelog`
+  label, a `release/*` head branch, and dependabot.
 - **At release time**, `scripts/changelog.py roll <version>` (run by
   `prepare-release.yml`) moves everything under `[Unreleased]` into a dated
   `## [X.Y.Z] - YYYY-MM-DD` section and leaves a fresh empty `[Unreleased]`.
@@ -136,13 +139,17 @@ We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
 ## Branch protection
 
 `main` is protected by a repository **ruleset**: every change needs a PR, and
-the three CI checks must pass to merge —
+the `checks.yml` CI jobs must pass to merge —
 
-| Check | Workflow |
+| Check | What it runs |
 |---|---|
-| Verify workspace config | `checks.yml` (runs `release-tools`' `verify-workspace-config`) |
-| Python tests | `checks.yml` (`pytest`) |
-| Web E2E smoke | `checks.yml` (Playwright vs. mock backend) |
+| Verify workspace config | `release-tools`' `verify-workspace-config` |
+| Changelog entry | `scripts/changelog_gate.sh` — the PR's merge-base diff must touch `CHANGELOG.md` (#2174; escape hatches: the `skip-changelog` label, `release/*` branches, dependabot) |
+| Lint (ruff + import contracts) | `ruff` + the import-layering contract |
+| Python tests | `pytest` |
+| Fleet integration (multi-instance) | the multi-instance fleet suite |
+| A2A live smoke (lean tier) | live A2A smoke against the lean tier |
+| Web E2E smoke | Playwright vs. mock backend |
 
 Direct pushes, force-pushes, and branch deletion are blocked. Approvals are set
 to **0** so the solo/automated flow (you + the release bot) is never blocked on

@@ -441,6 +441,11 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             # {event, prompt?, webhook?, session?} dicts, so it round-trips here (like
             # filesystem.projects / mcp.servers) rather than through the string_list FIELDS.
             "lifecycle_hooks": list(config.lifecycle_hooks),
+            # Managed projects registry (ADR 0095) — a top-level list of
+            # {name, path, github?, default_branch?, write?, no_delete?, fs?} dicts,
+            # so it round-trips here (like lifecycle_hooks / filesystem.projects)
+            # rather than through the string_list FIELDS.
+            "projects": list(config.projects),
             # background_keep is an operational knob (not a settings-schema field),
             # so emit it here for round-trip completeness like the breaker knobs.
             "checkpoint": {

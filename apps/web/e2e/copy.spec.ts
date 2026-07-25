@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { expandToolCard } from "./toolcard";
+
 // Each expanded tool section has a copy button that writes the raw value to the
 // clipboard. Grant clipboard permissions so we can read it back and verify.
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
@@ -14,7 +16,7 @@ test("copy button writes the raw value to the clipboard", async ({ page }) => {
   // Frame + copy button are the DS ToolCard/ToolSection (#832): `.pl-toolcard*`.
   const card = page.locator(".pl-toolcard").first();
   await expect(card.locator(".pl-toolcard__status--done")).toBeVisible();
-  await card.locator(".pl-toolcard__head").click();
+  await expandToolCard(page, card); // settled layout first — see e2e/toolcard.ts
 
   // Copy the input section's raw value.
   const inputSection = card.locator(".pl-toolcard__section").first();

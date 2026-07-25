@@ -390,9 +390,12 @@ class LangGraphConfig:
     # NOTE: this middleware also DELIVERS KnowledgeMiddleware's context to the
     # model (create_agent doesn't read the `context` state key), so it's wired
     # unconditionally; the flags below only control the caching half.
+    # Attempt-by-default (#2255): blocks are attached for EVERY model (aliases
+    # included); a provider that rejects them auto-falls back per session, one
+    # that silently ignores them draws a zero-hit warning.
     prompt_cache_enabled: bool = True
     prompt_cache_ttl: str = "5m"  # "5m" (ephemeral) or "1h" (persistent)
-    prompt_cache_force: bool = False  # bypass the Anthropic-name heuristic
+    prompt_cache_force: bool = False  # never auto-fall back — a rejection propagates
 
     # Cache-warming heartbeat — optional background ping that reproduces the
     # agent's cached system+tools prefix on an interval so the FIRST real
@@ -432,6 +435,26 @@ class LangGraphConfig:
     # "keep what you want, drop the rest, add your own" is fully config + plugin
     # driven — no core edit that conflicts on upstream re-sync.
     tools_disabled: list[str] = field(default_factory=list)
+
+    # Tool HIDE list (config ``tools.hidden``, #2172) — a HARD superset of ``disabled``:
+    # a hidden tool is denied like a disabled one (never bound to the graph), AND it is
+    # dropped from the console's tool inventory entirely, so it never renders as a
+    # toggle and can't be re-enabled from the UI. This is a trust/setup-time control
+    # (ADR 0071) — an archetype or a restricted console pins the set in config; the UI
+    # is presentation, not the boundary. Disabled = "off but toggleable"; hidden =
+    # "not available, and not offered".
+    tools_hidden: list[str] = field(default_factory=list)
+
+    # Settings HIDE list (config ``settings.hidden``, #2172) — the settings half of
+    # ``tools.hidden``. Entries are dotted field keys ("goal.max_iterations") or whole
+    # group prefixes ("goal", including plugin groups like "careercoach"). A hidden
+    # setting is dropped from the schema the console renders AND refused by the settings
+    # write/reset APIs, so it can't be seen or changed from the UI; its VALUE stays live
+    # in config (hiding ≠ disabling). Setup-time trust control (ADR 0071): the config
+    # file is the boundary, the UI is presentation. Contrast a field's static
+    # ``ui_hidden`` (dev-declared, #1076), which only moves rendering to a dedicated
+    # panel and locks nothing.
+    settings_hidden: list[str] = field(default_factory=list)
 
     # Model routing / failover — wires langchain's ModelFallbackMiddleware.
     # On primary error, retry on each fallback model (same gateway) in order.
@@ -613,6 +636,13 @@ class LangGraphConfig:
     # Retention guardrail (ADR 0006) — turns older than this are pruned by the
     # periodic maintenance loop so the store can't grow unbounded. 0 = keep forever.
     telemetry_retention_days: int = 90
+    # Prompt snapshot capture (#2243) — record the EXACT system prompt each model
+    # call received (stable prefix hash-deduped, volatile tail per call), viewable
+    # per turn in the console ("View prompt" / /prompt). ON by default — the
+    # operator owns the prompt; cost is one hashed blob + a small tail per call.
+    # Retention is trimmed in-write (no maintenance loop); 0 = keep forever.
+    prompt_capture_enabled: bool = True
+    prompt_capture_retention_days: int = 30
     # Fleet trace export (ADR 0006 / #1897) — write one per-turn trajectory JSONL
     # row (OpenAI chat format) to ``<instance>/fleet-traces/`` for the agent-fleet
     # flywheel. OFF by default; ``PROTOAGENT_FLEET_TRACE_EXPORT`` env overrides in
@@ -866,18 +896,21 @@ class LangGraphConfig:
     # (like ``filesystem_projects`` / ``mcp_servers``), not the string_list-typed FIELDS.
     lifecycle_hooks: list[dict] = field(default_factory=list)
 
-    # Operator-console directory allowlist — the extra directories the
-    # React console's tasks/notes APIs may read and write. The protoAgent
-    # repo root is always allowed implicitly (it's the default project);
-    # add other project roots here to operate on them. Empty = repo root
-    # only. The client sends a free-text project path, so this server-side
-    # list — not the UI — is the security boundary. See operator_api/paths.
+    # DEPRECATED / INERT — was the operator-console path sandbox for the tasks/notes
+    # APIs, enforced by ``operator_api.paths.resolve_project_path``. Nothing calls that
+    # helper anymore: tasks became a single instance-scoped store (the routes accept
+    # ``project_path`` and ignore it) and notes moved to a plugin with its own store, so
+    # this list gates nothing. The agent's filesystem fence is ``filesystem_projects``
+    # (ADR 0007). Kept in FIELDS + ui_hidden so existing YAML round-trips unchanged;
+    # don't wire new behavior to it.
     operator_allowed_dirs: list[str] = field(default_factory=list)
 
-    # The operator console's working directory — where its tasks/notes live, and
-    # the agent's default project. Set in the setup wizard / Settings. Blank =
-    # the resolver's default (PROTOAGENT_PROJECT_DIR env, else the protoAgent
-    # dir). Read by ``server._resolve_operator_project_root``; always allowed.
+    # Which directory the console calls "this project". Set in the setup wizard /
+    # Settings; blank = the resolver's default (PROTOAGENT_PROJECT_DIR env, else the
+    # protoAgent dir). Read by ``server._resolve_operator_project_root`` and surfaced as
+    # ``project.path`` in runtime status, which the console uses to prefill the wizard.
+    # NOT an access grant — it gives the agent no reach into that directory; only
+    # ``filesystem_projects`` (ADR 0007) does that.
     operator_project_dir: str = ""
 
     # Fenced filesystem toolset (ADR 0007 — operator primitives). ON by default,
@@ -905,6 +938,32 @@ class LangGraphConfig:
     # gate is then always enforced.
     filesystem_bypass_allowed: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
+
+    # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
+    # top-level ``projects:`` list of ``{name, path, github?, default_branch?, write?,
+    # no_delete?, fs?}`` dicts, keyed on ``name`` (the identifier the fs tools already
+    # address projects by — deliberately no separate slug). It describes a project's
+    # binding on THIS host: where it lives, what it is on GitHub, what the agent may do
+    # to it. Deliberately holds no planning state (goals/milestones/issues) — that lives
+    # in whatever board owns the work.
+    #
+    # Consumers project from it rather than re-declaring: the fs fence via
+    # ``effective_filesystem_projects`` below, the github plugin's repo picker via
+    # ``github``, the board's repo/base branch via ``name``. An EXPLICIT
+    # ``filesystem.projects`` (or ``github.repos``, or ``project_board.repo``) still
+    # wins, so every existing config and fork loads unchanged.
+    #
+    # ADR 0095 D3: a registered project is fenced READ-WRITE by default. That's the
+    # reverse of the cautious default, and deliberate — the case for "membership grants
+    # nothing until separately opted in" needs entries to arrive from somewhere other
+    # than the operator (a sync feed / org registry / onboarding webhook), and no such
+    # source exists. Opt out per entry: ``write: false`` (read-only), ``no_delete: true``
+    # (create/edit, never delete), ``fs: false`` (registered, but NOT in the fence at
+    # all — for a project tracked only for github/board purposes).
+    #
+    # A list of dicts, so it round-trips via config_io.py §B (like ``lifecycle_hooks`` /
+    # ``filesystem_projects``), not the string_list-typed FIELDS.
+    projects: list[dict] = field(default_factory=list)
 
     # Core media output store (#1929) — tool-generated binary artifacts
     # (images/audio/video) persisted via ``registry.save_media()`` and served on
@@ -958,15 +1017,43 @@ class LangGraphConfig:
         if env_model:
             self.model_name = env_model
 
+    def fenced_projects(self) -> list[dict]:
+        """The ADR 0095 ``projects:`` registry projected onto the fs-fence shape.
+
+        Entries opt out with ``fs: false``; everything else is fenced read-write
+        by default (D3). Only the fence keys are emitted — ``github`` /
+        ``default_branch`` are identity for other consumers and have no business
+        in the fence's vocabulary."""
+        fenced: list[dict] = []
+        for entry in self.projects or []:
+            if not isinstance(entry, dict) or entry.get("fs") is False:
+                continue
+            name = str(entry.get("name") or "").strip()
+            path = str(entry.get("path") or "").strip()
+            if not name or not path:
+                continue  # tools/fs_tools.py logs the skip when it builds the registry
+            projected = {"name": name, "path": path, "write": bool(entry.get("write", True))}
+            if entry.get("no_delete"):
+                projected["no_delete"] = True
+            fenced.append(projected)
+        return fenced
+
     def effective_filesystem_projects(self, *, create: bool = False) -> list[dict]:
         """The fs project registry the agent actually gets. Explicit
-        ``filesystem_projects`` win; otherwise (when filesystem is enabled) a
+        ``filesystem_projects`` win; then the ADR 0095 ``projects:`` registry
+        projected onto the fence; otherwise (when filesystem is enabled) a
         single default ``workspace`` project so the on-by-default fs toolset has a
         fenced place to work. ``create=True`` mkdirs the workspace dir."""
         if self.filesystem_projects:
             return self.filesystem_projects
         if not self.filesystem_enabled:
             return []
+        # A registry whose entries ALL opt out (``fs: false``) projects to nothing —
+        # fall through to the workspace default rather than handing back an empty
+        # fence, which unbinds the whole fs toolset with no visible cause (#2251).
+        fenced = self.fenced_projects()
+        if fenced:
+            return fenced
         from infra.paths import workspace_dir
 
         return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
@@ -1098,6 +1185,8 @@ class LangGraphConfig:
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
+            tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
+            settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
@@ -1124,6 +1213,10 @@ class LangGraphConfig:
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
             telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
+            prompt_capture_enabled=data.get("prompts", {}).get("capture", cls.prompt_capture_enabled),
+            prompt_capture_retention_days=data.get("prompts", {}).get(
+                "retention_days", cls.prompt_capture_retention_days
+            ),
             fleet_trace_export_enabled=data.get("telemetry", {}).get("fleet_trace_export", cls.fleet_trace_export_enabled),
             inbox_retention_days=data.get("inbox", {}).get("retention_days", cls.inbox_retention_days),
             activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),
@@ -1254,6 +1347,8 @@ class LangGraphConfig:
             # System lifecycle reactions (ADR 0074) — top-level ``lifecycle_hooks:`` list.
             # Opt-in: absent/empty ⇒ [] ⇒ nothing fires beyond the bus broadcast.
             lifecycle_hooks=list(data.get("lifecycle_hooks", []) or []),
+            # Managed projects registry (ADR 0095) — top-level ``projects:`` list.
+            projects=list(data.get("projects", []) or []),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),

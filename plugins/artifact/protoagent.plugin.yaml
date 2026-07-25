@@ -54,3 +54,12 @@ emits:
   - artifact.created
   - artifact.updated
   - artifact.deleted
+
+# The vendored render libs (mermaid, react, babel…) the artifact view imports. Same trap as
+# notes: `_view_public_paths` exempts the view PAGE, but an ES-module `import` carries no
+# Authorization header, so a gated vendor route 401s and the panel renders dead. Only visible
+# on a SISTER agent — ADR 0089 D5 closed members, so the proxy forwards these unauthenticated
+# requests to a member that rejects them. `_VENDOR_FILES` is an exact-name allowlist, so
+# exposing the subtree can't be walked.
+public_paths:
+  - "/plugins/artifact/vendor/"

@@ -174,12 +174,10 @@ test("a host-scoped edit on the host console saves to the host layer", async ({ 
 });
 
 // On a FLEET MEMBER console (/agent/<slug>/) the same fields show the ADR 0047 inheritance
-// view instead — inherited-from / overridden-here badges + reset-to-inherited. There is no
-// Box group on a member.
+// view instead — inherited-from / overridden-here badges + reset-to-inherited. The Box group
+// narrows to Fleet there (see the next test).
 test("per-agent (fleet member) settings show ADR 0047 inheritance badges + reset", async ({ page }) => {
   await openSettings(page, "/app/agent/ava/");
-  // No Box group on a fleet member.
-  await expect(page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true })).toHaveCount(0);
   await section(page, "Model");
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText(
@@ -193,6 +191,21 @@ test("per-agent (fleet member) settings show ADR 0047 inheritance badges + reset
   await temp.getByRole("button", { name: /Reset to inherited/ }).click();
   await expect(page.locator(".pl-toast", { hasText: /inherited/i })).toBeVisible();
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
+});
+
+// The Box group NARROWS on a sister agent's console, it doesn't vanish: Fleet stays (it names
+// the hub's fleet from any window — /api/fleet is a hub path), while Overview + Telemetry read
+// the focused agent's own endpoints and remain host-console-only.
+test("a sister agent's console keeps Box ▸ Fleet, without the agent-scoped Box sections", async ({ page }) => {
+  await openSettings(page, "/app/agent/ava/");
+  const sidenav = page.locator(".settings-overlay .pl-sidenav");
+  await expect(sidenav.getByRole("tab", { name: "Fleet", exact: true })).toBeVisible();
+  await expect(sidenav.getByRole("tab", { name: "Overview", exact: true })).toHaveCount(0);
+  await expect(sidenav.getByRole("tab", { name: "Telemetry", exact: true })).toHaveCount(0);
+  // And it's the real panel — the hub's roster, reachable from here.
+  await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await expect(page.locator(".fleet-row", { hasText: "roxy" })).toBeVisible();
 });
 
 test("Identity: a name change saves via /api/settings, not /api/config (no operator clobber)", async ({ page }) => {

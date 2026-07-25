@@ -1,6 +1,6 @@
 # 0058 — Runtime plugin install in the frozen desktop app (Discord as the first external comms plugin)
 
-Status: **Proposed**
+Status: **Accepted** (shipped v0.48.0)
 
 ## Context
 

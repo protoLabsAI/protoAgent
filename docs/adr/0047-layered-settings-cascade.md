@@ -143,6 +143,7 @@ the corresponding items in §7.
    | `routing.aux_model`, `routing.fallback_models` | gateway routing |
    | `prompt_cache.enabled/ttl/warm.enabled/warm.interval_seconds` | cache tier is gateway/deployment-dependent |
    | `telemetry.enabled`, `telemetry.retention_days` | observability is machine-wide |
+   | `prompts.capture`, `prompts.retention_days` | prompt-snapshot capture (#2243) is the same machine-wide observability posture as telemetry |
    | `identity.org` | white-label org branding is deployment-wide (`identity.name`/`operator` stay per-agent) |
    | `egress.allowed_hosts` | box-wide outbound network policy (ADR 0008); sits at the Host layer beside the inbound `network.bind` (D8) |
 

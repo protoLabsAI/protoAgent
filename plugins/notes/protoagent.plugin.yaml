@@ -18,3 +18,13 @@ views:
   # (`palette: { path: /quick }`) into the palette body. (`palette: inline` would reuse
   # the same /view page for both.)
   - { id: notes, label: "Notes", icon: "FileText", placement: right, path: "/plugins/notes/view", palette: { path: "/plugins/notes/quick" } }
+
+# The vendored CodeMirror modules the view pages import. `_view_public_paths` auto-exempts
+# the view PAGE paths, but an ES-module `import` can't carry an Authorization header any more
+# than the iframe navigation can — so these have to be exempt too, or the editor 401s and
+# renders as a dead box. This only surfaced on a SISTER agent: members used to run open on
+# loopback, and ADR 0089 D5 closed them, so the fleet proxy now forwards these unauthenticated
+# requests to a member that (rightly) rejects them. Serving them is safe — `_VENDOR_FILES` is
+# an exact-name allowlist, so the subtree can't be walked.
+public_paths:
+  - "/plugins/notes/vendor/"

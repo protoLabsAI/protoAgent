@@ -12,6 +12,7 @@ import { useUI } from "../state/uiStore";
 import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { Markdown } from "./LazyMarkdown";
+import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
 import { WorkBlock } from "./WorkBlock";
@@ -187,6 +188,13 @@ export function ChatMessageView({
           ) : null}
           {actions.onRewind ? (
             <MessageAction label="Rewind to here" icon={<History size={14} />} onClick={() => actions.onRewind!(message)} />
+          ) : null}
+          {message.taskId ? (
+            <MessageAction
+              label="View prompt"
+              icon={<FileText size={14} />}
+              onClick={() => openPromptViewer(message.taskId!)}
+            />
           ) : null}
           {actions.onRegenerate && message.id === actions.lastAssistantId ? (
             <MessageAction

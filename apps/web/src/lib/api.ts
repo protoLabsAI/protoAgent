@@ -5,7 +5,9 @@ import type {
   Archetype,
   ArchetypePreview,
   BackgroundJobDTO,
+  BrowseListing,
   FsProject,
+  ManagedProjects,
   Task,
   ChatMessage,
   ComponentSpec,
@@ -31,6 +33,7 @@ import type {
   MemoryInjectionDetail,
   MemoryInjectionRow,
   MemorySessionDigest,
+  PromptCall,
   NodeRuntimePayload,
   PythonRuntimePayload,
   RuntimeStatus,
@@ -1040,6 +1043,21 @@ export const api = {
     return request<MemoryInjectionDetail>(`/api/memory/injections/${id}`);
   },
 
+  // Prompt snapshots (#2243): every captured model call of one turn, in call
+  // order — the "View prompt" dialog's payload. 404s when the task has none.
+  promptsForTask(taskId: string) {
+    return request<{ enabled: boolean; calls: PromptCall[] }>(
+      `/api/prompts/${encodeURIComponent(taskId)}`,
+    );
+  },
+  // The most recent captured call of one session (backs /prompt). `call` is
+  // null when nothing has been captured yet; `enabled:false` = capture off.
+  promptLast(sessionId = "") {
+    const q = new URLSearchParams();
+    if (sessionId) q.set("session_id", sessionId);
+    return request<{ enabled: boolean; call: PromptCall | null }>(`/api/prompts/last?${q}`);
+  },
+
   // Chat attachment — extract + TIER a dropped file (FormData: `file` + `session_id`).
   // Returns a ready-to-prepend `context` block (full text for small docs, a lede +
   // retrieval note for large docs indexed under the session) so a big doc never
@@ -1610,6 +1628,36 @@ export const api = {
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST", body: {} });
   },
 
+  // Export a chat session as self-contained Markdown (#2158 P1). Read-only — never
+  // touches the checkpoint (unlike compact/rewind). Secrets are scrubbed server-side
+  // (graph/export_op) and the kinds found come back in `redactions` so the caller can
+  // tell the operator what was removed. `title` names the document heading + file.
+  exportChatSession(sessionId: string, title?: string) {
+    const q = title ? `?title=${encodeURIComponent(title)}` : "";
+    return request<{
+      found: boolean;
+      markdown: string;
+      message_count: number;
+      redactions: string[];
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export${q}`, { method: "GET" });
+  },
+
+  // `/btw` (#2180): ask a side question about this session's context WITHOUT changing
+  // it. The server runs an incognito turn on a fresh ephemeral thread seeded with the
+  // main thread's messages; the main thread's checkpoint is never written. The answer is
+  // rendered as an EPHEMERAL client-side note (it never goes back to the server as a real
+  // turn), so the side exchange leaves no trace in the conversation.
+  asideChatSession(sessionId: string, question: string) {
+    return request<{
+      found: boolean;
+      answer: string;
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/aside`, { method: "POST", body: { question } });
+  },
+
   // Rewind a chat session server-side (#1535): discard every message AFTER the
   // target and rewrite the LangGraph checkpoint in place, rolling the agent's live
   // context back to that point. The checkpoint is the agent's REAL context, so this
@@ -1881,6 +1929,26 @@ export const api = {
       return null; // not in Tauri / no manifest / offline — stay quiet
     }
   },
+  /** The LAUNCH check's stored outcome (#2203) — the shell runs one update check in
+   * parallel with engine startup; this pulls its result (a state read, no network).
+   * `done: false` while the check is still in flight. Null outside the shell or on an
+   * older shell without the command — callers must treat null as "no launch check". */
+  async launchUpdateResult(): Promise<{
+    done: boolean;
+    update: { version: string; current: string; notes: string } | null;
+  } | null> {
+    const core = tauriCore();
+    if (!core) return null;
+    try {
+      return (
+        (await core.invoke<{ done: boolean; update: { version: string; current: string; notes: string } | null }>(
+          "updater_launch_result",
+        )) ?? null
+      );
+    } catch {
+      return null; // older shell without the command — UpdateNotice falls back to its timers
+    }
+  },
   async installUpdate(
     onProgress: (e: { chunkLength: number; contentLength: number | null }) => void,
   ): Promise<void> {
@@ -2049,6 +2117,17 @@ export const api = {
       { method: "POST", body: { url, ref: ref || undefined, force: force || undefined } },
     );
   },
+  // Server-side directory listing behind the path pickers. Deliberately the SERVER's
+  // filesystem: the console may be configuring a different machine, and the browser's
+  // own pickers can't produce an absolute path on it.
+  browseDir(opts: { path?: string; files?: boolean; hidden?: boolean } = {}) {
+    const qs = new URLSearchParams();
+    if (opts.path) qs.set("path", opts.path);
+    if (opts.files) qs.set("files", "true");
+    if (opts.hidden) qs.set("hidden", "true");
+    const q = qs.toString();
+    return request<BrowseListing>(`/api/fs/browse${q ? `?${q}` : ""}`);
+  },
   uninstallPlugin(id: string) {
     return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
@@ -2062,6 +2141,12 @@ export const api = {
   },
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
+  },
+  // The ADR 0095 managed-projects registry. Read-only by design: the fs-projects POST
+  // above REPLACES `filesystem.projects`, so writing back a registry-derived list here
+  // would silently materialize the projection and sever the registry link.
+  managedProjects() {
+    return request<ManagedProjects>("/api/projects");
   },
   setFsProjects(projects: FsProject[]) {
     return request<{ ok: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects", {

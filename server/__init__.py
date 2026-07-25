@@ -815,6 +815,13 @@ def _main():
     from operator_api.theme_routes import register_theme_routes
 
     register_theme_routes(fastapi_app)
+
+    # Server-side directory listing behind the console's folder pickers. The console
+    # may be on a different machine than the server it configures, so a browser-native
+    # picker can't produce these paths — see operator_api/browse_routes.py.
+    from operator_api.browse_routes import register_browse_routes
+
+    register_browse_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
@@ -827,6 +834,12 @@ def _main():
     from operator_api.injection_routes import register_injection_routes
 
     register_injection_routes(fastapi_app)
+
+    # System-prompt snapshots (#2243) — /api/prompts/*: the exact prompt any
+    # captured model call received, behind the console's "View prompt".
+    from operator_api.prompt_routes import register_prompt_routes
+
+    register_prompt_routes(fastapi_app)
 
     # Live config / SOUL editing, model probe/test, setup wizard, and
     # schema-driven settings. Extracted to operator_api/config_routes.py

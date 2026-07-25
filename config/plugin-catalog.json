@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated official-plugin directory served by GET /api/plugins/catalog and rendered in the Plugins ▸ Discover section (ADR 0059). The official source; keep in sync with sites/marketing/data/plugins.json. A fork can override it by placing its own plugin-catalog.json in the live config dir. `repo` is the install URL (one-click install runs `plugin install <repo>`, ADR 0058 — works on every surface incl. the frozen desktop app).",
+  "_comment": "GENERATED from config/plugin-directory.yaml by scripts/plugin_directory.py — do not edit by hand; run `python scripts/plugin_directory.py build`. Curated official-plugin directory served by GET /api/plugins/catalog and rendered in the Plugins ▸ Discover section (ADR 0059). A fork can override it by placing its own plugin-catalog.json in the live config dir. `repo` is the install URL (one-click install runs `plugin install <repo>`, ADR 0058 — works on every surface incl. the frozen desktop app).",
   "plugins": [
     {
       "id": "discord",
@@ -14,8 +14,8 @@
       "name": "Artifact (Generative UI)",
       "category": "Generative UI",
       "official": true,
-      "repo": "https://github.com/protoLabsAI/artifact-plugin",
-      "tagline": "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). The reference external plugin."
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/artifact",
+      "tagline": "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). Ships built-in with protoAgent."
     },
     {
       "id": "terminal",
@@ -63,7 +63,7 @@
       "category": "Examples",
       "official": true,
       "repo": "https://github.com/protoLabsAI/spacetraders-plugin",
-      "tagline": "Autonomous SpaceTraders fleet commander — tools, crew, workflows, skills, and a console dashboard."
+      "tagline": "An autonomous SpaceTraders fleet commander — crew subagents, navigation/mining/trading tools, workflows, and a Fleet dashboard. The reference full-bundle plugin."
     },
     {
       "id": "prototrader-finance",
@@ -71,7 +71,7 @@
       "category": "Finance",
       "official": true,
       "repo": "https://github.com/protoLabsAI/prototrader-finance",
-      "tagline": "Market data, backtesting, factor IC, a gated paper broker, the research desk, and a Quant Desk view."
+      "tagline": "Trading research as a full bundle — market data, backtesting, factor IC, a behavioral journal, a gated paper broker, the research desk, and a Quant Desk dashboard."
     },
     {
       "id": "monarch_money",
@@ -96,6 +96,158 @@
       "official": true,
       "repo": "https://github.com/protoLabsAI/careercoach-plugin",
       "tagline": "Your career coach & job-hunt copilot — strategy, mock interviews, honest CV feedback, and offer/negotiation coaching, plus an autonomous evaluate→tailor→apply pipeline. A full-surface plugin showcase."
+    },
+    {
+      "id": "github",
+      "name": "GitHub (read/write tools)",
+      "category": "Integrations",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/github-plugin",
+      "tagline": "Read AND write GitHub over the gh CLI — PRs, issues, diffs, CI, repo files; plus gated create/edit/merge/close, comments, labels (per-agent write gating). Ships a read-only Issues/PRs board, a util-bar New-issue widget, and the user-only /issue command."
+    },
+    {
+      "id": "google",
+      "name": "Google Workspace",
+      "category": "Integrations",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/google-plugin",
+      "tagline": "Google Workspace for your agent, built to grow — Gmail (read + draft-only, never sends, plus mailbox hygiene) and Calendar (read + free/busy + search)."
+    },
+    {
+      "id": "cowork",
+      "name": "Cowork (document skills)",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/cowork-plugin",
+      "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus schedule, memory-consolidation, and writing-voice habits (ADR 0083)."
+    },
+    {
+      "id": "claude_bridge",
+      "name": "Claude Bridge",
+      "category": "Tools",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/claude-bridge-plugin",
+      "tagline": "Explore Claude Code's on-disk state — sessions, memory, scratchpads — and translate its skills, subagents, and MCP config over to protoAgent."
+    },
+    {
+      "id": "cua",
+      "name": "Computer Use",
+      "category": "Automation",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/cua-plugin",
+      "tagline": "Drive native GUI apps on this machine — snapshot a window's accessibility tree, then click/type/scroll by element without stealing focus. Wraps the cua-driver binary."
+    },
+    {
+      "id": "learning_wiki",
+      "name": "Learning Wiki",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/learningWiki-plugin",
+      "tagline": "An adaptive learning wiki — an LLM-maintained, interlinked concept wiki plus a learner ledger: per-concept strength, misconceptions, and FSRS-scheduled review."
+    },
+    {
+      "id": "protobanana",
+      "name": "protoBanana (image gen)",
+      "category": "Media",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protobanana-plugin",
+      "tagline": "Native image generation and editing via the protoBanana gateway — text-to-image, instruction edits, and identity-preserving edits over self-hosted ComfyUI workflows."
+    },
+    {
+      "id": "pr-reviewer",
+      "name": "PR Reviewer (protoPatch)",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/pr-reviewer-plugin",
+      "tagline": "The deterministic half of the PR-review QA tier — budgeted protoPatch structural reviews as a fifth review-panel member (ADR 0078)."
+    },
+    {
+      "id": "plugin-devkit",
+      "name": "Plugin Devkit",
+      "category": "Authoring",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/plugin-devkit",
+      "tagline": "Build your own plugins — the authoring kit + reference plugin. A scaffold tool, an architect subagent, the building-plugins skill, and a console guide, in one bundle."
+    },
+    {
+      "id": "coding_agent",
+      "name": "CLI Coding Agent (ACP)",
+      "category": "Orchestration",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coding_agent",
+      "tagline": "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol."
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "category": "Communication",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/telegram",
+      "tagline": "Run your agent as a Telegram bot — inbound DMs and groups, replies back out. A tiny reference communication plugin."
+    },
+    {
+      "id": "notes",
+      "name": "Notes",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/notes",
+      "tagline": "A single shared markdown note the agent and the operator both read and write, with a live-preview editor the plugin serves itself. The flagship reference plugin — on by default."
+    },
+    {
+      "id": "docs",
+      "name": "Docs",
+      "category": "Productivity",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/docs",
+      "tagline": "Answer questions about protoAgent from its own documentation — a keyword index over the bundled docs, docs_search / docs_read tools, and a console reader view. On by default."
+    },
+    {
+      "id": "craft",
+      "name": "Craft (engineering slash commands)",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/craft",
+      "tagline": "Engineering rituals you invoke by typing them — /grill, /standup, /code-review, /due-diligence — plus an ADR-authoring skill and a skill_writer subagent. Prompt-only: no tools, routes, network, or filesystem access."
+    },
+    {
+      "id": "workflows",
+      "name": "Workflows",
+      "category": "Automation",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/workflows",
+      "tagline": "Declarative multi-step subagent workflows — chain subagent steps, some running in parallel, into repeatable recipes defined once as YAML. Off by default (lean core)."
+    },
+    {
+      "id": "coder",
+      "name": "Coder (execution-grounded code-solve)",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coder",
+      "tagline": "Turns 'implement X, here are the tests' into a TEST-VERIFIED solution via a difficulty-gated search ladder — gated on the tests passing, not an LLM judge. Off by default; needs a declared delegate."
+    },
+    {
+      "id": "execute_code",
+      "name": "Execute Code",
+      "category": "Tools",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/execute_code",
+      "tagline": "A Python interpreter the agent runs code in — headline use is programmatic tool-calling: call several tools, compose the results in code, return only what matters. Ships disabled: a scrubbed-env subprocess is isolation, not a true sandbox."
+    },
+    {
+      "id": "orgchart",
+      "name": "Org Chart",
+      "category": "Orchestration",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/orgchart",
+      "tagline": "Live diagram of the agent fleet — every agent a node, a directed edge wherever one agent can delegate to another. Crawls outward from this agent's delegates. Off by default."
+    },
+    {
+      "id": "friction",
+      "name": "Friction Log",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/friction",
+      "tagline": "The agent records its own friction — missing or awkward tools, confusing errors, wrong paths — alongside auto-captured tool errors, so the improvement backlog writes itself from real use. Off by default."
     }
   ]
 }

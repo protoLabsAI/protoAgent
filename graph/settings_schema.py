@@ -25,7 +25,7 @@ class Field:
     key: str  # dotted YAML path, e.g. "model.temperature"
     attr: str  # LangGraphConfig attribute holding the value
     label: str
-    type: str  # string|text|number|bool|select|string_list|secret
+    type: str  # string|text|number|bool|select|string_list|secret|path
     section: str
     description: str = ""
     restart: bool = False  # True = needs a full process restart (not hot-reload)
@@ -49,6 +49,14 @@ class Field:
     # writer) but DON'T render it in the generic Settings UI — for a key a dedicated
     # panel already owns. `build_schema` skips it; `config_to_dict` keeps it. (#1076)
     ui_hidden: bool = False
+    # What a `type: "path"` field points at — "dir" (default) or "file". The console
+    # renders the same text input plus a Browse… button opening the server-side picker
+    # (/api/fs/browse), and this says whether picking ENDS on a folder or a file. Typing
+    # a path is the one input method that can't tell you it doesn't exist, and a bad
+    # path here is expensive (an unusable work folder unbinds the whole fs toolset), so
+    # the picker is the point. Value stays a plain string — `path` is a rendering hint,
+    # nothing downstream treats it differently.
+    path_kind: str = "dir"
 
 
 # ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
@@ -256,7 +264,10 @@ FIELDS: list[Field] = [
         "Enable prefix caching",
         "bool",
         "Caching",
-        "Anthropic prefix caching on the stable prompt; no-op on non-Anthropic models.",
+        "Prefix caching on the stable prompt — attempted for EVERY model, gateway aliases "
+        "included. A provider that rejects cache blocks falls back automatically; one that "
+        "silently ignores them draws a warning in the logs so you know you're paying full "
+        "input price.",
         scope="host",
     ),
     Field("prompt_cache.ttl", "prompt_cache_ttl", "Cache TTL", "select", "Caching", options=["5m", "1h"], scope="host"),
@@ -477,10 +488,11 @@ FIELDS: list[Field] = [
         "checkpoint.db_path",
         "checkpoint_db_path",
         "Conversation history DB",
-        "string",
+        "path",
         "Knowledge",
         "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
         restart=True,
+        path_kind="file",
     ),
     Field(
         "checkpoint.keep_per_thread",
@@ -554,7 +566,7 @@ FIELDS: list[Field] = [
         "commons.path",
         "commons_path",
         "Shared skills location",
-        "string",
+        "path",
         "Skills",
         "Box-shared skill library read by every agent on this machine. Blank = ~/.protoagent/commons.",
         scope="host",
@@ -676,6 +688,30 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # ── Prompt snapshots (#2243) ──────────────────────────────────────────────
+    Field(
+        "prompts.capture",
+        "prompt_capture_enabled",
+        "Capture system prompts",
+        "bool",
+        "Telemetry",
+        "Snapshot the exact system prompt every model call receives, so any turn's prompt "
+        "can be inspected via 'View prompt' or /prompt. Stays on this machine. Off = "
+        "nothing is recorded and the viewer reports capture disabled.",
+        restart=True,
+        scope="host",
+    ),
+    Field(
+        "prompts.retention_days",
+        "prompt_capture_retention_days",
+        "Prompt retention (days)",
+        "number",
+        "Telemetry",
+        "Auto-prune captured prompts older than this on each new capture (0 = keep forever).",
+        minimum=0,
+        restart=True,
+        scope="host",
+    ),
     # ── Media output store (#1929) ────────────────────────────────────────────
     Field(
         "media.public",
@@ -706,23 +742,34 @@ FIELDS: list[Field] = [
     Field("identity.name", "identity_name", "Agent name", "string", "Identity", ui_hidden=True),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
     Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
+    # These two predate the ADR 0007 fence and are NOT access control — the copy used to
+    # promise a tasks/notes sandbox that no longer exists (tasks went instance-global:
+    # the routes take `project_path` and discard it, `operator_api/routes.py`; notes moved
+    # to a plugin with its own store). Work folders (`filesystem.projects`) is the one
+    # thing that decides what the agent may touch, so say so here — an operator who
+    # reads "allowed dirs" as a grant looks in the wrong place for the wrong knob.
     Field(
         "operator.project_dir",
         "operator_project_dir",
         "Project directory",
-        "string",
+        "path",
         "Identity",
-        "Working directory for the console's tasks/notes (and the agent's "
-        "default project). Always allowed. Blank = the protoAgent directory.",
+        "Which folder the console calls 'this project' — it prefills the setup wizard and "
+        "shows in runtime status. It does NOT grant the agent access to anything: file "
+        "access is Work folders (Tools ▸ Filesystem). Blank = the protoAgent directory.",
     ),
+    # Inert, kept for round-trip: its only enforcement was
+    # `operator_api.paths.resolve_project_path`, which no in-tree caller invokes anymore.
+    # Hidden rather than deleted so existing YAML (and forks reading the key) still load.
     Field(
         "operator.allowed_dirs",
         "operator_allowed_dirs",
         "Allowed project dirs",
         "string_list",
         "Identity",
-        "Extra directories the tasks/notes APIs may touch, beyond the project "
-        "directory and protoAgent (which are always allowed).",
+        "Deprecated and inert — the old operator-console path sandbox, superseded by Work "
+        "folders (`filesystem.projects`, ADR 0007). Kept so existing config still loads.",
+        ui_hidden=True,
     ),
     Field(
         "auth.token",
@@ -1091,6 +1138,15 @@ def is_known_key(key: str) -> bool:
     return any(full == key for _, full, _, _ in _plugin_field_specs())
 
 
+def is_hidden_setting(key: str, hidden: list[str] | None) -> bool:
+    """``settings.hidden`` (#2172) — True when ``key`` is covered by the operator's
+    hide list: an exact dotted key, or anything under a listed group prefix
+    ("goal" hides every ``goal.*`` field; plugin groups like "careercoach" work the
+    same). Used by ``build_schema`` (never rendered) and the settings write/reset
+    APIs (never changed from the UI) — the two-point ``tools.hidden`` pattern."""
+    return any(key == h or key.startswith(h + ".") for h in (hidden or []))
+
+
 def _plugin_field_specs():
     """Plugin-declared settings fields (ADR 0019) as (schema, full_key, key, spec)
     — ``full_key`` is the dotted YAML path ``<section>.<key>`` the save writes to.
@@ -1227,15 +1283,23 @@ def build_schema(
     # `acp.agents.<id>`, so a custom coding agent shows in the runtime + aux-model
     # dropdowns. Empty config ⇒ exactly ACP_MODEL_OPTIONS (the built-in list).
     acp_opts = acp_runtime_options(getattr(config, "acp_agents", None))
+    # Operator hide list (#2172): dropped from the schema entirely — the write path
+    # refuses these keys too (validate_flat / reset), so gone means gone.
+    hidden = list(getattr(config, "settings_hidden", None) or [])
     groups: dict[str, dict[str, Any]] = {}
     for f in FIELDS:
         if f.ui_hidden:
             continue  # in FIELDS for config round-trip, but a dedicated panel owns the UI (#1076)
+        if is_hidden_setting(f.key, hidden):
+            continue  # settings.hidden (#2172) — never rendered, never toggleable back on
         current = getattr(config, f.attr, None)
         entry: dict[str, Any] = {
             "key": f.key,
             "label": f.label,
             "type": f.type,
+            # Only meaningful for `type: "path"` — whether Browse… ends on a folder or a
+            # file. Always emitted so the client can read it without a type check.
+            "path_kind": f.path_kind,
             "section": f.section,
             "description": f.description,
             "restart": f.restart,
@@ -1274,6 +1338,8 @@ def build_schema(
     # YAML path, so apply_updates_to_yaml + secret routing handle it for free).
     plugin_cfg = getattr(config, "plugin_config", {}) or {}
     for sch, full_key, key, spec in _plugin_field_specs():
+        if is_hidden_setting(full_key, hidden):
+            continue  # settings.hidden (#2172) covers plugin-declared fields/groups too
         section_cfg = plugin_cfg.get(sch.section) or sch.defaults
         current = section_cfg.get(key)
         ftype = spec.get("type", "string")
@@ -1282,6 +1348,10 @@ def build_schema(
             "key": full_key,
             "label": spec.get("label", key),
             "type": ftype,
+            # A plugin can declare `type: path` too and gets the same Browse… picker —
+            # plugins hold as many local paths as the core does (vaults, repos, export
+            # dirs), and none of them should be a free-text box either.
+            "path_kind": "file" if spec.get("path_kind") == "file" else "dir",
             "section": group,
             "description": spec.get("description", ""),
             "restart": bool(spec.get("restart", False)),
@@ -1335,10 +1405,19 @@ def build_schema(
     return out
 
 
-def validate_flat(updates: dict[str, Any]) -> tuple[bool, str | None]:
-    """Light per-field validation against the registry before persisting."""
+def validate_flat(
+    updates: dict[str, Any], hidden: list[str] | None = None
+) -> tuple[bool, str | None]:
+    """Light per-field validation against the registry before persisting.
+
+    ``hidden`` is the live ``settings.hidden`` list (#2172): a hidden key is refused
+    outright — the schema never rendered it, so any write to it is either a stale
+    client or an attempt to change a setup-time-locked value through the UI.
+    """
     plugin_keys = {full: spec for _, full, _, spec in _plugin_field_specs()}
     for key, val in updates.items():
+        if is_hidden_setting(key, hidden):
+            return False, f"{key} is locked by settings.hidden"
         f = _BY_KEY.get(key)
         if f is None:
             spec = plugin_keys.get(key)
@@ -1349,6 +1428,11 @@ def validate_flat(updates: dict[str, Any]) -> tuple[bool, str | None]:
                 return False, f"{key} must be a boolean"
             if t == "number" and (not isinstance(val, (int, float)) or isinstance(val, bool)):
                 return False, f"{key} must be a number"
+            # Same guard the core `path` fields get below — a plugin path field is fed by
+            # the same picker, so the same "client sent the whole entry object" mistake
+            # must fail here rather than write a dict into the plugin's config.
+            if t == "path" and not isinstance(val, str):
+                return False, f"{key} must be a string path"
             continue
         if f.type == "bool" and not isinstance(val, bool):
             return False, f"{key} must be a boolean"
@@ -1363,6 +1447,12 @@ def validate_flat(updates: dict[str, Any]) -> tuple[bool, str | None]:
             return False, f"{key} must be a list of strings"
         if f.type == "select" and f.options and val not in f.options:
             return False, f"{key} must be one of {f.options}"
+        # `path` saves a plain string like `string` does — the picker is a rendering
+        # affordance, not a new value shape. Pin the type anyway so a client that sends
+        # the picker's whole entry object ({name, path, kind}) fails loudly here instead
+        # of writing a dict into the YAML.
+        if f.type == "path" and not isinstance(val, str):
+            return False, f"{key} must be a string path"
     return True, None
 
 

@@ -1,7 +1,7 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2 } from "lucide-react";
+import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -11,7 +11,7 @@ import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
 import { QuickSetting } from "./QuickSetting";
-import { api, currentSlug } from "../lib/api";
+import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import type { DiscoveredAgent, FleetAgent } from "../lib/types";
@@ -22,6 +22,12 @@ import type { DiscoveredAgent, FleetAgent } from "../lib/types";
 export function canAddRemote(name: string, url: string): boolean {
   return name.trim().length > 0 && /^https?:\/\/.+/.test(url.trim());
 }
+
+/** The URL slug is the agent's STABLE id, never its (editable) display name — renaming an
+ * agent must not change its URL/bookmarks. `host` is the reserved slug for this instance.
+ * Same rule as the topbar FleetSwitcher, which navigates to the same href; exported (pure)
+ * so the row link's destination is unit-tested without rendering the panel. */
+export const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : a.id);
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
@@ -98,6 +104,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       void delegatesQ.refetch();
     },
   });
+  // The inverse gesture (#2266): unlink a member the focused agent already delegates to.
+  // Hits the same slug-scoped registry the add does, so the removal lands on the focused
+  // agent too — no detour to Settings → Capabilities → Delegates to undo a one-click add.
+  // Like the add, the badge flipping back to the link button IS the success feedback.
+  const removeDelegate = useMutation({
+    mutationFn: (name: string) => api.deleteDelegate(name),
+    onError: (e) => toast({ tone: "error", title: "Couldn't remove delegate", message: errMsg(e) }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.delegates });
+      void delegatesQ.refetch();
+    },
+  });
   const enableDelegates = useMutation({
     mutationFn: async (entry: { name: string; url: string }) => {
       const { config } = await api.config(); // the FOCUSED agent's live config (slug-scoped)
@@ -152,11 +170,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // a slug window, console + A2A reverse-proxied through this hub.
   const addMember = useMutation({
     mutationFn: (d: DiscoveredAgent) => api.addRemoteAgent({ name: d.name, url: d.url }),
-    onSuccess: (res, d) => addedToast(d.name, res.reachable),
+    onSuccess: (res, d) => {
+      addedToast(d.name, res.reachable);
+      // Drop it from the found list HERE, not just on the re-scan below: the rescan is a
+      // round-trip, and until it lands the agent sits in BOTH lists — offering an "Add to
+      // this fleet" button that now 400s ("an agent named … already exists"). The rescan
+      // stays as the authoritative refresh; this is what the operator sees immediately.
+      setDiscovered((list) => (list ? list.filter((x) => x.url !== d.url) : list));
+    },
     onError: (e) => toast({ tone: "error", title: "Couldn't add to fleet", message: errMsg(e) }),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
-      void scan(); // the new member drops out of the discover list
+      void scan(); // authoritative: the new member drops out of the discover list
     },
   });
 
@@ -278,7 +303,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         ) : (
           <ul className="fleet-list">
             {agents.map((a) => {
-              const isActive = (a.host ? "host" : a.id) === slug; // slug = stable id, not name
+              const isActive = slugOf(a) === slug; // slug = stable id, not name
               return (
                 <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
                   {/* A remote's `running` IS its reachability probe (it has no local process),
@@ -308,8 +333,17 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           onEditingChange={(e) => setRenaming(e ? a.id : null)}
                           onCommit={(next) => rename.mutate({ id: a.id, name: next })}
                         />
+                      ) : isActive ? (
+                        a.name // you're already here — a link to this window would be a no-op reload
                       ) : (
-                        a.name
+                        // #2240 — the name is the click-through to that agent's own window. A real
+                        // <a href>, not a click handler, so cmd/middle-click opens it in a NEW window
+                        // — the point of slug routing (ADR 0042) being one window per agent. Same
+                        // destination the topbar FleetSwitcher navigates to; a stopped agent resumes
+                        // on arrival via `activateSlugAgent`, so "not currently open" is not a gate.
+                        <a className="fleet-name-link" href={agentHref(slugOf(a))} title={`Open ${a.name}`}>
+                          {a.name}
+                        </a>
                       )}
                       {a.host ? <Badge status="neutral">this instance</Badge> : null}
                       {a.remote ? (
@@ -342,9 +376,20 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         agent but the one you're on (it can't delegate to itself). */}
                     {!isActive ? (
                       delegateNames.has(a.name) ? (
-                        <span title="A delegate of this agent">
-                          <Badge status="info">delegate</Badge>
-                        </span>
+                        // The badge is the STATE, the button is the ACTION — the pair keeps the
+                        // add/remove symmetric with the link button it replaced. Unlink2 (not
+                        // Trash2) on purpose: the row's Trash2 removes the AGENT, and these two
+                        // destructive-looking icons sit inches apart (#2266).
+                        <>
+                          <span title="A delegate of this agent">
+                            <Badge status="info">delegate</Badge>
+                          </span>
+                          <Button icon variant="ghost" title="Remove as a delegate of this agent (delegate_to)"
+                            disabled={removeDelegate.isPending}
+                            onClick={() => removeDelegate.mutate(a.name)}>
+                            <Unlink2 size={14} />
+                          </Button>
+                        </>
                       ) : (
                         <Button icon variant="ghost" title="Add as a delegate of this agent (delegate_to)"
                           disabled={addDelegate.isPending || !a.a2a}
@@ -370,9 +415,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         </Button>
                       </>
                     ) : null}
-                    {/* The host serves this console — it can't stop or remove itself; its
-                        display name is edited in Settings → Identity instead. */}
-                    {a.host || a.remote ? null : (
+                    {/* The agent serving THIS console can't act on itself — its display name
+                        is edited in Settings → Identity instead. On the host console that's
+                        the host row; in a sister agent's window (where this panel now also
+                        renders) it's that member's row, so the guard keys on the focused slug
+                        as well as `host` — otherwise "Stop"/"Remove" would kill or delete the
+                        very agent serving the window you're in. */}
+                    {a.host || a.remote || isActive ? null : (
                       <>
                         <Button icon variant="ghost" title="Rename (display name only — the id/URL stays)"
                           disabled={rename.isPending}
@@ -472,7 +521,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             ) : (
               <ul className="fleet-list">
                 {discovered.map((d) => (
-                  <li key={d.url} className="fleet-row">
+                  // `--found` marks a DISCOVERY result, not a member. The two lists render
+                  // the same row shape, so without a modifier a `.fleet-row` selector (CSS
+                  // or e2e) can't tell "on the network" from "in the fleet" — which made
+                  // the add-a-remote spec strict-mode-flake the moment both were on screen.
+                  <li key={d.url} className="fleet-row fleet-row--found">
                     <StatusDot status="success" />
                     <div className="fleet-row-main">
                       <span className="fleet-name">{d.name}</span>

@@ -1,3 +1,4 @@
+import designTokens from "@protolabsai/design/tokens.json";
 import { Spinner } from "@protolabsai/ui/data";
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -16,17 +17,67 @@ function pluginIdFromPath(path: string): string {
   return path.match(/\/api\/plugins\/([^/]+)\b/)?.[1] ?? "";
 }
 
-// Curated console theme tokens forwarded to a plugin view so it can match the
-// console look (ADR 0026 theming bridge). Exported so the command palette (ADR 0057)
-// can hand the same 6-key theme to an inline-morphed plugin iframe.
+// The `--pl-*` custom-property names the design package publishes, derived from its
+// tokens.json exactly the way the DS build generates tokens.css: kebab-case each key
+// path under a `--pl` prefix. The top-level `light` block is the light-MODE override
+// set (same names, different values), not extra tokens — skip it. Exported so tests
+// can pin the derived list against the shipped token set.
+const kebab = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+function collectTokenVars(node: Record<string, unknown>, prefix: string, acc: string[]): string[] {
+  for (const [key, value] of Object.entries(node)) {
+    if (prefix === "--pl" && key === "light") continue;
+    const name = `${prefix}-${kebab(key)}`;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      collectTokenVars(value as Record<string, unknown>, name, acc);
+    } else {
+      acc.push(name);
+    }
+  }
+  return acc;
+}
+export const PL_TOKEN_VARS: readonly string[] = collectTokenVars(
+  designTokens as Record<string, unknown>, "--pl", [],
+);
+
+// The active light/dark mode: the explicit `data-theme` force on <html> when the theme
+// machinery set one (agentTheme.ts / the DS ThemePanel), else the OS preference.
+function themeMode(): string {
+  const forced = document.documentElement.getAttribute("data-theme");
+  if (forced) return forced;
+  try {
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+// Console theme forwarded to a plugin view so it can match the console look (ADR 0026
+// theming bridge). One flat record, three layers:
+//   • the original curated six keys (bg/bgPanel/fg/fgMuted/brand/border) — unchanged;
+//     older plugin-kits bridge ONLY these onto --pl-* tokens, so they're the
+//     backward-compat contract (#2225);
+//   • the FULL computed --pl-* snapshot, keyed off @protolabsai/design's tokens.json —
+//     the kit passes --pl-*-form keys straight onto the page's :root, so a view inherits
+//     the operator's whole active theme (spacing, radii, status colors, fonts), not just
+//     the six curated slots;
+//   • `mode` — the current data-theme ("light"/"dark"), so a page can pick
+//     mode-appropriate assets/color-scheme (an unknown key to older kits — ignored).
+// Exported so the command palette (ADR 0057) can hand the same theme to an
+// inline-morphed plugin iframe.
 export function consoleTheme(): Record<string, string> {
   if (typeof window === "undefined") return {};
   const s = getComputedStyle(document.documentElement);
   const g = (n: string) => s.getPropertyValue(n).trim();
-  return {
+  const theme: Record<string, string> = {
     bg: g("--bg"), bgPanel: g("--bg-panel"), fg: g("--fg"),
     fgMuted: g("--fg-muted"), brand: g("--brand-violet-light"), border: g("--border"),
+    mode: themeMode(),
   };
+  for (const name of PL_TOKEN_VARS) {
+    const v = g(name);
+    if (v) theme[name] = v; // an unresolvable var is omitted — the kit skips empties anyway
+  }
+  return theme;
 }
 
 // Host for a plugin-contributed console surface (ADR 0026): a same-origin iframe
@@ -52,6 +103,20 @@ export function PluginView({ view }: { view: PluginViewType }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
+  // Has the frame navigated to the plugin page? Gates the posts below: a mounted-but-not-yet
+  // -navigated iframe is still on about:blank, which INHERITS the console's origin — under the
+  // desktop app that's `tauri://localhost`, so a post targeted at the sidecar origin is refused
+  // outright: "Unable to post message to http://127.0.0.1:7870. Recipient has origin
+  // tauri://localhost." The frame had no listener yet either way, so the post was always a
+  // no-op; gate it and drop the noise.
+  //
+  // Written at the LIFECYCLE EDGES, never mirrored off the `loaded` state during render. Two
+  // things prove navigation, and BOTH are needed: the iframe's own load event, and any message
+  // FROM the frame. The page's script runs (and posts its first `subscribe`) BEFORE the parent
+  // sees `load` — so gating the `since` replay on load alone dropped it and broke reopen
+  // catch-up (#1640). A message can only come from the navigated page; about:blank has no
+  // script. Reset when the frame is re-pointed.
+  const navigatedRef = useRef(false);
   const pluginId = useMemo(() => pluginIdFromPath(view.path), [view.path]);
   // Background delivery (#1640): a `background: true` subscribe from the page asks App
   // to keep this view mounted (hidden) when another surface is active. Store-reported;
@@ -78,6 +143,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
   //   • otherwise → the HTTP status. One retry covers a sub-second race with a hot-mount reload.
   useEffect(() => {
     let cancelled = false;
+    navigatedRef.current = false; // re-pointed frame: back to about:blank until it navigates
     setLoaded(false);
     setError(null);
     setReachable(false);
@@ -145,14 +211,20 @@ export function PluginView({ view }: { view: PluginViewType }) {
     // Pattern matching + since-replay + seq dedupe live in the pure relay
     // (lib/pluginEventRelay.ts) — this effect only wires postMessage to it.
     const relay = createPluginEventRelay({
-      post: (frame) =>
-        frameRef.current?.contentWindow?.postMessage({ type: "protoagent:event", ...frame }, origin),
+      post: (frame) => {
+        if (!navigatedRef.current) return; // pre-navigation frame — see navigatedRef
+        frameRef.current?.contentWindow?.postMessage({ type: "protoagent:event", ...frame }, origin);
+      },
       replaySince,
     });
 
     const onWindowMessage = (e: MessageEvent) => {
       // Only trust messages from THIS iframe's window.
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
+      // It spoke, so it's the navigated plugin page — not the about:blank placeholder. This
+      // is what unblocks the `since` replay below: the page's first `subscribe` beats the
+      // parent's load event, and the replay posts back inside this very handler.
+      navigatedRef.current = true;
       const m = e.data || {};
       if (m.type === "protoagent:ready") {
         // The kit announced it's now listening. It registers its `message` handler
@@ -198,14 +270,16 @@ export function PluginView({ view }: { view: PluginViewType }) {
 
   // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
   // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's
-  // style/data-theme). Re-post the FRESH curated theme to the mounted iframe so an embedded
+  // style/data-theme). Re-post the FRESH theme payload to the mounted iframe so an embedded
   // plugin view repaints WITHOUT a reload — its plugin-kit listens for `protoagent:theme`
   // and re-skins the --pl-* tokens. `handleLoad` only covers the first paint; this covers
   // every subsequent switch. (consoleTheme() reads the now-updated :root vars at fire time.)
   useEffect(() => {
     const onThemeChange = () => {
       const win = frameRef.current?.contentWindow;
-      if (!win) return;
+      // Not navigated yet → about:blank, wrong origin, nobody listening (see navigatedRef).
+      // handleLoad posts the FRESH theme on load, so nothing is lost by skipping here.
+      if (!win || !navigatedRef.current) return;
       try {
         const origin = new URL(apiUrl(src), window.location.href).origin;
         win.postMessage({ type: "protoagent:theme", theme: consoleTheme() }, origin);
@@ -218,6 +292,9 @@ export function PluginView({ view }: { view: PluginViewType }) {
   }, [src]);
 
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
+    // Synchronously, BEFORE postInit: the page can answer with `subscribe` (and its `since`
+    // replay) inside this same tick, well before the setLoaded re-render commits.
+    navigatedRef.current = true;
     setLoaded(true);
     const win = e.currentTarget.contentWindow;
     if (!win) return;
@@ -276,12 +353,18 @@ export function PluginView({ view }: { view: PluginViewType }) {
               // Esc always releases it.
               // allow: clipboard + pointer-lock via Permissions-Policy (no sandbox token
               // exists for clipboard) so copy/paste + pointer capture work in plugin UIs.
+              // allow-downloads: a sandboxed frame cannot start a download without it, so
+              // the artifact panel's Download button (ADR 0092 D2/D3 file artifacts — a
+              // plain <a download>.click()) was refused outright: "Not allowed to download
+              // due to sandboxing". Scoped to the plugin-view frame, which already carries
+              // allow-same-origin + allow-scripts; the artifact plugin's NESTED frame stays
+              // without it, so model-generated code still can't push a file at the operator.
               <iframe
                 ref={frameRef}
                 className="plugin-view-frame"
                 src={apiUrl(src)}
                 title={view.label}
-                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
+                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock allow-downloads"
                 allow="clipboard-read; clipboard-write; pointer-lock"
                 onLoad={handleLoad}
                 onError={() => setError(`The plugin page at ${src} didn’t respond.`)}

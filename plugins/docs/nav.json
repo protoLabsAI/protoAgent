@@ -144,6 +144,10 @@
         {
           "path": "guides/portfolio.md",
           "title": "Portfolio (one PM across boards)"
+        },
+        {
+          "path": "guides/build-with-a-coding-agent.md",
+          "title": "Build out your agent with a coding agent"
         }
       ]
     },
@@ -184,6 +188,10 @@
           "title": "Operator console (React/Tauri)"
         },
         {
+          "path": "guides/python-runtime.md",
+          "title": "Managed Python runtime (desktop)"
+        },
+        {
           "path": "guides/command-palette.md",
           "title": "Command palette (⌘K)"
         },
@@ -204,6 +212,10 @@
     {
       "label": "Operate & deploy",
       "items": [
+        {
+          "path": "guides/cli.md",
+          "title": "The protoagent command (CLI)"
+        },
         {
           "path": "guides/deploy.md",
           "title": "Deploy via GHCR"
@@ -756,6 +768,10 @@
         {
           "path": "adr/0094-managed-python-runtime.md",
           "title": "0094 — Managed Python runtime: execute_code on the frozen desktop app"
+        },
+        {
+          "path": "adr/0095-managed-projects-registry.md",
+          "title": "0095 — Managed projects registry: one place to declare a project"
         },
         {
           "path": "adr/index.md",

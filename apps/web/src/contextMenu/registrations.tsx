@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -222,6 +222,7 @@ registerContextMenu({
     onNewIncognito?: () => void;
     onToggleIncognito?: () => void;
     onRename?: () => void;
+    onExport?: () => void;
     onClose?: () => void;
     onCloseOthers?: () => void;
     onCloseLeft?: () => void;
@@ -244,6 +245,9 @@ registerContextMenu({
         icon: ctx.incognito ? <Eye size={14} /> : <EyeOff size={14} />,
         run: () => ctx.onToggleIncognito?.(),
       });
+      if (ctx.onExport) {
+        out.push({ id: "export", label: "Export as Markdown", icon: <Download size={14} />, run: () => ctx.onExport?.() });
+      }
       out.push({ id: "tab-div", divider: true });
       out.push({ id: "close", label: "Close chat", icon: <X size={14} />, danger: true, run: () => ctx.onClose?.() });
       // Bulk closers, each present only when it has targets (ChatSurface passes the closure

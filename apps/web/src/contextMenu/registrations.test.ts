@@ -89,6 +89,16 @@ describe("chat-tab bulk-close menu", () => {
     expect(got).not.toContain("bulk-div");
   });
 
+  it("offers Export as Markdown only when onExport is provided", () => {
+    const withExport = ids(resolveMenu("chat-tab", { sessionId: "s1", onExport: noop, onClose: noop }));
+    expect(withExport).toContain("export");
+    const withoutExport = ids(resolveMenu("chat-tab", { sessionId: "s1", onClose: noop }));
+    expect(withoutExport).not.toContain("export");
+    // Export is a non-destructive action — it must NOT be marked danger.
+    const items = resolveMenu("chat-tab", { sessionId: "s1", onExport: noop, onClose: noop }) as Item[];
+    expect(items.find((i) => i.id === "export")?.danger).toBeFalsy();
+  });
+
   it("shows no per-tab actions (single or bulk) for the empty-space menu", () => {
     const got = ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }));
     expect(got).toEqual(["new", "new-incognito"]);

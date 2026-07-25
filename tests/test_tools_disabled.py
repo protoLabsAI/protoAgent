@@ -156,3 +156,33 @@ def test_drop_disabled_tools_collects_dropped():
     kept = drop_disabled_tools([alpha, beta], dropped)
     assert [t.name for t in kept] == ["beta"]
     assert [t.name for t in dropped] == ["alpha"]
+
+
+# ── the hidden tier (#2172): a HARD superset of disabled ──────────────────────
+
+
+def test_tools_hidden_denies_at_the_graph(tmp_path):
+    """A hidden tool is dropped from the bound set exactly like a disabled one — the
+    authoritative sync in create_agent_graph unions hidden into the denylist."""
+    names = _bound_names(create_agent_graph(_cfg(tmp_path, tools_hidden=["run_command"])))
+    assert "run_command" not in names
+    assert "read_file" in names  # only the named tool is denied
+
+
+def test_tools_hidden_denies_a_plugin_tool(tmp_path):
+    @tool
+    def secret_plugin_tool() -> str:
+        """A plugin tool an admin wants gone entirely."""
+        return "ok"
+
+    g = create_agent_graph(_cfg(tmp_path, tools_hidden=["secret_plugin_tool"]), extra_tools=[secret_plugin_tool])
+    assert "secret_plugin_tool" not in _bound_names(g)
+
+
+def test_tools_hidden_roundtrips_through_config(tmp_path):
+    """tools.hidden parses off the same tools: block as tools.disabled."""
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig.from_dict({"tools": {"disabled": ["a"], "hidden": ["b", "c"]}})
+    assert cfg.tools_disabled == ["a"]
+    assert cfg.tools_hidden == ["b", "c"]

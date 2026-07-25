@@ -20,6 +20,12 @@ Two wire facts these tests pin, both easy to get wrong from the 0.3 docs:
   ``ParseDict``s params strictly, sending one is a ``-32602``
   (``test_v0_3_nested_push_config_shape_is_rejected``).
 
+The ``_scripted_push_app`` tests pin the client's TASK_NOT_FOUND retry
+(``_rpc_until_task_visible``): a just-started task is live in the active
+registry before its store write lands, so the first push-config call can race
+it (#2230). The client retries exactly that error with a bounded backoff; the
+scripted server makes the race deterministic instead of timing-dependent.
+
 The last test is a genuine end-to-end delivery: a real ``BasePushNotificationSender``
 POSTs over real TCP to ``evals/webhook.py``'s listener, so ``capture.received``
 is proof the agent actually called the webhook.
@@ -41,7 +47,7 @@ from a2a.server.tasks import (
     InMemoryTaskStore,
 )
 from a2a.types import AgentSkill
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 import protolabs_a2a as pa
 import evals.client as ec
@@ -213,6 +219,92 @@ async def test_set_push_config_round_trips(monkeypatch):
     finally:
         gate.set()
         await asyncio.wait_for(streaming, 10)
+
+
+def _scripted_push_app(fail_first_n: int) -> tuple[FastAPI, list[str]]:
+    """A scripted ``/a2a`` endpoint for pinning the client's retry behavior.
+
+    Answers the first ``fail_first_n`` calls with the exact TaskNotFound frame
+    a2a-sdk emits (code ``-32001``) and succeeds after — the deterministic
+    stand-in for the registration race, where a just-started task is live in
+    the active registry before its store write lands (#2230). Returns
+    ``(app, calls)``; ``calls`` logs each JSON-RPC method received.
+    """
+    calls: list[str] = []
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def a2a(request: Request) -> dict:
+        body = await request.json()
+        calls.append(body["method"])
+        if len(calls) <= fail_first_n:
+            return {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "error": {"code": -32001, "message": "Task not found"},
+            }
+        return {
+            "jsonrpc": "2.0",
+            "id": body["id"],
+            "result": {"taskId": body["params"]["taskId"], "url": body["params"].get("url", "")},
+        }
+
+    return app, calls
+
+
+@pytest.mark.asyncio
+async def test_set_push_config_retries_once_when_task_is_not_yet_visible(monkeypatch):
+    """Deterministic reproduction of the #2230 flake: the server says
+    TASK_NOT_FOUND once (task not in the store yet), then succeeds. The client
+    absorbs it — exactly one retry, then the created config comes back."""
+    app, calls = _scripted_push_app(fail_first_n=1)
+    client = _route(monkeypatch, app)
+
+    created = await client.set_push_config("task-1", "https://example.test/hook")
+
+    assert created["taskId"] == "task-1"
+    assert calls == ["CreateTaskPushNotificationConfig"] * 2  # one retry, no more
+
+
+@pytest.mark.asyncio
+async def test_set_push_config_gives_up_after_bounded_retries(monkeypatch):
+    """A genuinely unknown task still fails: TASK_NOT_FOUND on every attempt
+    exhausts the bounded backoff and the error propagates."""
+    app, calls = _scripted_push_app(fail_first_n=10_000)  # never succeeds
+    client = _route(monkeypatch, app)
+    monkeypatch.setattr(ec, "_TASK_VISIBLE_BACKOFF_S", 0.0)  # keep the exhaustion instant
+
+    with pytest.raises(ec.A2ARpcError) as excinfo:
+        await client.set_push_config("no-such-task", "https://example.test/hook")
+
+    assert excinfo.value.is_task_not_found
+    assert len(calls) == ec._TASK_VISIBLE_ATTEMPTS  # bounded, not infinite
+
+
+@pytest.mark.asyncio
+async def test_set_push_config_does_not_retry_other_rpc_errors(monkeypatch):
+    """Only TaskNotFound is transient — a ``-32602`` (wrong param shape, e.g.
+    the 0.3 nested config) raises on the first call, no retry."""
+    calls: list[str] = []
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def a2a(request: Request) -> dict:
+        body = await request.json()
+        calls.append(body["method"])
+        return {
+            "jsonrpc": "2.0",
+            "id": body["id"],
+            "error": {"code": -32602, "message": "Invalid parameters"},
+        }
+
+    client = _route(monkeypatch, app)
+
+    with pytest.raises(ec.A2ARpcError) as excinfo:
+        await client.set_push_config("task-1", "https://example.test/hook")
+
+    assert not excinfo.value.is_task_not_found
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

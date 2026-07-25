@@ -283,6 +283,62 @@ def test_instance_scoping_isolates_state(monkeypatch, tmp_path):
     assert _arts(art) == []  # the roxy instance has its own (empty) state
 
 
+# ── the full-body-write nudge (#2257) ──────────────────────────────────────────
+
+
+def _tmp_file(tmp_path, name="doc.txt", content=b"hello"):
+    f = tmp_path / name
+    f.write_bytes(content)
+    return str(f)
+
+
+def _saved_id(out: str) -> str:
+    return out.split("Saved file artifact ")[1].split(" ")[0]
+
+
+def test_repeated_file_saves_draw_a_nudge(monkeypatch, tmp_path):
+    # Field case: 11 saves of the same artifact in one turn. The third full-body
+    # write inside the window carries the batching nudge; the turn never breaks.
+    art = _load(monkeypatch, tmp_path)
+    p = _tmp_file(tmp_path)
+    out = art.save_file_artifact.invoke({"path": p})
+    art_id = _saved_id(out)
+    assert "NOTE:" not in out
+    assert "NOTE:" not in art.save_file_artifact.invoke({"path": p, "artifact_id": art_id})
+    out3 = art.save_file_artifact.invoke({"path": p, "artifact_id": art_id})
+    assert "full-body write #3" in out3 and "Batch" in out3
+
+
+def test_rewrites_count_but_targeted_updates_never_nudge(monkeypatch, tmp_path):
+    # update_artifact is the cheap path we nudge TOWARD — it must stay exempt.
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<a>1</a>", "title": "T"})
+    for old, new in [("1", "2"), ("2", "3"), ("3", "4"), ("4", "5")]:
+        out = art.update_artifact.invoke({"old_string": old, "new_string": new})
+        assert "NOTE:" not in out
+    assert "NOTE:" not in art.rewrite_artifact.invoke({"code": "<b>x</b>"})
+    assert "NOTE:" not in art.rewrite_artifact.invoke({"code": "<b>y</b>"})
+    out3 = art.rewrite_artifact.invoke({"code": "<b>z</b>"})
+    assert "full-body write #3" in out3
+
+
+def test_nudge_window_expires(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    p = _tmp_file(tmp_path)
+    art_id = _saved_id(art.save_file_artifact.invoke({"path": p}))
+    art.save_file_artifact.invoke({"path": p, "artifact_id": art_id})
+    real_now = art._now
+    monkeypatch.setattr(art, "_now", lambda: real_now() + art._SAVE_NUDGE_WINDOW_MS + 1)
+    # Old stamps aged out — the counter restarts instead of nagging forever.
+    assert "NOTE:" not in art.save_file_artifact.invoke({"path": p, "artifact_id": art_id})
+
+
+def test_tool_descriptions_teach_compose_once(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    assert "save ONCE" in art.save_file_artifact.description
+    assert "batch your changes into one rewrite" in art.rewrite_artifact.description
+
+
 # ── the routes (the split + gating contract) ───────────────────────────────────
 
 
@@ -325,6 +381,41 @@ def test_data_routes_on_the_gated_prefix(monkeypatch, tmp_path):
     hist = c.get("/api/plugins/artifact/history").json()
     assert len(hist["artifacts"]) == 1 and len(hist["artifacts"][0]["versions"]) == 2
     assert hist["current"] == hist["artifacts"][0]["id"]
+
+
+def test_history_is_conditional_etag_304(monkeypatch, tmp_path):
+    """#2256: the panel polls /history continuously — an unchanged store must answer
+    with an empty 304 (matched If-None-Match), and any mutation must rotate the tag."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    r1 = c.get("/api/plugins/artifact/history")
+    etag = r1.headers.get("etag")
+    assert r1.status_code == 200 and etag
+
+    r2 = c.get("/api/plugins/artifact/history", headers={"If-None-Match": etag})
+    assert r2.status_code == 304
+    assert r2.headers.get("etag") == etag
+    assert not r2.content  # 304 carries no body — the panel skips all work
+
+    art.show_artifact.invoke({"kind": "svg", "code": "<x/>", "title": "T"})
+    r3 = c.get("/api/plugins/artifact/history", headers={"If-None-Match": etag})
+    assert r3.status_code == 200  # store changed → old tag no longer matches
+    assert r3.headers.get("etag") and r3.headers.get("etag") != etag
+    assert len(r3.json()["artifacts"]) == 1
+
+
+def test_shell_polls_adaptively_with_etag(monkeypatch, tmp_path):
+    """The shell page's poll loop (#2256): conditional fetch, 304 short-circuit,
+    idle backoff constants, and no flat setInterval driver."""
+    art = _load(monkeypatch, tmp_path)
+    html = art._SHELL_HTML
+    assert "If-None-Match" in html
+    assert "304" in html
+    assert "POLL_IDLE_MS" in html and "POLL_FAST_MS" in html
+    assert "setInterval(poll" not in html  # the flat 1.5s driver is gone
 
 
 def test_delete_route_removes_the_artifact(monkeypatch, tmp_path):
@@ -439,7 +530,7 @@ def test_shell_page_is_four_rules_compliant(monkeypatch, tmp_path):
     assert 'import(window.__base + "/_ds/plugin-kit.js")' in html
     assert 'type="module"' in html
     # rules 2+3 — gated data via the kit's slug-aware authed fetch.
-    assert 'apiFetch("/api/plugins/artifact/history")' in html
+    assert 'apiFetch("/api/plugins/artifact/history"' in html  # conditional fetch adds an init arg (#2256)
     # nested artifact frame stays sandboxed with NO same-origin (the isolation model);
     # allow-pointer-lock lets game/canvas artifacts capture the pointer (protoAgent #1443).
     assert 'sandbox="allow-scripts allow-pointer-lock"' in html

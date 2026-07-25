@@ -1,6 +1,6 @@
 # 0077 — Adversarial code-review workflow + the findings convention
 
-- Status: Proposed
+- Status: Accepted (recipe live — the /code-review findings engine)
 - Date: 2026-07-06
 - Builds on: ADR 0002 (declarative workflow engine — the DAG this recipe runs on),
   ADR 0011 (deep-research adversarial roles — the reviewed-by-strangers pattern this

@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An agent you just added from network discovery no longer lingers in the "found" list.**
+  Adding a discovered protoAgent as a remote member dropped it from the found list only on
+  the follow-up re-scan, so for one round-trip it sat in both lists — still offering an "Add
+  to this fleet" button that answers `400 an agent named … already exists`. It's now removed
+  the moment the add succeeds, with the re-scan still doing the authoritative refresh.
+  Discovery rows also carry their own `fleet-row--found` modifier, so a selector can finally
+  tell "on the network" from "in the fleet" — the two lists render an identical row shape.
+
+### Changed
+- **Every sister agent gets the fleet surfaces, not just the host console (ADR 0048 §8).**
+  "New agent" and "Fleet settings" in the header switcher, the ⌘K **Fleet Room**, and
+  **Settings ▸ Box ▸ Fleet** all render in a fleet member's window now. They were gated to
+  the host to stop *nested* agents, but that fear never applied here: `/api/fleet` and
+  `/api/archetypes` are hub paths (never slug-scoped), so from `/app/agent/<slug>/` those
+  surfaces were already driving the **hub's** fleet — the same roster, the same members to
+  start and stop, the same fleet to create into. Open a sister agent, and the fleet is
+  reachable without a trip back to the host window.
+
+  The gate now asks the one question that actually distinguishes the nesting case: is this
+  a spawned member reached **directly on its own port**? There its `/api/fleet` really is a
+  fleet-of-one and creating would spawn a grandchild the hub never sees, so the items stay
+  disabled with a tooltip pointing at the host.
+
+  Two guards came along with it, since they only became reachable once member windows had
+  these panels: a window can no longer **Stop** or **Remove** the agent that serves it (the
+  fleet panel row and the Fleet Room roster both keyed on "is the host" — correct only on
+  the host console, and a Stop on your own row killed the console you were standing in).
+  The Box group narrows rather than disappears off the host — Overview and Telemetry read
+  the focused agent's own endpoints and stay host-only — which is also what makes the
+  "Fleet settings" deep-link resolve instead of falling back to an unrelated section.
+
+## [0.115.0] - 2026-07-25
+
 ### Added
 - **Opt-in per-step `timeout` in the workflow engine, with graceful degradation.** A recipe
   step may declare a positive `timeout` (seconds). Exceeding it is *degradation, not failure*:
@@ -21,6 +55,637 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores the key, so recipes can declare it ahead of the feature. This gives the pr-reviewer
   panel a way to cap its slowest finder (the review latency floor and top exhaustion cause)
   without taking the whole panel down to no verdict. (#2297)
+- **Managed projects are visible in the console, and it tells you when they aren't in
+  effect (ADR 0095 D5).** `GET /api/projects` plus a read-only **Managed projects** list at
+  the top of the Work folders dialog: each registered project with its GitHub repo, its
+  access mode (read-write / read-only / no delete / no fs), and whether its folder is
+  actually there.
+
+  The part that matters is the honesty about precedence. An explicit `filesystem.projects`
+  **wins** over the registry — that's what makes ADR 0095 non-regressing — which means a
+  fully-populated registry can be sitting there driving nothing at all. Rather than show a
+  tidy list of projects that have no effect, the panel says so outright and points at the
+  Work folders below as the reason. Registration itself is still a config-file edit; this
+  slice is deliberately read-only, because the folder editor's save path *replaces*
+  `filesystem.projects` and writing back a registry-derived list would silently materialize
+  the projection and sever the registry link.
+
+- **New guide — Build out your protoAgent with a coding agent.** A narrative how-to
+  (`docs/guides/build-with-a-coding-agent.md`) for growing a forked agent through a
+  pipeline instead of a keyboard: operator → project-manager agent → board → ACP coder
+  delegates → PRs. Covers standing up the `project-manager` archetype, the `coders`
+  tier map, the human intake gate, and a dedicated gates section making the claim
+  explicit — the loop's autonomy is downstream of its gates (checks.yml,
+  `local_gate_cmd`, `review_gate`, the bounded `ci_fix_max`/`rebase_fix_max` rounds),
+  and green is not a gate unless red was reachable. Wired into the VitePress sidebar
+  and the regenerated docs-plugin nav.
+- **A Social Marketing archetype — the fifth starter agent.** Pick it in the new-agent
+  picker or the setup wizard and you get a social marketing manager: it holds the brand's
+  voice, plans a balanced calendar, drafts native to each platform, lints its own copy
+  against per-surface rules, and hands back a copy-ready pack. Data only, per ADR 0042 —
+  a soul preset plus one catalog row pointing at the
+  [social-stack](https://github.com/protoLabsAI/social-stack) bundle (social-plugin +
+  the builtin artifact and notes surfaces), no new core seams. Standard tier and
+  deliberately **not** gated behind a document runtime, since it drives none.
+
+  **It never posts.** No platform credentials, no API keys, no outbound calls — the
+  agent produces the content and a person publishes it. That's a decision, not a gap:
+  platform APIs are the expensive, brittle half (each its own OAuth app, review, and
+  bill), and an autonomous poster's failure mode isn't a typo, it's a confident wrong
+  post that's permanent and screenshot-able. Everything the stack builds is identical
+  whether a person or an API sends it.
+- **The plugins that ship with protoAgent now appear in Discover (#2249).** Discover listed twenty
+  third-party plugins and exactly one bundled one — while `docs`, `notes` and `craft` were on by
+  default and already running in your instance, invisible in the surface built for finding out what
+  plugins do. Twelve of the fourteen in-tree plugins are now listed, each with a `bundled` pill
+  instead of an Install button (enabling one is a config change, not an install). `delegates` (always
+  loaded, not toggleable) and `hello` (the copy-me scaffold) stay out, with the reason recorded.
+- **Installed plugins say what they do (#2248).** The Plugins table rendered a plugin's *name* and
+  nothing else descriptive, so the name had to smuggle in its purpose — hence `Coder (execution-grounded
+  code-solve)`. Each row now carries its manifest description under the name (clamped to two lines,
+  full text on hover), and the row search matches it: "which plugin does X?" is the same question the
+  tool-name search already answered, asked in prose.
+- **Fleet rows are clickable, and a delegate can be unlinked where you linked it (#2240, #2266).**
+  Settings → Fleet listed every agent and gave you no way to reach one — the name is now a link to
+  that agent's own window (cmd/middle-click opens it in a new one; a stopped member resumes on
+  arrival). And adding a member as a delegate was one click while *undoing* it meant a trip to
+  Settings → Capabilities, because the row showed a `delegate` badge and no action; the badge now
+  carries an unlink button on the same registry.
+- **The desktop app uses the real OS folder chooser for path settings (#2265).** The in-app browser
+  added in #2264 walks the *server's* filesystem, which is the only thing that can work when the
+  console is configuring a machine it isn't running on — and it stays the default. But in the desktop
+  app's own window the two machines are the same, and there you now get the actual system chooser:
+  path autocomplete, `~` expansion, `/` to jump, Finder/Explorer favourites, network volumes. Only in
+  that window — a console focused on a fleet member may be pointed at another box entirely, so it
+  keeps the server-side browser rather than name a folder that machine doesn't have.
+- **The desktop app now emits `system.wake` (#1932, ADR 0074).** ADR 0074 defined three
+  lifecycle events, but nothing ever *originated* the third — so `lifecycle_hooks` reactions
+  meant to fire when you come back (resume interrupted work, refresh state, check the inbox)
+  never fired at all. When the desktop window returns to the foreground the shell now publishes
+  `system.wake` on the event bus, completing the set alongside `app.loaded` and `agent.active`.
+  Debounced to once per 60 s so alt-tabbing doesn't spam it, and the window's own boot focus is
+  suppressed (you just got `app.loaded`). Foreground-focus is the v1 signal — true OS sleep/wake
+  needs native power observers, a later lift.
+
+- **One place to declare a project (ADR 0095).** protoAgent asked for the same project in
+  four different boxes — its path as a work folder, its `owner/name` in the GitHub repo
+  list, its path *again* as the board's repo — with nothing cross-checking that the three
+  named the same thing. Move a checkout and the board points at the old path while the fs
+  fence points at the new one, silently. A new top-level `projects:` list is now the one
+  place: `{name, path, github, default_branch}` plus the access bits, and the other
+  settings read from it.
+
+  A registered project is fenced **read-write by default**; `write: false` makes it
+  read-only, `no_delete: true` allows create/edit but never delete, and `fs: false`
+  registers a project for GitHub/board purposes with no filesystem reach at all. An
+  explicit `filesystem.projects` still wins over the registry, so existing config and
+  forks load byte-identically and nothing migrates on upgrade.
+
+  This release wires the filesystem fence; the GitHub and board projections follow in
+  those plugins.
+- **Folder pickers for every path setting — no more typing a path and hoping.** Work
+  folders, the project directory, the conversation-history DB, and the shared-skills
+  location were all free-text boxes, and typing is the one input method that can't tell
+  you the path doesn't exist. That's expensive here: an unusable work folder is skipped
+  when the fs tools are built, and if it was the only root the agent loses `read_file` /
+  `list_dir` / `write_file` entirely. Each of these now carries a **Browse…** button
+  opening a folder browser; picking can only ever produce a directory that's really
+  there. Typing/pasting still works for anyone who knows the path.
+
+  The browser lists the **server's** filesystem (`GET /api/fs/browse`, read-only, names
+  and kinds, never contents), because the console routinely configures a machine it
+  isn't running on — tailnet, fleet members, Docker. The browser-native pickers can't
+  serve this: `webkitdirectory` yields the *client's* files under a fake root and
+  `showDirectoryPicker()` an opaque handle with no path at all. Listing necessarily
+  reaches outside the fs fence — you're choosing what to fence — which grants nothing
+  new: the same operator could already type any absolute path into the same field.
+
+  Settings gains a `path` field type (with `path_kind: dir|file`), so this is one
+  declarative flag rather than a per-field hack — plugin-declared path fields get the
+  picker for free.
+
+- **Middleware warnings now reach the console feed (#2262).** New `activity.emit()` seam:
+  the server binds the per-instance Activity feed at boot, and anything below it (graph
+  middleware, infra) appends operator-relevant notices best-effort — a no-op before
+  binding, never raising. First consumer: the prompt-cache watchers (#2255) — "caching
+  is not engaging for <model>" and "provider rejected cache_control" now show up in the
+  Activity surface instead of dying in agent.log.
+
+- **Artifacts nudge away from the save-loop (#2257).** The field pattern behind one
+  1.5M-token turn: eleven `save_file_artifact` revisions of the same file, each one
+  round-tripping the full body through the conversation. The tools now teach
+  compose-once (save/rewrite descriptions say to batch and write when complete), and a
+  third full-body write to the SAME artifact within a few minutes carries a nudge in the
+  tool result pointing at batching or `update_artifact` (the targeted path, deliberately
+  exempt). A nudge, never a block — turns keep working.
+
+### Changed
+- **Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).**
+  The archetype preset gains a fix-round rule as the last **How I work** bullet: a fix to
+  an open PR routes to that feature (the loop's CI-bounce requeues gate/CI failures, the
+  board's review requeue carries review findings to the same branch), never a fresh card —
+  so check the board and open PRs before creating any feature. The "pain points get filed
+  as issues" line, which assumed every PM has a write tool, is replaced with file-it-or-
+  hand-it-over: file myself when I have the tool, hand the operator a finished body when I
+  don't, never let the finding evaporate. A new honesty rule follows — an untooled action
+  is reported as a request with a ready body, never claimed as a finished filing. Generic
+  to any repo the PM is pointed at; distilled from a dogfood arc.
+
+- **Prompt caching is attempt-by-default, and failure is loud (#2255).** Caching used to
+  be gated on an Anthropic-looking model NAME, which silently disabled it for every
+  gateway alias — one field turn on `protolabs/fast` burned 1.5M input tokens with zero
+  cache reads and nothing said a word. `cache_control` now attaches for every model:
+  a provider that rejects the blocks gets one automatic retry without them and falls
+  back to plain delivery for that model for the session (warned once); a provider that
+  silently ignores them (consecutive calls with a cacheable-size prefix and zero cache
+  activity in usage) draws a once-per-model WARNING naming it. `force: true` now means
+  "never auto-fall back". The cache warmer's matching name gate is gone too — warming
+  is already double-opt-in.
+- **Settings stops describing two dead directory fences.** *Project directory* and
+  *Allowed project dirs* read like they gate the agent's file access; neither does, and
+  their copy promised a tasks/notes sandbox that no longer exists — tasks became one
+  instance-scoped store (the routes take `project_path` and discard it) and notes moved
+  to a plugin with its own store. `operator.allowed_dirs` is now **deprecated and
+  hidden**: its only enforcement was `operator_api.paths.resolve_project_path`, which no
+  in-tree caller invokes, so the field gated nothing while looking like a security knob.
+  The key stays in `FIELDS` (ui_hidden) so existing YAML round-trips untouched.
+  *Project directory* keeps its editor and now says what it really does — names the
+  console's project for the setup wizard and runtime status, grants no file access. The
+  one fence that decides what the agent may read and write is **Work folders**
+  (`filesystem.projects`, ADR 0007), and the guide + env-var reference now say so
+  instead of naming `operator.allowed_dirs` as "the filesystem security fence".
+
+### Fixed
+- **The generated OpenShell sandbox policy no longer locks the agent out of its own
+  workspace (#2281).** `scripts/gen_openshell_policy.py` read the raw
+  `filesystem.projects` config field, which is *empty* on a default install — the fs fence
+  falls back to the workspace directory rather than listing it explicitly. So the emitted
+  policy carried no project paths at all, and because Landlock is deny-by-default, it
+  denied the agent read/write on the one directory its filesystem toolset is actually
+  fenced to. The generator now reads the effective fence
+  (`effective_filesystem_projects()`), which also picks up the ADR 0095 `projects:`
+  registry — including its `fs: false` opt-out — for free.
+
+- **The artifact panel stops hammering /history (#2256).** The shell polled the full
+  store every 1.5s flat while visible — 157 requests in one 7-minute field session, 44%
+  of the member's log lines. The route is conditional now (weak mtime+size ETag; a
+  matched `If-None-Match` answers an empty 304 before the store is even read) and the
+  panel's cadence is adaptive: fast while the store is actually changing or a render
+  verdict just posted, decaying to an 8s idle tick, with an immediate refresh kick on
+  window re-focus. Idle cost drops from ~40 full-store reads a minute to ~7 empty 304s.
+- **/v1 non-streaming returns the final message with an honest `finish_reason` (#2234).**
+  A turn cut off by LangGraph's recursion limit / the tool loop's `max_iterations` came
+  back with every assistant message of the turn joined together — presenting a mid-loop
+  narration as the completed answer — and always claimed `finish_reason: "stop"`, so a
+  stateless driver couldn't tell "finished" from "died mid-flight". The non-streaming
+  handler now returns only the LAST assistant message, and reads the thread's
+  checkpointed state to report `finish_reason: "length"` (the OpenAI value for hitting a
+  limit) when the turn hard-stopped: the thread ends in a `ToolMessage`, or in an
+  `AIMessage` still carrying unresolved `tool_calls` — the shape of both real captures on
+  the issue. Clean turns keep `"stop"`; the streaming path is unchanged.
+
+## [0.114.0] - 2026-07-24
+
+### Fixed
+- **One bad work folder no longer takes away every filesystem tool (#2251).** Saving a work
+  folder that wasn't an existing absolute directory silently unbound the whole fenced fs
+  toolset: the unusable root was skipped, the registry came out empty, and because an
+  explicit `filesystem.projects` list suppresses the default `workspace` fallback, the agent
+  lost `read_file` / `list_dir` / `write_file` altogether — with one INFO log line to say why.
+  A relative path made it worse, resolving against the *server's* cwd (`/` under the desktop
+  sidecar) rather than the operator's. `POST /api/settings/filesystem-projects` now refuses
+  relative, missing, and not-a-directory paths with a reason; `GET` reports per-row `exists`
+  so the Work-folders editor warns when a saved folder goes missing later (renamed, unmounted
+  volume), including the "none of these exist, the tools are unbound" case; and the
+  all-unusable path logs at WARNING naming the folders. Plugin-iframe `postMessage` posts are
+  also gated on the frame having navigated — an unloaded iframe is still `about:blank`, which
+  inherits the console's origin (`tauri://localhost` in the desktop app), so every pre-load
+  post was refused by the browser and only ever produced console noise.
+
+### Added
+- **The prompt viewer shows where your context budget goes (#2243, P2).** Both prompt
+  composers now annotate what they build — `build_system_prompt_parts()` labels the
+  stable prefix (SOUL · Subagents · Managed projects · Operating model · Guidelines)
+  and `KnowledgeMiddleware` labels the dynamic tail (Injected memory with its
+  id-attributed counts · Skills index · Working state) — so every captured call carries
+  its real section boundaries, never a marker-parse reconstruction. The View-prompt
+  dialog renders a per-section budget breakdown (proportional bars + ≈token estimates,
+  context rows tinted), and `/prompt` gains a one-line budget in its note. Sections are
+  stored with the snapshot (per-blob for the deduped prefix, per call for the tail);
+  pre-P2 rows read back as unsegmented and even gain stable-prefix labels retroactively
+  when the same blob is captured again.
+- **See the exact system prompt for any turn (#2243, P1).** Most agent systems hide the
+  prompt; protoAgent now captures what each model call ACTUALLY received. A new
+  `PromptCaptureMiddleware` (directly after PromptCache — the one seam where the final
+  request exists) snapshots the stable prefix hash-deduped + the volatile context tail
+  per call, with the call's real token usage, into an instance-scoped
+  `prompt-snapshots.db` with in-write retention (`prompts.capture` on by default,
+  `prompts.retention_days` = 30). Every assistant message grows a **View prompt** action
+  (per-call tabs, raw text, copy, usage), and a client-side **/prompt** command drops the
+  session's last captured prompt into the thread as an ephemeral note. Deleting a chat
+  purges its snapshots — prompts never outlive their conversation. Read surface:
+  `GET /api/prompts/{task_id}` + `GET /api/prompts/last`.
+
+### Docs
+- **The craft plugin now says what it is (#2247).** Its README, module docstring, and the
+  root README row all claimed four skills; there are six — `/due-diligence` and
+  `adr-authoring` were undocumented everywhere. The `adr-authoring` omission mattered
+  most: it's the one skill in the plugin deliberately left agent-retrievable (not
+  `user_only`), so agent-authored ADRs meet the house bar unprompted, and nothing said
+  so. Docs now split the set into the five slashes you type vs. what the agent reaches
+  for on its own. The manifest name became `Craft (engineering slash commands)` —
+  following `Coder (execution-grounded code-solve)` — because the console's plugin table
+  renders only `name` and no view shows the description, so "Craft" alone was the whole
+  user-facing signal. `id: craft` is unchanged, so `plugins: { disabled: [craft] }` keeps
+  working.
+- **Spec: system prompt viewer (#2243).** `docs/plans/system-prompt-viewer.md` — the
+  researched plan for per-turn exact-prompt visibility: capture-at-call-time in a
+  middleware slot directly after PromptCache (the one seam where the final request
+  exists), hash-deduped stable blob + per-call dynamic tail, task_id-keyed store with
+  in-write retention, View-prompt dialog + /prompt command, and per-section context
+  budgets in P2. All three open questions from the issue resolved.
+
+## [0.113.0] - 2026-07-24
+
+### Docs
+- **Managed Python runtime gets its guide, and the front doors catch up with the product.**
+  New `guides/python-runtime.md` covers the desktop one-click interpreter install
+  (ADR 0094) end to end — what needs it, both install paths, the pre-failure status
+  surfaces, the stale-baseline refresh, and the API. The README and docs landing now
+  mention archetypes (the wizard picks one, not a "persona preset"), the `execute_code`/
+  `coder`/`friction`/`orgchart` plugins, workflow `gate: human` approval steps, the ⌘K
+  palette + Fleet Room, and `/export` + `/btw`. protobanana left the core roadmap (it's a
+  plugin, tracked in its own repo and the directory), and the internal `plans/`/`design/`
+  working docs are excluded from the published site.
+- **Documentation audit — stale claims fixed, missing reference material added.** The docs
+  landing no longer claims Discord/Google ship first-party (they're official external
+  installs) or that cost-v1 rides a DataPart (it's the artifact metadata map); the README
+  points plugin publishers at `config/plugin-directory.yaml` instead of the generated
+  overlay; the desktop README's retired `PROTOAGENT_CONFIG_DIR` → `PROTOAGENT_HOME`; the
+  releasing guide's branch-protection table lists the real seven CI checks (incl. the
+  changelog gate) instead of three; `tools.hidden` + `settings.hidden` are documented in
+  the configuration reference at last; the ADR index gains its five missing rows
+  (0079/0086/0087/0088/0092), corrects eight shipped ADRs still marked Proposed, and is
+  re-sorted; the orphaned `protoagent` CLI guide joins the sidebar and the guides overview
+  (with four other unlisted guides); and the plugins/fleet/desktop guides pick up the
+  Installed table, archetype `requires`, and launch-time update check.
+
+### Added
+- **Archetypes can declare a `tier`, and the picker files the advanced ones behind a
+  toggle.** Catalog entries and bundle `archetype:` manifests take an optional
+  `tier: "standard" | "advanced"` (absent = standard). The new-agent picker and the setup
+  wizard's persona step now split the flat card grid: standard archetypes render inline as
+  before, while advanced ones (out of the box, Project Manager and Design System Engineer)
+  collapse under a chevron "Advanced (N)" section so the picker leads with the everyday
+  choices. Picking a card in either section behaves identically. Archetypes with no `tier`
+  field are unchanged — they stay inline as standard.
+
+### Changed
+- **The last two raw `<table>`s now use the DS `Table` primitives (#2232).** The chat
+  generative-UI table renderer (`ChatComponent`) and the memory injection-record table
+  (`MemorySurface`) rendered bare `<table>`/`<th>`/`<td>`, so they didn't inherit DS table
+  theming and drifted from the Plugins/Telemetry surfaces that already use `Table/THead/
+  TBody/Tr/Th/Td`. Swapped both; `MemorySurface`'s clickable rows keep their role /
+  keyboard / aria behaviour via `Tr`'s prop pass-through (and pick up `pl-tr--interactive`
+  automatically). Retired the now-redundant per-file table CSS — only genuine deltas
+  remain (a keyboard `:focus-visible` row style the DS doesn't cover, two column tweaks),
+  which also drops two dead `--pl-color-text-muted`/`--pl-color-surface-2` var refs.
+- **Plugin views now receive the console's full theme, not six curated colors (#2225).**
+  The ADR 0026 theming bridge — `consoleTheme()`, carried by the `protoagent:init` and
+  `protoagent:theme` postMessage payloads — now includes the complete computed `--pl-*`
+  token map (keyed off `@protolabsai/design`'s tokens.json, so the list tracks the design
+  package) plus the active light/dark `mode`. The plugin-kit already passes `--pl-*`-form
+  keys straight onto a page's `:root`, so an embedded view inherits the operator's whole
+  active theme — spacing, radii, status colors, fonts — not just the six bridged slots.
+  The original six curated keys ride along unchanged, so older plugin-kits keep working.
+
+### Fixed
+- **Host-path bundle installs now seed the bundle's MCP servers and secrets (#2118).**
+  Installing a bundle on the host (SetupWizard, Discover, install-from-URL, the ops/MCP
+  surface) silently ignored its declared `mcp:` templates and `secrets:` — they only worked
+  through workspace create. The host path now uses the same seeding helpers with identical
+  semantics: operator/env-resolved inputs seed servers enabled, unresolved required inputs
+  land visible-but-inert, name-union never clobbers an existing server, and supplied values
+  for declared secrets reach the host `secrets.yaml` via `save_secrets` (0600,
+  merge-not-clobber). The CLI's fetch-only install stays fetch-only, and
+  `POST /api/plugins/install` accepts optional `inputs`/`secrets` (the `POST /api/fleet`
+  shapes) plus reports `mcp_seeded`.
+- **The eval client no longer races push-config registration (#2230).** A task started
+  over ``SendStreamingMessage`` is live slightly before its store write lands, so an
+  immediate ``CreateTaskPushNotificationConfig`` could bounce with TASK_NOT_FOUND —
+  the source of the flaky ``test_set_push_config_round_trips`` (and its event-loop
+  teardown noise). The push-config helpers now retry exactly that error with a short
+  bounded backoff (5 attempts, ~0.75s worst case); any other JSON-RPC error, or a
+  genuinely unknown task id, still fails immediately/after the bound.
+- **Frozen plugin install/update pips missing deps into the managed runtime (#2226).**
+  On the desktop app, installing (or updating) a plugin with unmet `requires_pip`
+  still answered with the pre-ADR-0093 refusal — "install it on a server/Docker
+  build instead" — even when the managed Python runtime (ADR 0094 P2) was
+  provisioned and one `install_deps` click away from satisfying them. The frozen
+  gate now routes the missing hard deps through
+  `install_requirements_into_managed_runtime` (with the same `install_deps` audit
+  trail) and proceeds; it refuses only when the runtime isn't provisioned (the
+  message points at `POST /api/runtime/python/install`) or the install genuinely
+  fails (pip's real error is surfaced). Optional-dep semantics (#1953/#2162) are
+  unchanged.
+- **Six status tones now actually theme (#2224).** Chat notes, the keybindings conflict
+  state, and the knowledge delete-armed state referenced `--pl-color-info/warning/danger`
+  — names the design package never defines — so their hex fallbacks rendered permanently:
+  never following operator theme overrides, never flipping to light mode. All six point at
+  the real `--pl-color-status-*` tokens now (and the test that had pinned the phantom
+  names pins the real ones). A repo-wide source guard (`statusTokenGuard.test.ts`) now
+  sweeps every console stylesheet and TS/TSX file and fails the unit suite if a bare
+  phantom name reappears anywhere outside the `theme-base.css` legacy-var bridge.
+- **The header menu drawer is a real modal now (#2222).** It claimed `aria-modal` but
+  kept none of the contract: Tab escaped to the page behind it, the background kept
+  scrolling, and the sheet mounted inside the header's DOM subtree. It's the DS Drawer
+  now — focus trap, body scroll-lock, Esc/backdrop dismiss, and the `<body>` portal all
+  come from `@protolabsai/ui`; the component is just the menu content. (~60 lines of
+  hand-rolled overlay chrome deleted.)
+- **An empty Attention view in Plugins ▸ Installed now says the good news.** Clicking the
+  Attention chip with nothing wrong showed the generic "No plugins match in Attention." —
+  which read like a problem. It now says "Nothing needs attention — no errors, unfinished
+  setup, available updates, or missing deps."
+
+## [0.112.0] - 2026-07-24
+
+### Added
+- **Design System Engineer joins the new-agent picker (#2219).** A fourth shipped
+  archetype: reads a design system live (tokens, component inventory, visual-identity
+  rules via the design-system plugin), watches for drift, enforces accessibility, and
+  ships every change as a reviewed PR by directing builder delegates — never
+  hand-coding, never merging its own work. Installs the `design-system-stack` bundle;
+  the persona ships as the `design-system` soul preset.
+- **Archetype cards warn about missing host capabilities at choose-time (#2186 follow-on).**
+  An archetype can declare `requires: [python_runtime]` (the Cowork catalog entry now
+  does; a bundle's `archetype:` block can too), and the new-agent picker shows a notice
+  when that requirement isn't provisioned on this host — so someone who picks Cowork
+  *specifically to produce documents* learns about the one-click runtime install before
+  their first docx fails, not after. Silent on source runs, when provisioned, and for a
+  stale-but-working doc baseline.
+- **Plugins ▸ Installed shows bundle provenance (ADR 0040).** Plugins installed by a
+  bundle carry the bundle's name as a chip on their row — a stack's members stop reading
+  as anonymous individual plugins — and the table's search matches the bundle name/id, so
+  "show me everything cowork-stack installed" is one query. The lock already recorded the
+  linkage (`by: "bundle:<id>"` + the `bundles[]` registry); the installer now persists the
+  bundle's display name too, and `GET /api/plugins/installed` joins it onto member rows
+  (older locks fall back to the bundle id).
+- **Desktop: the update prompt now lands at launch, not after engine boot (#2203).** The
+  shell runs one update check in parallel with sidecar startup and stores the outcome;
+  the in-app UpdateNotice pulls it the moment it mounts (a state read, no network) and
+  auto-opens the changelog modal when a newer build exists — so you can update *instead
+  of* sitting through engine startup, rather than being told 10+ seconds after it
+  finishes. Nothing blocks: the check is fire-and-forget, the modal is dismissible, the
+  10s-settle + 6h re-check cycle and the tray's manual check are unchanged, and the shell
+  still never shows its own dialog for an available update (single prompt path).
+- **One source of truth for every curated plugin listing.** `config/plugin-directory.yaml`
+  now drives both the in-app Plugins ▸ Discover catalog (`config/plugin-catalog.json`) and
+  the marketing site's plugin-page overlay (`sites/marketing/data/plugins.json`) via
+  `scripts/plugin_directory.py build`, with a `check` mode and a pytest drift guard — the
+  two files had diverged badly (each listed plugins the other didn't; the "keep in sync"
+  comment had no teeth). The Discover catalog grows from 12 to 20 plugins: GitHub, Google
+  Workspace, Cowork document skills, Claude Bridge, Computer Use, Learning Wiki,
+  protoBanana, and PR Reviewer join it. A `status: deprecated|internal` flag on a directory
+  entry pulls a plugin from every surface in one line.
+- **`settings.hidden` — hide settings from the console entirely (#2172, the settings half
+  of `tools.hidden`).** List dotted field keys (`goal.max_iterations`) or whole groups
+  (`goal`, including plugin groups like `careercoach`) in config and they vanish from the
+  Settings UI *and* are refused by the settings save/reset APIs — hidden means gone, not
+  toggleable back on. Values stay live in config (hiding ≠ disabling); it's a setup-time
+  trust control for restricted consoles and archetypes (ADR 0071), same two-point pattern
+  as `tools.hidden`.
+- **CI now enforces the CHANGELOG [Unreleased] entry on every PR.** A new
+  `changelog` job in `checks.yml` fails any PR whose merge-base diff doesn't touch
+  `CHANGELOG.md` — so release notes stop depending on end-of-cycle archaeology.
+  Escape hatches: the `skip-changelog` label (read from the event snapshot, so
+  apply-then-re-run), a `release/*` head branch (release PRs roll [Unreleased]
+  themselves), or a `dependabot[bot]` actor. Pure git + jq/shell, no dependency
+  install; the logic lives in `scripts/changelog_gate.sh` with tests, and the PR
+  template gained a matching two-item checklist (changelog entry, `Fixes #N`).
+  Marking the check *required* in branch protection is a follow-on operator
+  action. (#2174)
+
+### Changed
+- **Plugins ▸ Installed is a real table now — with search, status filter, and sortable
+  columns.** The old two-section list (Loaded/Disabled, fixed alphabetical) didn't scale
+  past a handful of plugins. The tab now renders one table (Plugin / Status / Contributes /
+  actions) with free-text search that also matches **tool names** ("which plugin ships
+  `search_jobs`?"), status chips (All · Loaded · Disabled · Attention — attention =
+  error, needs-setup, update available, or missing deps), and click-to-sort headers.
+  Default order keeps the old semantics: loaded first, attention floats up, then name.
+  All the row actions (update / install deps / set up / configure / enable / uninstall)
+  are unchanged.
+
+### Fixed
+- **Design-system conformance pass over the console CSS (#2072, mechanical tier).** The
+  bounded audit found several latent bugs, all fixed: two `var(--fg-primary)` references
+  (undefined, no fallback — the browser silently dropped the declarations, so the
+  Plugins/Telemetry sortable-header hover never applied), a typo'd `var(--mono)` that lost
+  the themed mono font, a hardcoded white-on-dark hover and a frozen-purple focus outline
+  that didn't flip in light mode, `#fff` badge text and raw `#000` drawer/mobile scrims
+  swapped for the `fg-on-accent` / `overlay` tokens, the devices panel's intended-but-
+  undefined `--bg-inset` pointed at the real token, one raw error-red literal tokenized,
+  and ~50 lines of dead hand-rolled confirm-modal CSS deleted (every call site moved to
+  the DS ConfirmDialog long ago).
+- **The filesystem-projects settings write no longer stalls the event loop (#2210).** The
+  fs-projects route was the one `_apply_settings_changes` call site not offloaded via
+  `asyncio.to_thread` (#497 pattern) — a config write + full graph reload ran synchronously
+  on the event loop, freezing every concurrent request for its duration. Now offloaded like
+  its four siblings, with a regression test that detects an on-loop apply.
+- **The managed Python runtime's state now surfaces BEFORE a tool call fails (#2186).**
+  The Settings nav's Tools entry carries a warning dot whenever the runtime install card
+  is actionable — not provisioned, stale document baseline, or a failed install (pulsing
+  while an install runs) — so on a stock desktop install you discover the one-click
+  provision while browsing, not by tripping over a dead `execute_code` mid-task. Mirrors
+  the `deps_missing` badge pattern (ADR 0094 D4's status-surface half; P1 shipped the
+  copy).
+- **Plugin catalog: the Artifact entry no longer points at the archived `artifact-plugin` repo.**
+  The plugin moved in-tree (`plugins/artifact`) some releases ago, but the Discover card's repo
+  link still sent people to the archived external repo; it now links to the in-tree plugin and
+  the tagline says "ships built-in" instead of calling it the reference external plugin.
+
+## [0.111.0] - 2026-07-23
+
+### Added
+- **`/btw` — ask a side question about the chat without changing it.** Type
+  `/btw <question>` and the agent answers *from* the current conversation's context, but the
+  exchange is never saved into it: no message added to the thread, no memory trail. The
+  isolation is **structural, not a flag** — the side turn runs incognito on a fresh
+  ephemeral thread seeded (read-only) with the main thread's messages, so the main thread's
+  checkpoint is never written (setting `incognito=true` on the *current* thread wouldn't do
+  this — incognito suppresses memory, but the turn still checkpoints its own thread). The
+  question + answer render as ephemeral client-side notes that never go back to the server as
+  a real turn. A unit test pins the guarantee: the main thread is read, never written, and
+  the turn runs on a different thread id. (#2180)
+### Removed
+- **The three orphan soul presets — `coding`, `research`, and `generic-assistant`.** No
+  archetype-catalog row ever pointed at them, so the wizard's persona step could never seed
+  from them — they were dead weight in `config/soul-presets/` that every fork carried along.
+  `base`, `blank`, `cowork`, and `project-manager` remain, and a new test asserts every
+  catalog `soul_preset` resolves to a shipped file so a future retirement can't strand a
+  catalog row. (#2192)
+
+### Changed
+- **New-agent panel: Name + Create moved above the archetype picker.** Every installed
+  bundle adds an archetype card, so on a busy host the list pushed the Name field and
+  Create button off-screen. They now sit first (tab order follows), and the card list
+  scrolls inside its own bounded container instead of growing the page. The preview link
+  and the inline Configure step stay with the archetype section. (#2193)
+- **Success-toned system notes follow the workspace accent.** The left border on a
+  `noteTone:"success"` chat note (export done, ingestion confirmed, …) was pinned to literal
+  success green; it now uses the workspace accent — the same
+  `var(--pl-color-accent, var(--brand-indigo, #6366f1))` chain the HITL card adopted in
+  #2157 — so a "done" confirmation reads as themed automation chrome and follows a
+  ThemePanel accent override. Warning/danger/info notes keep their semantic colours on
+  purpose (the #2197 export-blocked note relies on danger reading red). A source-guard test
+  pins the chain and the untouched tones.
+
+### Fixed
+- **The chat-export note now names the file it wrote — and admits when it couldn't.** The
+  success note reads "Exported N message(s) → `<filename>.md` (check your browser
+  downloads)." so the operator knows what to look for (the redaction warning still rides
+  along). And on a surface that blocks programmatic downloads (sandboxed webview / policy),
+  the note is a danger note — "Export blocked on this surface — no file was written" —
+  instead of a success message pointing at a file that doesn't exist: `downloadTextFile` now
+  returns whether the anchor click actually dispatched (still never throws). The
+  Tauri-native save dialog is a follow-on. (#2197)
+
+## [0.110.0] - 2026-07-23
+
+### Added
+- **A friendlier date/time picker in the New Schedule dialog.** One-off scheduling gets an
+  inline month calendar — click a day (it seeds a sensible time), or still type the date and
+  time by hand. Repeat scheduling gets a **24h / 12h** toggle with an AM/PM control for people
+  who don't think in 24-hour time. The live "Runs …" preview updates as you go. No DS
+  date-picker existed, so the calendar is hand-rolled, with the fiddly month/ISO math kept
+  pure and unit-tested. (#2159)
+- **`tools.hidden` — hide a tool from the console entirely, not just toggle it off.** A new
+  config list that's a **hard superset** of `tools.disabled`: a hidden tool is denied at the
+  graph (never bound, never callable) *and* dropped from the console's Tools inventory, so it
+  never renders as a row and can't be re-enabled from the UI. `disabled` stays
+  "off-but-visible-and-toggleable"; `hidden` is "gone". It's a setup-time / restricted-console
+  control (ADR 0071 — the UI is presentation, the config is the boundary): an archetype or a
+  compliance-bound console pins the set in `config.tools.hidden`. Enforced server-side at the
+  authoritative denylist sync, so no client can surface a hidden tool. (#2172)
+- **Export a chat as Markdown from the UI — `/export` and the tab context menu.** The
+  chat-export endpoint (v0.109.0) now has real entry points: type `/export`, or right-click a
+  chat tab → **Export as Markdown**. Both download a self-contained `.md` (named from the chat
+  title) with secrets scrubbed, and post a note into the thread — including a warning listing
+  what redaction removed, since the operator is meant to review before sharing. Empty threads
+  say so instead of downloading. (#2158)
+
+## [0.109.0] - 2026-07-23
+
+### Added
+- **Export a chat thread to Markdown, with secret redaction.** `GET
+  /api/chat/sessions/{id}/export` serializes one conversation to self-contained Markdown you
+  can read, review, and send — roles as headings, tool calls summarized rather than dumped,
+  multi-part content flattened, and the system prompt excluded (that's agent configuration,
+  not conversation). **Read-only**: unlike its `/compact` and `/rewind` siblings it never
+  touches the checkpoint, so there's no developer-flag gate; it still takes the per-thread
+  lock so an export can't capture a half-written turn. Secrets are scrubbed first — vendor
+  key shapes, JWTs, bearer headers, private-key blocks, `KEY=value` assignments, and home
+  paths that would otherwise leak the operator's username. That pass is **pattern-level over
+  free text on purpose**: `strip_secrets_from_doc` / `secret_paths` are config-shaped and
+  only strip known secret *keys* out of structured YAML, which never sees a token pasted into
+  a message or an `env` dump in tool output. The kinds found are reported back **and**
+  disclosed in the document itself — it's a safety net, not a guarantee, so the operator
+  reviews before sharing. P1 of the share-a-thread work; the hosted viewer is deferred to
+  #2179. (#2158)
+- **Project Manager archetype in the new-agent picker.** The persona you've been working with — frozen from ~30 merged PRs of dogfooding — is now shipable as a one-click agent type. (#2178)
+
+### Fixed
+- **The artifact panel's Download button works again.** A sandboxed iframe cannot start a
+  download without the `allow-downloads` token, so the file-artifact download (ADR 0092
+  D2/D3 — a plain `<a download>.click()` for the stored bytes) was refused outright with
+  *"Not allowed to download due to sandboxing"*: the feature's whole point is handing the
+  operator a `.docx`/`.xlsx`/`.pdf`, and it couldn't. Added to the console's plugin-view
+  frames only — the artifact plugin's NESTED frame stays without it, so model-generated
+  code still can't push a file at the operator.
+- **Plugin panels no longer render dead on a sister agent.** A plugin serving vendored ES
+  modules off its public view prefix (`notes`, `artifact`) had those assets left **gated**:
+  `_view_public_paths` auto-exempts a view's PAGE path, but an ES-module `import` carries no
+  `Authorization` header any more than the iframe navigation does. Unauthenticated means the
+  request never reaches ADR 0089 D3's operator-tier fleet-token swap, so a closed member
+  (rightly) 401s it — the panel loaded but the editor never initialised. Invisible until
+  ADR 0089 D5 closed members, since they used to run open on loopback. Both manifests now
+  declare their `vendor/` subtree in `public_paths` (safe: `_VENDOR_FILES` is an exact-name
+  allowlist, so the subtree can't be walked), and a test guards the whole class so the next
+  plugin to add a vendor route fails CI instead of someone's console.
+- Archetype catalog: the project-manager blurb said "Single-repo technical lead" — now "Single-repo project manager". (#2182)
+
+## [0.108.0] - 2026-07-23
+
+### Added
+- **Human approval gates in workflows — `gate: human`.** A step-level `gate: human` parks a run
+  for operator approval **before the gated step's subagent is spawned**, so no work is wasted.
+  Runs are now durable: each persists as one JSON file under
+  `{instance_store}/workflows/.runs/{run_id}.json` (atomic writes, best-effort so a disk hiccup
+  can never fail a run that would otherwise complete), carrying the run id, inputs, per-step
+  outputs and status — restart-safe and resumable indefinitely. `GET /api/plugins/workflows/runs`
+  lists paused runs with the parked step's **rendered** prompt (inputs + prior outputs
+  substituted, never raw `{{…}}`), and `POST …/runs/{run_id}/resume` takes `approve` (re-run with
+  the original prompt), `edit` (run an operator-supplied prompt verbatim; downstream steps see the
+  edited output), or `reject` (mark the step failed as `rejected by operator` and let the DAG carry
+  the error to dependents, matching inline-failure semantics). The console grows a **Pending Gates**
+  section, and `run_workflow` plus the `/<recipe>` slash command return the same self-contained
+  status block — recipe, paused step, run id, and every completed step's output — so an operator can
+  approve or deny without opening the panel. Ungated runs take the byte-identical pre-gate path.
+  (#2138, #2140, #2141, #2142)
+- **`execute_code` works in the packaged desktop app — a managed Python runtime (ADR 0094 P1).**
+  The desktop app provisions a pinned **CPython 3.12.13** (python-build-standalone, in-repo SHA256
+  table cross-checked against the GitHub per-asset digests, member-guarded extract, atomic swap) on
+  demand into a box-shared `runtime/python/current`, and the frozen `execute_code` spawns *that*
+  rather than the PyInstaller binary. Provisioning also pip-installs the ADR 0092 document baseline
+  (`requirements-docs.txt`) into the runtime's own site-packages, reproducing source-run semantics
+  exactly. No PATH exposure and no system-Python fallback — the runtime exists for exactly one
+  consumer, the `execute_code` child spawn. Net effect: compute-through-code capabilities that were
+  structurally dead on desktop — cowork's `docx`/`xlsx`/`pptx`/`pdf` skills above all — actually run
+  there. (#2144, closes #2137)
+- **Plugin deps install into the managed runtime on desktop (ADR 0094 P2).** ADR 0058 D2 used to
+  refuse a frozen-app plugin whose `requires_pip` wasn't bundled ("install it on a server/Docker
+  build instead"); those deps now install **into the managed Python runtime**, where the plugin's
+  `execute_code`-based skills import them. Zero console change — it reuses the existing
+  `/api/plugins/install-deps` route, the "Install deps" button and the `deps_missing` badge, by
+  making `_deps_satisfied()` count a dep present in the managed runtime and routing `install_deps()`
+  there when frozen. (#2149)
+- **Pip-less wheel installer for frozen-app plugin deps (ADR 0093 P1).** Behind the
+  `plugins.allow_unbundled_deps` opt-in, a third-party plugin's **pure-Python** deps install as
+  wheels into a writable per-instance dir on `sys.path`, where the plugin's own module imports
+  them — mirroring ADR 0058 D1's git-less archive fetch and closing the last `pip` gap on the
+  desktop app. It composes with the runtime work above: P2 routes deps to the **child** runtime (for
+  `execute_code` skills), this routes them to the **host** `sys.path` (for the plugin module
+  itself). (#2151, closing the Scope A half of #1631)
+- **Fleet Room — a ⌘K morph-view for the fleet.** ⌘K → **Fleet Room** turns the fleet from a
+  page-load switcher into a co-present room: every workspace agent appears as a presence-aware
+  member (dots encode running/idle), with DMs, broadcast, live activity, approval + running pills,
+  and `@`-addressing in the composer. Built on the existing A2A + fleet-proxy substrate — no new
+  infra. (#2129, #2132)
+- **Recipe-declared fan-out width + per-step timings for workflows.** A parallel stage wider than
+  the caller's concurrency cap was **silently serialized** — with `subagent_max_concurrency`
+  defaulting to 4, a five-step parallel stage ran 4 + 1, i.e. two waves. A recipe can now declare
+  its own fan-out width, and every step records a timing, so an author profiling a slow recipe can
+  see where the time actually goes. (#2168)
+- **`agent_runtime` now lives in the Model settings section (ADR 0033 D1 amended).** The runtime and
+  the model aren't independent for an operator: `create_llm` has an ACP-only fallback where an
+  `acp:*` runtime with no gateway configured is valid, while `native` requires a real gateway model
+  *and* key — so `agent_runtime` is a **precondition** of the model config, not a peer of Behavior.
+  First move of the settings-IA rework. (#2007)
+- **Per-server input namespacing for multi-server MCP bundles.** `resolve_bundle_mcp_item` now
+  prefers an operator-supplied `values["{server}:{key}"]` over the bare `values[key]`, so a bundle
+  whose servers share an input name (two `token` inputs, say) can seed each with its own value. The
+  lookup is scoped to the item being resolved, so a namespaced match never bleeds across servers,
+  and a server without one still falls back to bare key → env → default. The bundle-input picker is
+  collision-aware to match. (#2152, #2154)
+- **`env_remove` for ACP delegates.** A subtractive `env_remove` seam on the ACP delegate /
+  coding_agent spawn path lets a caller strip host identity and credential vars (`PROTOAGENT_*`,
+  `A2A_AUTH_TOKEN`, `AGENT_NAME`) from a spawned coder subprocess **without mutating `os.environ`** —
+  the regression that cost a live host its `PROTOAGENT_HOME` and re-exec'd a graceful restart as the
+  default instance. (#2145)
+- **Bare `/dream` and `/distill` dispatch with no prompt.** A new `SubagentConfig.default_prompt`
+  fallback means a bare (or whitespace-only) slash command runs the subagent's standard
+  instructions instead of dispatching an empty message; prompts with arguments pass through
+  unchanged. (#2166)
 - **Per-delegate environment editor in the console, with secret-tier rows.** Every delegate
   type's editor form (a2a / openai / acp) now exposes the per-delegate `env` map and the
   `env_remove` list, so operators author env-carrying delegates from the UI instead of
@@ -30,6 +695,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never sit in plaintext config. Values are verbatim (no `${VAR}` expansion) and merge over
   the inherited process env *after* `env_remove` strips it (a trailing `_` is a prefix
   match). Reads never echo a secret value — the form shows set-but-masked rows. (#2114)
+
+### Changed
+- **HITL card accents follow the workspace theme.** The human-in-the-loop cards' brand-indigo pins
+  are replaced with the `--pl-color-accent` chain, so an operator's workspace theme override
+  actually reaches them. (#2157)
+
+### Fixed
+- **Creating a Cowork agent on the desktop app — and a whole class of frozen-CLI breakage.**
+  Fleet ▸ Add Agent spawns `<frozen> plugin install <bundle>` → `server/cli.py::dispatch` → a
+  **dynamic** `importlib.import_module("graph.plugins.cli")`. PyInstaller's static scan can't follow
+  a dynamic string import, so the module never made it into the bundle and the dispatch failed. The
+  dynamically-dispatched CLI modules are now bundled explicitly. (#2160, fixes #2136)
+- **Recalled knowledge chunks are tagged with their source domain, not the table.** The always-on
+  auto-inject path rendered every RAG hit as `[{table}]` — always `"chunks"`, i.e. no signal — while
+  dropping the meaningful `domain` already present on each hit, so imported domains read back as the
+  agent's own memory. Recall now carries real provenance. (#2170, fixes #2161)
+- **A null edit-prompt can no longer orphan a paused workflow run.** `POST
+  /workflows/runs/{run_id}/resume` with `{"action":"edit","edits":{"prompt":null}}` permanently
+  orphaned the run — it vanished from Pending Gates, stuck `running` and unresumable by any API
+  path — because the guard used `.get("prompt","")`, which returns `None` for a JSON null. Resume
+  validation is hoisted above the registry lookup and rejects a null prompt up front. (#2164,
+  fixes #2143)
+- **The installer's optional-only failure path no longer drops satisfied optional deps.** (#2163,
+  fixes #2162)
+- **"New agent" in the header switcher is host-gated.** It was unconditionally clickable while
+  "Fleet settings" directly below it was already host-gated. Adding a member is the same host-only
+  operation, and in a member/slug window — whose `/api/fleet` is a fleet-of-one — it spawned a
+  nested fleet by accident. (#2156, the safe half of #1999)
+- **Workflow follow-ups from the fan-out/timings work** — a stray file, a stale docstring, and
+  paused-run timings. (#2169)
+- **The composer is focused after creating a new chat session.** (#2167)
 
 ## [0.107.0] - 2026-07-22
 

@@ -1,5 +1,6 @@
 use std::net::TcpListener;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -205,6 +206,63 @@ struct SidecarProcess(Mutex<Option<CommandChild>>);
 /// Set when the app is tearing down — a sidecar `Terminated` event during shutdown
 /// is the clean kill, not a crash to alert on.
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Holds the sidecar port + a throttle clock for the `system.wake` lifecycle event
+/// (ADR 0074). The window's `Focused(true)` fires on every alt-tab, so `last_wake`
+/// debounces it down to "came back after being away".
+struct WakeSignal {
+    port: u16,
+    last_wake: Mutex<Instant>,
+}
+
+/// Debounced `system.wake` (ADR 0074): the desktop window regained focus (a proxy for
+/// the shell coming back to the foreground). Emitted at most once per `WAKE_THROTTLE` so
+/// a quick tab-flick doesn't spam it. Best-effort, fire-and-forget: POST `system.wake` to
+/// the sidecar's `/api/events/publish`, which broadcasts it on the event bus (ADR 0039) so
+/// lifecycle hooks / config reactions can respond. A dead/booting sidecar just logs.
+///
+/// The POST carries the operator bearer. When this was first drafted (PR #1797) it didn't
+/// need to — the operator API trusted loopback. ADR 0089 closed that hole, and the
+/// middleware is explicit that "trust = the matched secret, never the path/Origin/
+/// loopback" (a2a_impl/auth.py, R5), so a tokenless publish is now a 401 on any instance
+/// with a token configured — i.e. the wake event would silently never fire, which is the
+/// worst failure shape for a fire-and-forget signal. Same token the shell already hands
+/// the webview; the response status is logged so a future auth change can't fail silently
+/// the way this one would have.
+fn maybe_signal_wake<R: Runtime>(app: &AppHandle<R>) {
+    const WAKE_THROTTLE: Duration = Duration::from_secs(60);
+    let Some(state) = app.try_state::<WakeSignal>() else {
+        return;
+    };
+    // Take the throttle decision under the lock, then drop it before the await.
+    {
+        let mut last = state.last_wake.lock().unwrap();
+        if last.elapsed() < WAKE_THROTTLE {
+            return;
+        }
+        *last = Instant::now();
+    }
+    let port = state.port;
+    let token = resolve_auth_token(app);
+    tauri::async_runtime::spawn(async move {
+        let url = format!("http://127.0.0.1:{port}/api/events/publish");
+        let body = serde_json::json!({
+            "topic": "system.wake",
+            "data": { "previous_state": "background", "source": "desktop" },
+        });
+        let mut req = reqwest::Client::new().post(&url).json(&body);
+        if let Some(t) = token.filter(|t| !t.is_empty()) {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+        match req.send().await {
+            Err(e) => log::debug!("desktop: system.wake POST failed (sidecar down/booting?): {e}"),
+            Ok(resp) if !resp.status().is_success() => {
+                log::warn!("desktop: system.wake rejected — HTTP {}", resp.status().as_u16());
+            }
+            Ok(_) => {}
+        }
+    });
+}
 
 /// A blocking, user-visible "the server didn't come up / died" alert with the log
 /// location — a launch that silently shows a dead console is undebuggable from the
@@ -523,6 +581,17 @@ fn parse_auth_token(yaml: &str) -> Option<String> {
 /// install — and the console keeps its existing behaviour.
 #[tauri::command]
 fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+    let found = resolve_auth_token(&app);
+    // Logged at INFO without the value: this is the one place that answers "did the shell
+    // hand the webview a token, or is the operator being asked for one the app already had?"
+    log::info!("desktop: auth_token requested — configured: {}", found.is_some());
+    found
+}
+
+/// The sidecar's operator token, resolved the way the server itself resolves it. Quiet:
+/// the webview-facing `auth_token` command logs, but the shell's own server-to-server
+/// callers (see `maybe_signal_wake`) would only add noise on a timer.
+fn resolve_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     // Env wins, mirroring the server's own precedence (a2a_impl/auth.py `configure`).
     if let Ok(t) = std::env::var("A2A_AUTH_TOKEN") {
         let t = t.trim().to_string();
@@ -532,11 +601,59 @@ fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
     }
     let dir = app.path().app_config_dir().ok()?;
     let path = dir.join("config").join("secrets.yaml");
-    let found = std::fs::read_to_string(&path).ok().and_then(|b| parse_auth_token(&b));
-    // Logged at INFO without the value: this is the one place that answers "did the shell
-    // hand the webview a token, or is the operator being asked for one the app already had?"
-    log::info!("desktop: auth_token requested — configured: {}", found.is_some());
-    found
+    std::fs::read_to_string(&path).ok().and_then(|b| parse_auth_token(&b))
+}
+
+/// The real OS folder/file chooser for the console's path settings (#2265).
+///
+/// #2264 gave every path field a **Browse…** that walks the SERVER's filesystem over
+/// `GET /api/fs/browse` — the only mechanism that works everywhere, because the console
+/// routinely configures a machine it isn't running on (tailnet, fleet members, Docker),
+/// and the browser-native pickers can't name a server path at all. That stays the
+/// fallback and the default. This is the progressive enhancement for the one case where
+/// the two machines are provably the same: the desktop app's HOST window, configuring
+/// the instance the app itself runs. There the operator gets back everything the real
+/// chooser gives for free — typing with autocomplete, `~` and `/` jumps, Finder/Explorer
+/// favourites, network volumes.
+///
+/// The webview decides when to call this (see `pickPathNative` in lib/desktop.ts); the
+/// shell just answers. Returns None when the operator cancels — the caller leaves the
+/// field untouched rather than falling through to the in-app browser, since a cancel is
+/// a decision, not a failure.
+#[tauri::command]
+async fn pick_path<R: Runtime>(app: AppHandle<R>, start: Option<String>, files: bool) -> Option<String> {
+    let mut builder = app.dialog().file();
+    // Seed the chooser at the field's current value when it names a real directory. A
+    // stale or mistyped path is exactly when someone reaches for Browse, so a bad seed
+    // must not dead-end the dialog — drop it and let the OS pick its own default.
+    if let Some(dir) = start
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+    {
+        builder = builder.set_directory(dir);
+    }
+
+    // The dialog is callback-based and fires on the UI thread. A capacity-1 channel plus
+    // `try_send` bridges it to this async command without ever blocking that thread —
+    // the blocking_* variants panic when called from the main thread, and there is
+    // exactly one send, so try_send cannot drop the result.
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    let reply = move |picked: Option<tauri_plugin_dialog::FilePath>| {
+        let _ = tx.try_send(picked);
+    };
+    if files {
+        builder.pick_file(reply);
+    } else {
+        builder.pick_folder(reply);
+    }
+
+    let picked = rx.recv().await.flatten()?;
+    // A native pick is always a real local path; `into_path` only fails for the
+    // Android/iOS content-URI form, which this desktop-only command never sees.
+    picked.into_path().ok().map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Check the GitHub Release updater manifest (latest.json) for a newer build;
@@ -721,6 +838,69 @@ struct UpdateInfo {
     notes: String,
 }
 
+/// The launch-time update check's outcome (#2203), held for the webview to pull.
+/// `done: false` = still in flight; `done + update: None` = up to date / check failed
+/// (both mean "nothing to prompt"); `done + update: Some` = prompt immediately.
+#[derive(serde::Serialize, Clone, Default)]
+struct LaunchUpdateResult {
+    done: bool,
+    update: Option<UpdateInfo>,
+}
+
+/// Managed state for the launch check — written once by `spawn_launch_update_check`,
+/// read (cheaply, no network) by the `updater_launch_result` command.
+#[derive(Default)]
+struct LaunchUpdateState(Mutex<LaunchUpdateResult>);
+
+/// Kick off the update check CONCURRENTLY with sidecar/engine startup (#2203): the old
+/// silent launch check was removed to avoid double-prompting (native dialog + web pill),
+/// which left the first prompt waiting on webview boot + a 10s settle timer — you sat
+/// through engine startup before learning a newer build existed. This check runs in
+/// parallel with `spawn_sidecar`, never blocks window creation, and shows NO native
+/// dialog: the result lands in `LaunchUpdateState`, where the web `UpdateNotice` pulls
+/// it as soon as it mounts and owns the entire prompt UX (one prompt path, unchanged).
+fn spawn_launch_update_check<R: Runtime>(app: AppHandle<R>) {
+    tauri::async_runtime::spawn(async move {
+        let outcome = match app.updater() {
+            Ok(updater) => match updater.check().await {
+                Ok(Some(update)) => {
+                    let current = app.package_info().version.to_string();
+                    log::info!("updater: {} available at launch (running {current})", update.version);
+                    Some(UpdateInfo {
+                        version: update.version.clone(),
+                        current,
+                        notes: update.body.clone().unwrap_or_default(),
+                    })
+                }
+                Ok(None) => {
+                    log::info!("updater: up to date (launch check)");
+                    None
+                }
+                Err(e) => {
+                    log::warn!("updater: launch check failed: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                log::info!("updater: unavailable for this install: {e}");
+                None
+            }
+        };
+        if let Some(state) = app.try_state::<LaunchUpdateState>() {
+            *state.0.lock().unwrap() = LaunchUpdateResult { done: true, update: outcome };
+        }
+    });
+}
+
+/// The launch check's stored outcome — a mutex read, safe for the webview to poll
+/// while `done` is false. Complements `updater_check` (a fresh network check).
+#[tauri::command]
+fn updater_launch_result<R: Runtime>(app: AppHandle<R>) -> LaunchUpdateResult {
+    app.try_state::<LaunchUpdateState>()
+        .map(|s| s.0.lock().unwrap().clone())
+        .unwrap_or_default()
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DownloadProgress {
@@ -780,11 +960,13 @@ pub fn run() {
             chat_stream,
             updater_check,
             updater_install,
+            updater_launch_result,
             hide_launcher,
             focus_main,
             hotkeys_status,
             hotkeys_set,
-            auth_token
+            auth_token,
+            pick_path
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -870,6 +1052,17 @@ pub fn run() {
                 );
             }
             spawn_sidecar(app.handle(), port);
+            // Update check in PARALLEL with engine startup (#2203) — result stored for
+            // the web UpdateNotice to pull the moment it mounts; see the fn docs.
+            app.manage(LaunchUpdateState::default());
+            spawn_launch_update_check(app.handle().clone());
+            // Seed the wake-signal state (ADR 0074). last_wake starts "now" so the
+            // window's own boot Focused(true) is inside the throttle and doesn't fire a
+            // redundant system.wake right after app.loaded.
+            app.manage(WakeSignal {
+                port,
+                last_wake: Mutex::new(Instant::now()),
+            });
             let app_url = || WebviewUrl::App(format!("index.html?__apiPort={port}").into());
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
@@ -951,11 +1144,13 @@ pub fn run() {
                 Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
             }
 
-            // Ambient update checks are now owned by the web UpdateNotice (an in-app
-            // pill + changelog, polling `updater_check` ~10s after boot then every 6h) —
-            // so the old silent launch check is gone, to avoid double-prompting (a native
-            // dialog AND the pill). The tray "Check for updates" still does an interactive
-            // native check (see the tray handler) as a manual fallback.
+            // Update-prompt ownership: the web UpdateNotice owns ALL ambient prompting
+            // (the pill + changelog modal). It seeds from the launch check above
+            // (`updater_launch_result`, #2203 — prompt lands before engine startup
+            // finishes) and keeps its own 10s-settle + 6h `updater_check` cycle. The
+            // shell never dialogs an available update on its own — that double-prompt
+            // is why the old silent launch check was removed. The tray "Check for
+            // Updates…" stays as the interactive native fallback.
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -980,6 +1175,8 @@ pub fn run() {
             // polling); sync_hotkeys is a no-op when everything is registered.
             if let RunEvent::WindowEvent { event: WindowEvent::Focused(true), .. } = &event {
                 sync_hotkeys(app_handle);
+                // System woke to the foreground (ADR 0074) — debounced system.wake.
+                maybe_signal_wake(app_handle);
             }
             // Tear the bundled server down with the app rather than orphaning it.
             if let RunEvent::Exit = event {

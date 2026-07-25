@@ -20,10 +20,15 @@ async function openScheduleModal(page) {
   await expect(page.getByTestId("schedule-modal")).toBeVisible();
 }
 
-test("modal opens on Once with a calendar input", async ({ page }) => {
+test("modal opens on Once with a date field, time field, and inline calendar", async ({ page }) => {
   await openScheduleModal(page);
-  await expect(page.getByTestId("schedule-once")).toBeVisible();
-  await expect(page.getByTestId("schedule-once")).toHaveAttribute("type", "datetime-local");
+  // #2159: the bare datetime-local is now a date input + time input + an inline month grid.
+  await expect(page.getByTestId("schedule-once-date")).toHaveAttribute("type", "date");
+  await expect(page.getByTestId("schedule-once-time")).toHaveAttribute("type", "time");
+  await expect(page.locator(".cal")).toBeVisible();
+  // Clicking a day in the calendar fills the date field.
+  await page.locator(".cal-day:not(.cal-out)").first().click();
+  await expect(page.getByTestId("schedule-once-date")).not.toHaveValue("");
 });
 
 test("repeat presets build cron with a plain-English preview", async ({ page }) => {
@@ -50,7 +55,8 @@ test("cron mode describes a raw expression", async ({ page }) => {
 
 test("submit is gated until prompt + schedule are set", async ({ page }) => {
   await openScheduleModal(page);
-  await page.getByTestId("schedule-once").fill("2099-01-01T09:00");
+  await page.getByTestId("schedule-once-date").fill("2099-01-01");
+  await page.getByTestId("schedule-once-time").fill("09:00");
   await expect(page.getByTestId("schedule-submit")).toBeDisabled(); // no prompt yet
   await page.getByTestId("schedule-prompt").fill("Run the daily brief");
   await expect(page.getByTestId("schedule-submit")).toBeEnabled();

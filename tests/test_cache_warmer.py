@@ -39,11 +39,11 @@ def test_should_not_run_when_prompt_cache_off():
     assert CacheWarmer(_cfg(prompt_cache_enabled=False))._should_run() is False
 
 
-def test_should_not_run_for_non_anthropic():
-    assert CacheWarmer(_cfg(model_name="protolabs/qwen"))._should_run() is False
-
-
-def test_force_overrides_model_heuristic():
+def test_runs_for_gateway_aliases_too():
+    # #2255: caching is attempt-by-default, so the warmer's old Anthropic-name
+    # gate is gone — warming is already double-opt-in (warm.enabled AND
+    # prompt_cache.enabled); an operator enabling it for an alias means it.
+    assert CacheWarmer(_cfg(model_name="protolabs/qwen"))._should_run() is True
     assert CacheWarmer(_cfg(model_name="protolabs/qwen", prompt_cache_force=True))._should_run() is True
 
 

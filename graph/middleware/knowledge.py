@@ -375,12 +375,24 @@ class KnowledgeMiddleware(AgentMiddleware):
                             rag_ids.append(r["id"])
                     memory_parts.append("\n".join(context_parts))
 
-        parts: list[str] = []
+        # Labeled sections (#2243 P2): the same texts that compose the context,
+        # annotated at the composer — PromptCaptureMiddleware persists them so
+        # the viewer can render a per-section context budget. The memory label
+        # carries the id-attributed counts the injection log already tracks.
+        parts: list[tuple[str, str]] = []
         if memory_parts:
-            parts.append(_wrap_injected_memory(memory_parts))
+            bits = []
+            if digest_ids:
+                bits.append(f"{len(digest_ids)} sessions")
+            if hot_ids:
+                bits.append(f"{len(hot_ids)} memories")
+            if rag_ids:
+                bits.append(f"{len(rag_ids)} docs")
+            label = "Injected memory" + (f" ({' · '.join(bits)})" if bits else "")
+            parts.append((label, _wrap_injected_memory(memory_parts)))
             self._record_injection(state, memory_parts, digest_ids, hot_ids, rag_ids)
         if skill_block:
-            parts.append(skill_block)
+            parts.append(("Skills index", skill_block))
 
         # The agent's own live commitments (ADR 0079 — the "Observe" step). Always injected,
         # even on goal turns and incognito threads: this is operational state the agent must
@@ -388,12 +400,17 @@ class KnowledgeMiddleware(AgentMiddleware):
         # don't apply. Empty-safe (returns "" when nothing is active).
         working_state = self._working_state_block(state)
         if working_state:
-            parts.append(working_state)
+            parts.append(("Working state", working_state))
 
         if not parts:
             return None
 
-        return {"context": "\n\n".join(parts)}
+        # Both keys always move together so a later call that returns None never
+        # leaves sections describing one context paired with another.
+        return {
+            "context": "\n\n".join(text for _label, text in parts),
+            "context_sections": [{"label": label, "chars": len(text)} for label, text in parts],
+        }
 
     def _search_scoped(self, query: str) -> list[dict]:
         """The auto-inject RAG search, namespace-scoped when configured (ADR

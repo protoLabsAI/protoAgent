@@ -65,6 +65,11 @@ jobs:
           fi
           echo "ok: no stale single-file launches in deploy artifacts or launchers"
 
+  # The CHANGELOG gate lives in its own workflow (.github/workflows/changelog.yml)
+  # so that applying the `skip-changelog` label re-triggers it — it needs
+  # `types: [… labeled, unlabeled]`, and putting those here would re-run the whole
+  # Python suite, fleet integration and web E2E on every label change.
+
   lint:
     name: Lint (ruff + import contracts)
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free

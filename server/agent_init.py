@@ -121,7 +121,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # get_all_tools() call so dropped tools never reach the graph.
     from tools.lg_tools import set_disabled_tools
 
-    set_disabled_tools(STATE.graph_config.tools_disabled)
+    # Hidden tools (#2172) are a HARD superset of disabled — deny them here too, so a
+    # hidden tool is never bound to the graph regardless of the disabled list. The console
+    # inventory then also drops them (console_handlers), so they never render or toggle.
+    _denied = list(dict.fromkeys([*STATE.graph_config.tools_disabled, *STATE.graph_config.tools_hidden]))
+    set_disabled_tools(_denied)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     from security import egress
 
@@ -260,6 +264,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.inbox_store = _build_inbox_store(STATE.graph_config)
     if STATE.activity_log is None:
         STATE.activity_log = _build_activity_log(STATE.graph_config)
+        # Bind the emit seam (#2262): in-graph code (middleware warnings the
+        # operator should SEE) appends through activity.emit(), which is a no-op
+        # until this line runs — graph can't import server, so the binding
+        # happens here, where the per-instance feed is built.
+        from activity import set_default_feed
+
+        set_default_feed(STATE.activity_log)
     from tasks import TaskStore
 
     if STATE.tasks_store is None:  # may have been created early (pre-setup) for the routes

@@ -1700,6 +1700,96 @@ async def compact_session(session_id: str, *, request_metadata: dict | None = No
     return {**result, "message": _compaction_message(result)}
 
 
+def _export_message(result: dict) -> str:
+    """Human-readable status line for an export result (surfaced to non-UI callers /
+    logs). Names the redactions when there were any — the operator is meant to review
+    before sharing, so a silent scrub would be the wrong default."""
+    reason = result.get("reason") or ""
+    if reason == "no_checkpointer":
+        return "Export unavailable — no conversation checkpoint to export."
+    if reason == "empty_thread":
+        return "Nothing to export — this conversation has no messages yet."
+    redactions = result.get("redactions") or []
+    note = (
+        f" Redacted before export: {', '.join(redactions)} — read it through before sharing."
+        if redactions
+        else ""
+    )
+    return f"Exported {result.get('message_count', 0)} message(s) as Markdown.{note}"
+
+
+async def export_session(
+    session_id: str,
+    *,
+    title: str | None = None,
+    request_metadata: dict | None = None,
+) -> dict:
+    """Export a chat session's conversation as Markdown (the "share this thread"
+    gesture, #2158 P1).
+
+    Resolves the session's checkpointer ``thread_id`` exactly as ``compact_session`` /
+    ``rewind_session`` do, then runs ``export_thread``. The per-thread lock is held even
+    though this is a **pure read**: it guarantees a consistent snapshot, so an export can
+    never capture a half-written turn (an ``AIMessage`` whose answering ``ToolMessage``\\s
+    haven't landed yet). Returns the ``export_thread`` result plus a human-readable
+    ``message``.
+    """
+    if STATE.graph is None:
+        return {
+            "found": False,
+            "markdown": "",
+            "message_count": 0,
+            "redactions": [],
+            "reason": "setup",
+            "message": "Setup required — finish the setup wizard first.",
+        }
+
+    from graph.export_op import export_thread
+
+    tid = _resolve_thread_id(request_metadata, session_id)
+    async with _thread_lock(tid):
+        result = await export_thread(STATE.graph, STATE.checkpointer, tid, title=title)
+    return {**result, "message": _export_message(result)}
+
+
+async def aside_session(
+    session_id: str,
+    question: str,
+    *,
+    request_metadata: dict | None = None,
+) -> dict:
+    """`/btw` — answer a side question about the session's context WITHOUT changing it
+    (the incognito side turn, #2180).
+
+    Resolves the session's checkpointer ``thread_id`` and runs ``run_aside``, which reads
+    that thread's messages and runs an incognito turn on a fresh EPHEMERAL thread — so the
+    main thread's checkpoint is never written. Returns ``{found, answer, reason, message}``.
+
+    Deliberately does NOT hold the per-thread lock across the turn: the aside never writes
+    the main thread (nothing to guard), and a side chat is meant to run *alongside* the main
+    conversation — locking would block the very thread it's supposed to sit beside."""
+    if STATE.graph is None:
+        return {"found": False, "answer": "", "reason": "setup", "message": "Setup required — finish the setup wizard first."}
+
+    from graph.aside_op import run_aside
+
+    tid = _resolve_thread_id(request_metadata, session_id)
+    result = await run_aside(
+        STATE.graph,
+        STATE.checkpointer,
+        tid,
+        question,
+        session_id=session_id,
+        db_path=getattr(STATE, "checkpoint_path", None),
+    )
+    reason = result.get("reason")
+    msg = {
+        "no_checkpointer": "No conversation yet — start chatting, then ask a side question.",
+        "empty_question": "Ask a question after /btw, e.g. `/btw what did we decide about the schema?`",
+    }.get(reason or "", "")
+    return {**result, "message": msg}
+
+
 def _rewind_message(result: dict) -> str:
     """Human-readable status line for a rewind result (surfaced to non-UI callers /
     logs; the console just truncates its own thread on success)."""

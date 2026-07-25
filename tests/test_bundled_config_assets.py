@@ -27,6 +27,7 @@ is covered without anyone remembering this file exists.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,79 @@ def test_archetype_catalog_specifically() -> None:
     assert "config/archetype-catalog.json" in _sidecar_bundled_sources()
 
 
+def test_project_manager_archetype_row() -> None:
+    """#2178 ships the Project Manager archetype as catalog data only (ADR 0042) —
+    pin the invariants the picker relies on: the id is unique (it's the RadioCard
+    value + React key), its `soul_preset` resolves to a preset file that is really
+    bundled, and `custom` is still the catch-all LAST row."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("project-manager") == 1, f"'project-manager' must appear exactly once, got {ids}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "project-manager")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'project-manager' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+
+    # It's an advanced-tier archetype (ADR 0042 picker placement) — the picker files it
+    # under the collapsed "Advanced" section rather than inline with Basic.
+    assert row.get("tier") == "advanced", f"'project-manager' must be tier 'advanced', got {row.get('tier')!r}"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
+def test_design_system_archetype_row() -> None:
+    """#2217 ships the Design System Engineer archetype as catalog data only (ADR
+    0042) — same invariants as the project-manager row: unique id, `soul_preset`
+    resolves to a really-bundled preset file, and `custom` stays the LAST row."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("design-system") == 1, f"'design-system' must appear exactly once, got {ids}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "design-system")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'design-system' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+
+    # Advanced-tier archetype (ADR 0042) — collapsed under the picker's "Advanced" section.
+    assert row.get("tier") == "advanced", f"'design-system' must be tier 'advanced', got {row.get('tier')!r}"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
+def test_social_marketing_archetype_row() -> None:
+    """The Social Marketing archetype ships as catalog data only (ADR 0042) — same
+    invariants as the other rows, plus the two that are specific to it: it is a
+    STANDARD-tier card (it's a mainstream persona, not an advanced one, so it must
+    render inline rather than collapse under 'Advanced'), and it must NOT declare
+    `requires: [python_runtime]` — unlike Cowork it drives no document runtime, and a
+    spurious requirement would gate it behind a runtime install on desktop."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("social-marketing") == 1, f"'social-marketing' must appear exactly once, got {ids}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "social-marketing")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+
+    assert row.get("tier", "standard") == "standard", (
+        f"'social-marketing' must render inline (standard tier), got {row.get('tier')!r}"
+    )
+    assert "requires" not in row, "the social stack drives no python runtime — it must not declare one"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def _sidecar_cli_hidden_imports() -> set[str]:
     """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""
@@ -145,3 +219,55 @@ def test_sidecar_bundles_every_forwarded_cli_module() -> None:
         f"_FORWARD CLI module(s) {missing} are dynamically imported but NOT in "
         f"build_sidecar.py::CLI_FORWARD_MODULES — they'd 'ModuleNotFoundError' in the frozen app."
     )
+
+
+def test_vendor_asset_routes_are_declared_public():
+    """A plugin that serves vendored ES modules off its PUBLIC view prefix must exempt
+    that subtree in ``public_paths``.
+
+    ``manifest._view_public_paths`` auto-exempts a view's PAGE path, but an ES-module
+    ``import`` carries no Authorization header any more than the iframe navigation does —
+    so a gated ``/plugins/<id>/vendor/*`` 401s and the panel renders as a dead box. This
+    stayed invisible while fleet members ran open on loopback; ADR 0089 D5 closed them, so
+    the proxy now forwards these unauthenticated requests to a member that rejects them
+    (notes + artifact both broke on sister agents this way).
+
+    Guarding the CLASS, not the two instances: any future plugin that adds a vendor route
+    without declaring it fails here rather than in someone's console.
+    """
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    plugins_dir = Path(__file__).parent.parent / "plugins"
+    offenders: list[str] = []
+    checked = 0
+
+    for entry in sorted(plugins_dir.iterdir()):
+        init, manifest_path = entry / "__init__.py", entry / "protoagent.plugin.yaml"
+        if not (init.is_file() and manifest_path.is_file()):
+            continue
+        # Serves a vendor asset route off the public (non-/api) view prefix?
+        if not re.search(r"""@\w+\.get\(\s*["']/vendor/""", init.read_text(encoding="utf-8")):
+            continue
+        checked += 1
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        pid = manifest.get("id") or entry.name
+        wanted = f"/plugins/{pid}/vendor/"
+        declared = [str(p) for p in (manifest.get("public_paths") or [])]
+        if not any(d.startswith(wanted) or wanted.startswith(d) for d in declared):
+            offenders.append(f"{entry.name} (needs public_paths entry {wanted!r}, has {declared})")
+
+    assert checked, "no vendor-serving plugins found — has the route shape changed?"
+    assert not offenders, "vendor assets gated behind auth — will 401 on a sister agent: " + "; ".join(offenders)
+
+
+def test_cowork_archetype_requires_python_runtime() -> None:
+    """The Cowork archetype's document skills route through execute_code, which on the
+    desktop app needs the managed Python runtime (ADR 0094) — the catalog row declares
+    it (#2186 follow-on) so the new-agent picker can warn at choose-time instead of the
+    operator's first docx failing (the exact ADR 0092 first-run this exists for)."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "cowork")
+    assert row.get("requires") == ["python_runtime"]

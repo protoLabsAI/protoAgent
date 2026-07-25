@@ -165,6 +165,17 @@ def _store_path() -> Path:
     return base / "history.json"
 
 
+def _store_etag() -> str:
+    """Weak validator for the store file (#2256) — mtime+size suffices because every
+    mutation goes through ``_write_store``, which rewrites the file. Constant when the
+    store doesn't exist yet (the default empty store is constant too)."""
+    try:
+        st = _store_path().stat()
+        return f'W/"{st.st_mtime_ns}-{st.st_size}"'
+    except OSError:
+        return 'W/"empty"'
+
+
 # ── binary blobs (ADR 0092 D2) ───────────────────────────────────────────────
 # A `file` artifact's BYTES live as sidecar files under <artifact-dir>/blobs/<id>/,
 # NOT inlined into history.json — the store is read on every panel poll, so a base64
@@ -568,6 +579,35 @@ def _thumbnail(data: bytes, mime: str) -> str | None:
         return None
 
 
+# ── full-body-write nudge (#2257) ────────────────────────────────────────────
+# Iterating an artifact by re-SAVING it (save_file_artifact / rewrite_artifact)
+# round-trips the entire body through the conversation every time — the field
+# case was 11 saves in one turn. Once a short window sees repeated full-body
+# writes to the SAME artifact, the tool result carries a nudge toward batching
+# (or update_artifact, the cheap targeted path — which is deliberately exempt).
+# A nudge, never a block: turns keep working.
+_SAVE_NUDGE_AFTER = 3
+_SAVE_NUDGE_WINDOW_MS = 10 * 60 * 1000
+_recent_full_saves: dict[str, list[int]] = {}
+
+
+def _save_nudge(art_id: str) -> str:
+    """Record one full-body write to ``art_id``; the nudge string once the recent
+    window crosses the threshold, else empty."""
+    now = _now()
+    stamps = [t for t in _recent_full_saves.get(art_id, []) if now - t <= _SAVE_NUDGE_WINDOW_MS]
+    stamps.append(now)
+    _recent_full_saves[art_id] = stamps
+    if len(stamps) < _SAVE_NUDGE_AFTER:
+        return ""
+    return (
+        f"\n\nNOTE: that's full-body write #{len(stamps)} to this artifact in a few minutes — "
+        "each one round-trips the entire content through the conversation. Batch the remaining "
+        "changes and write ONCE when the content is complete (for code artifacts, "
+        "update_artifact makes targeted edits without resending the body)."
+    )
+
+
 @tool
 def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
@@ -579,6 +619,10 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
     skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
     shows a download card with a readable text preview (docx→text, xlsx→sheet table,
     pptx→slide outline, pdf→text; images get a thumbnail), and offers a Download button.
+
+    COMPOSE the file completely, then save ONCE — do not save revision after revision while
+    you iterate in a single turn; every save round-trips the full file through the
+    conversation. Batch your edits and save when the content is done.
 
     ``title`` is an optional label. To save a NEW revision of a file you saved before (so it
     becomes v2, v3… of the same artifact rather than a new panel entry), pass that artifact's
@@ -647,7 +691,7 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
     kb = len(data) // 1024
     return (
         f"Saved file artifact {art_id} → v{v}: {p.name} ({mime}, {kb} KB) — now in the "
-        f"Artifact panel with a preview and a Download button."
+        f"Artifact panel with a preview and a Download button." + _save_nudge(art_id)
     )
 
 
@@ -748,8 +792,10 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
 def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
-    prefer ``update_artifact`` for small edits. Optionally update the ``title``. Defaults to the
-    most-recent artifact; pass ``artifact_id`` to target another.
+    prefer ``update_artifact`` for small edits — a rewrite round-trips the full body through
+    the conversation every time, so batch your changes into one rewrite rather than iterating
+    rewrite-by-rewrite. Optionally update the ``title``. Defaults to the most-recent artifact;
+    pass ``artifact_id`` to target another.
     """
     code = code or ""
     if err := _too_big(code):
@@ -763,7 +809,7 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     if title:
         art["title"] = title
     v = _commit_version(store, art, code)
-    return f"Rewrote artifact {art['id']} → version {v}." + _render_suffix(art["id"], v)
+    return f"Rewrote artifact {art['id']} → version {v}." + _save_nudge(art["id"]) + _render_suffix(art["id"], v)
 
 
 @tool
@@ -901,7 +947,8 @@ def _build_data_router():
     """The DATA routes — mounted under ``/api/plugins/artifact`` so they inherit the
     operator bearer gate (plugin-view rule 2). The shell page reads them with the
     handshake token; DELETE is the panel's user-driven cleanup."""
-    from fastapi import APIRouter, Body, HTTPException
+    from fastapi import APIRouter, Body, Header, HTTPException, Response
+    from fastapi.responses import JSONResponse
 
     router = APIRouter()
 
@@ -931,11 +978,19 @@ def _build_data_router():
         }
 
     @router.get("/history")
-    async def _history() -> dict:
+    async def _history(if_none_match: str | None = Header(default=None)):
         """The full store — every artifact with its version chain — for the panel's
-        artifact picker + version navigation."""
+        artifact picker + version navigation.
+
+        Conditional (#2256): responses carry a weak ETag derived from the store
+        file's mtime+size, and a matching ``If-None-Match`` short-circuits to an
+        empty 304 BEFORE the store is even read — the panel polls continuously,
+        and between changes that poll must cost nothing to serve."""
         _note_poll()  # a poll ⇒ a renderer is live (gates the inline render-error wait, #1458)
-        return _read_store()
+        etag = _store_etag()
+        if etag and if_none_match == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return JSONResponse(_read_store(), headers={"ETag": etag})
 
     @router.post("/render-status")
     async def _render_status(body: dict = Body(...)) -> dict:
@@ -1510,7 +1565,7 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
     // create/edit reply + check_artifact can surface a render failure. Best-effort POST.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} }
+      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
       return;
     }
     if(m.type!=="protoArtifact:ask") return;
@@ -1523,10 +1578,19 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     }catch(err){ reply({error:String(err).slice(0,300)}); }
   });
 
+  // Adaptive cadence + conditional requests (#2256): fast (1.5s) while the store is
+  // actually changing, decaying to a slow idle tick; unchanged polls are ETag 304s the
+  // server answers without reading the store and the panel skips without re-rendering.
+  var POLL_FAST_MS = 1500, POLL_IDLE_MS = 8000, POLL_ACTIVE_WINDOW_MS = 15000;
+  var lastEtag = "", storeChangedAt = Date.now(), pollTimer = null;
   async function poll() {
     if (document.hidden) return;  // don't poll while the window is hidden/minimized (desktop perf)
     try {
-      var r = await kit.apiFetch("/api/plugins/artifact/history");
+      var r = await kit.apiFetch("/api/plugins/artifact/history",
+        lastEtag ? {headers:{"If-None-Match": lastEtag}} : undefined);
+      if (r.status === 304) return;  // unchanged — no parse, no DOM churn
+      lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
+      storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
       var d = await r.json(); arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
       if (followNewest) { selId = curId || (arts[0] && arts[0].id) || null; selVer = null; }
       // A pinned selection whose artifact was deleted (not in arts) would strand the panel on a
@@ -1537,12 +1601,18 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
       rebuildArtSelect(); render();
     } catch (e) { /* transient */ }
   }
+  function schedulePoll(){
+    clearTimeout(pollTimer);
+    var idle = (Date.now() - storeChangedAt) > POLL_ACTIVE_WINDOW_MS;
+    pollTimer = setTimeout(async function(){ await poll(); schedulePoll(); }, idle ? POLL_IDLE_MS : POLL_FAST_MS);
+  }
+  function kickPoll(){ storeChangedAt = Date.now(); clearTimeout(pollTimer); poll().then(schedulePoll, schedulePoll); }
   // Boot ONCE, on whichever fires first: the handshake (the bearer arrives with
   // protoagent:init, so the gated history poll authenticates) or a short timer
   // for the no-handshake case (standalone page / older host).
   var booted = false;
-  function boot(){ if (booted) return; booted = true; loadSel(); poll(); setInterval(poll, 1500); }
+  function boot(){ if (booted) return; booted = true; loadSel(); poll(); schedulePoll(); }
   kit.initPluginView(boot);
   setTimeout(boot, 800);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted) poll(); }); // refresh on return
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted) kickPoll(); }); // refresh on return
 </script></body></html>"""

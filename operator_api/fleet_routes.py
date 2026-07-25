@@ -301,6 +301,14 @@ def _norm_url(u: str | None) -> str:
     return re.sub(r"\.git$", "", (u or "").strip().rstrip("/")).lower()
 
 
+def _norm_tier(value: object) -> str:
+    """Picker placement for an archetype card (ADR 0042). ``"advanced"`` files the card
+    under the picker's collapsed "Advanced (N)" section; anything else — including a missing
+    tag — is ``"standard"`` and renders inline. Normalized here so both the catalog and a
+    bundle self-registration hand the console one of exactly two values."""
+    return "advanced" if str(value or "").strip().lower() == "advanced" else "standard"
+
+
 # Last-resort archetypes if ``archetype-catalog.json`` is missing or unreadable — the two
 # code-free personas, so the picker + wizard always work even on a broken/forked config.
 _FALLBACK_ARCHETYPES = [
@@ -378,6 +386,14 @@ def _archetypes() -> list[dict]:
             "bundle": bundle,
             "blurb": entry.get("blurb", ""),
             "soul": soul,
+            # Picker placement (ADR 0042): "advanced" archetypes collapse under the picker's
+            # "Advanced (N)" toggle; a missing tag normalizes to "standard" (renders inline).
+            "tier": _norm_tier(entry.get("tier")),
+            # Host capabilities this archetype needs to be USEFUL (#2186 follow-on) —
+            # e.g. "python_runtime": cowork's document skills route through execute_code,
+            # which on the desktop app needs the managed CPython. The new-agent picker
+            # warns at choose-time when a requirement isn't provisioned.
+            "requires": list(entry.get("requires") or []),
         }
         seen_ids.add(aid)
         if bundle:
@@ -412,6 +428,12 @@ def _archetypes() -> list[dict]:
                     "blurb": arch.get("blurb", ""),
                     "bundle": url or None,
                     "soul": arch.get("soul", ""),
+                    # A bundle can file itself under the picker's "Advanced" toggle too —
+                    # same optional tag as the catalog field, normalized to standard/advanced.
+                    "tier": _norm_tier(arch.get("tier")),
+                    # A bundle's archetype: block can declare host requirements too —
+                    # same shape as the catalog field (#2186 follow-on).
+                    "requires": list(arch.get("requires") or []),
                 }
             )
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort

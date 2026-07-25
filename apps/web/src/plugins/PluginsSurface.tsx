@@ -1,12 +1,12 @@
 import "../settings/plugins.css";
 
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { Alert } from "@protolabsai/ui/data";
+import { Alert, Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { useState, type JSX } from "react";
-import { Download, DownloadCloud, ExternalLink, Github, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, DownloadCloud, ExternalLink, Github, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
 
 import { Input } from "@protolabsai/ui/forms";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
@@ -19,6 +19,17 @@ import { PluginSettingsDialog } from "./PluginSettingsDialog";
 import { PluginFreshness } from "./PluginFreshness";
 import { usePluginManage, usePluginRefresh } from "./usePluginManage";
 import { catalogCategories, filterCatalog } from "./catalog";
+import {
+  bundleLabel,
+  filterInstalled,
+  needsAttention,
+  sortInstalled,
+  statusCounts,
+  type InstalledRow,
+  type InstalledSort,
+  type InstalledSortKey,
+  type InstalledStatus,
+} from "./installed";
 import { api } from "../lib/api";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
 
@@ -27,19 +38,22 @@ type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
 const DIRECTORY_URL = "https://agent.protolabs.studio/plugins";
 const TOPIC_URL = "https://github.com/topics/protoagent-plugin";
 
+// The error text moved out of this label and onto the Status pill's tooltip when the
+// list became a table — the label is purely the tools/skills/views summary now.
 function contributionsLabel(p: Plugin): string {
   return (
     [
       p.loaded && p.tools.length ? `${p.tools.length} tool${p.tools.length === 1 ? "" : "s"}` : null,
       p.loaded && p.skills ? `${p.skills} skill${p.skills === 1 ? "" : "s"}` : null,
       p.views?.length ? `${p.views.length} view${p.views.length === 1 ? "" : "s"}` : null,
-      p.error || null,
-    ].filter(Boolean).join(" · ") || "no contributions"
+    ].filter(Boolean).join(" · ") || "—"
   );
 }
 
 function PluginRow({
   p,
+  bundleName,
+  description,
   update,
   busy,
   onToggle,
@@ -54,6 +68,10 @@ function PluginRow({
   installingDeps,
 }: {
   p: Plugin;
+  /** bundle provenance label (ADR 0040) — set when a bundle installed this plugin */
+  bundleName?: string | null;
+  /** manifest description (#2248) — what the plugin does, under the name */
+  description?: string;
   update?: PluginUpdate;
   busy: boolean;
   onToggle: (p: Plugin) => void;
@@ -70,31 +88,54 @@ function PluginRow({
   const on = p.enabled;
   const [configOpen, setConfigOpen] = useState(false);
   return (
-    <div className="plugin-row-wrap">
-      <div className="subagent-row">
-        <div>
-          {/* Name · version · (only-when-actionable) freshness/error badge. The loaded
-              vs disabled state is already the section this row sits under, so it carries
-              no per-row status pill — only a genuine error gets a badge. */}
-          <div className="plugin-row-head">
-            <strong>{p.name}</strong>
-            {p.version ? <span className="plugin-ver">v{p.version}</span> : null}
-            <PluginFreshness update={update} />
-            {/* Required-config gate (#1719) — a loaded-but-unconfigured plugin's tools
-                return a needs-setup notice; flag it so the operator can finish setup. */}
-            {p.incomplete ? (
-              <Badge status="warning">
-                <span
-                  title={`Missing required config: ${(p.needs_config ?? []).map((n) => n.label).join(", ") || "setup needed"} — click "Set up"`}
-                >
-                  needs setup
-                </span>
-              </Badge>
-            ) : null}
-            {p.error ? <StatusPill label="error" tone="error" /> : null}
-          </div>
-          <span>{contributionsLabel(p)}</span>
+    <Tr>
+      {/* Name · version · bundle chip · (only-when-actionable) freshness badge. */}
+      <Td className="plugin-cell-name">
+        <div className="plugin-row-head">
+          <strong>{p.name}</strong>
+          {p.version ? <span className="plugin-ver">v{p.version}</span> : null}
+          {bundleName ? (
+            <span className="plugin-chip" title={`Installed by the ${bundleName} bundle`}>
+              {bundleName}
+            </span>
+          ) : null}
+          <PluginFreshness update={update} />
         </div>
+        {/* What it DOES (#2248) — the manifest already carried this and the row dropped it,
+            so the display NAME had to smuggle it ("Coder (execution-grounded code-solve)").
+            Clamped to two lines: a manifest can write a paragraph, and a row is not the
+            place to read one — the full text is the title. */}
+        {description ? (
+          <p className="plugin-row-desc" title={description}>
+            {description}
+          </p>
+        ) : null}
+      </Td>
+      {/* The loaded/disabled state was the SECTION a row sat under before the table
+          rework; now it's a per-row pill (and a sortable/filterable column). */}
+      <Td className="plugin-cell-status">
+        <div className="plugin-status-chips">
+          <StatusPill label={p.loaded ? "loaded" : "disabled"} tone={p.loaded ? "success" : "muted"} />
+          {p.error ? (
+            <span title={p.error}>
+              <StatusPill label="error" tone="error" />
+            </span>
+          ) : null}
+          {/* Required-config gate (#1719) — a loaded-but-unconfigured plugin's tools
+              return a needs-setup notice; flag it so the operator can finish setup. */}
+          {p.incomplete ? (
+            <Badge status="warning">
+              <span
+                title={`Missing required config: ${(p.needs_config ?? []).map((n) => n.label).join(", ") || "setup needed"} — click "Set up"`}
+              >
+                needs setup
+              </span>
+            </Badge>
+          ) : null}
+        </div>
+      </Td>
+      <Td className="plugin-cell-contrib">{contributionsLabel(p)}</Td>
+      <Td className="plugin-cell-actions">
         {/* Compact action cluster: secondary actions (update / configure / uninstall) are
             icon-only with tooltips; only the primary Enable/Disable toggle keeps its label. */}
         <div className="plugin-row-actions">
@@ -180,17 +221,49 @@ function PluginRow({
             </Button>
           ) : null}
         </div>
-      </div>
-      {configurable || p.incomplete ? (
-        <PluginSettingsDialog
-          pluginId={p.id}
-          pluginName={p.name}
-          needsConfig={p.incomplete ? p.needs_config : undefined}
-          open={configOpen}
-          onClose={() => setConfigOpen(false)}
-        />
-      ) : null}
-    </div>
+        {configurable || p.incomplete ? (
+          <PluginSettingsDialog
+            pluginId={p.id}
+            pluginName={p.name}
+            needsConfig={p.incomplete ? p.needs_config : undefined}
+            open={configOpen}
+            onClose={() => setConfigOpen(false)}
+          />
+        ) : null}
+      </Td>
+    </Tr>
+  );
+}
+
+// A sortable column header: click toggles direction on the active key, or switches
+// key (at its natural order). aria-sort keeps it screen-reader-legible.
+function SortableTh({
+  label,
+  col,
+  sort,
+  onSort,
+}: {
+  label: string;
+  col: InstalledSortKey;
+  sort: InstalledSort;
+  onSort: (s: InstalledSort) => void;
+}) {
+  const active = sort.key === col;
+  return (
+    <Th
+      className="plugin-th-sortable"
+      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : undefined}
+    >
+      <button
+        type="button"
+        className="plugin-th-btn"
+        onClick={() => onSort(active ? { key: col, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: col, dir: "asc" })}
+        title={`Sort by ${label.toLowerCase()}`}
+      >
+        {label}
+        {active ? (sort.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : null}
+      </button>
+    </Th>
   );
 }
 
@@ -295,44 +368,59 @@ function LocalTab() {
   const removableIds = new Set((installed.data?.plugins ?? []).map((e) => e.id));
   const missing = (installed.data?.plugins ?? []).filter((e) => !e.present);
 
+  // Table controls: free-text search, status chip, sortable columns. Pure logic lives
+  // in installed.ts (the catalog.ts pattern) so it's unit-tested; default order keeps
+  // the old sections' semantics — loaded first, then name.
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<InstalledStatus>("All");
+  const [sort, setSort] = useState<InstalledSort>({ key: "status", dir: "asc" });
+
   // Built-ins (core runtime infrastructure like the delegate registry) aren't optional
   // add-ons — they always load, can't be toggled, and are configured in Workspace
   // settings — so they don't belong in the install/enable list.
   const plugins = (runtime.plugins ?? []).filter((p) => !p.builtin);
-  const byName = (a: Plugin, b: Plugin) => a.name.localeCompare(b.name);
-  const loaded = plugins.filter((p) => p.loaded).sort(byName);
-  const disabled = plugins.filter((p) => !p.loaded).sort(byName);
-
+  const installedById = new Map((installed.data?.plugins ?? []).map((e) => [e.id, e]));
   const depsById = new Map((installed.data?.plugins ?? []).map((e) => [e.id, e.deps_missing ?? []]));
-  const renderRow = (p: Plugin) => (
+  const rows: InstalledRow[] = plugins.map((p) => ({
+    p,
+    behind: Boolean(updateById.get(p.id)?.behind),
+    depsMissing: depsById.get(p.id) ?? [],
+    // Bundle provenance (ADR 0040) — labels rows a bundle installed, so a stack's
+    // members stop reading as anonymous individual plugins.
+    bundle: installedById.get(p.id)?.bundle,
+    // What the plugin DOES (#2248). The runtime status has no manifest, so the answer
+    // only exists on the inventory side of this join — which is why the row used to
+    // render a bare name and manifests smuggled their purpose into it.
+    description: installedById.get(p.id)?.manifest?.description,
+  }));
+  const counts = statusCounts(rows);
+  const shown = sortInstalled(filterInstalled(rows, q, status), sort);
+
+  const renderRow = (row: InstalledRow) => (
     <PluginRow
-      key={p.id}
-      p={p}
-      update={updateById.get(p.id)}
-      busy={pendingId === p.id}
+      key={row.p.id}
+      p={row.p}
+      bundleName={bundleLabel(row)}
+      description={row.description}
+      update={updateById.get(row.p.id)}
+      busy={pendingId === row.p.id}
       onToggle={onToggle}
       onUpdate={onUpdate}
-      updating={updatingId === p.id}
-      configurable={configurableIds.has(p.id)}
-      removable={removableIds.has(p.id)}
+      updating={updatingId === row.p.id}
+      configurable={configurableIds.has(row.p.id)}
+      removable={removableIds.has(row.p.id)}
       onRemove={onRemove}
-      removing={removingId === p.id}
-      depsMissing={depsById.get(p.id) ?? []}
+      removing={removingId === row.p.id}
+      depsMissing={row.depsMissing}
       onInstallDeps={(pl) => installDeps.mutate(pl)}
-      installingDeps={installDeps.isPending && installDeps.variables?.id === p.id}
+      installingDeps={installDeps.isPending && installDeps.variables?.id === row.p.id}
     />
   );
 
   return (
     <>
-      <PanelHeader title="Installed" kicker={`${plugins.length} installed · ${loaded.length} loaded`} />
+      <PanelHeader title="Installed" kicker={`${counts.All} installed · ${counts.Loaded} loaded`} />
       <div className="stage-body">
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-          <Button type="button" variant="ghost" onClick={() => setInstallOpen(true)} title="Install a plugin from a git URL">
-            <Download size={14} /> Install from URL
-          </Button>
-        </div>
-
         {missing.length ? (
           <Alert
             status="warning"
@@ -349,24 +437,65 @@ function LocalTab() {
 
         {plugins.length ? (
           <>
-            {loaded.length ? (
-              <>
-                <p className="panel-kicker">Loaded <span className="muted">· {loaded.length}</span></p>
-                <div className="subagent-list">{loaded.map(renderRow)}</div>
-              </>
-            ) : null}
-            {disabled.length ? (
-              <>
-                <p className="panel-kicker">Disabled <span className="muted">· {disabled.length}</span></p>
-                <div className="subagent-list">{disabled.map(renderRow)}</div>
-              </>
-            ) : null}
+            <div className="plugin-installed-controls">
+              <Input
+                className="plugin-search"
+                icon={<Search size={14} />}
+                type="search"
+                placeholder="Search plugins, tools…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                aria-label="Search installed plugins"
+              />
+              <Tabs
+                variant="segmented"
+                responsive
+                ariaLabel="filter installed plugins by status"
+                items={(["All", "Loaded", "Disabled", "Attention"] as const).map((s) => ({
+                  id: s,
+                  label: counts[s] ? `${s} · ${counts[s]}` : s,
+                }))}
+                active={status}
+                onSelect={(id) => setStatus(id as InstalledStatus)}
+              />
+              <Button type="button" variant="ghost" onClick={() => setInstallOpen(true)} title="Install a plugin from a git URL">
+                <Download size={14} /> Install from URL
+              </Button>
+            </div>
+            <div className="plugin-table-wrap">
+              <Table className="plugin-table">
+                <THead>
+                  <Tr>
+                    <SortableTh label="Plugin" col="name" sort={sort} onSort={setSort} />
+                    <SortableTh label="Status" col="status" sort={sort} onSort={setSort} />
+                    <SortableTh label="Contributes" col="contributions" sort={sort} onSort={setSort} />
+                    <Th className="plugin-th-actions" aria-label="actions" />
+                  </Tr>
+                </THead>
+                <TBody>
+                  {shown.map(renderRow)}
+                  {!shown.length ? (
+                    <Tr>
+                      <Td colSpan={4} className="muted">
+                        {/* An empty Attention view is the HEALTHY state — say so, instead of
+                            the generic no-match line reading like something's wrong. */}
+                        {status === "Attention" && !q.trim()
+                          ? "Nothing needs attention — no errors, unfinished setup, available updates, or missing deps."
+                          : `No plugins match${q ? ` "${q}"` : ""}${status !== "All" ? ` in ${status}` : ""}.`}
+                      </Td>
+                    </Tr>
+                  ) : null}
+                </TBody>
+              </Table>
+            </div>
           </>
         ) : (
           <div className="table-list">
             <div className="table-row">
               <span>no plugins installed — browse the Discover tab, or Install from URL</span>
-              <StatusPill label="none" tone="muted" />
+              <Button type="button" variant="ghost" onClick={() => setInstallOpen(true)} title="Install a plugin from a git URL">
+                <Download size={14} /> Install from URL
+              </Button>
             </div>
           </div>
         )}

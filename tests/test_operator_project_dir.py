@@ -98,3 +98,42 @@ def test_allowed_dirs_unchanged_without_duplicates(tmp_path, monkeypatch):
     )
     dirs = _operator_allowed_dirs()
     assert dirs == [project, "/alpha", "/beta"]
+
+
+def _schema_keys() -> set[str]:
+    from graph.settings_schema import build_schema
+
+    groups = build_schema(LangGraphConfig.from_dict({}))
+    return {f["key"] for g in groups for f in g["fields"]}
+
+
+def test_allowed_dirs_is_hidden_but_still_round_trips():
+    """`operator.allowed_dirs` is deprecated and inert: its only enforcement was
+    `operator_api.paths.resolve_project_path`, which nothing calls since tasks went
+    instance-global and notes became a plugin. It must NOT render in Settings — an
+    operator reading it as a file-access grant looks in the wrong place, when the real
+    fence is Work folders (`filesystem.projects`, ADR 0007) — but the key stays in
+    FIELDS so existing YAML still loads and writes back unchanged."""
+    assert "operator.allowed_dirs" not in _schema_keys()
+
+    cfg = LangGraphConfig.from_dict({"operator": {"allowed_dirs": ["/alpha", "/beta"]}})
+    assert cfg.operator_allowed_dirs == ["/alpha", "/beta"]
+
+    from graph.config_io import config_to_dict
+
+    assert config_to_dict(cfg)["operator"]["allowed_dirs"] == ["/alpha", "/beta"]
+
+
+def test_project_dir_still_renders_and_is_not_an_access_grant():
+    """`operator.project_dir` stays editable (it names the console's project), but it
+    grants no file access — that's `filesystem.projects` alone. Pinned so the two
+    don't get conflated again."""
+    assert "operator.project_dir" in _schema_keys()
+
+    cfg = LangGraphConfig.from_dict({"operator": {"project_dir": "/tmp/whatever"}})
+    assert cfg.filesystem_projects == [], "project_dir must not seed the fs fence"
+    # And check the EFFECTIVE fence, not just the raw field: with no explicit projects
+    # the agent still gets the default `workspace` root, so the claim that matters is
+    # that the project dir is not among the roots it can reach.
+    effective = cfg.effective_filesystem_projects()
+    assert all(p["path"] != "/tmp/whatever" for p in effective), effective

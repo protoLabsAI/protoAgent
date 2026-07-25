@@ -164,6 +164,10 @@ export type InstalledPlugin = {
   // Declared requires_pip entries missing from the runtime — drives the one-click
   // "Install deps" action (POST /api/plugins/install-deps).
   deps_missing?: string[];
+  // Bundle provenance (ADR 0040): present when this plugin was installed BY a bundle —
+  // joined server-side from the lock's bundles[] registry. `name` may be empty on locks
+  // written before it was persisted; fall back to `id`.
+  bundle?: { id: string; name?: string; url?: string };
   manifest?: {
     name: string;
     version: string;
@@ -179,7 +183,50 @@ export type InstalledPlugin = {
 };
 
 // A fenced filesystem root (ADR 0007) — one entry of `filesystem.projects`.
-export type FsProject = { name?: string; path: string; write: boolean };
+// One row from the server-side directory browser (GET /api/fs/browse). `path` is
+// absolute — it's handed straight back as the saved setting.
+export type BrowseEntry = { name: string; path: string; kind: "dir" | "file" };
+export type BrowseListing = {
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+  // The listing hit the server's cap. Surfaced rather than swallowed — a silently
+  // truncated list reads as "that's everything", which is how you conclude a folder
+  // isn't there when it is.
+  truncated?: boolean;
+  roots: { label: string; path: string }[];
+};
+
+// `exists` is READ-ONLY liveness from GET /api/settings/filesystem-projects: a root whose
+// folder is gone gets skipped when the fs tools are built, and if that empties the registry
+// the whole toolset unbinds. Absent on rows the editor is composing.
+export type FsProject = { name?: string; path: string; write: boolean; exists?: boolean };
+
+// The ADR 0095 managed-projects registry (GET /api/projects, read-only — registration
+// is still a YAML edit). `fenced` says whether THIS entry feeds the live fs fence:
+// false when it opts out with `fs: false`, and false for every row when explicit
+// Work folders shadow the registry wholesale (see ManagedProjects.fence_source).
+export type ManagedProject = {
+  name: string;
+  path: string;
+  github?: string;
+  default_branch?: string;
+  write?: boolean;
+  no_delete?: boolean;
+  fs?: boolean;
+  exists?: boolean;
+  fenced?: boolean;
+};
+
+// `fence_source` = who actually feeds the fs fence right now. "explicit" means
+// `filesystem.projects` is set and the registry below is driving NOTHING — the one
+// state worth shouting about, since declared-but-not-enforced is exactly the drift
+// ADR 0095 exists to kill.
+export type ManagedProjects = {
+  enabled: boolean;
+  fence_source: "explicit" | "registry" | "workspace_default" | "disabled";
+  projects: ManagedProject[];
+};
 
 // An entry in the official-plugin directory (GET /api/plugins/catalog, ADR 0059),
 // merged with install state. `repo` is the install URL — one-click install runs
@@ -269,7 +316,12 @@ export type SettingsField = {
   key: string;
   label: string;
   // "text" = a scalar multiline string (#964), rendered as a textarea but saved like "string".
-  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "secret";
+  // "path" = a filesystem path: same string value, rendered with a Browse… picker over the
+  // SERVER's filesystem (the console often configures a machine it isn't running on).
+  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "secret" | "path";
+  // Whether a "path" field ends on a folder or a file. Emitted for every field; only read
+  // when type is "path".
+  path_kind?: "dir" | "file";
   section: string;
   description?: string;
   restart: boolean;
@@ -893,6 +945,35 @@ export type MemoryInjectionDetail = {
   approx_tokens: number;
 };
 
+// One captured model call (GET /api/prompts/*, #2243): the EXACT system prompt
+// the call received — `system.stable` (the turn-stable prefix) + `system.context`
+// (the volatile per-call tail); their concatenation is byte-for-byte what the
+// model got — plus the call's real token usage.
+export type PromptCallUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+};
+// One labeled slice of the prompt (#2243 P2) — composer-annotated, in prompt
+// order (stable prefix rows first, then the dynamic tail). approx_tokens is
+// the server's chars/4 estimate.
+export type PromptSection = {
+  label: string;
+  chars: number;
+  approx_tokens: number;
+  scope: "stable" | "context";
+};
+export type PromptCall = {
+  call_index: number;
+  ts: string;
+  model: string;
+  system: { stable: string; context: string };
+  // Optional for skew with pre-P2 servers; empty = captured unsegmented.
+  sections?: PromptSection[];
+  usage: PromptCallUsage;
+};
+
 // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.
 export type DelegateFieldSpec = {
   key: string;
@@ -958,6 +1039,17 @@ export type Archetype = {
   blurb: string;
   bundle: string | null; // null = Basic; else the bundle git URL
   soul: string; // base SOUL.md the wizard seeds when this archetype is picked ("" = none)
+  // Picker placement (ADR 0042): "standard" (the default when the field is absent) renders
+  // inline in the RadioCardGroup as today; "advanced" files the card under the picker's
+  // collapsed "Advanced (N)" section (both the setup wizard's persona step and the fleet
+  // new-agent panel). The server normalizes catalog + bundle self-registrations to one of the
+  // two, so a missing tag arrives as "standard" — kept optional for older backends.
+  tier?: "standard" | "advanced";
+  // Host capabilities the archetype needs to be USEFUL (#2186 follow-on) — e.g.
+  // "python_runtime" (cowork's document skills route through execute_code, which on
+  // the desktop app needs the managed CPython). The picker warns at choose-time when
+  // a requirement isn't provisioned. Optional: absent on older hosts.
+  requires?: string[];
 };
 
 // What an archetype's bundle would set up — the read-only pre-install peek

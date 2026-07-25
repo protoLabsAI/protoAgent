@@ -149,12 +149,17 @@ def test_install_via_archive_pins_sha_and_writes_lock(env, monkeypatch):
 
 
 def test_frozen_dep_gate_refuses_unbundled_dep(env, monkeypatch):
+    """#2226: the gate refuses only when NO managed runtime is provisioned — and the
+    message points at the runtime install instead of 'use a server build'."""
+    import infra.python_runtime as pr
+
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: None)  # runtime absent
     monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
     monkeypatch.setattr(
         installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip="definitely_not_real_xyz>=1"))
     )
-    with pytest.raises(installer.InstallError, match="isn't in the desktop runtime"):
+    with pytest.raises(installer.InstallError, match="POST /api/runtime/python/install"):
         installer.install("https://github.com/acme/demo_ext")
     assert not (installer.live_plugins_dir() / "demo_ext").exists()  # refused before landing
 
@@ -202,8 +207,12 @@ def test_frozen_missing_optional_dep_warns_and_installs(env, monkeypatch, caplog
 
 
 def test_frozen_missing_hard_dep_still_refuses_with_optional_present(env, monkeypatch):
-    """Hard wins: a mixed manifest with a missing hard dep gets today's refusal."""
+    """Hard wins: a mixed manifest with a missing hard dep still refuses when no
+    managed runtime is provisioned — a missing optional alone wouldn't (#2226)."""
+    import infra.python_runtime as pr
+
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: None)  # runtime absent
     monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
     monkeypatch.setattr(
         installer,

@@ -207,10 +207,11 @@ def register_operator_routes(
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
-    ``allowed_dirs`` is an accessor returning the directories the operator
-    console may read/write (tasks + notes). It's a callable, not a static
-    list, so it re-reads live config after a settings reload. Injected
-    services keep their own allowlist; it only wires the defaults.
+    ``allowed_dirs`` is DEAD — accepted so callers (and forks) that still pass it keep
+    working, but no route reads it. It used to fence the tasks/notes path arguments via
+    ``operator_api.paths.resolve_project_path``; tasks then became one instance-scoped
+    store that ignores ``project_path`` entirely, and notes moved to a plugin. The
+    agent's filesystem fence is ``filesystem.projects`` (ADR 0007), not this.
     """
     # The agent + console share one instance-scoped task board (in-process store).
     task_svc = _TaskStoreAdapter(tasks_store)

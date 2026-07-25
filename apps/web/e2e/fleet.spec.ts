@@ -129,6 +129,46 @@ test("topbar switcher navigates to an agent by slug", async ({ page }) => {
   await expect(page.getByTestId("fleet-switcher")).toContainText("roxy");
 });
 
+test("a fleet row's name links to that agent's own window (#2240)", async ({ page }) => {
+  await openAgents(page);
+  // A peer's name is the click-through — a real <a href> (so cmd/middle-click opens it in a
+  // new window), pointing at the SLUG: the stable id, never the editable display name.
+  const roxy = page.locator(".fleet-row", { hasText: "roxy" }).locator(".fleet-name-link");
+  await expect(roxy).toHaveAttribute("href", /\/agent\/roxy\/$/);
+  // The focused agent's own row stays plain text — a link there is just a reload.
+  await expect(page.locator(".fleet-row.active .fleet-name-link")).toHaveCount(0);
+  await roxy.click();
+  await expect(page).toHaveURL(/\/app\/agent\/roxy\//);
+});
+
+test("a member that IS a delegate can be unlinked from its row (#2266)", async ({ page }) => {
+  // Stub the slug-scoped registry so ava reads as an existing delegate, and capture the
+  // removal. Stateful on purpose: after the DELETE the list comes back empty, and the row
+  // flipping to the add button is the ONLY success feedback the panel gives (no toast).
+  let delegates = [{ name: "ava", type: "a2a", url: "http://127.0.0.1:7890/a2a" }];
+  let deleted = null;
+  await page.route("**/api/delegates", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: { delegates } });
+  });
+  await page.route("**/api/delegates/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deleted = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop());
+    delegates = [];
+    return route.fulfill({ json: { ok: true, message: "Removed.", delegates } });
+  });
+
+  await openAgents(page);
+  const ava = page.locator(".fleet-row", { hasText: "ava" });
+  await expect(ava.getByText("delegate")).toBeVisible(); // the state badge
+  await ava.getByRole("button", { name: "Remove as a delegate of this agent (delegate_to)" }).click();
+
+  await expect.poll(() => deleted).toBe("ava"); // removal lands on the FOCUSED agent's registry
+  await expect(ava.getByText("delegate")).toHaveCount(0);
+  // ...and the add button is back, so the gesture is symmetric rather than one-way.
+  await expect(ava.getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })).toBeVisible();
+});
+
 test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }) => {
   // The focused agent (host) doesn't serve /api/delegates until the plugin is enabled;
   // enabling goes through the dedicated /api/plugins/{id}/enabled endpoint and the reload
@@ -191,13 +231,21 @@ test("rename edits the display name; the id/slug stays", async ({ page }) => {
 test("discover → add to fleet → switch into the remote member (ADR 0042 §I)", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: /Discover agents/ }).click();
-  const found = page.locator(".fleet-row", { hasText: "remy" });
+  // Address the two lists by their OWN selectors: a discovery result is `--found`, a member
+  // is not. They share the row shape, so a bare `.fleet-row` matched both the instant the
+  // add landed and strict-mode-flaked under load.
+  const found = page.locator(".fleet-row--found", { hasText: "remy" });
   await expect(found).toBeVisible();
 
   await found.getByRole("button", { name: "Add to this fleet (a switchable remote member)" }).click();
 
+  // …and it leaves the found list: an agent that's already a member must not keep offering
+  // "Add to this fleet", which would 400. (The re-scan satisfies this too — the point of the
+  // contract is the end state, not which of the two paths got there first.)
+  await expect(page.locator(".fleet-row--found", { hasText: "remy" })).toHaveCount(0);
+
   // Now a fleet member: remote tag + its URL, no start/stop controls.
-  const member = page.locator(".fleet-row", { hasText: "http://192.168.5.50:7871" });
+  const member = page.locator(".fleet-row:not(.fleet-row--found)", { hasText: "http://192.168.5.50:7871" });
   await expect(member).toBeVisible();
   await expect(member.getByText("remote", { exact: true })).toBeVisible();
   await expect(member.getByRole("button", { name: "Stop" })).toHaveCount(0);
@@ -353,4 +401,57 @@ test("⌘K → Fleet Room: a TYPED @name addresses that member without using the
   await room.locator(".flr__send").click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to/ })).toHaveCount(0);
+});
+
+// ── Sister agents get the fleet surfaces too (#1708/#1999 revisited) ───────────────────
+// The three affordances used to be host-console-only, on the theory that a member window
+// would be managing a fleet-of-one and could only nest. That's false for a slug window:
+// /api/fleet + /api/archetypes are HUB paths (lib/api.ts `isHubPath`), so a sister agent's
+// console drives the SAME fleet the host does. These pin that it stays reachable there —
+// and that the window can't act on the agent serving it.
+
+// Assert by ACTING, not by reading an aria-disabled attribute: a disabled DS MenuItem is
+// pointer-events:none, so a click that lands is proof the item is live — and it also proves
+// the deep-link RESOLVES, which is the half that was actually broken (the Box group was
+// dropped wholesale off the host, so "Fleet settings" fell back to some other section).
+test("a sister agent's window: Fleet settings opens the fleet panel from the switcher", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await page.getByTestId("fleet-switcher").click();
+  await page.getByRole("menuitem", { name: "Fleet settings" }).click();
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+});
+
+test("a sister agent's window: New agent opens the archetype picker from the switcher", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await page.getByTestId("fleet-switcher").click();
+  await page.getByRole("menuitem", { name: "New agent" }).click();
+  await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
+});
+
+test("a sister agent's window: the ⌘K Fleet Room opens on the hub's roster", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  // The hub's real roster — its siblings are here, not an empty fleet-of-one.
+  await expect(room.locator(".flr__member", { hasText: "main" })).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "roxy" })).toBeVisible();
+  // But no Stop on its OWN row: that button would kill the agent serving this window.
+  await expect(
+    room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: /^(Stop|Start) ava$/ }),
+  ).toHaveCount(0);
+  // A sibling still toggles normally.
+  await expect(room.locator(".flr__member", { hasText: "roxy" }).getByRole("button", { name: "Start roxy" })).toBeVisible();
+});
+
+test("a sister agent's window: the fleet panel won't stop or remove the agent serving it", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
+  const self = page.locator(".fleet-row", { hasText: "ava" });
+  await expect(self).toBeVisible();
+  await expect(self.getByRole("button", { name: "Stop" })).toHaveCount(0);
+  await expect(self.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  // A sibling keeps its controls — the guard is about SELF, not about being a member window.
+  await expect(page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Start" })).toBeVisible();
 });

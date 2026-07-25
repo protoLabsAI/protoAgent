@@ -170,14 +170,13 @@ enforcement:
 
 `PromptCacheMiddleware` (`graph/middleware/prompt_cache.py`) does two things at the model-call boundary: (1) **delivers** the volatile knowledge/skills/hot-memory context that `KnowledgeMiddleware` produces — `create_agent` builds a static system prompt and doesn't read the `context` state key, so this is what actually gets that context to the model; (2) sets Anthropic **`cache_control`** on the stable system-prompt prefix, with the volatile context placed *after* the breakpoint so it never invalidates the cached prefix.
 
-Caching is gated to Anthropic-family models (safe no-op elsewhere); **context delivery happens regardless**, so the middleware is always wired.
+Caching is **attempt-by-default with fail-loud watching** (#2255): blocks are attached for every model — gateway aliases included, since the alias name says nothing about what it routes to. A provider that *rejects* `cache_control` gets one automatic retry without blocks and falls back to plain delivery for that model for the session (logged once); a provider that *silently ignores* the blocks (repeated calls with a cacheable-size prefix and zero cache activity in usage) draws a WARNING naming the model — silent full-price billing is the failure mode this exists to kill. **Context delivery happens regardless**, so the middleware is always wired.
 
 ```yaml
 prompt_cache:
-  enabled: true     # caching half (delivery is unconditional)
+  enabled: true     # caching half (delivery is unconditional) — attempted on EVERY model
   ttl: "5m"         # "5m" ephemeral, or "1h" persistent (agent turns exceed 5m)
-  force: false      # cache even when the model name doesn't look Anthropic
-                    # (use when your gateway alias hides a Claude model)
+  force: false      # never auto-fall back: a provider rejection propagates
   warm:             # cache-warming heartbeat (off by default)
     enabled: false
     interval_seconds: 3300   # 55m — just under the "1h" tier
@@ -185,13 +184,13 @@ prompt_cache:
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `true` | Apply `cache_control` (Anthropic). No-op on non-Anthropic models. |
+| `enabled` | `true` | Attach `cache_control` to the stable prefix for every model. Rejection → auto-fallback (per model, per session); silent zero-hit → a once-per-model WARNING. `false` = plain delivery only. |
 | `ttl` | `"5m"` | Cache tier: `5m` (ephemeral) or `1h` (persistent). |
-| `force` | `false` | Bypass the Anthropic-name heuristic (opaque gateway aliases). |
+| `force` | `false` | Trust-the-operator mode: always attach, never auto-fall back (a rejection propagates instead of degrading silently). |
 | `warm.enabled` | `false` | Run a background heartbeat (`graph/cache_warmer.py`) that periodically reproduces the cached system prefix so the **first** request after an idle gap hits a warm cache instead of a full miss. |
 | `warm.interval_seconds` | `3300` | Heartbeat period. Set just under `ttl` (default 55m for the `1h` tier). |
 
-**When to enable `warm`:** sporadic but latency-sensitive traffic on the `1h` tier — the ~1-token ping per interval is cheap relative to a cold miss on a multi-thousand-token prefix while a user waits. Leave it **off** for steady traffic (the cache stays warm on its own — warming is then pure cost) and on non-Anthropic models (nothing to warm; the warmer no-ops at start unless `force` is set). It runs as its own asyncio task (started/stopped with the server), **not** through the scheduler — the scheduler fires full agent turns, the wrong primitive for a keep-alive.
+**When to enable `warm`:** sporadic but latency-sensitive traffic on the `1h` tier — the ~1-token ping per interval is cheap relative to a cold miss on a multi-thousand-token prefix while a user waits. Leave it **off** for steady traffic (the cache stays warm on its own — warming is then pure cost) and for providers where the zero-hit warning fired (nothing to warm). It runs as its own asyncio task (started/stopped with the server), **not** through the scheduler — the scheduler fires full agent turns, the wrong primitive for a keep-alive.
 
 ## `compaction`
 
@@ -235,6 +234,7 @@ execute_code:
 ```yaml
 tools:
   disabled: []              # tool names to DROP (the operator's denylist)
+  hidden: []                # tool names to REMOVE ENTIRELY — denied AND never shown in the console
   deferred:
     enabled: false          # OFF by default — the full tool set is shown
     keep: []                # always-on tool names; empty = built-in base
@@ -243,10 +243,25 @@ tools:
 | Key | Default | What |
 |---|---|---|
 | `disabled` | `[]` | Tool names to **drop** from the agent at graph build — covers the **fully assembled** set: core, plugin, MCP, the delegation tools, and the filesystem tools (so `disabled: [run_command]` removes shell access for this agent). Live-reloadable — in the console, **every row at Settings ▸ Capabilities ▸ Tools carries an on/off switch** that edits this list (a toggled-off tool stays listed, dimmed, so it can be re-enabled). Plugins still ADD tools on top (see [Plugins](/guides/plugins)). ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)) |
+| `hidden` | `[]` | A **hard superset of `disabled`** (#2172, [ADR 0071](../adr/0071-plugin-permissions-trust-model.md)): a hidden tool is denied at the graph like a disabled one, **and dropped from the console's tool inventory entirely** — it never renders as a toggle, so it can't be re-enabled from the UI. A setup-time trust control for restricted consoles and archetypes: the config file is the boundary, the UI is presentation. `disabled` = "off but visible"; `hidden` = "not available, and not offered". |
 | `deferred.enabled` | `false` | Withhold most tool schemas; expose them via `search_tools`. |
 | `deferred.keep` | `[]` | Tool names always shown. Empty → built-in base (keyless core + `task`/`task_batch`/`run_workflow`/`save_workflow` + `search_tools`). `search_tools` is always kept regardless. |
 
 Every tool remains **executable** even while deferred — `create_agent` registers all executors; deferral only trims what the model *sees* per turn. The agent loads tools by calling `search_tools("github pull request")`; matches stay available for the rest of the thread. Leave off unless you have a large catalog (e.g. a chatty MCP server) — for a handful of tools it adds a discovery hop for no benefit.
+
+## `settings`
+
+**Hide settings from the console** — the settings half of `tools.hidden` (#2172,
+[ADR 0071](../adr/0071-plugin-permissions-trust-model.md)).
+
+```yaml
+settings:
+  hidden: []   # dotted field keys ("goal.max_iterations") or whole groups ("goal", "careercoach")
+```
+
+| Key | Default | What |
+|---|---|---|
+| `hidden` | `[]` | Entries are dotted settings keys (`goal.max_iterations`) or **group prefixes** (`goal` — plugin groups like `careercoach` work too). A hidden setting is dropped from the schema the console renders **and refused by the settings save/reset APIs**, so it can't be seen or changed from the UI. The live **value is untouched** (hiding ≠ disabling) — this locks a setup-time decision, it doesn't turn the feature off. Like `tools.hidden`, it's meant for restricted consoles and archetype enforcement (a bundle's `config:` block can seed it at create time). |
 
 ## `telemetry`
 
@@ -262,6 +277,27 @@ telemetry:
 |---|---|---|
 | `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
 | `db_path` | `/sandbox/telemetry.db` | SQLite path; `/sandbox`→`~/.protoagent` fallback, instance-scoped (ADR 0004). |
+
+## `prompts`
+
+Per-call system-prompt snapshots (#2243) — the persistence behind the console's
+**View prompt** message action and the `/prompt` chat command: the EXACT prompt every
+model call received (the stable prefix hash-deduped, the volatile context tail per
+call), plus that call's real token usage. Instance-scoped SQLite
+(`prompt-snapshots.db`), trimmed in-write — no maintenance loop. Deleting a chat purges
+its snapshots. Read surface: `GET /api/prompts/{task_id}` + `GET /api/prompts/last`
+(operator `/api` only; both return `{enabled:false}` when capture is off).
+
+```yaml
+prompts:
+  capture: true                 # one hashed blob + a small tail per model call
+  retention_days: 30
+```
+
+| Key | Default | What |
+|---|---|---|
+| `capture` | `true` | Snapshot each model call's final system prompt. `false` → nothing recorded; the viewer reports capture disabled. |
+| `retention_days` | `30` | Prune snapshots older than this on each new capture (`0` = keep forever; a 5000-row cap also applies). |
 
 ## `filesystem`
 

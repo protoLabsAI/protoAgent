@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { expandToolCard } from "./toolcard";
+
 // Per-tool output renderers: each starter tool's known output string renders as
 // a purpose-built component, never a raw blob. The mock picks the tool scenario
 // from the prompt keyword (see e2e/fixtures.mjs).
@@ -13,8 +15,10 @@ async function run(page, prompt: string) {
   // Frame is the DS ToolCard (#832): `.pl-toolcard*`; the body slot is ours.
   const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
+  // `status--done` is the TOOL finishing, not the TURN — expanding there races the
+  // settle remount that drops the click (e2e/toolcard.ts).
   await expect(card.locator(".pl-toolcard__status--done")).toBeVisible();
-  await card.locator(".pl-toolcard__head").click();
+  await expandToolCard(page, card);
   await expect(card.locator(".pl-toolcard__body")).toBeVisible();
   return card.locator(".pl-toolcard__body");
 }

@@ -24,7 +24,7 @@ npm run desktop:dev
 The app **bundles and launches the protoAgent server itself** as a Tauri sidecar — no separately-running server required.
 
 - `apps/desktop/sidecar/build_sidecar.py` freezes the server into a single binary via PyInstaller, named `binaries/protoagent-server-<target-triple>` (the `externalBin` Tauri bundles). The React console is the UI, so the binary stays lean (~60 MB) rather than carrying a heavier server-rendered UI stack.
-- On launch the Rust shell (`src-tauri/src/lib.rs`) spawns the sidecar on the **fixed port 7870** with `--ui console --port 7870` (the console UI tier — API + A2A + console; ADR 0010), sets `PROTOAGENT_CONFIG_DIR` to the per-user app-config dir (so the read-only binary still persists setup/secrets), drains its output to the log, and kills it on app exit. (The dynamic-free-port + window-injection handoff proved unreliable across Tauri v2 webview contexts, so the port is pinned to the web client's fallback — see the comment in `lib.rs`.)
+- On launch the Rust shell (`src-tauri/src/lib.rs`) spawns the sidecar on the **fixed port 7870** with `--ui console --port 7870` (the console UI tier — API + A2A + console; ADR 0010), sets `PROTOAGENT_HOME` to the per-user app-config dir (so the read-only binary still persists setup/secrets), drains its output to the log, and kills it on app exit. (The dynamic-free-port + window-injection handoff proved unreliable across Tauri v2 webview contexts, so the port is pinned to the web client's fallback — see the comment in `lib.rs`.)
 - The shell creates the window itself and injects `window.__PROTOAGENT_API_BASE__` (the chosen `http://127.0.0.1:<port>`) before any page script runs; the webview's React build reads it (`apps/web/src/lib/api.ts`) and calls the sidecar's `/api`, `/a2a`, and `/v1`. The console probes with backoff on startup so the few-second cold start doesn't surface as an error.
 
 The sidecar binary is gitignored — it's a build artifact produced per platform by step 1 (locally or in CI before `tauri build`).
@@ -43,7 +43,7 @@ The app updates itself in place (tauri-plugin-updater): a silent check at launch
 (release builds only) plus a tray "Check for Updates…" item. It polls
 `latest.json` on the GitHub Release, verifies the bundle's minisign signature
 against the org public key baked into `tauri.conf.json`, installs, and
-relaunches — agent data (`PROTOAGENT_CONFIG_DIR`, workspaces) is untouched.
+relaunches — agent data (`PROTOAGENT_HOME`, workspaces) is untouched.
 
 - Updater bundles are only produced in CI when the org `TAURI_SIGNING_PRIVATE_KEY`
   is present; a release without them simply has no in-app update (the `latest.json`

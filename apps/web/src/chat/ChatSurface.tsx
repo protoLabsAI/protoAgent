@@ -27,6 +27,7 @@ import {
   takeGoalKickoff,
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
+import { exportChatToFile } from "./exportChat";
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { useFlagPredicate } from "../flags/flags";
@@ -261,6 +262,7 @@ export function ChatSurface({
       onNewIncognito: () => chatStore.createSession({ incognito: true }),
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+      onExport: () => void exportChatToFile(id),
       onClose: () => setPendingClose(id),
       onCloseOthers: others.length ? () => startBulkClose(others) : undefined,
       onCloseLeft: left.length ? () => startBulkClose(left) : undefined,

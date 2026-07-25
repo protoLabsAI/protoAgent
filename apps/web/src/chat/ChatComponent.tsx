@@ -2,6 +2,8 @@ import "./chat-component.css";
 
 import type { JSX } from "react";
 
+import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
+
 import { registeredChatComponents } from "../ext/componentRegistry";
 import type { ComponentSpec } from "../lib/types";
 
@@ -38,26 +40,26 @@ function TableComponent({ props }: { props: Record<string, unknown> }) {
   return (
     <div className="chat-comp chat-comp-table">
       <Title props={props} />
-      <table>
+      <Table>
         {columns.length > 0 ? (
-          <thead>
-            <tr>
+          <THead>
+            <Tr>
               {columns.map((c, i) => (
-                <th key={i}>{c}</th>
+                <Th key={i}>{c}</Th>
               ))}
-            </tr>
-          </thead>
+            </Tr>
+          </THead>
         ) : null}
-        <tbody>
+        <TBody>
           {rows.map((r, ri) => (
-            <tr key={ri}>
+            <Tr key={ri}>
               {(Array.isArray(r) ? r : [r]).map((cell, ci) => (
-                <td key={ci}>{asString(cell)}</td>
+                <Td key={ci}>{asString(cell)}</Td>
               ))}
-            </tr>
+            </Tr>
           ))}
-        </tbody>
-      </table>
+        </TBody>
+      </Table>
     </div>
   );
 }

@@ -1,5 +1,110 @@
 [
   {
+    "version": "v0.115.0",
+    "date": "2026-07-25",
+    "changes": [
+      "Managed projects are visible in the console, and it tells you when they aren't in effect.",
+      "New guide — Build out your protoAgent with a coding agent.",
+      "A Social Marketing archetype — the fifth starter agent.",
+      "The plugins that ship with protoAgent now appear in Discover (#2249).",
+      "Installed plugins say what they do (#2248).",
+      "Fleet rows are clickable, and a delegate can be unlinked where you linked it (#2240, #2266).",
+      "The desktop app uses the real OS folder chooser for path settings (#2265).",
+      "The desktop app now emits system.wake (#1932, ADR 0074).",
+      "One place to declare a project.",
+      "Folder pickers for every path setting — no more typing a path and hoping.",
+      "Middleware warnings now reach the console feed (#2262).",
+      "Artifacts nudge away from the save-loop (#2257).",
+      "Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).",
+      "Prompt caching is attempt-by-default, and failure is loud (#2255).",
+      "Settings stops describing two dead directory fences.",
+      "The generated OpenShell sandbox policy no longer locks the agent out of its own workspace (#2281).",
+      "The artifact panel stops hammering /history (#2256).",
+      "/v1 non-streaming returns the final message with an honest finish_reason (#2234)."
+    ]
+  },
+  {
+    "version": "v0.114.0",
+    "date": "2026-07-24",
+    "changes": [
+      "See the exact system prompt behind any reply — a View prompt action on every assistant message shows what the model actually received, call by call, with its real token usage.",
+      "The prompt viewer breaks your context budget down by section — persona, skills index, injected memory, working state — so you can see where the tokens go; /prompt drops the latest prompt into the chat as an unsaved note.",
+      "Prompt capture respects your boundaries: incognito chats record nothing, and deleting a chat purges its captured prompts with it.",
+      "A bad work folder no longer silently takes away every filesystem tool — unusable paths are refused with the reason, and the editor flags saved folders that later go missing.",
+      "The Craft plugin's console name and docs now say what it ships — all six commands, including the agent-reachable ADR-authoring skill."
+    ]
+  },
+  {
+    "version": "v0.113.0",
+    "date": "2026-07-24",
+    "changes": [
+      "The new-agent picker files advanced archetypes behind a toggle — the everyday starter types stay front and center.",
+      "Installing a bundle on the host now seeds its MCP servers and secrets too — same behavior as creating an agent from it.",
+      "Plugin views and artifacts receive the console's full theme — every token and your overrides, not six approximate colors.",
+      "The header menu is a real modal now: focus stays inside it, the page behind stops scrolling.",
+      "Status colors across chat notes and settings follow your theme and light mode properly.",
+      "New guide: the managed Python runtime — what needs it, the one-click install, and how to read its status surfaces.",
+      "A documentation deep-clean: stale claims fixed everywhere, the ADR index made whole, and the plugin/CLI guides easier to find."
+    ]
+  },
+  {
+    "version": "v0.112.0",
+    "date": "2026-07-24",
+    "changes": [
+      "The plugin manager is a real table now — search plugins (and the tools they ship), filter by status, sort any column.",
+      "One plugin directory everywhere: the in-app catalog and the website now share a single curated source — and Discover grew from 12 to 20 plugins.",
+      "Plugins installed by a bundle now say so — a chip names the bundle, and search finds everything it installed.",
+      "Design System Engineer joins the new-agent picker.",
+      "Archetype cards warn at choose-time when this machine still needs the one-click Python runtime install — and Settings flags it with a dot until it's provisioned.",
+      "settings.hidden — keep chosen settings out of the console entirely: hidden means gone, not toggleable back (the settings counterpart to tools.hidden).",
+      "Desktop: the update prompt lands at launch, before the engine loads — update first instead of sitting through startup.",
+      "Fixed: saving filesystem projects no longer stalls the server while it applies."
+    ]
+  },
+  {
+    "version": "v0.111.0",
+    "date": "2026-07-23",
+    "changes": [
+      "/btw — ask a quick side question about the chat: answered from its context, saved nowhere and never changing the conversation.",
+      "New-agent panel: Name and Create now sit above the archetype picker, over a scrollable card list.",
+      "Chat export tells you the filename it saved — and says so plainly when a download is blocked."
+    ]
+  },
+  {
+    "version": "v0.110.0",
+    "date": "2026-07-23",
+    "changes": [
+      "Export a chat to Markdown — from /export or the tab's right-click menu, with secrets scrubbed.",
+      "A friendlier New Schedule dialog: an inline calendar for one-off runs and a 12/24-hour time toggle.",
+      "Hide a tool from the console entirely (not just disable it) — for restricted or archetype-locked setups."
+    ]
+  },
+  {
+    "version": "v0.109.0",
+    "date": "2026-07-23",
+    "changes": [
+      "Export a chat thread to Markdown — secrets scrubbed, ready to read and share.",
+      "Project Manager archetype — a one-click agent type in the new-agent picker.",
+      "Generated documents download again from the artifact panel.",
+      "Plugin panels no longer render dead on a sister agent."
+    ]
+  },
+  {
+    "version": "v0.108.0",
+    "date": "2026-07-23",
+    "changes": [
+      "Human approval gates for workflows — pause a run at any step, then approve, edit, or reject.",
+      "execute_code runs in the packaged desktop app — a managed Python runtime, provisioned on demand.",
+      "Cowork's document skills (Word, Excel, PowerPoint, PDF) now work on the desktop app.",
+      "Plugins install their own dependencies on desktop — into the managed runtime, or as pure-Python wheels.",
+      "Fleet Room — summon the fleet from ⌘K, with presence, DMs, and broadcast.",
+      "Workflows honor a recipe's own fan-out width, with per-step timings.",
+      "The agent runtime setting now sits with the model it depends on.",
+      "Multi-server MCP bundles can seed each server with its own input value.",
+      "Fixes: creating a Cowork agent on desktop, knowledge-recall provenance, orphaned paused runs, and a host-gated \"New agent\"."
+    ]
+  },
+  {
     "version": "v0.107.0",
     "date": "2026-07-22",
     "changes": [

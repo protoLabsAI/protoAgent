@@ -497,3 +497,35 @@ def test_install_deps_route_maps_install_error(monkeypatch):
     monkeypatch.setattr(installer, "install_deps", _boom)
     r = _client().post("/api/plugins/install-deps", json={"id": "cowork"})
     assert r.status_code == 400 and "pip install failed" in r.json()["detail"]
+
+
+def test_installed_carries_bundle_provenance(monkeypatch, tmp_path):
+    """GET /api/plugins/installed joins the lock's bundles[] registry onto member rows
+    (ADR 0040): a bundle-installed plugin carries {id, name, url}; a direct install
+    doesn't. `name` falls back to "" on locks written before it was persisted."""
+    from graph.plugins import installer as inst
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(inst, "live_plugins_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        inst,
+        "list_installed",
+        lambda: [
+            {"id": "board", "source_url": "https://x/board", "present": False, "tracked": True, "by": "bundle:pm_stack"},
+            {"id": "solo", "source_url": "https://x/solo", "present": False, "tracked": True, "by": "console"},
+        ],
+    )
+    monkeypatch.setattr(
+        inst,
+        "_read_lock",
+        lambda: {
+            "plugins": [],
+            "bundles": [
+                {"id": "pm_stack", "name": "Project Manager", "source_url": "https://x/pm-stack", "plugins": ["board"]}
+            ],
+        },
+    )
+    body = _client().get("/api/plugins/installed").json()
+    by_id = {p["id"]: p for p in body["plugins"]}
+    assert by_id["board"]["bundle"] == {"id": "pm_stack", "name": "Project Manager", "url": "https://x/pm-stack"}
+    assert "bundle" not in by_id["solo"]

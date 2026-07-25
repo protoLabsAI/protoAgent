@@ -4,7 +4,7 @@ import { Input, Switch } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { FolderTree, TerminalSquare } from "lucide-react";
+import { AlertTriangle, FolderTree, TerminalSquare } from "lucide-react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
 import type { FsProject } from "../lib/types";
+import { PathPicker } from "../settings/PathPicker";
 import { QuickSetting } from "../settings/QuickSetting";
 import { useUI } from "../state/uiStore";
 import { StagePanel } from "./ErrorBoundary";
@@ -267,10 +268,64 @@ function WorkFoldersButton() {
       </Button>
       {open ? (
         <Dialog open onClose={() => setOpen(false)} title="Work folders" width={520}>
+          <ManagedProjectsList />
           <FsProjectsEditor />
         </Dialog>
       ) : null}
     </>
+  );
+}
+
+// The ADR 0095 managed-projects registry, READ-ONLY (D5 slice 1) — registration is still a
+// YAML edit. Renders nothing at all when nothing is registered, so the 99% who haven't opted
+// in see no new chrome.
+//
+// It sits above the Work-folders editor because that's the pairing that matters: an explicit
+// `filesystem.projects` WINS over the registry (what makes ADR 0095 non-regressing), so a
+// fully-populated registry can be sitting there driving nothing. Declared-but-not-enforced is
+// exactly the drift 0095 exists to kill, so the one thing this must never do is show a tidy
+// list of projects that aren't in effect without saying so.
+function ManagedProjectsList() {
+  const query = useQuery({ queryKey: ["managed-projects"], queryFn: () => api.managedProjects() });
+  const data = query.data;
+  if (!data || data.projects.length === 0) return null;
+
+  const shadowed = data.fence_source === "explicit";
+  const access = (p: (typeof data.projects)[number]) => {
+    if (p.fs === false) return "no fs";
+    if (p.write === false) return "read-only";
+    return p.no_delete ? "no delete" : "read-write";
+  };
+
+  return (
+    <div className="fs-projects">
+      <p className="fleet-section-label">Managed projects</p>
+      <p className="setup-hint">
+        Declared in <code>projects:</code> — one entry per project, feeding the folder fence, the
+        GitHub repo picker, and the board. Edit them in your config file.
+      </p>
+      {shadowed ? (
+        <p className="fs-projects-warning" role="alert">
+          <AlertTriangle size={14} />
+          <span>
+            The Work folders below are set explicitly, which overrides the registry — these
+            projects are registered but are <strong>not</strong> fencing anything. Clear the
+            folders below to let the registry drive the fence.
+          </span>
+        </p>
+      ) : null}
+      {data.projects.map((p) => (
+        <div key={p.name} className="fs-projects-row">
+          <span>
+            {p.name}
+            {p.github ? ` · ${p.github}` : ""}
+          </span>
+          <Badge status={p.exists === false ? "error" : p.fenced ? "success" : "neutral"}>
+            {p.exists === false ? "missing" : access(p)}
+          </Badge>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -279,6 +334,7 @@ function WorkFoldersButton() {
 // as the MCP servers editor. Saving with any folder present also enables fs tools.
 function FsProjectsEditor() {
   const toast = useToast();
+  const qc = useQueryClient();
   const query = useQuery({ queryKey: ["fs-projects"], queryFn: () => api.fsProjects() });
   const [rows, setRows] = useState<FsProject[] | null>(null);
   useEffect(() => {
@@ -290,14 +346,29 @@ function FsProjectsEditor() {
     onSuccess: (res) => {
       setRows(res.projects);
       void query.refetch();
+      // Saving here is the very thing that flips the registry's fence_source: adding
+      // explicit folders SHADOWS the registry, clearing them hands the fence back. The
+      // Managed projects list sits directly above in this dialog, so without this it
+      // would keep showing the pre-save shadowing state — stale about the action the
+      // operator just took.
+      void qc.invalidateQueries({ queryKey: ["managed-projects"] });
       toast({ tone: "success", title: "Folders saved", message: "Filesystem tools cover the listed folders." });
     },
     onError: (e: Error) => toast({ tone: "error", title: "Couldn't save folders", message: errMsg(e) }),
   });
 
   if (query.isLoading || rows === null) return null;
-  const saved = JSON.stringify(query.data?.projects ?? []);
-  const dirty = JSON.stringify(rows) !== saved;
+  // Compare on the EDITABLE fields only — the server also returns `exists`, which a
+  // refetch would fold into query.data but never into the row the editor round-trips,
+  // leaving Save falsely armed right after a successful save.
+  const editable = (list: FsProject[]) => JSON.stringify(list.map((r) => [r.path, r.write, r.name ?? ""]));
+  const savedRows = query.data?.projects ?? [];
+  const dirty = editable(rows) !== editable(savedRows);
+  // A folder that vanished after it was saved (renamed / unmounted / external drive) is
+  // dropped when the tools are built; if that was the last one the agent loses the whole
+  // filesystem toolset. The API can't refuse it after the fact, so say it here.
+  const missing = savedRows.filter((r) => r.exists === false);
+  const allMissing = savedRows.length > 0 && missing.length === savedRows.length;
 
   return (
     <div className="fs-projects">
@@ -306,13 +377,23 @@ function FsProjectsEditor() {
         The folders the filesystem tools may read{" "}
         (and, per-folder, write). The agent can't reach anything outside this list.
       </p>
+      {missing.length ? (
+        <p className="fs-projects-warning" role="alert">
+          <AlertTriangle size={14} />
+          <span>
+            {allMissing
+              ? "None of these folders exist, so the filesystem tools are unbound — the agent has no read_file / list_dir at all. Fix or remove the paths below."
+              : `${missing.length} folder${missing.length > 1 ? "s are" : " is"} missing and skipped — the agent can't reach ${missing.length > 1 ? "them" : "it"}.`}
+          </span>
+        </p>
+      ) : null}
       {rows.map((row, i) => (
         <div key={i} className="fs-projects-row">
-          <Input
+          <PathPicker
             value={row.path}
-            placeholder="~/Documents"
-            aria-label="Folder path"
-            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)))}
+            ariaLabel="Folder path"
+            invalid={savedRows[i]?.exists === false && savedRows[i]?.path === row.path}
+            onChange={(v) => setRows(rows.map((r, j) => (j === i ? { ...r, path: v } : r)))}
           />
           <label className="fs-projects-write">
             <Switch

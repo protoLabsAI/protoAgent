@@ -93,15 +93,24 @@ def _approved(decision) -> bool:
     return str(decision).strip().lower() in {"approve", "approved", "yes", "y", "true", "ok"}
 
 
+def _configured_entries(config, *, create: bool = False) -> list[dict]:
+    """The fence entries this config actually asks for — explicit
+    ``filesystem.projects``, else the ADR 0095 ``projects:`` registry projected
+    onto the fence, else the default workspace. The warning path below reports
+    against this same list, so a bad entry is named wherever it was declared."""
+    entries = (
+        config.effective_filesystem_projects(create=create)
+        if hasattr(config, "effective_filesystem_projects")
+        else (getattr(config, "filesystem_projects", []) or [])
+    )
+    return [e for e in entries or [] if isinstance(e, dict)]
+
+
 def _registry_from_config(config) -> ProjectRegistry:
     projects: list[Project] = []
     # Explicit projects, or the default workspace dir (created) when none are
     # configured — the on-by-default fenced workspace.
-    entries = (
-        config.effective_filesystem_projects(create=True)
-        if hasattr(config, "effective_filesystem_projects")
-        else (getattr(config, "filesystem_projects", []) or [])
-    )
+    entries = _configured_entries(config, create=True)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -140,7 +149,17 @@ def build_fs_tools(config) -> list:
     projects are registered (so the primitive is inert by default)."""
     registry = _registry_from_config(config)
     if not registry.names():
-        log.info("[fs] filesystem enabled but no valid projects registered — no tools")
+        # Configured-but-all-unusable is an OPERATOR MISTAKE, not the inert default: every
+        # fs tool unbinds and the agent just... can't read files anymore. Warn, and
+        # name the folders, so the log says why instead of only that it happened.
+        configured = _configured_entries(config)
+        if configured:
+            log.warning(
+                "[fs] no usable work folders — filesystem tools NOT bound. Fix or remove: %s",
+                ", ".join(str(e.get("path") or e.get("name") or "?") for e in configured),
+            )
+        else:
+            log.info("[fs] filesystem enabled but no valid projects registered — no tools")
         return []
     allow_run = bool(getattr(config, "filesystem_allow_run", False))
     # run_command is unsandboxed (arbitrary argv as the server user), so by

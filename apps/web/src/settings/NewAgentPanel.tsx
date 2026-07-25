@@ -9,15 +9,18 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
 import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
-import { archetypesQuery, queryKeys } from "../lib/queries";
+import { pythonRuntimeView } from "../app/pythonRuntime";
+import { archetypesQuery, pythonRuntimeQuery, queryKeys } from "../lib/queries";
 import { lucideIcon } from "../lib/lucideIcon";
 import { archetypeConfigFields, isMissingRequiredConfig, fieldId, splitConfigValues } from "../lib/archetypeConfig";
 import type { Archetype } from "../lib/types";
 
 const NAME_RE = /^[A-Za-z0-9-_]+$/;
 
-// Onboarding / archetype picker (ADR 0042). Pick an archetype (Basic + installed bundles),
-// optionally configure the bundle's MCP inputs + secrets (#2041), name the agent, create.
+// Onboarding / archetype picker (ADR 0042). Name the agent, pick an archetype (Basic +
+// installed bundles), optionally configure the bundle's MCP inputs + secrets (#2041), create.
+// Name + Create sit ABOVE the archetype section (#2193) so a growing archetype list never
+// pushes them off-screen — the card list scrolls inside its own bounded container instead.
 // Creating from a bundle clones+installs it (a few seconds) — the POST returns once the
 // agent is up, so the button shows a spinner until then.
 export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) => void; onCancel?: () => void }) {
@@ -32,10 +35,17 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
   // fieldId(origin+key) so an MCP input and a declared secret sharing a key don't collide.
   const [configOpen, setConfigOpen] = useState(true);
   const [values, setValues] = useState<Record<string, string>>({});
+  // Advanced archetypes (tier: "advanced") collapse below the standard cards behind a
+  // chevron toggle, so the picker leads with the everyday choices. Expand to pick one.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
   // agent from a bundle and has no SOUL editor, so Custom would just duplicate Basic.
   const list = (archetypes.data?.archetypes ?? []).filter((a) => a.id !== "custom");
+  // Split by tier: standard renders inline as today; advanced under a collapsible section.
+  // Absent tier = standard (backward compatible), so nothing moves unless it opts in.
+  const standard = list.filter((a) => a.tier !== "advanced");
+  const advanced = list.filter((a) => a.tier === "advanced");
   const pickedArchetype = list.find((a) => a.id === picked);
   const archetype = pickedArchetype ?? list[0];
   const nameOk = NAME_RE.test(name);
@@ -51,6 +61,21 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
     retry: 1,
   });
   const fields = useMemo(() => archetypeConfigFields(preview.data), [preview.data]);
+
+  // Runtime requirement at CHOOSE-time (#2186 follow-on): an archetype declaring
+  // `requires: [python_runtime]` (cowork — its document skills route through
+  // execute_code) gets a warning here when this host's managed runtime isn't ready,
+  // so the ADR-0092 first-run doesn't end at a failed docx on the new agent's first
+  // task. The new-agent flow is a HOST operation and the runtime is box-shared
+  // (ADR 0094), so the host's runtime state is exactly the state the new agent gets.
+  // `stale` (provisioned, old doc baseline) still works — no warning for it here.
+  const pyRuntime = pythonRuntimeView(useQuery(pythonRuntimeQuery()).data);
+  const runtimeWarning =
+    pickedArchetype?.requires?.includes("python_runtime") && pyRuntime.kind === "action" && !pyRuntime.stale
+      ? pyRuntime.installing
+        ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
+        : `${pickedArchetype.label} needs the managed Python runtime for its document skills — install it in Settings ▸ Tools first, or create the agent now and provision later.`
+      : null;
   // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure step
   // (or an individual required field) is a first-class path that falls back to env-only.
   const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
@@ -90,7 +115,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
     <section className="panel stage-panel">
       <PanelHeader
         title="New agent"
-        kicker="pick an archetype, name it, and launch — a new workspace agent on this host"
+        kicker="name it, pick an archetype, and launch — a new workspace agent on this host"
         actions={
           onCancel ? (
             <Button variant="ghost" onClick={onCancel}>
@@ -100,12 +125,66 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         }
       />
       <div className="stage-body">
+        <label className="field archetype-name-field">
+          <span>Name</span>
+          <Input
+            value={name}
+            autoFocus
+            placeholder="e.g. ava, roxy, research-bot"
+            aria-label="Agent name"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && nameOk && !create.isPending) create.mutate();
+            }}
+          />
+          <span className="field-hint">Letters, numbers, dashes and underscores — it's the agent's id and URL.</span>
+        </label>
+
+        <div className="panel-actions">
+          <Button
+            variant="primary"
+            disabled={!nameOk || create.isPending}
+            onClick={() => create.mutate()}
+          >
+            {create.isPending ? "Creating…" : archetype?.bundle ? `Create from ${archetype.label}` : "Create agent"}
+          </Button>
+        </div>
+
         <p className="fleet-section-label">Archetype</p>
-        <RadioCardGroup name="archetype" min="160px" value={picked} onValueChange={pick}>
-          {list.map((a: Archetype) => (
-            <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
-          ))}
-        </RadioCardGroup>
+        {/* Installed bundles grow this list without bound (#2193) — the cards scroll inside
+            their own container so Name/Create above never leave the viewport. Height only:
+            width stays with the AppShell's controlled container. */}
+        <div className="archetype-card-scroll" style={{ maxHeight: "min(40vh, 420px)", overflowY: "auto" }}>
+          <RadioCardGroup name="archetype" min="160px" value={picked} onValueChange={pick}>
+            {standard.map((a: Archetype) => (
+              <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
+            ))}
+          </RadioCardGroup>
+          {/* Advanced archetypes (tier: "advanced") collapse behind a chevron toggle — a
+              separate RadioCardGroup that shares the same picked value + pick(), so choosing a
+              card here is identical to choosing a standard one. Hidden entirely when empty, so
+              a catalog with no advanced entries looks exactly as it did before. */}
+          {advanced.length ? (
+            <div className="archetype-advanced">
+              <button
+                type="button"
+                className="archetype-configure-toggle"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((o) => !o)}
+              >
+                {advancedOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                <span>Advanced ({advanced.length})</span>
+              </button>
+              {advancedOpen ? (
+                <RadioCardGroup name="archetype-advanced" min="160px" value={picked} onValueChange={pick}>
+                  {advanced.map((a: Archetype) => (
+                    <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
+                  ))}
+                </RadioCardGroup>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         {pickedArchetype ? (
           <button type="button" className="archetype-preview-link" onClick={() => setPreviewOpen(true)}>
             See what&apos;s included in {pickedArchetype.label} →
@@ -113,6 +192,11 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         ) : null}
         {previewOpen && pickedArchetype ? (
           <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
+        ) : null}
+        {runtimeWarning ? (
+          <p className="archetype-runtime-notice" role="note">
+            {runtimeWarning}
+          </p>
         ) : null}
 
         {/* Inline Configure step (#2041) — appears only when the picked bundle has MCP inputs
@@ -164,31 +248,6 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
             ) : null}
           </div>
         ) : null}
-
-        <label className="field archetype-name-field">
-          <span>Name</span>
-          <Input
-            value={name}
-            autoFocus
-            placeholder="e.g. ava, roxy, research-bot"
-            aria-label="Agent name"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && nameOk && !create.isPending) create.mutate();
-            }}
-          />
-          <span className="field-hint">Letters, numbers, dashes and underscores — it's the agent's id and URL.</span>
-        </label>
-
-        <div className="panel-actions">
-          <Button
-            variant="primary"
-            disabled={!nameOk || create.isPending}
-            onClick={() => create.mutate()}
-          >
-            {create.isPending ? "Creating…" : archetype?.bundle ? `Create from ${archetype.label}` : "Create agent"}
-          </Button>
-        </div>
       </div>
     </section>
   );

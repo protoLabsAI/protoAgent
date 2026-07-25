@@ -29,13 +29,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 
 from graph.config import LangGraphConfig
 
 log = logging.getLogger(__name__)
-
-_ANTHROPIC_RE = re.compile(r"(claude|anthropic|sonnet|opus|haiku)", re.IGNORECASE)
 
 
 class CacheWarmer:
@@ -59,12 +56,9 @@ class CacheWarmer:
         if c.cache_warming_interval_seconds <= 0:
             log.warning("[cache-warmer] disabled: non-positive interval")
             return False
-        if not (c.prompt_cache_force or _ANTHROPIC_RE.search(c.model_name)):
-            log.info(
-                "[cache-warmer] disabled: model '%s' isn't Anthropic-family (set prompt_cache.force to override)",
-                c.model_name,
-            )
-            return False
+        # No model-name gate (#2255): caching is attempt-by-default now, and warming
+        # is already double-opt-in (warm.enabled AND prompt_cache.enabled) — an
+        # operator who turns warming on for a gateway alias knows what it routes to.
         return True
 
     # --- the warm prefix ----------------------------------------------------

@@ -98,7 +98,30 @@ def build_system_prompt(
     the prompt so the agent knows the dirs it can operate on (and which are
     read-only). Inert when None.
     """
-    parts = []
+    return "\n\n".join(
+        text
+        for _label, text in build_system_prompt_parts(
+            workspace=workspace,
+            include_subagents=include_subagents,
+            context=context,
+            projects=projects,
+        )
+    )
+
+
+def build_system_prompt_parts(
+    workspace: str = "/sandbox",
+    include_subagents: bool = True,
+    context: str = "",
+    projects=None,
+) -> list[tuple[str, str]]:
+    """The lead-agent system prompt as labeled ``(label, text)`` sections —
+    the segmentation substrate for the prompt viewer's context-budget
+    breakdown (#2243 P2). ``build_system_prompt`` is exactly these texts
+    joined with a blank line (a test pins the equivalence), so the labels
+    annotate the REAL prompt, never a reconstruction.
+    """
+    parts: list[tuple[str, str]] = []
 
     # 1. Identity — the instance's OWN persona. Prefer the canonical live SOUL:
     # ``instance_paths().soul_path`` = ``<instance_root>/config/SOUL.md`` — the path
@@ -125,36 +148,39 @@ def build_system_prompt(
     if not soul:
         soul = _read_file(Path(__file__).parent.parent / "config" / "SOUL.md")
     if soul:
-        parts.append(soul)
+        parts.append(("SOUL", soul))
     else:
         parts.append(
-            "# Agent\n\n"
-            "You are a protoAgent — an A2A-compliant LangGraph agent. "
-            "Replace this placeholder by writing an SOUL.md in the workspace "
-            "with your agent's identity, role, and personality."
+            (
+                "SOUL",
+                "# Agent\n\n"
+                "You are a protoAgent — an A2A-compliant LangGraph agent. "
+                "Replace this placeholder by writing an SOUL.md in the workspace "
+                "with your agent's identity, role, and personality.",
+            )
         )
 
     # 2. Subagent instructions
     if include_subagents:
-        parts.append(_build_subagent_section())
+        parts.append(("Subagents", _build_subagent_section()))
 
     # 2b. Managed project workspaces (ADR 0007 — fenced filesystem toolset).
     if projects:
         section = _build_projects_section(projects)
         if section:
-            parts.append(section)
+            parts.append(("Managed projects", section))
 
     # 3. Dynamic context (typically from KnowledgeMiddleware)
     if context:
-        parts.append(f"\n# Context\n\n{context}")
+        parts.append(("Context", f"\n# Context\n\n{context}"))
 
     # 3.5 Operating model — the autonomous doctrine (ADR 0079). Core, always shipped: it
     # teaches the agent to compose its four durable primitives (goal · tasks · schedule ·
     # watch) into ONE self-managing OODA loop, instead of treating each as an isolated tool.
-    parts.append(_OPERATING_MODEL)
+    parts.append(("Operating model", _OPERATING_MODEL))
 
     # 4. Operator guidelines — OVERRIDE THIS in your fork
-    parts.append("""
+    parts.append(("Guidelines", """
 # Guidelines
 
 - Prefer direct answers for simple requests; use tools when they add
@@ -170,9 +196,9 @@ def build_system_prompt(
   ready (it ends the turn and resumes you with `then`).
 - Answer directly and naturally. Your reasoning is streamed separately (native
   reasoning), so think freely — don't narrate your deliberation in the answer.
-""")
+"""))
 
-    return "\n\n".join(parts)
+    return parts
 
 
 def _build_projects_section(projects) -> str:

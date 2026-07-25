@@ -1,0 +1,94 @@
+/* "View prompt" body inside the DocumentViewer host (#2243). The host owns the
+   dialog chrome + body scroll region; this fills it with a meta strip and a
+   raw monospace reading surface that scrolls on its own. */
+.prompt-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+}
+
+.prompt-viewer__meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.prompt-viewer__spacer {
+  flex: 1;
+}
+
+.prompt-viewer__text {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prompt-viewer__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  padding: 8px 0;
+}
+
+/* Context-budget breakdown (#2243 P2): one row per composer-labeled section —
+   label, a proportional bar (share of the whole prompt), ≈token count. Context
+   (volatile-tail) rows tint the bar so the stable/dynamic halves read apart. */
+.prompt-viewer__budget {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.prompt-viewer__budget-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 240px) 1fr 64px;
+  gap: 10px;
+  align-items: center;
+}
+
+.prompt-viewer__budget-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-viewer__budget-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.prompt-viewer__budget-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--fg-muted);
+}
+
+.prompt-viewer__budget-fill--context {
+  background: var(--brand-violet);
+}
+
+.prompt-viewer__budget-tokens {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

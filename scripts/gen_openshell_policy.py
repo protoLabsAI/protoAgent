@@ -6,9 +6,14 @@ OpenShell's **v1 policy schema** (validated against OpenShell v0.0.59) —
 derived from what the agent is actually configured to use, not hand-rolled
 guesses:
 
-- ``filesystem_policy`` (Landlock) ← the ``filesystem.projects`` registry
-  (read-only vs read-write per project) + the agent data root + a read-only
-  OS baseline.
+- ``filesystem_policy`` (Landlock) ← the **effective** fs fence
+  (``LangGraphConfig.effective_filesystem_projects`` — explicit
+  ``filesystem.projects``, else the ADR 0095 ``projects:`` registry, else the
+  default workspace dir), read-only vs read-write per project, + the agent data
+  root + a read-only OS baseline. Reading the raw ``filesystem.projects`` field
+  instead was #2281: it's empty on a default install, so the emitted policy
+  carried no project paths and — Landlock being deny-by-default — locked the
+  agent out of the one directory its fs toolset is fenced to.
 - ``network_policies`` (per-binary, deny-by-default egress proxy) ←
   ``egress.allowed_hosts`` + ``model.api_base``.
 - ``process`` ← runs as the unprivileged ``sandbox`` user from the image.
@@ -65,7 +70,15 @@ def _host_port(url_or_host: str) -> tuple[str, int]:
 def build_policy(cfg: LangGraphConfig) -> str:
     rw_paths: list[tuple[str, str]] = [(p, "") for p in _RW_BASELINE]
     ro_paths: list[tuple[str, str]] = [(p, "") for p in _RO_BASELINE]
-    for entry in cfg.filesystem_projects or []:
+    # The fence the agent ACTUALLY gets, not the raw config field: with no explicit
+    # ``filesystem.projects`` (the shipped default) that field is empty while
+    # ``effective_filesystem_projects`` falls back to the default workspace — so reading
+    # the raw list emitted a policy with NO project paths and, Landlock being
+    # deny-by-default, denied the agent the one directory its fs toolset is fenced to.
+    # Also picks up the ADR 0095 ``projects:`` registry for free. ``create=False``:
+    # generating a policy must not mkdir anything, and ``landlock.compatibility:
+    # best_effort`` already skips paths that aren't there.
+    for entry in cfg.effective_filesystem_projects() or []:
         if not isinstance(entry, dict):
             continue
         path = str(entry.get("path") or "").strip()
@@ -105,7 +118,8 @@ def build_policy(cfg: LangGraphConfig) -> str:
 #
 # v1 policy schema, validated against OpenShell v0.0.59. Re-verify on upgrade
 # (`openshell policy prove` can check properties of this file). Single source
-# of truth: filesystem_policy ← filesystem.projects; network_policies ←
+# of truth: filesystem_policy ← the effective fs fence (filesystem.projects, else
+# the projects: registry, else the default workspace); network_policies ←
 # egress.allowed_hosts + model.api_base.
 
 version: 1

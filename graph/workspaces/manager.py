@@ -422,7 +422,7 @@ def _apply_bundle_config_defaults(cfg: Path, lock: Path) -> dict:
     return overlay
 
 
-def _apply_bundle_mcp_servers(cfg: Path, lock: Path, inputs: Mapping[str, str] | None = None) -> list[str]:
+def apply_bundle_mcp_servers(cfg: Path, lock: Path, inputs: Mapping[str, str] | None = None) -> list[str]:
     """Seed a freshly-installed bundle's ``mcp:`` servers into the workspace config
     (ADR 0083 D5, #2011). A bundle can carry catalog-shaped MCP templates
     (``{template, inputs}``); each is resolved against the seed-time environment (an
@@ -484,7 +484,7 @@ def _apply_bundle_mcp_servers(cfg: Path, lock: Path, inputs: Mapping[str, str] |
     return added
 
 
-def _apply_bundle_secrets(cfg: Path, lock: Path, secrets_list: list[dict]) -> list[str]:
+def apply_bundle_secrets(cfg: Path, lock: Path, secrets_list: list[dict]) -> list[str]:
     """Write operator-supplied values for a bundle's DECLARED secrets into the member's
     ``secrets.yaml`` (#2041). The bundle declares its secrets in the lock
     (``{key, label, placeholder, secret, required}`` per bundle, cached by the installer);
@@ -541,6 +541,13 @@ def _apply_bundle_secrets(cfg: Path, lock: Path, secrets_list: list[dict]) -> li
     # the config — write THERE, not the hub's overlay that save_secrets() would resolve by default.
     save_secrets(updates, cfg.parent / "secrets.yaml")
     return written
+
+
+# Public since #2118 — ops/plugins.py::install_and_activate seeds a HOST bundle install
+# with the same helpers (host config + host plugins.lock). The private aliases keep the
+# workspace-create call sites and existing tests unchanged.
+_apply_bundle_mcp_servers = apply_bundle_mcp_servers
+_apply_bundle_secrets = apply_bundle_secrets
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:

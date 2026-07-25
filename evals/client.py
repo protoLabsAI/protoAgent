@@ -70,6 +70,13 @@ def _resolve_auth_env() -> tuple[str, str]:
     return bearer, api_key
 
 
+# Bounded backoff for the push-config helpers' TASK_NOT_FOUND retry
+# (``AgentClient._rpc_until_task_visible``). Delays double per attempt:
+# 0.05 → 0.1 → 0.2 → 0.4, ~0.75s worst case before the error propagates.
+_TASK_VISIBLE_ATTEMPTS = 5
+_TASK_VISIBLE_BACKOFF_S = 0.05
+
+
 class AgentClient:
     """Thin A2A client tied to one agent instance."""
 
@@ -416,6 +423,26 @@ class AgentClient:
             raise A2ARpcError(method, resp["error"])
         return resp.get("result") or {}
 
+    async def _rpc_until_task_visible(self, method: str, params: dict, *, timeout_s: int = 10) -> dict:
+        """``_rpc``, absorbing the task-registration race (#2230).
+
+        A task started via ``SendStreamingMessage`` is live (streaming frames,
+        active-task registry) slightly before its store write lands, so an
+        immediate task-scoped call can get ``TASK_NOT_FOUND`` for a task that
+        provably exists. Retry exactly that error with a short doubling
+        backoff, bounded at ``_TASK_VISIBLE_ATTEMPTS`` attempts — a genuinely
+        wrong task id still fails, just ~0.75s later. Any other JSON-RPC error
+        propagates immediately.
+        """
+        for attempt in range(_TASK_VISIBLE_ATTEMPTS):
+            try:
+                return await self._rpc(method, params, timeout_s=timeout_s)
+            except A2ARpcError as e:
+                if not e.is_task_not_found or attempt == _TASK_VISIBLE_ATTEMPTS - 1:
+                    raise
+            await asyncio.sleep(_TASK_VISIBLE_BACKOFF_S * 2**attempt)
+        raise AssertionError("unreachable: the last attempt returns or raises")
+
     # ── push notification config ────────────────────────────────────────────
 
     async def set_push_config(self, task_id: str, url: str, token: str | None = None) -> dict:
@@ -430,7 +457,9 @@ class AgentClient:
         The task must already exist server-side (the handler looks it up and
         raises TaskNotFound otherwise), so call this on an in-flight task —
         or pass the config inline on ``SendMessage`` via
-        ``configuration.taskPushNotificationConfig``.
+        ``configuration.taskPushNotificationConfig``. A just-started task may
+        not have hit the store yet, so TASK_NOT_FOUND is retried briefly
+        (``_rpc_until_task_visible``) instead of failing the first call.
 
         When ``token`` is set the agent echoes it back as the
         ``X-A2A-Notification-Token`` header on every delivery.
@@ -438,31 +467,40 @@ class AgentClient:
         params: dict = {"taskId": task_id, "url": url}
         if token:
             params["token"] = token
-        return await self._rpc("CreateTaskPushNotificationConfig", params)
+        return await self._rpc_until_task_visible("CreateTaskPushNotificationConfig", params)
 
     async def get_push_config(self, task_id: str, config_id: str | None = None) -> dict:
         """``GetTaskPushNotificationConfig`` → the stored config.
 
         ``config_id`` defaults to the task id — that is what the store assigns
         when a config is created without an explicit ``id``."""
-        return await self._rpc(
+        return await self._rpc_until_task_visible(
             "GetTaskPushNotificationConfig",
             {"taskId": task_id, "id": config_id or task_id},
         )
 
     async def list_push_configs(self, task_id: str) -> list[dict]:
         """``ListTaskPushNotificationConfigs`` → the task's configs."""
-        res = await self._rpc("ListTaskPushNotificationConfigs", {"taskId": task_id})
+        res = await self._rpc_until_task_visible("ListTaskPushNotificationConfigs", {"taskId": task_id})
         return res.get("configs") or []
 
 
 class A2ARpcError(RuntimeError):
     """A JSON-RPC error frame returned by the agent."""
 
+    #: The A2A spec code for ``TaskNotFoundError`` (a2a-sdk ``utils/errors.py``).
+    TASK_NOT_FOUND_CODE = -32001
+
     def __init__(self, method: str, error: dict):
         self.method = method
         self.error = error
         super().__init__(f"{method}: {error}")
+
+    @property
+    def is_task_not_found(self) -> bool:
+        """True when the frame is the server's TaskNotFound (``-32001``) —
+        the one error ``_rpc_until_task_visible`` treats as transient."""
+        return self.error.get("code") == self.TASK_NOT_FOUND_CODE
 
 
 def _norm_state(state: str) -> str:

@@ -17,13 +17,6 @@
         ]
       },
       {
-        "title": "Plugin Python deps in the desktop app",
-        "detail": "opt-in install of a plugin's requires_pip packages inside the frozen desktop build.",
-        "refs": [
-          "#1631"
-        ]
-      },
-      {
         "title": "Federation token follow-ups",
         "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
         "refs": [
@@ -41,8 +34,7 @@
         "title": "Ollama & Hugging Face listings",
         "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
         "refs": [
-          "#1833",
-          "#1834"
+          "#1990"
         ]
       }
     ]
@@ -51,8 +43,8 @@
     "status": "In progress",
     "items": [
       {
-        "title": "Image generation plugin (protobanana)",
-        "detail": "generate → look → refine image workflows on the new media platform: tools save artifacts the chat renders inline, and the vision model critiques its own output.",
+        "title": "Design-system alignment",
+        "detail": "migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).",
         "refs": []
       }
     ]
@@ -60,6 +52,13 @@
   {
     "status": "Shipped",
     "items": [
+      {
+        "title": "Plugin Python deps in the desktop app",
+        "detail": "opt-in install of a plugin's requires_pip packages inside the frozen desktop build: pure-Python wheels onto the host path, or into the managed Python runtime that also gives the desktop app a working execute_code.",
+        "refs": [
+          "v0.108.0"
+        ]
+      },
       {
         "title": "Production traces → training flywheel",
         "detail": "per-turn trajectory export from production agents into the lab for downstream training-data collection.",

@@ -245,6 +245,26 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     ]
 
 
+def test_delete_session_purges_prompt_snapshots(monkeypatch):
+    # Prompt snapshots are conversation-scoped (#2243): deleting a chat purges
+    # its captured prompts (other sessions' rows untouched).
+    import operator_api.chat_routes as cr
+
+    from observability.prompt_snapshots import prompt_snapshots
+
+    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    prompt_snapshots().record(task_id="t1", session_id="s1", stable_text="P")
+    prompt_snapshots().record(task_id="t2", session_id="s2", stable_text="P")
+
+    c = _client(monkeypatch)
+    assert c.delete("/api/chat/sessions/s1").json()["deleted"] is True
+    assert prompt_snapshots().last_for_session("s1") is None
+    assert prompt_snapshots().last_for_session("s2") is not None
+
+
 def test_compact_session_route(monkeypatch):
     # The route is a thin pass-through to server.chat.compact_session — forwards the
     # path session_id and returns the compaction result dict verbatim. /compact is
@@ -453,3 +473,53 @@ def test_openai_streaming(monkeypatch):
     first = json.loads(frames[0][len("data: ") :])
     assert first["choices"][0]["delta"]["content"] == "echo:yo"
     assert frames[-1] == "data: [DONE]"
+
+
+def test_export_session_route(monkeypatch):
+    # Thin pass-through to server.chat.export_session — forwards the path session_id
+    # plus the optional ?title, and returns the export result dict verbatim. No
+    # developer-flag gate: export is read-only (unlike /compact), so there's nothing
+    # to guard behind a pre-release flag.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_export(session_id, *, title=None):
+        seen.append((session_id, title))
+        return {
+            "found": True,
+            "markdown": "# Chat export\n\n## User\n\nhi\n",
+            "message_count": 2,
+            "redactions": ["openai-key"],
+            "reason": "ok",
+            "message": "Exported 2 message(s) as Markdown.",
+        }
+
+    monkeypatch.setattr(cr, "export_session", _fake_export)
+    c = _client(monkeypatch)
+    body = c.get("/api/chat/sessions/s1/export?title=My%20Chat").json()
+    assert seen == [("s1", "My Chat")]
+    assert body["found"] is True and body["message_count"] == 2
+    assert body["markdown"].startswith("# Chat export")
+    # The redaction summary must survive to the caller — it's what the operator
+    # reviews before sharing.
+    assert body["redactions"] == ["openai-key"]
+
+
+def test_aside_session_route(monkeypatch):
+    # Thin pass-through to server.chat.aside_session — forwards the path session_id +
+    # the body's question, returns the result verbatim. POST (it runs a turn), no
+    # developer-flag gate.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_aside(session_id, question, **_k):
+        seen.append((session_id, question))
+        return {"found": True, "answer": "42", "reason": "ok", "message": ""}
+
+    monkeypatch.setattr(cr, "aside_session", _fake_aside)
+    c = _client(monkeypatch)
+    body = c.post("/api/chat/sessions/s1/aside", json={"question": "what's the answer?"}).json()
+    assert seen == [("s1", "what's the answer?")]
+    assert body["found"] is True and body["answer"] == "42"

@@ -257,6 +257,11 @@ class ProtoAgentExecutor(AgentExecutor):
 
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
+        # Thread the task id to in-graph middleware via the request-context
+        # contextvar (ADR 0032) — PromptCapture keys snapshots by it (#2243);
+        # it is request-scoped, not agent state, so metadata is the lane.
+        if context.task_id:
+            _md["a2a.task_id"] = context.task_id
         _origin = str(_md.get("origin", "") or "")
         _priority = str(_md.get("priority", "") or "")
         _trigger = str(_md.get("trigger") or _md.get("scheduler_job_id") or _md.get("inbox_source") or "")

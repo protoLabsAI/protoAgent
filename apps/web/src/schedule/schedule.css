@@ -107,3 +107,47 @@
   max-height: 320px;
   overflow-y: auto;
 }
+
+/* #2159 — inline month calendar + 12/24h toggle for the New Schedule builder. */
+.schedule-once { display: flex; flex-direction: column; gap: 10px; }
+.schedule-once-fields { display: flex; gap: 10px; }
+.schedule-once-fields .field { flex: 1; }
+
+.cal {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-panel);
+  user-select: none;
+}
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.cal-title { font-size: 13px; font-weight: 600; }
+.cal-nav {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px;
+  border: 1px solid transparent; background: transparent; color: var(--fg); cursor: pointer;
+}
+.cal-nav:hover { background: var(--bg-hover, rgba(127,127,127,.14)); }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal-dow { margin-bottom: 2px; }
+.cal-wd { text-align: center; font-size: 11px; color: var(--fg-muted); padding: 2px 0; }
+.cal-day {
+  aspect-ratio: 1 / 1; min-height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--fg); font-size: 12px; cursor: pointer;
+}
+.cal-day:hover { background: var(--bg-hover, rgba(127,127,127,.14)); }
+.cal-out { color: var(--fg-muted); opacity: .55; }
+.cal-today { border-color: var(--border); font-weight: 600; }
+.cal-sel { background: var(--brand-violet-light, #6d5efc); color: #fff; border-color: transparent; }
+.cal-sel:hover { background: var(--brand-violet-light, #6d5efc); }
+
+.field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hour-toggle {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent; color: var(--fg-muted); cursor: pointer;
+}
+.hour-toggle:hover { color: var(--fg); border-color: var(--fg-muted); }
+.time-12h { display: flex; gap: 6px; }
+.time-12h > * { flex: 1; }

@@ -12,7 +12,10 @@ import type { Page } from "@playwright/test";
 test("the header hamburger opens the app drawer → Settings dialog", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
-  const drawer = page.getByTestId("app-drawer");
+  // The whole sheet (head/body/FOOTER) — the DS Drawer dialog, named by its title
+  // (#2222). The `app-drawer` testid now rides the body wrapper only, so footer
+  // assertions below need the dialog scope; using the role also pins the a11y name.
+  const drawer = page.getByRole("dialog", { name: "Menu" });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   // The drawer is a single Settings door now (ADR 0048) — no separate Telemetry shortcut.
@@ -104,6 +107,31 @@ test("Tools panel: the Filesystem group's Work folders chip opens the fenced-roo
   const dialog = page.getByRole("dialog", { name: "Work folders" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Add folder" })).toBeVisible();
+});
+
+test("Work folders: Browse… picks a real folder from the SERVER, no typing", async ({ page }) => {
+  // Typing was the only way to fill this field, and a path that doesn't exist is skipped
+  // at graph build — if it was the only root, every filesystem tool unbinds. The picker
+  // lists the SERVER's directories (a browser-native picker would describe the client's
+  // machine, which is frequently not the one being configured) so the value is always
+  // real. Walk a level down and confirm the chosen path lands in the row.
+  await openToolsTab(page);
+  await page.getByRole("button", { name: /Filesystem/ }).click();
+  await page.getByRole("button", { name: "Work folders" }).click();
+  const folders = page.getByRole("dialog", { name: "Work folders" });
+  await folders.getByRole("button", { name: "Add folder" }).click();
+  await folders.getByRole("button", { name: /Browse/ }).click();
+
+  const picker = page.getByRole("dialog", { name: "Choose a folder" });
+  await expect(picker).toBeVisible();
+  await expect(picker.locator(".path-browser-cwd")).toHaveText("/home/op");
+  // A folder row navigates on ONE click — no select-then-descend gesture.
+  await picker.getByRole("option", { name: "dev" }).click();
+  await expect(picker.locator(".path-browser-cwd")).toHaveText("/home/op/dev");
+  await picker.getByRole("button", { name: "Use this folder" }).click();
+
+  await expect(picker).toBeHidden();
+  await expect(folders.getByLabel("Folder path")).toHaveValue("/home/op/dev");
 });
 
 // The old "Disabled tools" chip (a raw tools.disabled textarea) is gone — every row

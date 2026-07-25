@@ -248,6 +248,8 @@ HOST_SCOPED_KEYS = {
     "prompt_cache.warm.interval_seconds",
     "telemetry.enabled",
     "telemetry.retention_days",
+    "prompts.capture",
+    "prompts.retention_days",
     "identity.org",
     # commons.path is box-level (ADR 0041 commons read by every agent on the box);
     # skills.scope stays "agent" (each agent picks its own sharing mode).

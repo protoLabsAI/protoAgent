@@ -89,36 +89,16 @@
   line-height: 1.5;
 }
 
-/* Injection-record table — legible per-turn "what did it use?" readout. Each
-   row is a clickable affordance opening the resolved-detail dialog. */
+/* Injection-record table — the per-turn "what did it use?" readout. DS `Table`
+   supplies the chrome (borders, header, cursor + hover on the clickable rows via
+   `pl-tr--interactive`). These are the deltas the DS doesn't cover: spacing above
+   the table, keyboard focus-visibility on the rows, and two column tweaks. */
 .memory-injections {
-  width: 100%;
   margin-top: 0.6rem;
-  border-collapse: collapse;
-  font-size: 0.85rem;
 }
 
-.memory-injections th,
-.memory-injections td {
-  text-align: left;
-  vertical-align: top;
-  padding: 0.45rem 0.5rem;
-  border-bottom: 1px solid var(--pl-color-border, rgba(128, 128, 128, 0.25));
-}
-
-.memory-injections th {
-  font-weight: 600;
-  font-size: 0.75rem;
-  color: var(--pl-color-text-muted, #8a8f98);
-}
-
-.memory-injections-row {
-  cursor: pointer;
-}
-
-.memory-injections-row:hover,
 .memory-injections-row:focus-visible {
-  background: var(--pl-color-surface-2, rgba(128, 128, 128, 0.08));
+  background: var(--pl-color-bg-hover);
   outline: none;
 }
 
@@ -127,7 +107,7 @@
 }
 
 .memory-injections-context {
-  color: var(--pl-color-text-muted, #8a8f98);
+  color: var(--pl-color-fg-muted);
   white-space: nowrap;
 }
 

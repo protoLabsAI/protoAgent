@@ -8,7 +8,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-inset, var(--bg));
+  background: var(--pl-color-bg-inset);
 }
 
 .devices-pair {
@@ -116,7 +116,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-inset, var(--bg));
+  background: var(--pl-color-bg-inset);
 }
 .devices-token code {
   flex: 1;

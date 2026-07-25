@@ -171,6 +171,46 @@ def test_policy_empty_config_is_default_deny(tmp_path):
     assert "/sandbox" in policy  # data root always read-write
 
 
+def test_policy_includes_the_default_workspace_fence(tmp_path, monkeypatch):
+    """#2281 — the generator read ``filesystem_projects`` RAW, which is empty on a
+    default install (the shipped default), so the emitted policy carried no project
+    paths at all. Landlock is deny-by-default, so that denied the agent the one
+    directory its fs toolset is actually fenced to."""
+    from graph.config import LangGraphConfig
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    monkeypatch.setattr("infra.paths.workspace_dir", lambda create=False: ws)
+
+    cfg = LangGraphConfig()  # filesystem enabled, NO explicit projects — the default
+    assert cfg.filesystem_projects == []  # the raw field the generator used to read
+    policy = _gen().build_policy(cfg)
+
+    rw_idx = policy.index("read_write:")
+    assert rw_idx < policy.index(str(ws))  # the workspace is fenced READ-WRITE
+    assert "project: workspace" in policy
+
+
+def test_policy_includes_the_projects_registry(tmp_path):
+    """ADR 0095 — a project declared in the ``projects:`` registry reaches the policy
+    through the same effective-fence accessor, including its fs:false opt-out."""
+    from graph.config import LangGraphConfig
+
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "projects:\n"
+        "  - {name: rw, path: /work/rw}\n"  # registry default = read-write (D3)
+        "  - {name: ro, path: /work/ro, write: false}\n"
+        "  - {name: nofence, path: /work/nofence, fs: false}\n"
+    )
+    policy = _gen().build_policy(LangGraphConfig.from_yaml(p))
+
+    rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
+    assert rw_idx < policy.index("/work/rw") < ro_idx
+    assert ro_idx < policy.index("/work/ro")
+    assert "/work/nofence" not in policy  # fs:false grants no filesystem reach
+
+
 # ── #871: allow_private mode (fleet remotes) ────────────────────────────────────
 
 

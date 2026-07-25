@@ -225,15 +225,103 @@ def register_config_routes(app) -> None:
 
         return {"name": name, "content": read_soul_preset(name)}
 
+    @app.get("/api/projects")
+    async def _api_projects():
+        """The ADR 0095 managed-projects registry — READ-ONLY (D5 slice 1).
+
+        Registration is still a YAML edit; this surfaces what's registered and, more
+        importantly, **whether the registry is actually in effect**. An explicit
+        ``filesystem.projects`` wins over the registry by design (that's what makes
+        0095 non-regressing), which means a fully-populated registry can be sitting
+        there driving nothing. Silent divergence between what's declared and what's
+        enforced is the exact failure 0095 exists to kill, so it's reported rather
+        than left for the operator to infer:
+
+        - ``fence_source`` — who is actually feeding the fs fence right now:
+          ``explicit`` (``filesystem.projects`` is set and SHADOWS the registry) ·
+          ``registry`` · ``workspace_default`` · ``disabled``.
+        - per-row ``fenced`` — whether THAT entry contributes to the live fence
+          (false when it opts out with ``fs: false``, or when explicit roots shadow
+          the whole registry).
+        - per-row ``exists`` — same liveness check the work-folder editor reports; a
+          path that isn't a directory is dropped at graph build (#2251).
+
+        No POST: the work-folder editor's write path REPLACES ``filesystem.projects``,
+        so a naive write-back here would silently materialize the projection into
+        explicit entries and sever the registry link. Editing stays YAML-only until
+        that has a real answer."""
+        from pathlib import Path
+
+        cfg = STATE.graph_config
+        registry = list(getattr(cfg, "projects", []) or [])
+        explicit = list(getattr(cfg, "filesystem_projects", []) or [])
+        enabled = bool(getattr(cfg, "filesystem_enabled", False))
+        fenced_names = {
+            str(p.get("name") or "")
+            for p in (cfg.fenced_projects() if hasattr(cfg, "fenced_projects") else [])
+        }
+
+        if not enabled:
+            fence_source = "disabled"
+        elif explicit:
+            fence_source = "explicit"
+        elif fenced_names:
+            fence_source = "registry"
+        else:
+            fence_source = "workspace_default"
+
+        projects = []
+        for entry in registry:
+            row = dict(entry) if isinstance(entry, dict) else {}
+            raw = str(row.get("path") or "").strip()
+            try:
+                row["exists"] = bool(raw) and Path(raw).expanduser().is_dir()
+            except OSError:  # unreadable mount / bad path — same as gone for our purposes
+                row["exists"] = False
+            # `exists` is part of "feeds the live fence", not a separate nicety:
+            # fenced_projects() is a pure CONFIG projection, while the real fence
+            # (tools/fs_tools.py::_registry_from_config) drops any root whose path
+            # isn't a directory. So a registered-but-missing folder contributes
+            # nothing, and reporting it as fenced would be the same declared-vs-
+            # enforced lie this endpoint exists to expose.
+            row["fenced"] = bool(
+                fence_source == "registry"
+                and row["exists"]
+                and str(row.get("name") or "") in fenced_names
+            )
+            projects.append(row)
+        return {
+            "enabled": enabled,
+            "fence_source": fence_source,
+            "projects": projects,
+        }
+
     @app.get("/api/settings/filesystem-projects")
     async def _api_fs_projects():
         """The fenced fs roots (ADR 0007): the explicit ``filesystem.projects`` list
         plus whether filesystem tools are enabled. Backs the Tools-panel folder
-        editor — previously this collection had no UI or API at all (YAML-only)."""
+        editor — previously this collection had no UI or API at all (YAML-only).
+
+        Each row carries ``exists``: ``build_fs_tools`` silently SKIPS a root whose
+        path is no longer a directory, and when that empties the registry the whole
+        fs toolset disappears with only a log line. Reporting liveness here
+        lets the editor say which folder went missing instead of the operator having
+        to diff the tool list against the YAML."""
+        from pathlib import Path
+
         cfg = STATE.graph_config
+        projects = []
+        for entry in list(getattr(cfg, "filesystem_projects", []) or []):
+            row = dict(entry) if isinstance(entry, dict) else {}
+            raw = str(row.get("path") or "").strip()
+            try:
+                row["exists"] = bool(raw) and Path(raw).expanduser().is_dir()
+            except OSError:  # unreadable mount / bad path — same as gone for our purposes
+                row["exists"] = False
+            projects.append(row)
         return {
             "enabled": bool(getattr(cfg, "filesystem_enabled", False)),
-            "projects": list(getattr(cfg, "filesystem_projects", []) or []),
+            "projects": projects,
         }
 
     @app.post("/api/settings/filesystem-projects")
@@ -242,7 +330,15 @@ def register_config_routes(app) -> None:
         POST /api/mcp/servers): each entry ``{name?, path, write?}`` — name defaults
         from the folder basename, paths are ~-expanded, blanks and duplicate names
         are rejected. An empty list clears explicit roots (fs falls back to the
-        workspace default when enabled)."""
+        workspace default when enabled).
+
+        Every path must be an ABSOLUTE, EXISTING directory. ``build_fs_tools`` drops
+        roots that don't resolve to a directory, and once every configured root is
+        dropped the registry is empty and the entire fs toolset unbinds — so saving
+        one unusable folder here used to silently take read_file/list_dir/write_file
+        away from the agent, with nothing but a log warning to say why. A
+        relative path is refused for the same reason: it would resolve against the
+        server's CWD (``/`` under the desktop sidecar), never the operator's."""
         from pathlib import Path
 
         raw = (body or {}).get("projects")
@@ -257,6 +353,20 @@ def register_config_routes(app) -> None:
             if not path:
                 raise HTTPException(status_code=400, detail="each project needs a path")
             expanded = Path(path).expanduser()
+            if not expanded.is_absolute():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"folder path must be absolute (start with / or ~): {path!r}",
+                )
+            try:
+                is_dir = expanded.is_dir()
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail=f"can't read folder {expanded}: {exc}") from exc
+            if not is_dir:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"no such folder: {expanded} — create it first, or fix the path",
+                )
             name = str(entry.get("name", "")).strip() or expanded.name or "folder"
             if name in seen:
                 raise HTTPException(status_code=400, detail=f"duplicate project name: {name}")
@@ -268,7 +378,9 @@ def register_config_routes(app) -> None:
         updates: dict = {"filesystem": {"projects": projects}}
         if projects and (body or {}).get("enable", True):
             updates["filesystem"]["enabled"] = True
-        ok, messages = _apply_settings_changes(config=updates)
+        # Offloaded like every sibling call site (#497): config-YAML write + full graph
+        # reload must not run on the event loop. This was the one site that didn't (#2210).
+        ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "projects": projects}
@@ -319,7 +431,10 @@ def register_config_routes(app) -> None:
         need a full process restart to take effect."""
         from graph.settings_schema import nest_updates, restart_keys, validate_flat
 
-        ok, err = validate_flat(req.updates)
+        # settings.hidden (#2172): hidden keys are absent from the schema AND refused
+        # here — the UI is presentation, this is the write-side half of the lock.
+        hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
+        ok, err = validate_flat(req.updates, hidden=hidden)
         if not ok:
             return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
         # Validation + restart-key reporting are this surface's; the apply itself goes through
@@ -341,10 +456,15 @@ def register_config_routes(app) -> None:
         agent leaf YAML + reload, so each falls back to the Host/App layer. Only
         known settings keys are accepted (existence-gated against the registry —
         a reset carries no value, so the per-type validate_flat checks don't apply)."""
-        from graph.settings_schema import is_known_key
+        from graph.settings_schema import is_hidden_setting, is_known_key
 
+        hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
         for k in req.keys:
             if not is_known_key(k):
                 return {"ok": False, "messages": [f"validation: unknown setting: {k}"]}
+            # settings.hidden (#2172): a reset writes too (pops the leaf → the value
+            # falls back to Host/App), so a hidden key is just as locked here.
+            if is_hidden_setting(k, hidden):
+                return {"ok": False, "messages": [f"validation: {k} is locked by settings.hidden"]}
         ok, messages = await asyncio.to_thread(_reset_settings_keys, req.keys)
         return {"ok": ok, "messages": messages}

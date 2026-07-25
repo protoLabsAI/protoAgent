@@ -86,7 +86,7 @@ def test_save_settings_rejects_invalid(monkeypatch):
         "graph.settings_schema",
         _fake_module(
             "graph.settings_schema",
-            validate_flat=lambda u: (False, "bad key"),
+            validate_flat=lambda u, hidden=None: (False, "bad key"),
             nest_updates=lambda u: u,
             restart_keys=lambda u: [],
         ),
@@ -104,7 +104,7 @@ def test_save_settings_threads_layer(monkeypatch):
         "graph.settings_schema",
         _fake_module(
             "graph.settings_schema",
-            validate_flat=lambda u: (True, None),
+            validate_flat=lambda u, hidden=None: (True, None),
             nest_updates=lambda u: {"nested": u},
             restart_keys=lambda u: [],
         ),
@@ -131,7 +131,7 @@ def test_save_settings_defaults_to_agent_layer(monkeypatch):
         "graph.settings_schema",
         _fake_module(
             "graph.settings_schema",
-            validate_flat=lambda u: (True, None),
+            validate_flat=lambda u, hidden=None: (True, None),
             nest_updates=lambda u: u,
             restart_keys=lambda u: [],
         ),
@@ -154,7 +154,7 @@ def test_reset_settings_pops_known_keys(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: k == "model.name"),
+        _fake_module("graph.settings_schema", is_known_key=lambda k: k == "model.name", is_hidden_setting=lambda k, hidden=None: False),
     )
     captured = {}
 
@@ -173,11 +173,24 @@ def test_reset_settings_rejects_unknown_key(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: False),
+        _fake_module("graph.settings_schema", is_known_key=lambda k: False, is_hidden_setting=lambda k, hidden=None: False),
     )
     resp = _client().post("/api/settings/reset", json={"keys": ["bogus.key"]}).json()
     assert resp["ok"] is False
     assert any("unknown setting: bogus.key" in m for m in resp["messages"])
+
+
+def test_reset_settings_rejects_hidden_key(monkeypatch):
+    """A settings.hidden-locked key can't be reset back to inherited (#2172) — a reset
+    writes too (pops the leaf), so the lock covers it like a save."""
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module("graph.settings_schema", is_known_key=lambda k: True, is_hidden_setting=lambda k, hidden=None: True),
+    )
+    resp = _client().post("/api/settings/reset", json={"keys": ["goal.eval_model"]}).json()
+    assert resp["ok"] is False
+    assert any("locked by settings.hidden" in m for m in resp["messages"])
 
 
 class _BreakerStore:
@@ -335,45 +348,196 @@ def _fs_state(monkeypatch, **attrs):
     monkeypatch.setattr(rs.STATE, "graph_config", types.SimpleNamespace(**attrs), raising=False)
 
 
-def test_fs_projects_get(monkeypatch):
-    _fs_state(monkeypatch, filesystem_enabled=True, filesystem_projects=[{"name": "docs", "path": "/d", "write": False}])
+def test_fs_projects_get(monkeypatch, tmp_path):
+    _fs_state(monkeypatch, filesystem_enabled=True, filesystem_projects=[{"name": "docs", "path": str(tmp_path), "write": False}])
     body = _client().get("/api/settings/filesystem-projects").json()
     assert body["enabled"] is True and body["projects"][0]["name"] == "docs"
 
 
-def test_fs_projects_set_normalizes_and_enables(monkeypatch):
+def test_fs_projects_get_reports_missing_folders(monkeypatch, tmp_path):
+    """A root whose folder is gone is SKIPPED when the fs tools are built, and if
+    it was the last one the whole toolset unbinds with only a log line. GET reports
+    liveness per row so the editor can say which folder went missing."""
+    _fs_state(
+        monkeypatch,
+        filesystem_enabled=True,
+        filesystem_projects=[
+            {"name": "here", "path": str(tmp_path), "write": False},
+            {"name": "gone", "path": str(tmp_path / "nope"), "write": False},
+        ],
+    )
+    rows = _client().get("/api/settings/filesystem-projects").json()["projects"]
+    assert [r["exists"] for r in rows] == [True, False]
+
+
+def test_fs_projects_set_normalizes_and_enables(monkeypatch, tmp_path):
     captured = {}
 
     def _apply(config=None, soul=None):
         captured["config"] = config
         return True, ["reloaded"]
 
+    docs = tmp_path / "Documents"
+    inbox = tmp_path / "inbox"
+    docs.mkdir()
+    inbox.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setitem(sys.modules, "server.agent_init", _fake_module("server.agent_init", _apply_settings_changes=_apply))
     body = _client().post(
         "/api/settings/filesystem-projects",
-        json={"projects": [{"path": "~/Documents", "write": True}, {"name": "inbox", "path": "/tmp/inbox"}]},
+        json={"projects": [{"path": "~/Documents", "write": True}, {"name": "inbox", "path": str(inbox)}]},
     ).json()
     assert body["ok"] is True
     fs = captured["config"]["filesystem"]
     assert fs["enabled"] is True
     assert fs["projects"][0]["name"] == "Documents" and fs["projects"][0]["write"] is True
     assert not fs["projects"][0]["path"].startswith("~"), "paths are ~-expanded"
-    assert fs["projects"][1] == {"name": "inbox", "path": "/tmp/inbox", "write": False}
+    assert fs["projects"][1] == {"name": "inbox", "path": str(inbox), "write": False}
 
 
-def test_fs_projects_set_rejections(monkeypatch):
+def test_fs_projects_set_offloads_apply_off_the_event_loop(monkeypatch, tmp_path):
+    """#2210 — the fs-projects settings write must run _apply_settings_changes via
+    asyncio.to_thread like every sibling call site (#497): the apply does file I/O plus
+    a full graph reload, and calling it synchronously stalls the whole event loop. The
+    fake detects the loop by thread: get_running_loop() raises in a to_thread worker."""
+    import asyncio as aio
+
+    captured = {}
+
+    def _apply(config=None, soul=None):
+        try:
+            aio.get_running_loop()
+            captured["on_event_loop"] = True
+        except RuntimeError:
+            captured["on_event_loop"] = False
+        return True, ["reloaded"]
+
+    # Complete fake (all three names config_routes imports at module level), so this
+    # test also passes when run solo — unlike the sibling fakes, which rely on an
+    # earlier test having imported config_routes against the real server.agent_init.
+    monkeypatch.setitem(
+        sys.modules,
+        "server.agent_init",
+        _fake_module(
+            "server.agent_init",
+            _apply_settings_changes=_apply,
+            _build_settings_callbacks=lambda: {},
+            _reset_settings_keys=lambda keys: (True, []),
+        ),
+    )
+    body = _client().post("/api/settings/filesystem-projects", json={"projects": [{"path": str(tmp_path)}]}).json()
+    assert body["ok"] is True
+    assert captured["on_event_loop"] is False, "apply ran synchronously on the event loop"
+
+
+def test_fs_projects_set_rejections(monkeypatch, tmp_path):
     monkeypatch.setitem(
         sys.modules,
         "server.agent_init",
         _fake_module("server.agent_init", _apply_settings_changes=lambda config=None, soul=None: (True, [])),
     )
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
     c = _client()
     assert c.post("/api/settings/filesystem-projects", json={"projects": "nope"}).status_code == 400
     assert c.post("/api/settings/filesystem-projects", json={"projects": [{"path": " "}]}).status_code == 400
     assert (
         c.post(
             "/api/settings/filesystem-projects",
-            json={"projects": [{"name": "x", "path": "/a"}, {"name": "x", "path": "/b"}]},
+            json={"projects": [{"name": "x", "path": str(a)}, {"name": "x", "path": str(b)}]},
         ).status_code
         == 400
     )
+
+
+def test_fs_projects_set_refuses_unusable_folders(monkeypatch, tmp_path):
+    """The save path used to accept ANY non-blank string. build_fs_tools drops
+    every root that isn't a directory, and an empty registry unbinds the ENTIRE fs
+    toolset, so one fat-fingered folder silently took read_file/list_dir/write_file
+    away from the agent. Reject at the door instead, with a reason."""
+    monkeypatch.setitem(
+        sys.modules,
+        "server.agent_init",
+        _fake_module("server.agent_init", _apply_settings_changes=lambda config=None, soul=None: (True, [])),
+    )
+    c = _client()
+    # Relative — would resolve against the SERVER's cwd ("/" under the desktop sidecar).
+    rel = c.post("/api/settings/filesystem-projects", json={"projects": [{"path": "daf sda f s"}]})
+    assert rel.status_code == 400 and "absolute" in rel.json()["detail"]
+    # Absolute but nonexistent.
+    missing = c.post("/api/settings/filesystem-projects", json={"projects": [{"path": str(tmp_path / "nope")}]})
+    assert missing.status_code == 400 and "no such folder" in missing.json()["detail"]
+    # Absolute and existing, but a FILE — resolve() succeeds, the fence needs a dir.
+    f = tmp_path / "notes.txt"
+    f.write_text("x")
+    assert c.post("/api/settings/filesystem-projects", json={"projects": [{"path": str(f)}]}).status_code == 400
+
+
+# ── GET /api/projects — the ADR 0095 managed-projects registry (read-only) ────
+
+
+def _projects_state(monkeypatch, **attrs):
+    """Real LangGraphConfig (not a SimpleNamespace) so fenced_projects() is live."""
+    import runtime.state as rs
+
+    from graph.config import LangGraphConfig
+
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(**attrs), raising=False)
+
+
+def test_projects_get_reports_registry_and_liveness(monkeypatch, tmp_path):
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "here", "path": str(tmp_path), "github": "o/here"},
+            {"name": "gone", "path": str(tmp_path / "nope")},
+        ],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "registry"
+    assert [r["exists"] for r in body["projects"]] == [True, False]
+    assert body["projects"][0]["github"] == "o/here"  # identity fields survive
+    # A registered folder that isn't there contributes NOTHING to the real fence —
+    # fenced_projects() is a pure config projection, but _registry_from_config drops
+    # roots that aren't directories. Reporting it as fenced would be the same
+    # declared-vs-enforced lie this endpoint exists to expose.
+    assert [r["fenced"] for r in body["projects"]] == [True, False]
+
+
+def test_projects_get_flags_fs_false_as_unfenced(monkeypatch, tmp_path):
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "fenced", "path": str(tmp_path)},
+            {"name": "tracked", "path": str(tmp_path), "fs": False},
+        ],
+    )
+    rows = _client().get("/api/projects").json()["projects"]
+    assert [r["fenced"] for r in rows] == [True, False]
+
+
+def test_projects_get_says_when_explicit_roots_shadow_the_registry(monkeypatch, tmp_path):
+    """An explicit filesystem.projects WINS over the registry (that's what makes ADR
+    0095 non-regressing) — so a fully-populated registry can be driving nothing.
+    Reporting that is the whole point: silent divergence between declared and
+    enforced is the failure 0095 exists to kill."""
+    _projects_state(
+        monkeypatch,
+        filesystem_projects=[{"name": "legacy", "path": str(tmp_path), "write": True}],
+        projects=[{"name": "ignored", "path": str(tmp_path)}],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "explicit"
+    assert body["projects"][0]["fenced"] is False  # registered, but NOT in effect
+
+
+def test_projects_get_workspace_default_and_disabled(monkeypatch):
+    _projects_state(monkeypatch)  # nothing registered, fs on
+    assert _client().get("/api/projects").json()["fence_source"] == "workspace_default"
+
+    _projects_state(monkeypatch, filesystem_enabled=False, projects=[{"name": "a", "path": "/tmp"}])
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "disabled" and body["enabled"] is False
+    assert body["projects"][0]["fenced"] is False
