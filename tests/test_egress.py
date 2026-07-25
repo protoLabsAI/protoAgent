@@ -236,3 +236,22 @@ def test_default_mode_still_blocks_all_private():
     # The model-probe path keeps the strict default — private + loopback blocked too.
     for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://169.254.169.254/"):
         assert egress.check_url(bad) is not None, bad
+
+
+def test_policy_expands_tilde_to_match_the_enforced_fence(tmp_path, monkeypatch):
+    """The generator emitted the RAW path string while the enforced fence resolves
+    every root with Path(...).expanduser() — so a `~/…` entry produced a Landlock
+    policy containing a literal "~", which matches nothing. A policy that silently
+    disagrees with the fence it describes is worse than no policy."""
+    from graph.config import LangGraphConfig
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home_dir = tmp_path / "dev" / "proj"
+    home_dir.mkdir(parents=True)
+
+    p = tmp_path / "c.yaml"
+    p.write_text("projects:\n  - {name: proj, path: ~/dev/proj}\n")
+    policy = _gen().build_policy(LangGraphConfig.from_yaml(p))
+
+    assert str(home_dir) in policy
+    assert "~/dev/proj" not in policy

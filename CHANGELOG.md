@@ -27,6 +27,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a turn that genuinely produced nothing says so and asks you to retry — a visible
   failure is recoverable, a plausible wrong answer isn't. The same fix covers the
   tool-result fallback, which could otherwise have surfaced a prior turn's tool output.
+- **The managed-projects registry now refuses bad entries loudly instead of quietly
+  granting less (or more) than you asked for.** A review of ADR 0095 turned up a cluster
+  of ways the registry could mislead you, all now closed:
+
+  A **duplicate project name** silently dropped one of the two (the fence keys on name)
+  while the console reported *both* as active — it now keeps the first, warns, and marks
+  only the live one. **Malformed entries** — no name, no path, a relative path — vanished
+  without a word; they now warn where they're dropped, which the ADR asked for and the
+  code claimed but didn't do. **`~` is expanded everywhere**, including in the generated
+  OpenShell policy, which previously emitted a literal `~/…` that Landlock matches
+  against nothing — a sandbox policy that silently disagreed with the fence it describes.
+  **A relative path is refused** for the same reason the work-folders picker refuses one:
+  it resolves against the server's working directory, never yours.
+
+  The opt-outs also **failed open**: `fs: "false"` or `write: "false"` arriving as strings
+  (from JSON, an env overlay, a hand-edit) are truthy in Python, so they granted
+  read-write. Both now read as the "no" they obviously are — where a value is ambiguous,
+  it resolves toward *less* filesystem access.
+
+  Finally, a registry whose folders have all gone missing resolves to an empty fence and
+  unbinds the whole filesystem toolset. The console used to call that state "registry",
+  claiming a fence that wasn't there; it now reports **unbound** and says the agent has no
+  `read_file` / `list_dir` at all.
 - **An agent you just added from network discovery no longer lingers in the "found" list.**
   Adding a discovered protoAgent as a remote member dropped it from the found list only on
   the follow-up re-scan, so for one round-trip it sat in both lists — still offering an "Add

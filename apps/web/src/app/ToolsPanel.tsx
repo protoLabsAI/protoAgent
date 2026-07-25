@@ -291,11 +291,16 @@ function ManagedProjectsList() {
   if (!data || data.projects.length === 0) return null;
 
   const shadowed = data.fence_source === "explicit";
+  const unbound = data.fence_source === "unbound";
   const access = (p: (typeof data.projects)[number]) => {
     if (p.fs === false) return "no fs";
     if (p.write === false) return "read-only";
     return p.no_delete ? "no delete" : "read-write";
   };
+  // Duplicate names are dropped by the backend projection (first wins), so a second
+  // row with the same name is real config the operator should see — keyed by index
+  // so React doesn't collapse the two into one.
+  const rowKey = (p: (typeof data.projects)[number], i: number) => `${p.name}-${i}`;
 
   return (
     <div className="fs-projects">
@@ -314,8 +319,18 @@ function ManagedProjectsList() {
           </span>
         </p>
       ) : null}
-      {data.projects.map((p) => (
-        <div key={p.name} className="fs-projects-row">
+      {unbound ? (
+        <p className="fs-projects-warning" role="alert">
+          <AlertTriangle size={14} />
+          <span>
+            None of these projects' folders exist, so the filesystem tools are{" "}
+            <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
+            <code>list_dir</code> at all. Fix the paths in your config file.
+          </span>
+        </p>
+      ) : null}
+      {data.projects.map((p, i) => (
+        <div key={rowKey(p, i)} className="fs-projects-row">
           <span>
             {p.name}
             {p.github ? ` · ${p.github}` : ""}

@@ -81,7 +81,11 @@ def build_policy(cfg: LangGraphConfig) -> str:
     for entry in cfg.effective_filesystem_projects() or []:
         if not isinstance(entry, dict):
             continue
-        path = str(entry.get("path") or "").strip()
+        # Expand `~` exactly as the enforced fence does (tools/fs_tools.py resolves
+        # every root with Path(...).expanduser()). Emitting the raw string would put a
+        # literal "~/dev/x" in the Landlock policy, which matches nothing — a policy
+        # that silently disagrees with the fence it is supposed to describe.
+        path = str(Path(str(entry.get("path") or "").strip()).expanduser()) if entry.get("path") else ""
         if not path:
             continue
         target = rw_paths if entry.get("write") else ro_paths

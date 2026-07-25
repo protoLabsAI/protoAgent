@@ -256,10 +256,12 @@ def register_config_routes(app) -> None:
         registry = list(getattr(cfg, "projects", []) or [])
         explicit = list(getattr(cfg, "filesystem_projects", []) or [])
         enabled = bool(getattr(cfg, "filesystem_enabled", False))
-        fenced_names = {
-            str(p.get("name") or "")
-            for p in (cfg.fenced_projects() if hasattr(cfg, "fenced_projects") else [])
-        }
+        # The PROJECTION, in order — not a set. fenced_projects() already drops the
+        # malformed and duplicate entries (keeping the first of a duplicate name), so
+        # matching a raw registry row by name against a set would mark BOTH halves of a
+        # duplicate as fenced when only one root is reachable.
+        fenced_rows = cfg.fenced_projects() if hasattr(cfg, "fenced_projects") else []
+        fenced_names = [str(p.get("name") or "") for p in fenced_rows]
 
         if not enabled:
             fence_source = "disabled"
@@ -271,6 +273,7 @@ def register_config_routes(app) -> None:
             fence_source = "workspace_default"
 
         projects = []
+        claimed: set[str] = set()
         for entry in registry:
             row = dict(entry) if isinstance(entry, dict) else {}
             raw = str(row.get("path") or "").strip()
@@ -284,12 +287,24 @@ def register_config_routes(app) -> None:
             # isn't a directory. So a registered-but-missing folder contributes
             # nothing, and reporting it as fenced would be the same declared-vs-
             # enforced lie this endpoint exists to expose.
+            name = str(row.get("name") or "")
             row["fenced"] = bool(
                 fence_source == "registry"
                 and row["exists"]
-                and str(row.get("name") or "") in fenced_names
+                and name in fenced_names
+                and name not in claimed  # the SECOND row of a duplicate name isn't the fenced one
             )
+            if row["fenced"]:
+                claimed.add(name)
             projects.append(row)
+
+        # A registry that projects rows but whose paths are all gone resolves to an
+        # EMPTY fence downstream, and build_fs_tools then unbinds the entire toolset
+        # (#2251) — reporting "registry" there would claim the registry is driving a
+        # fence that doesn't exist. Say so instead; it's the state most worth naming.
+        if fence_source == "registry" and not any(p.get("fenced") for p in projects):
+            fence_source = "unbound"
+
         return {
             "enabled": enabled,
             "fence_source": fence_source,

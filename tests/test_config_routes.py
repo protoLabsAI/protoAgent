@@ -541,3 +541,46 @@ def test_projects_get_workspace_default_and_disabled(monkeypatch):
     body = _client().get("/api/projects").json()
     assert body["fence_source"] == "disabled" and body["enabled"] is False
     assert body["projects"][0]["fenced"] is False
+
+
+def test_projects_get_marks_only_the_first_of_a_duplicate_name(monkeypatch, tmp_path):
+    """fenced_projects() keeps the FIRST of a duplicate name, so the API must not
+    report both rows as fenced — only one root is actually reachable."""
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "dup", "path": str(tmp_path)},
+            {"name": "dup", "path": str(tmp_path)},
+        ],
+    )
+    rows = _client().get("/api/projects").json()["projects"]
+    assert [r["fenced"] for r in rows] == [True, False]
+
+
+def test_projects_get_reports_unbound_when_every_folder_is_gone(monkeypatch, tmp_path):
+    """A registry that projects rows but whose paths are all missing resolves to an
+    EMPTY fence — build_fs_tools then unbinds the whole toolset (#2251). Reporting
+    "registry" there would claim a fence that doesn't exist."""
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "gone", "path": str(tmp_path / "nope")},
+            {"name": "alsogone", "path": str(tmp_path / "nope2")},
+        ],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "unbound"
+    assert [r["fenced"] for r in body["projects"]] == [False, False]
+
+
+def test_projects_get_stays_registry_when_one_folder_survives(monkeypatch, tmp_path):
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "here", "path": str(tmp_path)},
+            {"name": "gone", "path": str(tmp_path / "nope")},
+        ],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "registry"
+    assert [r["fenced"] for r in body["projects"]] == [True, False]

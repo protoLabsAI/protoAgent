@@ -159,3 +159,77 @@ def test_all_entries_opted_out_falls_back_to_the_workspace_default():
 def test_empty_registry_keeps_the_workspace_default():
     """Today's behavior for a default install is unchanged."""
     assert [p["name"] for p in _cfg().effective_filesystem_projects()] == ["workspace"]
+
+
+# ---------------------------------------------------------------------------
+# Hardening (review follow-up) — every rejection is LOUD, every ambiguity
+# resolves toward LESS filesystem access.
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_name_keeps_the_first_and_warns(caplog):
+    """`_by_name` in fs_tools is a dict — a duplicate silently won before, and the
+    API reported BOTH rows as fenced while only one root was reachable."""
+    cfg = _cfg(
+        projects=[
+            {"name": "a", "path": "/tmp/first"},
+            {"name": "a", "path": "/tmp/second"},
+        ]
+    )
+    with caplog.at_level("WARNING"):
+        fenced = cfg.fenced_projects()
+    assert [p["path"] for p in fenced] == ["/tmp/first"]
+    assert "duplicate project name" in caplog.text
+
+
+def test_relative_path_is_refused_and_warns(caplog):
+    """A relative path resolves against the SERVER's cwd — the work-folders POST
+    route already refuses it for this reason; the registry now agrees."""
+    with caplog.at_level("WARNING"):
+        fenced = _cfg(projects=[{"name": "a", "path": "rel/ative"}]).fenced_projects()
+    assert fenced == []
+    assert "not absolute" in caplog.text
+
+
+def test_tilde_is_expanded_so_every_consumer_agrees(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fenced = _cfg(projects=[{"name": "a", "path": "~/dev/x"}]).fenced_projects()
+    assert fenced[0]["path"] == str(tmp_path / "dev/x")
+    assert "~" not in fenced[0]["path"]
+
+
+def test_malformed_entries_warn_where_they_are_dropped(caplog):
+    """ADR 0095 constraint: a wrong entry must be VISIBLE. These are dropped here,
+    so nothing downstream can report them — this is the only place that can."""
+    with caplog.at_level("WARNING"):
+        assert _cfg(projects=[{"name": "a"}]).fenced_projects() == []  # no path
+        assert _cfg(projects=[{"path": "/tmp/x"}]).fenced_projects() == []  # no name
+        assert _cfg(projects=["not-a-dict"]).fenced_projects() == []
+    assert caplog.text.count("[projects]") >= 3
+
+
+@pytest.mark.parametrize("falsey", [False, "false", "False", "no", "off", "0", 0, ""])
+def test_fs_opt_out_accepts_string_falses(falsey):
+    """`fs: "false"` from JSON/an env overlay is a truthy STRING — it used to grant
+    the fence. Granting access is the direction that must never fail open."""
+    cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "fs": falsey}])
+    assert cfg.fenced_projects() == []
+
+
+@pytest.mark.parametrize("falsey", [False, "false", "no", "off", "0", 0])
+def test_write_false_accepts_string_falses(falsey):
+    cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "write": falsey}])
+    assert cfg.fenced_projects()[0]["write"] is False
+
+
+@pytest.mark.parametrize("truthy", [True, "true", "yes", 1])
+def test_fs_truthy_stays_fenced(truthy):
+    cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "fs": truthy}])
+    assert [p["name"] for p in cfg.fenced_projects()] == ["a"]
+
+
+def test_no_delete_ignores_a_string_false():
+    cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "no_delete": "false"}])
+    assert "no_delete" not in cfg.fenced_projects()[0]
+    on = _cfg(projects=[{"name": "a", "path": "/tmp/a", "no_delete": "true"}])
+    assert on.fenced_projects()[0]["no_delete"] is True

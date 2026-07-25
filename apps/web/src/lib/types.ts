@@ -224,7 +224,10 @@ export type ManagedProject = {
 // ADR 0095 exists to kill.
 export type ManagedProjects = {
   enabled: boolean;
-  fence_source: "explicit" | "registry" | "workspace_default" | "disabled";
+  // "unbound" = the registry has entries but none of their folders are there, so the
+  // fence resolves EMPTY and the whole fs toolset unbinds (#2251). Distinct from
+  // "registry" precisely because that case must not look like it's working.
+  fence_source: "explicit" | "registry" | "workspace_default" | "disabled" | "unbound";
   projects: ManagedProject[];
 };
 

@@ -97,7 +97,12 @@ def _configured_entries(config, *, create: bool = False) -> list[dict]:
     """The fence entries this config actually asks for — explicit
     ``filesystem.projects``, else the ADR 0095 ``projects:`` registry projected
     onto the fence, else the default workspace. The warning path below reports
-    against this same list, so a bad entry is named wherever it was declared."""
+    against this same list, so a bad *explicit* entry is named here.
+
+    Registry entries are NOT all visible here: ``fenced_projects`` drops the
+    malformed ones (no name/path, duplicate name, relative path) before this
+    ever sees them — which is why it does its own WARNING logging rather than
+    deferring to the warning below."""
     entries = (
         config.effective_filesystem_projects(create=create)
         if hasattr(config, "effective_filesystem_projects")
