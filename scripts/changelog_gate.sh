@@ -13,12 +13,15 @@
 # touch the file.
 #
 # Escape hatches (any one skips the gate, exit 0):
-#   - the PR carries the `skip-changelog` label (read from $GITHUB_EVENT_PATH —
-#     the event snapshot. A label added AFTER the run started is invisible to it,
-#     and a re-run does NOT help: `gh run rerun` replays the original payload.
-#     Only a new pull_request event regenerates it — a synchronize push (an empty
-#     commit works) or close+reopen. Best avoided entirely: pass the label at
-#     creation, `gh pr create --label skip-changelog`.)
+#   - the PR carries the `skip-changelog` label — read from $GITHUB_EVENT_PATH,
+#     the event SNAPSHOT, and this workflow doesn't trigger on `labeled`. Two
+#     consequences, both verified the hard way:
+#       * `gh pr create --label skip-changelog` does NOT work. GitHub's create-PR
+#         API takes no labels, so gh applies them in a second call — after the
+#         `opened` event already fired with an empty label set.
+#       * A re-run does NOT work either: `gh run rerun` replays that same payload.
+#     Only a NEW pull_request event carries the label: a synchronize push (an
+#     empty commit is enough) or close+reopen. Label first, then push.
 #   - PR_HEAD_REF matches release/* (release PRs roll [Unreleased] themselves)
 #   - PR_ACTOR is dependabot[bot] (bot PRs never need entries)
 #
