@@ -600,3 +600,32 @@ def test_projects_get_reports_unbound_when_every_entry_opts_out(monkeypatch, tmp
     body = _client().get("/api/projects").json()
     assert body["fence_source"] == "unbound"
     assert [r["fenced"] for r in body["projects"]] == [False, False]
+
+
+def test_projects_get_does_not_credit_a_duplicate_with_a_different_path(monkeypatch, tmp_path):
+    """The nastiest divergence: fenced_projects() keeps the FIRST duplicate, which
+    only validates absoluteness — not existence. So [{dup,/missing},{dup,/exists}]
+    puts /missing in the fence, fs_tools drops it as a non-directory, and the REAL
+    fence is empty. Matching rows by name alone credited the /exists row as live —
+    exactly the declared-vs-enforced lie this endpoint exists to expose."""
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "dup", "path": str(tmp_path / "missing")},
+            {"name": "dup", "path": str(tmp_path)},  # exists, but NOT the fenced entry
+        ],
+    )
+    body = _client().get("/api/projects").json()
+    assert [r["fenced"] for r in body["projects"]] == [False, False]
+    assert body["fence_source"] == "unbound"
+
+
+def test_projects_get_matches_a_tilde_row_against_its_expanded_fence_entry(monkeypatch, tmp_path):
+    """fenced_projects() expands `~`, so a row written as `~/x` has to be compared
+    against the EXPANDED path or it would never match its own fence entry."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "proj").mkdir()
+    _projects_state(monkeypatch, projects=[{"name": "p", "path": "~/proj"}])
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "registry"
+    assert body["projects"][0]["fenced"] is True
