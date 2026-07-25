@@ -408,9 +408,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         </Button>
                       </>
                     ) : null}
-                    {/* The host serves this console — it can't stop or remove itself; its
-                        display name is edited in Settings → Identity instead. */}
-                    {a.host || a.remote ? null : (
+                    {/* The agent serving THIS console can't act on itself — its display name
+                        is edited in Settings → Identity instead. On the host console that's
+                        the host row; in a sister agent's window (where this panel now also
+                        renders) it's that member's row, so the guard keys on the focused slug
+                        as well as `host` — otherwise "Stop"/"Remove" would kill or delete the
+                        very agent serving the window you're in. */}
+                    {a.host || a.remote || isActive ? null : (
                       <>
                         <Button icon variant="ghost" title="Rename (display name only — the id/URL stays)"
                           disabled={rename.isPending}

@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Every sister agent gets the fleet surfaces, not just the host console (ADR 0048 §8).**
+  "New agent" and "Fleet settings" in the header switcher, the ⌘K **Fleet Room**, and
+  **Settings ▸ Box ▸ Fleet** all render in a fleet member's window now. They were gated to
+  the host to stop *nested* agents, but that fear never applied here: `/api/fleet` and
+  `/api/archetypes` are hub paths (never slug-scoped), so from `/app/agent/<slug>/` those
+  surfaces were already driving the **hub's** fleet — the same roster, the same members to
+  start and stop, the same fleet to create into. Open a sister agent, and the fleet is
+  reachable without a trip back to the host window.
+
+  The gate now asks the one question that actually distinguishes the nesting case: is this
+  a spawned member reached **directly on its own port**? There its `/api/fleet` really is a
+  fleet-of-one and creating would spawn a grandchild the hub never sees, so the items stay
+  disabled with a tooltip pointing at the host.
+
+  Two guards came along with it, since they only became reachable once member windows had
+  these panels: a window can no longer **Stop** or **Remove** the agent that serves it (the
+  fleet panel row and the Fleet Room roster both keyed on "is the host" — correct only on
+  the host console, and a Stop on your own row killed the console you were standing in).
+  The Box group narrows rather than disappears off the host — Overview and Telemetry read
+  the focused agent's own endpoints and stay host-only — which is also what makes the
+  "Fleet settings" deep-link resolve instead of falling back to an unrelated section.
+
 ## [0.115.0] - 2026-07-25
 
 ### Added

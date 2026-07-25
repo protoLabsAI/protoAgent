@@ -35,9 +35,10 @@ export function FleetSwitcher({
   const agents = fleet.data?.agents ?? [];
   const slug = currentSlug(); // the agent THIS window is on
   const current = agents.find((a) => slugOf(a) === slug);
-  // Fleet settings are hub-only (#1708): non-null in a member window (a hub slug window,
-  // or a spawned workspace member reached directly) — the item disables with this tooltip.
-  const fleetSettingsBlocked = fleetSettingsDisabledReason(agents, slug);
+  // Non-null only on a spawned member reached DIRECTLY on its own port (#1708/#1999) — the
+  // one window where managing "the fleet" would spawn a nested one. A sister agent's slug
+  // window drives the hub's fleet and keeps both items live.
+  const fleetSettingsBlocked = fleetSettingsDisabledReason(agents);
 
   // Only a hard fleet-API error hides the switcher; otherwise it's always available.
   if (fleet.isError) return <>{fallbackName}</>;
@@ -71,9 +72,9 @@ export function FleetSwitcher({
       })}
       {agents.length > 0 ? <MenuSeparator /> : null}
       {fleetSettingsBlocked ? (
-        // Adding a member is a host-only op, same as Fleet settings (a member window's
-        // /api/fleet is a fleet-of-one — "New agent" there would spawn a nested fleet by
-        // accident, #1999). Disabled + tooltip, not hidden, so it stays discoverable.
+        // Adding a member follows the same gate as Fleet settings: on a directly-reached
+        // member /api/fleet is a fleet-of-one, so "New agent" there would spawn a nested
+        // fleet by accident (#1999). Disabled + tooltip, not hidden, so it stays discoverable.
         <Tooltip label={fleetSettingsBlocked} side="left">
           <MenuItem icon={<Plus size={14} />} disabled>
             New agent

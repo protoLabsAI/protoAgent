@@ -89,7 +89,7 @@ SETTINGS  (focused agent + this box + this console)
 │  ├ Knowledge      recall (top-k · embeddings)
 │  └ Integrations   Plugins · GitHub repos
 │
-├ BOX — box-wide ops (HOST CONSOLE ONLY)
+├ BOX — box-wide ops (HOST CONSOLE ONLY, narrowed by §8 — Fleet is everywhere)
 │  ├ Overview       model / version / storage at a glance
 │  ├ Fleet          members · discovery · network · keep-warm   ← box runtime lives here
 │  └ Telemetry      cost / latency store
@@ -118,7 +118,8 @@ Is it device/console-local (this browser, no cascade)?
           • external services + plugins ............... Integrations
 
 Then: is the field box-OPERATIONAL (telemetry store, fleet/discovery/keep-warm)?
-  └ yes → it renders in the BOX group (host console only)
+  └ yes → it renders in the BOX group (host console only, unless the section names the
+          same box from any window — see §8: Fleet does, Overview/Telemetry don't)
   └ no  → it renders in its domain, with a per-field scope badge if host-scoped
 ```
 
@@ -199,7 +200,7 @@ bespoke editor:
 ```
 Agent         Identity · Model · Behavior · Knowledge · Integrations
 Capabilities  Tools · MCP · Skills · Subagents · Delegates
-Box (host)    Overview · Fleet · Telemetry
+Box           Overview (host) · Fleet (everywhere, §8) · Telemetry (host)
 This console  Theme · Chat · Keyboard
 ```
 
@@ -326,6 +327,45 @@ onTabContextMenu` / `KeyRecorder` remain future DS gaps.
 - **Phase 2 (conventions, DRAFT under the UI local-test gate):** T5–T7 + delete the dead `hostLayer` path.
 - **Phase 4:** the §6.3 DS extraction wave. — ✅ **DONE 2026-06-29** (DS 0.50.0–0.52.0; app
   #1438/#1439/#1441/#1442). Context-menu kit (protoContent #341) tracked separately.
+
+## 8. Amendment (2026-07-25) — Box ▸ Fleet renders in every sister agent's window
+
+**Decision.** The **Box** group is no longer gated wholesale to the host console. It is
+gated **per section**: a Box section renders off the host console iff it still names the
+*same box* from there. Today that means **Fleet renders everywhere**; **Overview** and
+**Telemetry** stay host-only.
+
+**Why the original gate was too broad.** It was written to prevent *nested* agents — the
+worry that a member window "managing the fleet" would spawn children under itself. That
+fear doesn't apply to a sister agent's slug window: `/api/fleet` and `/api/archetypes` are
+**hub paths** in the console router (`isHubPath`, `apps/web/src/lib/api.ts`) — never
+slug-scoped — so from `/app/agent/<slug>/` every fleet read and write already lands on the
+**hub's** supervisor. The roster is the hub's real roster, "New agent" creates into the
+hub's fleet, and start/stop/remove act on the hub's members. The one window where the fear
+is real is a spawned member reached **directly on its own port**, whose `workspaces_root()`
+is empty by construction (`graph/workspaces/manager.py`) — creating there would spawn a
+grandchild invisible to the hub and break the "a member's empty workspaces root keeps
+`shutdown_all` hub-only" invariant. That window keeps the block
+(`apps/web/src/app/fleetSettingsGate.ts`, keyed on the instance's own `member: true`
+self-report, not on the URL slug).
+
+**Scope of the change.** Three surfaces move together, because they're one affordance
+seen from three doors: the header switcher's **New agent** + **Fleet settings**, the ⌘K
+**Fleet Room**, and **Settings ▸ Box ▸ Fleet**. Narrowing the Box group per section rather
+than dropping it is what makes the "Fleet settings" deep-link resolve in a member window —
+with the group gone, `openGlobalSettings("fleet")` fell back to the first section.
+
+**Invariant this adds.** A window may not act destructively on **the agent serving it**.
+The pre-existing guards keyed on `host` (correct only on the host console); they now also
+key on the focused slug, so a sister agent's Fleet panel and Fleet Room roster show no
+Stop / Remove on their own row.
+
+**Unchanged.** The Fleet panel's "Box runtime" chip keeps working from a member window and
+needs no gate: `QuickSetting` picks its layer from field scope (`every f.scope === "host"`
+→ `layer: "host"`), and the Host layer file is **box-tier**
+(`box_root/host-config.yaml`, `infra/paths.py`) — one machine-wide file every instance on
+the box shares. A sister agent editing `network.bind` / `fleet.*` there writes the same
+box default the host console writes.
 
 ## 7. History — superseded 2026-06-10 proposal ("two scope-based homes")
 

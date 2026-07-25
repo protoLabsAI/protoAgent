@@ -6,9 +6,11 @@
 // The bottom bar broadcasts to everyone online (the @everyone announce — the only
 // fire-and-forget path, since you can't stream N replies into one pane).
 //
-// Entered from the palette's "Agents" group; the DS CommandPalette supplies the
-// back/close chrome + footer. Ungated for now — it reflects whatever api.fleet() returns
-// for this window; host-scoping (cf. fleetSettingsGate) can follow.
+// Entered from the palette's "Agents" group; the DS CommandPalette supplies the back/close
+// chrome + footer. Open in every sister agent's window as well as the host's: `/api/fleet` is
+// a hub path (never slug-scoped), so the roster it reflects is the same one from anywhere.
+// The one window it's withheld from is a member reached DIRECTLY on its own port, where the
+// fleet really is a fleet-of-one — see fleetSettingsGate.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ExternalLink, Play, Radio, Send, Square } from "lucide-react";
@@ -226,7 +228,11 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
             {roster.map((a) => {
               const slug = slugOf(a);
               const p = presenceOf(a);
-              const local = !a.host && !a.remote; // only a local process can be started/stopped here
+              // Only a local process can be started/stopped here — and never the agent serving
+              // THIS window (`here`): in a sister agent's room its own row would otherwise offer
+              // a Stop that kills the console you're standing in. The host row is already
+              // excluded on the host console; `here` is what covers a member's window.
+              const local = !a.host && !a.remote && slug !== here;
               return (
                 <div key={slug} className={`flr__member${a.running ? "" : " is-down"}`}>
                   <span className={`flr__dot flr__dot--${p.key}`} aria-hidden />

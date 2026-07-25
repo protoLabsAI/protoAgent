@@ -40,8 +40,10 @@ import { ThemeSurface } from "./ThemeSurface";
 //                  Plugins. Schema-driven domains carry the ADR 0047 badge.
 //   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates.
 //                  Each manager owns its sharing/tier knob via a contextual chip (no extra panel).
-//   Box          — box-wide ops (HOST CONSOLE ONLY): Overview · Fleet · Telemetry. Box-runtime +
-//                  telemetry knobs are chips on Fleet / Telemetry, not a separate empty panel.
+//   Box          — box-wide ops: Overview · Fleet · Telemetry. Overview + Telemetry are host
+//                  console only; Fleet renders in every sister agent's window too (it names
+//                  the hub's fleet from anywhere). Box-runtime + telemetry knobs are chips on
+//                  Fleet / Telemetry, not a separate empty panel.
 //   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard.
 
 type Section = {
@@ -53,6 +55,10 @@ type Section = {
    *  section is filtered from BOTH the nav and the resolvable set, so a persisted id
    *  pointing at it falls back to the first visible section rather than a blank pane. */
   flag?: string;
+  /** Box sections only: this one reads the FOCUSED agent's endpoints, so it renders on the
+   *  host console alone. Absent on a Box section = it names the whole box from any window
+   *  (Fleet — `/api/fleet` is a hub path), so a sister agent's console gets it too. */
+  hostOnly?: boolean;
 };
 
 // The Plugins manager (install · enable · configure, plus the Discover directory) — the
@@ -113,12 +119,16 @@ const CAPABILITY_SECTIONS: Section[] = [
   { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
 ];
 
-// BOX — box-wide operations (host console only). The host box-runtime + telemetry knobs are
-// reached via chips on Fleet ("Box runtime") and Telemetry, not a separate empty schema panel.
+// BOX — box-wide operations. Overview + Telemetry read the FOCUSED agent's endpoints
+// (/api/runtime, /api/telemetry), so they'd mean something different in a sister agent's
+// window and stay host-console-only. Fleet is the exception: `/api/fleet` is a hub path
+// (never slug-scoped), so it names the SAME fleet from every window — every sister agent
+// manages the roster its hub does. The host box-runtime + telemetry knobs are reached via
+// chips on Fleet ("Box runtime") and Telemetry, not a separate empty schema panel.
 const BOX_SECTIONS: Section[] = [
-  { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
+  { id: "overview", label: "Overview", icon: Gauge, hostOnly: true, render: () => <OverviewPanel /> },
   { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
+  { id: "telemetry", label: "Telemetry", icon: BarChart3, hostOnly: true, render: () => <TelemetrySurface /> },
 ];
 
 // THIS CONSOLE — device-local preferences. These don't cascade and use their own backends
@@ -131,7 +141,7 @@ const CONSOLE_SECTIONS: Section[] = [
 ];
 
 // One consolidated settings surface. `initialSection` deep-links a section (the overlay / a ⌘K
-// command). The Box group is gated to the host console.
+// command). The Box group's agent-scoped sections are gated to the host console; Fleet is not.
 export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
   const onHost = isHostConsole();
   // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
@@ -153,12 +163,16 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     : CONSOLE_SECTIONS;
 
   // Drop flag-off sections everywhere they'd be reachable — nav, active-id resolution, and
-  // the ⌘K/deep-link path that reads the same persisted id.
+  // the ⌘K/deep-link path that reads the same persisted id — and the same for `hostOnly`
+  // sections off the host console. A sister agent's window keeps
+  // the Box group, narrowed to what still names the box from there (Fleet). Narrowing the group
+  // — rather than dropping it — is what makes the header's "Fleet settings" deep-link resolve
+  // in a member window instead of silently falling back to the first section.
   const flagOn = useFlagPredicate();
-  const shown = (list: Section[]) => visibleSections(list, flagOn);
+  const shown = (list: Section[]) => visibleSections(list, flagOn, onHost);
   const agentSections = shown(AGENT_SECTIONS);
   const capabilitySections = shown(CAPABILITY_SECTIONS);
-  const boxSections = onHost ? shown(BOX_SECTIONS) : [];
+  const boxSections = shown(BOX_SECTIONS);
 
   const sections = [
     ...agentSections,
@@ -201,7 +215,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
   const groups = [
     { label: "Agent", items: agentSections.map(toItem) },
     { label: "Capabilities", items: capabilitySections.map(toItem) },
-    ...(onHost ? [{ label: "Box", items: boxSections.map(toItem) }] : []),
+    ...(boxSections.length ? [{ label: "Box", items: boxSections.map(toItem) }] : []),
     { label: "This console", items: consoleSections.map(toItem) },
   ];
 

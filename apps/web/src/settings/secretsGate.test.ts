@@ -45,7 +45,7 @@ describe("Settings ▸ Secrets is flag-gated (#2120)", () => {
     // The component must call the SAME visibleSections this test exercises — and the
     // agent group (where secrets lives) must go through shown().
     expect(src).toContain('import { visibleSections } from "./sectionGate"');
-    expect(src).toMatch(/const shown = \(list: Section\[\]\) => visibleSections\(list, flagOn\)/);
+    expect(src).toMatch(/const shown = \(list: Section\[\]\) => visibleSections\(list, flagOn, onHost\)/);
     expect(src).toMatch(/shown\(AGENT_SECTIONS\)/);
   });
 

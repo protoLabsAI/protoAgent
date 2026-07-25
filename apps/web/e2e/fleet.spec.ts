@@ -394,3 +394,56 @@ test("⌘K → Fleet Room: a TYPED @name addresses that member without using the
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to/ })).toHaveCount(0);
 });
+
+// ── Sister agents get the fleet surfaces too (#1708/#1999 revisited) ───────────────────
+// The three affordances used to be host-console-only, on the theory that a member window
+// would be managing a fleet-of-one and could only nest. That's false for a slug window:
+// /api/fleet + /api/archetypes are HUB paths (lib/api.ts `isHubPath`), so a sister agent's
+// console drives the SAME fleet the host does. These pin that it stays reachable there —
+// and that the window can't act on the agent serving it.
+
+// Assert by ACTING, not by reading an aria-disabled attribute: a disabled DS MenuItem is
+// pointer-events:none, so a click that lands is proof the item is live — and it also proves
+// the deep-link RESOLVES, which is the half that was actually broken (the Box group was
+// dropped wholesale off the host, so "Fleet settings" fell back to some other section).
+test("a sister agent's window: Fleet settings opens the fleet panel from the switcher", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await page.getByTestId("fleet-switcher").click();
+  await page.getByRole("menuitem", { name: "Fleet settings" }).click();
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+});
+
+test("a sister agent's window: New agent opens the archetype picker from the switcher", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await page.getByTestId("fleet-switcher").click();
+  await page.getByRole("menuitem", { name: "New agent" }).click();
+  await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
+});
+
+test("a sister agent's window: the ⌘K Fleet Room opens on the hub's roster", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  // The hub's real roster — its siblings are here, not an empty fleet-of-one.
+  await expect(room.locator(".flr__member", { hasText: "main" })).toBeVisible();
+  await expect(room.locator(".flr__member", { hasText: "roxy" })).toBeVisible();
+  // But no Stop on its OWN row: that button would kill the agent serving this window.
+  await expect(
+    room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: /^(Stop|Start) ava$/ }),
+  ).toHaveCount(0);
+  // A sibling still toggles normally.
+  await expect(room.locator(".flr__member", { hasText: "roxy" }).getByRole("button", { name: "Start roxy" })).toBeVisible();
+});
+
+test("a sister agent's window: the fleet panel won't stop or remove the agent serving it", async ({ page }) => {
+  await page.goto("/app/agent/ava/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
+  const self = page.locator(".fleet-row", { hasText: "ava" });
+  await expect(self).toBeVisible();
+  await expect(self.getByRole("button", { name: "Stop" })).toHaveCount(0);
+  await expect(self.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  // A sibling keeps its controls — the guard is about SELF, not about being a member window.
+  await expect(page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Start" })).toBeVisible();
+});
