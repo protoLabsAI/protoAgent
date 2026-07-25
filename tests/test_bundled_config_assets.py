@@ -161,6 +161,33 @@ def test_design_system_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+def test_social_marketing_archetype_row() -> None:
+    """The Social Marketing archetype ships as catalog data only (ADR 0042) — same
+    invariants as the other rows, plus the two that are specific to it: it is a
+    STANDARD-tier card (it's a mainstream persona, not an advanced one, so it must
+    render inline rather than collapse under 'Advanced'), and it must NOT declare
+    `requires: [python_runtime]` — unlike Cowork it drives no document runtime, and a
+    spurious requirement would gate it behind a runtime install on desktop."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("social-marketing") == 1, f"'social-marketing' must appear exactly once, got {ids}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "social-marketing")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+
+    assert row.get("tier", "standard") == "standard", (
+        f"'social-marketing' must render inline (standard tier), got {row.get('tier')!r}"
+    )
+    assert "requires" not in row, "the social stack drives no python runtime — it must not declare one"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def _sidecar_cli_hidden_imports() -> set[str]:
     """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""

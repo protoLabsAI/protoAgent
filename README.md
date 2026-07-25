@@ -74,8 +74,8 @@ uv sync && uv run python -m server          # core, serves the React console (--
 #   python -m server
 
 # 3. Open the wizard — pick your endpoint, pick a model, name the
-#    agent, pick an archetype (Basic, Cowork, Project Manager, Design System
-#    Engineer — or any installed bundle that declares one), hit Launch. The
+#    agent, pick an archetype (Basic, Cowork, Social Marketing, Project Manager,
+#    Design System Engineer — or any installed bundle that declares one), hit Launch. The
 #    console chat appears once setup completes.
 open http://localhost:7870
 ```

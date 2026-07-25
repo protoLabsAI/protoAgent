@@ -21,6 +21,14 @@
       ]
     },
     {
+      "id": "social-marketing",
+      "label": "Social Marketing",
+      "icon": "Megaphone",
+      "bundle": "https://github.com/protoLabsAI/social-stack",
+      "blurb": "A social marketing manager — brand voice, a balanced calendar, native drafts per platform, and a copy-ready pack. Never posts on its own.",
+      "soul_preset": "social-marketing"
+    },
+    {
       "id": "project-manager",
       "label": "Project Manager",
       "icon": "ClipboardList",
