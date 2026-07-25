@@ -163,6 +163,22 @@ function fleetFor(req) {
   return fleetScopes.get(scope);
 }
 
+// The MCP roster needs the SAME per-spec isolation, for a sharper reason: its writers
+// disagree about shape. `POST /api/mcp/servers` (catalog/inline add) APPENDS to the roster,
+// while `POST /api/__test__/mcp/layered` REPLACES it wholesale — so with one shared array
+// the layered seed silently drops a server another test just added. `fullyParallel` spreads
+// even a single file's tests across workers, so "runs last" is not a thing an e2e can
+// assume: this raced inside mcp.spec.ts itself (the catalog test's `memory` vanishing
+// mid-assert) and could leak the layered roster into any other spec that opens the MCP
+// panel. Scope per spec + reset between tests, exactly as the fleet slice does.
+const mcpScopes = new Map();
+const cloneMcp = () => JSON.parse(JSON.stringify(RUNTIME_STATUS.mcp));
+function mcpFor(req) {
+  const scope = req.headers["x-e2e-mcp"] || "default";
+  if (!mcpScopes.has(scope)) mcpScopes.set(scope, cloneMcp());
+  return mcpScopes.get(scope);
+}
+
 // Drop a plugin's Settings group from the (mutable, in-place) schema fixture — used by
 // install (replace-don't-duplicate) and uninstall so cross-test state stays clean (#1643).
 function removePluginSchemaGroup(id) {
@@ -173,10 +189,11 @@ function removePluginSchemaGroup(id) {
 
 // `params` = the request URL's searchParams (empty by default) — the folder picker
 // route reads ?path=/?files= from it to serve a NAVIGABLE tree.
-function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams()) {
+function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), mcp = RUNTIME_STATUS.mcp) {
   switch (pathname) {
     case "/api/runtime/status":
-      return RUNTIME_STATUS;
+      // `mcp` is the caller's SCOPED roster (see mcpFor) — never the shared baseline.
+      return { ...RUNTIME_STATUS, mcp };
     case "/api/runtime/node":
       // Default: a system Node is present, so <NodeRuntimeCard> stays hidden and no
       // spec sees the banner unless it explicitly page.route()s the missing state.
@@ -306,7 +323,7 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams()) {
     case "/api/mcp/catalog": {
       // Curated common-MCP-server directory (quick-add picker). `installed` mirrors
       // whatever is already in the runtime roster.
-      const configured = new Set(RUNTIME_STATUS.mcp.servers.map((s) => s.name));
+      const configured = new Set(mcp.servers.map((s) => s.name));
       return {
         servers: [
           {
@@ -649,7 +666,7 @@ const server = createServer(async (req, res) => {
           return sendJson(res, ARCHETYPE_PREVIEWS[id] ?? { id, bundle: null });
         }
       }
-      const payload = handleApiGet(pathname, fleetFor(req), url.searchParams);
+      const payload = handleApiGet(pathname, fleetFor(req), url.searchParams, mcpFor(req));
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
     }
@@ -711,17 +728,22 @@ const server = createServer(async (req, res) => {
       playbooks = clonePlaybooks();
       return sendJson(res, { ok: true });
     }
+    if (pathname === "/api/__test__/mcp/reset" && req.method === "POST") {
+      mcpScopes.set(req.headers["x-e2e-mcp"] || "default", cloneMcp());
+      return sendJson(res, { ok: true });
+    }
     if (pathname === "/api/__test__/mcp/layered" && req.method === "POST") {
       // Put the MCP roster into "layered" mode (servers carry a tier) so the tier
       // badges + share/unshare surface — exercised by the commons e2e. Keep `echo`
       // (the default fixture other specs assert against — RUNTIME_STATUS is shared
       // across parallel spec files) and ADD the tiered servers.
-      RUNTIME_STATUS.mcp.servers = [
+      const seeded = mcpFor(req);
+      seeded.servers = [
         { name: "echo", transport: "stdio", tool_count: 2 },
         { name: "shared-fs", transport: "stdio", tool_count: 1, tier: "commons" },
         { name: "local-fs", transport: "stdio", tool_count: 1, tier: "private" },
       ];
-      RUNTIME_STATUS.mcp.tool_count = 4;
+      seeded.tool_count = 4;
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/knowledge/reset" && req.method === "POST") {
@@ -928,10 +950,11 @@ const server = createServer(async (req, res) => {
     }
     if (pathname === "/api/mcp/servers" && req.method === "POST") {
       const name = body.name || "server";
-      RUNTIME_STATUS.mcp.servers = RUNTIME_STATUS.mcp.servers
+      const roster = mcpFor(req);
+      roster.servers = roster.servers
         .filter((s) => s.name !== name)
         .concat({ name, transport: body.transport || "stdio", tool_count: 1 });
-      return sendJson(res, { ok: true, name, servers: RUNTIME_STATUS.mcp.servers.map((s) => s.name) });
+      return sendJson(res, { ok: true, name, servers: roster.servers.map((s) => s.name) });
     }
     if (pathname === "/api/mcp/servers/import" && req.method === "POST") {
       let added = ["imported"];
@@ -945,13 +968,15 @@ const server = createServer(async (req, res) => {
       const mp = pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/promote$/);
       if (mp && req.method === "POST") {
         const name = decodeURIComponent(mp[1]);
-        RUNTIME_STATUS.mcp.servers = RUNTIME_STATUS.mcp.servers.map((s) => (s.name === name ? { ...s, tier: "commons" } : s));
+        const roster = mcpFor(req);
+        roster.servers = roster.servers.map((s) => (s.name === name ? { ...s, tier: "commons" } : s));
         return sendJson(res, { ok: true, promoted: true, name });
       }
       const mf = pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/forget$/);
       if (mf && req.method === "POST") {
         const name = decodeURIComponent(mf[1]);
-        RUNTIME_STATUS.mcp.servers = RUNTIME_STATUS.mcp.servers.map((s) => (s.name === name ? { ...s, tier: "private" } : s));
+        const roster = mcpFor(req);
+        roster.servers = roster.servers.map((s) => (s.name === name ? { ...s, tier: "private" } : s));
         return sendJson(res, { ok: true, forgotten: true, name });
       }
       const m = pathname.match(/^\/api\/mcp\/servers\/([^/]+)$/);

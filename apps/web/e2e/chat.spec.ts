@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { expandToolCard } from "./toolcard";
+
 import { seedCurrentChat } from "./chat-helpers";
 
 // Drives the chat surface against the mock A2A stream and asserts the
@@ -49,7 +51,7 @@ test("tool-call card is collapsed by default and renders structured components",
   // A duration pill is stamped on completion (mock gaps frames ~40ms).
   await expect(card.locator(".pl-toolcard__dur")).toHaveText(/^\d+ms$|^\d+\.\d+s$/);
 
-  await card.locator(".pl-toolcard__head").click();
+  await expandToolCard(page, card); // settled layout first — see e2e/toolcard.ts
   const body = card.locator(".pl-toolcard__body");
   await expect(body).toBeVisible();
 
@@ -122,7 +124,7 @@ test("long tool values do not overflow the chat horizontally", async ({ page }) 
 
   const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
-  await card.locator(".pl-toolcard__head").click();
+  await expandToolCard(page, card); // settled layout first — see e2e/toolcard.ts
   await expect(card.locator(".pl-toolcard__body")).toBeVisible();
 
   const metrics = await page.evaluate(() => {

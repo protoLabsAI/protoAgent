@@ -170,11 +170,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // a slug window, console + A2A reverse-proxied through this hub.
   const addMember = useMutation({
     mutationFn: (d: DiscoveredAgent) => api.addRemoteAgent({ name: d.name, url: d.url }),
-    onSuccess: (res, d) => addedToast(d.name, res.reachable),
+    onSuccess: (res, d) => {
+      addedToast(d.name, res.reachable);
+      // Drop it from the found list HERE, not just on the re-scan below: the rescan is a
+      // round-trip, and until it lands the agent sits in BOTH lists — offering an "Add to
+      // this fleet" button that now 400s ("an agent named … already exists"). The rescan
+      // stays as the authoritative refresh; this is what the operator sees immediately.
+      setDiscovered((list) => (list ? list.filter((x) => x.url !== d.url) : list));
+    },
     onError: (e) => toast({ tone: "error", title: "Couldn't add to fleet", message: errMsg(e) }),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
-      void scan(); // the new member drops out of the discover list
+      void scan(); // authoritative: the new member drops out of the discover list
     },
   });
 
@@ -514,7 +521,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             ) : (
               <ul className="fleet-list">
                 {discovered.map((d) => (
-                  <li key={d.url} className="fleet-row">
+                  // `--found` marks a DISCOVERY result, not a member. The two lists render
+                  // the same row shape, so without a modifier a `.fleet-row` selector (CSS
+                  // or e2e) can't tell "on the network" from "in the fleet" — which made
+                  // the add-a-remote spec strict-mode-flake the moment both were on screen.
+                  <li key={d.url} className="fleet-row fleet-row--found">
                     <StatusDot status="success" />
                     <div className="fleet-row-main">
                       <span className="fleet-name">{d.name}</span>

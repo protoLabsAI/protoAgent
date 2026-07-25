@@ -231,13 +231,21 @@ test("rename edits the display name; the id/slug stays", async ({ page }) => {
 test("discover → add to fleet → switch into the remote member (ADR 0042 §I)", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: /Discover agents/ }).click();
-  const found = page.locator(".fleet-row", { hasText: "remy" });
+  // Address the two lists by their OWN selectors: a discovery result is `--found`, a member
+  // is not. They share the row shape, so a bare `.fleet-row` matched both the instant the
+  // add landed and strict-mode-flaked under load.
+  const found = page.locator(".fleet-row--found", { hasText: "remy" });
   await expect(found).toBeVisible();
 
   await found.getByRole("button", { name: "Add to this fleet (a switchable remote member)" }).click();
 
+  // …and it leaves the found list: an agent that's already a member must not keep offering
+  // "Add to this fleet", which would 400. (The re-scan satisfies this too — the point of the
+  // contract is the end state, not which of the two paths got there first.)
+  await expect(page.locator(".fleet-row--found", { hasText: "remy" })).toHaveCount(0);
+
   // Now a fleet member: remote tag + its URL, no start/stop controls.
-  const member = page.locator(".fleet-row", { hasText: "http://192.168.5.50:7871" });
+  const member = page.locator(".fleet-row:not(.fleet-row--found)", { hasText: "http://192.168.5.50:7871" });
   await expect(member).toBeVisible();
   await expect(member.getByText("remote", { exact: true })).toBeVisible();
   await expect(member.getByRole("button", { name: "Stop" })).toHaveCount(0);

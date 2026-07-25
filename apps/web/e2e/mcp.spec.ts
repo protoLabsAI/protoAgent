@@ -3,6 +3,20 @@ import { expect, test } from "@playwright/test";
 // Settings ▸ Workspace ▸ MCP: add/remove MCP servers inline (hot reload). The mock
 // runtime status ships one server (echo); add/remove hit the mocked /api/mcp/servers.
 
+// This spec MUTATES the roster two incompatible ways — the catalog/inline adds APPEND,
+// the layered seed REPLACES — and `fullyParallel` spreads even one file's tests across
+// workers, so they ran concurrently and the seed dropped a just-added server mid-assert.
+// Claim a private roster scope (the mock keys state on x-e2e-mcp) and reset it before
+// every test, same as fleet.spec.ts does for the fleet. `page.request` does NOT inherit
+// setExtraHTTPHeaders, so control-plane calls pass the header explicitly.
+const mcpScope = (testInfo: { parallelIndex: number }) => `mcp-spec-${testInfo.parallelIndex}`;
+
+test.beforeEach(async ({ page }, testInfo) => {
+  const scope = mcpScope(testInfo);
+  await page.setExtraHTTPHeaders({ "x-e2e-mcp": scope }); // app fetches carry it
+  await page.request.post("/api/__test__/mcp/reset", { headers: { "x-e2e-mcp": scope } });
+});
+
 test("MCP tab lists servers and adds one inline", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
@@ -72,10 +86,11 @@ test("MCP catalog adds a no-input server in one click", async ({ page }) => {
 });
 
 // Box-commons sharing (ADR 0041): when the agent is layered, each server shows a
-// commons/private tier badge and a share / unshare action. (Runs last — the seed
-// replaces the MCP roster.)
-test("MCP servers show tier badges and share / unshare", async ({ page }) => {
-  await page.request.post("/api/__test__/mcp/layered");
+// commons/private tier badge and a share / unshare action. The seed REPLACES the roster,
+// so it lands in this test's own scope — it used to claim it "runs last", which
+// `fullyParallel` made untrue.
+test("MCP servers show tier badges and share / unshare", async ({ page }, testInfo) => {
+  await page.request.post("/api/__test__/mcp/layered", { headers: { "x-e2e-mcp": mcpScope(testInfo) } });
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();

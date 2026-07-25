@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An agent you just added from network discovery no longer lingers in the "found" list.**
+  Adding a discovered protoAgent as a remote member dropped it from the found list only on
+  the follow-up re-scan, so for one round-trip it sat in both lists — still offering an "Add
+  to this fleet" button that answers `400 an agent named … already exists`. It's now removed
+  the moment the add succeeds, with the re-scan still doing the authoritative refresh.
+  Discovery rows also carry their own `fleet-row--found` modifier, so a selector can finally
+  tell "on the network" from "in the fleet" — the two lists render an identical row shape.
+
 ### Changed
 - **Every sister agent gets the fleet surfaces, not just the host console (ADR 0048 §8).**
   "New agent" and "Fleet settings" in the header switcher, the ⌘K **Fleet Room**, and
