@@ -129,6 +129,46 @@ test("topbar switcher navigates to an agent by slug", async ({ page }) => {
   await expect(page.getByTestId("fleet-switcher")).toContainText("roxy");
 });
 
+test("a fleet row's name links to that agent's own window (#2240)", async ({ page }) => {
+  await openAgents(page);
+  // A peer's name is the click-through — a real <a href> (so cmd/middle-click opens it in a
+  // new window), pointing at the SLUG: the stable id, never the editable display name.
+  const roxy = page.locator(".fleet-row", { hasText: "roxy" }).locator(".fleet-name-link");
+  await expect(roxy).toHaveAttribute("href", /\/agent\/roxy\/$/);
+  // The focused agent's own row stays plain text — a link there is just a reload.
+  await expect(page.locator(".fleet-row.active .fleet-name-link")).toHaveCount(0);
+  await roxy.click();
+  await expect(page).toHaveURL(/\/app\/agent\/roxy\//);
+});
+
+test("a member that IS a delegate can be unlinked from its row (#2266)", async ({ page }) => {
+  // Stub the slug-scoped registry so ava reads as an existing delegate, and capture the
+  // removal. Stateful on purpose: after the DELETE the list comes back empty, and the row
+  // flipping to the add button is the ONLY success feedback the panel gives (no toast).
+  let delegates = [{ name: "ava", type: "a2a", url: "http://127.0.0.1:7890/a2a" }];
+  let deleted = null;
+  await page.route("**/api/delegates", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: { delegates } });
+  });
+  await page.route("**/api/delegates/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deleted = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop());
+    delegates = [];
+    return route.fulfill({ json: { ok: true, message: "Removed.", delegates } });
+  });
+
+  await openAgents(page);
+  const ava = page.locator(".fleet-row", { hasText: "ava" });
+  await expect(ava.getByText("delegate")).toBeVisible(); // the state badge
+  await ava.getByRole("button", { name: "Remove as a delegate of this agent (delegate_to)" }).click();
+
+  await expect.poll(() => deleted).toBe("ava"); // removal lands on the FOCUSED agent's registry
+  await expect(ava.getByText("delegate")).toHaveCount(0);
+  // ...and the add button is back, so the gesture is symmetric rather than one-way.
+  await expect(ava.getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })).toBeVisible();
+});
+
 test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }) => {
   // The focused agent (host) doesn't serve /api/delegates until the plugin is enabled;
   // enabling goes through the dedicated /api/plugins/{id}/enabled endpoint and the reload

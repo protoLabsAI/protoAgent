@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { canAddRemote } from "./FleetManagerPanel";
+import { canAddRemote, slugOf } from "./FleetManagerPanel";
 
 describe("canAddRemote — manual add-remote submit gate (ADR 0042 §I)", () => {
   it("requires a non-empty name", () => {
@@ -19,5 +19,21 @@ describe("canAddRemote — manual add-remote submit gate (ADR 0042 §I)", () => 
 
   it("trims before validating", () => {
     expect(canAddRemote("  ava  ", "  http://host:7870  ")).toBe(true);
+  });
+});
+
+describe("slugOf — the row link's destination (#2240)", () => {
+  it("maps this instance to the reserved host slug", () => {
+    expect(slugOf({ id: "abc123", host: true })).toBe("host");
+  });
+
+  it("uses the stable id for every other member", () => {
+    expect(slugOf({ id: "abc123" })).toBe("abc123");
+    expect(slugOf({ id: "abc123", host: false })).toBe("abc123");
+  });
+
+  it("never uses the display name — a rename must not move the agent's URL", () => {
+    // The panel renames in place (id survives); the link has to keep pointing at the id.
+    expect(slugOf({ id: "abc123" } as { id: string; name?: string })).toBe("abc123");
   });
 });
