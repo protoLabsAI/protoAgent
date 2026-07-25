@@ -1067,12 +1067,16 @@ class LangGraphConfig:
                 log.warning("[projects] skipping non-object entry: %r", entry)
                 continue
             name = str(entry.get("name") or "").strip()
-            if _falsey(entry.get("fs"), default=False):
-                continue  # registered for other consumers; no filesystem reach
             path = str(entry.get("path") or "").strip()
+            # Malformed is reported BEFORE the opt-out is honoured: `{fs: false}` with no
+            # name or path is junk config, and staying quiet about it because it happens
+            # to be opted out is the same invisibility the warnings exist to end. A
+            # WELL-FORMED opt-out below stays silent — that one is deliberate, not a typo.
             if not name or not path:
                 log.warning("[projects] skipping entry missing name/path: %r", entry)
                 continue
+            if _falsey(entry.get("fs"), default=False):
+                continue  # registered for other consumers; no filesystem reach
             if name in seen:
                 log.warning(
                     "[projects] duplicate project name %r — keeping the first, dropping this one. "
@@ -1080,6 +1084,10 @@ class LangGraphConfig:
                     name,
                 )
                 continue
+            # Absoluteness is checked on the EXPANDED-but-unresolved path, because
+            # `.resolve()` makes every path absolute (it resolves a relative one against
+            # the process CWD) — resolving first would silently swallow the very input
+            # this rejects.
             expanded = Path(path).expanduser()
             if not expanded.is_absolute():
                 log.warning(
@@ -1092,7 +1100,12 @@ class LangGraphConfig:
             seen.add(name)
             projected = {
                 "name": name,
-                "path": str(expanded),
+                # Emitted RESOLVED, matching tools/fs_tools.py and gen_openshell_policy.py.
+                # Without this a symlinked project is projected as the link while the
+                # enforced fence and the Landlock policy follow it to the target — the
+                # declared-vs-enforced divergence this registry exists to prevent, in the
+                # one function whose docstring promises every consumer sees the same path.
+                "path": str(expanded.resolve()),
                 "write": not _falsey(entry.get("write"), default=False),
             }
             if not _falsey(entry.get("no_delete"), default=True):

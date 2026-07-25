@@ -18,6 +18,15 @@ def _cfg(**kw) -> LangGraphConfig:
     return LangGraphConfig(**kw)
 
 
+def _r(path: str) -> str:
+    """The path fenced_projects() will PROJECT for this input.
+
+    It resolves (matching tools/fs_tools.py and the OpenShell policy), and on macOS
+    /tmp is itself a symlink to /private/tmp — so a hard-coded expectation would be
+    asserting the unresolved value the QA panel flagged as the bug."""
+    return str(Path(path).resolve())
+
+
 # ---------------------------------------------------------------------------
 # Parse + round-trip
 # ---------------------------------------------------------------------------
@@ -67,18 +76,18 @@ def test_projects_emitted_by_config_to_dict():
 def test_registered_is_read_write_by_default():
     """ADR 0095 D3: registration grants read-write unless it opts out."""
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a"}])
-    assert cfg.fenced_projects() == [{"name": "a", "path": "/tmp/a", "write": True}]
+    assert cfg.fenced_projects() == [{"name": "a", "path": _r("/tmp/a"), "write": True}]
 
 
 def test_write_false_projects_read_only():
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "write": False}])
-    assert cfg.fenced_projects() == [{"name": "a", "path": "/tmp/a", "write": False}]
+    assert cfg.fenced_projects() == [{"name": "a", "path": _r("/tmp/a"), "write": False}]
 
 
 def test_no_delete_carries_through():
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "no_delete": True}])
     assert cfg.fenced_projects() == [
-        {"name": "a", "path": "/tmp/a", "write": True, "no_delete": True}
+        {"name": "a", "path": _r("/tmp/a"), "write": True, "no_delete": True}
     ]
 
 
@@ -105,7 +114,7 @@ def test_identity_fields_are_stripped_from_the_fence():
             }
         ]
     )
-    assert cfg.fenced_projects() == [{"name": "a", "path": "/tmp/a", "write": True}]
+    assert cfg.fenced_projects() == [{"name": "a", "path": _r("/tmp/a"), "write": True}]
 
 
 @pytest.mark.parametrize(
@@ -139,7 +148,7 @@ def test_explicit_filesystem_projects_win_over_the_registry():
 def test_registry_projects_onto_the_fence_when_no_explicit_list():
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "write": False}])
     assert cfg.effective_filesystem_projects() == [
-        {"name": "a", "path": "/tmp/a", "write": False}
+        {"name": "a", "path": _r("/tmp/a"), "write": False}
     ]
 
 
@@ -199,7 +208,7 @@ def test_duplicate_name_keeps_the_first_and_warns(caplog):
     )
     with caplog.at_level("WARNING"):
         fenced = cfg.fenced_projects()
-    assert [p["path"] for p in fenced] == ["/tmp/first"]
+    assert [p["path"] for p in fenced] == [_r("/tmp/first")]
     assert "duplicate project name" in caplog.text
 
 
@@ -254,3 +263,40 @@ def test_no_delete_ignores_a_string_false():
     assert "no_delete" not in cfg.fenced_projects()[0]
     on = _cfg(projects=[{"name": "a", "path": "/tmp/a", "no_delete": "true"}])
     assert on.fenced_projects()[0]["no_delete"] is True
+
+
+def test_a_symlinked_path_is_projected_resolved(tmp_path):
+    """QA panel finding: fs_tools and gen_openshell_policy both `.resolve()`, so
+    projecting the LINK here left the reported fence pointing at the symlink while
+    the enforced fence and the Landlock policy followed it to the target — the
+    declared-vs-enforced divergence this registry exists to prevent."""
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target)
+
+    fenced = _cfg(projects=[{"name": "a", "path": str(link)}]).fenced_projects()
+    assert fenced[0]["path"] == str(target.resolve())
+
+
+def test_relative_paths_are_still_refused_after_resolving(caplog):
+    """`.resolve()` makes EVERY path absolute (a relative one against the process
+    CWD), so absoluteness has to be judged before resolving or this rejection
+    silently stops working."""
+    with caplog.at_level("WARNING"):
+        assert _cfg(projects=[{"name": "a", "path": "rel/ative"}]).fenced_projects() == []
+    assert "not absolute" in caplog.text
+
+
+def test_a_malformed_opted_out_entry_still_warns(caplog):
+    """QA panel finding: the `fs: false` check ran BEFORE name/path validation, so
+    `{fs: false}` — junk config — was dropped in silence. A WELL-FORMED opt-out
+    stays silent; that one is deliberate, not a typo."""
+    with caplog.at_level("WARNING"):
+        assert _cfg(projects=[{"fs": False}]).fenced_projects() == []
+    assert "missing name/path" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        assert _cfg(projects=[{"name": "a", "path": "/tmp/a", "fs": False}]).fenced_projects() == []
+    assert caplog.text.strip() == ""

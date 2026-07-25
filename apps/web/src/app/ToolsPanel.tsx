@@ -282,14 +282,14 @@ function WorkFoldersButton() {
 // project read-write in the console while the backend correctly kept it OUT of the fence:
 // the same report-vs-enforce divergence this panel exists to expose, one layer up.
 // Keep in step with _FALSE_STRINGS on the Python side.
+// ONE predicate: absent already answers "no" (both `fs` and `write` default to yes when
+// the key is missing), so a separate optedOut() wrapper was pure delegation.
 const FALSE_STRINGS = new Set(["false", "no", "off", "0", ""]);
 const isNo = (v: unknown): boolean => {
   if (v === undefined || v === null) return false; // absent = not a "no"
   if (typeof v === "string") return FALSE_STRINGS.has(v.trim().toLowerCase());
   return !v;
 };
-// `fs` opts a project out of the fence entirely; absent means "in the fence".
-const optedOut = (v: unknown): boolean => v !== undefined && v !== null && isNo(v);
 
 // The ADR 0095 managed-projects registry, READ-ONLY (D5 slice 1) — registration is still a
 // YAML edit. Renders nothing at all when nothing is registered, so the 99% who haven't opted
@@ -308,7 +308,7 @@ function ManagedProjectsList() {
   const shadowed = data.fence_source === "explicit";
   const unbound = data.fence_source === "unbound";
   const access = (p: (typeof data.projects)[number]) => {
-    if (optedOut(p.fs)) return "no fs";
+    if (isNo(p.fs)) return "no fs";
     if (isNo(p.write)) return "read-only";
     return p.no_delete ? "no delete" : "read-write";
   };
@@ -341,7 +341,7 @@ function ManagedProjectsList() {
             {/* Two ways to be unbound, and they need different advice: every entry opted
                 out (deliberate — just say what it means), or every folder is gone (a
                 mistake — say how to fix it). */}
-            {data.projects.every((p) => optedOut(p.fs)) ? (
+            {data.projects.every((p) => isNo(p.fs)) ? (
               <>
                 Every project sets <code>fs: false</code>, so the filesystem tools are{" "}
                 <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}

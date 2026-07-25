@@ -302,7 +302,9 @@ def register_config_routes(app) -> None:
             # Compare the EXPANDED path, since fenced_projects() expands `~` — a row
             # written as `~/dev/x` must still match the fence entry it produced.
             try:
-                key = (name, str(Path(raw).expanduser())) if raw else (name, "")
+                # Resolved, in lockstep with fenced_projects() — it emits resolved paths,
+                # so comparing an unresolved one here would never match a symlinked entry.
+                key = (name, str(Path(raw).expanduser().resolve())) if raw else (name, "")
             except (OSError, ValueError):
                 key = (name, raw)
             row["fenced"] = bool(
