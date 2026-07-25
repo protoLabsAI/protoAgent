@@ -110,6 +110,17 @@ visible cause.
 `fs: false` covers the genuine case — a project registered for GitHub/board purposes that
 the agent should have no filesystem reach into.
 
+**`fs: false` is honoured literally, including when every entry sets it** (amended after
+review). A *configured* registry is the answer even when it projects to nothing: the fence
+is empty and the filesystem toolset unbinds. The first implementation substituted the
+default workspace there, reasoning that an empty fence unbinds everything with no visible
+cause (constraint #2 above) — but that granted read-write on a directory the operator had
+just declared out of reach, to fix a *visibility* problem with an *access* change. The
+visibility problem is now fixed directly: every dropped or malformed entry logs a warning
+naming it, and `GET /api/projects` reports `fence_source: "unbound"` with a console banner.
+An *absent* registry still gets the workspace default — that is the default-install path
+and is deliberately unchanged.
+
 Should a population source ever be introduced, entries from it must land `fs: false` and
 require explicit local promotion. That is a property of *imported* entries, not of the
 registry.

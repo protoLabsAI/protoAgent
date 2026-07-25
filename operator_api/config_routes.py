@@ -267,7 +267,11 @@ def register_config_routes(app) -> None:
             fence_source = "disabled"
         elif explicit:
             fence_source = "explicit"
-        elif fenced_names:
+        elif registry:
+            # A CONFIGURED registry is the fence source even when it projects nothing —
+            # that's the whole point of honouring `fs: false` literally rather than
+            # substituting the workspace default. Refined to "unbound" below when no
+            # row actually feeds the fence.
             fence_source = "registry"
         else:
             fence_source = "workspace_default"
@@ -298,10 +302,12 @@ def register_config_routes(app) -> None:
                 claimed.add(name)
             projects.append(row)
 
-        # A registry that projects rows but whose paths are all gone resolves to an
-        # EMPTY fence downstream, and build_fs_tools then unbinds the entire toolset
-        # (#2251) — reporting "registry" there would claim the registry is driving a
-        # fence that doesn't exist. Say so instead; it's the state most worth naming.
+        # A configured registry where NO row feeds the fence resolves to an empty fence,
+        # and build_fs_tools then unbinds the entire toolset (#2251). Reporting
+        # "registry" there would claim the registry is driving a fence that doesn't
+        # exist. Two distinct ways to land here, both worth naming rather than hiding:
+        # every entry opted out with `fs: false` (deliberate), or every folder is
+        # missing (a mistake). The console tells them apart from the rows.
         if fence_source == "registry" and not any(p.get("fenced") for p in projects):
             fence_source = "unbound"
 

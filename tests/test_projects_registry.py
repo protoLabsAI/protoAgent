@@ -148,17 +148,38 @@ def test_filesystem_disabled_yields_no_fence_even_with_a_registry():
     assert cfg.effective_filesystem_projects() == []
 
 
-def test_all_entries_opted_out_falls_back_to_the_workspace_default():
-    """An empty fence unbinds the ENTIRE fs toolset with no visible cause (#2251).
-    A registry where every entry sets fs:false must not produce that."""
+def test_all_entries_opted_out_yields_NO_fence():
+    """`fs: false` means "registered, but NOT in the fence at all" (D3) and is now
+    honoured literally. This previously fell through to the workspace default —
+    granting read-write on a directory the operator had just said they didn't want,
+    to avoid an invisible unbind (#2251). The unbind is no longer invisible: the
+    drops WARN and /api/projects reports fence_source "unbound"."""
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "fs": False}])
-    effective = cfg.effective_filesystem_projects()
-    assert [p["name"] for p in effective] == ["workspace"]
+    assert cfg.effective_filesystem_projects() == []
+
+
+def test_a_registry_of_only_bad_entries_yields_NO_fence():
+    """Same rule for the mistake case: a configured registry is the answer even when
+    every entry is unusable. The warnings name each one, so this is a loud empty
+    fence rather than a silent substitution."""
+    cfg = _cfg(projects=[{"name": "a", "path": "relative/path"}])
+    assert cfg.effective_filesystem_projects() == []
 
 
 def test_empty_registry_keeps_the_workspace_default():
-    """Today's behavior for a default install is unchanged."""
+    """The DEFAULT-INSTALL path, deliberately unchanged: no registry configured at
+    all still gets the fenced workspace, so nobody who hasn't opted in is affected."""
     assert [p["name"] for p in _cfg().effective_filesystem_projects()] == ["workspace"]
+
+
+def test_explicit_filesystem_projects_still_win_over_an_opted_out_registry():
+    """The non-regression guarantee holds even in the new empty-fence case."""
+    explicit = [{"name": "legacy", "path": "/tmp/legacy", "write": True}]
+    cfg = _cfg(
+        filesystem_projects=explicit,
+        projects=[{"name": "a", "path": "/tmp/a", "fs": False}],
+    )
+    assert cfg.effective_filesystem_projects() == explicit
 
 
 # ---------------------------------------------------------------------------

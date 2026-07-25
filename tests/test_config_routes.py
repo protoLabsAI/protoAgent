@@ -584,3 +584,19 @@ def test_projects_get_stays_registry_when_one_folder_survives(monkeypatch, tmp_p
     body = _client().get("/api/projects").json()
     assert body["fence_source"] == "registry"
     assert [r["fenced"] for r in body["projects"]] == [True, False]
+
+
+def test_projects_get_reports_unbound_when_every_entry_opts_out(monkeypatch, tmp_path):
+    """`fs: false` everywhere is now honoured literally — no workspace-default
+    substitution — so the API must say the fence is unbound rather than pretending
+    a registry is driving it."""
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "a", "path": str(tmp_path), "fs": False},
+            {"name": "b", "path": str(tmp_path), "fs": False},
+        ],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "unbound"
+    assert [r["fenced"] for r in body["projects"]] == [False, False]

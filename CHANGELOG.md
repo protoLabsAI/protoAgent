@@ -46,10 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-write. Both now read as the "no" they obviously are — where a value is ambiguous,
   it resolves toward *less* filesystem access.
 
-  Finally, a registry whose folders have all gone missing resolves to an empty fence and
-  unbinds the whole filesystem toolset. The console used to call that state "registry",
-  claiming a fence that wasn't there; it now reports **unbound** and says the agent has no
-  `read_file` / `list_dir` at all.
+  Finally, a registry that feeds nothing resolves to an empty fence and unbinds the whole
+  filesystem toolset. The console used to call that state "registry", claiming a fence that
+  wasn't there; it now reports **unbound** and says the agent has no `read_file` /
+  `list_dir` at all — distinguishing "every folder is missing" (fix your paths) from
+  "every project opts out" (that's what `fs: false` means).
+
+### Changed
+- **`fs: false` on every project now means what it says: no filesystem fence at all.**
+  Previously that case fell through to the default workspace folder — so declaring every
+  project out of reach quietly granted the agent read-write on `~/.protoagent/workspace`.
+  The reasoning was that an empty fence unbinds the toolset with no visible cause, but that
+  fixed a *visibility* problem with an *access* change. Visibility is now handled directly
+  (every dropped entry warns by name; the console reports **unbound**), so the fence is
+  simply left empty, as asked.
+
+  Only affects configs that set `projects:` **and** opt every entry out. A config with no
+  `projects:` registry still gets the fenced workspace exactly as before — the
+  default-install path is unchanged.
 - **An agent you just added from network discovery no longer lingers in the "found" list.**
   Adding a discovered protoAgent as a remote member dropped it from the found list only on
   the follow-up re-scan, so for one round-trip it sat in both lists — still offering an "Add

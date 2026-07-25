@@ -1110,12 +1110,21 @@ class LangGraphConfig:
             return self.filesystem_projects
         if not self.filesystem_enabled:
             return []
-        # A registry whose entries ALL opt out (``fs: false``) projects to nothing —
-        # fall through to the workspace default rather than handing back an empty
-        # fence, which unbinds the whole fs toolset with no visible cause (#2251).
-        fenced = self.fenced_projects()
-        if fenced:
-            return fenced
+        # A CONFIGURED registry is the answer, even when it projects to nothing.
+        # ``fs: false`` on every entry means "registered, but NOT in the fence at all"
+        # (D3) and is honoured literally — substituting the workspace default would
+        # grant read-write on a directory the operator just said they didn't want.
+        #
+        # This used to fall through to that default, on the grounds that an empty fence
+        # unbinds the whole toolset with no visible cause (#2251). That reason is gone:
+        # every dropped entry now WARNs by name, and ``/api/projects`` reports
+        # ``fence_source: "unbound"`` with a console banner. The failure is loud, so it
+        # no longer has to be papered over with access nobody asked for.
+        #
+        # An ABSENT registry still gets the workspace default below — that's the
+        # default-install path and it is deliberately unchanged.
+        if self.projects:
+            return self.fenced_projects()
         from infra.paths import workspace_dir
 
         return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]

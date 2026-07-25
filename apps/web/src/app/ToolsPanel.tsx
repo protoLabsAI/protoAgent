@@ -323,9 +323,23 @@ function ManagedProjectsList() {
         <p className="fs-projects-warning" role="alert">
           <AlertTriangle size={14} />
           <span>
-            None of these projects' folders exist, so the filesystem tools are{" "}
-            <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
-            <code>list_dir</code> at all. Fix the paths in your config file.
+            {/* Two ways to be unbound, and they need different advice: every entry opted
+                out (deliberate — just say what it means), or every folder is gone (a
+                mistake — say how to fix it). */}
+            {data.projects.every((p) => p.fs === false) ? (
+              <>
+                Every project sets <code>fs: false</code>, so the filesystem tools are{" "}
+                <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
+                <code>list_dir</code> at all. That's what <code>fs: false</code> means;
+                drop it from a project to fence that folder.
+              </>
+            ) : (
+              <>
+                None of these projects' folders exist, so the filesystem tools are{" "}
+                <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
+                <code>list_dir</code> at all. Fix the paths in your config file.
+              </>
+            )}
           </span>
         </p>
       ) : null}
