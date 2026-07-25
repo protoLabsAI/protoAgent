@@ -81,13 +81,19 @@ def build_policy(cfg: LangGraphConfig) -> str:
     for entry in cfg.effective_filesystem_projects() or []:
         if not isinstance(entry, dict):
             continue
-        # Expand `~` exactly as the enforced fence does (tools/fs_tools.py resolves
-        # every root with Path(...).expanduser()). Emitting the raw string would put a
-        # literal "~/dev/x" in the Landlock policy, which matches nothing — a policy
-        # that silently disagrees with the fence it is supposed to describe.
-        path = str(Path(str(entry.get("path") or "").strip()).expanduser()) if entry.get("path") else ""
-        if not path:
+        # Normalize exactly as the ENFORCED fence does — tools/fs_tools.py resolves every
+        # root with Path(...).expanduser().resolve() — so the policy describes the same
+        # directories the agent actually gets. Emitting the raw string put a literal
+        # "~/dev/x" in the Landlock rule, which matches nothing.
+        #
+        # Emptiness is checked on the STRIPPED string, before Path() ever sees it:
+        # Path("") is Path("."), so a whitespace-only path silently became the server's
+        # CURRENT DIRECTORY and was emitted as a fenced root. Both of the obvious guards
+        # miss it — the raw value is truthy, and so is the resulting ".".
+        raw_path = str(entry.get("path") or "").strip()
+        if not raw_path:
             continue
+        path = str(Path(raw_path).expanduser().resolve())
         target = rw_paths if entry.get("write") else ro_paths
         target.append((path, f"project: {entry.get('name', '?')}"))
 

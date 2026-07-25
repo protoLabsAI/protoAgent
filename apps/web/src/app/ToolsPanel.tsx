@@ -276,6 +276,21 @@ function WorkFoldersButton() {
   );
 }
 
+// Mirrors the backend's `_falsey` (graph/config.py). The registry's `fs` / `write` values
+// can arrive as strings from JSON, an env overlay or a hand-edit — `"false"` is a truthy
+// string in JS exactly as it is in Python. A bare `p.fs === false` here would label a
+// project read-write in the console while the backend correctly kept it OUT of the fence:
+// the same report-vs-enforce divergence this panel exists to expose, one layer up.
+// Keep in step with _FALSE_STRINGS on the Python side.
+const FALSE_STRINGS = new Set(["false", "no", "off", "0", ""]);
+const isNo = (v: unknown): boolean => {
+  if (v === undefined || v === null) return false; // absent = not a "no"
+  if (typeof v === "string") return FALSE_STRINGS.has(v.trim().toLowerCase());
+  return !v;
+};
+// `fs` opts a project out of the fence entirely; absent means "in the fence".
+const optedOut = (v: unknown): boolean => v !== undefined && v !== null && isNo(v);
+
 // The ADR 0095 managed-projects registry, READ-ONLY (D5 slice 1) — registration is still a
 // YAML edit. Renders nothing at all when nothing is registered, so the 99% who haven't opted
 // in see no new chrome.
@@ -293,8 +308,8 @@ function ManagedProjectsList() {
   const shadowed = data.fence_source === "explicit";
   const unbound = data.fence_source === "unbound";
   const access = (p: (typeof data.projects)[number]) => {
-    if (p.fs === false) return "no fs";
-    if (p.write === false) return "read-only";
+    if (optedOut(p.fs)) return "no fs";
+    if (isNo(p.write)) return "read-only";
     return p.no_delete ? "no delete" : "read-write";
   };
   // Duplicate names are dropped by the backend projection (first wins), so a second
@@ -326,7 +341,7 @@ function ManagedProjectsList() {
             {/* Two ways to be unbound, and they need different advice: every entry opted
                 out (deliberate — just say what it means), or every folder is gone (a
                 mistake — say how to fix it). */}
-            {data.projects.every((p) => p.fs === false) ? (
+            {data.projects.every((p) => optedOut(p.fs)) ? (
               <>
                 Every project sets <code>fs: false</code>, so the filesystem tools are{" "}
                 <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
