@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fenced to. The generator now reads the effective fence
   (`effective_filesystem_projects()`), which also picks up the ADR 0095 `projects:`
   registry — including its `fs: false` opt-out — for free.
+### Added
+- **Managed projects are visible in the console, and it tells you when they aren't in
+  effect (ADR 0095 D5).** `GET /api/projects` plus a read-only **Managed projects** list at
+  the top of the Work folders dialog: each registered project with its GitHub repo, its
+  access mode (read-write / read-only / no delete / no fs), and whether its folder is
+  actually there.
+
+  The part that matters is the honesty about precedence. An explicit `filesystem.projects`
+  **wins** over the registry — that's what makes ADR 0095 non-regressing — which means a
+  fully-populated registry can be sitting there driving nothing at all. Rather than show a
+  tidy list of projects that have no effect, the panel says so outright and points at the
+  Work folders below as the reason. Registration itself is still a config-file edit; this
+  slice is deliberately read-only, because the folder editor's save path *replaces*
+  `filesystem.projects` and writing back a registry-derived list would silently materialize
+  the projection and sever the registry link.
 
 ### Changed
 - **Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).**

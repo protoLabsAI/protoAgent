@@ -202,6 +202,32 @@ export type BrowseListing = {
 // the whole toolset unbinds. Absent on rows the editor is composing.
 export type FsProject = { name?: string; path: string; write: boolean; exists?: boolean };
 
+// The ADR 0095 managed-projects registry (GET /api/projects, read-only — registration
+// is still a YAML edit). `fenced` says whether THIS entry feeds the live fs fence:
+// false when it opts out with `fs: false`, and false for every row when explicit
+// Work folders shadow the registry wholesale (see ManagedProjects.fence_source).
+export type ManagedProject = {
+  name: string;
+  path: string;
+  github?: string;
+  default_branch?: string;
+  write?: boolean;
+  no_delete?: boolean;
+  fs?: boolean;
+  exists?: boolean;
+  fenced?: boolean;
+};
+
+// `fence_source` = who actually feeds the fs fence right now. "explicit" means
+// `filesystem.projects` is set and the registry below is driving NOTHING — the one
+// state worth shouting about, since declared-but-not-enforced is exactly the drift
+// ADR 0095 exists to kill.
+export type ManagedProjects = {
+  enabled: boolean;
+  fence_source: "explicit" | "registry" | "workspace_default" | "disabled";
+  projects: ManagedProject[];
+};
+
 // An entry in the official-plugin directory (GET /api/plugins/catalog, ADR 0059),
 // merged with install state. `repo` is the install URL — one-click install runs
 // `plugin install <repo>`. `bundled` = a built-in still shipped with the host (not

@@ -268,10 +268,64 @@ function WorkFoldersButton() {
       </Button>
       {open ? (
         <Dialog open onClose={() => setOpen(false)} title="Work folders" width={520}>
+          <ManagedProjectsList />
           <FsProjectsEditor />
         </Dialog>
       ) : null}
     </>
+  );
+}
+
+// The ADR 0095 managed-projects registry, READ-ONLY (D5 slice 1) — registration is still a
+// YAML edit. Renders nothing at all when nothing is registered, so the 99% who haven't opted
+// in see no new chrome.
+//
+// It sits above the Work-folders editor because that's the pairing that matters: an explicit
+// `filesystem.projects` WINS over the registry (what makes ADR 0095 non-regressing), so a
+// fully-populated registry can be sitting there driving nothing. Declared-but-not-enforced is
+// exactly the drift 0095 exists to kill, so the one thing this must never do is show a tidy
+// list of projects that aren't in effect without saying so.
+function ManagedProjectsList() {
+  const query = useQuery({ queryKey: ["managed-projects"], queryFn: () => api.managedProjects() });
+  const data = query.data;
+  if (!data || data.projects.length === 0) return null;
+
+  const shadowed = data.fence_source === "explicit";
+  const access = (p: (typeof data.projects)[number]) => {
+    if (p.fs === false) return "no fs";
+    if (p.write === false) return "read-only";
+    return p.no_delete ? "no delete" : "read-write";
+  };
+
+  return (
+    <div className="fs-projects">
+      <p className="fleet-section-label">Managed projects</p>
+      <p className="setup-hint">
+        Declared in <code>projects:</code> — one entry per project, feeding the folder fence, the
+        GitHub repo picker, and the board. Edit them in your config file.
+      </p>
+      {shadowed ? (
+        <p className="fs-projects-warning" role="alert">
+          <AlertTriangle size={14} />
+          <span>
+            The Work folders below are set explicitly, which overrides the registry — these
+            projects are registered but are <strong>not</strong> fencing anything. Clear the
+            folders below to let the registry drive the fence.
+          </span>
+        </p>
+      ) : null}
+      {data.projects.map((p) => (
+        <div key={p.name} className="fs-projects-row">
+          <span>
+            {p.name}
+            {p.github ? ` · ${p.github}` : ""}
+          </span>
+          <Badge status={p.exists === false ? "error" : p.fenced ? "success" : "neutral"}>
+            {p.exists === false ? "missing" : access(p)}
+          </Badge>
+        </div>
+      ))}
+    </div>
   );
 }
 

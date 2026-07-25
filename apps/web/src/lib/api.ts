@@ -7,6 +7,7 @@ import type {
   BackgroundJobDTO,
   BrowseListing,
   FsProject,
+  ManagedProjects,
   Task,
   ChatMessage,
   ComponentSpec,
@@ -2140,6 +2141,12 @@ export const api = {
   },
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
+  },
+  // The ADR 0095 managed-projects registry. Read-only by design: the fs-projects POST
+  // above REPLACES `filesystem.projects`, so writing back a registry-derived list here
+  // would silently materialize the projection and sever the registry link.
+  managedProjects() {
+    return request<ManagedProjects>("/api/projects");
   },
   setFsProjects(projects: FsProject[]) {
     return request<{ ok: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects", {

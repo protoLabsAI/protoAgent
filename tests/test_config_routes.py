@@ -473,3 +473,67 @@ def test_fs_projects_set_refuses_unusable_folders(monkeypatch, tmp_path):
     f = tmp_path / "notes.txt"
     f.write_text("x")
     assert c.post("/api/settings/filesystem-projects", json={"projects": [{"path": str(f)}]}).status_code == 400
+
+
+# ── GET /api/projects — the ADR 0095 managed-projects registry (read-only) ────
+
+
+def _projects_state(monkeypatch, **attrs):
+    """Real LangGraphConfig (not a SimpleNamespace) so fenced_projects() is live."""
+    import runtime.state as rs
+
+    from graph.config import LangGraphConfig
+
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(**attrs), raising=False)
+
+
+def test_projects_get_reports_registry_and_liveness(monkeypatch, tmp_path):
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "here", "path": str(tmp_path), "github": "o/here"},
+            {"name": "gone", "path": str(tmp_path / "nope")},
+        ],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "registry"
+    assert [r["exists"] for r in body["projects"]] == [True, False]
+    assert body["projects"][0]["github"] == "o/here"  # identity fields survive
+    assert [r["fenced"] for r in body["projects"]] == [True, True]
+
+
+def test_projects_get_flags_fs_false_as_unfenced(monkeypatch, tmp_path):
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "fenced", "path": str(tmp_path)},
+            {"name": "tracked", "path": str(tmp_path), "fs": False},
+        ],
+    )
+    rows = _client().get("/api/projects").json()["projects"]
+    assert [r["fenced"] for r in rows] == [True, False]
+
+
+def test_projects_get_says_when_explicit_roots_shadow_the_registry(monkeypatch, tmp_path):
+    """An explicit filesystem.projects WINS over the registry (that's what makes ADR
+    0095 non-regressing) — so a fully-populated registry can be driving nothing.
+    Reporting that is the whole point: silent divergence between declared and
+    enforced is the failure 0095 exists to kill."""
+    _projects_state(
+        monkeypatch,
+        filesystem_projects=[{"name": "legacy", "path": str(tmp_path), "write": True}],
+        projects=[{"name": "ignored", "path": str(tmp_path)}],
+    )
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "explicit"
+    assert body["projects"][0]["fenced"] is False  # registered, but NOT in effect
+
+
+def test_projects_get_workspace_default_and_disabled(monkeypatch):
+    _projects_state(monkeypatch)  # nothing registered, fs on
+    assert _client().get("/api/projects").json()["fence_source"] == "workspace_default"
+
+    _projects_state(monkeypatch, filesystem_enabled=False, projects=[{"name": "a", "path": "/tmp"}])
+    body = _client().get("/api/projects").json()
+    assert body["fence_source"] == "disabled" and body["enabled"] is False
+    assert body["projects"][0]["fenced"] is False

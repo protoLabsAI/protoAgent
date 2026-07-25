@@ -225,6 +225,67 @@ def register_config_routes(app) -> None:
 
         return {"name": name, "content": read_soul_preset(name)}
 
+    @app.get("/api/projects")
+    async def _api_projects():
+        """The ADR 0095 managed-projects registry — READ-ONLY (D5 slice 1).
+
+        Registration is still a YAML edit; this surfaces what's registered and, more
+        importantly, **whether the registry is actually in effect**. An explicit
+        ``filesystem.projects`` wins over the registry by design (that's what makes
+        0095 non-regressing), which means a fully-populated registry can be sitting
+        there driving nothing. Silent divergence between what's declared and what's
+        enforced is the exact failure 0095 exists to kill, so it's reported rather
+        than left for the operator to infer:
+
+        - ``fence_source`` — who is actually feeding the fs fence right now:
+          ``explicit`` (``filesystem.projects`` is set and SHADOWS the registry) ·
+          ``registry`` · ``workspace_default`` · ``disabled``.
+        - per-row ``fenced`` — whether THAT entry contributes to the live fence
+          (false when it opts out with ``fs: false``, or when explicit roots shadow
+          the whole registry).
+        - per-row ``exists`` — same liveness check the work-folder editor reports; a
+          path that isn't a directory is dropped at graph build (#2251).
+
+        No POST: the work-folder editor's write path REPLACES ``filesystem.projects``,
+        so a naive write-back here would silently materialize the projection into
+        explicit entries and sever the registry link. Editing stays YAML-only until
+        that has a real answer."""
+        from pathlib import Path
+
+        cfg = STATE.graph_config
+        registry = list(getattr(cfg, "projects", []) or [])
+        explicit = list(getattr(cfg, "filesystem_projects", []) or [])
+        enabled = bool(getattr(cfg, "filesystem_enabled", False))
+        fenced_names = {
+            str(p.get("name") or "")
+            for p in (cfg.fenced_projects() if hasattr(cfg, "fenced_projects") else [])
+        }
+
+        if not enabled:
+            fence_source = "disabled"
+        elif explicit:
+            fence_source = "explicit"
+        elif fenced_names:
+            fence_source = "registry"
+        else:
+            fence_source = "workspace_default"
+
+        projects = []
+        for entry in registry:
+            row = dict(entry) if isinstance(entry, dict) else {}
+            raw = str(row.get("path") or "").strip()
+            try:
+                row["exists"] = bool(raw) and Path(raw).expanduser().is_dir()
+            except OSError:  # unreadable mount / bad path — same as gone for our purposes
+                row["exists"] = False
+            row["fenced"] = fence_source == "registry" and str(row.get("name") or "") in fenced_names
+            projects.append(row)
+        return {
+            "enabled": enabled,
+            "fence_source": fence_source,
+            "projects": projects,
+        }
+
     @app.get("/api/settings/filesystem-projects")
     async def _api_fs_projects():
         """The fenced fs roots (ADR 0007): the explicit ``filesystem.projects`` list
