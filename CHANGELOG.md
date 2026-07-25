@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bill), and an autonomous poster's failure mode isn't a typo, it's a confident wrong
   post that's permanent and screenshot-able. Everything the stack builds is identical
   whether a person or an API sends it.
+- **The plugins that ship with protoAgent now appear in Discover (#2249).** Discover listed twenty
+  third-party plugins and exactly one bundled one — while `docs`, `notes` and `craft` were on by
+  default and already running in your instance, invisible in the surface built for finding out what
+  plugins do. Twelve of the fourteen in-tree plugins are now listed, each with a `bundled` pill
+  instead of an Install button (enabling one is a config change, not an install). `delegates` (always
+  loaded, not toggleable) and `hello` (the copy-me scaffold) stay out, with the reason recorded.
+
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
   location were all free-text boxes, and typing is the one input method that can't tell
