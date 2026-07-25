@@ -5,7 +5,7 @@ A recipe is a dict (parsed from YAML):
     name: str
     description: str (optional)
     inputs: [{name, required?, default?}]   (optional)
-    steps:  [{id, subagent, prompt, depends_on?}]
+    steps:  [{id, subagent, prompt, depends_on?, timeout?}]
     output: str (optional template; default = last step's output)
     max_concurrency: int (optional; the recipe's fan-out width — see below)
 
@@ -41,6 +41,15 @@ def _refs(text: str) -> list[str]:
 # Ceiling on a recipe-declared fan-out. High enough for any realistic panel, low
 # enough that a typo (``max_concurrency: 500``) can't stampede the gateway.
 MAX_FANOUT = 16
+
+# What a step's output becomes when its opt-in ``timeout`` fires. Ends with an empty
+# findings array so a review finder that degrades reads downstream as "no findings from
+# this angle" rather than a parse error — the same shape protoPatch emits when it is
+# unavailable. Dependents (synthesize/verify) proceed on the other steps' output.
+_TIMEOUT_GAP = (
+    "Gap: step {sid!r} exceeded its {timeout}s time budget and was cut off — no result "
+    "from this step this run.\n\n```json\n[]\n```"
+)
 
 
 def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) -> list[str]:
@@ -79,6 +88,9 @@ def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) ->
         gate = step.get("gate")
         if gate is not None and gate != "human":
             errors.append(f"step {sid!r}: unsupported gate {gate!r} (only 'human' is supported)")
+        timeout = step.get("timeout")
+        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
+            errors.append(f"step {sid!r}: 'timeout' must be a positive number of seconds")
 
     id_set = set(ids)
     # depends_on references + cycle check
@@ -174,9 +186,14 @@ async def execute_workflow(
     """Run the recipe's step DAG. ``run_step(subagent, prompt, step_id) -> output``.
 
     Returns ``{"output": str, "steps": {id: output}, "failed": [ids],
-    "timings": {id: seconds}}``. Step failures are recorded inline (the step's output
-    becomes the error text) so independent branches still complete — matching
-    task_batch semantics.
+    "degraded": [ids], "timings": {id: seconds}}``. Step failures are recorded inline
+    (the step's output becomes the error text) so independent branches still complete —
+    matching task_batch semantics.
+
+    A step may carry an optional ``timeout`` (positive seconds). Exceeding it is
+    graceful degradation, NOT a failure: the step yields an empty Gap result and its id
+    is listed in ``degraded`` (not ``failed``), so dependents proceed on the other
+    steps. Without it a hung subagent has no engine-level bound and stalls the DAG.
 
     A recipe's own ``max_concurrency`` wins over the caller's, so a declared fan-out is
     never serialized by a resource cap that knows nothing about this recipe's shape.
@@ -211,6 +228,7 @@ async def execute_workflow(
     pending = {s["id"]: set(s.get("depends_on", []) or []) for s in steps}
     done: dict[str, str] = dict(seed_outputs or {})
     failed: list[str] = []
+    degraded: list[str] = []
     prompt_overrides = prompt_overrides or {}
     skip_gate = set(skip_gate or ())
     sem = asyncio.Semaphore(max(1, max_concurrency))
@@ -232,11 +250,26 @@ async def execute_workflow(
     async def run_one(sid: str) -> tuple[str, str, bool]:
         step = by_id[sid]
         prompt = prompt_overrides[sid] if sid in prompt_overrides else render_template(step["prompt"], inputs, done)
+        timeout = step.get("timeout")
         async with sem:
             started = time.monotonic()
             try:
-                out = await run_step(step["subagent"], prompt, sid)
+                call = run_step(step["subagent"], prompt, sid)
+                if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0:
+                    out = await asyncio.wait_for(call, timeout)
+                else:
+                    out = await call
                 return sid, str(out), False
+            except (asyncio.TimeoutError, TimeoutError):
+                # Graceful degradation, NOT a failure: an opt-in per-step `timeout` caps a
+                # step that would otherwise run unbounded (with no engine-level timeout a
+                # hung subagent stalls the whole DAG forever). The step yields an empty
+                # result + a Gap — dependents proceed exactly as they do for protoPatch's
+                # own Gap fallback — so a slow finder degrades the panel by one angle
+                # instead of exhausting it into no verdict at all. Recorded as `degraded`
+                # (distinct from `failed`) so the caller can see it happened.
+                degraded.append(sid)
+                return sid, _TIMEOUT_GAP.format(sid=sid, timeout=timeout), False
             except Exception as exc:  # noqa: BLE001 — record inline, keep the DAG going
                 return sid, f"Error: step {sid!r} raised {type(exc).__name__}: {exc}", True
             finally:
@@ -267,6 +300,7 @@ async def execute_workflow(
                     # the two completion paths disagree about the result shape, and a
                     # long step before a pause is exactly what you want to see.
                     "timings": dict(timings),
+                    "degraded": list(degraded),
                 }
         for sid, out, err in await asyncio.gather(*(run_one(s) for s in ready)):
             done[sid] = out
@@ -280,5 +314,6 @@ async def execute_workflow(
         "output": render_template(output_tpl, inputs, done),
         "steps": done,
         "failed": failed,
+        "degraded": degraded,
         "timings": timings,
     }

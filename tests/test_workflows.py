@@ -154,6 +154,74 @@ def test_execute_records_failure_inline_and_continues():
     assert "Error: step 'gather'" in res["steps"]["brief"]
 
 
+# --- Opt-in per-step timeout: graceful degradation, not failure ---------------
+
+
+def test_validate_catches_bad_timeout():
+    def step(t):
+        return {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": t}]}
+
+    assert any("'timeout' must be a positive" in e for e in validate_recipe(step(-1)))
+    assert any("'timeout' must be a positive" in e for e in validate_recipe(step(0)))
+    assert any("'timeout' must be a positive" in e for e in validate_recipe(step("soon")))
+    assert any("'timeout' must be a positive" in e for e in validate_recipe(step(True)))  # bool is not seconds
+    assert validate_recipe(step(30)) == []  # a positive number is fine
+    assert validate_recipe(step(0.5)) == []
+
+
+def test_step_timeout_degrades_gracefully_not_as_failure():
+    async def run_step(subagent, prompt, sid):
+        if sid == "slow":
+            await asyncio.sleep(0.5)
+            return "NEVER — should have been cut off"
+        if sid == "merge":
+            return f"merged<{prompt}>"
+        return f"{sid}-ok"
+
+    recipe = {
+        "name": "t",
+        "steps": [
+            {"id": "slow", "subagent": "researcher", "prompt": "p", "timeout": 0.05},
+            {"id": "fast", "subagent": "researcher", "prompt": "p"},
+            {
+                "id": "merge",
+                "subagent": "researcher",
+                "prompt": "{{steps.slow.output}} :: {{steps.fast.output}}",
+                "depends_on": ["slow", "fast"],
+            },
+        ],
+    }
+    res = asyncio.run(execute_workflow(recipe, {}, run_step=run_step))
+    assert "slow" in res["degraded"]  # degraded ...
+    assert "slow" not in res["failed"]  # ... NOT failed
+    assert "exceeded its 0.05s time budget" in res["steps"]["slow"]
+    assert "```json\n[]\n```" in res["steps"]["slow"]  # empty-findings shape for downstream parsers
+    # The DAG kept going: merge ran and threaded in BOTH the Gap and the fast output.
+    assert "fast-ok" in res["steps"]["merge"] and "time budget" in res["steps"]["merge"]
+
+
+def test_step_within_its_timeout_completes_normally():
+    async def run_step(subagent, prompt, sid):
+        await asyncio.sleep(0.01)
+        return f"{sid}-ok"
+
+    recipe = {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": 5}]}
+    res = asyncio.run(execute_workflow(recipe, {}, run_step=run_step))
+    assert res["degraded"] == [] and res["steps"]["a"] == "a-ok"
+
+
+def test_no_timeout_key_is_unbounded_and_unchanged():
+    # The default path must be byte-for-byte the pre-timeout behaviour: no degraded list
+    # entries, step runs to completion however long (0.05s here stands in for "unbounded").
+    async def run_step(subagent, prompt, sid):
+        await asyncio.sleep(0.05)
+        return f"{sid}-ok"
+
+    recipe = {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p"}]}
+    res = asyncio.run(execute_workflow(recipe, {}, run_step=run_step))
+    assert res["degraded"] == [] and res["steps"]["a"] == "a-ok"
+
+
 # --- Step-level gate: human (F2) ---------------------------------------------
 
 
