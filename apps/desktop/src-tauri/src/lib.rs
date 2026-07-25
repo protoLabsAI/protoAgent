@@ -220,6 +220,15 @@ struct WakeSignal {
 /// a quick tab-flick doesn't spam it. Best-effort, fire-and-forget: POST `system.wake` to
 /// the sidecar's `/api/events/publish`, which broadcasts it on the event bus (ADR 0039) so
 /// lifecycle hooks / config reactions can respond. A dead/booting sidecar just logs.
+///
+/// The POST carries the operator bearer. When this was first drafted (PR #1797) it didn't
+/// need to — the operator API trusted loopback. ADR 0089 closed that hole, and the
+/// middleware is explicit that "trust = the matched secret, never the path/Origin/
+/// loopback" (a2a_impl/auth.py, R5), so a tokenless publish is now a 401 on any instance
+/// with a token configured — i.e. the wake event would silently never fire, which is the
+/// worst failure shape for a fire-and-forget signal. Same token the shell already hands
+/// the webview; the response status is logged so a future auth change can't fail silently
+/// the way this one would have.
 fn maybe_signal_wake<R: Runtime>(app: &AppHandle<R>) {
     const WAKE_THROTTLE: Duration = Duration::from_secs(60);
     let Some(state) = app.try_state::<WakeSignal>() else {
@@ -234,14 +243,23 @@ fn maybe_signal_wake<R: Runtime>(app: &AppHandle<R>) {
         *last = Instant::now();
     }
     let port = state.port;
+    let token = resolve_auth_token(app);
     tauri::async_runtime::spawn(async move {
         let url = format!("http://127.0.0.1:{port}/api/events/publish");
         let body = serde_json::json!({
             "topic": "system.wake",
             "data": { "previous_state": "background", "source": "desktop" },
         });
-        if let Err(e) = reqwest::Client::new().post(&url).json(&body).send().await {
-            log::debug!("desktop: system.wake POST failed (sidecar down/booting?): {e}");
+        let mut req = reqwest::Client::new().post(&url).json(&body);
+        if let Some(t) = token.filter(|t| !t.is_empty()) {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+        match req.send().await {
+            Err(e) => log::debug!("desktop: system.wake POST failed (sidecar down/booting?): {e}"),
+            Ok(resp) if !resp.status().is_success() => {
+                log::warn!("desktop: system.wake rejected — HTTP {}", resp.status().as_u16());
+            }
+            Ok(_) => {}
         }
     });
 }
@@ -563,6 +581,17 @@ fn parse_auth_token(yaml: &str) -> Option<String> {
 /// install — and the console keeps its existing behaviour.
 #[tauri::command]
 fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+    let found = resolve_auth_token(&app);
+    // Logged at INFO without the value: this is the one place that answers "did the shell
+    // hand the webview a token, or is the operator being asked for one the app already had?"
+    log::info!("desktop: auth_token requested — configured: {}", found.is_some());
+    found
+}
+
+/// The sidecar's operator token, resolved the way the server itself resolves it. Quiet:
+/// the webview-facing `auth_token` command logs, but the shell's own server-to-server
+/// callers (see `maybe_signal_wake`) would only add noise on a timer.
+fn resolve_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     // Env wins, mirroring the server's own precedence (a2a_impl/auth.py `configure`).
     if let Ok(t) = std::env::var("A2A_AUTH_TOKEN") {
         let t = t.trim().to_string();
@@ -572,11 +601,7 @@ fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
     }
     let dir = app.path().app_config_dir().ok()?;
     let path = dir.join("config").join("secrets.yaml");
-    let found = std::fs::read_to_string(&path).ok().and_then(|b| parse_auth_token(&b));
-    // Logged at INFO without the value: this is the one place that answers "did the shell
-    // hand the webview a token, or is the operator being asked for one the app already had?"
-    log::info!("desktop: auth_token requested — configured: {}", found.is_some());
-    found
+    std::fs::read_to_string(&path).ok().and_then(|b| parse_auth_token(&b))
 }
 
 /// The real OS folder/file chooser for the console's path settings (#2265).

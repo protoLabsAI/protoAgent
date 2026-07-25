@@ -63,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path autocomplete, `~` expansion, `/` to jump, Finder/Explorer favourites, network volumes. Only in
   that window — a console focused on a fleet member may be pointed at another box entirely, so it
   keeps the server-side browser rather than name a folder that machine doesn't have.
+- **The desktop app now emits `system.wake` (#1932, ADR 0074).** ADR 0074 defined three
+  lifecycle events, but nothing ever *originated* the third — so `lifecycle_hooks` reactions
+  meant to fire when you come back (resume interrupted work, refresh state, check the inbox)
+  never fired at all. When the desktop window returns to the foreground the shell now publishes
+  `system.wake` on the event bus, completing the set alongside `app.loaded` and `agent.active`.
+  Debounced to once per 60 s so alt-tabbing doesn't spam it, and the window's own boot focus is
+  suppressed (you just got `app.loaded`). Foreground-focus is the v1 signal — true OS sleep/wake
+  needs native power observers, a later lift.
 
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
@@ -1739,13 +1747,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.92.0] - 2026-07-05
 
 ### Added
-- **Desktop `system.wake` lifecycle event** (#1653 follow-up, ADR 0074). The desktop shell now
-  emits the third lifecycle event: when its window returns to the foreground it POSTs `system.wake`
-  to the sidecar's `/api/events/publish`, which broadcasts it on the event bus so `lifecycle_hooks`
-  reactions (resume interrupted work, refresh state, check the inbox) fire on wake. Debounced (once
-  per 60 s) so an alt-tab doesn't spam it; the boot focus is suppressed. Rounds out `app.loaded` +
-  `agent.active`. (Foreground-focus is the v1 signal; true OS sleep/wake would need native power
-  observers — a later lift.)
 - **System lifecycle events** (#1653, ADR 0074). The agent now broadcasts its own lifecycle
   transitions on the [event bus](docs/guides/lifecycle-events.md) (ADR 0039): `app.loaded` when
   boot finishes (graph + scheduler + surfaces + fleet-autostart up) and `agent.active` when it
