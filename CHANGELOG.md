@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Project Manager preset learns fix-round doctrine and stops over-claiming (#2273).**
+  The archetype preset gains a fix-round rule as the last **How I work** bullet: a fix to
+  an open PR routes to that feature (the loop's CI-bounce requeues gate/CI failures, the
+  board's review requeue carries review findings to the same branch), never a fresh card —
+  so check the board and open PRs before creating any feature. The "pain points get filed
+  as issues" line, which assumed every PM has a write tool, is replaced with file-it-or-
+  hand-it-over: file myself when I have the tool, hand the operator a finished body when I
+  don't, never let the finding evaporate. A new honesty rule follows — an untooled action
+  is reported as a request with a ready body, never claimed as a finished filing. Generic
+  to any repo the PM is pointed at; distilled from a dogfood arc.
+
 ### Added
 - **Folder pickers for every path setting — no more typing a path and hoping.** Work
   folders, the project directory, the conversation-history DB, and the shared-skills
