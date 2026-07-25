@@ -144,6 +144,10 @@
         {
           "path": "guides/portfolio.md",
           "title": "Portfolio (one PM across boards)"
+        },
+        {
+          "path": "guides/build-with-a-coding-agent.md",
+          "title": "Build out your agent with a coding agent"
         }
       ]
     },

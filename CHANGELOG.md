@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to any repo the PM is pointed at; distilled from a dogfood arc.
 
 ### Added
+- **New guide — Build out your protoAgent with a coding agent.** A narrative how-to
+  (`docs/guides/build-with-a-coding-agent.md`) for growing a forked agent through a
+  pipeline instead of a keyboard: operator → project-manager agent → board → ACP coder
+  delegates → PRs. Covers standing up the `project-manager` archetype, the `coders`
+  tier map, the human intake gate, and a dedicated gates section making the claim
+  explicit — the loop's autonomy is downstream of its gates (checks.yml,
+  `local_gate_cmd`, `review_gate`, the bounded `ci_fix_max`/`rebase_fix_max` rounds),
+  and green is not a gate unless red was reachable. Wired into the VitePress sidebar
+  and the regenerated docs-plugin nav.
 - **A Social Marketing archetype — the fifth starter agent.** Pick it in the new-agent
   picker or the setup wizard and you get a social marketing manager: it holds the brand's
   voice, plans a balanced calendar, drafts native to each platform, lints its own copy

@@ -56,6 +56,7 @@ Connect your agent to other agents and endpoints, and run many of them.
 | [Spawn CLI coding agents (ACP)](/guides/coding-agents) | You want the agent to drive a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol |
 | [Run a fleet (workspaces, archetypes, supervisor)](/guides/fleet) | You want many named agents on one host — created from archetypes, run in the background, sharing a skills commons |
 | [Portfolio (one PM, many team boards)](/guides/portfolio) | You want one PM agent to dispatch work to, and track, several team-agents' project boards across repos — over A2A |
+| [Build out your agent with a coding agent](/guides/build-with-a-coding-agent) | You've forked the template and want to grow it through a project-manager agent, a board, and coder delegates instead of typing every change |
 
 ## Tools, MCP & plugins
 
