@@ -1358,6 +1358,9 @@ def _build_watch_tools():
         check_args: dict | None = None,
         run_prompt: str = "",
         watch_id: str | None = None,
+        interval_s: float | None = None,
+        expires_in_s: float | None = None,
+        stall_after: int | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Create a WATCH: poll `condition` on a cadence (ground-truthed by the plugin verifier
@@ -1365,7 +1368,20 @@ def _build_watch_tools():
         session. Use watches to supervise many things at once (a deploy, CI, a metric) — each a
         separate watch, all polled in parallel. Only plugin verifiers are allowed; shell/test/
         data watches are operator-only. `watch_id` defaults to a slug of the condition (pass one
-        to hold two watches on the same condition). Returns the watch status, or an error.
+        to hold two watches on the same condition).
+
+        Three optional knobs shape how long it lives and how hard it polls — set them when you
+        know the answer, because a watch with none of them polls at the default cadence until
+        something clears it:
+        - `interval_s`: seconds between checks for THIS watch (a floor — never faster than the
+          global cadence). Raise it for something slow-moving; a nightly build doesn't need a
+          30s poll.
+        - `expires_in_s`: give up after this many seconds FROM NOW; the watch finishes `expired`
+          instead of polling forever. Use it whenever the thing you're watching has a deadline.
+        - `stall_after`: after N consecutive checks with unchanged evidence, fire the stall
+          signal (the watch stays active) — how you notice a deploy that's wedged rather than slow.
+
+        Returns the watch status, or an error.
         """
         from runtime.state import STATE
 
@@ -1378,10 +1394,28 @@ def _build_watch_tools():
         if check not in known:
             avail = ", ".join(known) if known else "(none registered — enable a plugin that contributes a verifier)"
             return f"Error: unknown plugin verifier {check!r}. Available verifiers: {avail}."
+        from graph.watches.controller import WatchController
+
+        # RELATIVE deadline on the tool surface, absolute in the store. The operator API takes
+        # an epoch/ISO `deadline`, but a model has no reliable "now" — asked for an ISO
+        # timestamp it guesses, and a guess in the past expires the watch on its very first
+        # tick. "Seconds from now" is a duration the model actually knows. The `float | None`
+        # annotations already make the tool schema reject a non-numeric span or interval, so
+        # the only check left is one the schema can't express: the span must be in the FUTURE.
+        deadline = None
+        if expires_in_s is not None:
+            if expires_in_s <= 0:
+                return "Error: expires_in_s must be positive — it's a span from now, not a timestamp."
+            from time import time
+
+            deadline = time() + expires_in_s
         ok, msg, _w = STATE.watch_controller.create(
             condition=condition,
             verifier={"type": "plugin", "check": check, "args": check_args or {}},
             watch_id=watch_id,
+            interval_s=interval_s,
+            deadline=deadline,
+            stall_after=WatchController._parse_stall_after(stall_after),
             run_prompt=run_prompt or "",
             run_session=session_id or "",
             trusted=False,

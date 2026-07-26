@@ -169,6 +169,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no usable timestamp is left alone rather than deleted blind. The prune reuses the
   tick's existing store scan, so it costs no extra I/O and adds no second loop.
 
+- **An agent can finally give a watch a lifetime (ADR 0067).** `create_watch` took only
+  `condition` / `check` / `check_args` / `run_prompt` / `watch_id`, so **every**
+  agent-created watch had no expiry and no stall detection and polled at the global cadence
+  until a human cleared it — the controller and `POST /api/watches` had supported all three
+  knobs since the primitive shipped; only the tool surface didn't expose them. It now takes
+  `interval_s` (this watch's own cadence floor), `expires_in_s` and `stall_after`.
+
+  The deadline is **relative** on the tool (`expires_in_s`, seconds from now) where the
+  operator API takes an absolute epoch/ISO `deadline`: a model has no reliable "now", and an
+  ISO timestamp it guessed in the past would expire the watch on its very first tick. A
+  non-positive span is refused rather than arming a watch that dies immediately.
+
 ### Changed
 - **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
   feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
