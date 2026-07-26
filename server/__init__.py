@@ -1161,6 +1161,15 @@ def _main():
     if gate_msg:
         log.warning("%s", gate_msg)
 
+    # Reachability guardrail (#2147): a single-IP bind silently stops serving loopback,
+    # which is how the desktop app's own webview reaches its sidecar — so it locks the
+    # operator out of the console with nothing to say why. Warn (don't refuse: a
+    # headless box legitimately binds one interface, and refusing to boot would replace
+    # a reachable-elsewhere server with no server at all).
+    reach_msg = auth.evaluate_bind_reachability(args.host)
+    if reach_msg:
+        log.warning("%s", reach_msg)
+
     # Don't outlive the launcher. When run as a desktop sidecar the Tauri shell
     # sets PROTOAGENT_PARENT_PID; a PyInstaller-frozen onefile runs as a
     # bootloader + child, so the shell killing the bootloader can leave this
