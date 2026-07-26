@@ -46,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0–1, a missing `identity_preserved` defaults to true (a false "identity lost" alarm is
   the expensive one), and any failure leaves the deterministic report intact — a curation
   pass must never take down the maintenance loop hosting it.
+- **Keyboard shortcuts work with sandboxed plugin views (#1457).** A plugin view is an
+  iframe, which broke keyboards in both directions: keys pressed inside it never reached
+  the host listener (so *every* host shortcut was dead while a plugin view had focus), and
+  the page had no way to reach `registerKeybinding` to declare its own. ADR 0063 shipped
+  the rebindable core; this is the half that was missing.
+
+  A postMessage bridge closes both. A page can declare chords
+  (`protoagent:keybindings`) — they appear in Settings ▸ Keyboard, rebindable like any
+  other, and fire back into the page when pressed. And it can forward a chord it didn't
+  handle (`protoagent:keydown`), which the host resolves through the **same** matcher the
+  DOM path uses, so precedence and the typing gate behave identically wherever focus is.
+
+  Trust mirrors the existing `protoagent:publish` namespace rule: a plugin's binding ids
+  are forced into its own `plugin.<id>.` namespace, so a view cannot register, replace, or
+  shadow a core binding like `chat.new`, nor collide with another plugin. The chord a page
+  asks for is only a **default** — the operator's override always wins. A forwarded chord
+  can only reach *global* bindings, since the focus chain lives inside the iframe and the
+  host genuinely cannot know which of its own panels is focused.
 - **A plugin symlinked to a live checkout no longer serves mixed code undetected
   (#2298).** When the checkout's branch changes under a running process, Python's module
   cache keeps the already-imported code at the old version while anything imported
@@ -158,10 +176,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the Work hub, the only way to turn watches on was hand-editing YAML. Both now live under
   **Settings ▸ Behavior ▸ Watches**, beside Goal mode rather than inside it.
 
+- **Finished watches are retired instead of accumulating forever (ADR 0067).** Nothing ever
+  pruned a met or expired watch: its JSON stayed on disk permanently, and every list
+  surface — the agent's `list_watches`, `sdk.list_watches`, `GET /api/watches`, the console
+  Watches panel and the Work Overview card — returned it permanently. An instance
+  supervising anything on a cadence grew an unbounded tail of dead tripwires, which lands
+  in the agent's context every time it lists its watches. The tick now retires terminal
+  watches older than the new `watches.keep_terminal_h` (default 24h, matching the Overview
+  card's "met today" window; `0` keeps them forever, the old behavior). Only terminal
+  watches age out — an `active` watch is never pruned however old it is, and a terminal one
+  with no usable timestamp is left alone rather than deleted blind. The prune reuses the
+  tick's existing store scan, so it costs no extra I/O and adds no second loop.
+
 ### Changed
 - **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
   feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
   default. An instance that doesn't want them sets `watches.enabled: false`.
+
+### Removed
+- **The `cleared` watch status, which never existed.** `TERMINAL_STATUSES` advertised
+  `("met", "expired", "cleared")`, but clearing a watch *unlinks its file* — a cleared watch
+  is an absent watch, never a stored one with a status. The phantom third state had already
+  produced dead code in the console (`workOverview.visibleWatches` filtered
+  `status !== "cleared"`, which never matched anything). Both are gone.
 
 ### Fixed
 - **The desktop app can open a second window — "New Window" is no longer a no-op
