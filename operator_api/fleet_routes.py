@@ -230,16 +230,21 @@ def register_fleet_routes(app) -> None:
     @app.post("/api/fleet/{name}/stop")
     async def _stop_agent(name: str):
         try:
-            return {"ok": True, **await asyncio.to_thread(supervisor.stop, name)}  # #6 — off the loop
+            res = await asyncio.to_thread(supervisor.stop, name)  # #6 — off the loop
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
+        # `ok` tracks the OUTCOME, not just "the request was handled" (#2286) — a caller
+        # that only checks `ok` must not read a survived process as a successful stop.
+        return {"ok": bool(res.get("stopped")), **res}
 
     @app.post("/api/fleet/down")
     async def _stop_fleet():
         """Shut down the **entire** fleet (every running agent). Mirrors the CLI's
         ``fleet down`` with no args."""
-        stopped = await asyncio.to_thread(supervisor.down)  # busy-waits per agent (#6)
-        return {"ok": True, "stopped": [r["name"] for r in stopped]}
+        results = await asyncio.to_thread(supervisor.down)  # busy-waits per agent (#6)
+        stopped = [r["name"] for r in results if r.get("stopped")]
+        failed = [{"name": r["name"], "reason": r.get("reason", "")} for r in results if not r.get("stopped")]
+        return {"ok": not failed, "stopped": stopped, **({"failed": failed} if failed else {})}
 
     @app.patch("/api/fleet/{name}")
     async def _rename_agent(name: str, req: dict):
