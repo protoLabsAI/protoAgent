@@ -16,15 +16,15 @@ metric stops moving.
 The watch tools default **OFF** as of #2020. Enable them in `langgraph-config.yaml`:
 
 ```yaml
-goal:
-  enabled: true            # the watch tools ride inside the goal-enabled tool group
 watches:
   enabled: true
 ```
 
-Both flags are required — `watches.enabled` alone binds nothing. This gates only whether the
+That's the only flag — watches are **independent of goal mode**. It gates only whether the
 **agent** gets `create_watch` / `list_watches` / `clear_watch`; it never touches stored watches,
-and the background poller runs regardless. See [Configuration ▸ `watches`](/reference/configuration#watches).
+and **the background poller runs regardless of both flags**, so a watch created by an operator
+(`POST /api/watches`) or a plugin is polled on an instance where the agent has no watch tools at
+all. See [Configuration ▸ `watches`](/reference/configuration#watches).
 
 ## What a watch is made of
 
