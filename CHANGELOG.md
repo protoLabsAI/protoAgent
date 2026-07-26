@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Plugin endpoint errors answer with a structured JSON error instead of a bare 500
+  (#2259).** A plugin route handler that raised produced `HTTP 500` with the plain-text
+  body `Internal Server Error` and nothing a caller could parse — so "my request was
+  malformed" and "the panel blew up mid-run" looked identical from the outside, which
+  matters most on a long-running endpoint where retrying an actual crash is expensive.
+
+  The envelope is installed at the **plugin-dispatch layer**, so it covers every plugin
+  at once rather than asking each to remember: the response now carries the exception
+  type, its message, and the owning plugin id, while the traceback still goes to the log.
+  It deliberately does *not* reinterpret status codes — mapping something like
+  `ValueError` to 400 would guess that an internal bug is a client error and recreate the
+  same confusion in the other direction. A plugin that wants a 400 raises it itself, and
+  those pass through untouched. Websocket routes are left alone, and the wrapper is
+  idempotent so plugin hot-reload can't stack it.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed
