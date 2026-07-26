@@ -27,6 +27,17 @@ log = logging.getLogger(__name__)
 SAFE_PROGRAMMATIC_VERIFIERS = frozenset({"plugin"})
 
 
+class _Unset:
+    """Sentinel for ``update``'s optional fields. Not ``None``: ``None`` is a real value
+    there ("drop the deadline", "stop stall-detecting"), so the two must stay distinct."""
+
+    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+        return "UNSET"
+
+
+UNSET = _Unset()
+
+
 class WatchController:
     def __init__(self, config, store: WatchStore | None = None):
         self._config = config
@@ -76,18 +87,10 @@ class WatchController:
         if not condition:
             return (False, "a watch condition is required.", None)
         verifier = verifier or {"type": "llm"}
-        vtype = verifier.get("type", "llm")
-        if vtype not in VERIFIERS:
-            return (False, f"unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}.", None)
-        if not trusted and vtype not in SAFE_PROGRAMMATIC_VERIFIERS:
-            return (
-                False,
-                f"programmatic watches must use a 'plugin' verifier (got {vtype!r}); "
-                "command/test/ci/data verifiers are operator-only — create them via POST /api/watches.",
-                None,
-            )
-        if vtype == "plugin" and not verifier.get("check"):
-            return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).", None)
+        # Shared with `update` so the trust gate can't drift between the two write paths.
+        ok, err = self._validate_verifier(verifier, trusted=trusted)
+        if not ok:
+            return (False, err, None)
         wid = (watch_id or "").strip() or self._derive_id(condition)
         watch = Watch(
             id=wid,
@@ -101,6 +104,111 @@ class WatchController:
         )
         self._store.set(watch)
         return (True, f"Watch created. {watch.status_line()}", watch)
+
+    # --- update --------------------------------------------------------------
+
+    async def update(
+        self,
+        watch_id: str,
+        *,
+        condition: str | _Unset = UNSET,
+        verifier: dict | _Unset = UNSET,
+        interval_s: float | None | _Unset = UNSET,
+        deadline: float | None | _Unset = UNSET,
+        stall_after: int | None | _Unset = UNSET,
+        run_prompt: str | _Unset = UNSET,
+        run_session: str | _Unset = UNSET,
+        trusted: bool = False,
+    ) -> tuple[bool, str, Watch | None]:
+        """Edit a LIVE watch in place. Every field defaults to ``UNSET`` — a sentinel, not
+        ``None``, because ``None`` is a meaningful value here ("drop the deadline") and the
+        two must not collapse into each other.
+
+        Until this existed the only edit was clear-and-recreate, which threw away the watch's
+        accumulated stall state and its id whenever the condition changed.
+
+        **Active only.** A met/expired watch is history — re-arming it by editing would
+        resurrect a record the console already showed as finished, and it's within the
+        ``keep_terminal_h`` window precisely so someone can read what happened. Create a new
+        watch instead.
+
+        **Trust (ADR 0067 D4).** ``trusted=False`` (agent tool / SDK) may only touch a watch
+        whose CURRENT verifier is in ``SAFE_PROGRAMMATIC_VERIFIERS`` and may not change the
+        verifier at all. Both halves matter: without the first, an agent could re-aim an
+        operator's shell-verified watch by rewriting its ``condition``; without the second it
+        could simply swap ``plugin`` for ``command`` and gain the shell it is denied at create
+        time. ``trusted=True`` (the ``/api`` operator channel) may change anything.
+
+        Serialized on the same per-id lock as ``evaluate`` — an edit racing a tick would
+        otherwise read-modify-write over the verifier result (or lose the edit entirely).
+        Returns ``(ok, message, watch|None)``."""
+        async with self._lock_for(watch_id):
+            watch = self._store.get(watch_id)
+            if watch is None:
+                return (False, f"no watch {watch_id!r}.", None)
+            if not watch.active:
+                return (
+                    False,
+                    f"watch {watch_id!r} is {watch.status} — a finished watch can't be edited; create a new one.",
+                    None,
+                )
+            current_vtype = (watch.verifier or {}).get("type", "llm")
+            if not trusted and current_vtype not in SAFE_PROGRAMMATIC_VERIFIERS:
+                return (
+                    False,
+                    f"watch {watch_id!r} uses a {current_vtype!r} verifier — only its operator can edit it "
+                    "(PATCH /api/watches/{id}); programmatic callers manage 'plugin' watches.",
+                    None,
+                )
+            if not isinstance(verifier, _Unset):
+                if not trusted:
+                    return (
+                        False,
+                        "a watch's verifier is operator-only — change it via PATCH /api/watches/{id}, "
+                        "or clear this watch and create a new one.",
+                        None,
+                    )
+                ok, err = self._validate_verifier(verifier, trusted=True)
+                if not ok:
+                    return (False, err, None)
+                watch.verifier = verifier
+            if not isinstance(condition, _Unset):
+                if not (condition or "").strip():
+                    return (False, "a watch condition is required.", None)
+                watch.condition = condition
+            if not isinstance(interval_s, _Unset):
+                watch.interval_s = interval_s
+            if not isinstance(deadline, _Unset):
+                watch.deadline = deadline
+            if not isinstance(stall_after, _Unset):
+                # A new threshold starts a new stall episode: keeping the old streak would let
+                # a raised threshold fire immediately off checks counted under the old one, and
+                # a lowered one silently stay "already notified".
+                watch.stall_after = stall_after
+                watch.stall_streak = 0
+                watch.stalled_notified = False
+            if not isinstance(run_prompt, _Unset):
+                watch.run_prompt = run_prompt or ""
+            if not isinstance(run_session, _Unset):
+                watch.run_session = run_session or ""
+            self._store.set(watch)
+            return (True, f"Watch updated. {watch.status_line()}", watch)
+
+    def _validate_verifier(self, verifier: dict, *, trusted: bool) -> tuple[bool, str]:
+        """Shared create/update verifier gate. Returns ``(ok, error_message)``."""
+        verifier = verifier or {"type": "llm"}
+        vtype = verifier.get("type", "llm")
+        if vtype not in VERIFIERS:
+            return (False, f"unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}.")
+        if not trusted and vtype not in SAFE_PROGRAMMATIC_VERIFIERS:
+            return (
+                False,
+                f"programmatic watches must use a 'plugin' verifier (got {vtype!r}); "
+                "command/test/ci/data verifiers are operator-only — create them via POST /api/watches.",
+            )
+        if vtype == "plugin" and not verifier.get("check"):
+            return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
+        return (True, "")
 
     @staticmethod
     def _derive_id(condition: str) -> str:

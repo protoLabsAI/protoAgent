@@ -61,7 +61,37 @@ effective `interval_s`) so one verifier can keep **per-watch** state — see
   polling its verifier forever (worse after uninstall, when that verifier is unresolvable).
 - **Operator (REST)** — `POST /api/watches` accepts **any** verifier type (it's on the `/api`
   operator surface, gated by the [federation-token ceiling](/reference/configuration#secrets));
-  plus `GET /api/watches` and `DELETE /api/watches/{id}`.
+  plus `GET /api/watches`, `PATCH /api/watches/{id}` and `DELETE /api/watches/{id}`.
+
+## Editing a live watch
+
+Adjusting a watch is not the same as replacing it: clear-and-recreate throws away the stall
+streak and the evidence it has accumulated, and changes the id if the condition changed. Use
+the update path instead.
+
+- **Agent tool** — `update_watch(watch_id, interval_s=…, expires_in_s=…, stall_after=…,
+  run_prompt=…, condition=…)`. Pass only what changes. `expires_in_s` is measured from **now**,
+  and `clear_deadline=true` removes an expiry outright (a nullable number can't say "clear it" —
+  an omitted argument already means "leave it").
+- **Plugin (SDK)** — `await sdk.update_watch(watch_id, **fields)`. Async, unlike `create_watch`,
+  because the edit takes the controller's per-watch lock so it can't interleave with a tick
+  mid-evaluation. Passing `None` **clears** a field; omitting it leaves it alone.
+- **Operator (REST)** — `PATCH /api/watches/{id}` with only the keys you want changed. An
+  explicit `null` clears a field; the operator channel may also change the `verifier`.
+
+Two rules hold on every path:
+
+- **Only active watches.** A met or expired watch is history — it sits inside the
+  `keep_terminal_h` window so you can read what happened, not so it can be revived. Create a
+  new one.
+- **The trust boundary from [D4](/adr/0067-standalone-watch-primitive) survives editing.** The
+  agent/SDK path can only edit a watch whose verifier is `plugin`, and can never change the
+  verifier. Otherwise an agent denied a shell verifier at *create* time could simply swap one
+  in afterwards — or leave the verifier alone and re-aim an operator's watch by rewriting its
+  condition. Both are refused.
+
+Changing `stall_after` resets the stall episode (`stall_streak` back to 0, the "already
+notified" flag cleared), so a raised threshold can't fire off checks counted under the old one.
 
 ```jsonc
 // operator: watch a deploy, run the smoke test when it finishes

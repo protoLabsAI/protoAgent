@@ -15,7 +15,7 @@ from graph.watches.store import WatchStore
 from runtime.state import STATE
 from tools.lg_tools import get_all_tools
 
-WATCH_TOOLS = {"create_watch", "list_watches", "clear_watch"}
+WATCH_TOOLS = {"create_watch", "list_watches", "update_watch", "clear_watch"}
 
 
 # --- get_all_tools gating --------------------------------------------------

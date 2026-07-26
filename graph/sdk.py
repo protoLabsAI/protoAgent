@@ -361,6 +361,29 @@ def clear_watch(watch_id: str) -> bool:
     return controller.clear(watch_id)
 
 
+async def update_watch(watch_id: str, **fields) -> dict:
+    """Edit a live watch in place — ``{"ok", "watch_id", "message"}``.
+
+    Accepts any of ``condition`` / ``interval_s`` / ``deadline`` / ``stall_after`` /
+    ``run_prompt`` / ``run_session``; an omitted field is untouched, and passing ``None``
+    CLEARS one (``deadline=None`` drops the expiry). Async, unlike its sibling
+    :func:`create_watch`, because the edit takes the controller's per-watch lock so it can't
+    interleave with a tick that is mid-evaluation on the same watch.
+
+    A plugin may only edit a watch whose verifier is ``plugin`` — the same trust boundary
+    :func:`create_watch` enforces (ADR 0067 D4) — and cannot change the verifier at all.
+    Terminal watches are immutable; create a new one.
+
+    This completes the reconcile loop that :func:`list_watches` / :func:`clear_watch` began
+    (#1638): a plugin whose spec changed a threshold no longer has to clear and recreate,
+    which reset the watch's accumulated stall state every time it shipped a tweak."""
+    controller = STATE.watch_controller
+    if controller is None:
+        return {"ok": False, "watch_id": watch_id, "message": "watch system unavailable (no watch_controller)"}
+    ok, msg, watch = await controller.update(watch_id, trusted=False, **fields)
+    return {"ok": ok, "watch_id": watch.id if watch else watch_id, "message": msg}
+
+
 _DURATION = re.compile(r"^\s*(\d+)\s*([mhd])\s*$", re.IGNORECASE)
 # The shared id segment tying a loop's two halves together: the tick job is
 # ``plugin:<plugin_id>:goal-loop:<loop_id>`` (schedule_recurring's namespacing) and the watch

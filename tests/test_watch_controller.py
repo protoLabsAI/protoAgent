@@ -435,3 +435,134 @@ async def test_tick_all_prunes_while_it_ticks(tmp_path, monkeypatch):
     monkeypatch.setattr(c, "evaluate", _spy)
     await c.tick_all()
     assert [w.id for w in c.list_watches()] == ["live"]
+
+
+# --- update: editing a live watch in place ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_edits_only_the_fields_passed(tmp_path):
+    # Before this the only "edit" was clear+recreate, which threw away stall state.
+    c = _ctrl(tmp_path)
+    c.create(condition="deploy lands", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, interval_s=60)
+    ok, msg, w = await c.update("w", interval_s=1800)
+    assert ok and "Watch updated" in msg
+    assert w.interval_s == 1800
+    assert w.condition == "deploy lands"  # untouched
+    assert w.verifier == {"type": "plugin", "check": "p:v"}
+
+
+@pytest.mark.asyncio
+async def test_update_distinguishes_none_from_not_supplied(tmp_path):
+    """`None` is a real value here — "drop the deadline" — so it must not read as
+    "unchanged". That's the whole reason the signature uses an UNSET sentinel."""
+    c = _ctrl(tmp_path)
+    c.create(
+        condition="ship it", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+        deadline=9_999_999_999, stall_after=4,
+    )
+    _ok, _m, w = await c.update("w", deadline=None)  # explicit clear
+    assert w.deadline is None
+    assert w.stall_after == 4  # NOT supplied → untouched, not cleared
+
+
+@pytest.mark.asyncio
+async def test_update_resets_the_stall_episode_when_the_threshold_moves(tmp_path):
+    # A raised threshold must not fire off checks counted under the old one, and a lowered
+    # one must not stay silently "already notified".
+    c = _ctrl(tmp_path)
+    _o, _m, w = c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, stall_after=2)
+    w.stall_streak, w.stalled_notified = 5, True
+    c.store.set(w)
+    _ok, _msg, updated = await c.update("w", stall_after=10)
+    assert (updated.stall_after, updated.stall_streak, updated.stalled_notified) == (10, 0, False)
+
+
+@pytest.mark.asyncio
+async def test_update_refuses_a_terminal_watch(tmp_path):
+    # A finished watch is history — it sits in the retention window so someone can read what
+    # happened, not so it can be resurrected into a live one.
+    c = _ctrl(tmp_path)
+    _o, _m, w = c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    w.status = "met"
+    c.store.set(w)
+    ok, msg, _ = await c.update("w", interval_s=60)
+    assert not ok and "met" in msg and "create a new one" in msg
+    assert c.store.get("w").interval_s is None
+
+
+@pytest.mark.asyncio
+async def test_update_missing_watch(tmp_path):
+    ok, msg, _ = await _ctrl(tmp_path).update("nope", interval_s=60)
+    assert not ok and "no watch" in msg
+
+
+# --- update: the trust boundary (ADR 0067 D4) ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_untrusted_cannot_swap_a_plugin_verifier_for_a_shell_one(tmp_path):
+    """The escalation this gate exists for: an agent that can't CREATE a command watch must
+    not be able to edit its way to one."""
+    c = _ctrl(tmp_path)
+    c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    ok, msg, _ = await c.update("w", verifier={"type": "command", "command": "rm -rf /"}, trusted=False)
+    assert not ok and "operator-only" in msg
+    assert c.store.get("w").verifier == {"type": "plugin", "check": "p:v"}
+
+
+@pytest.mark.asyncio
+async def test_untrusted_cannot_re_aim_an_operator_watch_via_its_condition(tmp_path):
+    """The subtler half: leaving the verifier alone but rewriting the CONDITION an operator's
+    llm/command watch judges is the same escalation wearing a different hat."""
+    c = _ctrl(tmp_path)
+    c.create(condition="prod is healthy", watch_id="w", verifier={"type": "llm"}, trusted=True)
+    ok, msg, _ = await c.update("w", condition="anything at all", trusted=False)
+    assert not ok and "only its operator can edit it" in msg
+    assert c.store.get("w").condition == "prod is healthy"
+
+
+@pytest.mark.asyncio
+async def test_trusted_may_change_the_verifier_but_it_is_still_validated(tmp_path):
+    c = _ctrl(tmp_path)
+    c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    ok, _m, w = await c.update("w", verifier={"type": "command", "command": "exit 0"}, trusted=True)
+    assert ok and w.verifier["type"] == "command"
+    bad, msg, _ = await c.update("w", verifier={"type": "nonsense"}, trusted=True)
+    assert not bad and "unknown verifier type" in msg
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_a_blank_condition(tmp_path):
+    c = _ctrl(tmp_path)
+    c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    ok, msg, _ = await c.update("w", condition="   ")
+    assert not ok and "condition is required" in msg
+
+
+@pytest.mark.asyncio
+async def test_update_serializes_against_an_in_flight_evaluate(tmp_path, monkeypatch):
+    """The edit takes the SAME per-id lock as evaluate. Without it, an edit landing mid-tick
+    is read-modify-written away by the verifier result (or vice versa)."""
+    import asyncio
+
+    c = _ctrl(tmp_path)
+    c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, stall_after=9)
+    started = asyncio.Event()
+
+    async def _slow_verifier(spec, ctx):
+        from graph.goals.verifiers import VerifyResult
+
+        started.set()
+        await asyncio.sleep(0.05)  # hold the lock while the update tries to land
+        return VerifyResult(False, "still going", "e")
+
+    monkeypatch.setattr("graph.watches.controller.run_verifier", _slow_verifier)
+    tick = asyncio.create_task(c.evaluate("w"))
+    await started.wait()
+    _ok, _m, w = await c.update("w", interval_s=1234)
+    await tick
+
+    stored = c.store.get("w")
+    assert stored.interval_s == 1234  # the edit survived the concurrent verifier write
+    assert stored.last_reason == "still going"  # ...and so did the verifier's result

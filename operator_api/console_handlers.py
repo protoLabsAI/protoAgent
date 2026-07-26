@@ -583,6 +583,45 @@ async def _operator_watches_set(body: dict) -> dict:
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
 
+async def _operator_watches_update(watch_id: str, body: dict) -> dict:
+    """Operator watch-edit (ADR 0067) — the trusted channel, so it may change ANY field
+    including the verifier. Only keys PRESENT in the body are touched: an absent key means
+    "leave it", while an explicit ``null`` means "clear it" (drop the deadline, stop
+    stall-detecting). Maps ok=False → 400."""
+    from graph.watches.controller import WatchController
+
+    if STATE.watch_controller is None:
+        return {"ok": False, "error": "watch mode is not available"}
+    body = body or {}
+    picks: dict = {}
+    if "condition" in body:
+        picks["condition"] = body["condition"]
+    if "verifier" in body:
+        # No "clear the verifier": a watch without one can never evaluate, so an empty
+        # verifier is a malformed edit, not a way to disarm. Clear the watch instead.
+        if not body["verifier"]:
+            return {"ok": False, "error": "verifier cannot be empty — clear the watch instead of disarming it"}
+        picks["verifier"] = body["verifier"]
+    if "interval_s" in body:
+        picks["interval_s"] = body["interval_s"]
+    if "deadline" in body:
+        # Same parse as create: epoch seconds or ISO-8601. An explicit null clears it, and
+        # `_parse_deadline(None)` is also None, so both spellings land on "no deadline".
+        picks["deadline"] = WatchController._parse_deadline(body["deadline"])
+    if "stall_after" in body:
+        picks["stall_after"] = WatchController._parse_stall_after(body["stall_after"])
+    if "run_prompt" in body:
+        picks["run_prompt"] = body["run_prompt"] or ""
+    if "run_session" in body:
+        picks["run_session"] = body["run_session"] or ""
+    if not picks:
+        return {"ok": False, "error": "nothing to update — send at least one editable field"}
+    ok, msg, watch = await STATE.watch_controller.update(watch_id, trusted=True, **picks)
+    if not ok:
+        return {"ok": False, "error": msg}
+    return {"ok": True, "message": msg, "watch": watch.to_dict() if watch else None}
+
+
 async def _operator_activity_list() -> dict:
     """Return the Activity provenance feed (ADR 0022) — newest-first entries
     with origin/trigger/priority — plus the thread's message history from the

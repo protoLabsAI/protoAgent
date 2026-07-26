@@ -251,7 +251,7 @@ FIELDS: list[Field] = [
         "Enable watches",
         "bool",
         "Watches",
-        "Binds the `create_watch` / `list_watches` / `clear_watch` tools so the agent can "
+        "Binds the `create_watch` / `list_watches` / `update_watch` / `clear_watch` tools so the agent can "
         "supervise many external conditions at once. Turning this off never deletes a stored "
         "watch, and watches created by an operator or a plugin keep being polled either way.",
     ),

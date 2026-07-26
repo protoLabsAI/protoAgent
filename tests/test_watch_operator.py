@@ -55,6 +55,99 @@ async def test_operator_watches_disabled_when_no_controller(monkeypatch):
     assert (await console_handlers._operator_watches_set({"condition": "c"}))["ok"] is False
 
 
+
+@pytest.mark.asyncio
+async def test_operator_watches_update_patches_only_what_it_is_sent(monkeypatch, tmp_path):
+    from operator_api import console_handlers
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="rollout lands", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+                interval_s=60, stall_after=4)
+    res = await console_handlers._operator_watches_update("w", {"interval_s": 1800})
+    assert res["ok"] is True
+    w = ctrl.store.get("w")
+    assert w.interval_s == 1800
+    assert w.stall_after == 4  # absent from the body → untouched (PATCH, not PUT)
+    assert w.condition == "rollout lands"
+
+
+@pytest.mark.asyncio
+async def test_operator_watches_update_null_clears_a_field(monkeypatch, tmp_path):
+    from operator_api import console_handlers
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+                deadline=9_999_999_999)
+    await console_handlers._operator_watches_update("w", {"deadline": None})
+    assert ctrl.store.get("w").deadline is None
+
+
+@pytest.mark.asyncio
+async def test_operator_watches_update_parses_an_iso_deadline(monkeypatch, tmp_path):
+    from operator_api import console_handlers
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    await console_handlers._operator_watches_update("w", {"deadline": "2030-01-01T00:00:00+00:00"})
+    assert ctrl.store.get("w").deadline == 1893456000.0
+
+
+@pytest.mark.asyncio
+async def test_operator_watches_update_may_change_the_verifier(monkeypatch, tmp_path):
+    # Trusted channel: the operator can re-aim a watch at a shell verifier, which the
+    # agent/SDK path is denied.
+    from operator_api import console_handlers
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    res = await console_handlers._operator_watches_update(
+        "w", {"verifier": {"type": "command", "command": "exit 0"}}
+    )
+    assert res["ok"] is True and ctrl.store.get("w").verifier["type"] == "command"
+
+
+@pytest.mark.asyncio
+async def test_operator_watches_update_rejects_empty_and_unknown(monkeypatch, tmp_path):
+    from operator_api import console_handlers
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    assert "nothing to update" in (await console_handlers._operator_watches_update("w", {}))["error"]
+    # A watch can't be disarmed by emptying its verifier — it would never evaluate again.
+    blank = await console_handlers._operator_watches_update("w", {"verifier": {}})
+    assert "cannot be empty" in blank["error"]
+    missing = await console_handlers._operator_watches_update("nope", {"interval_s": 5})
+    assert missing["ok"] is False and "no watch" in missing["error"]
+
+
+# --- sdk.update_watch ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sdk_update_watch_edits_in_place(monkeypatch, tmp_path):
+    from graph import sdk
+
+    ctrl = _wire(monkeypatch, tmp_path)
+    ctrl.create(condition="c", watch_id="st-fuel", verifier={"type": "plugin", "check": "p:v"}, stall_after=2)
+    res = await sdk.update_watch("st-fuel", stall_after=6)
+    assert res["ok"] is True and res["watch_id"] == "st-fuel"
+    assert ctrl.store.get("st-fuel").stall_after == 6
+
+
+@pytest.mark.asyncio
+async def test_sdk_update_watch_unavailable(monkeypatch):
+    from graph import sdk
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "watch_controller", None)
+    assert (await sdk.update_watch("x", interval_s=5))["ok"] is False
+
+
+def test_sdk_module_exposes_update_watch():
+    from graph import sdk
+
+    assert callable(sdk.update_watch)
+
 # --- sdk.create_watch (plugin-only) ----------------------------------------
 
 

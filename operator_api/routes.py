@@ -196,6 +196,7 @@ def register_operator_routes(
     watch_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     watch_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    watch_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     chat_commands: Callable[[], dict[str, Any]] | None = None,
     events_subscribe: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
     events_publish: Callable[[str, dict[str, Any]], None] | None = None,
@@ -519,8 +520,8 @@ def register_operator_routes(
                 raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
             return res
 
-    # Watch surface (ADR 0067): read + clear + operator create. POST accepts ANY verifier —
-    # safe because /api is operator-tier by the ADR 0066 path ceiling.
+    # Watch surface (ADR 0067): read + clear + operator create/edit. POST and PATCH accept
+    # ANY verifier — safe because /api is operator-tier by the ADR 0066 path ceiling.
     if watch_list is not None:
 
         @app.get("/api/watches")
@@ -545,6 +546,20 @@ def register_operator_routes(
         async def _watch_set(body: dict):
             try:
                 res = await watch_set(body or {})
+            except Exception as exc:
+                raise _http_error(exc) from exc
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
+            return res
+
+    if watch_update is not None:
+
+        @app.patch("/api/watches/{watch_id}")
+        async def _watch_update(watch_id: str, body: dict):
+            # PATCH, not PUT: only the keys present in the body change. An explicit `null`
+            # clears a field (drop the deadline); an absent key leaves it alone.
+            try:
+                res = await watch_update(watch_id, body or {})
             except Exception as exc:
                 raise _http_error(exc) from exc
             if not res.get("ok"):

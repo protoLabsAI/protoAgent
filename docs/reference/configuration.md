@@ -420,7 +420,7 @@ watches:
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `true` | Bind the `create_watch` / `list_watches` / `clear_watch` tools. |
+| `enabled` | `true` | Bind the `create_watch` / `list_watches` / `update_watch` / `clear_watch` tools. |
 | `interval` | `30` | Seconds between out-of-band ticks. Clamped to a 5s floor. A watch's own `interval_s` overrides it as a *floor* (a watch is skipped until its own interval has elapsed), so raising this slows every watch but lowering it never speeds up a watch that asked to be slower. Re-read every tick — a change applies without a restart. |
 | `keep_terminal_h` | `24` | Hours a **met**/**expired** watch stays listed before the tick deletes it. `0` keeps them forever. The default matches the Overview card's "met today" pulse, so a trip is visible for exactly as long as the console reports it. Only terminal watches age out — an `active` watch is never pruned, however old. |
 

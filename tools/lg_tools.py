@@ -1434,6 +1434,62 @@ def _build_watch_tools():
         return "\n".join(w.status_line() for w in watches) if watches else "No watches."
 
     @tool
+    async def update_watch(
+        watch_id: str,
+        condition: str | None = None,
+        run_prompt: str | None = None,
+        interval_s: float | None = None,
+        expires_in_s: float | None = None,
+        stall_after: int | None = None,
+        clear_deadline: bool = False,
+    ) -> str:
+        """Adjust a watch you already set, without losing what it has observed. Pass only
+        what you want to change; everything else stays. Use this instead of clear+create —
+        recreating resets the watch's stall history and starts its evidence over.
+
+        Typical: a watch you gave an hour needs three (`expires_in_s=10800`, measured from
+        NOW, not from when it was created); something is moving slower than you thought
+        (`interval_s=1800`); you want the trip to run a different follow-up (`run_prompt`).
+        `clear_deadline=true` removes an expiry entirely so the watch runs until it trips.
+
+        Only watches with a plugin verifier can be edited here, and a finished watch can't be
+        edited at all — set a new one. Returns the updated status, or an error.
+        """
+        from runtime.state import STATE
+
+        if STATE.watch_controller is None:
+            return "Watch mode is not available."
+        from graph.watches.controller import WatchController
+
+        # Only the keys present here are touched — the controller leaves everything else
+        # exactly as it was (its UNSET sentinel, not None, marks "not supplied").
+        fields: dict = {}
+        if condition is not None:
+            fields["condition"] = condition
+        if run_prompt is not None:
+            fields["run_prompt"] = run_prompt
+        if interval_s is not None:
+            fields["interval_s"] = interval_s
+        if stall_after is not None:
+            fields["stall_after"] = WatchController._parse_stall_after(stall_after)
+        # Two ways to touch the deadline, because "None" on a tool argument means "not
+        # supplied" — there's no way to spell "clear it" with a nullable number alone.
+        if clear_deadline:
+            if expires_in_s is not None:
+                return "Error: pass either expires_in_s or clear_deadline, not both."
+            fields["deadline"] = None
+        elif expires_in_s is not None:
+            if expires_in_s <= 0:
+                return "Error: expires_in_s must be positive — it's a span from now, not a timestamp."
+            from time import time
+
+            fields["deadline"] = time() + expires_in_s
+        if not fields:
+            return "Error: nothing to update — pass at least one field to change."
+        _ok, msg, _w = await STATE.watch_controller.update(watch_id, trusted=False, **fields)
+        return msg
+
+    @tool
     def clear_watch(watch_id: str) -> str:
         """Remove a watch by its id (from list_watches). Returns whether it existed."""
         from runtime.state import STATE
@@ -1443,7 +1499,7 @@ def _build_watch_tools():
         cleared = STATE.watch_controller.clear(watch_id)
         return f"Watch {watch_id!r} cleared." if cleared else f"No watch {watch_id!r} to clear."
 
-    return [create_watch, list_watches, clear_watch]
+    return [create_watch, list_watches, update_watch, clear_watch]
 
 
 @tool
