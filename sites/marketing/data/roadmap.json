@@ -10,13 +10,6 @@
         ]
       },
       {
-        "title": "Multi-window desktop chat",
-        "detail": "\"Open in New Window\" spawns a real second desktop window with its own chat surface.",
-        "refs": [
-          "#1706"
-        ]
-      },
-      {
         "title": "Federation token follow-ups",
         "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
         "refs": [
@@ -52,6 +45,13 @@
   {
     "status": "Shipped",
     "items": [
+      {
+        "title": "Multi-window desktop chat",
+        "detail": "\"Open in New Window\" spawns a real second desktop window with its own chat surface.",
+        "refs": [
+          "v0.117.0"
+        ]
+      },
       {
         "title": "Plugin Python deps in the desktop app",
         "detail": "opt-in install of a plugin's requires_pip packages inside the frozen desktop build: pure-Python wheels onto the host path, or into the managed Python runtime that also gives the desktop app a working execute_code.",
