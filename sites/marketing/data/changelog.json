@@ -1,5 +1,37 @@
 [
   {
+    "version": "v0.117.0",
+    "date": "2026-07-26",
+    "changes": [
+      "Semantic tier for persona-drift detection — an opt-in LLM judge (#2272).",
+      "requires_pip entries can declare scope: host | runtime (#2246).",
+      "The ACP layer no longer discards stopReason — a coder can declare a dead end (#2279).",
+      "Keyboard shortcuts work with sandboxed plugin views (#1457).",
+      "A plugin symlinked to a live checkout no longer serves mixed code undetected (#2298).",
+      "Archetypes declare a capability contract, checked against the tools that actually bound (#2277).",
+      "/v1 (OpenAI-compat) can now continue a session across requests (#2119).",
+      "An agent can finally give a watch a lifetime.",
+      "A watch can be edited in place instead of cleared and recreated.",
+      "Watches default ON.",
+      "The changelog gate now requires a changelog.d/ fragment — editing CHANGELOG.md directly no longer satisfies it (#2322).",
+      "Changelog entries are now news fragments — changelog.d/<issue>.<kind>.md (#2322).",
+      "Category filters no longer spill out of the panel (plugin Discover + MCP catalog).",
+      "/v1 disconnect semantics are defined instead of undefined (#2119).",
+      "team-ready now knows about open PRs that already claim the issue (#2278).",
+      "A bind-posture guardrail — a single-IP network.bind no longer locks you out silently (#2147).",
+      "watches.interval is a real setting, and both watch keys reached the Settings UI.",
+      "Finished watches are retired instead of accumulating forever.",
+      "The desktop app can open a second window — \"New Window\" is no longer a no-op (#1706).",
+      "Plugin endpoint errors answer with a structured JSON error instead of a bare 500 (#2259).",
+      "Watches are no longer coupled to goal mode — and the poller no longer silently skips every watch when goal mode is off.",
+      "The watch tick no longer blocks the event loop on its store scan.",
+      "A watch reaction reports one origin, not two.",
+      "POST /api/fleet/{name}/stop no longer reports a stop it didn't achieve (#2286).",
+      "The cleared watch status, which never existed.",
+      "The Watches panel shows a watch's cadence, expiry and stall threshold."
+    ]
+  },
+  {
     "version": "v0.116.0",
     "date": "2026-07-26",
     "changes": [

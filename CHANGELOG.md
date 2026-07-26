@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.117.0] - 2026-07-26
+
 ### Added
 - **Semantic tier for persona-drift detection — an opt-in LLM judge (#2272).** The
   deterministic tier (#2116) measures *text similarity*, which structurally cannot tell
@@ -128,11 +130,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than a second-resolution clock, which also closes a latent collision where two
   unrelated callers landing in the same second silently shared one session. Caller-supplied
   keys are sanitized at the boundary, since a session id reaches memory paths.
+- **An agent can finally give a watch a lifetime (ADR 0067).** `create_watch` took only
+  `condition` / `check` / `check_args` / `run_prompt` / `watch_id`, so **every**
+  agent-created watch had no expiry, no stall detection, and no cadence of its own — it
+  polled at the global rate until a human cleared it. The `Watch` dataclass,
+  `WatchController.create` and `POST /api/watches` had supported all three knobs since the
+  primitive shipped; only the *tool* surface didn't expose them, which is precisely the
+  surface an autonomous agent has. It now takes `interval_s`, `expires_in_s` and
+  `stall_after`.
+
+  The deadline is **relative** on the tool (`expires_in_s`, seconds from now) where the
+  operator API takes an absolute epoch/ISO `deadline`: a model has no reliable "now", and an
+  ISO timestamp it guessed in the past would expire the watch on its very first tick. A
+  non-positive span is refused rather than arming a watch that dies immediately.
+
+  `status_line()` reports the knobs for an active watch — `(every 30m, expires in 2h, stall
+  after 3)`. That line is what the agent reads back, from `list_watches` and from
+  `<working_state>`'s ACTIVE WATCHES block: an agent that can set an expiry has to be able
+  to see one, or it can't tell a watch about to lapse from one that polls indefinitely.
+
+- **A watch can be edited in place instead of cleared and recreated (ADR 0067).** No surface
+  could change a live watch: adjusting a threshold meant `clear_watch` + `create_watch`, which
+  discarded the watch's accumulated stall streak and evidence, and changed its id whenever the
+  condition changed. There is now an update path on all three surfaces — the `update_watch`
+  agent tool, `await sdk.update_watch(...)` for plugins (async, unlike `create_watch`, because
+  it takes the controller's per-watch lock so an edit can't interleave with a tick
+  mid-evaluation), and `PATCH /api/watches/{id}` for operators.
+
+  Only the fields you pass change: the controller distinguishes "not supplied" from `None` via
+  a sentinel, so `deadline=None` **clears** an expiry while omitting it leaves it alone. On the
+  agent tool, where an omitted argument is already `None`, an explicit `clear_deadline` flag
+  does that job. Changing `stall_after` resets the stall episode, so a raised threshold can't
+  fire off checks counted under the old one.
+
+  The ADR 0067 D4 trust boundary survives editing, which is the part worth stating plainly: the
+  agent/SDK path may only edit a watch whose verifier is already `plugin`, and may never change
+  the verifier. Without the first rule an agent could re-aim an operator's shell-verified watch
+  by rewriting its `condition`; without the second it could simply swap `plugin` for `command`
+  and obtain the shell it is denied at create time. Terminal watches are immutable — they sit
+  in the `keep_terminal_h` window to be read, not revived.
 
 ### Changed
 - **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
   feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
   default. An instance that doesn't want them sets `watches.enabled: false`.
+- **The changelog gate now requires a `changelog.d/` fragment — editing `CHANGELOG.md`
+  directly no longer satisfies it (#2322).** The transitional acceptance existed only so
+  the fragments change wouldn't fail PRs already open against the old convention; it was
+  retired once the PR queue drained to zero, so nothing was grandfathered and nothing broke.
+
+  Touching `CHANGELOG.md` isn't forbidden — a typo in an old released section is a fair
+  edit — it just doesn't substitute for the fragment, because an entry written under
+  `[Unreleased]` reintroduces the shared-anchor conflict fragments exist to remove.
+
+- **Changelog entries are now news fragments — `changelog.d/<issue>.<kind>.md` (#2322).**
+  Every PR used to write to the same three lines under `## [Unreleased]`, so two PRs in
+  flight conflicted *by construction*: a 13-PR stack cost roughly ten extra CI cycles, and
+  none of the conflicts were semantic. Stacking also produced duplicate `### Fixed` /
+  `### Added` headings that had to be consolidated by hand each cycle.
+
+  A fragment is a new file, so there is nothing to 3-way merge. `prepare-release.yml` now
+  runs `changelog.py collate` before `roll`, folding fragments into `[Unreleased]` under
+  one heading per kind and deleting them — so `CHANGELOG.md` is only ever edited by the
+  release process. A fragment with an unknown kind or a malformed name fails loudly rather
+  than being silently dropped into the wrong section.
+
+  The gate keeps its teeth and still accepts a direct `CHANGELOG.md` edit, so no in-flight
+  or fork PR breaks; fragments are simply the path that doesn't conflict. See
+  `changelog.d/README.md`.
 
 ### Fixed
 - **Category filters no longer spill out of the panel (plugin Discover + MCP catalog).**
@@ -308,6 +373,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is an absent watch, never a stored one with a status. The phantom third state had already
   produced dead code in the console (`workOverview.visibleWatches` filtered
   `status !== "cleared"`, which never matched anything). Both are gone.
+
+### Docs
+- **The Watches panel shows a watch's cadence, expiry and stall threshold.** #2325 gave the
+  agent `interval_s` / `expires_in_s` / `stall_after` and echoed them back through
+  `list_watches` and `<working_state>` — but the console still rendered only
+  `id · verifier · reason`, so the operator was the one party who could not see when a watch
+  expires or how hard it polls. The panel's meta line now carries the same facts, in the same
+  words the agent reads (`every 30m · expires in 2h · stall after 3`), from a TS formatter
+  that mirrors `Watch._lifetime_suffix`. A deadline already in the past reads `past its
+  deadline` in the warning tone rather than counting down through zero, and a met or expired
+  watch shows none of it — the same rule the server applies.
 
 ## [0.116.0] - 2026-07-26
 
