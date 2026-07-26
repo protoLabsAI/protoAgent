@@ -14,7 +14,7 @@ import { ArrowLeft, Plus } from "lucide-react";
 import { StagePanel } from "./ErrorBoundary";
 import { GoalCreateDialog, GoalsPanel } from "./GoalsPanel";
 import { newGoalTab } from "./goalTab";
-import { WatchesPanel } from "./WatchesPanel";
+import { WatchCreateDialog, WatchesPanel } from "./WatchesPanel";
 import { TaskCreateDialog, TasksPanel } from "./TasksPanel";
 import { ScheduleModal, SchedulePanel } from "../schedule/SchedulePanel";
 import { api } from "../lib/api";
@@ -22,6 +22,7 @@ import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { tasksQuery, goalsQuery, schedulesQuery, watchesQuery, queryKeys } from "../lib/queries";
 import type { GoalSetBody } from "../chat/goalForm";
+import type { WatchCreateBody } from "../chat/watchForm";
 import type { GoalState, ScheduledJob, Task, WatchState } from "../lib/types";
 import type { IssueDraft } from "./tasks";
 import {
@@ -154,6 +155,7 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
   // Quick-add: the overview hosts the same creator dialogs the panels use (one form, two
   // hosts) — open-state + mutation + invalidation live here, mirroring the panel hosts.
   const [goalOpen, setGoalOpen] = useState(false);
+  const [watchOpen, setWatchOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
@@ -165,6 +167,15 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
     },
     onError: (e) => toast({ tone: "error", title: "Couldn't set goal", message: errMsg(e) }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals }),
+  });
+  const createWatch = useMutation({
+    mutationFn: (body: WatchCreateBody) => api.createWatch(body),
+    onSuccess: (res) => {
+      setWatchOpen(false);
+      toast({ tone: "success", title: "Watch set", message: res.message || "The agent is watching for it." });
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't set watch", message: errMsg(e) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.watches }),
   });
   const createTask = useMutation({
     mutationFn: (d: IssueDraft) =>
@@ -230,13 +241,12 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
           count={activeWatches(watches).length}
           pulse={watchesPulse(watches)}
           onOpen={() => onOpen("watches")}
-          // No quick-add: watches are agent-created (ADR 0067), not an operator form.
-          quickAdd={null}
+          quickAdd={{ label: "Watch", testId: "work-add-watch", onAdd: () => setWatchOpen(true) }}
           empty={
             watchList.length === 0
               ? {
                   title: "No watches",
-                  description: "The agent sets watches when you ask it to keep an eye on something.",
+                  description: "Watch something the agent doesn't move — a deploy, CI, a metric.",
                 }
               : null
           }
@@ -303,6 +313,12 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
           setGoal.mutate(tabBody, { onSuccess: onSet });
         }}
         busy={setGoal.isPending}
+      />
+      <WatchCreateDialog
+        open={watchOpen}
+        onClose={() => { setWatchOpen(false); createWatch.reset(); }}
+        onCreate={(body) => createWatch.mutate(body)}
+        busy={createWatch.isPending}
       />
       <TaskCreateDialog
         open={taskOpen}

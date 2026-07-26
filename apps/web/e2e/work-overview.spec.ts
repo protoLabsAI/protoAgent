@@ -97,15 +97,46 @@ test("Tasks quick-add opens the create dialog without navigating; creating updat
   await expect(tasks.getByText("Overview quick-add")).toBeVisible();
 });
 
-test("the Watches card has no quick-add (watches are agent-created)", async ({ page }) => {
+test("every card offers a quick-add, Watches included", async ({ page }) => {
+  // Watches used to be the one card without one — agent-created only, so the console could
+  // CLEAR a watch but never set one, exposing strictly less than the `/api/watches` it
+  // fronts (and that surface is the TRUSTED one: it takes verifiers the agent is denied).
   await openWork(page);
-  const watches = page.getByTestId("work-card-watches");
-  await expect(watches).toBeVisible();
-  await expect(watches.locator(".work-card-foot")).toHaveCount(0);
-  // The other cards do offer one.
   await expect(page.getByTestId("work-add-goal")).toBeVisible();
+  await expect(page.getByTestId("work-add-watch")).toBeVisible();
   await expect(page.getByTestId("work-add-task")).toBeVisible();
   await expect(page.getByTestId("work-add-schedule")).toBeVisible();
+});
+
+test("the Watches quick-add opens the creator without navigating, and creates", async ({ page }) => {
+  const posted: Array<Record<string, unknown>> = [];
+  await page.route("**/api/watches", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ok: true, message: "Watch created." } });
+  });
+
+  await openWork(page);
+  await page.getByTestId("work-add-watch").click();
+  await expect(page.getByTestId("watch-create-dialog")).toBeVisible();
+  // Quick-add never navigates — the overview stays put behind the dialog.
+  await expect(page.getByTestId("work-card-watches")).toBeVisible();
+
+  await page.getByLabel("Watch for").fill("the staging rollout completes");
+  await page.getByRole("button", { name: /next/i }).click();
+  await page.getByLabel(/When it trips/i).fill("Run the smoke test and report.");
+  await page.getByLabel("Check every").fill("30m");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+
+  await expect(page.locator(".pl-toast__title", { hasText: "Watch set" })).toBeVisible();
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({
+    condition: "the staging rollout completes",
+    verifier: { type: "llm" },
+    interval_s: 1800,
+    run_prompt: "Run the smoke test and report.",
+    run_session: "operator",
+  });
 });
 
 test("an empty card shows the DS Empty with the quick-add as its CTA", async ({ page }) => {
@@ -215,15 +246,43 @@ test("clicking a goal row opens the detail drawer (plan, contract, timeline, act
   await expect(page.locator(".pl-toast__title", { hasText: "Goal re-armed" })).toBeVisible();
 });
 
-test("watches empty state explains agent-created watches and offers no CTA", async ({ page }) => {
+test("the whole second step is optional — a bare watch submits untouched", async ({ page }) => {
+  // Step 2 is cadence + reaction, all optional. If anything there ever became required the
+  // simplest possible watch would stop being one click away, so pin the minimal body.
+  const posted: Array<Record<string, unknown>> = [];
+  await page.route("**/api/watches", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ok: true, message: "Watch created." } });
+  });
+
+  await openWork(page);
+  await page.getByTestId("work-add-watch").click();
+  await page.getByLabel("Watch for").fill("something happens");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+
+  const submit = page.getByRole("button", { name: "Submit", exact: true });
+  await expect(submit).toBeEnabled();
+  await submit.click();
+
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0]).toEqual({ condition: "something happens", verifier: { type: "llm" } });
+});
+
+test("watches empty state offers the quick-add as its CTA, like every other card", async ({ page }) => {
+  // It used to explain that only the agent could set a watch, and deliberately offered no
+  // CTA. Now that the operator can set one, the empty state is the DS Empty-with-action the
+  // Goals/Tasks/Schedule cards already use.
   await page.route("**/api/watches", (route) =>
     route.fulfill({ json: { enabled: true, watches: [] } }),
   );
   await openWork(page);
 
   const watches = page.getByTestId("work-card-watches");
-  await expect(watches.getByText(/The agent sets watches/)).toBeVisible();
-  await expect(watches.locator(".pl-empty__action")).toHaveCount(0);
+  await expect(watches.getByText(/Watch something the agent doesn't move/)).toBeVisible();
+  await expect(watches.locator(".pl-empty__action")).toHaveCount(1);
+  await watches.locator(".pl-empty__action").click();
+  await expect(page.getByTestId("watch-create-dialog")).toBeVisible();
 });
 
 test("the Watches panel shows a watch's cadence, expiry and stall threshold", async ({ page }) => {

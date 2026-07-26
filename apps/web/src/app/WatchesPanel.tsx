@@ -1,16 +1,20 @@
 import "../watches/watches.css";
 
 import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import {
   QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
-import { Suspense, useEffect } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { HitlForm } from "../chat/HitlForm";
+import { buildWatchCreateBody, watchFormPayload, type WatchCreateBody } from "../chat/watchForm";
+import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { watchesQuery, queryKeys } from "../lib/queries";
@@ -63,7 +67,8 @@ function WatchesList() {
         title="No watches"
         description={
           <>
-            an agent or plugin creates them (or <code>POST /api/watches</code>)
+            set one with <code>New watch</code> — or the agent will, when you ask it to keep an
+            eye on something
           </>
         }
       />
@@ -116,13 +121,77 @@ function WatchesList() {
   );
 }
 
+// Operator "new watch" dialog — ONE creator, two hosts (mirroring GoalCreateDialog): the
+// Watches panel's header action and the Work overview's Watches-card quick-add both open it.
+// Chromeless DS Dialog because `HitlForm` brings its own title, stepper and actions.
+//
+// The answers map through the shared `buildWatchCreateBody` to `POST /api/watches` — the
+// TRUSTED channel (ADR 0066 path ceiling), so this form can arm the command/test/ci/data
+// verifiers the agent's own `create_watch` is denied. Until this existed the console could
+// only CLEAR a watch, which meant the console exposed strictly less than the API it fronts.
+export function WatchCreateDialog({
+  open,
+  onClose,
+  onCreate,
+  busy,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (body: WatchCreateBody) => void;
+  busy: boolean;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" className="watch-create-modal">
+      <div data-testid="watch-create-dialog">
+        <HitlForm
+          payload={watchFormPayload()}
+          busy={busy}
+          onSubmit={(answers) => {
+            const body = buildWatchCreateBody(
+              typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {},
+            );
+            if (body) onCreate(body);
+          }}
+          onCancel={onClose}
+        />
+      </div>
+    </Dialog>
+  );
+}
+
 export function WatchesPanel() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [creating, setCreating] = useState(false);
+  const create = useMutation({
+    mutationFn: (body: WatchCreateBody) => api.createWatch(body),
+    onSuccess: (res) => {
+      setCreating(false);
+      toast({ tone: "success", title: "Watch set", message: res.message || "The agent is watching for it." });
+    },
+    // A rejected verifier comes back HTTP 400 → request() throws here.
+    onError: (e) => toast({ tone: "error", title: "Couldn't set watch", message: errMsg(e) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.watches }),
+  });
   return (
     <section className="panel side-panel watches-panel">
       <PanelHeader
         compact
         title="Watches"
-        kicker={<>passive verifier-only objectives · created by an agent or plugin</>}
+        kicker={<>conditions something else moves · polled out-of-band</>}
+        actions={
+          <Button
+            variant="primary"
+            type="button"
+            onClick={() => {
+              create.reset();
+              setCreating(true);
+            }}
+            data-testid="watch-new"
+          >
+            <Plus size={16} /> New watch
+          </Button>
+        }
       />
       <ScrollArea className="watches-list" role="region" aria-label="Watches" tabIndex={0}>
         <QueryErrorResetBoundary>
@@ -135,6 +204,15 @@ export function WatchesPanel() {
           )}
         </QueryErrorResetBoundary>
       </ScrollArea>
+      <WatchCreateDialog
+        open={creating}
+        onClose={() => {
+          setCreating(false);
+          create.reset();
+        }}
+        onCreate={(body) => create.mutate(body)}
+        busy={create.isPending}
+      />
     </section>
   );
 }
