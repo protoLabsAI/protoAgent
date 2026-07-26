@@ -35,7 +35,10 @@
       "bundle": "https://github.com/protoLabsAI/project-manager-stack",
       "blurb": "Single-repo project manager — reads deeply, never holds the keyboard; ships every change through a board of coding agents and reports back as it merges.",
       "soul_preset": "project-manager",
-      "tier": "advanced"
+      "tier": "advanced",
+      "requires_tools": [
+        "github_create_issue"
+      ]
     },
     {
       "id": "design-system",
