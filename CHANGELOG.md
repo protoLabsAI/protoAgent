@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Category filters no longer spill out of the panel (plugin Discover + MCP catalog).**
+  With the directory's 14 categories the segmented filter strip is ~1250px wide; inside a
+  760px Settings drawer it simply overflowed, running off the right edge and over the
+  close button, with no way to reach the categories past the edge.
+
+  The DS segmented `Tabs` is an `inline-flex` strip with no `max-width` and no scroll, and
+  its `responsive` collapse keys on the **container's** width (`@container (max-width:
+  30rem)`) rather than on whether the pills actually *fit* — so a wide container with many
+  categories never collapses and never scrolls. The strip now scrolls horizontally inside
+  its row, with pills keeping their size (shrinking them would squash labels rather than
+  fix the overflow).
+
+  Console-side for now; the underlying gap belongs in `@protolabsai/ui` — a segmented
+  strip should never overflow its container regardless of who renders it.
 ### Added
 - **A plugin symlinked to a live checkout no longer serves mixed code undetected
   (#2298).** When the checkout's branch changes under a running process, Python's module
@@ -29,6 +44,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under a live process, so the usual case pays nothing. The stamp is
   `(relpath, mtime, size)` over `*.py` — no file contents are read on the poll, and
   non-Python churn (a README, a `.pyc`) can't raise a false alarm.
+- **`team-ready` now knows about open PRs that already claim the issue (#2278).** The
+  label is the only intake gate the board pipeline accepts, and it knew nothing about
+  pull requests — so an issue whose work was already in flight kept advertising itself as
+  available, and an agent told to "pick up the next `team-ready` issue" would board it,
+  dispatch a coder, and burn a full run on work already done. Both observed cases were
+  exactly that (#2266, claimed by an open PR; #1986, shipped in a merged PR and never
+  closed).
+
+  A sweep now reconciles the two: an open PR carrying `Closes #N` / `Fixes #N` /
+  `Resolves #N` **claims** issue N, which swaps `team-ready` for a visible `claimed-by-pr`.
+  When the claim goes away — PR closed, or the reference edited out — the swap is
+  reversed, so an abandoned PR can't silently strand an issue as un-pickable.
+  `claimed-by-pr` doubles as the bookkeeping marker: it is added only where the sweep
+  removed `team-ready`, so a release restores the label exactly where it was taken and
+  never promotes an untriaged issue into intake. A bare mention (`related to #N`) is not
+  a claim.
+
+  Runs on PR open/edit/reopen/close, hourly as a backstop, and on demand with a dry-run
+  input.
 - **A bind-posture guardrail — a single-IP `network.bind` no longer locks you out
   silently (#2147).** uvicorn binds *one* host, so pinning a specific interface IP (say
   the box's Tailscale address, to make the operator API tailnet-reachable but invisible
@@ -48,6 +82,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It warns rather than refuses: a headless box legitimately binds a single interface, and
   refusing to boot would trade a reachable-elsewhere server for no server at all.
 ### Fixed
+- **The desktop app can open a second window — "New Window" is no longer a no-op
+  (#1706).** The shell's `on_new_window` handler only ever forwarded *external* http(s)
+  links to the system browser and denied everything else, so a same-origin new-window
+  request — which is what the menu item and any in-app "open in new window" gesture
+  produce — was silently swallowed. There was no path to a second window at all.
+
+  Same-origin requests now open a real Tauri window carrying the same API-base handoff and
+  title-bar treatment as the primary one (an unmanaged child webview would have had
+  neither). A "New Window" tray item makes it discoverable, and a `new_window` command
+  lets the console request one — optionally at a route, so a link to a specific agent
+  opens a window already pointed at it. New windows are offset rather than centred, since
+  a second window landing exactly on the first reads as "nothing happened".
+
+  Loopback on a *different* port is still treated as somebody else's server and opens in
+  the browser.
 - **Plugin endpoint errors answer with a structured JSON error instead of a bare 500
   (#2259).** A plugin route handler that raised produced `HTTP 500` with the plain-text
   body `Internal Server Error` and nothing a caller could parse — so "my request was

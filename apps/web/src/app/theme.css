@@ -2228,3 +2228,15 @@ textarea {
   color: var(--error);
   font-size: 12px;
 }
+
+/* Category filter overflow (#2319) — same DS segmented-Tabs gap as the plugin Discover
+   row: no max-width, no scroll, and the `responsive` collapse keys on container width
+   rather than on whether the pills fit. In this dialog the spill lands squarely on the
+   close (X) button. See apps/web/src/settings/plugins.css for the sibling rule. */
+.mcp-catalog-controls .pl-tabs--segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.mcp-catalog-controls .pl-tabs--segmented > * { flex: 0 0 auto; }
