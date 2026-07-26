@@ -46,6 +46,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0–1, a missing `identity_preserved` defaults to true (a false "identity lost" alarm is
   the expensive one), and any failure leaves the deterministic report intact — a curation
   pass must never take down the maintenance loop hosting it.
+- **Archetypes declare a capability contract, checked against the tools that actually
+  bound (#2277).** An archetype preset is the shipped artifact that defines an agent's
+  identity — the template every fork starts from — and it could commit to actions the
+  bundle's default config never provisions. `project-manager` shipped "pain points get
+  filed as issues" while `github.write` defaults to `false`, so `github_create_issue` was
+  never registered and every PM spawned from that archetype inherited the contradiction.
+  The failure is silent by construction: the model fills the impossible instruction with
+  narration and reports the action as done, so nothing errors.
+
+  An archetype can now declare `requires_tools` (in `archetype-catalog.json` or a bundle's
+  `archetype:` block); `create()` records the contract on the workspace, and the member
+  checks it at runtime against `bound_tools` — what the model can really call. That's
+  deliberate: the gap is usually a per-agent config flag suppressing a registration, which
+  no amount of manifest metadata can see. A shortfall raises a warning naming the missing
+  tools and the silent-narration failure mode. `project-manager` now declares
+  `github_create_issue`.
+
+  A warning, not a refusal — the operator may have turned a capability off on purpose, and
+  an agent that boots degraded beats one that won't boot. Detecting *undeclared* claims in
+  free-text doctrine remains #2276.
 - **`/v1` (OpenAI-compat) can now continue a session across requests (#2119).** Every
   request minted `openai-compat-<unix seconds>`, so multi-turn workflows were amnesiac:
   turn 2 of a plan→execute flow re-scouted from scratch everything turn 1 had already
