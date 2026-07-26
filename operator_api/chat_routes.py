@@ -17,9 +17,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
+import uuid
 
+from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -99,6 +102,86 @@ def _has_unresolved_tool_calls(msg) -> bool:
     from langchain_core.messages import AIMessage
 
     return isinstance(msg, AIMessage) and bool(getattr(msg, "tool_calls", None))
+
+
+#: Caller-supplied session keys are pinned to this alphabet. A session id reaches
+#: filesystem paths (``graph/middleware/memory.py`` still resolves a LEGACY raw-name read
+#: path beside the encoded one), so an unsanitized `../` from a /v1 caller would escape
+#: the memory dir. Sanitizing at the boundary closes that for this surface regardless of
+#: what any downstream consumer does with the value.
+_V1_KEY_OK = re.compile(r"[^A-Za-z0-9._-]")
+_V1_KEY_MAX = 96
+
+
+def _v1_session_id(req: dict, request=None) -> str:
+    """The session this ``/v1`` turn continues (#2119).
+
+    Every request used to mint ``openai-compat-<unix seconds>``, so a multi-turn
+    workflow — plan, review, execute, the LE archetype's core loop — was amnesiac: turn 2
+    re-scouted everything turn 1 had already read, and the caller had to paste turn 1's
+    output back in to make progress. (The second-resolution clock was also a latent
+    *collision*: two unrelated callers landing in the same second silently shared one
+    session.)
+
+    A caller can now pin the session, in precedence order:
+
+    1. ``session_id`` in the body — explicit intent, and what an OpenAI client passes
+       through ``extra_body``.
+    2. ``X-Session-Id`` header — for clients that can't reach the body schema.
+    3. ``user`` — the OpenAI-standard field, honoured as the issue proposed.
+
+    With none of them the behaviour is unchanged in spirit but no longer collides: a
+    fresh, unique session per request. Continuity is opt-in, so an existing stateless
+    caller sees exactly what it saw before.
+    """
+    body = req or {}
+    header = (request.headers.get("X-Session-Id") or "").strip() if request is not None else ""
+    raw = (
+        str(body.get("session_id") or "").strip()
+        or header
+        or str(body.get("user") or "").strip()
+    )
+    if not raw:
+        # uuid4, not the wall clock: unique per request AND collision-free.
+        return f"openai-compat-{uuid.uuid4().hex}"
+    # Strip separators first, then collapse any run of dots. Dots are allowed (a `user`
+    # is plausibly "first.last") but `..` never needs to survive into something that
+    # becomes a path component — belt-and-braces, since removing `/` already defangs it.
+    safe = re.sub(r"\.{2,}", "_", _V1_KEY_OK.sub("_", raw))
+    return f"openai-compat-{safe[:_V1_KEY_MAX]}"
+
+
+async def _run_v1_turn(prompt: str, session_id: str, **kw):
+    """Run one ``/v1`` turn with **defined** disconnect semantics (#2119): the turn is
+    NOT cancelled when the HTTP client goes away.
+
+    Previously this was simply undefined from the outside — a client-side read timeout
+    left the caller unable to tell whether the work had been abandoned or was still
+    running, and in the reported case a 15-minute turn's entire result was unreachable.
+
+    Run-to-completion is the right default for an agent turn: the expensive part is the
+    tool work, it is already checkpointed against the session, and killing it at the
+    transport layer throws that away for a reason (a client's socket) that has nothing to
+    do with whether the work is still wanted. Paired with a pinned ``session_id``, a
+    caller that timed out reconnects to the SAME session and finds the finished work in
+    context instead of re-running it.
+
+    The turn is shielded rather than fire-and-forget: if the client is still there it
+    still awaits normally. The done-callback exists to retrieve the exception from an
+    orphaned turn — without it a failure after the caller left surfaces as a bare
+    "exception was never retrieved" at GC time, with no session context attached.
+    """
+    turn = asyncio.ensure_future(chat(prompt, session_id, **kw))
+
+    def _drain(fut: asyncio.Future) -> None:
+        if fut.cancelled():
+            return
+        exc = fut.exception()
+        if exc is not None:
+            log.warning("[v1] turn for session %s failed after the client left: %r", session_id, exc)
+
+    turn.add_done_callback(_drain)
+    return await asyncio.shield(turn)
 
 
 async def _v1_finish_reason(session_id: str) -> str:
@@ -361,7 +444,7 @@ def register_chat_routes(app, ui: str) -> None:
     # Lets this agent be registered as a model in the LiteLLM gateway /
     # OpenWebUI without any protocol adapter.
     @app.post("/v1/chat/completions")
-    async def _openai_chat_completions(req: dict):
+    async def _openai_chat_completions(req: dict, request: Request):
         """OpenAI-compatible chat completion over one agent turn.
 
         Non-streaming ``finish_reason`` semantics (#2234): ``"stop"`` means the
@@ -373,13 +456,28 @@ def register_chat_routes(app, ui: str) -> None:
         it as one. Detection reads the thread's checkpointed state (see
         ``_v1_finish_reason``). The non-streaming message carries only the LAST
         assistant message of the turn — intermediate narrations between tool
-        calls are never joined in. The streaming path is unchanged."""
+        calls are never joined in. The streaming path is unchanged.
+
+        **Session continuity (#2119).** Pin a session with ``session_id`` in the
+        body, an ``X-Session-Id`` header, or the OpenAI ``user`` field (that
+        precedence) and consecutive requests resume the same context — so a
+        multi-turn workflow (plan → review → execute) doesn't re-scout from
+        scratch every turn. Omit all three and you get a fresh, unique session
+        per request, as before. See ``_v1_session_id``.
+
+        **Disconnect semantics (#2119).** Defined, where they used to be
+        undefined: the turn is NOT cancelled when the HTTP client goes away. It
+        runs to completion server-side and is checkpointed against its session
+        (see ``_run_v1_turn``). So a caller whose read timeout fired reconnects
+        with the SAME session key and finds the finished work already in
+        context, instead of re-running it — which only works if the session was
+        pinned, the other half of why continuity matters here."""
         messages = req.get("messages", [])
         user_msgs = [m for m in messages if m.get("role") == "user"]
         if not user_msgs:
             return {"error": "No user message provided"}, 400
         prompt, images = _split_openai_content(user_msgs[-1].get("content", ""))
-        session_id = f"openai-compat-{int(time.time())}"
+        session_id = _v1_session_id(req, request)
         stream = req.get("stream", False)
 
         # Honor the OpenAI `model` field as a per-request override — unless it's
@@ -396,7 +494,7 @@ def register_chat_routes(app, ui: str) -> None:
         # runs. A2A and /api/chat already expose this; /v1 was the gap.
         incognito = bool(req.get("incognito", False))
 
-        result = await chat(prompt, session_id, model=model, incognito=incognito, images=images or None)
+        result = await _run_v1_turn(prompt, session_id, model=model, incognito=incognito, images=images or None)
         # Joined parts feed the streaming path only (its historical shape); the
         # non-streaming body is rebuilt below from the LAST assistant message.
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
