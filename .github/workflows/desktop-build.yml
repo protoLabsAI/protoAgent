@@ -327,14 +327,55 @@ jobs:
         # Tauri notarizes the .app *inside* the bundle; without its own ticket
         # the DMG container still reads as un-notarized on a fresh download.
         # Submit + staple the DMG itself so Gatekeeper verifies it offline.
+        #
+        # SUBMIT and WAIT are separate calls on purpose. `notarytool submit --wait` polls
+        # internally and treats a single failed poll as fatal — so one network blip on the
+        # runner killed an upload Apple had already ACCEPTED and was processing (v0.119.0:
+        # `NSURLErrorDomain Code=-1009 "The Internet connection appears to be offline"`
+        # against .../notary/v2/submissions/<id>, while the status was still "In Progress").
+        # Splitting them lets us re-poll the EXISTING submission instead of re-uploading a
+        # ~100MB DMG, and lets a transient failure retry while a genuine rejection doesn't.
         run: |
           set -euo pipefail
           DMG="$(ls dist-desktop/*.dmg | head -1)"
           KEYFILE="$(mktemp -t protoagent-apple-api-XXXXXX).p8"
           python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_API_KEY_BASE64"]))' "$KEYFILE"
-          xcrun notarytool submit "$DMG" \
-            --key "$KEYFILE" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
-            --wait
+          AUTH=(--key "$KEYFILE" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER")
+
+          SUBMISSION_ID="$(xcrun notarytool submit "$DMG" "${AUTH[@]}" --output-format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          echo "notarization submission: $SUBMISSION_ID"
+
+          # Poll with retries. `notarytool wait` resumes an existing submission, so a retry
+          # costs one request rather than a re-upload.
+          STATUS=""
+          for attempt in 1 2 3 4 5; do
+            if xcrun notarytool wait "$SUBMISSION_ID" "${AUTH[@]}" --timeout 20m; then
+              STATUS="Accepted"
+              break
+            fi
+            # A terminal verdict must NOT be retried — retrying would burn 5 attempts and
+            # then report a network problem for what is actually a rejected binary.
+            STATUS="$(xcrun notarytool info "$SUBMISSION_ID" "${AUTH[@]}" --output-format json 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' || true)"
+            if [ "$STATUS" = "Invalid" ] || [ "$STATUS" = "Rejected" ]; then
+              echo "::error::Notarization $STATUS for $SUBMISSION_ID — this is a real rejection, not a network fault."
+              xcrun notarytool log "$SUBMISSION_ID" "${AUTH[@]}" || true
+              exit 1
+            fi
+            echo "::warning::notarytool wait failed (attempt $attempt/5, last known status: ${STATUS:-unknown}) — retrying in 30s"
+            sleep 30
+          done
+
+          # Confirm ACCEPTED rather than trusting the loop fell through cleanly.
+          FINAL="$(xcrun notarytool info "$SUBMISSION_ID" "${AUTH[@]}" --output-format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
+          if [ "$FINAL" != "Accepted" ]; then
+            echo "::error::Notarization ended as '${FINAL:-unknown}' for $SUBMISSION_ID"
+            xcrun notarytool log "$SUBMISSION_ID" "${AUTH[@]}" || true
+            exit 1
+          fi
+
           xcrun stapler staple "$DMG"
 
       - name: Verify macOS artifact
