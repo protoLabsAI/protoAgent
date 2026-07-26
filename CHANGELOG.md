@@ -74,7 +74,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Discovery rows also carry their own `fleet-row--found` modifier, so a selector can finally
   tell "on the network" from "in the fleet" — the two lists render an identical row shape.
 
-### Changed
 - **Every sister agent gets the fleet surfaces, not just the host console (ADR 0048 §8).**
   "New agent" and "Fleet settings" in the header switcher, the ⌘K **Fleet Room**, and
   **Settings ▸ Box ▸ Fleet** all render in a fleet member's window now. They were gated to
@@ -97,8 +96,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the focused agent's own endpoints and stay host-only — which is also what makes the
   "Fleet settings" deep-link resolve instead of falling back to an unrelated section.
 
-## [0.115.0] - 2026-07-25
-
 ### Added
 - **Opt-in per-step `timeout` in the workflow engine, with graceful degradation.** A recipe
   step may declare a positive `timeout` (seconds). Exceeding it is *degradation, not failure*:
@@ -109,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores the key, so recipes can declare it ahead of the feature. This gives the pr-reviewer
   panel a way to cap its slowest finder (the review latency floor and top exhaustion cause)
   without taking the whole panel down to no verdict. (#2297)
+## [0.115.0] - 2026-07-25
+
+### Added
 - **Managed projects are visible in the console, and it tells you when they aren't in
   effect (ADR 0095 D5).** `GET /api/projects` plus a read-only **Managed projects** list at
   the top of the Work folders dialog: each registered project with its GitHub repo, its

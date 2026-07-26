@@ -7,7 +7,8 @@
       "The managed-projects registry now refuses bad entries loudly instead of quietly granting less (or more) than you asked for.",
       "fs: false on every project now means what it says: no filesystem fence at all.",
       "An agent you just added from network discovery no longer lingers in the \"found\" list.",
-      "Every sister agent gets the fleet surfaces, not just the host console."
+      "Every sister agent gets the fleet surfaces, not just the host console.",
+      "Opt-in per-step `timeout` in the workflow engine, with graceful degradation — a hung step degrades (empty Gap, listed in `degraded`) instead of stalling the whole DAG."
     ]
   },
   {
