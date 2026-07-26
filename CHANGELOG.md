@@ -106,6 +106,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   It warns rather than refuses: a headless box legitimately binds a single interface, and
   refusing to boot would trade a reachable-elsewhere server for no server at all.
+
+- **`watches.interval` is a real setting, and both watch keys reached the Settings UI
+  (ADR 0067).** `watch_interval` was read in three places — the server's `_watch_loop`, the
+  controller's effective-cadence calculation, and the `VerifierInvoker` handed to a plugin
+  verifier — as `getattr(cfg, "watch_interval", 30)` against a field that **did not exist
+  on `LangGraphConfig`**. Every read silently took the fallback, so the global poll cadence
+  was hard-coded at 30s and the `watch_interval` the ADR, the watches guide and the plugin
+  docs all describe was unconfigurable. It is now a parsed field (`watches.interval`,
+  floored at 5s, re-read every tick so a change applies with no restart), and the three
+  readers share one `DEFAULT_WATCH_INTERVAL_S` constant instead of three loose literals.
+
+  Neither `watches.enabled` nor the new `watches.interval` was in `graph/settings_schema.py`,
+  so neither rendered anywhere in Settings — on an install that already ships a Watches panel
+  in the Work hub, the only way to turn watches on was hand-editing YAML. Both now live under
+  **Settings ▸ Behavior ▸ Watches**, beside Goal mode rather than inside it.
+
+### Changed
+- **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
+  feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
+  default. An instance that doesn't want them sets `watches.enabled: false`.
+
 ### Fixed
 - **The desktop app can open a second window — "New Window" is no longer a no-op
   (#1706).** The shell's `on_new_window` handler only ever forwarded *external* http(s)

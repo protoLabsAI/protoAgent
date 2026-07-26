@@ -24,6 +24,7 @@ log = logging.getLogger("protoagent.config")
 # config-side SubagentDef mirrors them so the YAML override layer can't drift
 # (graph/subagents/config has no graph.config dep — no import cycle).
 from graph.subagents.config import RESEARCHER_CONFIG
+from graph.watches.types import DEFAULT_WATCH_INTERVAL_S
 
 # Secrets (model API key, A2A bearer) live in an untracked ``secrets.yaml``
 # sibling of the main config, never in the tracked YAML. See graph/config_io
@@ -500,13 +501,20 @@ class LangGraphConfig:
     goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
 
     # Watches (ADR 0067) — agent-held supervised conditions (a deploy, CI, a metric),
-    # polled out-of-band; when one trips the agent is resumed to react. Feature flag
-    # (#2020), default OFF while the feature cooks. Gates ONLY whether the agent-facing
-    # watch tools (create_watch / list_watches / clear_watch) are BOUND — they ride
-    # inside the goal-enabled tool group, so goal mode must also be on. Toggling this
-    # off never deletes or mutates stored watch state, and the background watch poller
-    # is untouched: it's a tool-availability flag, nothing else.
-    watches_enabled: bool = False
+    # polled out-of-band; when one trips the agent is resumed to react. `enabled` gates
+    # ONLY whether the agent-facing watch tools (create_watch / list_watches /
+    # clear_watch) are BOUND — independent of goal mode, and NOT a kill switch: toggling
+    # it off never deletes or mutates stored watch state, and the background poller runs
+    # regardless (an operator/plugin watch keeps polling on an instance where the agent
+    # has no watch tools). Default ON since the feature settled; it was OFF while it
+    # cooked (#2020).
+    watches_enabled: bool = True
+    # Global poll cadence for the out-of-band watch tick, in seconds. A watch's own
+    # `interval_s` overrides it as a FLOOR (#1753). The server clamps to >=5s. This was
+    # referenced as `watch_interval` in three places for two releases WITHOUT ever being
+    # a field, so every read silently took the getattr default and the cadence could not
+    # be configured at all.
+    watch_interval: float = DEFAULT_WATCH_INTERVAL_S
 
     # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
     # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
@@ -1279,6 +1287,7 @@ class LangGraphConfig:
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
             watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
+            watch_interval=float(data.get("watches", {}).get("interval", cls.watch_interval) or cls.watch_interval),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
             soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
             soul_drift_interval_hours=int(

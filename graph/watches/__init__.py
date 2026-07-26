@@ -2,6 +2,18 @@
 
 from graph.watches.controller import WatchController
 from graph.watches.store import WatchStore
-from graph.watches.types import TERMINAL_STATUSES, Watch
+from graph.watches.types import (
+    DEFAULT_WATCH_INTERVAL_S,
+    MIN_WATCH_INTERVAL_S,
+    TERMINAL_STATUSES,
+    Watch,
+)
 
-__all__ = ["WatchController", "WatchStore", "Watch", "TERMINAL_STATUSES"]
+__all__ = [
+    "WatchController",
+    "WatchStore",
+    "Watch",
+    "TERMINAL_STATUSES",
+    "DEFAULT_WATCH_INTERVAL_S",
+    "MIN_WATCH_INTERVAL_S",
+]

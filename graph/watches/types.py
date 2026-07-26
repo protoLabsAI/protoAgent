@@ -19,6 +19,18 @@ from time import time
 #   cleared  — removed by an operator/agent/plugin
 TERMINAL_STATUSES = ("met", "expired", "cleared")
 
+# Default global poll cadence, in seconds. THE source of truth: ``LangGraphConfig``
+# imports it as the default for its ``watch_interval`` field (``watches.interval``), and
+# the controller / server loop fall back to it when handed a config object that has no
+# such attribute (a duck-typed stub in tests). Keep it here rather than as a literal at
+# each read — the reads used to be three unrelated ``getattr(cfg, "watch_interval", 30)``
+# calls against a field that did not exist.
+DEFAULT_WATCH_INTERVAL_S = 30.0
+
+# Floor the server enforces on the configured cadence — a sub-5s tick would re-run every
+# verifier (which can shell out) faster than they plausibly finish.
+MIN_WATCH_INTERVAL_S = 5.0
+
 
 @dataclass
 class Watch:
