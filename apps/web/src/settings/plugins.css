@@ -112,3 +112,19 @@
 .plugin-row-danger:hover:not(:disabled) { color: var(--danger); }
 .settings-flat-group { display: flex; flex-direction: column; }
 .plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* Category filter overflow (#2319). The DS segmented Tabs is an `inline-flex` strip with
+   no max-width and no scroll, and its `responsive` collapse keys on the CONTAINER's width
+   (`@container (max-width: 30rem)`) — not on whether the pills actually FIT. So a WIDE
+   container with many categories never collapses and never scrolls: the strip just spills
+   out of the panel, over the Settings drawer's close button. The catalog ships 14
+   categories today, so this is the normal case, not an edge one.
+   Let the strip scroll inside its row instead. Pills keep their size (`flex: 0 0 auto`) —
+   shrinking them would squash labels rather than fix the overflow. */
+.plugin-discover-controls .pl-tabs--segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.plugin-discover-controls .pl-tabs--segmented > * { flex: 0 0 auto; }

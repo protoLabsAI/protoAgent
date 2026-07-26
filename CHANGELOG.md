@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Category filters no longer spill out of the panel (plugin Discover + MCP catalog).**
+  With the directory's 14 categories the segmented filter strip is ~1250px wide; inside a
+  760px Settings drawer it simply overflowed, running off the right edge and over the
+  close button, with no way to reach the categories past the edge.
+
+  The DS segmented `Tabs` is an `inline-flex` strip with no `max-width` and no scroll, and
+  its `responsive` collapse keys on the **container's** width (`@container (max-width:
+  30rem)`) rather than on whether the pills actually *fit* — so a wide container with many
+  categories never collapses and never scrolls. The strip now scrolls horizontally inside
+  its row, with pills keeping their size (shrinking them would squash labels rather than
+  fix the overflow).
+
+  Console-side for now; the underlying gap belongs in `@protolabsai/ui` — a segmented
+  strip should never overflow its container regardless of who renders it.
 ### Added
 - **`requires_pip` entries can declare `scope: host | runtime` (#2246).** On the desktop
   app there are two Pythons with separate site-packages — the frozen host process, and
@@ -28,6 +43,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the refusal says why and names the ways out: vendor it, drop it, or ship it in the app
   bundle. The console's `deps_missing` is scope-aware too, so a plugin that will crash at
   tool time no longer reports itself ready.
+- **`/v1` (OpenAI-compat) can now continue a session across requests (#2119).** Every
+  request minted `openai-compat-<unix seconds>`, so multi-turn workflows were amnesiac:
+  turn 2 of a plan→execute flow re-scouted from scratch everything turn 1 had already
+  read, ran past the client's timeout, and only succeeded when the operator pasted turn
+  1's output back into the prompt. That is the LE archetype's core loop.
+
+  A caller can now pin the session with `session_id` in the body, an `X-Session-Id`
+  header, or the OpenAI-standard `user` field (that precedence). With none of them the
+  behaviour is unchanged in spirit — a fresh session per request — but it now uses a uuid
+  rather than a second-resolution clock, which also closes a latent collision where two
+  unrelated callers landing in the same second silently shared one session. Caller-supplied
+  keys are sanitized at the boundary, since a session id reaches memory paths.
+
+### Fixed
+- **`/v1` disconnect semantics are defined instead of undefined (#2119).** When an HTTP
+  client timed out mid-turn, what happened to the running turn was unknowable from the
+  outside — the reported case lost a 15-minute turn entirely. The turn is no longer
+  cancelled when the caller goes away: it runs to completion and is checkpointed against
+  its session, so a caller whose read timeout fired reconnects with the same session key
+  and finds the finished work already in context rather than re-running it. (An orphaned
+  turn's failure is logged with its session id instead of surfacing as a bare
+  "exception was never retrieved" at GC time.)
 - **`team-ready` now knows about open PRs that already claim the issue (#2278).** The
   label is the only intake gate the board pipeline accepts, and it knew nothing about
   pull requests — so an issue whose work was already in flight kept advertising itself as
@@ -66,6 +103,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It warns rather than refuses: a headless box legitimately binds a single interface, and
   refusing to boot would trade a reachable-elsewhere server for no server at all.
 ### Fixed
+- **The desktop app can open a second window — "New Window" is no longer a no-op
+  (#1706).** The shell's `on_new_window` handler only ever forwarded *external* http(s)
+  links to the system browser and denied everything else, so a same-origin new-window
+  request — which is what the menu item and any in-app "open in new window" gesture
+  produce — was silently swallowed. There was no path to a second window at all.
+
+  Same-origin requests now open a real Tauri window carrying the same API-base handoff and
+  title-bar treatment as the primary one (an unmanaged child webview would have had
+  neither). A "New Window" tray item makes it discoverable, and a `new_window` command
+  lets the console request one — optionally at a route, so a link to a specific agent
+  opens a window already pointed at it. New windows are offset rather than centred, since
+  a second window landing exactly on the first reads as "nothing happened".
+
+  Loopback on a *different* port is still treated as somebody else's server and opens in
+  the browser.
 - **Plugin endpoint errors answer with a structured JSON error instead of a bare 500
   (#2259).** A plugin route handler that raised produced `HTTP 500` with the plain-text
   body `Internal Server Error` and nothing a caller could parse — so "my request was
