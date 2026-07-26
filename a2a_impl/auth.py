@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -578,4 +579,45 @@ def evaluate_open_bind(host: str, *, bearer_configured: bool, allow_open: bool) 
         "langgraph-config.yaml or A2A_AUTH_TOKEN, bind 127.0.0.1 (the "
         "default), or set PROTOAGENT_ALLOW_OPEN=1 if a network boundary "
         "fences this port."
+    )
+
+
+#: 0.0.0.0 / :: mean "every interface", so loopback is served too. Mirrors
+#: ``pairing_routes._WILDCARD_BINDS`` (that one answers "is this address reachable?",
+#: this one answers "did we just exclude ourselves?").
+_WILDCARD_BINDS = ("0.0.0.0", "::", "*", "")
+
+
+def evaluate_bind_reachability(host: str) -> str | None:
+    """Warn when the configured bind **excludes loopback** (#2147).
+
+    uvicorn binds a *single* host. Pinning one interface IP — e.g. the box's Tailscale
+    address, to make the operator API tailnet-reachable but invisible on other networks
+    — therefore stops serving ``127.0.0.1``. The desktop app's Tauri webview reaches its
+    sidecar over loopback, so this is a total UI lockout, recoverable only by reverting
+    ``network.bind`` and relaunching. It is a silent footgun: nothing about the setting
+    says "and this will lock you out of your own console".
+
+    There is no bind that expresses "loopback + tailnet, nothing else". The way to get it
+    is ``0.0.0.0`` (which keeps loopback) plus scoping *reach* at the network layer —
+    Tailscale ACL, firewall, or simply not publishing the port. Post-ADR-0089 the wide
+    bind is token-gated, so that posture is not an open hole.
+
+    Returns a message to log/surface, or ``None`` when loopback is still served.
+    """
+    h = (host or "").strip()
+    if h in _LOOPBACK_HOSTS or h in _WILDCARD_BINDS:
+        return None
+    try:
+        if ipaddress.ip_address(h).is_loopback:  # 127.0.0.0/8 beyond 127.0.0.1
+            return None
+    except ValueError:
+        pass  # a hostname, not an IP — can't classify without resolving; `localhost` is above
+    return (
+        f"[network] bind is pinned to {h}, which EXCLUDES loopback — uvicorn binds a single "
+        "host, so 127.0.0.1 is no longer served and the local console (and the desktop app's "
+        "own webview, which reaches its sidecar over loopback) cannot reach this instance. "
+        "For 'reachable on my tailnet/LAN but nothing else', set network.bind to 0.0.0.0 — "
+        "which keeps loopback — and scope REACH at the network layer (Tailscale ACL, "
+        "firewall, or not publishing the port) rather than at the bind."
     )
