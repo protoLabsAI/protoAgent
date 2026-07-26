@@ -295,10 +295,12 @@ goal:
 # mutates a stored watch, and the background poller runs regardless, so a watch created
 # by an operator (POST /api/watches) or a plugin keeps being polled either way.
 # `interval` is the global poll cadence in seconds (min 5); a watch's own `interval_s`
-# overrides it as a floor.
+# overrides it as a floor. `keep_terminal_h` is how long a met/expired watch stays listed
+# before the tick deletes it (0 = keep forever).
 watches:
   enabled: true
   # interval: 30
+  # keep_terminal_h: 24
 
 # Persona — the agent's own SOUL.md. `self_edit_enabled` (OFF by default) gives the
 # LEAD agent the `edit_soul` tool so it can rewrite SECTIONS of its own persona

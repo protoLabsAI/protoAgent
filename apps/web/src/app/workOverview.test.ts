@@ -72,15 +72,18 @@ describe("watches card", () => {
   const now = new Date(2026, 6, 1, 12, 0, 0).getTime();
   const secsAt = (h: number) => new Date(2026, 6, 1, h, 0, 0).getTime() / 1000;
 
-  it("visibleWatches hides cleared and floats actives first", () => {
+  it("visibleWatches floats actives first, keeps the finished ones in order", () => {
+    // Only `active` / `met` / `expired` ever reach the client — clearing a watch unlinks
+    // its file, so there is no "cleared" row to filter out (the filter that used to try
+    // was dead code).
     const ws = [
       watch({ id: "m", status: "met" }),
       watch({ id: "a", status: "active" }),
-      watch({ id: "x", status: "cleared" }),
       watch({ id: "e", status: "expired" }),
+      watch({ id: "a2", status: "active" }),
     ];
-    expect(visibleWatches(ws).map((w) => w.id)).toEqual(["a", "m", "e"]);
-    expect(activeWatches(ws)).toHaveLength(1);
+    expect(visibleWatches(ws).map((w) => w.id)).toEqual(["a", "a2", "m", "e"]);
+    expect(activeWatches(ws)).toHaveLength(2);
   });
 
   it("pulse counts watching + met-today (local day) off finished_at", () => {

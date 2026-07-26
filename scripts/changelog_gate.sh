@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 #
-# PR gate: require a CHANGELOG.md change in every PR (the [Unreleased] entry
-# PROTO.md asks for), so release notes stop depending on someone reconstructing
-# a cycle's worth of merges. Invoked by the `changelog` job in
+# PR gate: require a changelog entry in every PR, so release notes stop depending on
+# someone reconstructing a cycle's worth of merges.
+#
+# The entry belongs in changelog.d/<issue>.<kind>.md (#2322) — a NEW FILE per PR, which
+# cannot conflict. Editing CHANGELOG.md directly is still accepted so this change breaks
+# no in-flight or fork PR, but it is the path that costs: every such PR writes to the
+# same three lines under [Unreleased], so two in flight conflict by construction. Invoked by the `changelog` job in
 # .github/workflows/checks.yml; kept as a script so tests/test_changelog_gate.py
 # can exercise it against throwaway git repos.
 #
@@ -50,10 +54,26 @@ if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ]; then
   fi
 fi
 
-if git diff --name-only "${base}...HEAD" | grep -qx 'CHANGELOG.md'; then
-  echo "ok: CHANGELOG.md touched in this PR"
+# A news fragment is the expected path (#2322): distinct filenames never conflict, so a
+# stack of PRs no longer costs one serial merge per PR to a single shared anchor.
+# At least one changelog.d/*.md that ISN'T the README — a PR may legitimately touch the
+# README *and* add a fragment, so this filters the README out rather than disqualifying
+# the whole PR when it appears (which is what an earlier version of this check did).
+if git diff --name-only "${base}...HEAD" \
+   | grep -E '^changelog\.d/.+\.md$' \
+   | grep -qvx 'changelog.d/README.md'; then
+  echo "ok: changelog.d/ fragment added in this PR"
   exit 0
 fi
 
-echo "::error::Missing changelog entry — add an entry under [Unreleased] in CHANGELOG.md or apply the skip-changelog label."
+# Editing CHANGELOG.md directly still passes. Kept deliberately: this must not break an
+# in-flight or fork PR written against the old convention, and a flag day would fail
+# honest PRs for a reason that has nothing to do with their content. Tightening to
+# fragments-only is a one-line change once open PRs have cycled.
+if git diff --name-only "${base}...HEAD" | grep -qx 'CHANGELOG.md'; then
+  echo "ok: CHANGELOG.md touched in this PR (prefer a changelog.d/ fragment — see changelog.d/README.md)"
+  exit 0
+fi
+
+echo "::error::Missing changelog entry — add changelog.d/<issue>.<kind>.md (see changelog.d/README.md), or apply the skip-changelog label."
 exit 1

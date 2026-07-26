@@ -90,6 +90,12 @@ jobs:
           ")
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
+      - name: Collate changelog fragments into [Unreleased]
+        # Feature PRs drop changelog.d/<issue>.<kind>.md instead of editing CHANGELOG.md,
+        # so they can't conflict with each other (#2322). Fold them in — and delete
+        # them — immediately before the roll, so the dated section is complete.
+        run: python scripts/changelog.py collate
+
       - name: Roll changelog
         run: python scripts/changelog.py roll "${{ steps.version.outputs.version }}"
 

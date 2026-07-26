@@ -3,6 +3,7 @@
 from graph.watches.controller import WatchController
 from graph.watches.store import WatchStore
 from graph.watches.types import (
+    DEFAULT_KEEP_TERMINAL_H,
     DEFAULT_WATCH_INTERVAL_S,
     MIN_WATCH_INTERVAL_S,
     TERMINAL_STATUSES,
@@ -16,4 +17,5 @@ __all__ = [
     "TERMINAL_STATUSES",
     "DEFAULT_WATCH_INTERVAL_S",
     "MIN_WATCH_INTERVAL_S",
+    "DEFAULT_KEEP_TERMINAL_H",
 ]

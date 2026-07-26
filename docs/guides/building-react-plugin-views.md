@@ -303,6 +303,55 @@ within a console tab — a reopened view catches up from its stored mark instead
 polling. On hosts that predate #1640 the extra fields are ignored and events carry no `seq`;
 if you need to support them, keep a poll fallback and disarm it the first time a `seq` arrives.
 
+## Keyboard shortcuts (#1457)
+
+Your view is an iframe, so keys pressed inside it never reach the console's keydown host —
+without this bridge, **every** host shortcut is dead while your view has focus, and you have
+no way to declare your own. Two messages fix both directions.
+
+**Declare chords.** They show up in Settings ▸ Keyboard, rebindable like any core shortcut,
+and fire back into your page when pressed:
+
+```js
+parent.postMessage({
+  type: "protoagent:keybindings",
+  bindings: [
+    { id: "toggle", label: "Toggle docs panel", keys: "mod+shift+d" },
+    { id: "search", label: "Search docs", keys: "mod+shift+f", group: "Docs" },
+  ],
+}, "*");
+
+addEventListener("message", (e) => {
+  if (e.data?.type === "protoagent:keybinding" && e.data.id === "toggle") togglePanel();
+});
+```
+
+The `keys` you name is a **default**; an operator override always wins. Re-posting
+`protoagent:keybindings` **replaces** your previous set (post `bindings: []` to clear).
+Your ids are namespaced to `plugin.<your-id>.<id>` by the host, so you can't register,
+replace, or shadow a core binding — or collide with another plugin.
+
+**Let host chords through.** Forward anything you didn't handle yourself, so ⌘K still
+opens the palette while your view has focus:
+
+```js
+addEventListener("keydown", (e) => {
+  if (handledLocally(e)) return;
+  const combo = [
+    e.metaKey || e.ctrlKey ? "mod" : "", e.shiftKey ? "shift" : "",
+    e.altKey ? "alt" : "", e.key.toLowerCase(),
+  ].filter(Boolean).join("+");
+  const el = document.activeElement;
+  const editable = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  parent.postMessage({ type: "protoagent:keydown", combo, editable }, "*");
+});
+```
+
+Pass `editable: true` when focus is in one of your own text fields and the host will
+respect the same typing gate it applies to its own inputs. A forwarded chord reaches only
+**global** bindings — the host can't see inside your iframe, so it can't know which of its
+panels is focused, and firing another panel's scoped chord would be worse than not firing.
+
 ## Trust & the sandbox split
 
 There are **two different** iframe-sandbox postures. Do not blur them.

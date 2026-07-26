@@ -24,7 +24,7 @@ log = logging.getLogger("protoagent.config")
 # config-side SubagentDef mirrors them so the YAML override layer can't drift
 # (graph/subagents/config has no graph.config dep — no import cycle).
 from graph.subagents.config import RESEARCHER_CONFIG
-from graph.watches.types import DEFAULT_WATCH_INTERVAL_S
+from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_S
 
 # Secrets (model API key, A2A bearer) live in an untracked ``secrets.yaml``
 # sibling of the main config, never in the tracked YAML. See graph/config_io
@@ -515,6 +515,11 @@ class LangGraphConfig:
     # a field, so every read silently took the getattr default and the cadence could not
     # be configured at all.
     watch_interval: float = DEFAULT_WATCH_INTERVAL_S
+    # How long a met/expired watch is kept before the tick deletes it, in hours. Without
+    # this a terminal watch lived on disk forever and every list surface (the agent's
+    # list_watches, sdk.list_watches, GET /api/watches, the console panel) returned it
+    # forever. 0 = keep forever, the repo's convention for a retention knob.
+    watch_keep_terminal_h: float = DEFAULT_KEEP_TERMINAL_H
 
     # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
     # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
@@ -1288,6 +1293,9 @@ class LangGraphConfig:
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
             watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
             watch_interval=float(data.get("watches", {}).get("interval", cls.watch_interval) or cls.watch_interval),
+            watch_keep_terminal_h=float(
+                data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
+            ),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
             soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
             soul_drift_interval_hours=int(

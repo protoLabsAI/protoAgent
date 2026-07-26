@@ -75,8 +75,9 @@ def test_fails_without_changelog_change_and_says_how_to_fix(tmp_path: Path) -> N
 
     result = _run_gate(repo)
     assert result.returncode == 1
-    # The one-line fix instruction the job surfaces as a ::error:: annotation.
-    assert "add an entry under [Unreleased]" in result.stdout
+    # The one-line fix instruction the job surfaces as a ::error:: annotation. It points
+    # at a FRAGMENT now (#2322) — the conflict-free path — not the shared anchor.
+    assert "changelog.d/" in result.stdout
     assert "skip-changelog" in result.stdout
 
 
@@ -181,3 +182,30 @@ def test_labeling_retriggers_the_gate() -> None:
     types = workflow.split("types:", 1)[1].split("\n", 1)[0]
     for action in ("opened", "synchronize", "reopened", "labeled", "unlabeled"):
         assert action in types, f"changelog.yml must trigger on {action!r}, got {types.strip()}"
+
+
+def test_passes_when_pr_adds_a_changelog_fragment(tmp_path: Path) -> None:
+    """The path #2322 introduces: a new file per PR, so two PRs in flight can't conflict."""
+    repo = _pr_repo(tmp_path)
+    (repo / "changelog.d").mkdir(exist_ok=True)
+    (repo / "changelog.d" / "2286.fixed.md").write_text("- fleet stop lied\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add fragment")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 0
+    assert "fragment" in result.stdout
+
+
+def test_the_fragments_readme_alone_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    """Touching the docs file must not count as writing an entry."""
+    repo = _pr_repo(tmp_path)
+    (repo / "changelog.d").mkdir(exist_ok=True)
+    (repo / "changelog.d" / "README.md").write_text("# docs edit\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "readme only")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 1
