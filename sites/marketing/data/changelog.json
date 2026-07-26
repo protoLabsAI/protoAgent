@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.118.0",
+    "date": "2026-07-26",
+    "changes": [
+      "GET /api/verifiers — every verifier a goal or watch can use, from every source.",
+      "An operator can set a watch from the console.",
+      "A released changelog fragment is now actually deleted, instead of being published twice.",
+      "The goal creator offers plugin verifiers too."
+    ]
+  },
+  {
     "version": "v0.117.0",
     "date": "2026-07-26",
     "changes": [

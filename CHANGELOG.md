@@ -11,6 +11,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.118.0] - 2026-07-26
+
+### Added
+- **`GET /api/verifiers` — every verifier a goal or watch can use, from every source
+  (ADR 0028/0067).** The console's goal creator hardcoded its verifier list in TypeScript, and
+  the new watch creator inherited the copy. Two things followed: the list drifted from the
+  server registry (`plugin` was missing from it entirely), and because `plugin` was missing,
+  **every plugin-contributed check was unreachable from the console** — even though the
+  operator API has always accepted them. On a machine with the usual plugins installed that
+  silently excluded `spacetraders:credits`, `careercoach:new_matches`,
+  `learning_wiki:strength` and friends, which are precisely the checks worth watching, since
+  they read real state instead of judging a transcript.
+
+  The endpoint enumerates the live registries and labels each entry with its `source`
+  (`core` / `plugin`); both creators build their pickers from it. Choosing `plugin` reveals a
+  picker of the registered checks plus an optional JSON `args` field. The `plugin` option is
+  hidden entirely when nothing registers a check, so the picker is never empty, and the form
+  falls back to the core types if the fetch fails.
+
+  `register_goal_verifier` gained an optional `description` so a contributed check can explain
+  itself instead of showing a bare `<plugin-id>:<name>`. Additive — a plugin that omits it is
+  attributed by its namespace.
+
+- **An operator can set a watch from the console.** Watches were agent-created only: the Work
+  hub's Watches card was the one card with no quick-add, and the panel could *clear* a watch
+  but never set one — so the console exposed strictly less than the `/api/watches` it fronts,
+  and that surface is the more capable of the two (it's operator-tier by the ADR 0066 path
+  ceiling, so it takes the command/test/ci/data verifiers the agent is denied at create time).
+
+  There is now a **New watch** creator, hosted by both the Watches panel header and the card's
+  quick-add — one form, two hosts, exactly like the goal creator, and rendered through the same
+  `HitlForm` so the verifier cards read identically to the ones an operator already knows from
+  `/goal new`. Step 1 is what to watch and how to ground it, with only the input the chosen
+  verifier needs; step 2 is optional — what to do when it trips, how hard to poll, when to give
+  up, and the stall threshold.
+
+  Durations are authored the way an operator thinks about them (`30m`, `6h`, `7d`) and mapped
+  to the absolute epoch the API stores — the same relative-in/absolute-stored split the
+  `create_watch` tool uses, for the same reason: a wall-clock timestamp is the awkward half to
+  write by hand.
+
+  The same form is on `/watch new` in chat, and bare `/watch` lists what's set. `/watch`
+  claims its whole token rather than only the `new` subcommand the way `/goal` does — there
+  is no server-side `/watch` to fall through to, so an unclaimed branch would send the literal
+  text to the agent as a message.
+
+### Fixed
+- **A released changelog fragment is now actually deleted, instead of being published
+  twice.** `prepare-release.yml` runs `changelog.py collate`, which folds every
+  `changelog.d/<issue>.<kind>.md` into `[Unreleased]` **and deletes the file** — but the
+  commit step staged an explicit file list that omitted `changelog.d/`, so the deletions
+  never reached the release branch. Every fragment survived and would be collated a second
+  time into the following release, duplicating each entry verbatim. Caught on v0.117.0, the
+  first real release since fragments landed (#2322/#2326), before it could double-publish.
+
+- **The goal creator offers plugin verifiers too.** #2332 gave the watch creator a
+  catalog-driven verifier picker (`GET /api/verifiers`) but left `/goal`'s form on its
+  hardcoded TypeScript list — the copy that had dropped `plugin` in the first place. So the
+  bug the watch work diagnosed was still live one form over: a goal could not be
+  ground-truthed by `spacetraders:credits` or `learning_wiki:strength` from the console, even
+  though `POST /api/goals` has always accepted them.
+
+  Both creators now build from the same catalog, in all three hosts (panel action, Work-card
+  quick-add, `/goal new` in chat). Choosing `plugin` reveals a picker of the registered checks
+  plus an optional JSON `args` field.
+
+  `buildVerifier` also gained the `plugin` branch it never had: a `plugin` pick fell through
+  to `{type: "llm"}`, so even a hand-built payload silently became a fuzzy LLM judgment
+  instead of the ground-truthed check it asked for.
+
 ## [0.117.0] - 2026-07-26
 
 ### Added
