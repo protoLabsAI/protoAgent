@@ -10,6 +10,7 @@ bad plugin can't break the rest or the boot.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import logging
 import os
@@ -171,10 +172,82 @@ def _import_register(manifest: PluginManifest):
     if entry is None:
         raise RuntimeError("no entry module (expected __init__.py or plugin.py)")
     module = _load_plugin_module(manifest, entry)
+    _record_source_fingerprint(manifest)
     register = getattr(module, "register", None)
     if not callable(register):
         raise RuntimeError("plugin module has no callable register(registry)")
     return register
+
+
+# ── Live-checkout code drift (#2298) ──────────────────────────────────────────
+# A plugin installed as a SYMLINK to a working git checkout serves a *mix* of two
+# versions when that checkout's branch changes under the running process. Python
+# caches imported modules, so code imported before the change keeps running the old
+# version — while anything imported LAZILY afterwards loads the new one. protoAgent
+# plugins are written to import host-only deps lazily (``graph.*`` etc. are
+# try-wrapped so a plugin's suite can run host-free), which makes them especially
+# prone: the discipline that keeps plugins testable is exactly what lets a mid-flight
+# branch switch produce a half-updated process. Nothing detected it, and the
+# divergence is invisible from the outside.
+#
+# Only symlinked plugins are tracked. A normal install is an immutable copy the
+# operator doesn't edit under a live process, so it pays nothing here.
+_SOURCE_FINGERPRINTS: dict[str, tuple[str, str]] = {}
+
+
+def _source_fingerprint(path: Path) -> str:
+    """A cheap content-identity stamp for a plugin's Python sources.
+
+    ``(relpath, mtime_ns, size)`` over every ``*.py``, hashed. A branch switch
+    rewrites files, so mtimes move even when a file's size is unchanged. Deliberately
+    not a content hash (that would read every file on every poll) and deliberately not
+    git-aware (it must also catch an editor save or a stash pop, and the checkout may
+    not be a git repo at all)."""
+    h = hashlib.sha256()
+    try:
+        for f in sorted(path.rglob("*.py")):
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            h.update(f"{f.relative_to(path)}:{st.st_mtime_ns}:{st.st_size}\n".encode())
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _record_source_fingerprint(manifest: PluginManifest) -> None:
+    """Stamp a symlinked plugin's sources at the moment its modules were imported."""
+    try:
+        if not manifest.path.is_symlink():
+            return
+        fp = _source_fingerprint(manifest.path)
+        if fp:
+            _SOURCE_FINGERPRINTS[manifest.id] = (str(manifest.path), fp)
+    except OSError:  # pragma: no cover — a vanished path is not worth failing a load over
+        pass
+
+
+def code_drift_warning() -> str | None:
+    """Warn when a symlinked plugin's sources changed since its modules were imported.
+
+    Recomputed live (like the co-location and fleet-skew banners) so it appears when a
+    checkout moves and clears the moment the plugin is reloaded. Returns ``None`` when
+    nothing is symlinked — the common case, and one ``is_symlink()`` per tracked plugin."""
+    drifted = []
+    for pid, (path, fp) in sorted(_SOURCE_FINGERPRINTS.items()):
+        if _source_fingerprint(Path(path)) != fp:
+            drifted.append(pid)
+    if not drifted:
+        return None
+    names = ", ".join(drifted)
+    return (
+        f"[plugins] source changed on disk since import: {names}. This plugin is symlinked to a "
+        "live checkout, and Python caches imported modules — so the process is now serving a MIX "
+        "of the imported code and whatever is on disk now (anything imported lazily after the "
+        "change loads the new version). Reload the plugin or restart the agent; until then, "
+        "treat its behaviour as undefined."
+    )
 
 
 def run_plugin_mcp_main(plugin_id: str) -> None:

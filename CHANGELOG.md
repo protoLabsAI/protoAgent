@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A plugin symlinked to a live checkout no longer serves mixed code undetected
+  (#2298).** When the checkout's branch changes under a running process, Python's module
+  cache keeps the already-imported code at the old version while anything imported
+  *lazily* afterwards loads the new one — so the process serves a mix of two commits.
+  protoAgent plugins are especially prone to it, because the lazy host-import discipline
+  that lets a plugin's suite run host-free is exactly what defers those imports past the
+  switch. Nothing warned, and the divergence is invisible from outside.
+
+  A plugin's Python sources are now fingerprinted at the moment its modules are imported,
+  and a live warning appears in runtime status when they change underneath — naming the
+  plugin and the actual hazard (a *mixed* process, not merely a stale one). It clears when
+  the plugin is reloaded, so it tracks the real state rather than latching until restart.
+
+  Scoped to **symlinked** plugin paths: a normal install is an immutable copy nobody edits
+  under a live process, so the usual case pays nothing. The stamp is
+  `(relpath, mtime, size)` over `*.py` — no file contents are read on the poll, and
+  non-Python churn (a README, a `.pyc`) can't raise a false alarm.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed
