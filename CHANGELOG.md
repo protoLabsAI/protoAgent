@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the refusal says why and names the ways out: vendor it, drop it, or ship it in the app
   bundle. The console's `deps_missing` is scope-aware too, so a plugin that will crash at
   tool time no longer reports itself ready.
+- **`team-ready` now knows about open PRs that already claim the issue (#2278).** The
+  label is the only intake gate the board pipeline accepts, and it knew nothing about
+  pull requests — so an issue whose work was already in flight kept advertising itself as
+  available, and an agent told to "pick up the next `team-ready` issue" would board it,
+  dispatch a coder, and burn a full run on work already done. Both observed cases were
+  exactly that (#2266, claimed by an open PR; #1986, shipped in a merged PR and never
+  closed).
+
+  A sweep now reconciles the two: an open PR carrying `Closes #N` / `Fixes #N` /
+  `Resolves #N` **claims** issue N, which swaps `team-ready` for a visible `claimed-by-pr`.
+  When the claim goes away — PR closed, or the reference edited out — the swap is
+  reversed, so an abandoned PR can't silently strand an issue as un-pickable.
+  `claimed-by-pr` doubles as the bookkeeping marker: it is added only where the sweep
+  removed `team-ready`, so a release restores the label exactly where it was taken and
+  never promotes an untriaged issue into intake. A bare mention (`related to #N`) is not
+  a claim.
+
+  Runs on PR open/edit/reopen/close, hourly as a backstop, and on demand with a dry-run
+  input.
 - **A bind-posture guardrail — a single-IP `network.bind` no longer locks you out
   silently (#2147).** uvicorn binds *one* host, so pinning a specific interface IP (say
   the box's Tailscale address, to make the operator API tailnet-reachable but invisible
