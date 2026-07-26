@@ -239,6 +239,32 @@ FIELDS: list[Field] = [
         "with a coding agent.",
         options_source="models+acp",
     ),
+    # ── Watches ──────────────────────────────────────────────────────────────
+    # ADR 0067. Separate from Goal mode above: a goal is a bounded loop the agent DRIVES,
+    # a watch is a condition an external process moves while the agent supervises. Both
+    # keys were absent from FIELDS entirely, so neither was reachable from Settings —
+    # `watches.enabled` could only be turned on by hand-editing YAML, on an install that
+    # already ships the Watches panel in the Work hub.
+    Field(
+        "watches.enabled",
+        "watches_enabled",
+        "Enable watches",
+        "bool",
+        "Watches",
+        "Binds the `create_watch` / `list_watches` / `clear_watch` tools so the agent can "
+        "supervise many external conditions at once. Turning this off never deletes a stored "
+        "watch, and watches created by an operator or a plugin keep being polled either way.",
+    ),
+    Field(
+        "watches.interval",
+        "watch_interval",
+        "Poll cadence (seconds)",
+        "number",
+        "Watches",
+        "How often the out-of-band tick re-runs every active watch's verifier. A watch's own "
+        "`interval_s` overrides this as a floor. Values below 5s are clamped.",
+        minimum=5,
+    ),
     # ── Persona (self-authored SOUL) ─────────────────────────────────────────
     # Guarded, default OFF. When on, the lead agent gets the `edit_soul` tool and can
     # rewrite sections of its own SOUL.md (persona only — ADR 0079; every edit snapshotted
@@ -1189,6 +1215,9 @@ _SECTION_CATEGORY = {
     "Caching": "Model",
     # Behavior — how the agent thinks, loops, and decides.
     "Goal mode": "Behavior",
+    # Watches (ADR 0067) sit beside Goal mode, not inside it: the two are independent
+    # dispositions (drive vs. supervise) and each has its own enable flag.
+    "Watches": "Behavior",
     "Compaction": "Behavior",
     "Middleware": "Behavior",
     "Background": "Behavior",

@@ -11,26 +11,30 @@ When a watch is **met**, it can run a follow-up agent turn (via `run_in_session`
 `on_met` hooks. A `deadline` finishes it `expired`; `stall_after` fires `on_stalled` when the
 metric stops moving.
 
-## Turn it on first
+## Configuring it
 
-The watch tools default **OFF** as of #2020. Enable them in `langgraph-config.yaml`:
+The watch tools are **on by default** (they shipped off under #2020 while the feature settled).
+Both knobs live in `langgraph-config.yaml`, and both are editable from **Settings ▸ Behavior ▸
+Watches**:
 
 ```yaml
 watches:
-  enabled: true
+  enabled: true      # bind create_watch / list_watches / clear_watch for the agent
+  interval: 30       # global poll cadence, seconds (min 5)
 ```
 
-That's the only flag — watches are **independent of goal mode**. It gates only whether the
-**agent** gets `create_watch` / `list_watches` / `clear_watch`; it never touches stored watches,
-and **the background poller runs regardless of both flags**, so a watch created by an operator
-(`POST /api/watches`) or a plugin is polled on an instance where the agent has no watch tools at
-all. See [Configuration ▸ `watches`](/reference/configuration#watches).
+`enabled` is the only gate, and watches are **independent of goal mode**. It decides whether the
+**agent** gets the tools; it never touches stored watches, and **the background poller runs
+regardless**, so a watch created by an operator (`POST /api/watches`) or a plugin is polled even
+on an instance where the agent has no watch tools at all. See
+[Configuration ▸ `watches`](/reference/configuration#watches).
 
 ## What a watch is made of
 
 `{ condition, verifier, interval_s?, deadline?, stall_after?, run_prompt?, run_session? }` — the
 `verifier` is the same spec [goals use](/guides/goal-mode#verifier-types) (`plugin` / `command`
-/ `test` / `ci` / `data` / `llm`). It's polled **out-of-band** on a cadence (default 30s),
+/ `test` / `ci` / `data` / `llm`). It's polled **out-of-band** on the `watches.interval` cadence
+(default 30s),
 verifier-only — no agent turn, no model call. A `plugin` verifier is handed the invoking
 watch's identity on `ctx.invoker` (`kind="watch"`, the watch `id`, its `run_session`, and the
 effective `interval_s`) so one verifier can keep **per-watch** state — see
