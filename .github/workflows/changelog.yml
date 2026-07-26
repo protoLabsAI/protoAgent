@@ -58,3 +58,14 @@ jobs:
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_ACTOR: ${{ github.actor }}
         run: bash scripts/changelog_gate.sh "origin/${{ github.base_ref }}"
+      - name: Entries must be under [Unreleased], not an already-dated heading
+        # The sibling gate above asks WHETHER the changelog was touched; this asks
+        # WHERE. A branch cut before a release roll carries `## [Unreleased]` as its
+        # diff context, so after the roll renames it the 3-way merge files the entry
+        # inside the CLOSED section — credited to a release that shipped without it
+        # and absent from the next one's notes. Twice, silently, before this existed.
+        # Runs even when the gate above skipped: a `skip-changelog` PR that touches
+        # the changelog anyway can still misfile.
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: python3 scripts/changelog_placement.py "origin/${{ github.base_ref }}"
