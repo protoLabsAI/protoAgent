@@ -26,6 +26,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Console-side for now; the underlying gap belongs in `@protolabsai/ui` — a segmented
   strip should never overflow its container regardless of who renders it.
+### Added
+- **A bind-posture guardrail — a single-IP `network.bind` no longer locks you out
+  silently (#2147).** uvicorn binds *one* host, so pinning a specific interface IP (say
+  the box's Tailscale address, to make the operator API tailnet-reachable but invisible
+  elsewhere) stops serving `127.0.0.1` — and the desktop app's own webview reaches its
+  sidecar over loopback. The result was a total UI lockout with nothing anywhere saying
+  why, recoverable only by reverting the setting and relaunching.
+
+  Boot now warns when the configured bind excludes loopback, naming the setting, the
+  consequence, and the actually-correct posture: there is no bind that means "loopback +
+  tailnet, nothing else" — you want `0.0.0.0` (which keeps loopback) plus scoping *reach*
+  at the network layer (Tailscale ACL, firewall, or not publishing the port). Post-ADR-0089
+  the wide bind is token-gated, so that posture isn't an open hole. The same warning rides
+  the runtime-status poll beside the co-location and version-skew banners, so it shows in
+  the console for anyone reaching the instance over LAN/tailnet and self-clears when the
+  bind widens.
+
+  It warns rather than refuses: a headless box legitimately binds a single interface, and
+  refusing to boot would trade a reachable-elsewhere server for no server at all.
+### Fixed
+- **Plugin endpoint errors answer with a structured JSON error instead of a bare 500
+  (#2259).** A plugin route handler that raised produced `HTTP 500` with the plain-text
+  body `Internal Server Error` and nothing a caller could parse — so "my request was
+  malformed" and "the panel blew up mid-run" looked identical from the outside, which
+  matters most on a long-running endpoint where retrying an actual crash is expensive.
+
+  The envelope is installed at the **plugin-dispatch layer**, so it covers every plugin
+  at once rather than asking each to remember: the response now carries the exception
+  type, its message, and the owning plugin id, while the traceback still goes to the log.
+  It deliberately does *not* reinterpret status codes — mapping something like
+  `ValueError` to 400 would guess that an internal bug is a client error and recreate the
+  same confusion in the other direction. A plugin that wants a 400 raises it itself, and
+  those pass through untouched. Websocket routes are left alone, and the wrapper is
+  idempotent so plugin hot-reload can't stack it.
+- **`POST /api/fleet/{name}/stop` no longer reports a stop it didn't achieve (#2286).** The
+  endpoint returned `{"ok": true, "stopped": true}` and removed the member from `fleet.json`
+  while the process kept running and kept LISTENing on its port — the worst of both states:
+  invisible to the hub, still answering requests, and holding its port against any
+  replacement, so the standard fix for a stuck member (restart it) could not proceed.
+
+  The root cause was the pid-reuse guard. `_is_our_agent()` recognised a member only by
+  `-m server` or `python …server`, but a **frozen desktop member is launched as the bare
+  sidecar binary** (`protoagent-server`) — `manager._server_argv()` drops `-m server` under
+  `sys.frozen` because PyInstaller's entrypoint already is it. So every desktop member read
+  as "not ours": `stop()` reaped the registry entry and returned success **without ever
+  sending a signal**, which is why SIGTERM appeared to be ignored and a manual SIGKILL was
+  needed. The same predicate gates `shutdown_all()`, so the hub's shutdown hook was
+  additionally spinning down *nothing* on desktop, leaving members to outlive their hub.
+
+  `_is_our_agent()` now recognises the frozen sidecar; `stop()` confirms the process is
+  actually gone before claiming success, and if it survives SIGTERM+SIGKILL it reports
+  `stopped: false` with the reason and **restores the registry entry** rather than
+  deregistering a live process. A recycled pid still reaps without signalling, but now says
+  so in the response. `ok` on the endpoint tracks the outcome instead of always being `true`,
+  and `/api/fleet/down` reports any members it failed to stop.
 
 ## [0.116.0] - 2026-07-26
 
