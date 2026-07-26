@@ -415,12 +415,14 @@ cadence, out-of-band, that resumes the agent when it trips. See [Watches](/guide
 watches:
   enabled: true            # bind the watch TOOLS for the agent
   interval: 30             # global poll cadence, seconds (min 5)
+  keep_terminal_h: 24      # retire met/expired watches after this long (0 = never)
 ```
 
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Bind the `create_watch` / `list_watches` / `clear_watch` tools. |
 | `interval` | `30` | Seconds between out-of-band ticks. Clamped to a 5s floor. A watch's own `interval_s` overrides it as a *floor* (a watch is skipped until its own interval has elapsed), so raising this slows every watch but lowering it never speeds up a watch that asked to be slower. Re-read every tick — a change applies without a restart. |
+| `keep_terminal_h` | `24` | Hours a **met**/**expired** watch stays listed before the tick deletes it. `0` keeps them forever. The default matches the Overview card's "met today" pulse, so a trip is visible for exactly as long as the console reports it. Only terminal watches age out — an `active` watch is never pruned, however old. |
 
 Three things this flag deliberately does **not** do, because the distinction matters when you
 toggle it on a running agent:

@@ -16,8 +16,12 @@ from time import time
 #   active   — being polled on a cadence
 #   met      — the verifier passed (reaction fired)
 #   expired  — a deadline passed before it met (on_expired fired)
-#   cleared  — removed by an operator/agent/plugin
-TERMINAL_STATUSES = ("met", "expired", "cleared")
+# There is no "cleared" status: clearing UNLINKS the file, so a cleared watch is an absent
+# watch, never a stored one. The constant used to list it, which is why a console filter
+# (`workOverview.visibleWatches`) shipped a dead `status !== "cleared"` guard. Terminal ==
+# "finished, subject to `watches.keep_terminal_h` retention" — the definition the store,
+# the tick and `Watch.active` all agree on.
+TERMINAL_STATUSES = ("met", "expired")
 
 # Default global poll cadence, in seconds. THE source of truth: ``LangGraphConfig``
 # imports it as the default for its ``watch_interval`` field (``watches.interval``), and
@@ -30,6 +34,13 @@ DEFAULT_WATCH_INTERVAL_S = 30.0
 # Floor the server enforces on the configured cadence — a sub-5s tick would re-run every
 # verifier (which can shell out) faster than they plausibly finish.
 MIN_WATCH_INTERVAL_S = 5.0
+
+# How long a TERMINAL watch is kept before the tick retires it, in hours.
+# ``LangGraphConfig.watch_keep_terminal_h`` (``watches.keep_terminal_h``) mirrors it; <= 0
+# disables pruning, the repo's convention for a retention knob. 24h matches the Overview
+# card's "met today" pulse, so a trip stays visible for exactly as long as the console
+# claims to report it.
+DEFAULT_KEEP_TERMINAL_H = 24.0
 
 
 @dataclass

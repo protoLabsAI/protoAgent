@@ -16,7 +16,7 @@ import os
 
 from graph.goals.verifiers import VERIFIERS, VerifierInvoker, VerifyContext, run_verifier
 from graph.watches.store import WatchStore
-from graph.watches.types import DEFAULT_WATCH_INTERVAL_S, Watch
+from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_S, Watch
 
 log = logging.getLogger(__name__)
 
@@ -213,20 +213,25 @@ class WatchController:
         firing it every few minutes (#1753). Watches with no explicit ``interval_s`` evaluate
         every tick, as before. The event-driven ``evaluate``/``evaluate_now`` fast path a plugin
         calls on state change bypasses this gate by design. Returns how many reached a terminal
-        state this tick."""
+        state this tick.
+
+        The tick also retires watches that finished longer than ``watches.keep_terminal_h``
+        ago — see :meth:`prune_terminal`."""
         from time import time
 
-        # ``active_watches`` is a synchronous glob + read of every watch file, and the
-        # server's ``_watch_loop`` calls this ON the event loop — so hop the scan to a
-        # thread (the operator list handler already does) instead of stalling every other
-        # request for the length of the scan. An empty store makes the whole tick a no-op,
-        # which is what keeps the loop cheap enough to run unconditionally.
-        watches = await asyncio.to_thread(self.active_watches)
-        if not watches:
+        # ONE synchronous glob + read of every watch file, split here into the actives to
+        # tick and the terminals to age out. The server's ``_watch_loop`` calls this ON the
+        # event loop, so hop the scan to a thread (the operator list handler already does)
+        # instead of stalling every other request for its duration. An empty store makes
+        # the whole tick a no-op, which is what keeps the loop cheap enough to run
+        # unconditionally.
+        stored = await asyncio.to_thread(self._store.all)
+        if not stored:
             return 0
         now = time()
+        await asyncio.to_thread(self.prune_terminal, [w for w in stored if not w.active], now)
         finished = 0
-        for watch in watches:
+        for watch in (w for w in stored if w.active):
             if not self._due(watch, now):
                 continue
             try:
@@ -237,6 +242,43 @@ class WatchController:
             if status is not None:
                 finished += 1
         return finished
+
+    def prune_terminal(self, terminal: list[Watch] | None = None, now: float | None = None) -> int:
+        """Delete watches that finished more than ``watches.keep_terminal_h`` hours ago.
+
+        A met/expired watch used to live on disk forever, and every list surface returned it
+        forever — the agent's ``list_watches``, ``sdk.list_watches``, ``GET /api/watches`` and
+        the console panel all grew without bound on an instance that supervises anything on a
+        cadence. Retention gives a trip a visible afterlife (the default 24h matches the
+        Overview card's "met today" pulse) and then retires it.
+
+        ``keep_terminal_h <= 0`` disables pruning entirely — the repo's convention for a
+        retention knob (cf. ``telemetry_retention_days``, ``checkpoint_prune_interval_hours``).
+        A terminal watch with no usable timestamp is never pruned: deleting state we can't age
+        is worse than keeping it. Returns how many were deleted. Sync (called via
+        ``to_thread`` from the tick); ``clear`` is idempotent, so racing the operator's
+        delete button is harmless."""
+        from time import time
+
+        keep_h = float(getattr(self._config, "watch_keep_terminal_h", DEFAULT_KEEP_TERMINAL_H) or 0)
+        if keep_h <= 0:
+            return 0
+        now = time() if now is None else now
+        cutoff = now - keep_h * 3600
+        if terminal is None:
+            terminal = [w for w in self._store.all() if not w.active]
+        pruned = 0
+        for watch in terminal:
+            # `finished_at` is set by _finish; fall back to created_at for a file written by
+            # hand or by an older build. Neither → leave it alone.
+            stamp = watch.finished_at or watch.created_at
+            if not stamp or stamp > cutoff:
+                continue
+            if self.clear(watch.id):
+                pruned += 1
+        if pruned:
+            log.info("[watch] pruned %d terminal watch(es) older than %gh", pruned, keep_h)
+        return pruned
 
     @staticmethod
     def _due(watch: Watch, now: float) -> bool:

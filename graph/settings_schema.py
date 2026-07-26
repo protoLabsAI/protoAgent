@@ -265,6 +265,17 @@ FIELDS: list[Field] = [
         "`interval_s` overrides this as a floor. Values below 5s are clamped.",
         minimum=5,
     ),
+    Field(
+        "watches.keep_terminal_h",
+        "watch_keep_terminal_h",
+        "Keep finished watches (hours)",
+        "number",
+        "Watches",
+        "How long a met or expired watch stays listed before the tick deletes it. 0 keeps them "
+        "forever — which is what every build before this one did, so watch lists grew without "
+        "bound on an instance that supervises anything on a cadence.",
+        minimum=0,
+    ),
     # ── Persona (self-authored SOUL) ─────────────────────────────────────────
     # Guarded, default OFF. When on, the lead agent gets the `edit_soul` tool and can
     # rewrite sections of its own SOUL.md (persona only — ADR 0079; every edit snapshotted

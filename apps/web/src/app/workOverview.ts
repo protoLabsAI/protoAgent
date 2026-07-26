@@ -25,10 +25,18 @@ export function goalsPulse(goals: GoalState[]): string {
 
 // ── watches ──────────────────────────────────────────────────────────────────
 
-/** Watches worth showing on the card: everything but cleared, actives first. */
+/** Watches worth showing on the card: actives first, then the finished ones still inside
+ *  the `watches.keep_terminal_h` retention window (the server prunes past it, so the card
+ *  no longer has to reason about an unbounded tail).
+ *
+ *  There is deliberately no "cleared" filter here: clearing a watch UNLINKS its file, so a
+ *  cleared watch never comes back from the API. This used to filter `status !== "cleared"`,
+ *  which never matched anything. */
 export function visibleWatches(watches: WatchState[]): WatchState[] {
-  const kept = watches.filter((w) => w.status !== "cleared");
-  return [...kept.filter((w) => w.status === "active"), ...kept.filter((w) => w.status !== "active")];
+  return [
+    ...watches.filter((w) => w.status === "active"),
+    ...watches.filter((w) => w.status !== "active"),
+  ];
 }
 
 export function activeWatches(watches: WatchState[]): WatchState[] {
