@@ -14,6 +14,7 @@ import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { watchesQuery, queryKeys } from "../lib/queries";
+import { watchLifetime } from "./workOverview";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
@@ -77,9 +78,28 @@ function WatchesList() {
             <strong>{watch.condition || watch.id}</strong>
             <StatusPill label={watch.status} tone={watchTone(watch.status)} />
           </div>
+          {/* Facts are separate elements, not one interpolated string, so the ` · `
+              separators are structural (a CSS ::after) and each fact stays whole when the
+              line wraps — an embedded separator put a dangling "· " at the start of a
+              wrapped line. Lifetime knobs are ADR 0067 / #2325: the agent has been able to
+              SET these and reads them back from `list_watches`, so without them here the
+              operator was the one party who couldn't see when a watch expires. */}
           <span className="watch-row-meta">
-            {watch.id} · {watch.verifier?.type || "llm"}
-            {watch.last_reason ? ` · ${trunc(watch.last_reason)}` : ""}
+            <span className="watch-row-fact">{watch.id}</span>
+            <span className="watch-row-fact">{watch.verifier?.type || "llm"}</span>
+            {watchLifetime(watch).map((part) => (
+              <span
+                key={part}
+                className={
+                  part === "past its deadline" ? "watch-row-fact watch-row-fact-warn" : "watch-row-fact"
+                }
+              >
+                {part}
+              </span>
+            ))}
+            {watch.last_reason ? (
+              <span className="watch-row-fact watch-row-reason">{trunc(watch.last_reason)}</span>
+            ) : null}
           </span>
           <Button
             icon variant="ghost" className="watch-row-clear"

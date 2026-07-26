@@ -11,6 +11,9 @@ import {
   untilLabel,
   upcomingJobs,
   visibleWatches,
+  watchLifetime,
+  watchDeadlineLapsed,
+  formatWatchDuration,
   watchesPulse,
 } from "./workOverview";
 
@@ -173,5 +176,42 @@ describe("schedule card", () => {
     expect(untilLabel("2026-07-03T12:00:00Z", now)).toBe("in 2d");
     expect(untilLabel(null, now)).toBe("");
     expect(untilLabel("not-a-date", now)).toBe("");
+  });
+});
+
+describe("watch lifetime knobs (console parity with list_watches)", () => {
+  const now = new Date(2026, 6, 1, 12, 0, 0).getTime();
+  const inSecs = (s: number) => now / 1000 + s;
+
+  it("formatWatchDuration matches the server's _duration bands", () => {
+    expect(formatWatchDuration(45)).toBe("45s");
+    expect(formatWatchDuration(600)).toBe("10m");
+    expect(formatWatchDuration(7200)).toBe("2h");
+    expect(formatWatchDuration(3 * 86400)).toBe("3d");
+    expect(formatWatchDuration(-5)).toBe("0s"); // a just-lapsed deadline never reads negative
+  });
+
+  it("reports only the knobs that are set", () => {
+    const w = watch({ status: "active", interval_s: 1800, deadline: inSecs(7200), stall_after: 3 });
+    expect(watchLifetime(w, now)).toEqual(["every 30m", "expires in 2h", "stall after 3"]);
+    expect(watchLifetime(watch({ status: "active" }), now)).toEqual([]);
+    expect(watchLifetime(watch({ status: "active", stall_after: 2 }), now)).toEqual(["stall after 2"]);
+  });
+
+  it("says 'past its deadline' instead of counting down through zero", () => {
+    const lapsed = watch({ status: "active", deadline: inSecs(-30) });
+    expect(watchLifetime(lapsed, now)).toEqual(["past its deadline"]);
+    expect(watchDeadlineLapsed(lapsed, now)).toBe(true);
+    expect(watchDeadlineLapsed(watch({ status: "active", deadline: inSecs(60) }), now)).toBe(false);
+  });
+
+  it("stays silent on a terminal watch", () => {
+    // "expires in 2h" is meaningless once a watch is met/expired — the same rule the server
+    // applies before building its status line.
+    for (const status of ["met", "expired"]) {
+      const w = watch({ status, interval_s: 1800, deadline: inSecs(7200), stall_after: 3 });
+      expect(watchLifetime(w, now)).toEqual([]);
+      expect(watchDeadlineLapsed(w, now)).toBe(false);
+    }
   });
 });

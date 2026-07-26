@@ -225,3 +225,25 @@ test("watches empty state explains agent-created watches and offers no CTA", asy
   await expect(watches.getByText(/The agent sets watches/)).toBeVisible();
   await expect(watches.locator(".pl-empty__action")).toHaveCount(0);
 });
+
+test("the Watches panel shows a watch's cadence, expiry and stall threshold", async ({ page }) => {
+  // #2325 gave the AGENT interval/expiry/stall and echoed them back through `list_watches`
+  // and <working_state>; the operator's panel still rendered only `id · verifier · reason`,
+  // so the one party who couldn't see when a watch expires was the human. Parity, pinned.
+  await openWork(page);
+  await page.getByTestId("work-card-watches").click();
+  await expect(page.getByRole("heading", { name: "Watches" })).toBeVisible();
+
+  const row = page.locator(".watch-row", { hasText: "CI is green on main" });
+  const meta = row.locator(".watch-row-meta");
+  await expect(meta).toContainText("every 30m");
+  await expect(meta).toContainText("expires in 2h");
+  await expect(meta).toContainText("stall after 3");
+  await expect(meta).toContainText("watch-1"); // the pre-existing id · verifier prefix survives
+  await expect(meta).toContainText("llm");
+
+  // A terminal watch carries none of it — "expires in …" is meaningless once it's met.
+  const met = page.locator(".watch-row", { hasText: "The staging deploy finishes" });
+  await expect(met.locator(".watch-row-meta")).not.toContainText("expires in");
+  await expect(met.locator(".watch-row-fact")).toHaveCount(0);
+});

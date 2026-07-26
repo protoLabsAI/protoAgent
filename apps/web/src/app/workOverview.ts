@@ -43,6 +43,43 @@ export function activeWatches(watches: WatchState[]): WatchState[] {
   return watches.filter((w) => w.status === "active");
 }
 
+/** A compact span: `45s` / `30m` / `2h` / `3d`. Mirrors `_duration` in
+ *  `graph/watches/types.py` — the same watch reads the same way in the console and in the
+ *  agent's own `list_watches`, so an operator and the agent describe it identically.
+ *  Rounded on purpose: this is prose, not arithmetic. */
+export function formatWatchDuration(seconds: number): string {
+  const s = Math.max(0, seconds);
+  if (s < 90) return `${Math.round(s)}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  if (s < 172800) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
+/** The lifetime facts an ACTIVE watch carries — `["every 30m", "expires in 2h",
+ *  "stall after 3"]` — for the panel's meta line. Mirrors `Watch._lifetime_suffix`.
+ *
+ *  Terminal watches return `[]`: "expires in …" is meaningless once a watch is met or
+ *  expired, which is the same rule the server applies before building its status line.
+ *  A deadline already in the past reads `past its deadline` rather than `expires in 0s` —
+ *  the tick just hasn't run yet. */
+export function watchLifetime(watch: WatchState, now: number = Date.now()): string[] {
+  if (watch.status !== "active") return [];
+  const parts: string[] = [];
+  if (watch.interval_s) parts.push(`every ${formatWatchDuration(watch.interval_s)}`);
+  if (watch.deadline != null) {
+    const left = watch.deadline - now / 1000;
+    parts.push(left > 0 ? `expires in ${formatWatchDuration(left)}` : "past its deadline");
+  }
+  if (watch.stall_after) parts.push(`stall after ${watch.stall_after}`);
+  return parts;
+}
+
+/** Whether the deadline has lapsed — the panel tints this segment, since it means the
+ *  watch is about to finish `expired` rather than met. */
+export function watchDeadlineLapsed(watch: WatchState, now: number = Date.now()): boolean {
+  return watch.status === "active" && watch.deadline != null && watch.deadline - now / 1000 <= 0;
+}
+
 /** "2 watching · 1 met today" (the met fragment only when something was met today).
  *  The met time is `finished_at` — the controller's met path finishes BEFORE its
  *  `last_checked = now` write, so `last_checked` on a met watch is the PREVIOUS check
