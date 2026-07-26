@@ -120,7 +120,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "${BRANCH}"
+          # `-A changelog.d` matters: collate DELETES each fragment it folded in, and an
+          # explicit file list stages modifications but never those deletions — so the
+          # fragments survived onto the release branch and were collated a second time
+          # into the NEXT release, duplicating every entry (caught on v0.117.0, the
+          # fragment mechanism's first real release).
           git add pyproject.toml uv.lock CHANGELOG.md sites/marketing/data/changelog.json
+          git add -A changelog.d
           git commit -m "chore: release v${VERSION}"
           git push origin "${BRANCH}"
 
