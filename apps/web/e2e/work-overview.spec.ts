@@ -243,7 +243,14 @@ test("the Watches panel shows a watch's cadence, expiry and stall threshold", as
   await expect(meta).toContainText("llm");
 
   // A terminal watch carries none of it — "expires in …" is meaningless once it's met.
+  // The fixture's met watch has interval_s + stall_after SET, so this proves suppression
+  // rather than just the absence of data.
   const met = page.locator(".watch-row", { hasText: "The staging deploy finishes" });
-  await expect(met.locator(".watch-row-meta")).not.toContainText("expires in");
-  await expect(met.locator(".watch-row-fact")).toHaveCount(0);
+  const metMeta = met.locator(".watch-row-meta");
+  await expect(metMeta).not.toContainText("expires in");
+  await expect(metMeta).not.toContainText("every ");
+  await expect(metMeta).not.toContainText("stall after");
+  // Exactly the id + verifier facts remain — every fact is a `.watch-row-fact`, so this
+  // pins "no lifetime facts" as a count rather than trusting the text assertions alone.
+  await expect(met.locator(".watch-row-fact")).toHaveCount(2);
 });

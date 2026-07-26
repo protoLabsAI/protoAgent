@@ -284,6 +284,11 @@ export const WATCHES = {
       verifier: { type: "llm" },
       last_checked: MET_AT_SEC - 300,
       finished_at: MET_AT_SEC,
+      // Knobs deliberately SET on a terminal watch: the panel must suppress them (a met
+      // watch has nothing left to expire), so the spec proves suppression rather than
+      // just the absence of data.
+      interval_s: 600,
+      stall_after: 2,
     },
     {
       id: "watch-3",
