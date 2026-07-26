@@ -76,6 +76,18 @@ async def _operator_runtime_status():
             warnings.append(skew)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
+    # Bind posture (#2147) — a single-IP bind excludes loopback. Anyone reading this
+    # over the LAN/tailnet can still see the banner (loopback is what's cut off), and
+    # it self-clears the moment the bind widens. Pure string work, no probe.
+    try:
+        from a2a_impl.auth import evaluate_bind_reachability
+        from operator_api.pairing_routes import bind_host
+
+        posture = evaluate_bind_reachability(bind_host())
+        if posture:
+            warnings.append(posture)
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     # Archetype capability contract (#2277) — does this agent's persona commit to actions
     # it has no tool for? Checked against `bound_tools` (what the model can really call),
     # not the manifest, because the gap is usually a config flag suppressing a
