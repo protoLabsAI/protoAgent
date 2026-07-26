@@ -11,21 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Category filters no longer spill out of the panel (plugin Discover + MCP catalog).**
-  With the directory's 14 categories the segmented filter strip is ~1250px wide; inside a
-  760px Settings drawer it simply overflowed, running off the right edge and over the
-  close button, with no way to reach the categories past the edge.
-
-  The DS segmented `Tabs` is an `inline-flex` strip with no `max-width` and no scroll, and
-  its `responsive` collapse keys on the **container's** width (`@container (max-width:
-  30rem)`) rather than on whether the pills actually *fit* — so a wide container with many
-  categories never collapses and never scrolls. The strip now scrolls horizontally inside
-  its row, with pills keeping their size (shrinking them would squash labels rather than
-  fix the overflow).
-
-  Console-side for now; the underlying gap belongs in `@protolabsai/ui` — a segmented
-  strip should never overflow its container regardless of who renders it.
 ### Added
 - **Semantic tier for persona-drift detection — an opt-in LLM judge (#2272).** The
   deterministic tier (#2116) measures *text similarity*, which structurally cannot tell
@@ -144,7 +129,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unrelated callers landing in the same second silently shared one session. Caller-supplied
   keys are sanitized at the boundary, since a session id reaches memory paths.
 
+### Changed
+- **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
+  feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
+  default. An instance that doesn't want them sets `watches.enabled: false`.
+
 ### Fixed
+- **Category filters no longer spill out of the panel (plugin Discover + MCP catalog).**
+  With the directory's 14 categories the segmented filter strip is ~1250px wide; inside a
+  760px Settings drawer it simply overflowed, running off the right edge and over the
+  close button, with no way to reach the categories past the edge.
+
+  The DS segmented `Tabs` is an `inline-flex` strip with no `max-width` and no scroll, and
+  its `responsive` collapse keys on the **container's** width (`@container (max-width:
+  30rem)`) rather than on whether the pills actually *fit* — so a wide container with many
+  categories never collapses and never scrolls. The strip now scrolls horizontally inside
+  its row, with pills keeping their size (shrinking them would squash labels rather than
+  fix the overflow).
+
+  Console-side for now; the underlying gap belongs in `@protolabsai/ui` — a segmented
+  strip should never overflow its container regardless of who renders it.
+
 - **`/v1` disconnect semantics are defined instead of undefined (#2119).** When an HTTP
   client timed out mid-turn, what happened to the running turn was unknowable from the
   outside — the reported case lost a 15-minute turn entirely. The turn is no longer
@@ -218,19 +223,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no usable timestamp is left alone rather than deleted blind. The prune reuses the
   tick's existing store scan, so it costs no extra I/O and adds no second loop.
 
-### Changed
-- **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
-  feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
-  default. An instance that doesn't want them sets `watches.enabled: false`.
-
-### Removed
-- **The `cleared` watch status, which never existed.** `TERMINAL_STATUSES` advertised
-  `("met", "expired", "cleared")`, but clearing a watch *unlinks its file* — a cleared watch
-  is an absent watch, never a stored one with a status. The phantom third state had already
-  produced dead code in the console (`workOverview.visibleWatches` filtered
-  `status !== "cleared"`, which never matched anything). Both are gone.
-
-### Fixed
 - **The desktop app can open a second window — "New Window" is no longer a no-op
   (#1706).** The shell's `on_new_window` handler only ever forwarded *external* http(s)
   links to the system browser and denied everything else, so a same-origin new-window
@@ -309,6 +301,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deregistering a live process. A recycled pid still reaps without signalling, but now says
   so in the response. `ok` on the endpoint tracks the outcome instead of always being `true`,
   and `/api/fleet/down` reports any members it failed to stop.
+
+### Removed
+- **The `cleared` watch status, which never existed.** `TERMINAL_STATUSES` advertised
+  `("met", "expired", "cleared")`, but clearing a watch *unlinks its file* — a cleared watch
+  is an absent watch, never a stored one with a status. The phantom third state had already
+  produced dead code in the console (`workOverview.visibleWatches` filtered
+  `status !== "cleared"`, which never matched anything). Both are gone.
 
 ## [0.116.0] - 2026-07-26
 
