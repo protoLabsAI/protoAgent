@@ -14,6 +14,7 @@ import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
 import { exportChatToFile } from "./exportChat";
 import { buildGoalSetBody, goalFormPayload } from "./goalForm";
+import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 import { promptNoteMarkdown } from "./promptView";
 
@@ -538,6 +539,81 @@ registerSlashCommand({
           )
           // A rejected verifier / disabled goal mode comes back as HTTP 400 → request() throws.
           .catch((e) => ctx.noteToThread(`Couldn't set goal: ${errMsg(e)}`, { tone: "danger" }));
+        ctx.focusComposer();
+      },
+      onCancel: ctx.focusComposer,
+    });
+    return true;
+  },
+});
+
+// `/watch` (ADR 0067) — the operator's watch surface in chat, mirroring `/goal new`: the
+// SAME `watchFormPayload` + `HitlForm` the Work panel's creator renders, resolved locally
+// (no agent round-trip) and POSTed to the operator `/api/watches`.
+//
+// Unlike `/goal`, this claims the WHOLE token rather than just the `new` subcommand: there is
+// no server-side `/watch` control command to fall through to, so returning false would send
+// the literal text "/watch" to the agent as a message. Every branch is handled here.
+registerSlashCommand({
+  name: "watch",
+  description: "List watches — /watch new opens a guided form",
+  usage: "/watch · /watch new",
+  run: (ctx) => {
+    const arg = ctx.rest.trim().toLowerCase();
+
+    if (arg && arg !== "new") {
+      ctx.noteToThread("Usage: `/watch` to list, `/watch new` to set one.", { tone: "info" });
+      ctx.focusComposer();
+      return true;
+    }
+
+    // Bare `/watch` — a read, so it needs no session or form panel.
+    if (!arg) {
+      void api
+        .watches()
+        .then(({ watches }) => {
+          const active = watches.filter((w) => w.status === "active");
+          if (!watches.length) {
+            ctx.noteToThread("No watches. `/watch new` sets one.", { tone: "info" });
+            return;
+          }
+          const line = (w: (typeof watches)[number]) =>
+            `- **${w.condition || w.id}** · \`${w.status}\` · ${w.verifier?.type ?? "llm"}` +
+            (w.last_reason ? ` — ${w.last_reason}` : "");
+          ctx.noteToThread(
+            [`**${active.length} active** of ${watches.length} watch(es).`, ...watches.map(line)].join("\n"),
+          );
+        })
+        .catch((e) => ctx.noteToThread(`Couldn't read watches: ${errMsg(e)}`, { tone: "danger" }));
+      ctx.focusComposer();
+      return true;
+    }
+
+    // `/watch new` — the guided form. Needs the composer-form panel; a host without it
+    // (or without a tab) gets told rather than silently dropping the command.
+    if (!ctx.openForm) {
+      ctx.noteToThread("This surface can't open the watch form — set one from Work ▸ Watches.", {
+        tone: "info",
+      });
+      ctx.focusComposer();
+      return true;
+    }
+    ctx.openForm({
+      payload: watchFormPayload(),
+      onSubmit: (answers) => {
+        const body = buildWatchCreateBody(
+          typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {},
+        );
+        if (!body) {
+          ctx.noteToThread("A watch needs something to watch for — nothing was set.", { tone: "warning" });
+          ctx.focusComposer();
+          return;
+        }
+        void api
+          .createWatch(body)
+          .then((res) => ctx.noteToThread(`**Watch set.** ${res.message ?? ""}`.trim(), { tone: "success" }))
+          // A rejected verifier comes back HTTP 400 → request() throws.
+          .catch((e) => ctx.noteToThread(`Couldn't set watch: ${errMsg(e)}`, { tone: "danger" }));
         ctx.focusComposer();
       },
       onCancel: ctx.focusComposer,
