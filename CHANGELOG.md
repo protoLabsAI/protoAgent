@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A bind-posture guardrail — a single-IP `network.bind` no longer locks you out
+  silently (#2147).** uvicorn binds *one* host, so pinning a specific interface IP (say
+  the box's Tailscale address, to make the operator API tailnet-reachable but invisible
+  elsewhere) stops serving `127.0.0.1` — and the desktop app's own webview reaches its
+  sidecar over loopback. The result was a total UI lockout with nothing anywhere saying
+  why, recoverable only by reverting the setting and relaunching.
+
+  Boot now warns when the configured bind excludes loopback, naming the setting, the
+  consequence, and the actually-correct posture: there is no bind that means "loopback +
+  tailnet, nothing else" — you want `0.0.0.0` (which keeps loopback) plus scoping *reach*
+  at the network layer (Tailscale ACL, firewall, or not publishing the port). Post-ADR-0089
+  the wide bind is token-gated, so that posture isn't an open hole. The same warning rides
+  the runtime-status poll beside the co-location and version-skew banners, so it shows in
+  the console for anyone reaching the instance over LAN/tailnet and self-clears when the
+  bind widens.
+
+  It warns rather than refuses: a headless box legitimately binds a single interface, and
+  refusing to boot would trade a reachable-elsewhere server for no server at all.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed
