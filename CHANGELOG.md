@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Semantic tier for persona-drift detection — an opt-in LLM judge (#2272).** The
+  deterministic tier (#2116) measures *text similarity*, which structurally cannot tell
+  apart the two things an operator actually cares about: the persona was **rewritten**
+  (identity lost), versus operating procedure **accreted into** it (`doctrine_leak` — the
+  CLAUDE.md/AGENTS.md bloat failure). Both read as a low retention ratio, so separating
+  them is a semantic judgement.
+
+  `soul.drift.judge.enabled` turns on a judge returning
+  `{drift_score, identity_preserved, doctrine_leak, rationale}`, folded into the existing
+  `persona.drift_detected` event. One judge covers both #1986's second tier and the
+  persona-vs-doctrine guard left over from #1985.
+
+  Off by default and it runs **only when the deterministic tier already crossed its
+  threshold** — the cheap signal decides whether to look, the judge decides what kind. A
+  judge that can't be reached or answers unusably yields *no* semantic verdict rather than
+  a clean one, so silence can't be misread as a semantic all-clear. Scores are clamped to
+  0–1, a missing `identity_preserved` defaults to true (a false "identity lost" alarm is
+  the expensive one), and any failure leaves the deterministic report intact — a curation
+  pass must never take down the maintenance loop hosting it.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed

@@ -938,6 +938,40 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
 _last_soul_drift_check: float = 0.0
 
 
+def _judge_soul_drift(cfg, report: dict) -> dict | None:
+    """Run the opt-in semantic tier for a report that already crossed the threshold.
+
+    Returns the judge's ``{drift_score, identity_preserved, doctrine_leak, rationale}``,
+    or ``None`` when the tier is off, the baseline can't be re-read, or the judge gave no
+    usable verdict. Best-effort throughout: the deterministic report stands on its own and
+    a judge failure must not cost us the signal we already have."""
+    if not getattr(cfg, "soul_drift_judge_enabled", False):
+        return None
+    try:
+        from graph.config_io import read_soul, read_soul_version
+        from graph.soul_judge import judge_soul_drift
+
+        baseline = read_soul_version(report.get("baseline_id") or "")
+        current = read_soul()
+        if not baseline or not current:
+            return None
+        verdict = judge_soul_drift(
+            baseline, current, model=(getattr(cfg, "soul_drift_judge_model", "") or None)
+        )
+    except Exception:  # noqa: BLE001 — never break the pass over the optional tier
+        log.exception("[soul-drift] semantic tier failed")
+        return None
+    if verdict:
+        log.info(
+            "[soul-drift] semantic verdict: identity_preserved=%s doctrine_leak=%s score=%.3f — %s",
+            verdict["identity_preserved"],
+            verdict["doctrine_leak"],
+            verdict["drift_score"],
+            verdict["rationale"],
+        )
+    return verdict
+
+
 def _run_soul_drift_pass(cfg) -> dict | None:
     """Run one persona-drift curation pass NOW (ignores the interval gate).
 
@@ -961,6 +995,13 @@ def _run_soul_drift_pass(cfg) -> dict | None:
 
     threshold = float(getattr(cfg, "soul_drift_threshold", 1.0) or 0.0)
     if report["score"] >= threshold:
+        # Semantic tier (#2272) — only past the deterministic threshold: the cheap signal
+        # decides WHETHER to look, the judge decides WHAT KIND. Retention can't separate
+        # "the persona was rewritten" from "operating instructions accreted into it" —
+        # both read as a low ratio — so `doctrine_leak` needs a semantic judgement.
+        semantic = _judge_soul_drift(cfg, report)
+        if semantic:
+            report["semantic"] = semantic
         try:
             _event_bus.publish(
                 "persona.drift_detected",
@@ -978,6 +1019,10 @@ def _run_soul_drift_pass(cfg) -> dict | None:
                         "sections_dropped": report["sections_dropped"],
                     },
                     "rationale": report["rationale"],
+                    # Absent when the tier is off OR the judge gave no usable verdict —
+                    # a distinct state from "clean", so a consumer can't read silence as
+                    # a semantic all-clear it never received.
+                    **({"semantic": semantic} if semantic else {}),
                 },
             )
             log.info(

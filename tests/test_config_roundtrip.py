@@ -128,6 +128,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "soul_drift_enabled": True,  # #1986 read-only persona-drift curation pass, on by default
     "soul_drift_interval_hours": 24,
     "soul_drift_threshold": 0.25,
+    "soul_drift_judge_enabled": False,  # #2272 semantic tier — opt-in (LLM call, costs tokens)
+    "soul_drift_judge_model": "",  # blank ⇒ the agent's own model
     "identity_name": "protoagent",
     "identity_operator": "",
     "identity_org": "",

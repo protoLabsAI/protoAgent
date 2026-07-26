@@ -532,6 +532,15 @@ class LangGraphConfig:
     soul_drift_enabled: bool = True
     soul_drift_interval_hours: int = 24
     soul_drift_threshold: float = 0.25
+    # Semantic tier (#2272) — an opt-in LLM judge that answers what the retention ratio
+    # structurally can't: was the persona REWRITTEN (identity lost) or did operating
+    # procedure ACCRETE into it (``doctrine_leak`` — the CLAUDE.md/AGENTS.md bloat
+    # failure)? Both read as low retention, so only a semantic judgement separates them.
+    # Off by default: non-deterministic and it costs tokens. It runs only when the
+    # deterministic tier already crossed its threshold — the cheap signal decides whether
+    # to look, the judge decides what kind of drift it is. Blank model ⇒ the agent's own.
+    soul_drift_judge_enabled: bool = False
+    soul_drift_judge_model: str = ""
 
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
@@ -1286,6 +1295,12 @@ class LangGraphConfig:
             ),
             soul_drift_threshold=float(
                 soul_drift.get("threshold", cls.soul_drift_threshold) or 0.0
+            ),
+            soul_drift_judge_enabled=bool(
+                (soul_drift.get("judge", {}) or {}).get("enabled", cls.soul_drift_judge_enabled)
+            ),
+            soul_drift_judge_model=str(
+                (soul_drift.get("judge", {}) or {}).get("model", cls.soul_drift_judge_model) or ""
             ),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
