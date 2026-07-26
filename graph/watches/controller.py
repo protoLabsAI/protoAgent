@@ -16,7 +16,13 @@ import os
 
 from graph.goals.verifiers import VERIFIERS, VerifierInvoker, VerifyContext, run_verifier
 from graph.watches.store import WatchStore
-from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_S, TRIGGERS, Watch
+from graph.watches.types import (
+    DEFAULT_KEEP_TERMINAL_H,
+    DEFAULT_WATCH_INTERVAL_S,
+    FLAP_WARN_CONSECUTIVE_FIRES,
+    TRIGGERS,
+    Watch,
+)
 
 log = logging.getLogger(__name__)
 
@@ -324,6 +330,14 @@ class WatchController:
             fires = result.met and not watch.was_met
 
         watch.was_met = bool(result.met)
+        watch.check_count += 1
+
+        if fires:
+            watch.fire_count += 1
+            watch.consecutive_fires += 1
+        else:
+            watch.consecutive_fires = 0
+            watch.flap_warned = False
 
         if fires:
             reason = result.reason or ("value changed" if watch.trigger == "change" else "verifier passed")
@@ -335,8 +349,9 @@ class WatchController:
                 watch.last_checked = now
                 watch.stall_streak = 0
                 watch.stalled_notified = False
+                flapping = self._note_flap(watch)
                 self._store.set(watch)
-                await self._react(watch, reason)
+                await self._react(watch, reason, flapping=flapping)
                 return None
             return await self._finish(watch, "met", reason, result.evidence)
 
@@ -455,7 +470,32 @@ class WatchController:
             return True
         return (now - watch.last_checked) >= interval_s
 
-    async def _react(self, watch: Watch, reason: str) -> None:
+    def _note_flap(self, watch: Watch) -> bool:
+        """Detect (and warn ONCE per episode about) a watch firing on back-to-back checks.
+
+        Returns whether this fire is part of a flapping run, so the caller can mark the
+        metric. The warning is deduped by `flap_warned` — a flapping watch fires every tick by
+        definition, and a flap warning that itself repeats every tick is just a second storm.
+        The counter resets on the first check that doesn't fire, so a watch that settles goes
+        quiet and can warn again if it starts up later."""
+        if watch.consecutive_fires < FLAP_WARN_CONSECUTIVE_FIRES:
+            return False
+        if not watch.flap_warned:
+            watch.flap_warned = True
+            log.warning(
+                "[watch] %s is FLAPPING — fired on %d consecutive checks (trigger=%s, every %ss). "
+                "%d of its %d checks have fired. Each fire can enqueue an agent turn; consider a "
+                "longer interval_s, a steadier verifier, or dropping repeat.",
+                watch.id,
+                watch.consecutive_fires,
+                watch.trigger,
+                watch.interval_s if watch.interval_s else "default",
+                watch.fire_count,
+                watch.check_count,
+            )
+        return True
+
+    async def _react(self, watch: Watch, reason: str, *, flapping: bool = False) -> None:
         """Fire a watch's reaction WITHOUT ending it — the run_prompt turn, the hook, the bus
         event. Shared by the terminal path (`_finish`) and the repeating path, so a recurring
         watch reacts identically to a one-shot; only its lifetime differs.
@@ -477,6 +517,13 @@ class WatchController:
                 run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
+
+        try:
+            from observability import metrics
+
+            metrics.record_watch_fire(watch.trigger, flapping=flapping)
+        except Exception:  # noqa: BLE001 — telemetry must never break a reaction
+            pass
 
         from graph.watches.hooks import fire_watch_hook
 

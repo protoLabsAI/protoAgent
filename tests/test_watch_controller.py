@@ -5,6 +5,7 @@ import pytest
 
 from graph.config import LangGraphConfig
 from graph.watches.controller import WatchController
+from graph.watches.types import FLAP_WARN_CONSECUTIVE_FIRES as FLAP_WARN
 from graph.watches.store import WatchStore
 
 
@@ -725,3 +726,84 @@ async def test_switching_trigger_clears_the_edge_state(tmp_path, monkeypatch):
     assert c.store.get("w").was_met is True
     await c.update("w", trigger="met")
     assert c.store.get("w").was_met is False
+
+
+# --- flapping observability -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_flapping_watch_warns_once_and_counts(tmp_path, monkeypatch, caplog):
+    """A repeating watch that fires on back-to-back checks is costing an agent turn per tick.
+    It must be visible — but the WARNING must not itself repeat every tick, or the diagnostic
+    is a second storm."""
+    import logging
+
+    c = _ctrl(tmp_path)
+    c.create(
+        condition="oscillates", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+        trigger="change", repeat=True,
+    )
+    # A value that moves on EVERY poll — the worst case, and exactly what a clock-like
+    # verifier looks like.
+    _script(monkeypatch, [(False, str(i)) for i in range(12)])
+    with caplog.at_level(logging.WARNING, logger="graph.watches.controller"):
+        for _ in range(12):
+            await c.evaluate("w")
+
+    warnings = [r for r in caplog.records if "FLAPPING" in r.getMessage()]
+    assert len(warnings) == 1, "the flap warning must be deduped, not once per tick"
+    assert "w" in warnings[0].getMessage()
+
+    stored = c.store.get("w")
+    assert stored.check_count == 12
+    assert stored.fire_count == 11  # the first check is the baseline
+    assert stored.consecutive_fires >= FLAP_WARN
+    assert stored.flap_warned is True
+
+
+@pytest.mark.asyncio
+async def test_a_settled_watch_resets_and_can_warn_again(tmp_path, monkeypatch, caplog):
+    import logging
+
+    c = _ctrl(tmp_path)
+    c.create(
+        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+        trigger="change", repeat=True,
+    )
+    # Flap, settle (repeated identical evidence → no fire), then flap again.
+    steps = [(False, str(i)) for i in range(7)] + [(False, "same")] * 3 + [(False, str(i)) for i in range(20, 28)]
+    _script(monkeypatch, steps)
+    with caplog.at_level(logging.WARNING, logger="graph.watches.controller"):
+        for _ in range(len(steps)):
+            await c.evaluate("w")
+
+    warnings = [r for r in caplog.records if "FLAPPING" in r.getMessage()]
+    # Two distinct episodes → two warnings. A watch that settles goes quiet and is allowed to
+    # complain again if it starts up later.
+    assert len(warnings) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_repeating_watch_never_warns(tmp_path, monkeypatch, caplog):
+    import logging
+
+    c = _ctrl(tmp_path)
+    c.create(condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, repeat=True)
+    # Edges are rare: true once, then quiet. That's the intended shape.
+    _script(monkeypatch, [(False, "a"), (True, "b"), (True, "b"), (True, "b"), (False, "a"), (False, "a")])
+    with caplog.at_level(logging.WARNING, logger="graph.watches.controller"):
+        for _ in range(6):
+            await c.evaluate("w")
+
+    assert not [r for r in caplog.records if "FLAPPING" in r.getMessage()]
+    stored = c.store.get("w")
+    assert stored.fire_count == 1 and stored.consecutive_fires == 0
+
+
+def test_counters_start_at_zero_and_are_exposed(tmp_path):
+    # They ride the stored record, so `GET /api/watches` shows a lifetime fire RATE without
+    # anyone needing to scrape logs.
+    c = _ctrl(tmp_path)
+    _o, _m, w = c.create(condition="c", verifier={"type": "plugin", "check": "p:v"})
+    d = w.to_dict()
+    assert d["check_count"] == 0 and d["fire_count"] == 0 and d["consecutive_fires"] == 0

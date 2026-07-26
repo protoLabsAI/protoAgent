@@ -49,6 +49,12 @@ MIN_WATCH_INTERVAL_S = 5.0
 # claims to report it.
 DEFAULT_KEEP_TERMINAL_H = 24.0
 
+# Consecutive fires that mark a repeating watch as FLAPPING. A healthy repeating watch fires
+# on edges, which are rare; one that fires on back-to-back checks is either oscillating or
+# monitoring a value that moves every poll. Either way each fire can enqueue an agent turn, so
+# it costs far more than intended — worth a loud, deduped warning and a metric.
+FLAP_WARN_CONSECUTIVE_FIRES = 5
+
 
 @dataclass
 class Watch:
@@ -78,6 +84,13 @@ class Watch:
     # Without this a repeating watch is level-triggered — a predicate that stays true (e.g.
     # "credits >= 1,000,000", true forever once crossed) would re-fire every single tick.
     was_met: bool = False
+    # Observability for the repeating/monitor dispositions (see FLAP_WARN_CONSECUTIVE_FIRES).
+    # `check_count`/`fire_count` give a lifetime fire RATE straight off GET /api/watches;
+    # `consecutive_fires` is the burst signal — it resets on any check that doesn't fire.
+    check_count: int = 0
+    fire_count: int = 0
+    consecutive_fires: int = 0
+    flap_warned: bool = False
     # Reaction (ADR 0067 D3): on met, enqueue this prompt as a one-shot agent turn in
     # ``run_session`` via sdk.run_in_session. Both empty → the watch reacts via hooks only.
     run_prompt: str = ""

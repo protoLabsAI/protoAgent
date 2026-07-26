@@ -507,6 +507,9 @@ export type WatchState = {
   deadline?: number | null; // epoch seconds; past → expired
   stall_after?: number | null; // N unchanged checks → on_stalled
   trigger?: string; // "met" (tripwire) | "change" (monitor: fires when the value moves)
+  check_count?: number; // evaluations so far — with fire_count, a lifetime fire RATE
+  fire_count?: number;
+  consecutive_fires?: number; // back-to-back fires; the flapping signal
   repeat?: boolean; // firing leaves it armed — only a deadline or a clear ends it
   run_prompt?: string; // on met, enqueued as a one-shot turn in run_session
   run_session?: string;

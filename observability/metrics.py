@@ -22,6 +22,8 @@ _compactions = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
+_watch_fires = None
+_watch_flapping = None
 _a2a_turns = None
 _a2a_turn_latency = None
 
@@ -34,7 +36,7 @@ def _prefix() -> str:
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
     global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
-    global _a2a_turns, _a2a_turn_latency
+    global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -85,6 +87,22 @@ def init():
             "Tool execution latency",
             ["tool_name"],
             buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+        )
+        # Watch reactions (ADR 0067). Labelled by TRIGGER only — a watch id is
+        # operator-defined and unbounded, so using it as a label is a cardinality blowup.
+        # The watch id lives in the log line instead, where it's free.
+        _watch_fires = Counter(
+            f"{p}_watch_fires_total",
+            "Watch reactions fired, by trigger (met | change)",
+            ["trigger"],
+        )
+        # A repeating watch whose predicate oscillates (or whose monitored value moves every
+        # poll) fires back-to-back. Each fire can enqueue an agent turn, so this is the signal
+        # that a watch is costing far more than intended.
+        _watch_flapping = Counter(
+            f"{p}_watch_flapping_total",
+            "Flapping episodes detected on a repeating watch (consecutive-fire runs)",
+            ["trigger"],
         )
         _active_sessions = Gauge(
             f"{p}_active_sessions",
@@ -173,6 +191,15 @@ def record_tool_call(tool_name: str, success: bool, latency_s: float):
         return
     _tool_calls.labels(tool_name=tool_name, success=str(success)).inc()
     _tool_latency.labels(tool_name=tool_name).observe(latency_s)
+
+
+def record_watch_fire(trigger: str, *, flapping: bool = False):
+    """A watch fired its reaction. `flapping=True` additionally marks a consecutive-fire run —
+    see WatchController's flap detection. No-ops when metrics are off."""
+    if _watch_fires is not None:
+        _watch_fires.labels(trigger=trigger or "met").inc()
+    if flapping and _watch_flapping is not None:
+        _watch_flapping.labels(trigger=trigger or "met").inc()
 
 
 def session_started():

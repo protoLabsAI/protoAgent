@@ -215,3 +215,18 @@ describe("watch lifetime knobs (console parity with list_watches)", () => {
     }
   });
 });
+
+describe("a repeating watch shows how often it has fired", () => {
+  const now = new Date(2026, 6, 1, 12, 0, 0).getTime();
+
+  it("surfaces the fire count once it is non-trivial", () => {
+    // Each fire can enqueue an agent turn, so a climbing count is a cost signal.
+    const w = watch({ status: "active", repeat: true, fire_count: 14 });
+    expect(watchLifetime(w, now)).toContain("fired 14×");
+  });
+
+  it("stays quiet for a one-shot, or a repeater that has barely fired", () => {
+    expect(watchLifetime(watch({ status: "active", fire_count: 9 }), now)).toEqual([]);
+    expect(watchLifetime(watch({ status: "active", repeat: true, fire_count: 1 }), now)).toEqual(["repeating"]);
+  });
+});

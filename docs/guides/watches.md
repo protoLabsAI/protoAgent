@@ -88,6 +88,27 @@ Two properties that matter more than they look:
 A repeating watch ends only at its **deadline** or an explicit **clear** — give it an
 `expires_in_s` unless you really mean forever.
 
+### Watching for a flapping watch
+
+A repeating watch whose predicate oscillates — or a monitor whose value moves on every poll —
+fires back-to-back, and **each fire can enqueue an agent turn**. That's the one way these
+dispositions cost far more than intended, so it's instrumented rather than left to be
+discovered:
+
+- **Per watch**, on the record and so in `GET /api/watches`: `check_count`, `fire_count` (a
+  lifetime fire *rate*) and `consecutive_fires` (the burst signal — it resets on any check that
+  doesn't fire). The console shows `fired N×` on a repeating row once N is non-trivial.
+- **A deduped `WARNING`** naming the watch, its trigger, its interval and its rate, once
+  `consecutive_fires` crosses the threshold. Deduped on purpose: a flapping watch fires every
+  tick, and a warning that repeated every tick would be a second storm. It re-arms if the watch
+  settles and starts up again.
+- **Prometheus**: `protoagent_watch_fires_total{trigger}` and
+  `protoagent_watch_flapping_total{trigger}`, off `/metrics`. Labelled by trigger only — watch
+  ids are operator-defined and unbounded, so they'd be a cardinality blowup as a label. The id
+  is in the log line, where it's free.
+
+If you see it: raise `interval_s`, use a steadier verifier, or drop `repeat`.
+
 ## Editing a live watch
 
 Adjusting a watch is not the same as replacing it: clear-and-recreate throws away the stall

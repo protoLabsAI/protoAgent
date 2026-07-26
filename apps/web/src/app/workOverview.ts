@@ -76,6 +76,10 @@ export function watchLifetime(watch: WatchState, now: number = Date.now()): stri
     parts.push(left > 0 ? `expires in ${formatWatchDuration(left)}` : "past its deadline");
   }
   if (watch.stall_after) parts.push(`stall after ${watch.stall_after}`);
+  // A repeating watch that has fired more than a handful of times is worth seeing at a
+  // glance — each fire can enqueue an agent turn, so a high count is a cost signal, not
+  // trivia. Only shown once it's non-trivial, to keep a normal row quiet.
+  if (watch.repeat && (watch.fire_count ?? 0) > 1) parts.push(`fired ${watch.fire_count}×`);
   return parts;
 }
 
