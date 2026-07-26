@@ -197,6 +197,7 @@ def register_operator_routes(
     watch_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     watch_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     watch_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    verifier_catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     chat_commands: Callable[[], dict[str, Any]] | None = None,
     events_subscribe: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
     events_publish: Callable[[str, dict[str, Any]], None] | None = None,
@@ -565,6 +566,18 @@ def register_operator_routes(
             if not res.get("ok"):
                 raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
             return res
+
+    # Verifier catalog (ADR 0028/0067) — what a goal or watch can be checked WITH, from
+    # every source. Read-only; the console's creators build their pickers from it instead of
+    # hardcoding a list that drifts from the registry.
+    if verifier_catalog is not None:
+
+        @app.get("/api/verifiers")
+        async def _verifiers():
+            try:
+                return await verifier_catalog()
+            except Exception as exc:
+                raise _http_error(exc) from exc
 
     # --- Slash commands ------------------------------------------------------
     # The chat console fetches the registered `/`-commands the server handles

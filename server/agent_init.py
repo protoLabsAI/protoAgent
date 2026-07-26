@@ -1745,7 +1745,11 @@ def _apply_plugin_registries(plugins) -> None:
     from graph.lifecycle import hooks as _lifecycle_hooks
     from graph.watches import hooks as _watch_hooks
 
-    _goal_verifiers.set_plugin_verifiers(plugins.goal_verifiers)  # ADR 0028
+    # getattr: a duck-typed bundle (tests) or one built before this field existed still
+    # threads its verifiers; they simply render without a description.
+    _goal_verifiers.set_plugin_verifiers(
+        plugins.goal_verifiers, getattr(plugins, "goal_verifier_meta", None)
+    )  # ADR 0028
     _goal_hooks.set_goal_hooks(plugins.goal_hooks)
     _watch_hooks.set_watch_hooks(plugins.watch_hooks)  # ADR 0067
     _lifecycle_hooks.set_lifecycle_hooks(plugins.lifecycle_hooks)  # ADR 0074

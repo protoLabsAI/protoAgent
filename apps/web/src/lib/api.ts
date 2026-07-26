@@ -55,6 +55,7 @@ import type {
   WatchState,
   WorkflowPausedRun,
   WorkflowRunResult,
+  VerifierCatalog,
   WorkflowSummary,
 } from "./types";
 
@@ -1362,6 +1363,13 @@ export const api = {
   // instead of polling — same pattern as goals.
   watches() {
     return request<{ watches: WatchState[]; enabled: boolean }>("/api/watches");
+  },
+
+  // What a goal or watch can be checked WITH, from every source (ADR 0028/0067). The
+  // creators build their verifier pickers from this instead of a hardcoded list — a UI-side
+  // copy of a server registry drifts, and this one had already lost the whole `plugin` class.
+  verifiers() {
+    return request<VerifierCatalog>("/api/verifiers");
   },
 
   // Operator watch-create. This is the TRUSTED channel (ADR 0066 path ceiling), so unlike

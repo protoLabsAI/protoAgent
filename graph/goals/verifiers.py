@@ -297,8 +297,12 @@ _PLUGIN_VERIFIERS: dict = {}
 # and a now-present one goes quiet.
 _WARNED_UNKNOWN_VERIFIERS: set[str] = set()
 
+# name -> {"plugin_id", "description"} for the registered plugin verifiers, set alongside
+# the callables so a chooser can render more than a bare id.
+_PLUGIN_VERIFIER_META: dict[str, dict] = {}
 
-def set_plugin_verifiers(mapping: dict | None) -> None:
+
+def set_plugin_verifiers(mapping: dict | None, meta: dict | None = None) -> None:
     """Replace the registered plugin verifier set (called at build + reload).
 
     Rebinds the module global in ONE atomic step rather than ``clear()`` then
@@ -309,8 +313,9 @@ def set_plugin_verifiers(mapping: dict | None) -> None:
     next tick. A single name rebind is GIL-atomic; readers see the old or new map,
     never an empty one. (``_PLUGIN_VERIFIERS`` is referenced only within this module,
     so reassigning the global is safe.)"""
-    global _PLUGIN_VERIFIERS
+    global _PLUGIN_VERIFIERS, _PLUGIN_VERIFIER_META
     _PLUGIN_VERIFIERS = dict(mapping or {})
+    _PLUGIN_VERIFIER_META = dict(meta or {})
     # A fresh mapping may now resolve names that were unknown before (e.g. a plugin update
     # that registers new verifiers, #1752) — reset the dedup set so a still-missing name
     # warns again and a now-present one stops.
@@ -321,6 +326,60 @@ def plugin_verifier_names() -> list[str]:
     """Registered plugin-verifier names (``<plugin-id>:<name>``), sorted. Lets the
     set_goal tool reject an unknown verifier before creating an unsatisfiable goal."""
     return sorted(_PLUGIN_VERIFIERS)
+
+
+# One-line summaries for the CORE verifier types, so the catalog below describes every
+# source in the same shape. These lived only in the console as a hardcoded TS array, which
+# is exactly how a UI list drifts from the registry it claims to mirror — `plugin` was
+# missing from it entirely, making every plugin-contributed check unreachable from the
+# console even though the operator API accepts them.
+#
+# INSERTION ORDER IS THE PRESENTATION ORDER: concrete//ground-truthed first, the fuzzy `llm`
+# default last, `plugin` after it. Sorting alphabetically instead would open the picker on
+# `ci` and bury `llm` mid-list, which reads worse for the most common choice.
+_CORE_VERIFIER_DESCRIPTIONS = {
+    "command": "A shell command that exits 0",
+    "test": "A test command that exits 0",
+    "ci": "GitHub checks are green (PR # or branch)",
+    "data": "Assert over a file's contents",
+    "llm": "Fuzzy LLM judgment (the default)",
+    "plugin": "A check contributed by an installed plugin",
+}
+
+
+def verifier_catalog() -> dict:
+    """Every verifier an operator can choose, from every source, built from the LIVE
+    registries rather than a hardcoded list.
+
+    ``{"types": [{value, description, source}], "plugin_checks": [{name, plugin_id,
+    description}]}``. ``source`` is ``"core"`` for the built-in types and ``"plugin"`` for
+    contributed checks — the same source-labelling other multi-registry surfaces use, so a
+    chooser can group and attribute them instead of showing one flat anonymous list.
+
+    ``plugin_checks`` is empty when no installed plugin registers one; a chooser should hide
+    the ``plugin`` type in that case rather than offer a picker with nothing in it."""
+    return {
+        "types": [
+            {
+                "value": name,
+                "description": _CORE_VERIFIER_DESCRIPTIONS.get(name, ""),
+                "source": "core",
+            }
+            # Described types in their curated order, then any core type this map hasn't
+            # caught up with — a new verifier still surfaces rather than silently vanishing.
+            for name in [*_CORE_VERIFIER_DESCRIPTIONS, *sorted(set(VERIFIERS) - set(_CORE_VERIFIER_DESCRIPTIONS))]
+            if name in VERIFIERS
+        ],
+        "plugin_checks": [
+            {
+                "name": name,
+                "plugin_id": (_PLUGIN_VERIFIER_META.get(name) or {}).get("plugin_id", name.split(":", 1)[0]),
+                "description": (_PLUGIN_VERIFIER_META.get(name) or {}).get("description", ""),
+                "source": "plugin",
+            }
+            for name in sorted(_PLUGIN_VERIFIERS)
+        ],
+    }
 
 
 async def _verify_plugin(spec: dict, ctx: VerifyContext) -> VerifyResult:

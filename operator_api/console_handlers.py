@@ -583,6 +583,18 @@ async def _operator_watches_set(body: dict) -> dict:
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
 
+async def _operator_verifier_catalog() -> dict:
+    """Every verifier an operator can choose, from every source (ADR 0028/0067).
+
+    The console's goal + watch creators used to hardcode the core types in TypeScript, which
+    both drifted from the server registry (`plugin` was missing) and made every
+    plugin-contributed check unreachable from the console — even though the operator API has
+    always accepted them. This is the one place that enumerates them, built live."""
+    from graph.goals.verifiers import verifier_catalog
+
+    return verifier_catalog()
+
+
 async def _operator_watches_update(watch_id: str, body: dict) -> dict:
     """Operator watch-edit (ADR 0067) — the trusted channel, so it may change ANY field
     including the verifier. Only keys PRESENT in the body are touched: an absent key means

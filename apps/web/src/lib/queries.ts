@@ -11,6 +11,7 @@ export const queryKeys = {
   // `invalidateQueries(["goals"])` on the goal.* bus pushes also refreshes an open drawer.
   goalDetail: (sessionId: string) => ["goals", "detail", sessionId] as const,
   watches: ["watches"] as const,
+  verifiers: ["verifiers"] as const,
   tasks: ["tasks", "issues"] as const,
   workflows: ["workflows"] as const,
   // Paused workflow runs (F3 Pending Gates) — a distinct top-level key so a recipe-list
@@ -100,6 +101,15 @@ export const goalDetailQuery = (sessionId: string) =>
 // Passive watches (ADR 0067) — verifier-only objectives polled out-of-band. Lives in the
 // Work hub; the panel invalidates this on the `watch.*` bus pushes (created/checked/met/
 // expired/stalled) instead of a poll — same pattern as goals.
+// The verifier catalog (ADR 0028/0067) changes only when plugins load/reload, so it's
+// effectively static per session — but it must NOT be suspense-loaded: a failed fetch has to
+// degrade to the core types rather than block the creator dialog behind an error boundary.
+export const verifiersQuery = () => ({
+  queryKey: queryKeys.verifiers,
+  queryFn: () => api.verifiers(),
+  staleTime: 5 * 60_000,
+});
+
 export const watchesQuery = () =>
   queryOptions({
     queryKey: queryKeys.watches,

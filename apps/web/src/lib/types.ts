@@ -1154,3 +1154,16 @@ export type PythonRuntimeStatus = {
 };
 
 export type PythonRuntimePayload = { python: PythonRuntimeStatus; install: NodeInstallState };
+
+// The verifier catalog (`GET /api/verifiers`, ADR 0028/0067) — every verifier a goal or
+// watch can use, from every source, enumerated from the LIVE server registries. `source`
+// distinguishes the built-in types from plugin-contributed checks so a chooser can group and
+// attribute them; `plugin_checks` is empty when nothing registers one.
+export type VerifierType = { value: string; description: string; source: "core" };
+export type VerifierPluginCheck = {
+  name: string; // `<plugin-id>:<check>` — namespaced by the registry, so collision-free
+  plugin_id: string;
+  description: string;
+  source: "plugin";
+};
+export type VerifierCatalog = { types: VerifierType[]; plugin_checks: VerifierPluginCheck[] };

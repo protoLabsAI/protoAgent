@@ -499,6 +499,7 @@ def _main():
         watch_clear=_console._operator_watches_clear,
         watch_set=_console._operator_watches_set,
         watch_update=_console._operator_watches_update,
+        verifier_catalog=_console._operator_verifier_catalog,
         chat_commands=_console._operator_chat_commands,
         events_subscribe=_event_bus.subscribe,
         events_publish=_event_bus.publish,

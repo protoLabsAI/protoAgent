@@ -10,18 +10,22 @@
 // capable of the two — `POST /api/watches` is trusted (ADR 0066 path ceiling), so it accepts
 // shell/test/ci/data verifiers the agent is denied. The console was hiding the stronger half.
 
-import type { HitlPayload } from "../lib/types";
+import type { HitlPayload, VerifierCatalog } from "../lib/types";
 
-// The verifier types `/api/watches` accepts (ADR 0067 D4 — trusted channel, so all of them).
-// Identical to GOAL_VERIFIER_TYPES on purpose: an operator who has set a goal already knows
-// this control, and the two primitives share one verifier implementation server-side.
-export const WATCH_VERIFIER_TYPES = [
-  { value: "command", label: "command", description: "A shell command that exits 0" },
-  { value: "test", label: "test", description: "A test command that exits 0" },
-  { value: "ci", label: "ci", description: "GitHub checks are green (PR # or branch)" },
-  { value: "data", label: "data", description: "Assert over a file's contents" },
-  { value: "llm", label: "llm", description: "Fuzzy LLM judgment (the default)" },
-] as const;
+// Fallback when the catalog hasn't loaded (or `GET /api/verifiers` failed): the core types,
+// minus `plugin`, which is meaningless without knowing what's registered. The REAL list comes
+// from the server — a hardcoded UI copy of a server registry is exactly how this field lost
+// the entire plugin class in the first place.
+export const FALLBACK_VERIFIER_TYPES: VerifierCatalog = {
+  types: [
+    { value: "command", description: "A shell command that exits 0", source: "core" },
+    { value: "test", description: "A test command that exits 0", source: "core" },
+    { value: "ci", description: "GitHub checks are green (PR # or branch)", source: "core" },
+    { value: "data", description: "Assert over a file's contents", source: "core" },
+    { value: "llm", description: "Fuzzy LLM judgment (the default)", source: "core" },
+  ],
+  plugin_checks: [],
+};
 
 // The session a console-created watch reacts into. Matches the goal creator's `"operator"`
 // target, so a trip lands in the same place an operator-set goal does.
@@ -48,7 +52,11 @@ export function parseDuration(raw: unknown): number | null {
 // SAME type-aware conditional inputs (only the fields the picked verifier needs). Step 2 = the
 // watch-specific half a goal has no analogue for: how hard to poll, when to give up, and what
 // to DO when it trips — the last being the whole point of the primitive.
-export function watchFormPayload(): HitlPayload {
+export function watchFormPayload(catalog: VerifierCatalog = FALLBACK_VERIFIER_TYPES): HitlPayload {
+  const checks = catalog.plugin_checks ?? [];
+  // Offer `plugin` only when something registers a check — a card whose picker would be
+  // empty is worse than no card. Everything else comes straight from the server's list.
+  const types = (catalog.types ?? []).filter((v) => v.value !== "plugin" || checks.length > 0);
   return {
     kind: "form",
     title: "New watch",
@@ -70,11 +78,31 @@ export function watchFormPayload(): HitlPayload {
               type: "string",
               title: "How to check it",
               default: "llm",
-              oneOf: WATCH_VERIFIER_TYPES.map((v) => ({
+              oneOf: types.map((v) => ({
                 const: v.value,
-                title: v.label,
+                title: v.value,
                 description: v.description,
               })),
+            },
+            verify_plugin_check: {
+              type: "string",
+              title: "Plugin check",
+              description: "A check contributed by an installed plugin — it reads real state, not the transcript.",
+              // Namespaced `<plugin-id>:<check>` by the registry, so the id is unambiguous;
+              // the plugin's own description rides alongside when it registered one.
+              oneOf: checks.map((c) => ({
+                const: c.name,
+                title: c.name,
+                description: c.description || `from ${c.plugin_id}`,
+              })),
+              showWhen: { field: "verifier", equals: "plugin" },
+            },
+            verify_plugin_args: {
+              type: "string",
+              title: "Check arguments (optional)",
+              description:
+                'JSON the check reads, e.g. `{"min": 1000000}`. Each plugin documents its own; invalid JSON is dropped rather than sent.',
+              showWhen: { field: "verifier", equals: "plugin" },
             },
             verify_command: {
               type: "string",
@@ -165,6 +193,22 @@ function buildVerifier(answers: Record<string, unknown>): Record<string, unknown
       const ref = str(answers.verify_ci).replace(/^#/, "");
       // A bare number is a PR; anything else is a branch — same split the goal form uses.
       return /^\d+$/.test(ref) ? { type: "ci", pr: ref } : { type: "ci", branch: ref };
+    }
+    case "plugin": {
+      const spec: Record<string, unknown> = { type: "plugin", check: str(answers.verify_plugin_check) };
+      // `args` is declarative data the plugin's own verifier validates — we can't know its
+      // shape, so pass it through when it parses and omit it when it doesn't. The verifier
+      // reports what it actually needed, which beats us guessing a schema we don't have.
+      const raw = str(answers.verify_plugin_args);
+      if (raw) {
+        try {
+          const parsed: unknown = JSON.parse(raw);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) spec.args = parsed;
+        } catch {
+          /* not JSON — omit rather than send a string the verifier can't read */
+        }
+      }
+      return spec;
     }
     case "data": {
       const spec: Record<string, unknown> = { type: "data", path: str(answers.verify_data_path) };

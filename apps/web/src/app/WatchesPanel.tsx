@@ -5,6 +5,7 @@ import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import {
   QueryErrorResetBoundary,
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
@@ -17,7 +18,7 @@ import { buildWatchCreateBody, watchFormPayload, type WatchCreateBody } from "..
 import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { watchesQuery, queryKeys } from "../lib/queries";
+import { watchesQuery, verifiersQuery, queryKeys } from "../lib/queries";
 import { watchLifetime } from "./workOverview";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "@protolabsai/ui/data";
@@ -140,11 +141,16 @@ export function WatchCreateDialog({
   onCreate: (body: WatchCreateBody) => void;
   busy: boolean;
 }) {
+  // The verifier options come from the server (core types + whatever plugins registered),
+  // not a hardcoded list. `enabled: open` so it's fetched when the dialog is first opened
+  // rather than on every panel mount; `data` undefined (still loading, or the fetch failed)
+  // falls through to `watchFormPayload`'s core-type default.
+  const { data: catalog } = useQuery({ ...verifiersQuery(), enabled: open });
   return (
     <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" className="watch-create-modal">
       <div data-testid="watch-create-dialog">
         <HitlForm
-          payload={watchFormPayload()}
+          payload={watchFormPayload(catalog)}
           busy={busy}
           onSubmit={(answers) => {
             const body = buildWatchCreateBody(

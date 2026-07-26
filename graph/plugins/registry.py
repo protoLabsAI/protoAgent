@@ -78,6 +78,10 @@ class PluginRegistry:
         self.mcp_servers: list = []  # factories: config -> entry dict | None
         self.thread_id_resolver = None  # (request_metadata, session_id) -> str (#571)
         self.goal_verifiers: dict = {}  # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
+        # name -> {"plugin_id", "description"}. Parallel to goal_verifiers rather than folded
+        # into it so every existing reader — which expects the value to BE the callable —
+        # keeps working untouched.
+        self.goal_verifier_meta: dict = {}
         self.goal_hooks: list = []  # {on_achieved, on_failed, on_stalled} reactions (ADR 0028 + 0030 D5)
         self.watch_hooks: list = []  # {on_met, on_expired, on_stalled} watch reactions (ADR 0067)
         self.lifecycle_hooks: list = []  # {on_app_loaded, on_agent_active, on_system_wake} (ADR 0074)
@@ -224,7 +228,7 @@ class PluginRegistry:
             p = self.plugin_dir / p
         self.workflow_dirs.append(p)
 
-    def register_goal_verifier(self, name: str, fn) -> None:
+    def register_goal_verifier(self, name: str, fn, description: str = "") -> None:
         """Contribute an in-process goal/watch verifier (ADR 0028) — an async
         ``(spec, ctx) -> VerifyResult`` referenced by a ``{"type":"plugin",
         "check":"<name>"}`` goal or watch. Name it ``<plugin-id>:<verifier>`` to
@@ -232,7 +236,11 @@ class PluginRegistry:
         validates (no shell, no eval). This is the only verifier type safe to set
         programmatically (D3). ``ctx`` is a ``graph.goals.VerifyContext``;
         ``ctx.invoker`` identifies the polling goal/watch (kind/id/session_id/
-        interval_s, #1641) so a verifier can keep per-invoker state."""
+        interval_s, #1641) so a verifier can keep per-invoker state.
+
+        ``description`` is a one-line human summary shown wherever a verifier is CHOSEN
+        (the console's goal/watch creators list it beside the core types). Optional and
+        additive — an older plugin that omits it just shows its ``<plugin-id>:<name>``."""
         if not name or not callable(fn):
             log.warning(
                 "[plugins] %s: register_goal_verifier needs a name + callable: %r / %r", self.plugin_id, name, fn
@@ -240,6 +248,10 @@ class PluginRegistry:
             return
         key = name if ":" in name else f"{self.plugin_id}:{name}"
         self.goal_verifiers[key] = fn
+        self.goal_verifier_meta[key] = {
+            "plugin_id": self.plugin_id,
+            "description": (description or "").strip(),
+        }
 
     def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
         """React when a goal reaches a terminal state (ADR 0028 D4). ``on_achieved`` /

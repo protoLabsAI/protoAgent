@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   OPERATOR_SESSION,
-  WATCH_VERIFIER_TYPES,
+  FALLBACK_VERIFIER_TYPES,
   buildWatchCreateBody,
   parseDuration,
   watchFormPayload,
@@ -20,7 +20,7 @@ describe("watchFormPayload", () => {
     expect(step1.required).toEqual(["condition"]);
     expect(step1.properties.verifier.default).toBe("llm");
     // Cards, not a dropdown: HitlForm turns a oneOf-with-descriptions into option cards.
-    expect(step1.properties.verifier.oneOf).toHaveLength(WATCH_VERIFIER_TYPES.length);
+    expect(step1.properties.verifier.oneOf).toHaveLength(FALLBACK_VERIFIER_TYPES.types.length);
   });
 
   it("shows only the input the picked verifier needs", () => {
@@ -130,5 +130,78 @@ describe("buildWatchCreateBody", () => {
     const body = buildWatchCreateBody({ condition: "c", interval: "soon", expires_in: "later" }, NOW)!;
     expect(body.interval_s).toBeUndefined();
     expect(body.deadline).toBeUndefined();
+  });
+});
+
+
+describe("verifier options come from the catalog, not a hardcoded list", () => {
+  const CATALOG = {
+    types: [
+      { value: "command", description: "A shell command that exits 0", source: "core" as const },
+      { value: "llm", description: "Fuzzy LLM judgment (the default)", source: "core" as const },
+      { value: "plugin", description: "A check contributed by an installed plugin", source: "core" as const },
+    ],
+    plugin_checks: [
+      { name: "spacetraders:credits", plugin_id: "spacetraders", description: "Credits at or above args.min", source: "plugin" as const },
+      { name: "careercoach:new_matches", plugin_id: "careercoach", description: "", source: "plugin" as const },
+    ],
+  };
+  const verifierField = (c?: typeof CATALOG) =>
+    (watchFormPayload(c).steps![0].schema as any).properties.verifier;
+  const props = (c?: typeof CATALOG) => (watchFormPayload(c).steps![0].schema as any).properties;
+
+  it("renders whatever the server says, including plugin", () => {
+    expect(verifierField(CATALOG).oneOf.map((o: any) => o.const)).toEqual(["command", "llm", "plugin"]);
+  });
+
+  it("hides the plugin type when nothing registers a check", () => {
+    // A `plugin` card whose picker would be empty is worse than no card at all.
+    const bare = { ...CATALOG, plugin_checks: [] };
+    expect(verifierField(bare).oneOf.map((o: any) => o.const)).toEqual(["command", "llm"]);
+  });
+
+  it("lists the registered checks, falling back to the plugin id for an undescribed one", () => {
+    const picker = props(CATALOG).verify_plugin_check;
+    expect(picker.showWhen).toEqual({ field: "verifier", equals: "plugin" });
+    expect(picker.oneOf.map((o: any) => [o.const, o.description])).toEqual([
+      ["spacetraders:credits", "Credits at or above args.min"],
+      // Registered before `description` existed → attributed by plugin instead of blank.
+      ["careercoach:new_matches", "from careercoach"],
+    ]);
+  });
+
+  it("falls back to the core types when the catalog never loaded", () => {
+    // The fetch can fail; the form must still be usable, just without the plugin class.
+    expect(verifierField().oneOf.map((o: any) => o.const)).toEqual(
+      FALLBACK_VERIFIER_TYPES.types.map((v) => v.value),
+    );
+    expect(verifierField().oneOf.map((o: any) => o.const)).not.toContain("plugin");
+  });
+});
+
+describe("buildWatchCreateBody — plugin verifier", () => {
+  const NOW = 1_800_000_000_000;
+  const verifierOf = (a: Record<string, unknown>) =>
+    buildWatchCreateBody({ condition: "c", verifier: "plugin", ...a }, NOW)!.verifier;
+
+  it("carries the check and parsed args", () => {
+    expect(
+      verifierOf({ verify_plugin_check: "spacetraders:credits", verify_plugin_args: '{"min": 1000000}' }),
+    ).toEqual({ type: "plugin", check: "spacetraders:credits", args: { min: 1000000 } });
+  });
+
+  it("omits args entirely when absent or unparseable", () => {
+    // We can't know each plugin's arg schema, so bad JSON is dropped and the verifier says
+    // what it needed — better than sending a string it can't read.
+    expect(verifierOf({ verify_plugin_check: "x:y" })).toEqual({ type: "plugin", check: "x:y" });
+    expect(verifierOf({ verify_plugin_check: "x:y", verify_plugin_args: "min: 5" })).toEqual({
+      type: "plugin",
+      check: "x:y",
+    });
+    // A bare array/scalar isn't an args object either.
+    expect(verifierOf({ verify_plugin_check: "x:y", verify_plugin_args: "[1,2]" })).toEqual({
+      type: "plugin",
+      check: "x:y",
+    });
   });
 });

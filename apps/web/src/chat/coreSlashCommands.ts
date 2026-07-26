@@ -15,6 +15,7 @@ import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-s
 import { exportChatToFile } from "./exportChat";
 import { buildGoalSetBody, goalFormPayload } from "./goalForm";
 import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
+import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 import { promptNoteMarkdown } from "./promptView";
 
@@ -598,8 +599,24 @@ registerSlashCommand({
       ctx.focusComposer();
       return true;
     }
-    ctx.openForm({
-      payload: watchFormPayload(),
+    // The verifier options come from the server. This runs outside React, so fetch first and
+    // open the form on resolve — `run` still returns true synchronously, which is the
+    // documented way to intercept a command while doing async work. A failed fetch still
+    // opens the form, just on the core types.
+    void api
+      .verifiers()
+      .catch(() => undefined)
+      .then((catalog) => openWatchForm(ctx, catalog));
+    return true;
+  },
+});
+
+function openWatchForm(
+  ctx: Parameters<Parameters<typeof registerSlashCommand>[0]["run"]>[0],
+  catalog: VerifierCatalog | undefined,
+) {
+    ctx.openForm!({
+      payload: watchFormPayload(catalog),
       onSubmit: (answers) => {
         const body = buildWatchCreateBody(
           typeof answers === "object" && answers ? (answers as Record<string, unknown>) : {},
@@ -618,6 +635,4 @@ registerSlashCommand({
       },
       onCancel: ctx.focusComposer,
     });
-    return true;
-  },
-});
+}

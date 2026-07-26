@@ -271,6 +271,7 @@ class FakeRegistry:
         self.skill_dirs: list = []
         self.workflow_dirs: list = []
         self.verifiers: dict = {}
+        self.verifier_meta: dict = {}
         self.goal_hooks: list = []
         self.watch_hooks: list = []
         self.lifecycle_hooks: list = []
@@ -343,8 +344,9 @@ class FakeRegistry:
     def register_workflow_dir(self, path) -> None:
         self.workflow_dirs.append(str(path))
 
-    def register_goal_verifier(self, name: str, fn) -> None:
+    def register_goal_verifier(self, name: str, fn, description: str = "") -> None:
         self.verifiers[name] = fn
+        self.verifier_meta[name] = {"plugin_id": getattr(self, "plugin_id", ""), "description": description}
 
     def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
         self.goal_hooks.append((on_achieved, on_failed))

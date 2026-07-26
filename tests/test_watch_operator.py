@@ -281,3 +281,66 @@ def test_loader_result_has_watch_hooks():
     from graph.plugins.loader import PluginLoadResult
 
     assert PluginLoadResult().watch_hooks == []
+
+
+# --- the verifier catalog (what a chooser can offer, ADR 0028/0067) --------
+
+
+def test_verifier_catalog_lists_every_core_type_including_plugin(monkeypatch):
+    """The console used to hardcode these in TypeScript and had silently dropped `plugin`,
+    making every contributed check unreachable from the operator UI. The catalog is built
+    from the LIVE registry so it can't drift again."""
+    from graph.goals.verifiers import VERIFIERS, verifier_catalog
+
+    cat = verifier_catalog()
+    # Curated presentation order, not alphabetical — `llm` (the common default) reads last,
+    # not buried mid-list. Every core type is present regardless.
+    assert {t["value"] for t in cat["types"]} == set(VERIFIERS)
+    assert [t["value"] for t in cat["types"]][:2] == ["command", "test"]
+    assert [t["value"] for t in cat["types"]][-1] == "plugin"
+    assert "plugin" in [t["value"] for t in cat["types"]]
+    assert all(t["source"] == "core" for t in cat["types"])
+    assert all(t["description"] for t in cat["types"])  # every type explains itself
+
+
+def test_verifier_catalog_reports_registered_plugin_checks(monkeypatch):
+    from graph.goals import verifiers as gv
+
+    async def _fn(spec, ctx): ...
+
+    monkeypatch.setattr(gv, "_PLUGIN_VERIFIERS", {"st:credits": _fn, "cc:new_matches": _fn})
+    monkeypatch.setattr(
+        gv, "_PLUGIN_VERIFIER_META", {"st:credits": {"plugin_id": "st", "description": "Credits ≥ args.min"}}
+    )
+    checks = gv.verifier_catalog()["plugin_checks"]
+
+    assert [c["name"] for c in checks] == ["cc:new_matches", "st:credits"]  # sorted
+    assert all(c["source"] == "plugin" for c in checks)
+    by_name = {c["name"]: c for c in checks}
+    assert by_name["st:credits"]["description"] == "Credits ≥ args.min"
+    # Registered before `description` existed → still attributed, via the namespace.
+    assert by_name["cc:new_matches"]["plugin_id"] == "cc"
+    assert by_name["cc:new_matches"]["description"] == ""
+
+
+def test_verifier_catalog_is_empty_of_plugins_when_none_registered(monkeypatch):
+    # A chooser hides its `plugin` option in this case rather than offering an empty picker.
+    from graph.goals import verifiers as gv
+
+    monkeypatch.setattr(gv, "_PLUGIN_VERIFIERS", {})
+    assert gv.verifier_catalog()["plugin_checks"] == []
+
+
+def test_register_goal_verifier_records_a_description(tmp_path):
+    """The SDK addition is additive — an older plugin passing (name, fn) still registers."""
+    from graph.plugins.registry import PluginRegistry
+
+    reg = PluginRegistry("demo", tmp_path)
+
+    async def _fn(spec, ctx): ...
+
+    reg.register_goal_verifier("checks_out", _fn, "Reads real state")
+    reg.register_goal_verifier("legacy", _fn)  # no description — must still work
+    assert "demo:checks_out" in reg.goal_verifiers
+    assert reg.goal_verifier_meta["demo:checks_out"]["description"] == "Reads real state"
+    assert reg.goal_verifier_meta["demo:legacy"]["description"] == ""
