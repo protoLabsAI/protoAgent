@@ -819,3 +819,73 @@ def test_spawned_member_agent_name_respects_explicit_workspace_override(tmp_path
     supervisor.start("iota")
 
     assert captured["env"]["AGENT_NAME"] == "custom-name"  # explicit wins
+
+
+# ── stop() must not claim a stop it didn't achieve (#2286) ────────────────────
+def _ps_returning(monkeypatch, command_line: str):
+    """Stub `ps -o command= -p <pid>` so _is_our_agent sees a chosen command line."""
+
+    class _Res:
+        stdout = command_line
+
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda *a, **k: _Res())
+
+
+def test_is_our_agent_recognizes_the_frozen_sidecar(monkeypatch):
+    """The desktop sidecar is launched as the bare binary (manager._server_argv() under
+    `sys.frozen`), so it carries neither `-m server` nor `python`. Missing it made every
+    frozen member read as "not ours" — the #2286 root cause."""
+    _ps_returning(monkeypatch, "/Applications/protoAgent.app/Contents/MacOS/protoagent-server --port 7875\n")
+    assert supervisor._is_our_agent(52868)
+
+
+def test_is_our_agent_still_recognizes_a_source_checkout(monkeypatch):
+    _ps_returning(monkeypatch, "/usr/bin/python3 -m server --port 7871\n")
+    assert supervisor._is_our_agent(4242)
+
+
+def test_is_our_agent_rejects_an_unrelated_process(monkeypatch):
+    """The #10 pid-reuse guard must keep rejecting things that aren't ours."""
+    _ps_returning(monkeypatch, "/usr/sbin/cupsd -l\n")
+    assert not supervisor._is_our_agent(4242)
+
+
+def test_stop_reports_failure_and_restores_entry_when_process_survives(fleet, monkeypatch):
+    """A process that survives SIGTERM *and* SIGKILL must be reported honestly, and its
+    registry entry restored — deregistering a live member leaves an orphan that is
+    invisible to the hub yet still holding its port (#2286)."""
+    manager.create("stubborn", port=7891)
+    supervisor.start("stubborn")
+    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: None)  # ignores every signal
+    monkeypatch.setattr(supervisor, "_KILL_GRACE", 0.05)
+
+    res = supervisor.stop("stubborn", timeout=0.1)
+
+    assert res["stopped"] is False
+    assert "still running" in res["reason"] and "99001" in res["reason"]  # names the pid to kill
+    assert supervisor.is_running("stubborn")  # entry restored, not silently dropped
+
+
+def test_stop_reports_success_when_the_process_actually_exits(fleet):
+    manager.create("compliant", port=7892)
+    supervisor.start("compliant")
+
+    res = supervisor.stop("compliant")
+
+    assert res["stopped"] is True and "reason" not in res
+    assert not supervisor.is_running("compliant")
+
+
+def test_stop_on_a_recycled_pid_reaps_without_signalling(fleet, monkeypatch):
+    """pid reuse (#10): the pid isn't ours, so OUR member is genuinely gone. Reaping is
+    correct and `stopped` is true — but the response says no signal was sent."""
+    manager.create("recycled", port=7893)
+    supervisor.start("recycled")
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: False)
+    signalled: list[int] = []
+    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: signalled.append(pid))
+
+    res = supervisor.stop("recycled")
+
+    assert res["stopped"] is True and "no signal sent" in res["note"]
+    assert signalled == []
