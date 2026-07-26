@@ -357,3 +357,81 @@ async def test_tick_all_evaluates_due_never_checked_and_default(tmp_path, monkey
     monkeypatch.setattr(c, "evaluate", _spy)
     await c.tick_all()
     assert set(seen) == {"due", "fresh", "default"}
+
+
+# --- terminal-watch retention (watches.keep_terminal_h) --------------------
+
+
+def _finished(ctrl, watch_id: str, *, status: str, age_h: float):
+    """Store a watch that reached ``status`` ``age_h`` hours ago."""
+    from time import time
+
+    _ok, _m, w = ctrl.create(condition=watch_id, watch_id=watch_id, verifier={"type": "plugin", "check": "p:c"})
+    w.status = status
+    w.finished_at = time() - age_h * 3600
+    ctrl.store.set(w)
+    return w
+
+
+def test_prune_terminal_retires_only_the_aged_out(tmp_path):
+    # Before this, a met/expired watch lived on disk forever and every list surface
+    # returned it forever. Retention retires the old ones and nothing else.
+    c = _ctrl(tmp_path, watch_keep_terminal_h=24)
+    _finished(c, "old-met", status="met", age_h=25)
+    _finished(c, "old-expired", status="expired", age_h=100)
+    _finished(c, "fresh-met", status="met", age_h=1)
+    c.create(condition="still going", watch_id="live", verifier={"type": "plugin", "check": "p:c"})
+
+    assert c.prune_terminal() == 2
+    assert {w.id for w in c.list_watches()} == {"fresh-met", "live"}
+
+
+def test_prune_terminal_never_touches_an_active_watch_however_old(tmp_path):
+    # An `active` watch is not garbage — a long-horizon watch legitimately polls for weeks.
+    from time import time
+
+    c = _ctrl(tmp_path, watch_keep_terminal_h=1)
+    _ok, _m, w = c.create(condition="ancient", watch_id="ancient", verifier={"type": "plugin", "check": "p:c"})
+    w.created_at = time() - 365 * 24 * 3600
+    w.last_checked = time() - 365 * 24 * 3600
+    c.store.set(w)
+
+    assert c.prune_terminal() == 0
+    assert [x.id for x in c.list_watches()] == ["ancient"]
+
+
+def test_prune_terminal_disabled_keeps_everything(tmp_path):
+    # 0 = keep forever (the repo's retention-knob convention), i.e. the old behavior.
+    c = _ctrl(tmp_path, watch_keep_terminal_h=0)
+    _finished(c, "ancient-met", status="met", age_h=10_000)
+
+    assert c.prune_terminal() == 0
+    assert [w.id for w in c.list_watches()] == ["ancient-met"]
+
+
+def test_prune_terminal_keeps_a_watch_it_cannot_age(tmp_path):
+    # No usable timestamp → leave it. Deleting state we can't age is worse than keeping it.
+    c = _ctrl(tmp_path, watch_keep_terminal_h=1)
+    _ok, _m, w = c.create(condition="undateable", watch_id="undateable", verifier={"type": "plugin", "check": "p:c"})
+    w.status = "met"
+    w.finished_at = None
+    w.created_at = 0
+    c.store.set(w)
+
+    assert c.prune_terminal() == 0
+    assert [x.id for x in c.list_watches()] == ["undateable"]
+
+
+@pytest.mark.asyncio
+async def test_tick_all_prunes_while_it_ticks(tmp_path, monkeypatch):
+    # Retention rides the existing tick — no second loop, and it reuses the one store scan.
+    c = _ctrl(tmp_path, watch_keep_terminal_h=24)
+    _finished(c, "stale", status="met", age_h=48)
+    c.create(condition="live", watch_id="live", verifier={"type": "plugin", "check": "p:c"})
+
+    async def _spy(watch_id):
+        return None
+
+    monkeypatch.setattr(c, "evaluate", _spy)
+    await c.tick_all()
+    assert [w.id for w in c.list_watches()] == ["live"]

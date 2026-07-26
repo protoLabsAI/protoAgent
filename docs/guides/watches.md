@@ -19,8 +19,9 @@ Watches**:
 
 ```yaml
 watches:
-  enabled: true      # bind create_watch / list_watches / clear_watch for the agent
-  interval: 30       # global poll cadence, seconds (min 5)
+  enabled: true         # bind create_watch / list_watches / clear_watch for the agent
+  interval: 30          # global poll cadence, seconds (min 5)
+  keep_terminal_h: 24   # retire met/expired watches after this long (0 = keep forever)
 ```
 
 `enabled` is the only gate, and watches are **independent of goal mode**. It decides whether the
@@ -72,6 +73,12 @@ via [`sdk.run_in_session`](/guides/plugins) — non-blocking — and `on_met` ho
 N consecutive **unchanged**-evidence checks fire `on_stalled` once per stall episode **without**
 ending the watch. The console **Watches** panel lists every watch with its status, and toasts on
 met/expired.
+
+A finished watch sticks around so you can see *what* tripped — then the tick retires it after
+`watches.keep_terminal_h` (default 24h). Only `met`/`expired` watches age out; an `active` watch
+polls for as long as it needs to, however old. Set `keep_terminal_h: 0` to keep every trip
+forever. Clearing a watch is different from it aging out: `clear_watch` / `DELETE /api/watches/{id}`
+**deletes the file immediately**, so there is no `cleared` state to find in a listing.
 
 **Wake-framing (ADR 0079).** The reaction turn doesn't arrive as a bare `run_prompt`. The
 scheduler prepends a *why-you're-awake* header (`[Autonomous wake — a watch you set has tripped.
