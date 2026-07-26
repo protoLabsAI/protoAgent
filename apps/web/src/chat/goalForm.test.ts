@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_MAX_ITERATIONS,
-  GOAL_VERIFIER_TYPES,
+  FALLBACK_GOAL_VERIFIERS,
   buildGoalSetBody,
   buildVerifier,
   goalFormPayload,
@@ -51,7 +51,7 @@ describe("goalFormPayload", () => {
 
   it("renders the verifier field as option cards for every type (single source of truth)", () => {
     const cards = step1.properties?.verifier?.oneOf ?? [];
-    expect(cards.map((c) => c.const)).toEqual(GOAL_VERIFIER_TYPES.map((v) => v.value));
+    expect(cards.map((c) => c.const)).toEqual(FALLBACK_GOAL_VERIFIERS.types.map((v) => v.value));
   });
 
   it("gates each verification field on the matching verifier (showWhen)", () => {

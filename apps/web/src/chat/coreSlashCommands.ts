@@ -521,8 +521,24 @@ registerSlashCommand({
       ctx.focusComposer();
       return true;
     }
-    ctx.openForm({
-      payload: goalFormPayload(),
+    // Verifier options come from the server; this runs outside React so fetch first and open
+    // on resolve. `run` still returns true synchronously to intercept the send, and a failed
+    // fetch still opens the form on the core types.
+    void api
+      .verifiers()
+      .catch(() => undefined)
+      .then((catalog) => openGoalForm(ctx, sid, catalog));
+    return true;
+  },
+});
+
+function openGoalForm(
+  ctx: Parameters<Parameters<typeof registerSlashCommand>[0]["run"]>[0],
+  sid: string,
+  catalog: VerifierCatalog | undefined,
+) {
+    ctx.openForm!({
+      payload: goalFormPayload(catalog),
       onSubmit: (answers) => {
         const body = buildGoalSetBody(
           sid,
@@ -544,9 +560,7 @@ registerSlashCommand({
       },
       onCancel: ctx.focusComposer,
     });
-    return true;
-  },
-});
+}
 
 // `/watch` (ADR 0067) — the operator's watch surface in chat, mirroring `/goal new`: the
 // SAME `watchFormPayload` + `HitlForm` the Work panel's creator renders, resolved locally

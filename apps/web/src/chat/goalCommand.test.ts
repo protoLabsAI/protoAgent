@@ -25,11 +25,15 @@ describe("/goal client interception", () => {
     expect(goal).toBeTruthy();
   });
 
-  it("/goal new opens the form and handles it (returns true, never sent)", () => {
+  it("/goal new opens the form and handles it (returns true, never sent)", async () => {
     const openForm = vi.fn();
+    // The form's verifier options come from `GET /api/verifiers`, so the open lands a
+    // microtask later — `run` still returns true SYNCHRONOUSLY, which is what stops the
+    // literal text being sent. With no server here the fetch rejects and the form still
+    // opens, on the core types.
     const handled = goal!.run(ctx("new", { openForm }));
-    expect(openForm).toHaveBeenCalledTimes(1);
     expect(handled).toBe(true);
+    await vi.waitFor(() => expect(openForm).toHaveBeenCalledTimes(1));
   });
 
   it("bare /goal falls through to the server (returns false)", () => {

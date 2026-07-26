@@ -5,19 +5,27 @@
 // (`src/**/*.test.ts`, no renderer) can exercise the schema shape + the verifier/contract
 // mapping directly — mirroring the repo's other pure-helper tests (e.g. shiftCue.ts).
 
-import type { HitlPayload } from "../lib/types";
+import type { HitlPayload, VerifierCatalog } from "../lib/types";
 
 // The verifier types the operator `/api/goals` surface accepts (ADR 0028/0066). Rendered as
 // option cards (the `oneOf` + descriptions turn the field into cards — hitl-form.isCardChoice).
 // `llm` is the default: HitlForm seeds it from the schema (#1978) so the card opens selected,
 // and the mapping still coerces an absent/unknown answer to llm as the belt-and-braces layer.
-export const GOAL_VERIFIER_TYPES = [
-  { value: "command", label: "command", description: "A shell command that exits 0" },
-  { value: "test", label: "test", description: "A test command that exits 0" },
-  { value: "ci", label: "ci", description: "GitHub checks are green (PR # or branch)" },
-  { value: "data", label: "data", description: "Assert over a file's contents" },
-  { value: "llm", label: "llm", description: "Fuzzy LLM judgment (the default)" },
-] as const;
+// Fallback for when the catalog hasn't loaded (or `GET /api/verifiers` failed). The REAL
+// list comes from the server — this hardcoded copy is what silently dropped `plugin`, making
+// every plugin-contributed check unreachable from the console even though `/api/goals`
+// accepts them. `plugin` stays out of the fallback: it's meaningless without knowing what's
+// registered.
+export const FALLBACK_GOAL_VERIFIERS: VerifierCatalog = {
+  types: [
+    { value: "command", description: "A shell command that exits 0", source: "core" },
+    { value: "test", description: "A test command that exits 0", source: "core" },
+    { value: "ci", description: "GitHub checks are green (PR # or branch)", source: "core" },
+    { value: "data", description: "Assert over a file's contents", source: "core" },
+    { value: "llm", description: "Fuzzy LLM judgment (the default)", source: "core" },
+  ],
+  plugin_checks: [],
+};
 
 export const DEFAULT_MAX_ITERATIONS = 8;
 
@@ -28,7 +36,11 @@ export const DEFAULT_MAX_ITERATIONS = 8;
 // Step 2 = the OPTIONAL completion contract. `condition` (the one required field) lives in
 // step 1 and gates its Next. Both hosts (the `/goal new` composer form and the GoalsPanel
 // inline form) render this identically through `HitlForm`.
-export function goalFormPayload(): HitlPayload {
+export function goalFormPayload(catalog: VerifierCatalog = FALLBACK_GOAL_VERIFIERS): HitlPayload {
+  const checks = catalog.plugin_checks ?? [];
+  // Offer `plugin` only when something registers a check — an empty picker is worse than no
+  // card. Everything else is whatever the server says it supports.
+  const types = (catalog.types ?? []).filter((v) => v.value !== "plugin" || checks.length > 0);
   return {
     kind: "form",
     title: "New goal",
@@ -49,11 +61,29 @@ export function goalFormPayload(): HitlPayload {
               type: "string",
               title: "How to verify it's done",
               default: "llm",
-              oneOf: GOAL_VERIFIER_TYPES.map((v) => ({
+              oneOf: types.map((v) => ({
                 const: v.value,
-                title: v.label,
+                title: v.value,
                 description: v.description,
               })),
+            },
+            verify_plugin_check: {
+              type: "string",
+              title: "Plugin check",
+              description: "A check contributed by an installed plugin — it reads real state, not the transcript.",
+              oneOf: checks.map((c) => ({
+                const: c.name,
+                title: c.name,
+                description: c.description || `from ${c.plugin_id}`,
+              })),
+              showWhen: { field: "verifier", equals: "plugin" },
+            },
+            verify_plugin_args: {
+              type: "string",
+              title: "Check arguments (optional)",
+              description:
+                'JSON the check reads, e.g. `{"min": 1000000}`. Each plugin documents its own; invalid JSON is dropped rather than sent.',
+              showWhen: { field: "verifier", equals: "plugin" },
             },
             verify_command: {
               type: "string",
@@ -175,6 +205,12 @@ export function buildVerifier(type: unknown, detail: unknown): Record<string, un
     if (contains) spec.contains = contains;
     return spec;
   }
+  if (t === "plugin") {
+    // `detail` carries the check name; args ride separately since they're structured. A
+    // plugin pick used to fall through to `llm` here — the type existed in neither the
+    // options nor the mapping.
+    return d ? { type: "plugin", check: d } : { type: "plugin" };
+  }
   return { type: "llm" };
 }
 
@@ -190,6 +226,7 @@ export function verifierDetail(answers: Record<string, unknown>): string {
     const contains = String(answers.verify_data_contains ?? "").trim();
     return contains ? `${path} :: ${contains}` : path;
   }
+  if (t === "plugin") return String(answers.verify_plugin_check ?? "").trim();
   return "";
 }
 
@@ -239,6 +276,20 @@ export function buildGoalSetBody(
   if (!condition) return null;
 
   const verifier = buildVerifier(answers.verifier, verifierDetail(answers));
+  // Declarative args the plugin's own verifier validates. We can't know its shape, so pass
+  // it through when it parses as an object and omit it otherwise — the verifier reports what
+  // it actually needed, which beats guessing a schema we don't have.
+  if (verifier.type === "plugin") {
+    const rawArgs = String(answers.verify_plugin_args ?? "").trim();
+    if (rawArgs) {
+      try {
+        const parsed: unknown = JSON.parse(rawArgs);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) verifier.args = parsed;
+      } catch {
+        /* not JSON — omit rather than send a string the verifier can't read */
+      }
+    }
+  }
   const outcome = String(answers.outcome ?? "").trim();
   const constraints = splitLines(answers.constraints);
   const boundaries = splitLines(answers.boundaries);

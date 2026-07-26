@@ -313,3 +313,21 @@ test("the Watches panel shows a watch's cadence, expiry and stall threshold", as
   // pins "no lifetime facts" as a count rather than trusting the text assertions alone.
   await expect(met.locator(".watch-row-fact")).toHaveCount(2);
 });
+
+test("the creators offer plugin checks, not just the core verifier types", async ({ page }) => {
+  // The console used to hardcode the core types in TS and had dropped `plugin` entirely, so
+  // every plugin-contributed check was unreachable from the UI even though the operator API
+  // accepts them. Both creators now build the picker from `GET /api/verifiers`.
+  await openWork(page);
+  await page.getByTestId("work-add-watch").click();
+  const dialog = page.getByTestId("watch-create-dialog");
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByText("plugin", { exact: true }).click();
+  // The registered checks, each attributed — by its own description, or by plugin id when it
+  // registered before `description` existed.
+  await expect(dialog.getByText("spacetraders:credits")).toBeVisible();
+  await expect(dialog.getByText("Credits at or above args.min")).toBeVisible();
+  await expect(dialog.getByText("careercoach:new_matches")).toBeVisible();
+  await expect(dialog.getByText("from careercoach")).toBeVisible();
+});

@@ -45,6 +45,7 @@ import {
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
   WATCHES,
+  VERIFIERS,
   WORKFLOW_RUN_RESULT,
   WORKFLOWS,
 } from "./fixtures.mjs";
@@ -268,6 +269,8 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
       return GOALS;
     case "/api/watches":
       return WATCHES;
+    case "/api/verifiers":
+      return VERIFIERS;
     case "/api/notes/workspace":
       return { workspace: NOTES_WORKSPACE };
     case "/api/tasks/status":

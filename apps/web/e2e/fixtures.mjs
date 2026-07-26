@@ -1188,3 +1188,27 @@ export const DELEGATES = {
     },
   ],
 };
+
+// The verifier catalog (`GET /api/verifiers`, ADR 0028/0067) — core types plus two plugin
+// checks, so the creators' pickers exercise BOTH sources. One check carries a description
+// and one doesn't, which is the real-world split: `description` was added to
+// register_goal_verifier after plugins already shipped without it.
+export const VERIFIERS = {
+  types: [
+    { value: "command", description: "A shell command that exits 0", source: "core" },
+    { value: "test", description: "A test command that exits 0", source: "core" },
+    { value: "ci", description: "GitHub checks are green (PR # or branch)", source: "core" },
+    { value: "data", description: "Assert over a file's contents", source: "core" },
+    { value: "llm", description: "Fuzzy LLM judgment (the default)", source: "core" },
+    { value: "plugin", description: "A check contributed by an installed plugin", source: "core" },
+  ],
+  plugin_checks: [
+    {
+      name: "spacetraders:credits",
+      plugin_id: "spacetraders",
+      description: "Credits at or above args.min",
+      source: "plugin",
+    },
+    { name: "careercoach:new_matches", plugin_id: "careercoach", description: "", source: "plugin" },
+  ],
+};

@@ -5,6 +5,7 @@ import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import {
   QueryErrorResetBoundary,
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
@@ -19,7 +20,7 @@ import { buildGoalSetBody, goalFormPayload, type GoalSetBody } from "../chat/goa
 import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { goalsQuery, queryKeys } from "../lib/queries";
+import { goalsQuery, verifiersQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
@@ -142,11 +143,15 @@ export function GoalCreateDialog({
   onCreate: (body: GoalSetBody) => void;
   busy: boolean;
 }) {
+  // Verifier options come from the server (core types + whatever plugins registered), not a
+  // hardcoded list. `enabled: open` fetches on first open; undefined data (loading, or a
+  // failed fetch) falls through to goalFormPayload's core-type default.
+  const { data: catalog } = useQuery({ ...verifiersQuery(), enabled: open });
   return (
     <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" className="goal-create-modal">
       <div data-testid="goal-create-dialog">
         <HitlForm
-          payload={goalFormPayload()}
+          payload={goalFormPayload(catalog)}
           busy={busy}
           onSubmit={(answers) => {
             const body = buildGoalSetBody(
