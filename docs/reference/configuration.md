@@ -413,12 +413,14 @@ cadence, out-of-band, that resumes the agent when it trips. See [Watches](/guide
 
 ```yaml
 watches:
-  enabled: false           # default OFF — the watch TOOLS are not bound
+  enabled: true            # bind the watch TOOLS for the agent
+  interval: 30             # global poll cadence, seconds (min 5)
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `false` | Bind the `create_watch` / `list_watches` / `clear_watch` tools. |
+| `enabled` | `true` | Bind the `create_watch` / `list_watches` / `clear_watch` tools. |
+| `interval` | `30` | Seconds between out-of-band ticks. Clamped to a 5s floor. A watch's own `interval_s` overrides it as a *floor* (a watch is skipped until its own interval has elapsed), so raising this slows every watch but lowering it never speeds up a watch that asked to be slower. Re-read every tick — a change applies without a restart. |
 
 Three things this flag deliberately does **not** do, because the distinction matters when you
 toggle it on a running agent:
@@ -433,9 +435,8 @@ toggle it on a running agent:
   goal-enabled group, so `watches.enabled: true` with goal mode off bound nothing — and, worse,
   the background poller rode `goal.enabled` too, so an instance with goal mode off accepted
   watches on `POST /api/watches`, listed them in the console as `active`, and never polled one.)
-- It defaults **off** while the feature settles (#2020). Before this flag existed the tools were
-  always bound, so an agent upgrading from ≤0.105.2 that relies on them must now opt in
-  explicitly.
+- It defaults **on**. It shipped off while the feature settled (#2020) and flipped back on once
+  it did; an instance that wants the tools gone sets `enabled: false` explicitly.
 
 ## `knowledge`
 

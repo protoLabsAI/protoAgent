@@ -123,7 +123,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_max_iterations": 8,
     "goal_no_progress_limit": 3,
     "goal_verify_timeout": 120.0,
-    "watches_enabled": False,  # #2020 feature flag, default off (example keeps watches: commented)
+    "watches_enabled": True,  # #2020 flag, back ON now the feature settled (example sets it)
+    "watch_interval": 30.0,  # ADR 0067 global poll cadence (example keeps `interval:` commented)
     "soul_self_edit_enabled": False,
     "soul_drift_enabled": True,  # #1986 read-only persona-drift curation pass, on by default
     "soul_drift_interval_hours": 24,
