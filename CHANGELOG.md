@@ -41,6 +41,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancel shouldn't be fought. `max_tokens` deliberately is **not**: hitting a limit is
   precisely when escalating a tier or splitting the work is the right move. `end_turn` is
   a normal completion whose productivity stays the caller's judgement.
+- **`/v1` (OpenAI-compat) can now continue a session across requests (#2119).** Every
+  request minted `openai-compat-<unix seconds>`, so multi-turn workflows were amnesiac:
+  turn 2 of a plan→execute flow re-scouted from scratch everything turn 1 had already
+  read, ran past the client's timeout, and only succeeded when the operator pasted turn
+  1's output back into the prompt. That is the LE archetype's core loop.
+
+  A caller can now pin the session with `session_id` in the body, an `X-Session-Id`
+  header, or the OpenAI-standard `user` field (that precedence). With none of them the
+  behaviour is unchanged in spirit — a fresh session per request — but it now uses a uuid
+  rather than a second-resolution clock, which also closes a latent collision where two
+  unrelated callers landing in the same second silently shared one session. Caller-supplied
+  keys are sanitized at the boundary, since a session id reaches memory paths.
+
+### Fixed
+- **`/v1` disconnect semantics are defined instead of undefined (#2119).** When an HTTP
+  client timed out mid-turn, what happened to the running turn was unknowable from the
+  outside — the reported case lost a 15-minute turn entirely. The turn is no longer
+  cancelled when the caller goes away: it runs to completion and is checkpointed against
+  its session, so a caller whose read timeout fired reconnects with the same session key
+  and finds the finished work already in context rather than re-running it. (An orphaned
+  turn's failure is logged with its session id instead of surfacing as a bare
+  "exception was never retrieved" at GC time.)
 - **`team-ready` now knows about open PRs that already claim the issue (#2278).** The
   label is the only intake gate the board pipeline accepts, and it knew nothing about
   pull requests — so an issue whose work was already in flight kept advertising itself as
