@@ -42,19 +42,23 @@ import re
 import subprocess
 import sys
 
-# `## [1.2.3] - 2026-01-01` (dated/closed) vs `## [Unreleased]` (open).
-_DATED = re.compile(r"^## \[\d+\.\d+\.\d+\]")
+# `## [1.2.3] - 2026-01-01` (dated/closed) vs `## [Unreleased]` (open). The VERSION is
+# captured because it — not the whole heading — is the section's identity: correcting a
+# heading's date would otherwise make the section look brand-new to the base/head
+# comparison, and a misfiled entry added in the same commit would slip through.
+_DATED = re.compile(r"^## \[(\d+\.\d+\.\d+)\]")
 _HEADING = re.compile(r"^## \[")
 _ENTRY = re.compile(r"^- \*\*")
 
 
 def entries_by_dated_section(text: str) -> dict[str, int]:
-    """{dated heading: number of `- **` entries beneath it}. Open sections skipped."""
+    """{release version: number of `- **` entries beneath it}. Open sections skipped."""
     counts: dict[str, int] = {}
     current: str | None = None
     for line in text.splitlines():
         if _HEADING.match(line):
-            current = line.strip() if _DATED.match(line) else None
+            m = _DATED.match(line)
+            current = m.group(1) if m else None
             if current is not None:
                 counts.setdefault(current, 0)
         elif current is not None and _ENTRY.match(line):
@@ -73,13 +77,28 @@ def main() -> int:
         print(f"skip: release branch {head_ref!r} rolls [Unreleased] into a dated section by design")
         return 0
 
-    try:
-        before = subprocess.run(
-            ["git", "show", f"{base}:CHANGELOG.md"], capture_output=True, text=True, check=True
-        ).stdout
-    except subprocess.CalledProcessError:
+    # Resolve the base FIRST, and fail loudly if it doesn't. Folding "the ref is
+    # unresolvable" into "there's no CHANGELOG there" would make this gate pass silently
+    # whenever it couldn't actually run — a shallow clone without the base, a typo'd ref —
+    # which is the same fail-open shape it exists to prevent. A guard that can't check
+    # must say so, not wave the PR through.
+    if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+                      capture_output=True).returncode != 0:
+        print(
+            f"::error::base ref {base!r} does not resolve — cannot compare changelog "
+            "placement. (A shallow checkout? This job needs fetch-depth: 0.)"
+        )
+        return 1
+
+    probe = subprocess.run(["git", "cat-file", "-e", f"{base}:CHANGELOG.md"], capture_output=True)
+    if probe.returncode != 0:
+        # The ref resolves, it just has no changelog — a genuinely new file. Nothing to
+        # compare against, and no dated section can have grown.
         print(f"skip: no CHANGELOG.md at {base} — nothing to compare")
         return 0
+    before = subprocess.run(
+        ["git", "show", f"{base}:CHANGELOG.md"], capture_output=True, text=True, check=True
+    ).stdout
     try:
         with open("CHANGELOG.md", encoding="utf-8") as fh:
             after = fh.read()
@@ -97,9 +116,9 @@ def main() -> int:
         print("ok: no new entries under an already-dated changelog heading")
         return 0
 
-    for heading, was, now in grew:
+    for version, was, now in grew:
         print(
-            f"::error::{heading} gained {now - was} changelog entr"
+            f"::error::[{version}] gained {now - was} changelog entr"
             f"{'y' if now - was == 1 else 'ies'} ({was} -> {now}). That release has already "
             "shipped, so the entry would be credited to it AND missing from the next "
             "release's notes. Move it under '## [Unreleased]'. (Your branch was probably "

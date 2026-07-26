@@ -40,7 +40,8 @@ _V1 = "## [0.1.0] - 2026-01-01\n\n### Added\n- **First thing.** body\n"
 def test_counts_only_dated_sections():
     """[Unreleased] is open — it's supposed to accumulate entries, so it isn't counted."""
     got = count(_doc(_UNREL, _V2, _V1))
-    assert got == {"## [0.2.0] - 2026-01-02": 1, "## [0.1.0] - 2026-01-01": 1}
+    # Keyed by VERSION, not heading text — a date correction must not change identity.
+    assert got == {"0.2.0": 1, "0.1.0": 1}
 
 
 def test_a_new_entry_under_a_dated_heading_is_detected():
@@ -48,7 +49,7 @@ def test_a_new_entry_under_a_dated_heading_is_detected():
     after = _doc(_UNREL, "## [0.2.0] - 2026-01-02\n\n### Fixed\n- **Old thing.** body\n- **Misfiled.** body\n", _V1)
     o, n = count(before), count(after)
     grew = [h for h in o if h in n and n[h] > o[h]]
-    assert grew == ["## [0.2.0] - 2026-01-02"]
+    assert grew == ["0.2.0"]
 
 
 def test_adding_under_unreleased_is_clean():
@@ -98,3 +99,32 @@ def test_workflow_wires_the_placement_gate():
     wf = (ROOT / ".github" / "workflows" / "changelog.yml").read_text(encoding="utf-8")
     assert "scripts/changelog_placement.py" in wf
     assert "PR_HEAD_REF" in wf
+
+
+# ── review follow-up: identity by version, and no silent pass when it can't check ──
+
+
+def test_a_date_correction_does_not_reset_section_identity():
+    """Sections are keyed by VERSION, not the whole heading. Keying on heading text
+    meant that correcting a date made the section look brand-new to the base/head
+    comparison — so an entry misfiled in the same commit would slip through."""
+    before = _doc(_UNREL, "## [0.2.0] - 2026-01-02\n\n### Fixed\n- **A.** x\n")
+    after = _doc(_UNREL, "## [0.2.0] - 2026-01-03\n\n### Fixed\n- **A.** x\n- **Misfiled.** y\n")
+    o, n = count(before), count(after)
+    grew = [h for h in o if h in n and n[h] > o[h]]
+    assert grew == ["0.2.0"], "a date-only heading edit must not hide a new entry"
+
+
+def test_an_unresolvable_base_fails_rather_than_skipping(monkeypatch, tmp_path, capsys):
+    """A gate that can't check must SAY so, not wave the PR through. Folding an
+    unresolvable ref into 'nothing to compare' is the same fail-open shape this
+    guard exists to prevent."""
+    monkeypatch.delenv("PR_HEAD_REF", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n")
+    import subprocess as sp
+
+    sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(_MOD.sys, "argv", ["changelog_placement.py", "origin/nope"])
+    assert _MOD.main() == 1
+    assert "does not resolve" in capsys.readouterr().out
