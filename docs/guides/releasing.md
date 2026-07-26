@@ -129,11 +129,12 @@ We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
   three lines under `## [Unreleased]`, so two PRs in flight conflicted *by
   construction* — a 13-PR stack cost ~10 extra CI cycles, none of the conflicts
   semantic (#2322). A fragment is a new file; there is nothing to 3-way merge.
-- CI **enforces** an entry (#2174): the `Changelog entry` check fails any PR that adds
-  neither a `changelog.d/` fragment nor a `CHANGELOG.md` edit. (The direct edit is still
-  accepted so no in-flight or fork PR breaks — it's just the path that conflicts.)
-  Escape hatches are unchanged: the `skip-changelog` label, a `release/*` head branch,
-  and dependabot.
+- CI **enforces** an entry (#2174): the `Changelog entry` check fails any PR that doesn't
+  add a `changelog.d/` fragment. A direct `CHANGELOG.md` edit does **not** satisfy it —
+  an entry written there is precisely the shared-anchor conflict fragments remove. (You
+  may still touch `CHANGELOG.md`, e.g. a typo in an old released section; it just doesn't
+  substitute for the fragment.) Escape hatches are unchanged: the `skip-changelog` label,
+  a `release/*` head branch, and dependabot.
 - **At release time**, `scripts/changelog.py collate` folds every fragment into
   `[Unreleased]` — one heading per kind, merging into an existing heading rather than
   duplicating it — and deletes the fragments. Then `roll <version>` (both run by

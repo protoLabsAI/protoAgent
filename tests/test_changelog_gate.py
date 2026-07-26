@@ -81,12 +81,31 @@ def test_fails_without_changelog_change_and_says_how_to_fix(tmp_path: Path) -> N
     assert "skip-changelog" in result.stdout
 
 
-def test_passes_when_pr_touches_changelog(tmp_path: Path) -> None:
+def test_editing_changelog_directly_no_longer_satisfies_the_gate(tmp_path: Path) -> None:
+    """#2322: an entry written under [Unreleased] is exactly the shared-anchor conflict
+    fragments exist to remove, so it must not green a PR. The transitional acceptance was
+    retired once the PR queue drained to zero — nothing was grandfathered."""
     repo = _pr_repo(tmp_path)
     (repo / "CHANGELOG.md").write_text(
         "# Changelog\n\n## [Unreleased]\n\n### Added\n- a thing\n", encoding="utf-8"
     )
     _git(repo, "commit", "-aqm", "with entry")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 1
+    assert "changelog.d/" in result.stdout
+
+
+def test_a_changelog_edit_alongside_a_fragment_is_fine(tmp_path: Path) -> None:
+    """Touching CHANGELOG.md isn't forbidden — fixing a typo in an old released section
+    is legitimate. It just doesn't substitute for the fragment."""
+    repo = _pr_repo(tmp_path)
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n", encoding="utf-8")
+    (repo / "changelog.d").mkdir(exist_ok=True)
+    (repo / "changelog.d" / "42.fixed.md").write_text("- a thing\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "fragment + unrelated changelog touch")
 
     assert _run_gate(repo).returncode == 0
 

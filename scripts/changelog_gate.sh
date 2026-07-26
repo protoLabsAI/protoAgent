@@ -4,9 +4,10 @@
 # someone reconstructing a cycle's worth of merges.
 #
 # The entry belongs in changelog.d/<issue>.<kind>.md (#2322) — a NEW FILE per PR, which
-# cannot conflict. Editing CHANGELOG.md directly is still accepted so this change breaks
-# no in-flight or fork PR, but it is the path that costs: every such PR writes to the
-# same three lines under [Unreleased], so two in flight conflict by construction. Invoked by the `changelog` job in
+# cannot conflict. A direct CHANGELOG.md edit does NOT satisfy this gate: every such PR
+# writes to the same three lines under [Unreleased], so two in flight conflict by
+# construction (a 13-PR stack cost ~10 extra CI cycles to that one anchor). CHANGELOG.md
+# is written by the release process — `changelog.py collate` — not by feature PRs. Invoked by the `changelog` job in
 # .github/workflows/checks.yml; kept as a script so tests/test_changelog_gate.py
 # can exercise it against throwaway git repos.
 #
@@ -66,14 +67,11 @@ if git diff --name-only "${base}...HEAD" \
   exit 0
 fi
 
-# Editing CHANGELOG.md directly still passes. Kept deliberately: this must not break an
-# in-flight or fork PR written against the old convention, and a flag day would fail
-# honest PRs for a reason that has nothing to do with their content. Tightening to
-# fragments-only is a one-line change once open PRs have cycled.
-if git diff --name-only "${base}...HEAD" | grep -qx 'CHANGELOG.md'; then
-  echo "ok: CHANGELOG.md touched in this PR (prefer a changelog.d/ fragment — see changelog.d/README.md)"
-  exit 0
-fi
-
-echo "::error::Missing changelog entry — add changelog.d/<issue>.<kind>.md (see changelog.d/README.md), or apply the skip-changelog label."
+# A direct CHANGELOG.md edit NO LONGER counts. The transitional acceptance existed only
+# so #2322 wouldn't fail PRs already open against the old convention; it was retired once
+# the queue drained to zero, so nothing is grandfathered and nothing broke. Editing
+# CHANGELOG.md isn't forbidden (an old section may need a typo fix) — it just doesn't
+# satisfy the gate, because an entry written there reintroduces the shared-anchor
+# conflict this whole change exists to remove.
+echo "::error::Missing changelog entry — add changelog.d/<issue>.<kind>.md (see changelog.d/README.md), or apply the skip-changelog label. Editing CHANGELOG.md directly no longer satisfies this gate: entries there conflict between PRs (#2322)."
 exit 1

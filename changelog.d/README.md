@@ -1,7 +1,7 @@
 # changelog.d — news fragments
 
-One file per PR. **Never edit `CHANGELOG.md` directly in a feature PR** — that is the
-whole point: every PR used to write to the same three lines under `## [Unreleased]`, so
+One file per PR. **Never edit `CHANGELOG.md` directly in a feature PR** — the CI gate
+enforces this: a `CHANGELOG.md` edit does not satisfy it. That is the whole point: every PR used to write to the same three lines under `## [Unreleased]`, so
 two PRs in flight conflicted *by construction* and a stack of N cost O(N) serial merges
 (#2322).
 
