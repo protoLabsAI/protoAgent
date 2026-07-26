@@ -5,7 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
 import { onTopic, replaySince } from "../lib/events";
+import { registerKeybinding } from "../ext/keybindingRegistry";
+import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
+import { parseForwardedKey, parsePluginKeybindings } from "../lib/pluginKeybindings";
 import { useUI } from "../state/uiStore";
 import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
@@ -103,6 +106,10 @@ export function PluginView({ view }: { view: PluginViewType }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
+  // Unregister fns for chords this view declared (#1457). Held in a ref so the message
+  // handler can replace the set in place, and dropped on teardown — a keybinding that
+  // outlived its iframe would post into a dead window.
+  const pluginBindings = useRef<Array<() => void>>([]);
   // Has the frame navigated to the plugin page? Gates the posts below: a mounted-but-not-yet
   // -navigated iframe is still on about:blank, which INHERITS the console's origin — under the
   // desktop app that's `tauri://localhost`, so a post targeted at the sidecar origin is refused
@@ -241,6 +248,37 @@ export function PluginView({ view }: { view: PluginViewType }) {
         // pre-#1640 subscribes (no `background` field) never touch the mount policy.
         if (req.background !== undefined && view.key) setPluginBackground(view.key, req.background);
         relay.subscribe(req);
+      } else if (m.type === "protoagent:keybindings") {
+        // The page declares chords it wants (#1457). Ids are namespaced in the parser —
+        // a view can't register or replace a core binding, or collide with another
+        // plugin. The chord it names is a DEFAULT: the operator's override wins through
+        // the same Settings ▸ Keyboard path as everything else.
+        const specs = parsePluginKeybindings(m, pluginId);
+        if (!specs) return;
+        // Re-registering REPLACES the previous set, so a view that drops a chord doesn't
+        // leave a ghost binding firing into a page that forgot about it.
+        pluginBindings.current.forEach((off) => off());
+        pluginBindings.current = specs.map((spec) =>
+          registerKeybinding({
+            id: spec.id,
+            label: spec.label,
+            group: spec.group,
+            defaultKeys: spec.defaultKeys,
+            run: () => {
+              // Fire back with the id the PAGE knows, not our namespaced one.
+              frameRef.current?.contentWindow?.postMessage(
+                { type: "protoagent:keybinding", id: spec.pluginLocalId },
+                "*",
+              );
+            },
+          }),
+        );
+      } else if (m.type === "protoagent:keydown") {
+        // A chord the page didn't handle. Without this, every host shortcut was dead
+        // while a plugin view had focus — the iframe is a separate document, so its
+        // keydowns never reach the host listener at all.
+        const key = parseForwardedKey(m);
+        if (key) runForwardedCombo(key.combo, key.editable);
       } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
         // Force the plugin's namespace — a page can only publish under its own id.
         const bare = m.topic.replace(/^.*?\./, "");
@@ -265,6 +303,9 @@ export function PluginView({ view }: { view: PluginViewType }) {
       // Drop any pending init re-posts — the iframe is being torn down / re-pointed.
       initTimers.current.forEach(clearTimeout);
       initTimers.current = [];
+      // …and the chords it registered, for the same reason.
+      pluginBindings.current.forEach((off) => off());
+      pluginBindings.current = [];
     };
   }, [src, pluginId, view.key, setPluginBackground]);
 

@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Keyboard shortcuts work with sandboxed plugin views (#1457).** A plugin view is an
+  iframe, which broke keyboards in both directions: keys pressed inside it never reached
+  the host listener (so *every* host shortcut was dead while a plugin view had focus), and
+  the page had no way to reach `registerKeybinding` to declare its own. ADR 0063 shipped
+  the rebindable core; this is the half that was missing.
+
+  A postMessage bridge closes both. A page can declare chords
+  (`protoagent:keybindings`) — they appear in Settings ▸ Keyboard, rebindable like any
+  other, and fire back into the page when pressed. And it can forward a chord it didn't
+  handle (`protoagent:keydown`), which the host resolves through the **same** matcher the
+  DOM path uses, so precedence and the typing gate behave identically wherever focus is.
+
+  Trust mirrors the existing `protoagent:publish` namespace rule: a plugin's binding ids
+  are forced into its own `plugin.<id>.` namespace, so a view cannot register, replace, or
+  shadow a core binding like `chat.new`, nor collide with another plugin. The chord a page
+  asks for is only a **default** — the operator's override always wins. A forwarded chord
+  can only reach *global* bindings, since the focus chain lives inside the iframe and the
+  host genuinely cannot know which of its own panels is focused.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed
