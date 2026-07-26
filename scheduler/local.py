@@ -648,27 +648,31 @@ class LocalScheduler:
             except Exception:  # noqa: BLE001 — the event is best-effort
                 log.exception("[scheduler] fired-event publish failed for %s", job.id)
 
+        # A watch-reaction one-shot carries a `watch-<id>` job id (graph/watches →
+        # sdk.run_in_session); everything else is an ordinary `scheduler` fire. ONE origin
+        # value serves both the bus event and the A2A metadata below — they used to
+        # disagree (the bus got the raw `watch-<id>` job id, the wire got `watch`), which
+        # only worked because the console pattern-matched both forms. The job id still
+        # travels as `trigger`, so nothing loses the per-watch detail.
+        is_watch = job.id.startswith("watch-")
+        is_wait = job.id.startswith("wait:")
+        fire_origin = "watch" if is_watch else "scheduler"
+
         # Turn-lifecycle events (#1767): a scheduled/watch fire holds the connection open
         # for the WHOLE turn (the A2A handler runs it synchronously), so without these the
         # console shows nothing — no typing indicator, no stream — during the agent's
         # longest turns. Emit `turn.started` before the POST and `turn.finished` after so
         # the console renders its typing indicator, labelled by trigger. The session id is
         # the fire's context (a `wait`/`run_in_session` resume lands in a chat session; a
-        # plain cron lands in the Activity thread); a watch-reaction one-shot carries a
-        # `watch-<id>` job id (graph/watches → sdk.run_in_session), so tag its origin as
-        # such — otherwise it's an ordinary `scheduler` fire.
+        # plain cron lands in the Activity thread).
         session_id = job.context_id or ACTIVITY_CONTEXT
-        origin = job.id if job.id.startswith("watch-") else "scheduler"
-        self._publish_turn("turn.started", session_id=session_id, origin=origin, trigger=job.id)
+        self._publish_turn("turn.started", session_id=session_id, origin=fire_origin, trigger=job.id)
 
         # Wake-framing (ADR 0079): a scheduled/watch fire delivered a bare prompt, so the agent
         # had no idea WHY it was awake (a cron sweep? a watch trip? a wait resume?). Prepend a
         # one-line "why you're awake" header and point it at <working_state> so it orients before
         # acting, and set a distinct `watch` origin so a watch reaction is no longer masquerading
         # as an ordinary scheduler fire (server._AUTONOMOUS_ORIGINS recognizes both).
-        is_watch = job.id.startswith("watch-")
-        is_wait = job.id.startswith("wait:")
-        fire_origin = "watch" if is_watch else "scheduler"
         if is_watch:
             wake_header = "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]"
         elif is_wait:
@@ -736,7 +740,7 @@ class LocalScheduler:
         finally:
             # Always clear the indicator, whatever the outcome — a failed fire that left
             # `turn.started` hanging would spin the console forever.
-            self._publish_turn("turn.finished", session_id=session_id, origin=origin, trigger=job.id, ok=ok)
+            self._publish_turn("turn.finished", session_id=session_id, origin=fire_origin, trigger=job.id, ok=ok)
 
     def _generate_id(self) -> str:
         # Agent-name prefix keeps cross-agent IDs distinct in shared

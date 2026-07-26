@@ -551,12 +551,17 @@ def _main():
 
             STATE.checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
 
-        # Monitor-goal cadence (ADR 0030) — out-of-band verifier ticks so a met
-        # long-horizon goal finishes without a session turn.
-        if STATE.graph_config is not None and getattr(STATE.graph_config, "goal_enabled", True):
-            import asyncio
+        # Watch cadence (ADR 0067) — out-of-band verifier ticks so a met watch reacts
+        # without waiting for a session turn. Started UNCONDITIONALLY: it used to ride
+        # `goal_enabled` (a leftover of the deleted ADR 0030 monitor-goal loop it grew
+        # out of), which meant an instance with goal mode off accepted watches on
+        # `POST /api/watches` — that route has no gate — persisted them, listed them in
+        # the console as `active`, and never polled a single one. The loop is cheap when
+        # idle (it no-ops on an empty store), and `watches.enabled` gates only whether
+        # the AGENT gets the tools, never whether stored watches are honored.
+        import asyncio
 
-            STATE.watch_task = asyncio.create_task(_watch_loop())
+        STATE.watch_task = asyncio.create_task(_watch_loop())
 
         # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
         # in ``plugins.update_policy``; the loop self-guards each pass (empty policy
