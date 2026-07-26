@@ -913,3 +913,78 @@ def test_cache_key_distinguishes_env_and_env_remove():
     b = _cache_key({**base, "env_remove": ["PROTOAGENT_"]})
     c = _cache_key({**base, "env": {"ANTHROPIC_MODEL": "opus"}})
     assert len({a, b, c}) == 3
+
+
+# ── stopReason is surfaced, not discarded (#2279) ─────────────────────────────
+_STOP_REASON_AGENT_TMPL = r"""
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                                          "content": {"type": "text", "text": "text"}}}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "__REASON__"}})
+"""
+
+
+async def _turn_with_stop_reason(tmp_path, reason: str) -> AcpClient:
+    script = tmp_path / f"stop_{reason}.py"
+    script.write_text(_STOP_REASON_AGENT_TMPL.replace("__REASON__", reason), encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="stop")
+    try:
+        await client.prompt("go", timeout=30.0)
+    finally:
+        await client.close()
+    return client
+
+
+async def test_stop_reason_is_recorded_off_the_wire(tmp_path):
+    """The ACP layer already knows why the turn ended; it used to log it and drop it."""
+    client = await _turn_with_stop_reason(tmp_path, "end_turn")
+    assert client.last_stop_reason == "end_turn"
+
+
+async def test_refusal_is_a_dead_end(tmp_path):
+    """A refusal is not worth escalating a model tier for — a bigger model refuses too.
+    This is the case that burned three coder runs across three tiers."""
+    client = await _turn_with_stop_reason(tmp_path, "refusal")
+    assert client.dead_end() == "refusal"
+
+
+async def test_cancelled_is_a_dead_end(tmp_path):
+    """Someone stopped this turn on purpose; retrying fights that decision."""
+    client = await _turn_with_stop_reason(tmp_path, "cancelled")
+    assert client.dead_end() == "cancelled"
+
+
+async def test_max_tokens_is_not_a_dead_end(tmp_path):
+    """The one stop reason where escalating a tier (or splitting the work) IS right —
+    so it must stay retryable rather than being lumped in with 'gave up'."""
+    client = await _turn_with_stop_reason(tmp_path, "max_tokens")
+    assert client.last_stop_reason == "max_tokens" and client.dead_end() is None
+
+
+async def test_end_turn_is_not_a_dead_end(tmp_path):
+    """A normal completion. Whether it did anything useful is the caller's judgement
+    (did it commit?), not something the transport should pre-empt."""
+    client = await _turn_with_stop_reason(tmp_path, "end_turn")
+    assert client.dead_end() is None
+
+
+async def test_stop_reason_starts_empty_before_any_turn(tmp_path):
+    client = AcpClient(sys.executable, ["-c", "pass"], cwd=str(tmp_path), name="fresh")
+    assert client.last_stop_reason is None and client.dead_end() is None
