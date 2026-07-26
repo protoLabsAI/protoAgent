@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Category filters no longer spill out of the panel (plugin Discover + MCP catalog).**
+  With the directory's 14 categories the segmented filter strip is ~1250px wide; inside a
+  760px Settings drawer it simply overflowed, running off the right edge and over the
+  close button, with no way to reach the categories past the edge.
+
+  The DS segmented `Tabs` is an `inline-flex` strip with no `max-width` and no scroll, and
+  its `responsive` collapse keys on the **container's** width (`@container (max-width:
+  30rem)`) rather than on whether the pills actually *fit* — so a wide container with many
+  categories never collapses and never scrolls. The strip now scrolls horizontally inside
+  its row, with pills keeping their size (shrinking them would squash labels rather than
+  fix the overflow).
+
+  Console-side for now; the underlying gap belongs in `@protolabsai/ui` — a segmented
+  strip should never overflow its container regardless of who renders it.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed
