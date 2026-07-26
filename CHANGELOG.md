@@ -45,6 +45,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asks for is only a **default** — the operator's override always wins. A forwarded chord
   can only reach *global* bindings, since the focus chain lives inside the iframe and the
   host genuinely cannot know which of its own panels is focused.
+- **A plugin symlinked to a live checkout no longer serves mixed code undetected
+  (#2298).** When the checkout's branch changes under a running process, Python's module
+  cache keeps the already-imported code at the old version while anything imported
+  *lazily* afterwards loads the new one — so the process serves a mix of two commits.
+  protoAgent plugins are especially prone to it, because the lazy host-import discipline
+  that lets a plugin's suite run host-free is exactly what defers those imports past the
+  switch. Nothing warned, and the divergence is invisible from outside.
+
+  A plugin's Python sources are now fingerprinted at the moment its modules are imported,
+  and a live warning appears in runtime status when they change underneath — naming the
+  plugin and the actual hazard (a *mixed* process, not merely a stale one). It clears when
+  the plugin is reloaded, so it tracks the real state rather than latching until restart.
+
+  Scoped to **symlinked** plugin paths: a normal install is an immutable copy nobody edits
+  under a live process, so the usual case pays nothing. The stamp is
+  `(relpath, mtime, size)` over `*.py` — no file contents are read on the poll, and
+  non-Python churn (a README, a `.pyc`) can't raise a false alarm.
 - **Archetypes declare a capability contract, checked against the tools that actually
   bound (#2277).** An archetype preset is the shipped artifact that defines an agent's
   identity — the template every fork starts from — and it could commit to actions the
@@ -124,6 +141,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   It warns rather than refuses: a headless box legitimately binds a single interface, and
   refusing to boot would trade a reachable-elsewhere server for no server at all.
+
+- **`watches.interval` is a real setting, and both watch keys reached the Settings UI
+  (ADR 0067).** `watch_interval` was read in three places — the server's `_watch_loop`, the
+  controller's effective-cadence calculation, and the `VerifierInvoker` handed to a plugin
+  verifier — as `getattr(cfg, "watch_interval", 30)` against a field that **did not exist
+  on `LangGraphConfig`**. Every read silently took the fallback, so the global poll cadence
+  was hard-coded at 30s and the `watch_interval` the ADR, the watches guide and the plugin
+  docs all describe was unconfigurable. It is now a parsed field (`watches.interval`,
+  floored at 5s, re-read every tick so a change applies with no restart), and the three
+  readers share one `DEFAULT_WATCH_INTERVAL_S` constant instead of three loose literals.
+
+  Neither `watches.enabled` nor the new `watches.interval` was in `graph/settings_schema.py`,
+  so neither rendered anywhere in Settings — on an install that already ships a Watches panel
+  in the Work hub, the only way to turn watches on was hand-editing YAML. Both now live under
+  **Settings ▸ Behavior ▸ Watches**, beside Goal mode rather than inside it.
+
+### Changed
+- **Watches default ON (ADR 0067).** `watches.enabled` shipped off under #2020 "while the
+  feature cooks"; it has, so `create_watch` / `list_watches` / `clear_watch` are bound by
+  default. An instance that doesn't want them sets `watches.enabled: false`.
+
 ### Fixed
 - **The desktop app can open a second window — "New Window" is no longer a no-op
   (#1706).** The shell's `on_new_window` handler only ever forwarded *external* http(s)

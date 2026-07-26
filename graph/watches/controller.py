@@ -16,7 +16,7 @@ import os
 
 from graph.goals.verifiers import VERIFIERS, VerifierInvoker, VerifyContext, run_verifier
 from graph.watches.store import WatchStore
-from graph.watches.types import Watch
+from graph.watches.types import DEFAULT_WATCH_INTERVAL_S, Watch
 
 log = logging.getLogger(__name__)
 
@@ -156,11 +156,13 @@ class WatchController:
         watch = self._store.get(watch_id)
         if watch is None or not watch.active:
             return None
-        # Effective cadence: the per-watch override, else the config default the
-        # server's _watch_loop ticks at (mirrors its getattr fallback).
+        # Effective cadence: the per-watch override, else the configured global cadence
+        # the server's _watch_loop ticks at (mirrors its fallback).
         interval_s = watch.interval_s
         if interval_s is None:
-            interval_s = float(getattr(self._config, "watch_interval", 30) or 30)
+            interval_s = float(
+                getattr(self._config, "watch_interval", DEFAULT_WATCH_INTERVAL_S) or DEFAULT_WATCH_INTERVAL_S
+            )
         ctx = VerifyContext(
             config=self._config,
             condition=watch.condition,

@@ -21,8 +21,9 @@ WATCH_TOOLS = {"create_watch", "list_watches", "clear_watch"}
 # --- get_all_tools gating --------------------------------------------------
 
 
-def test_watch_tools_absent_by_default_even_with_goal_mode_on():
-    # Default: goal mode on, watches flag off -> the three watch tools are NOT bound.
+def test_watch_tools_absent_when_the_flag_is_off():
+    # get_all_tools' own parameter default is off (callers thread the config value), so an
+    # unflagged build binds nothing — the flag is what turns them on, not the call shape.
     names = {t.name for t in get_all_tools(goal_enabled=True)}
     assert not (WATCH_TOOLS & names)
 
@@ -52,11 +53,39 @@ def test_goal_tools_do_not_bring_watch_tools_along():
 # --- config plumbing -------------------------------------------------------
 
 
-def test_watches_enabled_defaults_off_and_parses_from_yaml():
-    assert LangGraphConfig().watches_enabled is False
-    assert LangGraphConfig.from_dict({"watches": {"enabled": True}}).watches_enabled is True
-    # Absent section -> the default (off).
-    assert LangGraphConfig.from_dict({}).watches_enabled is False
+def test_watches_enabled_defaults_on_and_parses_from_yaml():
+    assert LangGraphConfig().watches_enabled is True
+    assert LangGraphConfig.from_dict({"watches": {"enabled": False}}).watches_enabled is False
+    # Absent section -> the default (on).
+    assert LangGraphConfig.from_dict({}).watches_enabled is True
+
+
+def test_watch_interval_is_a_real_field_parsed_from_yaml():
+    """Regression for the gap this replaced: `watch_interval` was read in three places via
+    ``getattr(cfg, "watch_interval", 30)`` against a field that DID NOT EXIST, so the
+    cadence silently pinned to 30s and `watches.interval` in YAML did nothing."""
+    from graph.watches import DEFAULT_WATCH_INTERVAL_S
+
+    assert LangGraphConfig().watch_interval == DEFAULT_WATCH_INTERVAL_S
+    assert LangGraphConfig.from_dict({"watches": {"interval": 120}}).watch_interval == 120.0
+    # Absent section / null value -> the default, never None (the loop does arithmetic on it).
+    assert LangGraphConfig.from_dict({}).watch_interval == DEFAULT_WATCH_INTERVAL_S
+    assert LangGraphConfig.from_dict({"watches": {"interval": None}}).watch_interval == DEFAULT_WATCH_INTERVAL_S
+
+
+def test_watch_config_keys_are_reachable_from_settings():
+    """Both keys were missing from FIELDS, so neither rendered in the Settings UI — the
+    only way to enable watches was hand-editing YAML on an install that already ships the
+    Watches panel."""
+    from graph.settings_schema import FIELDS, _SECTION_CATEGORY
+
+    by_key = {f.key: f for f in FIELDS}
+    assert "watches.enabled" in by_key and not by_key["watches.enabled"].ui_hidden
+    assert "watches.interval" in by_key and not by_key["watches.interval"].ui_hidden
+    assert by_key["watches.enabled"].attr == "watches_enabled"
+    assert by_key["watches.interval"].attr == "watch_interval"
+    # A core section missing from the category map renders nowhere.
+    assert _SECTION_CATEGORY.get("Watches") == "Behavior"
 
 
 # --- actually bound to the compiled lead graph -----------------------------

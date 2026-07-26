@@ -871,12 +871,17 @@ async def _checkpoint_prune_loop() -> None:
 async def _watch_loop() -> None:
     """Out-of-band cadence for watches (ADR 0067): periodically run each active watch's
     verifier — no agent turn — so a met watch reacts (run_in_session + hooks) without waiting
-    for a session turn. Many watches tick together; verifier-only."""
+    for a session turn. Many watches tick together; verifier-only.
+
+    The cadence is re-read from config on EVERY iteration, so editing ``watches.interval``
+    in Settings retimes the loop on the next tick with no restart."""
+    from graph.watches import DEFAULT_WATCH_INTERVAL_S, MIN_WATCH_INTERVAL_S
+
     await asyncio.sleep(15)  # let boot settle before the first tick
     while True:
         ctrl = STATE.watch_controller
         cfg = STATE.graph_config
-        interval = getattr(cfg, "watch_interval", 30) if cfg else 30
+        interval = getattr(cfg, "watch_interval", DEFAULT_WATCH_INTERVAL_S) if cfg else DEFAULT_WATCH_INTERVAL_S
         if ctrl is not None:
             try:
                 n = await ctrl.tick_all()
@@ -884,7 +889,7 @@ async def _watch_loop() -> None:
                     log.info("[watch] %d watch(es) reached a terminal state", n)
             except Exception:
                 log.exception("[watch] tick failed")
-        await asyncio.sleep(max(5, interval))
+        await asyncio.sleep(max(MIN_WATCH_INTERVAL_S, float(interval or DEFAULT_WATCH_INTERVAL_S)))
 
 
 async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade: bool = True) -> str | None:
