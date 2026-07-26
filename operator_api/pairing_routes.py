@@ -49,6 +49,13 @@ def set_bind_host(host: str) -> None:
     _BIND_HOST[0] = (host or "").strip() or "127.0.0.1"
 
 
+def bind_host() -> str:
+    """The resolved bind interface — what uvicorn was actually given, not what config
+    says (an explicit ``--host`` wins over ``network.bind``). Read by the runtime-status
+    posture warning (#2147)."""
+    return _BIND_HOST[0]
+
+
 def _reachable(addr: str) -> bool:
     """Can a phone reach this instance on ``addr``, given what we actually bound to?"""
     bind = _BIND_HOST[0]
