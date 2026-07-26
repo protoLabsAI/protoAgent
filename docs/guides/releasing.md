@@ -119,14 +119,27 @@ push the tag by hand (step 4); that tag push is the release trigger.
 We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
 [`CHANGELOG.md`](https://github.com/protoLabsAI/protoAgent/blob/main/CHANGELOG.md).
 
-- **In your feature PR**, add a bullet under `## [Unreleased]` in the right
-  group (`### Added` / `### Changed` / `### Fixed` / `### Removed` / `### Docs`).
-  CI **enforces** this (#2174): the `Changelog entry` check fails any PR whose
-  diff doesn't touch `CHANGELOG.md` — escape hatches are the `skip-changelog`
-  label, a `release/*` head branch, and dependabot.
-- **At release time**, `scripts/changelog.py roll <version>` (run by
-  `prepare-release.yml`) moves everything under `[Unreleased]` into a dated
-  `## [X.Y.Z] - YYYY-MM-DD` section and leaves a fresh empty `[Unreleased]`.
+- **In your feature PR**, add a **news fragment** — a new file at
+  `changelog.d/<issue-or-pr>.<kind>.md`, where `<kind>` is `added` / `changed` /
+  `fixed` / `removed` / `deprecated` / `security` / `docs`. Its contents are the
+  markdown bullet(s) exactly as they should read in the release notes. See
+  [`changelog.d/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/changelog.d/README.md).
+
+  **Don't edit `CHANGELOG.md` in a feature PR.** Every PR used to write to the same
+  three lines under `## [Unreleased]`, so two PRs in flight conflicted *by
+  construction* — a 13-PR stack cost ~10 extra CI cycles, none of the conflicts
+  semantic (#2322). A fragment is a new file; there is nothing to 3-way merge.
+- CI **enforces** an entry (#2174): the `Changelog entry` check fails any PR that adds
+  neither a `changelog.d/` fragment nor a `CHANGELOG.md` edit. (The direct edit is still
+  accepted so no in-flight or fork PR breaks — it's just the path that conflicts.)
+  Escape hatches are unchanged: the `skip-changelog` label, a `release/*` head branch,
+  and dependabot.
+- **At release time**, `scripts/changelog.py collate` folds every fragment into
+  `[Unreleased]` — one heading per kind, merging into an existing heading rather than
+  duplicating it — and deletes the fragments. Then `roll <version>` (both run by
+  `prepare-release.yml`) moves that section into a dated `## [X.Y.Z] - YYYY-MM-DD` one
+  and leaves a fresh empty `[Unreleased]`. So `CHANGELOG.md` is only ever edited by the
+  release process.
 - The rolled changelog is committed **inside the release PR**, so it goes
   through the same `main` ruleset (PR + checks) as any change — nothing is
   pushed to `main` directly.
