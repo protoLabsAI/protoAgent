@@ -103,6 +103,14 @@ class PluginManifest:
     #     warn and load).
     requires_pip: list[str] = field(default_factory=list)
     optional_pip: list[str] = field(default_factory=list)
+    #   pip_scopes: pkg name -> "host" | "runtime" (#2246). Which INTERPRETER has to be
+    #     able to import the dep. ``runtime`` (the default, matching the compute-plugin
+    #     pattern) means the managed Python runtime that serves ``execute_code`` children;
+    #     ``host`` means this process. They have separate site-packages, so a dep the
+    #     managed runtime satisfies is NOT importable in a frozen host — and a plugin whose
+    #     tools import it in-process would pass the install gate and then die at tool time.
+    #     Only non-default (``host``) entries are recorded; absent ⇒ runtime.
+    pip_scopes: dict[str, str] = field(default_factory=dict)
     repository: str = ""
     homepage: str = ""
     min_protoagent_version: str = ""
@@ -315,30 +323,47 @@ def _parse_emits(entries, plugin_dir: Path, plugin_id: str) -> tuple[list[str], 
     return names, schemas
 
 
-def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str]]:
-    """Parse ``requires_pip:`` → ``(hard specs, optional specs)`` (#1953).
+#: Valid ``scope:`` values on a ``requires_pip`` mapping entry (#2246).
+_PIP_SCOPES = ("host", "runtime")
+
+
+def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str], dict[str, str]]:
+    """Parse ``requires_pip:`` → ``(hard specs, optional specs, scopes)`` (#1953, #2246).
 
     An entry is either a bare PEP 508 spec string (today's behavior, unchanged —
-    a HARD dep) or a mapping ``{pkg: "pillow>=10", optional: true}``:
+    a HARD dep) or a mapping ``{pkg: "pillow>=10", optional: true, scope: host}``:
 
     .. code-block:: yaml
 
         requires_pip:
-          - "httpx>=0.27"                          # hard — still fine
-          - { pkg: "pillow>=10", optional: true }  # optional tier
+          - "httpx>=0.27"                            # hard, runtime-scoped (default)
+          - { pkg: "pillow>=10", optional: true }    # optional tier
+          - { pkg: "numpy", scope: host }            # imported IN-PROCESS by the plugin
 
     The optional tier is for a dep the plugin degrades gracefully without (a
     lazy import + a readable tool error naming the fix): the frozen-app gate
     (ADR 0058 D2) warns instead of refusing when it's missing, and
-    ``install-deps`` installs it best-effort. A mapping without
-    ``optional: true`` is just a hard dep spelled long-form; a mapping without
-    a usable ``pkg`` warns and is skipped — it never fails the manifest load
-    (mirroring ``_parse_emits``).
+    ``install-deps`` installs it best-effort.
+
+    ``scope`` says which INTERPRETER must be able to import the dep. ``runtime``
+    (the default, matching the compute-plugin pattern) is the managed Python runtime
+    serving ``execute_code`` children; ``host`` is this process. They have separate
+    site-packages, so declaring nothing and relying on the runtime is wrong for a
+    plugin whose *tools* import the dep in-process — that combination passed the
+    frozen install gate and then died with ``ModuleNotFoundError`` at every tool call.
+    Only non-default (``host``) entries are recorded, so an unscoped manifest parses
+    to an empty mapping and behaves exactly as before.
+
+    A mapping without ``optional: true`` is just a hard dep spelled long-form; a
+    mapping without a usable ``pkg`` warns and is skipped — it never fails the manifest
+    load (mirroring ``_parse_emits``). An unrecognized ``scope`` warns and falls back to
+    the default rather than rejecting the plugin.
     """
     if not isinstance(entries, (list, tuple)):
-        return [], []
+        return [], [], {}
     hard: list[str] = []
     optional: list[str] = []
+    scopes: dict[str, str] = {}
     for entry in entries:
         if isinstance(entry, dict):
             pkg = str(entry.get("pkg", "") or "").strip()
@@ -348,9 +373,31 @@ def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str]]:
                 )
                 continue
             (optional if entry.get("optional") else hard).append(pkg)
+            raw_scope = str(entry.get("scope", "") or "").strip().lower()
+            if raw_scope and raw_scope not in _PIP_SCOPES:
+                log.warning(
+                    "[plugins] %s: requires_pip entry %r has unknown scope %r (expected %s) — "
+                    "treating as 'runtime'",
+                    plugin_id,
+                    pkg,
+                    raw_scope,
+                    " or ".join(_PIP_SCOPES),
+                )
+                raw_scope = ""
+            if raw_scope == "host":
+                scopes[_pip_pkg_name(pkg)] = "host"
         else:
             hard.append(str(entry))
-    return hard, optional
+    return hard, optional, scopes
+
+
+def _pip_pkg_name(spec: str) -> str:
+    """Distribution name out of a PEP 508 spec — ``"pillow>=10,<11"`` → ``"pillow"``.
+
+    Mirrors ``installer._dep_pkg_name``; duplicated rather than imported because the
+    manifest parser must stay importable without the installer (a plugin's own test
+    suite loads manifests host-free)."""
+    return re.split(r"[<>=!~\[; ]", str(spec).strip(), maxsplit=1)[0].strip()
 
 
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
@@ -407,7 +454,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     )
     emits, emits_schemas = _parse_emits(data.get("emits"), plugin_dir, pid)
     subscribes = data.get("subscribes")
-    requires_pip, optional_pip = _parse_requires_pip(data.get("requires_pip"), pid)
+    requires_pip, optional_pip, pip_scopes = _parse_requires_pip(data.get("requires_pip"), pid)
     return PluginManifest(
         id=pid,
         name=name,
@@ -432,6 +479,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],
         requires_pip=requires_pip,
         optional_pip=optional_pip,
+        pip_scopes=pip_scopes,
         repository=str(data.get("repository", "")).strip(),
         homepage=str(data.get("homepage", "")).strip(),
         min_protoagent_version=str(data.get("min_protoagent_version", "")).strip(),

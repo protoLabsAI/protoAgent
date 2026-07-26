@@ -166,6 +166,29 @@ requires_pip: ["httpx>=0.27"]
 min_protoagent_version: "0.20.0"
 ```
 
+### Dep scope: which interpreter has to import it
+
+On the desktop app there are **two** Pythons with separate site-packages: the frozen
+host process, and the managed Python runtime that serves `execute_code` children. A
+`requires_pip` entry can say which one needs the dep:
+
+```yaml
+requires_pip:
+  - "httpx>=0.27"                          # runtime-scoped (the default)
+  - { pkg: "pillow>=10", optional: true }  # optional tier
+  - { pkg: "numpy", scope: host }          # imported IN-PROCESS by the plugin's tools
+```
+
+`scope: runtime` (the default, matching the compute-plugin pattern) means the managed
+runtime satisfies it and the wheel installer provisions it. **`scope: host` means your
+plugin's own module imports it** — the managed runtime can never satisfy that, so on a
+frozen host the install gate refuses honestly instead of passing and letting every tool
+call die with `ModuleNotFoundError` (#2246). If you hit that refusal, vendor the code,
+drop the dependency, or ship it in the app bundle.
+
+An unrecognized `scope` warns and falls back to the default rather than rejecting the
+plugin.
+
 `min_protoagent_version` is enforced at load: the plugin is refused when it needs a
 newer host. The host version it's compared against is the same shared resolver the
 A2A agent card advertises (`infra.paths.package_version()` — the repo

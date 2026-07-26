@@ -145,7 +145,10 @@ def register_plugin_routes(app) -> None:
                 # Actionable install state (#2013 adjacent): which declared pip deps
                 # are missing from the runtime — drives the console's "Install deps"
                 # action instead of the old install-manually advisory text.
-                _, missing = installer._deps_satisfied(list(m.requires_pip or []))
+                # Scope-aware (#2246): a `scope: host` dep isn't satisfied by the managed
+                # runtime, so the console must keep showing it as missing rather than
+                # reporting a plugin ready that will ModuleNotFoundError at tool time.
+                _, missing = installer._deps_satisfied(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
                 item["deps_missing"] = missing
             out.append(item)
         return {"plugins": out}
