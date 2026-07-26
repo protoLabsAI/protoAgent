@@ -101,6 +101,18 @@ async def _operator_runtime_status():
             warnings.append(contract)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
+    # Live-checkout plugin drift (#2298) — a plugin symlinked to a working checkout
+    # serves a MIX of two versions after a branch switch, and nothing else notices.
+    # Same live/self-clearing shape; stats only symlinked plugins, so the usual
+    # (copied-install) case costs nothing. Off the loop — it stats files.
+    try:
+        from graph.plugins.loader import code_drift_warning
+
+        drift = await asyncio.to_thread(code_drift_warning)
+        if drift:
+            warnings.append(drift)
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     return _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),

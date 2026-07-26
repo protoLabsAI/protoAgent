@@ -289,14 +289,16 @@ goal:
   max_iterations: 8
 
 # Watches (ADR 0067) — agent-held supervised conditions (a deploy, CI, a metric),
-# polled out-of-band; when one trips the agent is resumed to react. OFF by default
-# (#2020) while the feature cooks. `enabled: true` BINDS the agent-facing
-# create_watch / list_watches / clear_watch tools (goal mode must also be on — they
-# ride inside the goal-enabled tool group). Tool-availability flag ONLY: toggling it
-# off never deletes or mutates stored watches, and the background watch poller is
-# untouched.
-# watches:
-#   enabled: true
+# polled out-of-band; when one trips the agent is resumed to react. `enabled` (ON by
+# default) BINDS the agent-facing create_watch / list_watches / clear_watch tools —
+# independent of goal mode. Tool-availability ONLY: turning it off never deletes or
+# mutates a stored watch, and the background poller runs regardless, so a watch created
+# by an operator (POST /api/watches) or a plugin keeps being polled either way.
+# `interval` is the global poll cadence in seconds (min 5); a watch's own `interval_s`
+# overrides it as a floor.
+watches:
+  enabled: true
+  # interval: 30
 
 # Persona — the agent's own SOUL.md. `self_edit_enabled` (OFF by default) gives the
 # LEAD agent the `edit_soul` tool so it can rewrite SECTIONS of its own persona
