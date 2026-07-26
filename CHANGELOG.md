@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`POST /api/fleet/{name}/stop` no longer reports a stop it didn't achieve (#2286).** The
+  endpoint returned `{"ok": true, "stopped": true}` and removed the member from `fleet.json`
+  while the process kept running and kept LISTENing on its port — the worst of both states:
+  invisible to the hub, still answering requests, and holding its port against any
+  replacement, so the standard fix for a stuck member (restart it) could not proceed.
+
+  The root cause was the pid-reuse guard. `_is_our_agent()` recognised a member only by
+  `-m server` or `python …server`, but a **frozen desktop member is launched as the bare
+  sidecar binary** (`protoagent-server`) — `manager._server_argv()` drops `-m server` under
+  `sys.frozen` because PyInstaller's entrypoint already is it. So every desktop member read
+  as "not ours": `stop()` reaped the registry entry and returned success **without ever
+  sending a signal**, which is why SIGTERM appeared to be ignored and a manual SIGKILL was
+  needed. The same predicate gates `shutdown_all()`, so the hub's shutdown hook was
+  additionally spinning down *nothing* on desktop, leaving members to outlive their hub.
+
+  `_is_our_agent()` now recognises the frozen sidecar; `stop()` confirms the process is
+  actually gone before claiming success, and if it survives SIGTERM+SIGKILL it reports
+  `stopped: false` with the reason and **restores the registry entry** rather than
+  deregistering a live process. A recycled pid still reaps without signalling, but now says
+  so in the response. `ok` on the endpoint tracks the outcome instead of always being `true`,
+  and `/api/fleet/down` reports any members it failed to stop.
+
 ## [0.116.0] - 2026-07-26
 
 ### Fixed
