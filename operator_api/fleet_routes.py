@@ -186,6 +186,11 @@ def register_fleet_routes(app) -> None:
         # The archetype's base SOUL.md (the persona picked in the new-agent picker), written
         # into the workspace so a bundle agent arrives WITH its persona, not just its tools.
         soul = (str(body.get("soul") or "").strip()) or None
+        # The archetype's capability contract (#2277) — the tools its persona commits to
+        # performing. Recorded on the workspace so the member can check its own doctrine
+        # against the tools that actually bound, instead of narrating actions it can't do.
+        raw_req = body.get("requires_tools")
+        requires_tools = [str(t) for t in raw_req if str(t).strip()] if isinstance(raw_req, list) else None
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
@@ -210,6 +215,7 @@ def register_fleet_routes(app) -> None:
                 soul=soul,
                 inputs=inputs,
                 secrets=secrets,
+                requires_tools=requires_tools,
             )
             agent = (
                 (await asyncio.to_thread(supervisor.start, name))
@@ -399,6 +405,11 @@ def _archetypes() -> list[dict]:
             # which on the desktop app needs the managed CPython. The new-agent picker
             # warns at choose-time when a requirement isn't provisioned.
             "requires": list(entry.get("requires") or []),
+            # Capability contract (#2277): the tools this archetype's PERSONA commits to
+            # performing. Recorded on the created workspace so the member can check its own
+            # doctrine against the tools that actually bound — a preset that says it files
+            # issues while `github.write` defaults false otherwise narrates the filing.
+            "requires_tools": list(entry.get("requires_tools") or []),
         }
         seen_ids.add(aid)
         if bundle:
@@ -439,6 +450,9 @@ def _archetypes() -> list[dict]:
                     # A bundle's archetype: block can declare host requirements too —
                     # same shape as the catalog field (#2186 follow-on).
                     "requires": list(arch.get("requires") or []),
+                    # A bundle's archetype: block declares its capability contract the
+                    # same way (#2277).
+                    "requires_tools": list(arch.get("requires_tools") or []),
                 }
             )
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort

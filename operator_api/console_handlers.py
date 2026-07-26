@@ -88,6 +88,19 @@ async def _operator_runtime_status():
             warnings.append(posture)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
+    # Archetype capability contract (#2277) — does this agent's persona commit to actions
+    # it has no tool for? Checked against `bound_tools` (what the model can really call),
+    # not the manifest, because the gap is usually a config flag suppressing a
+    # registration. No-op unless this instance is a workspace member with a contract.
+    try:
+        from graph.workspaces import manager as _ws
+
+        bound = [getattr(t, "name", "") for t in (getattr(STATE.graph, "bound_tools", None) or [])]
+        contract = await asyncio.to_thread(_ws.capability_contract_warning, bound)
+        if contract:
+            warnings.append(contract)
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     return _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),

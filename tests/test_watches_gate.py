@@ -1,9 +1,11 @@
-"""The watches feature flag (#2020, ADR 0067) — gate the agent-facing watch tools
-behind ``watches.enabled`` (default OFF) so the feature can cook before shipping on.
+"""The watches feature flag (#2020, ADR 0067) — ``watches.enabled`` gates the agent-facing
+watch tools, and NOTHING else.
 
 Mirrors the ``goal.enabled`` gating in test_set_goal_tool.py: the flag controls TOOL
-AVAILABILITY only. It never deletes or mutates stored watch state, and the watch tools
-ride INSIDE the goal-enabled tool group (goal mode must also be on)."""
+AVAILABILITY only — it never deletes or mutates stored watch state. It is also
+INDEPENDENT of goal mode: the tools used to ride inside the goal-enabled group, which
+coupled two unrelated dispositions (a goal the agent drives vs. a condition an external
+process moves), so turning goal mode off silently took the watch tools with it."""
 
 from __future__ import annotations
 
@@ -30,10 +32,20 @@ def test_watch_tools_bound_when_flag_and_goal_mode_on():
     assert WATCH_TOOLS <= names
 
 
-def test_watch_tools_require_goal_mode():
-    # The watch tools ride inside the goal-enabled group; with goal mode off the flag
-    # alone binds nothing (parity with how set_goal is gated).
+def test_watch_tools_are_independent_of_goal_mode():
+    # `watches.enabled` alone binds the tools — a watch is not a goal, so goal mode has no
+    # say. (It used to: the tools were nested in the goal-enabled group, so an instance
+    # that turned goal mode off lost watches it never asked to lose.)
     names = {t.name for t in get_all_tools(goal_enabled=False, watches_enabled=True)}
+    assert WATCH_TOOLS <= names
+    # ...and the goal tools stay gone, so this didn't just leak the whole group.
+    assert not ({"set_goal", "abandon_goal"} & names)
+
+
+def test_goal_tools_do_not_bring_watch_tools_along():
+    # The inverse coupling: goal mode on with watches off binds set_goal but no watch tool.
+    names = {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=False)}
+    assert "set_goal" in names
     assert not (WATCH_TOOLS & names)
 
 
@@ -86,6 +98,10 @@ def test_watch_tools_bound_to_lead_graph_only_when_enabled():
     assert WATCH_TOOLS <= on
     off = _lead_graph_tool_names(goal_enabled=True, watches_enabled=False)
     assert not (WATCH_TOOLS & off)
+    # Goal mode off must still bind them on the COMPILED graph, not just in get_all_tools —
+    # create_agent_graph threads the two flags separately or the decoupling is cosmetic.
+    goalless = _lead_graph_tool_names(goal_enabled=False, watches_enabled=True)
+    assert WATCH_TOOLS <= goalless
 
 
 # --- preservation semantics (issue #2020) ----------------------------------

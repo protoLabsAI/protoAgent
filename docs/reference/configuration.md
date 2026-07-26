@@ -427,8 +427,12 @@ toggle it on a running agent:
   state, and the background watch **poller is untouched** — existing watches keep polling and
   keep firing their `on_met` hooks. You are removing the agent's ability to *create and manage*
   watches, not the watches themselves.
-- The tools ride inside the goal-enabled tool group, so **`goal.enabled` must also be true** for
-  them to appear. `watches.enabled: true` with goal mode off binds nothing.
+- It is **independent of `goal.enabled`**. A watch is verifier-only and moved by an external
+  process; a goal is a bounded loop the agent drives. They are separate dispositions and each
+  flag now binds its own tools. (Until this change the watch tools were nested inside the
+  goal-enabled group, so `watches.enabled: true` with goal mode off bound nothing — and, worse,
+  the background poller rode `goal.enabled` too, so an instance with goal mode off accepted
+  watches on `POST /api/watches`, listed them in the console as `active`, and never polled one.)
 - It defaults **off** while the feature settles (#2020). Before this flag existed the tools were
   always bound, so an agent upgrading from ≤0.105.2 that relies on them must now opt in
   explicitly.
