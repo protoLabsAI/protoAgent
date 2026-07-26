@@ -214,9 +214,17 @@ class WatchController:
         state this tick."""
         from time import time
 
+        # ``active_watches`` is a synchronous glob + read of every watch file, and the
+        # server's ``_watch_loop`` calls this ON the event loop — so hop the scan to a
+        # thread (the operator list handler already does) instead of stalling every other
+        # request for the length of the scan. An empty store makes the whole tick a no-op,
+        # which is what keeps the loop cheap enough to run unconditionally.
+        watches = await asyncio.to_thread(self.active_watches)
+        if not watches:
+            return 0
         now = time()
         finished = 0
-        for watch in self.active_watches():
+        for watch in watches:
             if not self._due(watch, now):
                 continue
             try:
