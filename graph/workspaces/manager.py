@@ -112,6 +112,48 @@ def is_workspace_member() -> bool:
     return _read_record(instance_paths().instance_root) is not None
 
 
+def capability_contract_warning(bound_tool_names) -> str | None:
+    """Warn when THIS agent's persona commits to actions it has no tool for (#2277).
+
+    An archetype preset is the shipped artifact that defines an agent's identity — the
+    template every fork starts from. When it commits to an action the bundle's DEFAULT
+    config never provisions, every instance inherits the lie, and the failure mode is
+    silent by construction: the model fills the impossible instruction with narration and
+    reports the action as completed, so nothing errors and nothing crashes. The shipped
+    case was ``project-manager``'s "pain points get filed as issues" against a
+    ``github.write`` that defaults false, so ``github_create_issue`` was never registered.
+
+    The archetype records the tools its doctrine depends on (``requires_tools`` in
+    ``archetype-catalog.json`` / a bundle's ``archetype:`` block); ``create()`` copies
+    that contract onto the workspace. Here — inside the member, after the graph has bound
+    its tools — is the one place where both the doctrine and the live tool set are
+    knowable at once, so the contract is checked against ground truth rather than against
+    manifest metadata that can't see a config-gated registration.
+
+    Returns ``None`` for a non-member, a member with no declared contract, or a satisfied
+    one. Deliberately a warning, not a refusal: the operator may have turned a capability
+    off on purpose, and an agent that boots degraded beats one that won't boot.
+    """
+    from infra.paths import instance_paths
+
+    rec = _read_record(instance_paths().instance_root)
+    declared = [str(t) for t in (rec or {}).get("requires_tools") or []]
+    if not declared:
+        return None
+    missing = [t for t in declared if t not in set(bound_tool_names or ())]
+    if not missing:
+        return None
+    return (
+        f"[archetype] this agent's persona commits to actions it has no tool for: "
+        f"{', '.join(missing)}. The archetype declared them, but they aren't bound — most "
+        f"often a per-agent capability flag that defaults off (e.g. github.write gating "
+        f"github_create_issue), or a plugin that didn't enable. Asked to do these, the model "
+        f"will narrate a completion rather than fail, so the breakage is invisible in its own "
+        f"output. Enable the capability, or edit SOUL.md so the doctrine matches what this "
+        f"agent can actually do."
+    )
+
+
 def list_workspaces() -> list[dict]:
     """Every workspace under the root (each dir with a ``workspace.yaml``)."""
     root = workspaces_root()
@@ -236,6 +278,7 @@ def create(
     soul: str | None = None,
     inputs: Mapping[str, str] | None = None,
     secrets: list[dict] | None = None,
+    requires_tools: list[str] | None = None,
 ) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
     an installed plugin bundle. Does not start it.
@@ -311,6 +354,12 @@ def create(
         "created": datetime.now(timezone.utc).isoformat(),
         "bundle": bundle or "",
     }
+    # The archetype's capability contract (#2277): the tools its persona commits to
+    # performing. Recorded here because the member's instance root IS this workspace, so
+    # it can read its own contract at boot and check it against what actually got bound —
+    # the only place both the doctrine and the live tool set are knowable at once.
+    if requires_tools:
+        rec["requires_tools"] = [str(t) for t in requires_tools if str(t).strip()]
     # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
     # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
     # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned

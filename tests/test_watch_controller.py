@@ -132,6 +132,20 @@ async def test_tick_all_counts_terminal(tmp_path):
     assert await c.tick_all() == 1
 
 
+@pytest.mark.asyncio
+async def test_tick_all_on_an_empty_store_is_a_cheap_noop(tmp_path, monkeypatch):
+    """The server starts ``_watch_loop`` unconditionally, so the idle tick must cost
+    nothing beyond the store scan — no verifier work, no per-watch bookkeeping. Guards the
+    premise that made the unconditional start acceptable."""
+    c = _ctrl(tmp_path)
+
+    def _boom(*a, **k):  # any verifier work on an empty store is a bug
+        raise AssertionError("tick_all ran a verifier with no watches stored")
+
+    monkeypatch.setattr("graph.watches.controller.run_verifier", _boom)
+    assert await c.tick_all() == 0
+
+
 # --- the run_in_session reaction on met (the supervision payoff) ------------
 
 

@@ -315,7 +315,12 @@ class TestFireTurnEvents:
     async def test_watch_reaction_fire_tags_watch_origin(self, tmp_path, monkeypatch):
         """A watch reaction (ADR 0067) enqueues a one-shot with a ``watch-<id>`` job id
         via sdk.run_in_session — the origin metadata lets the console label the indicator
-        as a watch trigger rather than a plain schedule."""
+        as a watch trigger rather than a plain schedule.
+
+        The bus origin is the plain ``watch`` token, matching the ``origin`` this same fire
+        puts on the A2A message metadata. They used to disagree — the bus got the raw
+        ``watch-<id>`` job id — and only the console's pattern-match over both spellings
+        hid it. The per-watch id is still carried, on ``trigger``."""
         import httpx
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
@@ -325,10 +330,12 @@ class TestFireTurnEvents:
 
         await s._fire(job)
 
-        started = next(d for (t, d) in events if t == "turn.started")
-        assert started["origin"] == "watch-abc123"
-        assert started["session_id"] == "chat-9"
-        assert started["trigger"] == "watch-abc123"
+        turn = [(t, d) for (t, d) in events if t.startswith("turn.")]
+        assert [t for (t, _) in turn] == ["turn.started", "turn.finished"]
+        for _t, d in turn:  # both ends of the bracket, not just the start
+            assert d["origin"] == "watch"
+            assert d["session_id"] == "chat-9"
+            assert d["trigger"] == "watch-abc123"
 
     @pytest.mark.asyncio
     async def test_fire_without_context_defaults_to_activity_thread(self, tmp_path, monkeypatch):

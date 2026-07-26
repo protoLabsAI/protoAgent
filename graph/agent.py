@@ -968,9 +968,9 @@ def create_agent_graph(
         # Subagent builds deliberately omit it: subagents are bounded by
         # max_turns and must not self-set goals.
         goal_enabled=config.goal_enabled,
-        # Watch tools (ADR 0067) additionally gated by the watches feature flag
-        # (#2020, default off) — same registry-vs-binding threading as goal_enabled,
-        # and they ride inside the goal-enabled group so goal mode must also be on.
+        # Watch tools (ADR 0067), gated by `watches.enabled` (#2020) — same
+        # registry-vs-binding threading as goal_enabled, but an INDEPENDENT axis: a watch
+        # is verifier-only and moved by an external process, so goal mode has no say.
         watches_enabled=config.watches_enabled,
         # Lets knowledge_ingest build the gateway STT/vision fns for audio/video/image.
         graph_config=config,
