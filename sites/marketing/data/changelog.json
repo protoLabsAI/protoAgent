@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.116.0",
+    "date": "2026-07-26",
+    "changes": [
+      "/api/chat no longer answers with the *previous* turn's reply after a stalled turn (#2300).",
+      "The managed-projects registry now refuses bad entries loudly instead of quietly granting less (or more) than you asked for.",
+      "fs: false on every project now means what it says: no filesystem fence at all.",
+      "An agent you just added from network discovery no longer lingers in the \"found\" list.",
+      "Every sister agent gets the fleet surfaces, not just the host console."
+    ]
+  },
+  {
     "version": "v0.115.0",
     "date": "2026-07-25",
     "changes": [

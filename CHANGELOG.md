@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.116.0] - 2026-07-26
+
 ### Fixed
 - **`/api/chat` no longer answers with the *previous* turn's reply after a stalled turn
   (#2300).** When a turn's model stream died partway through, the request came back with a
