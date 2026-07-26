@@ -41,6 +41,12 @@ from typing import Awaitable, Callable
 logger = logging.getLogger("protoagent.plugins.coding_agent")
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+
+#: ACP ``stopReason`` values that mean "do not retry this turn" (#2279). `max_tokens` is
+#: deliberately absent — hitting a limit is exactly when escalating a tier or splitting
+#: the work is the right response, and `end_turn` is a normal completion whose
+#: productivity is the caller's call (commits), not the transport's.
+_DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
 ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
 
 
@@ -340,6 +346,10 @@ class AcpClient:
 
         # Per-turn state (one turn at a time).
         self._answer = ""
+        # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
+        # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
+        # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
+        self.last_stop_reason: str | None = None
         self._progress: ProgressCallback | None = None
         self._on_tool: ToolCallback | None = None
         self._on_text: ProgressCallback | None = None
@@ -934,6 +944,28 @@ class AcpClient:
             self._on_tool = None
             self._on_text = None
             self._on_thought = None
-        stop = (result or {}).get("stopReason")
-        logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, stop)
+        self.last_stop_reason = str((result or {}).get("stopReason") or "") or None
+        logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, self.last_stop_reason)
         return self._answer.strip()
+
+    def dead_end(self) -> str | None:
+        """Why the last turn is NOT worth retrying — or ``None`` when a retry is sane.
+
+        ``prompt()`` returns text, so ``end_turn``, ``refusal``, ``max_tokens`` and
+        ``cancelled`` all collapse into one downstream signal: "no commits". Those are
+        four different situations and only one of them is worth escalating a model tier
+        for. In the reported case a board feature named a file that does not exist, and
+        the loop burned three coder runs across three model tiers (~20 minutes) escalating
+        against a spec no model could satisfy — because silence reads as
+        failure-worth-retrying.
+
+        - ``refusal`` — the agent declined. A bigger model will decline too.
+        - ``cancelled`` — someone or something stopped this turn on purpose. Retrying
+          fights that decision.
+        - ``max_tokens`` — a real limit, and the one case where escalating a tier (or
+          splitting the work) IS the right move, so it is deliberately NOT a dead end.
+        - ``end_turn`` — a normal completion; whether it did anything is the caller's
+          judgement (commits), not ours.
+        """
+        reason = (self.last_stop_reason or "").strip()
+        return reason if reason in _DEAD_END_STOP_REASONS else None
