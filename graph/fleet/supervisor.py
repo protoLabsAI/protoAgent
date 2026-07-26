@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,12 @@ class FleetError(Exception):
     """A supervisor op was rejected (no such workspace, not running, …)."""
 
 
+#: Bounded grace after SIGKILL before ``stop()`` decides the process really survived.
+#: SIGKILL is not instantaneous (kernel teardown, and ``_alive`` reaps a zombie child
+#: first), so reporting immediately would race the very thing we're asserting (#2286).
+_KILL_GRACE = 2.0
+
+
 def _state_path() -> Path:
     return manager.workspaces_root() / "fleet.json"
 
@@ -44,11 +51,32 @@ def _state_lock() -> FileLock:
     return FileLock(str(_state_path()) + ".lock", timeout=5)
 
 
+def _server_binary_names() -> set[str]:
+    """Basenames that identify a **frozen** protoAgent server in a command line.
+
+    ``manager._server_argv()`` launches members as ``python -m server`` from a source
+    checkout but as the *bare sidecar binary* when frozen (PyInstaller's entrypoint is
+    already ``-m server``, so passing it dies at argparse). The desktop sidecar is
+    ``binaries/protoagent-server`` (``tauri.conf.json`` ``externalBin``)."""
+    names = {"protoagent-server", "protoagent_server"}
+    if getattr(sys, "frozen", False):
+        # This hub IS the sidecar, and members are spawned with our own sys.executable —
+        # so our basename is authoritative even if the bundle is renamed downstream.
+        names.add(Path(sys.executable).name)
+    return {n for name in names for n in (name, f"{name}.exe")}
+
+
 def _is_our_agent(pid: int) -> bool:
     """PID-reuse guard (#10): fleet.json survives reboots, so a recycled pid can make a dead
     agent look alive — and stop() could SIGKILL whatever unrelated process now owns it. Only
     treat/kill a pid as ours if its command line is actually a protoAgent server. Best-effort:
-    if we can't inspect it, fall back to trusting the pid (don't break stop on odd platforms)."""
+    if we can't inspect it, fall back to trusting the pid (don't break stop on odd platforms).
+
+    Matching only the *source* form (``-m server`` / ``python …server``) made every *frozen*
+    desktop member read as "not ours" (#2286): ``stop()`` then reaped the registry entry
+    without signalling anything and still reported ``stopped: True``, leaving an orphan alive
+    and holding its port against any replacement — and ``shutdown_all()`` skipped members
+    entirely, so they outlived the hub that spawned them."""
     try:
         out = subprocess.run(
             ["ps", "-o", "command=", "-p", str(pid)],
@@ -58,9 +86,12 @@ def _is_our_agent(pid: int) -> bool:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return True
-    if not out.strip():
+    cmd = out.strip()
+    if not cmd:
         return False  # pid not found
-    return "-m server" in out or ("python" in out.lower() and "server" in out)
+    if "-m server" in cmd or ("python" in cmd.lower() and "server" in cmd):
+        return True
+    return any(name in cmd for name in _server_binary_names())
 
 
 def _load_state() -> dict:
@@ -309,18 +340,41 @@ def stop(ident: str, *, timeout: float = 8.0) -> dict:
         _save_state(state)
     # Kill outside the lock. Verify the pid is actually our agent first (#10 — a recycled
     # pid after a reboot could otherwise get SIGKILLed even though it's unrelated).
-    if _is_our_agent(pid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-            deadline = time.monotonic() + timeout
-            while _alive(pid) and time.monotonic() < deadline:
-                time.sleep(0.2)
-            if _alive(pid):
-                os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
-    else:
+    if not _is_our_agent(pid):
+        # The pid belongs to something else, so OUR member is genuinely gone (its pid was
+        # recycled). Reaping the entry is right and `stopped` is true — but say why we
+        # never signalled, so an operator reading the log isn't left guessing.
         log.warning("[fleet] %s pid %d is not our agent (pid reuse?) — reaped entry, no kill", name, pid)
+        return {"name": name, "stopped": True, "note": f"pid {pid} is not a protoAgent server (pid reuse?) — no signal sent"}
+    try:
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + timeout
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if _alive(pid):
+            os.kill(pid, signal.SIGKILL)
+            # SIGKILL is not instantaneous — the kernel still has to tear the process down,
+            # and _alive() reaps a zombie child first. Give it a bounded grace so we report
+            # the settled truth rather than a race.
+            hard = time.monotonic() + _KILL_GRACE
+            while _alive(pid) and time.monotonic() < hard:
+                time.sleep(0.1)
+    except OSError:
+        pass
+    if _alive(pid):
+        # #2286: never claim a stop we didn't achieve. Restore the entry — a live process
+        # that the registry has forgotten is the worst of both states: invisible to the hub,
+        # still serving, and still holding its port against any replacement.
+        with _state_lock():
+            state = _load_state()
+            state.setdefault(name, rec)
+            _save_state(state)
+        log.error("[fleet] %s pid %d survived SIGTERM+SIGKILL — entry restored, still running", name, pid)
+        return {
+            "name": name,
+            "stopped": False,
+            "reason": f"process still running at PID {pid} after SIGTERM+SIGKILL",
+        }
     log.info("[fleet] stopped %s (pid %d)", name, pid)
     return {"name": name, "stopped": True}
 
