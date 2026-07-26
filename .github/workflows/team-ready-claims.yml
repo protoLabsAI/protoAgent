@@ -1,0 +1,51 @@
+name: team-ready claims
+
+# `team-ready` is the ONLY intake gate the board pipeline accepts, and it knows nothing
+# about pull requests — so an issue whose work is already in flight keeps advertising
+# itself as available, and an agent told to "pick up the next team-ready issue" burns a
+# full run on work already done (#2278).
+#
+# This sweep reconciles the label with reality: an open PR carrying `Closes #N` /
+# `Fixes #N` / `Resolves #N` claims issue N, which then swaps `team-ready` for
+# `claimed-by-pr`. When the claim goes away — PR closed, or the reference edited out —
+# the swap is reversed, so an abandoned PR doesn't silently strand the issue as
+# un-pickable. Logic lives in scripts/team_ready_claims.py (covered by
+# tests/test_team_ready_claims.py); this job only wires the token in.
+#
+# `pull_request_target` (not `pull_request`) because labeling issues needs a write token,
+# which `pull_request` withholds from fork PRs. It is safe here for the usual reason: the
+# job checks out and runs the BASE repo's script and never executes any PR-authored code.
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, closed]
+  schedule:
+    - cron: "17 * * * *"  # hourly backstop — catches anything the events missed
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the plan without writing labels"
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+  pull-requests: read
+
+concurrency:
+  # Serialize: two runs reconciling the same labels concurrently would race.
+  group: team-ready-claims
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Reconcile team-ready against PR claims
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Reconcile
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python3 scripts/team_ready_claims.py
