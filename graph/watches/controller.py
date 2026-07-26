@@ -16,7 +16,7 @@ import os
 
 from graph.goals.verifiers import VERIFIERS, VerifierInvoker, VerifyContext, run_verifier
 from graph.watches.store import WatchStore
-from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_S, Watch
+from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_S, TRIGGERS, Watch
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,8 @@ class WatchController:
         stall_after: int | None = None,
         run_prompt: str = "",
         run_session: str = "",
+        trigger: str = "met",
+        repeat: bool = False,
         trusted: bool = False,
     ) -> tuple[bool, str, Watch | None]:
         """Create a watch. ``trusted=False`` (agent/plugin/SDK) allows ONLY a ``plugin``
@@ -91,6 +93,11 @@ class WatchController:
         ok, err = self._validate_verifier(verifier, trusted=trusted)
         if not ok:
             return (False, err, None)
+        trigger = (trigger or "met").strip().lower()
+        if trigger not in TRIGGERS:
+            # Reject rather than silently defaulting: a watch armed with a trigger nobody
+            # implements would poll forever and never fire, which is invisible.
+            return (False, f"unknown trigger {trigger!r}; known: {', '.join(TRIGGERS)}.", None)
         wid = (watch_id or "").strip() or self._derive_id(condition)
         watch = Watch(
             id=wid,
@@ -101,6 +108,8 @@ class WatchController:
             stall_after=stall_after,
             run_prompt=run_prompt or "",
             run_session=run_session or "",
+            trigger=trigger,
+            repeat=bool(repeat),
         )
         self._store.set(watch)
         return (True, f"Watch created. {watch.status_line()}", watch)
@@ -118,6 +127,8 @@ class WatchController:
         stall_after: int | None | _Unset = UNSET,
         run_prompt: str | _Unset = UNSET,
         run_session: str | _Unset = UNSET,
+        trigger: str | _Unset = UNSET,
+        repeat: bool | _Unset = UNSET,
         trusted: bool = False,
     ) -> tuple[bool, str, Watch | None]:
         """Edit a LIVE watch in place. Every field defaults to ``UNSET`` — a sentinel, not
@@ -191,6 +202,18 @@ class WatchController:
                 watch.run_prompt = run_prompt or ""
             if not isinstance(run_session, _Unset):
                 watch.run_session = run_session or ""
+            if not isinstance(trigger, _Unset):
+                tg = (trigger or "met").strip().lower()
+                if tg not in TRIGGERS:
+                    return (False, f"unknown trigger {tg!r}; known: {', '.join(TRIGGERS)}.", None)
+                # Switching what fires it invalidates the edge state — otherwise a watch moved
+                # onto `met` while already satisfied would wait for a falling edge that may
+                # never come.
+                if tg != watch.trigger:
+                    watch.was_met = False
+                watch.trigger = tg
+            if not isinstance(repeat, _Unset):
+                watch.repeat = bool(repeat)
             self._store.set(watch)
             return (True, f"Watch updated. {watch.status_line()}", watch)
 
@@ -285,12 +308,42 @@ class WatchController:
         from time import time
 
         now = time()
-        if result.met:
-            return await self._finish(watch, "met", result.reason or "verifier passed", result.evidence)
+        first_check = watch.last_checked is None
+        changed = result.evidence != watch.last_evidence or result.reason != watch.last_reason
+
+        # --- does this observation FIRE? -----------------------------------
+        # `trigger` picks the event; `repeat` picks the lifetime. They're orthogonal.
+        if watch.trigger == "change":
+            # A monitor: fire whenever the observed value moves. The FIRST check only
+            # establishes the baseline — firing on it would report a change from nothing.
+            fires = changed and not first_check
+        else:
+            # A tripwire: fire on the RISING EDGE of the predicate. Edge, not level: a
+            # repeating watch on a predicate that stays true ("credits >= 1M" once crossed)
+            # would otherwise re-fire every tick, forever.
+            fires = result.met and not watch.was_met
+
+        watch.was_met = bool(result.met)
+
+        if fires:
+            reason = result.reason or ("value changed" if watch.trigger == "change" else "verifier passed")
+            if watch.repeating:
+                # Fire, but stay armed: record the observation, react, keep polling. A trip is
+                # progress, so it also ends any stall episode.
+                watch.last_reason = reason
+                watch.last_evidence = result.evidence
+                watch.last_checked = now
+                watch.stall_streak = 0
+                watch.stalled_notified = False
+                self._store.set(watch)
+                await self._react(watch, reason)
+                return None
+            return await self._finish(watch, "met", reason, result.evidence)
+
         if watch.deadline is not None and now >= watch.deadline:
             return await self._finish(watch, "expired", "deadline passed before the watch met", result.evidence)
 
-        unchanged = result.reason == watch.last_reason and result.evidence == watch.last_evidence
+        unchanged = not changed
         watch.stall_streak = (watch.stall_streak + 1) if unchanged else 0
         if not unchanged:
             watch.stalled_notified = False
@@ -402,22 +455,15 @@ class WatchController:
             return True
         return (now - watch.last_checked) >= interval_s
 
-    async def _finish(self, watch: Watch, status: str, reason: str, evidence: str = "") -> str:
-        from time import time
+    async def _react(self, watch: Watch, reason: str) -> None:
+        """Fire a watch's reaction WITHOUT ending it — the run_prompt turn, the hook, the bus
+        event. Shared by the terminal path (`_finish`) and the repeating path, so a recurring
+        watch reacts identically to a one-shot; only its lifetime differs.
 
-        from graph.watches.hooks import fire_watch_hook
-
-        watch.status = status
-        watch.last_reason = reason
-        if evidence:
-            watch.last_evidence = evidence
-        watch.finished_at = time()
-        self._store.set(watch)
-
-        # Reaction (ADR 0067 D3): on MET, enqueue the follow-up prompt as a one-shot agent
-        # turn in the watch's target session — non-blocking, reuses the tested run_in_session
-        # primitive. Skipped when there's no prompt or no target session (hooks still fire).
-        if status == "met" and (watch.run_prompt or "").strip() and (watch.run_session or "").strip():
+        The hook and topic name the trigger honestly: a `change` fire is NOT `on_met` — a
+        plugin subscribed to `on_met` is told the condition is satisfied, which a mere value
+        move doesn't mean."""
+        if (watch.run_prompt or "").strip() and (watch.run_session or "").strip():
             try:
                 from graph.sdk import run_in_session
 
@@ -432,8 +478,34 @@ class WatchController:
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
 
-        await fire_watch_hook("on_met" if status == "met" else "on_expired", watch)
-        self._publish("watch.met" if status == "met" else "watch.expired", watch, reason)
+        from graph.watches.hooks import fire_watch_hook
+
+        if watch.trigger == "change":
+            await fire_watch_hook("on_changed", watch)
+            # NOT `watch.changed` — the STORE already publishes that on every write. This is a
+            # distinct thing: the observed value moved.
+            self._publish("watch.value_changed", watch, reason)
+        else:
+            await fire_watch_hook("on_met", watch)
+            self._publish("watch.met", watch, reason)
+
+    async def _finish(self, watch: Watch, status: str, reason: str, evidence: str = "") -> str:
+        from time import time
+
+        from graph.watches.hooks import fire_watch_hook
+
+        watch.status = status
+        watch.last_reason = reason
+        if evidence:
+            watch.last_evidence = evidence
+        watch.finished_at = time()
+        self._store.set(watch)
+
+        if status == "met":
+            await self._react(watch, reason)
+        else:
+            await fire_watch_hook("on_expired", watch)
+            self._publish("watch.expired", watch, reason)
         return status
 
     def _publish(self, topic: str, watch: Watch, reason: str = "") -> None:

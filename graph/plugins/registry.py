@@ -83,7 +83,7 @@ class PluginRegistry:
         # keeps working untouched.
         self.goal_verifier_meta: dict = {}
         self.goal_hooks: list = []  # {on_achieved, on_failed, on_stalled} reactions (ADR 0028 + 0030 D5)
-        self.watch_hooks: list = []  # {on_met, on_expired, on_stalled} watch reactions (ADR 0067)
+        self.watch_hooks: list = []  # {on_met, on_expired, on_stalled, on_changed} (ADR 0067)
         self.lifecycle_hooks: list = []  # {on_app_loaded, on_agent_active, on_system_wake} (ADR 0074)
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
@@ -270,14 +270,16 @@ class PluginRegistry:
             }
         )
 
-    def register_watch_hook(self, *, on_met=None, on_expired=None, on_stalled=None) -> None:
+    def register_watch_hook(self, *, on_met=None, on_expired=None, on_stalled=None, on_changed=None) -> None:
         """React when a watch trips (ADR 0067) — ``on_met`` (verifier passed), ``on_expired``
         (deadline passed), ``on_stalled`` (evidence unchanged for ``stall_after`` checks, the
-        watch stays active). Each takes the ``Watch`` (sync or async). Provide ANY of the three.
-        A raising hook is logged + swallowed."""
-        if not (callable(on_met) or callable(on_expired) or callable(on_stalled)):
+        watch stays active), ``on_changed`` (a `trigger: "change"` watch observed a new value —
+        NOT the same as met: the value moved, the condition may still be false). Each takes the
+        ``Watch`` (sync or async). Provide ANY of them. A raising hook is logged + swallowed."""
+        if not (callable(on_met) or callable(on_expired) or callable(on_stalled) or callable(on_changed)):
             log.warning(
-                "[plugins] %s: register_watch_hook needs on_met, on_expired, and/or on_stalled", self.plugin_id
+                "[plugins] %s: register_watch_hook needs on_met, on_expired, on_stalled and/or on_changed",
+                self.plugin_id,
             )
             return
         self.watch_hooks.append(
@@ -286,6 +288,7 @@ class PluginRegistry:
                 "on_met": on_met if callable(on_met) else None,
                 "on_expired": on_expired if callable(on_expired) else None,
                 "on_stalled": on_stalled if callable(on_stalled) else None,
+                "on_changed": on_changed if callable(on_changed) else None,
             }
         )
 

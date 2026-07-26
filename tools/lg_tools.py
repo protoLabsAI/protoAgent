@@ -1361,6 +1361,8 @@ def _build_watch_tools():
         interval_s: float | None = None,
         expires_in_s: float | None = None,
         stall_after: int | None = None,
+        repeat: bool = False,
+        on_change: bool = False,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Create a WATCH: poll `condition` on a cadence (ground-truthed by the plugin verifier
@@ -1369,6 +1371,17 @@ def _build_watch_tools():
         separate watch, all polled in parallel. Only plugin verifiers are allowed; shell/test/
         data watches are operator-only. `watch_id` defaults to a slug of the condition (pass one
         to hold two watches on the same condition).
+
+        By default this is a TRIPWIRE: it fires once, then it's done. Two flags turn it into a
+        standing monitor instead:
+        - `repeat`: keep watching after it fires. It then fires each time the condition BECOMES
+          true again — not once per check while it stays true — so a condition that latches
+          (`credits >= 1M`) won't spam you.
+        - `on_change`: fire whenever the checked VALUE moves, whatever the condition says. Use
+          this to track something rather than wait for it ("tell me whenever the treasury
+          changes"). Implies `repeat`.
+        A repeating watch runs until its deadline or until you clear it — set `expires_in_s`
+        unless you really mean forever.
 
         Three optional knobs shape how long it lives and how hard it polls — set them when you
         know the answer, because a watch with none of them polls at the default cadence until
@@ -1418,6 +1431,10 @@ def _build_watch_tools():
             stall_after=WatchController._parse_stall_after(stall_after),
             run_prompt=run_prompt or "",
             run_session=session_id or "",
+            trigger="change" if on_change else "met",
+            # A change monitor that stopped after one move would be a strange tripwire, so
+            # on_change implies repeat rather than silently firing once.
+            repeat=bool(repeat or on_change),
             trusted=False,
         )
         return msg
@@ -1442,6 +1459,8 @@ def _build_watch_tools():
         expires_in_s: float | None = None,
         stall_after: int | None = None,
         clear_deadline: bool = False,
+        repeat: bool | None = None,
+        on_change: bool | None = None,
     ) -> str:
         """Adjust a watch you already set, without losing what it has observed. Pass only
         what you want to change; everything else stays. Use this instead of clear+create —
@@ -1472,6 +1491,12 @@ def _build_watch_tools():
             fields["interval_s"] = interval_s
         if stall_after is not None:
             fields["stall_after"] = WatchController._parse_stall_after(stall_after)
+        if repeat is not None:
+            fields["repeat"] = bool(repeat)
+        if on_change is not None:
+            fields["trigger"] = "change" if on_change else "met"
+            if on_change:
+                fields["repeat"] = True
         # Two ways to touch the deadline, because "None" on a tool argument means "not
         # supplied" — there's no way to spell "clear it" with a nullable number alone.
         if clear_deadline:

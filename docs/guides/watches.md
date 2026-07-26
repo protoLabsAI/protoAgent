@@ -63,6 +63,31 @@ effective `interval_s`) so one verifier can keep **per-watch** state — see
   operator surface, gated by the [federation-token ceiling](/reference/configuration#secrets));
   plus `GET /api/watches`, `PATCH /api/watches/{id}` and `DELETE /api/watches/{id}`.
 
+## Tripwire or monitor
+
+A watch fires when its **trigger** says so, and `repeat` decides whether firing ends it. Two
+orthogonal axes, three combinations worth using:
+
+| | fires | after firing | use for |
+|---|---|---|---|
+| **tripwire** (default) | the verifier passes | done | "when the deploy finishes, run the smoke test" |
+| **repeating** (`repeat`) | each time it *becomes* true | keeps watching | "every time a PR lands, do X" |
+| **monitor** (`trigger: change`) | the evidence *moves* | keeps watching | "tell me whenever the treasury changes" |
+
+Two properties that matter more than they look:
+
+- **A repeating `met` watch is edge-triggered, not level-triggered.** It fires when the
+  predicate *becomes* true, then stays quiet until it goes false and true again. Without that,
+  a condition that latches — `credits >= 1,000,000`, true forever once crossed — would re-fire
+  every single tick.
+- **A `change` watch calls `on_changed`, not `on_met`,** and publishes `watch.value_changed`
+  (not `watch.changed`, which the store already emits on every write). A plugin subscribed to
+  `on_met` is being told the condition is *satisfied*; a value merely moving doesn't mean that.
+  Its first check only establishes the baseline and never fires.
+
+A repeating watch ends only at its **deadline** or an explicit **clear** — give it an
+`expires_in_s` unless you really mean forever.
+
 ## Editing a live watch
 
 Adjusting a watch is not the same as replacing it: clear-and-recreate throws away the stall

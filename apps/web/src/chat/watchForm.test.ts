@@ -39,7 +39,7 @@ describe("watchFormPayload", () => {
     const step2 = watchFormPayload().steps![1].schema as Record<string, any>;
     expect(step2.required ?? []).toEqual([]);
     expect(Object.keys(step2.properties).sort()).toEqual(
-      ["expires_in", "interval", "run_prompt", "stall_after"].sort(),
+      ["expires_in", "interval", "mode", "run_prompt", "stall_after"].sort(),
     );
   });
 });
@@ -203,5 +203,33 @@ describe("buildWatchCreateBody — plugin verifier", () => {
       type: "plugin",
       check: "x:y",
     });
+  });
+});
+
+describe("fire mode (tripwire vs standing monitor)", () => {
+  const NOW = 1_800_000_000_000;
+  const body = (mode?: string) =>
+    buildWatchCreateBody({ condition: "c", ...(mode ? { mode } : {}) }, NOW)!;
+
+  it("defaults to a one-shot tripwire and sends neither field", () => {
+    // The pre-monitor body shape, byte-identical — opting in is explicit.
+    expect(body()).toEqual({ condition: "c", verifier: { type: "llm" } });
+    expect(body("once")).toEqual({ condition: "c", verifier: { type: "llm" } });
+  });
+
+  it("'every time it becomes true' repeats without changing the trigger", () => {
+    expect(body("repeat")).toMatchObject({ repeat: true });
+    expect(body("repeat").trigger).toBeUndefined();
+  });
+
+  it("'whenever the value changes' is a repeating change monitor", () => {
+    // A change monitor that fired once would be a strange tripwire.
+    expect(body("change")).toMatchObject({ trigger: "change", repeat: true });
+  });
+
+  it("offers exactly the three meaningful modes", () => {
+    const mode = (watchFormPayload().steps![1].schema as any).properties.mode;
+    expect(mode.default).toBe("once");
+    expect(mode.oneOf.map((o: any) => o.const)).toEqual(["once", "repeat", "change"]);
   });
 });

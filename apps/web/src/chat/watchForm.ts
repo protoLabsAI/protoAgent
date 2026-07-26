@@ -137,6 +137,26 @@ export function watchFormPayload(catalog: VerifierCatalog = FALLBACK_VERIFIER_TY
         schema: {
           type: "object",
           properties: {
+            mode: {
+              type: "string",
+              title: "Fire",
+              default: "once",
+              // The primitive's two axes collapsed into one operator-facing choice, because
+              // trigger×repeat has four combinations and only three are meaningful.
+              oneOf: [
+                { const: "once", title: "once, then stop", description: "A tripwire — the original behaviour" },
+                {
+                  const: "repeat",
+                  title: "every time it becomes true",
+                  description: "Fires on each rising edge, not once per check while it stays true",
+                },
+                {
+                  const: "change",
+                  title: "whenever the value changes",
+                  description: "A monitor — reports movement, whatever the condition says",
+                },
+              ],
+            },
             run_prompt: {
               type: "string",
               format: "textarea",
@@ -152,7 +172,8 @@ export function watchFormPayload(catalog: VerifierCatalog = FALLBACK_VERIFIER_TY
             expires_in: {
               type: "string",
               title: "Give up after",
-              description: "`6h`, `7d`. Blank watches indefinitely; past it the watch finishes `expired`.",
+              description:
+                "`6h`, `7d`. Blank watches indefinitely; past it the watch finishes `expired`. Worth setting for a repeating watch — nothing else ends one.",
             },
             stall_after: {
               type: "number",
@@ -170,6 +191,8 @@ export function watchFormPayload(catalog: VerifierCatalog = FALLBACK_VERIFIER_TY
 export type WatchCreateBody = {
   condition: string;
   verifier: Record<string, unknown>;
+  trigger?: string;
+  repeat?: boolean;
   interval_s?: number;
   deadline?: number;
   stall_after?: number;
@@ -241,6 +264,16 @@ export function buildWatchCreateBody(
 
   const expires = parseDuration(answers.expires_in);
   if (expires) body.deadline = Math.round(now / 1000) + expires;
+
+  // "once" is the default and sends neither field, so a body from this form stays
+  // byte-identical to the pre-monitor shape unless the operator opted in.
+  const mode = str(answers.mode) || "once";
+  if (mode === "change") {
+    body.trigger = "change";
+    body.repeat = true;
+  } else if (mode === "repeat") {
+    body.repeat = true;
+  }
 
   const stall = Number(answers.stall_after);
   if (Number.isFinite(stall) && stall > 0) body.stall_after = Math.round(stall);

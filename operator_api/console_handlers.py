@@ -578,6 +578,8 @@ async def _operator_watches_set(body: dict) -> dict:
         stall_after=WatchController._parse_stall_after(body.get("stall_after")),
         run_prompt=body.get("run_prompt") or "",
         run_session=body.get("run_session") or "",
+        trigger=body.get("trigger") or "met",
+        repeat=bool(body.get("repeat")),
         trusted=True,
     )
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
@@ -626,6 +628,10 @@ async def _operator_watches_update(watch_id: str, body: dict) -> dict:
         picks["run_prompt"] = body["run_prompt"] or ""
     if "run_session" in body:
         picks["run_session"] = body["run_session"] or ""
+    if "trigger" in body:
+        picks["trigger"] = body["trigger"] or "met"
+    if "repeat" in body:
+        picks["repeat"] = bool(body["repeat"])
     if not picks:
         return {"ok": False, "error": "nothing to update — send at least one editable field"}
     ok, msg, watch = await STATE.watch_controller.update(watch_id, trusted=True, **picks)

@@ -351,8 +351,8 @@ class FakeRegistry:
     def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
         self.goal_hooks.append((on_achieved, on_failed))
 
-    def register_watch_hook(self, *, on_met=None, on_expired=None, on_stalled=None) -> None:
-        self.watch_hooks.append((on_met, on_expired, on_stalled))
+    def register_watch_hook(self, *, on_met=None, on_expired=None, on_stalled=None, on_changed=None) -> None:
+        self.watch_hooks.append((on_met, on_expired, on_stalled, on_changed))
 
     def register_lifecycle_hook(self, *, on_app_loaded=None, on_agent_active=None, on_system_wake=None) -> None:
         self.lifecycle_hooks.append((on_app_loaded, on_agent_active, on_system_wake))

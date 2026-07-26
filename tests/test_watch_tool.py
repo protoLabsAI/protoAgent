@@ -188,3 +188,38 @@ async def test_update_watch_tool_cannot_touch_an_operator_verifier(monkeypatch, 
     out = await update.ainvoke({"watch_id": "w", "condition": "anything"})
     assert "only its operator can edit it" in out
     assert ctrl.store.get("w").condition == "prod is healthy"
+
+
+# --- repeat / on_change on the agent tool -----------------------------------
+
+
+def test_create_watch_defaults_to_a_one_shot_tripwire(monkeypatch, tmp_path):
+    ctrl, create, _l, _u, _c = _tools(monkeypatch, tmp_path)
+    create.invoke({"condition": "deploy lands", "check": "p:v"})
+    w = _only(ctrl)
+    assert (w.trigger, w.repeat) == ("met", False)
+
+
+def test_create_watch_repeat_keeps_it_armed(monkeypatch, tmp_path):
+    ctrl, create, _l, _u, _c = _tools(monkeypatch, tmp_path)
+    create.invoke({"condition": "a PR lands", "check": "p:v", "repeat": True})
+    w = _only(ctrl)
+    assert (w.trigger, w.repeat) == ("met", True)
+
+
+def test_on_change_implies_repeat(monkeypatch, tmp_path):
+    # A change monitor that stopped after one move would be a strange tripwire.
+    ctrl, create, _l, _u, _c = _tools(monkeypatch, tmp_path)
+    create.invoke({"condition": "the treasury", "check": "p:v", "on_change": True})
+    w = _only(ctrl)
+    assert (w.trigger, w.repeat) == ("change", True)
+
+
+@pytest.mark.asyncio
+async def test_update_watch_can_promote_a_tripwire_to_a_monitor(monkeypatch, tmp_path):
+    ctrl, create, _l, update, _c = _tools(monkeypatch, tmp_path)
+    create.invoke({"condition": "c", "check": "p:v", "watch_id": "w"})
+    assert (ctrl.store.get("w").trigger, ctrl.store.get("w").repeat) == ("met", False)
+    await update.ainvoke({"watch_id": "w", "on_change": True})
+    w = ctrl.store.get("w")
+    assert (w.trigger, w.repeat) == ("change", True)

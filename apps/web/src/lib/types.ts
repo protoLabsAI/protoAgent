@@ -506,6 +506,8 @@ export type WatchState = {
   interval_s?: number | null; // per-watch cadence override; null → config watch_interval
   deadline?: number | null; // epoch seconds; past → expired
   stall_after?: number | null; // N unchanged checks → on_stalled
+  trigger?: string; // "met" (tripwire) | "change" (monitor: fires when the value moves)
+  repeat?: boolean; // firing leaves it armed — only a deadline or a clear ends it
   run_prompt?: string; // on met, enqueued as a one-shot turn in run_session
   run_session?: string;
   last_reason?: string;

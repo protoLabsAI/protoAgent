@@ -302,11 +302,20 @@ def create_watch(
     stall_after: int | None = None,
     run_prompt: str = "",
     run_session: str = "",
+    trigger: str = "met",
+    repeat: bool = False,
 ) -> dict:
     """Register a WATCH from a plugin (ADR 0067): poll ``condition`` — ground-truthed by the
     plugin verifier named ``verifier`` (``"<plugin-id>:<name>"``) — on a cadence, and when it
     trips run ``run_prompt`` as a follow-up turn in ``run_session`` (via :func:`run_in_session`)
     and fire ``on_met`` hooks. Plugin-verifier only (like a set_goal-tool goal); hold as MANY as
+    ``trigger`` + ``repeat`` decide WHEN it fires and whether firing ends it:
+    ``met``/``False`` is the default one-shot tripwire; ``met``/``True`` fires on every rising
+    EDGE of the predicate (never per-tick while it stays true); ``change``/``True`` is a
+    standing monitor — it fires whenever the verifier's evidence MOVES, whatever the predicate
+    says, and calls ``on_changed`` rather than ``on_met``. A repeating watch only ends on its
+    deadline or an explicit clear, so give it one if it shouldn't run forever.
+
     you like (unlike a monitor goal, which is one-per-session). Returns ``{"ok", "watch_id",
     "message"}`` — ok=False with a readable message if the subsystem is off or the verifier is
     rejected."""
@@ -322,6 +331,8 @@ def create_watch(
         stall_after=stall_after,
         run_prompt=run_prompt,
         run_session=run_session,
+        trigger=trigger,
+        repeat=repeat,
         trusted=False,
     )
     return {"ok": ok, "watch_id": watch.id if watch else None, "message": msg}

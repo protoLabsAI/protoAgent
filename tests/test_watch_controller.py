@@ -566,3 +566,162 @@ async def test_update_serializes_against_an_in_flight_evaluate(tmp_path, monkeyp
     stored = c.store.get("w")
     assert stored.interval_s == 1234  # the edit survived the concurrent verifier write
     assert stored.last_reason == "still going"  # ...and so did the verifier's result
+
+
+# --- repeat + change trigger (a standing monitor, not a one-shot tripwire) ---
+
+
+class _Scripted:
+    """A verifier that replays a scripted list of (met, evidence) per call."""
+
+    def __init__(self, steps):
+        self.steps = list(steps)
+        self.calls = 0
+
+    async def __call__(self, spec, ctx):
+        from graph.goals.verifiers import VerifyResult
+
+        met, evidence = self.steps[min(self.calls, len(self.steps) - 1)]
+        self.calls += 1
+        return VerifyResult(met, f"reason:{evidence}", evidence)
+
+
+def _script(monkeypatch, steps):
+    v = _Scripted(steps)
+    monkeypatch.setattr("graph.watches.controller.run_verifier", v)
+    return v
+
+
+@pytest.mark.asyncio
+async def test_repeating_met_watch_is_edge_triggered_not_level(tmp_path, monkeypatch):
+    """THE footgun this design exists to avoid. A predicate that stays true — "credits >= 1M"
+    once crossed — must fire ONCE per crossing, not once per tick, forever."""
+    fired: list[str] = []
+    from graph.watches import hooks as watch_hooks
+
+    watch_hooks.set_watch_hooks([{"plugin_id": "t", "on_met": lambda w: fired.append(w.id)}])
+    try:
+        c = _ctrl(tmp_path)
+        c.create(
+            condition="credits >= 1M", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+            repeat=True,
+        )
+        # false → true (fire) → true → true (silent: still the same edge) → false → true (fire)
+        _script(monkeypatch, [(False, "0"), (True, "1M"), (True, "1M"), (True, "1M"), (False, "0"), (True, "2M")])
+        for _ in range(6):
+            assert await c.evaluate("w") is None  # never terminal — it repeats
+        assert fired == ["w", "w"]  # two RISING EDGES, not four true-ticks
+        assert c.store.get("w").active
+    finally:
+        watch_hooks.set_watch_hooks([])
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_met_watch_is_unchanged(tmp_path, monkeypatch):
+    # The default is exactly the old behavior: fire once, go terminal.
+    c = _ctrl(tmp_path)
+    c.create(condition="deploy lands", watch_id="w", verifier={"type": "plugin", "check": "p:v"})
+    _script(monkeypatch, [(False, "0"), (True, "done")])
+    assert await c.evaluate("w") is None
+    assert await c.evaluate("w") == "met"
+    assert c.store.get("w").status == "met"
+
+
+@pytest.mark.asyncio
+async def test_change_trigger_fires_on_every_move_and_never_on_the_first_check(tmp_path, monkeypatch):
+    """A monitor: report when the value MOVES, whatever the predicate says. The first check
+    only establishes the baseline — firing on it would report a change from nothing."""
+    fired: list[str] = []
+    from graph.watches import hooks as watch_hooks
+
+    watch_hooks.set_watch_hooks([{"plugin_id": "t", "on_changed": lambda w: fired.append(w.last_evidence)}])
+    try:
+        c = _ctrl(tmp_path)
+        c.create(
+            condition="treasury", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+            trigger="change", repeat=True,
+        )
+        # Never met — a change monitor doesn't care about the predicate at all.
+        _script(monkeypatch, [(False, "100"), (False, "100"), (False, "250"), (False, "250"), (False, "900")])
+        for _ in range(5):
+            assert await c.evaluate("w") is None
+        assert fired == ["250", "900"]  # baseline silent, repeats skipped, both moves reported
+    finally:
+        watch_hooks.set_watch_hooks([])
+
+
+@pytest.mark.asyncio
+async def test_change_trigger_fires_on_changed_not_on_met(tmp_path, monkeypatch):
+    """A `change` fire must NOT call on_met — a plugin subscribed to on_met is being told the
+    condition is satisfied, which a mere value move doesn't mean."""
+    events: list[str] = []
+    from graph.watches import hooks as watch_hooks
+
+    watch_hooks.set_watch_hooks([
+        {"plugin_id": "t", "on_met": lambda w: events.append("met"), "on_changed": lambda w: events.append("changed")}
+    ])
+    try:
+        c = _ctrl(tmp_path)
+        c.create(
+            condition="treasury", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+            trigger="change", repeat=True,
+        )
+        # Even when the predicate IS true, a change-trigger reports the change, not a met.
+        _script(monkeypatch, [(True, "100"), (True, "250")])
+        await c.evaluate("w")
+        await c.evaluate("w")
+        assert events == ["changed"]
+    finally:
+        watch_hooks.set_watch_hooks([])
+
+
+@pytest.mark.asyncio
+async def test_a_repeating_watch_still_expires_on_its_deadline(tmp_path, monkeypatch):
+    # Repeating means "firing doesn't end it", NOT "nothing ends it" — otherwise a recurring
+    # monitor is unkillable except by hand.
+    from time import time
+
+    c = _ctrl(tmp_path)
+    c.create(
+        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"},
+        repeat=True, deadline=time() - 1,
+    )
+    _script(monkeypatch, [(False, "x")])
+    assert await c.evaluate("w") == "expired"
+
+
+@pytest.mark.asyncio
+async def test_repeating_fire_resets_the_stall_episode(tmp_path, monkeypatch):
+    # A trip is progress, so it ends any stall the watch had accumulated.
+    c = _ctrl(tmp_path)
+    _o, _m, w = c.create(
+        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, repeat=True, stall_after=2
+    )
+    w.stall_streak, w.stalled_notified = 5, True
+    c.store.set(w)
+    _script(monkeypatch, [(True, "moved")])
+    await c.evaluate("w")
+    stored = c.store.get("w")
+    assert (stored.stall_streak, stored.stalled_notified) == (0, False)
+
+
+def test_create_rejects_an_unknown_trigger(tmp_path):
+    # Silently defaulting would arm a watch that polls forever and never fires — invisible.
+    c = _ctrl(tmp_path)
+    ok, msg, _ = c.create(condition="c", verifier={"type": "plugin", "check": "p:v"}, trigger="whenever")
+    assert not ok and "unknown trigger" in msg
+
+
+@pytest.mark.asyncio
+async def test_switching_trigger_clears_the_edge_state(tmp_path, monkeypatch):
+    """Moving an already-satisfied watch onto `met` must be able to fire again — otherwise it
+    waits for a falling edge that may never come."""
+    c = _ctrl(tmp_path)
+    c.create(
+        condition="c", watch_id="w", verifier={"type": "plugin", "check": "p:v"}, trigger="change", repeat=True
+    )
+    _script(monkeypatch, [(True, "a"), (True, "b")])
+    await c.evaluate("w")  # establishes was_met = True under the change trigger
+    assert c.store.get("w").was_met is True
+    await c.update("w", trigger="met")
+    assert c.store.get("w").was_met is False

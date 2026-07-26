@@ -2,7 +2,8 @@
 
 A plugin reacts when a watch trips — ``on_met`` (verifier passed), ``on_expired`` (deadline
 passed), ``on_stalled`` (unchanged evidence for ``stall_after`` checks; the watch stays
-active). Populated by the loader at graph build via ``set_watch_hooks`` (re-set on reload),
+active), ``on_changed`` (a ``trigger: "change"`` watch saw a NEW value — the value moved,
+which is not the same as the condition being satisfied). Populated by the loader at graph build via ``set_watch_hooks`` (re-set on reload),
 fired from ``WatchController``. A hook fn takes the ``Watch``; sync or async. A hook that
 raises is logged and swallowed — a bad hook must never break the tick.
 """
@@ -14,7 +15,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# Each entry: {"plugin_id", "on_met": fn|None, "on_expired": fn|None, "on_stalled": fn|None}.
+# Each entry: {"plugin_id", "on_met"|"on_expired"|"on_stalled"|"on_changed": fn|None}.
 _WATCH_HOOKS: list[dict] = []
 
 
@@ -24,7 +25,8 @@ def set_watch_hooks(hooks: list[dict] | None) -> None:
 
 
 async def fire_watch_hook(event: str, watch) -> None:
-    """Fire the matching hook for ``event`` (``on_met`` | ``on_expired`` | ``on_stalled``)."""
+    """Fire the matching hook for ``event`` (``on_met`` | ``on_expired`` | ``on_stalled`` |
+    ``on_changed``)."""
     for hook in _WATCH_HOOKS:
         fn = hook.get(event)
         if fn is None:

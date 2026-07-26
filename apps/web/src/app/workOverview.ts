@@ -65,6 +65,11 @@ export function formatWatchDuration(seconds: number): string {
 export function watchLifetime(watch: WatchState, now: number = Date.now()): string[] {
   if (watch.status !== "active") return [];
   const parts: string[] = [];
+  // Lead with the disposition: a repeating/change watch behaves differently enough from a
+  // one-shot tripwire that it shouldn't look identical in the list. Mirrors the server's
+  // `_lifetime_suffix`.
+  if (watch.trigger === "change") parts.push("on change");
+  if (watch.repeat) parts.push("repeating");
   if (watch.interval_s) parts.push(`every ${formatWatchDuration(watch.interval_s)}`);
   if (watch.deadline != null) {
     const left = watch.deadline - now / 1000;
