@@ -16,14 +16,8 @@ the ADR 0023 re-export block in ``server/__init__.py`` and for the test suite
 (``tests/test_skill_slash.py`` imports ``server._parse_skill_command``).
 """
 
-import asyncio  # noqa: F401 — used by the async runners below
-import logging
-from typing import Any  # noqa: F401
-
 from graph.output_format import extract_output
 from runtime.state import STATE
-
-log = logging.getLogger("protoagent.server")
 
 
 # --- Workflow slash commands (ADR 0002) --------------------------------------
