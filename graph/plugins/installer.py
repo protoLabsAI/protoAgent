@@ -435,20 +435,33 @@ def _importable(pkg: str) -> bool:
         return False
 
 
-def _deps_satisfied(deps: list[str]) -> tuple[bool, list[str]]:
+def _deps_satisfied(deps: list[str], scopes: dict[str, str] | None = None) -> tuple[bool, list[str]]:
     """(all satisfied?, [missing dist names]) for a plugin's ``requires_pip``.
 
     A dep is satisfied when it's importable in THIS process — or, in the frozen desktop
     app, when it's installed in the managed Python runtime (ADR 0094 P2). The two have
     separate site-packages: a compute plugin's deps live in the child runtime (its
     ``execute_code`` skills import them there), never in the host, so a host-only check
-    would report them forever-missing and the "Install deps" action could never clear."""
+    would report them forever-missing and the "Install deps" action could never clear.
+
+    ``scopes`` (#2246) carves out the opposite error. A ``host``-scoped dep is one the
+    plugin imports IN-PROCESS, so the managed runtime cannot satisfy it — and accepting
+    the runtime's copy made the gate answer "satisfied" about the wrong interpreter:
+    install passed, then every tool call died with ``ModuleNotFoundError``. Host-scoped
+    deps are therefore judged by host importability alone. Unscoped deps default to
+    ``runtime`` (the compute-plugin pattern), so existing manifests are unaffected."""
     runtime_dists = _managed_runtime_dists()
-    missing = [
-        n
-        for spec in deps
-        if (n := _dep_pkg_name(spec)) and not _importable(n) and _normalize_dist(n) not in runtime_dists
-    ]
+    scopes = scopes or {}
+    missing = []
+    for spec in deps:
+        name = _dep_pkg_name(spec)
+        if not name:
+            continue
+        if _importable(name):
+            continue
+        # A host-scoped dep can only be satisfied by THIS interpreter, never the child.
+        if scopes.get(name) == "host" or _normalize_dist(name) not in runtime_dists:
+            missing.append(name)
     return (not missing, missing)
 
 
@@ -473,16 +486,34 @@ def _normalize_dist(name: str) -> str:
     return _norm(name)
 
 
-def _frozen_install_missing_deps(pid: str, requires_pip: list[str], missing: list[str]) -> None:
+def _frozen_install_missing_deps(
+    pid: str, requires_pip: list[str], missing: list[str], scopes: dict[str, str] | None = None
+) -> None:
     """Frozen desktop, hard deps missing at install/update time: pip them into the
     managed Python runtime (ADR 0094 P2) — the same target ``install_deps`` uses —
     instead of the pre-ADR-0093 flat refusal (#2226). Refuses only when the runtime
     isn't provisioned (naming the install route) or the install itself fails
-    (surfacing pip's real error)."""
+    (surfacing pip's real error).
+
+    A ``host``-scoped dep (#2246) is refused up front and NOT sent to the runtime:
+    installing it there would "succeed" while leaving the in-process import that
+    actually needs it just as broken, which is the whole failure this scope exists to
+    stop. On a frozen host that dep is genuinely unsatisfiable, so say so — and say why
+    — rather than passing the gate and crashing at tool time."""
     # Module (not from-) imports: callables resolve through the source module at call
     # time, so test monkeypatches on infra.python_runtime / runtime.python_install bind.
     import infra.python_runtime as pr
     import runtime.python_install as pi
+
+    host_scoped = [n for n in missing if (scopes or {}).get(n) == "host"]
+    if host_scoped:
+        raise InstallError(
+            f"{pid!r} needs {', '.join(host_scoped)} as a HOST-scoped dep, which a frozen app "
+            f"cannot satisfy: the plugin imports it in this process, and the managed Python "
+            f"runtime (which is where deps get installed) only serves execute_code children — "
+            f"separate site-packages. Vendor the code, drop the dependency, or ship it in the "
+            f"app bundle. (Declare scope: runtime if it is only imported by execute_code.)"
+        )
 
     to_install = [s for s in requires_pip if _dep_pkg_name(s) in missing]
     _validate_pip_specs(pid, to_install)
@@ -557,11 +588,11 @@ def install(
         warnings: list[str] = []
         if _frozen_like():
             if manifest.requires_pip:
-                ok, missing = _deps_satisfied(manifest.requires_pip)
+                ok, missing = _deps_satisfied(manifest.requires_pip, manifest.pip_scopes)
                 if not ok:
-                    _frozen_install_missing_deps(pid, manifest.requires_pip, missing)
+                    _frozen_install_missing_deps(pid, manifest.requires_pip, missing, manifest.pip_scopes)
             if manifest.optional_pip:
-                _, soft_missing = _deps_satisfied(manifest.optional_pip)
+                _, soft_missing = _deps_satisfied(manifest.optional_pip, manifest.pip_scopes)
                 if soft_missing:
                     warn = (
                         f"optional dep(s) {', '.join(soft_missing)} aren't in the desktop runtime — "
@@ -890,12 +921,15 @@ def install_deps(plugin_id: str) -> list[str]:
     #     `plugins.allow_unbundled_deps`), for deps the plugin's OWN module imports;
     #   • ADR 0094 P2 — into the managed Python runtime (when provisioned), for deps the
     #     plugin's execute_code SKILLS import.
-    # We can't cheaply tell which kind a dep is, so we satisfy every available target;
-    # at least one must succeed or we refuse, naming what to enable. Optional deps only
-    # warn (#1953).
+    # A dep that does NOT declare a scope could be either kind, so we satisfy every
+    # available target; at least one must succeed or we refuse, naming what to enable.
+    # A `scope: host` dep (#2246) is unambiguous — it must land where THIS process can
+    # import it, so the managed runtime doesn't count as satisfying it. Optional deps
+    # only warn (#1953).
     if _frozen_like():
-        ok, missing = _deps_satisfied(deps)
-        _, soft_missing = _deps_satisfied(optional)
+        scopes = manifest.pip_scopes
+        ok, missing = _deps_satisfied(deps, scopes)
+        _, soft_missing = _deps_satisfied(optional, scopes)
         if ok and not soft_missing:
             log.info("[plugins] %s deps already satisfied (bundled / wheel-deps / managed runtime)", plugin_id)
             return deps + optional
@@ -910,20 +944,40 @@ def install_deps(plugin_id: str) -> list[str]:
 
             try:
                 wheel_installer.install(
-                    plugin_id, to_install + to_install_soft, already_satisfied=lambda n: _deps_satisfied([n])[0]
+                    plugin_id,
+                    to_install + to_install_soft,
+                    already_satisfied=lambda n: _deps_satisfied([n], scopes)[0],
                 )
                 targets_tried.append("wheel-deps")
             except wheel_installer.WheelInstallError as exc:
                 errors.append(f"wheel install: {exc}")
 
-        # Target 2 (ADR 0094 P2): managed runtime, when provisioned.
+        # Target 2 (ADR 0094 P2): managed runtime, when provisioned. HOST-scoped deps are
+        # withheld (#2246) — the runtime serves execute_code children, so installing an
+        # in-process import there would report success while leaving it just as broken.
+        runtime_specs = [s for s in to_install + to_install_soft if scopes.get(_dep_pkg_name(s)) != "host"]
         from runtime.python_install import PythonRuntimeError, install_requirements_into_managed_runtime
 
-        try:
-            install_requirements_into_managed_runtime(to_install + to_install_soft)
-            targets_tried.append("managed-runtime")
-        except PythonRuntimeError as exc:
-            errors.append(f"managed runtime: {exc}")
+        if runtime_specs:
+            try:
+                install_requirements_into_managed_runtime(runtime_specs)
+                targets_tried.append("managed-runtime")
+            except PythonRuntimeError as exc:
+                errors.append(f"managed runtime: {exc}")
+
+        # A host-scoped dep is only really installed if THIS process can now import it.
+        # Verify rather than trusting "some target accepted it" — believing the wrong
+        # interpreter is the entire bug this scope exists to prevent.
+        still_missing_host = [n for n in _deps_satisfied(deps, scopes)[1] if scopes.get(n) == "host"]
+        if still_missing_host:
+            raise InstallError(
+                f"{plugin_id!r} needs {', '.join(still_missing_host)} importable in the HOST process "
+                f"(scope: host), and a frozen app can't provide that: the managed Python runtime only "
+                f"serves execute_code children, and pure-Python wheel deps require Settings ▸ Plugins ▸ "
+                f"'Install unbundled plugin deps'. Enable that, vendor the code, or ship the dep in the "
+                f"app bundle."
+                + (f" [{'; '.join(errors)}]" if errors else "")
+            )
 
         if not targets_tried:
             # Nothing installed anywhere. Hard deps are fatal; a bare optional gap degrades.

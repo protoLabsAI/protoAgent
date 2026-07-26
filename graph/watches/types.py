@@ -86,9 +86,38 @@ class Watch:
         return cls(**{k: v for k, v in data.items() if k in known})
 
     def status_line(self) -> str:
-        """One-line human summary for list output + status."""
+        """One-line human summary for list output + status.
+
+        Includes the lifetime knobs for an ACTIVE watch, because this line is what the agent
+        reads back — from ``list_watches`` and from ``<working_state>``'s ACTIVE WATCHES
+        block. An agent that can set an expiry has to be able to see one, or it can't tell a
+        watch that's about to lapse from one that will poll indefinitely."""
         vt = self.verifier.get("type", "llm")
         base = f"watch [{self.status}] ({self.id}) via {vt}: {self.condition!r}"
+        if self.active:
+            base += self._lifetime_suffix()
         if self.last_reason:
             base += f" — {self.last_reason}"
         return base
+
+    def _lifetime_suffix(self) -> str:
+        """`` (every 30m, expires in 2h, stall after 3)`` — only the parts that are set."""
+        parts = []
+        if self.interval_s:
+            parts.append(f"every {_duration(self.interval_s)}")
+        if self.deadline is not None:
+            left = self.deadline - time()
+            parts.append(f"expires in {_duration(left)}" if left > 0 else "past its deadline")
+        if self.stall_after:
+            parts.append(f"stall after {self.stall_after}")
+        return f" ({', '.join(parts)})" if parts else ""
+
+
+def _duration(seconds: float) -> str:
+    """A compact, agent-readable span: ``45s`` / ``30m`` / ``2h`` / ``3d``. Rounded — this
+    feeds prose the model reads, not arithmetic it does."""
+    seconds = max(0.0, float(seconds))
+    for limit, div, unit in ((90, 1, "s"), (5400, 60, "m"), (172800, 3600, "h")):
+        if seconds < limit:
+            return f"{round(seconds / div)}{unit}"
+    return f"{round(seconds / 86400)}d"

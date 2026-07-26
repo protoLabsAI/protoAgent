@@ -46,6 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0–1, a missing `identity_preserved` defaults to true (a false "identity lost" alarm is
   the expensive one), and any failure leaves the deterministic report intact — a curation
   pass must never take down the maintenance loop hosting it.
+- **`requires_pip` entries can declare `scope: host | runtime` (#2246).** On the desktop
+  app there are two Pythons with separate site-packages — the frozen host process, and
+  the managed runtime that serves `execute_code` children. The install gate accepted a
+  dep because the *managed runtime* had it, while the plugin imported it *in-process*:
+  the answer was true for the wrong interpreter, so install passed and then every tool
+  call died with `ModuleNotFoundError`.
+
+  `scope: runtime` (the default, matching the compute-plugin pattern) behaves exactly as
+  before, so no existing manifest changes. `scope: host` means the plugin's own module
+  imports it, which the managed runtime can never satisfy — so the gate now judges it by
+  host importability alone, withholds it from the managed-runtime install target (which
+  would "succeed" while leaving the real import broken), and **verifies the host can
+  actually import it** rather than trusting that some target accepted it. When it can't,
+  the refusal says why and names the ways out: vendor it, drop it, or ship it in the app
+  bundle. The console's `deps_missing` is scope-aware too, so a plugin that will crash at
+  tool time no longer reports itself ready.
 - **The ACP layer no longer discards `stopReason` — a coder can declare a dead end
   (#2279).** ACP already told us *why* a turn ended and we logged it and dropped it on the
   floor. Because `prompt()` returns text, `end_turn`, `refusal`, `max_tokens` and

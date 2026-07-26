@@ -45,6 +45,12 @@ effective `interval_s`) so one verifier can keep **per-watch** state — see
 
 - **Agent tool** — `create_watch(condition, check, run_prompt=…)`; `list_watches` / `clear_watch`
   manage them. Plugin-verifier only (like `set_goal`) — the agent can't open a shell/eval watch.
+  The lifetime knobs are on the tool too: `interval_s` (this watch's own cadence floor),
+  `expires_in_s` (give up after N seconds **from now** → `expired`) and `stall_after`. The
+  deadline is *relative* here, unlike the operator API's absolute `deadline`, because a model
+  has no reliable "now" — an ISO timestamp it guessed in the past would expire the watch on its
+  first tick. Set at least `expires_in_s` whenever the thing being watched has a deadline: a
+  watch created with none of these polls until something clears it.
 - **Plugin (SDK)** — `sdk.create_watch(*, condition, verifier, run_prompt=…)`, and react with
   `registry.register_watch_hook(on_met=…, on_expired=…, on_stalled=…)`. The lifecycle half
   (#1638): `sdk.list_watches(prefix="")` (each `{id, condition, status, verifier}`,
