@@ -745,10 +745,14 @@ fn check_for_updates<R: Runtime>(app: AppHandle<R>, interactive: bool) {
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show protoAgent", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    // #1706: a discoverable way to get a second window. Two agents side by side, or one
+    // window per task, without tab-switching — and it makes the capability visible
+    // instead of hiding it behind a context-menu gesture nobody finds.
+    let new_win = MenuItem::with_id(app, "new_window", "New Window", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &separator, &updates, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &new_win, &hide, &separator, &updates, &quit])?;
 
     // The protoLabs robot mark, at the menu-bar size + template treatment Orbis
     // used for fleet agents (icons/tray-robot.png, 44×44; system-tinted). Each
@@ -762,6 +766,11 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
+            "new_window" => {
+                if let Err(e) = open_chat_window(app, None) {
+                    log::error!("desktop: New Window failed: {e}");
+                }
+            }
             "hide" => hide_main_window(app),
             "updates" => check_for_updates(app.clone(), true),
             "quit" => app.exit(0),
@@ -908,6 +917,111 @@ struct DownloadProgress {
     content_length: Option<u64>,
 }
 
+/// Monotonic suffix for extra chat-window labels. Tauri window labels must be UNIQUE for
+/// the app's lifetime — reusing one that was closed collides — so this only ever climbs.
+static NEXT_WINDOW_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(2);
+
+/// Open an additional chat window (#1706).
+///
+/// The menu item existed and did nothing: same-origin new-window requests were denied
+/// outright by `on_new_window` (which only ever forwarded EXTERNAL http(s) links to the
+/// system browser), so there was no path to a second window at all.
+///
+/// A new window is a full second webview against the SAME sidecar — one server, one
+/// fleet, one set of stores. Session independence falls out of the console's own model:
+/// each window boots its own chat store and mints its own session id, and the URL is the
+/// source of truth for which agent it targets (ADR 0042 slug routing), so two windows can
+/// sit on two agents without desyncing.
+///
+/// `path` is an optional in-app route (e.g. `agent/roxy-1a2b/`) so a caller can open a
+/// window already pointed at something; empty opens the default console.
+fn open_chat_window<R: Runtime>(app: &AppHandle<R>, path: Option<String>) -> Result<(), String> {
+    // WakeSignal already carries the resolved sidecar port (managed in setup, after
+    // choose_port) — no second source of truth for it.
+    let port = app
+        .try_state::<WakeSignal>()
+        .map(|s| s.port)
+        .ok_or_else(|| "sidecar port not resolved yet".to_string())?;
+    let id = NEXT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!("main-{id}");
+    // Same handoff the primary window gets — without it the webview has no API base and
+    // boots into the setup wizard against the wrong origin.
+    let init = format!("window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";");
+    let route = path.unwrap_or_default();
+    let route = route.trim_start_matches('/');
+    let url = if route.is_empty() {
+        format!("index.html?__apiPort={port}")
+    } else {
+        format!("index.html?__apiPort={port}#/{route}")
+    };
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("protoAgent")
+        .inner_size(1280.0, 820.0)
+        .min_inner_size(980.0, 640.0)
+        .resizable(true)
+        // Offset rather than centered: a second window landing exactly on the first looks
+        // like nothing happened — the same "did that work?" the no-op menu item produced.
+        .position(60.0 + f64::from(id % 5) * 28.0, 60.0 + f64::from(id % 5) * 28.0)
+        .initialization_script(&init);
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+    builder.build().map_err(|e| e.to_string())?;
+    log::info!("desktop: opened chat window {label}");
+    Ok(())
+}
+
+/// Open another chat window — the webview-facing half of #1706, so a console menu item
+/// or keybinding can request one. (An init-script global would be unreliable here; the
+/// shell invokes this, matching how the rest of the desktop bridge works.)
+#[tauri::command]
+fn new_window<R: Runtime>(app: AppHandle<R>, path: Option<String>) -> Result<(), String> {
+    open_chat_window(&app, path)
+}
+
+/// Is this new-window target OUR app rather than the wider web (#1706)?
+///
+/// Two shapes reach here: the Tauri asset scheme the window itself is served from
+/// (`tauri://localhost`, and `http://tauri.localhost` on Windows), and a same-port
+/// loopback URL — a console link to `http://127.0.0.1:<sidecar>/app/…`. Anything else,
+/// including loopback on a DIFFERENT port, is somebody else's server and belongs in the
+/// system browser.
+fn is_own_origin(target: &str, port: u16) -> bool {
+    if target.starts_with("tauri://") || target.starts_with("http://tauri.localhost") {
+        return true;
+    }
+    for host in ["127.0.0.1", "localhost"] {
+        if target.starts_with(&format!("http://{host}:{port}/"))
+            || target == format!("http://{host}:{port}")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// The in-app route out of a same-origin target, or None for the bare app root.
+/// `…/app/agent/roxy-1a2b/` and `…#/agent/roxy-1a2b/` both yield `agent/roxy-1a2b/`, so a
+/// link to a specific agent opens a window already pointed at it.
+fn own_origin_path(target: &str) -> Option<String> {
+    let rest = target.split_once('#').map(|(_, frag)| frag).unwrap_or_else(|| {
+        target
+            .split_once("/app/")
+            .map(|(_, path)| path)
+            .unwrap_or("")
+    });
+    let rest = rest.trim_start_matches('/').trim();
+    if rest.is_empty() || rest.starts_with("index.html") {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
+
 /// Check the updater manifest for a newer build, returning its version + notes for the
 /// in-app UpdateNotice (the web pill renders the changelog) — the typed counterpart to
 /// the tray's native-dialog `check_for_updates`. None when up to date; Err on failure.
@@ -966,7 +1080,8 @@ pub fn run() {
             hotkeys_status,
             hotkeys_set,
             auth_token,
-            pick_path
+            pick_path,
+            new_window
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -1075,6 +1190,7 @@ pub fn run() {
             // deny the in-app window. (Browsers handle this implicitly via allow-popups;
             // the desktop shell has to do it explicitly.)
             let link_opener = app.handle().clone();
+            let sidecar_port = port;
             #[allow(unused_mut)] // `mut` is only used on the macOS title-bar branch below.
             let mut win = WebviewWindowBuilder::new(app, "main", app_url())
                 .title("protoAgent")
@@ -1085,11 +1201,22 @@ pub fn run() {
                 .initialization_script(&init)
                 .on_new_window(move |url, _features| {
                     let target = url.as_str();
-                    if target.starts_with("http://") || target.starts_with("https://") {
+                    // Our OWN origin asking for a new window is "open this in a second
+                    // window", not an external link — that request used to fall through
+                    // to Deny below, which is why the menu item did nothing (#1706).
+                    // Serve it with a real Tauri window rather than letting the webview
+                    // spawn a chrome-less child that never gets our init script.
+                    if is_own_origin(target, sidecar_port) {
+                        if let Err(e) = open_chat_window(&link_opener, own_origin_path(target)) {
+                            log::error!("desktop: failed to open a new chat window: {e}");
+                        }
+                    } else if target.starts_with("http://") || target.starts_with("https://") {
                         if let Err(e) = link_opener.opener().open_url(target, None::<&str>) {
                             log::error!("desktop: failed to open external link {target}: {e}");
                         }
                     }
+                    // Deny either way: we've already served the request ourselves, and an
+                    // unmanaged child webview would have no API base and no title bar.
                     tauri::webview::NewWindowResponse::Deny
                 });
             // Invisible title bar (macOS): no opaque chrome — content fills the
@@ -1219,5 +1346,65 @@ mod auth_token_tests {
         assert_eq!(parse_auth_token("model:\n  api_base: x\n"), None);
         assert_eq!(parse_auth_token("auth:\n  token:\n"), None);
         assert_eq!(parse_auth_token(""), None);
+    }
+
+}
+
+#[cfg(test)]
+mod new_window_tests {
+    use super::{is_own_origin, own_origin_path};
+
+    // ── #1706: which new-window targets are OURS ──────────────────────────────
+    #[test]
+    fn own_origin_matches_the_tauri_asset_scheme() {
+        assert!(is_own_origin("tauri://localhost/app/", 7870));
+        assert!(is_own_origin("http://tauri.localhost/app/", 7870));
+    }
+
+    #[test]
+    fn own_origin_matches_loopback_on_the_sidecar_port() {
+        assert!(is_own_origin("http://127.0.0.1:7870/app/", 7870));
+        assert!(is_own_origin("http://localhost:7870/app/agent/roxy-1a2b/", 7870));
+        assert!(is_own_origin("http://127.0.0.1:7870", 7870));
+    }
+
+    #[test]
+    fn loopback_on_a_different_port_is_somebody_elses_server() {
+        // A dev server, another fork, an unrelated app — belongs in the browser, not
+        // in one of our windows.
+        assert!(!is_own_origin("http://127.0.0.1:3000/app/", 7870));
+        assert!(!is_own_origin("http://localhost:5173/", 7870));
+    }
+
+    #[test]
+    fn external_links_are_not_own_origin() {
+        assert!(!is_own_origin("https://github.com/protoLabsAI/protoAgent", 7870));
+        assert!(!is_own_origin("https://127.0.0.1.evil.test/app/", 7870));
+    }
+
+    #[test]
+    fn a_port_prefix_collision_is_not_a_match() {
+        // 7870 must not match 78700 — a prefix compare without the trailing
+        // delimiter would.
+        assert!(!is_own_origin("http://127.0.0.1:78700/app/", 7870));
+    }
+
+    #[test]
+    fn own_origin_path_extracts_an_in_app_route() {
+        assert_eq!(
+            own_origin_path("http://127.0.0.1:7870/app/agent/roxy-1a2b/"),
+            Some("agent/roxy-1a2b/".to_string())
+        );
+        assert_eq!(
+            own_origin_path("tauri://localhost/index.html?__apiPort=7870#/agent/ava-9f/"),
+            Some("agent/ava-9f/".to_string())
+        );
+    }
+
+    #[test]
+    fn the_bare_app_root_yields_no_route() {
+        assert_eq!(own_origin_path("http://127.0.0.1:7870/app/"), None);
+        assert_eq!(own_origin_path("tauri://localhost/index.html?__apiPort=7870"), None);
+        assert_eq!(own_origin_path("http://127.0.0.1:7870"), None);
     }
 }
