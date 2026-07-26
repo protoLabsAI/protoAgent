@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.119.0",
+    "date": "2026-07-26",
+    "changes": [
+      "A watch can be a standing monitor, not just a one-shot tripwire."
+    ]
+  },
+  {
     "version": "v0.118.0",
     "date": "2026-07-26",
     "changes": [
