@@ -1594,11 +1594,90 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
                 plugin_id,
             )
         try:
+            _install_error_envelope(r["router"], plugin_id)
             app.include_router(r["router"], prefix=prefix)
             STATE.plugin_router_keys.add(key)
             log.info("[plugins] mounted router from %s at %s", plugin_id, prefix or "/")
         except Exception:  # noqa: BLE001
             log.exception("[plugins] failed to mount router from %s", plugin_id)
+
+
+def _install_error_envelope(router, plugin_id: str) -> None:
+    """Wrap a plugin router's handlers so an unhandled exception answers with a
+    structured JSON error instead of Starlette's bare ``Internal Server Error`` (#2259).
+
+    A plugin endpoint that raised on bad input produced a plain-text 500 with no body a
+    caller could parse — so "my request was malformed" and "the panel blew up mid-run"
+    were indistinguishable, which matters a great deal when the endpoint is long-running
+    and retrying an actual crash is expensive.
+
+    Applied at the **dispatch layer**, so it covers every plugin at once rather than
+    asking each to remember. Deliberately does NOT reinterpret status: mapping, say,
+    ``ValueError`` to 400 would guess that an internal bug is a client error and recreate
+    the same confusion in the other direction. A plugin that wants 400 raises
+    ``HTTPException(400, …)`` itself — those pass through untouched, as do the
+    ``HTTPException``s FastAPI raises for request validation.
+
+    ``include_router`` rebuilds each route from ``route.endpoint``, so wrapping the
+    endpoint before inclusion is enough. Websocket routes are left alone (an HTTP error
+    body is meaningless once a socket is upgraded), and the wrapper is idempotent so the
+    hot-reload path can re-mount the same router object without stacking wrappers.
+    """
+    from fastapi.routing import APIRoute
+
+    for route in getattr(router, "routes", []):
+        if not isinstance(route, APIRoute):
+            continue
+        route.endpoint = _wrap_plugin_endpoint(route.endpoint, plugin_id)
+
+
+def _wrap_plugin_endpoint(fn, plugin_id: str):
+    import functools
+    import inspect
+
+    from fastapi import HTTPException
+
+    if getattr(fn, "__protoagent_error_envelope__", False):
+        return fn
+
+    def _envelope(exc: Exception) -> HTTPException:
+        # The traceback goes to the log (the operator's copy); the response carries the
+        # exception type + message so the CALLER can tell a validation reject from a
+        # crash without shell access to the host.
+        log.exception("[plugins] %s: unhandled error in plugin route", plugin_id)
+        return HTTPException(
+            500,
+            detail={
+                "error": f"{type(exc).__name__}: {exc}".strip()[:500] or "unhandled plugin error",
+                "plugin": plugin_id,
+                "type": type(exc).__name__,
+            },
+        )
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def _wrapped(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise _envelope(exc) from exc
+
+    else:
+
+        @functools.wraps(fn)
+        def _wrapped(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise _envelope(exc) from exc
+
+    _wrapped.__protoagent_error_envelope__ = True
+    return _wrapped
 
 
 def _apply_plugin_registries(plugins) -> None:
