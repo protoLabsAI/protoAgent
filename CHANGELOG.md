@@ -79,6 +79,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same confusion in the other direction. A plugin that wants a 400 raises it itself, and
   those pass through untouched. Websocket routes are left alone, and the wrapper is
   idempotent so plugin hot-reload can't stack it.
+- **Watches are no longer coupled to goal mode — and the poller no longer silently skips
+  every watch when goal mode is off (ADR 0067).** Two separate couplings, one root cause:
+  the watch primitive grew out of ADR 0030's deleted `monitor` goal disposition and kept
+  riding `goal.enabled` on the way out.
+
+  The background poller was started only `if goal_enabled` — under a comment still
+  describing the monitor-goal loop. `POST /api/watches` has no gate of its own, so an
+  instance with goal mode off would **accept** an operator's watch, persist it, list it in
+  the console as `active`, and never poll it once: `last_checked` stayed `null` forever,
+  no verifier ever ran, no `on_met` hook ever fired. Nothing surfaced the no-op. The loop
+  now starts unconditionally; it no-ops on an empty store, which is what makes that cheap.
+
+  Separately, the `create_watch` / `list_watches` / `clear_watch` tools were bound *inside*
+  the goal-enabled tool group, so `watches.enabled: true` with goal mode off bound nothing.
+  They now bind on `watches.enabled` alone. A watch is verifier-only and moved by an
+  external process; a goal is a bounded loop the agent drives — separate dispositions,
+  separate flags. The docs claimed both of these already worked this way; now they do.
+
+- **The watch tick no longer blocks the event loop on its store scan.** `tick_all` globbed
+  and read every watch file synchronously from inside the server's `_watch_loop`, stalling
+  every other request for the length of the scan (the operator list handler already hopped
+  to a thread; the loop didn't). The scan now runs in a thread.
+
+- **A watch reaction reports one origin, not two.** The scheduler published `turn.started` /
+  `turn.finished` with the raw `watch-<id>` job id as `origin` while the A2A metadata for
+  the same fire carried `watch`; only the console's pattern-match over both spellings kept
+  it working. Both now use `watch`, and the job id still travels as `trigger`.
+
 - **`POST /api/fleet/{name}/stop` no longer reports a stop it didn't achieve (#2286).** The
   endpoint returned `{"ok": true, "stopped": true}` and removed the member from `fleet.json`
   while the process kept running and kept LISTENing on its port — the worst of both states:
