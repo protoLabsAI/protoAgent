@@ -64,16 +64,45 @@ def session_filename(session_id: str) -> str:
     return f"{session_id.replace(':', '%3A')}.json"
 
 
+def contained_in(base: str, path: str) -> bool:
+    """Does *path* actually resolve INSIDE *base*? (#2340)
+
+    ``session_filename`` only encodes ``:`` — it does not neutralize separators or
+    ``..`` — so a session id like ``../../x`` produced a path outside the memory dir
+    for READS (both candidates), the atomic WRITE, and the legacy unlink. Session ids
+    are caller-supplied on several surfaces (``/api/chat``, A2A conversation ids,
+    ``/v1``), so the containment check belongs HERE, at the one place paths are built,
+    rather than at each caller — the callers keep multiplying, and two of them already
+    had to remember :func:`is_safe_session_id` by hand.
+
+    Uses ``realpath`` on both sides so a symlinked memory dir compares correctly.
+    """
+    root = os.path.realpath(base)
+    resolved = os.path.realpath(path)
+    return resolved == root or resolved.startswith(root + os.sep)
+
+
 def session_file_candidates(session_id: str, base: str | None = None) -> list[str]:
     """Paths to try when READING *session_id*'s summary: the encoded name
     first, then the legacy raw-``:`` name (files a pre-encoding build wrote on
     POSIX). Writers use the encoded name only — and drop the legacy file after
-    a successful write, so the pair never coexists for long."""
+    a successful write, so the pair never coexists for long.
+
+    Candidates that escape ``base`` are dropped (#2340). An escaping id can only ever
+    read a file this module never wrote, so returning nothing is the truthful answer,
+    not a lost feature."""
     if base is None:
         base = memory_path()
     encoded = os.path.join(base, session_filename(session_id))
     legacy = os.path.join(base, f"{session_id}.json")
-    return [encoded] if encoded == legacy else [encoded, legacy]
+    candidates = [encoded] if encoded == legacy else [encoded, legacy]
+    safe = [c for c in candidates if contained_in(base, c)]
+    if len(safe) != len(candidates):
+        log.warning(
+            "[memory] session id %r maps outside the memory dir — ignoring escaping path(s)",
+            session_id[:80],
+        )
+    return safe
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +233,16 @@ def _persist_session(state: dict, trace_id: str) -> None:
 
     # --- Atomic write ---
     dest = os.path.join(base, session_filename(session_id))
+    # Never write outside the memory dir (#2340): `session_filename` encodes ':' but
+    # not separators or '..', and session ids are caller-supplied. Refuse loudly —
+    # silently skipping persistence is the invisible-failure class this codebase keeps
+    # having to dig out.
+    if not contained_in(base, dest):
+        log.error(
+            "[memory] refusing to persist session %r — its path escapes the memory dir",
+            session_id[:80],
+        )
+        return
     tmp_fd = None
     tmp_path = None
     try:
@@ -221,7 +260,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
         # after the encoded write lands so the digest never lists this session
         # twice. Best-effort — the encoded file is already the source of truth.
         legacy = os.path.join(base, f"{session_id}.json")
-        if legacy != dest:
+        if legacy != dest and contained_in(base, legacy):  # never unlink outside (#2340)
             try:
                 os.remove(legacy)
             except OSError:
