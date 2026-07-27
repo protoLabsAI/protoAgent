@@ -25,11 +25,52 @@ _GATEWAY_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
 # retries the request *start*, never a mid-body read, so a rate-limited or flaky gateway
 # that terminates the response kills the whole turn (#1728). These are the read/transport
 # failures we treat as retryable when the stream produced NOTHING yet.
+# langchain_openai's stall guard: the socket is alive but the provider stopped producing
+# for `stream_chunk_timeout` (120s default). It is NOT an httpx/httpcore error — it
+# subclasses TimeoutError/OSError — so it fell through this tuple entirely and no stall was
+# ever retried, which is why a stalled turn was lost outright with no partial and no retry
+# (#2305). Imported defensively: an older langchain_openai has no such class, and a missing
+# optional symbol must not break llm construction.
+try:  # pragma: no cover - trivial import guard
+    from langchain_openai import StreamChunkTimeoutError as _StreamChunkTimeoutError
+
+    _STALL_ERRORS: tuple[type[BaseException], ...] = (_StreamChunkTimeoutError,)
+except ImportError:  # pragma: no cover
+    _STALL_ERRORS = ()
+
 RETRYABLE_STREAM_ERRORS: tuple[type[BaseException], ...] = (
     httpx.TransportError,  # httpx.ReadError / ConnectError / ReadTimeout / …
     httpcore.NetworkError,  # httpcore.ReadError / WriteError / ConnectError (raw, unwrapped)
     httpcore.TimeoutException,  # httpcore.ReadTimeout / ConnectTimeout
+    *_STALL_ERRORS,  # provider went silent mid-stream (#2305)
 )
+
+
+def _chunk_has_content(item: object) -> bool:
+    """Did this streamed chunk carry anything a consumer has already SEEN?
+
+    The reconnect rule below is about not duplicating user-visible output. The first
+    chunk of an OpenAI stream is the *role* delta — ``{"role": "assistant"}`` with empty
+    content — so a stall right after it (the exact ``chunks_received=1`` signature in
+    #2305) has shown the user nothing and is safe to replay.
+
+    Deliberately CONSERVATIVE: anything we can't read is treated as content, so an
+    unfamiliar chunk shape costs a retry we could have had rather than risking a
+    duplicated answer.
+    """
+    for obj in (getattr(item, "message", None), item):
+        if obj is None:
+            continue
+        content = getattr(obj, "content", None)
+        if content:
+            return True
+        # Reasoning rides its own channel and IS rendered, so it counts as seen.
+        extra = getattr(obj, "additional_kwargs", None)
+        if isinstance(extra, dict) and extra.get("reasoning_content"):
+            return True
+        if content == "" or content == []:
+            return False  # a shape we understand, and it's empty
+    return True  # unknown shape — assume it was seen
 _STREAM_RETRY_BACKOFF_S = 0.5
 
 
@@ -40,35 +81,52 @@ async def _stream_with_reconnect(
     backoff: float = _STREAM_RETRY_BACKOFF_S,
     sleep: Callable = asyncio.sleep,
 ) -> AsyncIterator:
-    """Yield from a model stream, restarting it on a transport/read error that occurs
-    **before any item is emitted**.
+    """Yield from a model stream, restarting it on a transport/read error or a provider
+    stall that occurs **before any CONTENT has been emitted**.
 
-    Retrying is only safe with zero items emitted: each chunk fires its
-    ``on_llm_new_token`` callback as it's yielded, so once one has streamed a fresh
-    stream would duplicate it — there we re-raise. This reconnects the model call only;
-    it never replays tools or restarts the turn. A provider closing the stream at the
-    top (the rate-limit case in #1728) emits nothing, so it reconnects cleanly.
+    Retrying is safe exactly while nothing user-visible has streamed: each content chunk
+    fires its ``on_llm_new_token`` callback as it's yielded, so replaying after one would
+    duplicate it — there we re-raise. This reconnects the model call only; it never
+    replays tools or restarts the turn.
+
+    The bar is CONTENT, not items (#2305). The first chunk of an OpenAI stream is the role
+    delta with empty content, so a stall one chunk in — ``chunks_received=1``, the exact
+    signature in #2305 — had shown the user nothing yet still counted as "emitted" and
+    killed the turn. ``_chunk_has_content`` draws the line where duplication actually
+    starts, and errs toward not retrying when a chunk's shape is unfamiliar.
+
+    A provider closing the stream at the top (the rate-limit case in #1728) emits nothing,
+    so it still reconnects cleanly.
     """
     attempts = max(max_retries, 0) + 1
     delay = backoff
     for attempt in range(attempts):
-        emitted = 0
+        emitted_content = False
         try:
             async for item in make_stream():
-                emitted += 1
+                emitted_content = emitted_content or _chunk_has_content(item)
                 yield item
             return
         except RETRYABLE_STREAM_ERRORS as exc:
-            if emitted or attempt == attempts - 1:
+            if emitted_content or attempt == attempts - 1:
                 raise
+            # Two different failures reach here and the distinction matters when reading
+            # logs: a transport drop (provider CLOSED the stream — often a rate limit) vs
+            # a stall (socket still open, provider went SILENT — #2305).
+            cause = (
+                "provider went silent mid-stream"
+                if _STALL_ERRORS and isinstance(exc, _STALL_ERRORS)
+                else "provider closed stream; possible rate limit"
+            )
             log.warning(
                 "model stream dropped before any content (%s: %s) — reconnecting, "
-                "attempt %d/%d in %.1fs (provider closed stream; possible rate limit)",
+                "attempt %d/%d in %.1fs (%s)",
                 type(exc).__name__,
-                exc,
+                str(exc)[:200],
                 attempt + 1,
                 attempts - 1,
                 delay,
+                cause,
             )
             await sleep(delay)
             delay *= 2
