@@ -11,6 +11,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.120.0] - 2026-07-27
+
+### Added
+- **`scripts/watch_smoke.py` — a live smoke for the watch subsystem (ADR 0067), plus the
+  regression guard #2320 never got.** `WatchController` is thoroughly unit-tested by calling
+  `tick_all` directly, and that is precisely what could not catch the bug that shipped: the
+  server started the poller inside the `goal_enabled` branch, so a goal-mode-off instance
+  accepted watches on `POST /api/watches` (which has no gate), persisted them, listed them
+  `active` in the console — and never polled one. Every controller test passed the whole time.
+
+  The new smoke boots throwaway instances and drives every disposition over the real HTTP
+  surface: the poller running with goal mode off, one-shot `met`, a repeating watch's rising
+  **edge** (a latched predicate must not re-fire every tick — each fire can enqueue an agent
+  turn), a `change` monitor's baseline-then-move, expiry, stall, the per-watch `interval_s`
+  floor, in-place edit preserving accrued counters, flap detection and its trigger-labelled
+  counters, and terminal-watch retention. It needs no gateway and costs no model turns —
+  every watch is `run_prompt`-less, so the reaction never reaches `run_in_session`, and
+  predicates are files the script owns rather than LLM judgments. ~140s end to end.
+
+  `test_the_watch_poller_is_started_unconditionally` guards the original regression
+  structurally, since the start site is a closure registered on FastAPI's startup event and
+  reaching it functionally means booting the server. What the fix *is* — "this statement has
+  no enclosing conditional" — is what the test asserts.
+
+### Fixed
+- **A provider that goes silent mid-stream is now retried instead of losing the turn
+  (#2305).** Roughly 17% of turns died with `No streaming chunk received for 120.0s
+  (model=protolabs/cloud, chunks_received=1)` — the stream opened, delivered one chunk,
+  then went quiet until the guard fired. The turn was lost outright: no partial result,
+  no retry, and whatever it had been asked to do simply didn't happen.
+
+  Two independent causes, both closed. That guard raises langchain_openai's
+  `StreamChunkTimeoutError`, which subclasses `TimeoutError`/`OSError` and so matched
+  none of the httpx/httpcore types in `RETRYABLE_STREAM_ERRORS` — a stall was therefore
+  never retried, even when nothing at all had streamed. And the reconnect rule refused to
+  retry once *any* item had been yielded, while the first chunk of an OpenAI stream is
+  the role delta carrying no content — so `chunks_received=1` counted as "already
+  emitted" despite the user having seen nothing.
+
+  The bar is now **content**, not items: a stall is retryable while nothing user-visible
+  has streamed, which is exactly where duplication starts. Reasoning counts as content
+  (it's rendered), and an unfamiliar chunk shape is treated as content — erring toward a
+  retry not taken rather than a duplicated answer. A stall *after* real content still
+  raises, unchanged. The reconnect log now distinguishes "provider went silent" from
+  "provider closed stream; possible rate limit".
+
+- **A network blip no longer discards a macOS notarization Apple already accepted.** The
+  desktop build called `xcrun notarytool submit --wait`, which polls internally and treats a
+  single failed poll as fatal. On the v0.119.0 drop the DMG uploaded fine, Apple accepted it
+  and reported `In Progress` — then one status request failed DNS on the runner
+  (`NSURLErrorDomain Code=-1009 "The Internet connection appears to be offline"`) and the
+  whole leg died. macOS was the only failing platform, and because the `latest.json` fan-in is
+  `needs: build`, that one blip also cost the manifest and the `Latest` promotion for every
+  platform.
+
+  Submit and wait are now separate calls: the submission id is captured, and polling retries
+  against the **existing** submission (`notarytool wait <id>`) rather than re-uploading a
+  ~100 MB DMG. A genuine `Invalid`/`Rejected` verdict short-circuits the retry loop and dumps
+  the notary log, so a rejected binary still fails fast instead of being retried five times
+  and misreported as a network fault. The final status is re-confirmed as `Accepted` before
+  stapling.
+
+- **`scripts/live_smoke.py` is now hermetic — it used to inherit the developer's host
+  config.** The smoke isolated the *instance* tier (`PROTOAGENT_HOME`) but not the *box*
+  tier, and `host-config.yaml` — the Host cascade layer every instance on the machine
+  inherits — resolves from `data_home()` unless `PROTOAGENT_BOX_ROOT` says otherwise. So on
+  any box with a host config, the smoke silently ran with settings it never declared. A host
+  config that widens `network.bind` is the sharp case: the server correctly refuses to bind
+  wide with no auth token, and the smoke reports `/healthz never returned 200` — a message
+  that points at the boot, not at the inherited setting. CI ships no `host-config.yaml`,
+  which is why this only ever bit locally, on exactly the pre-PR gate run PROTO.md asks for.
+
+- **A session id can no longer build a path outside the memory dir (#2340).**
+  `session_filename()` encodes `:` for NTFS but neutralizes neither path separators nor
+  `..`, and session ids are caller-supplied on several surfaces (`/api/chat`, A2A
+  conversation ids, `/v1`). An id like `../../x` therefore escaped the memory dir on
+  **three** paths, not the one originally reported: both read candidates, the atomic
+  write, and the post-write unlink of the legacy raw-`:` twin — meaning it could have
+  deleted a file outside the directory.
+
+  Containment is now enforced where the paths are built rather than at each caller.
+  `is_safe_session_id` already existed as the charset contract, but only two call sites
+  remembered to apply it, and callers keep multiplying. Escaping read candidates are
+  dropped (an escaping id can only ever name a file this module never wrote, so nothing
+  is lost), and the write refuses loudly rather than skipping silently. Resolution goes
+  through `realpath` on both sides, so a symlinked memory dir compares correctly and a
+  sibling sharing a name prefix (`/memory-evil` vs `/memory`) doesn't slip through a
+  naive prefix check.
+
 ## [0.119.0] - 2026-07-26
 
 ### Added

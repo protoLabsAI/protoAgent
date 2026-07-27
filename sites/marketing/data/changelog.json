@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.120.0",
+    "date": "2026-07-27",
+    "changes": [
+      "scripts/watch_smoke.py — a live smoke for the watch subsystem, plus the regression guard #2320 never got.",
+      "A provider that goes silent mid-stream is now retried instead of losing the turn (#2305).",
+      "A network blip no longer discards a macOS notarization Apple already accepted.",
+      "scripts/live_smoke.py is now hermetic — it used to inherit the developer's host config.",
+      "A session id can no longer build a path outside the memory dir (#2340)."
+    ]
+  },
+  {
     "version": "v0.119.0",
     "date": "2026-07-26",
     "changes": [
