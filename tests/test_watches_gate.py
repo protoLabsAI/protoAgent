@@ -133,6 +133,54 @@ def test_watch_tools_bound_to_lead_graph_only_when_enabled():
     assert WATCH_TOOLS <= goalless
 
 
+# --- the POLLER, not the tools (#2320) -------------------------------------
+
+
+def test_the_watch_poller_is_started_unconditionally():
+    """The regression this guards is the LOOP, not the tool gating above.
+
+    ``_watch_loop`` used to be started inside the ``goal_enabled`` branch — a leftover of
+    the deleted ADR 0030 monitor-goal loop it grew out of. ``POST /api/watches`` has no
+    such gate, so a goal-mode-off instance accepted watches, persisted them, listed them
+    ``active`` in the console, and never polled one. Nothing raised; the watches simply
+    never fired, which is why it survived two releases.
+
+    Asserted STRUCTURALLY because the start site is a closure registered with
+    ``@fastapi_app.on_event("startup")`` inside the app builder — reaching it functionally
+    means booting the whole server. What the fix *is*, precisely, is "this statement has no
+    enclosing conditional", so that is what this checks. Same technique as
+    tests/test_bundled_config_assets.py.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "server" / "__init__.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+
+    # Every `_watch_loop()` CALL (the import of the same name is an alias, not a Call),
+    # paired with the chain of nodes enclosing it.
+    found: list[tuple[ast.Call, list[ast.AST]]] = []
+
+    def visit(node: ast.AST, ancestors: list[ast.AST]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "_watch_loop":
+                found.append((child, [*ancestors, node]))
+            visit(child, [*ancestors, node])
+
+    visit(tree, [])
+    assert found, "no _watch_loop() start found in server/__init__.py — did the poller move?"
+
+    for call, ancestors in found:
+        gates = [n for n in ancestors if isinstance(n, (ast.If, ast.IfExp))]
+        assert not gates, (
+            f"the watch poller (line {call.lineno}) is started inside a conditional at line "
+            f"{gates[0].lineno}. It must start unconditionally: any instance where that "
+            "condition is false will accept watches on POST /api/watches, list them active, "
+            "and silently never poll one (#2320). The idle tick is a no-op on an empty "
+            "store, which is what makes the unconditional start affordable."
+        )
+
+
 # --- preservation semantics (issue #2020) ----------------------------------
 
 

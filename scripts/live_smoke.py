@@ -82,6 +82,14 @@ def main() -> int:
     # home_dir IS the instance root (PROTOAGENT_HOME): config lands at
     # <home>/config/langgraph-config.yaml, plugins at <home>/plugins, etc.
     home_dir = Path(tempfile.mkdtemp(prefix="smoke-home-"))
+    # PROTOAGENT_HOME isolates only the INSTANCE tier. The box tier (host-config.yaml,
+    # the Host cascade layer inherited by every instance on the machine) still resolves
+    # to data_home() unless PROTOAGENT_BOX_ROOT says otherwise — so on a developer box
+    # with a host-config, the smoke silently inherits it. A host-config that widens
+    # `network.bind` makes the server refuse to boot here (no auth token is set), and
+    # the smoke fails with "/healthz never returned 200" pointing at nothing. CI has no
+    # such file, which is why this only ever bites locally.
+    box_dir = Path(tempfile.mkdtemp(prefix="smoke-box-"))
     (home_dir / "config").mkdir(parents=True, exist_ok=True)
     (home_dir / "config" / "langgraph-config.yaml").write_text(
         "model:\n"
@@ -93,6 +101,7 @@ def main() -> int:
         **os.environ,
         "OPENAI_API_KEY": "fake-smoke-key",
         "PROTOAGENT_HOME": str(home_dir),
+        "PROTOAGENT_BOX_ROOT": str(box_dir),
         "PROTOAGENT_INSTANCE": "cismoke",
         "PROTOAGENT_HEADLESS_SETUP": "1",
         "PYTHONPATH": str(ROOT),
