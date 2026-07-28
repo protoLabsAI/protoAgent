@@ -157,16 +157,28 @@ class MCPSessionPool:
         except Exception:  # noqa: BLE001 — a stuck session must not wedge shutdown
             log.warning("[mcp] pool shutdown incomplete — cancelling remaining sessions")
 
-        def _finalize() -> None:
-            # Cancel stragglers (e.g. a call still holding a slot lock), then stop
-            # once the cancellations have had a cycle to unwind.
-            for task in asyncio.all_tasks(loop):
+        async def _finalize() -> None:
+            # Cancel stragglers (e.g. a call still holding a slot lock) and AWAIT
+            # them before stopping the loop. Scheduling `loop.stop()` right after
+            # `task.cancel()` is not enough: cancel() only REQUESTS cancellation,
+            # so a loop that stops before the task resumes leaves that task's
+            # future unresolved FOREVER — and the caller parked on it through
+            # `wrap_future` hangs for the life of the process. That stranded any
+            # turn whose MCP call was in flight when a config reload swapped the
+            # pool, contradicting this module's "in-flight calls never hang".
+            tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
+            for task in tasks:
                 task.cancel()
-            loop.call_soon(loop.stop)
+            if tasks:
+                # Bounded: a task that refuses to unwind must not wedge shutdown.
+                await asyncio.wait(tasks, timeout=_SLOT_CLOSE_TIMEOUT)
+            loop.stop()
 
-        loop.call_soon_threadsafe(_finalize)
+        loop.call_soon_threadsafe(lambda: loop.create_task(_finalize()))
         if thread is not None:
-            thread.join(timeout=5.0)
+            # Must outlast _finalize's own bounded wait, or we'd give up on a
+            # drain that was about to succeed.
+            thread.join(timeout=_SLOT_CLOSE_TIMEOUT + 5.0)
             if thread.is_alive():  # pragma: no cover — pathological hang
                 log.warning("[mcp] pool thread did not stop; leaving loop open")
                 return
@@ -179,13 +191,21 @@ class MCPSessionPool:
         try:
             return await asyncio.wrap_future(future)
         except asyncio.CancelledError:
-            if future.cancelled():
-                # Pool-side cancellation (shutdown/reload swap), NOT the caller's
-                # own cancel — degrade instead of cancelling the whole turn.
+            # WHO cancelled decides what this means, and ``future.cancelled()``
+            # cannot tell you: ``wrap_future`` cancels the bridged future on the
+            # CALLER's cancel too, so that flag is true either way. The pool only
+            # ever cancels from ``close()``, which sets ``_closed`` before it
+            # cancels anything — so the flag IS the discriminator.
+            if self._closed:
+                # Pool-side (shutdown/reload swap) — degrade to a tool error
+                # instead of killing a turn the operator never stopped.
                 raise RuntimeError(
                     f"MCP session pool closed while calling server {slot.name!r}"
                 ) from None
-            future.cancel()  # caller cancelled — propagate to the pool side
+            # The caller cancelled (turn Stop, an upstream timeout). Propagate to
+            # the pool side and RE-RAISE: swallowing this would hand the model a
+            # normal tool result and the turn would keep running after Stop.
+            future.cancel()
             raise
 
     # ── pool-loop internals (everything below runs on the pool loop) ─────────

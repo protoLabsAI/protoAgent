@@ -19,6 +19,8 @@ import asyncio
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from graph.config import LangGraphConfig
 from tools.mcp_tools import (
     _run_blocking,
@@ -602,6 +604,7 @@ def test_private_shadows_commons_by_name(monkeypatch, tmp_path) -> None:
 # server process MID-CALL to exercise the pool's reconnect path.
 
 _FIXTURE_SERVER = '''
+import asyncio
 import os
 import sys
 
@@ -623,6 +626,19 @@ def ping(text: str) -> str:
 def die() -> str:
     """Kill the server process mid-call."""
     os._exit(1)
+
+
+@mcp.tool()
+async def hang() -> str:
+    """Accept the request and never answer — stands in for a real server doing an
+    enormous walk. Exercises the cancel paths (caller Stop vs pool shutdown).
+
+    ASYNC on purpose: a sync sleep would block FastMCP's event loop, so the
+    subprocess could not answer the shutdown handshake and teardown would wedge.
+    The real offender (a Node fs server walking a huge tree) keeps its loop
+    responsive too — it is the one REQUEST that never finishes, not the server."""
+    await asyncio.sleep(300)
+    return "never"
 
 
 mcp.run(transport="stdio")
@@ -651,8 +667,8 @@ def test_persistent_session_reused_across_calls(tmp_path) -> None:
     cfg, boot_file = _fixture_server_cfg(tmp_path)
     clients, tools, meta = build_mcp_tools(cfg)
     try:
-        assert {t.name for t in tools} == {"fix__ping", "fix__die"}
-        assert meta == [{"name": "fix", "transport": "stdio", "tool_count": 2, "tier": "private"}]
+        assert {t.name for t in tools} == {"fix__ping", "fix__die", "fix__hang"}
+        assert meta == [{"name": "fix", "transport": "stdio", "tool_count": 3, "tier": "private"}]
         ping = next(t for t in tools if t.name == "fix__ping")
         # Two invocations from two DIFFERENT event loops — the pool bridges every
         # call onto its own loop, so callers stay loop-agnostic like before.
@@ -714,6 +730,57 @@ def test_include_filter_applies_to_pooled_server(tmp_path) -> None:
         assert "pong:x" in str(asyncio.run(tools[0].ainvoke({"text": "x"})))
     finally:
         close_mcp_clients(clients)
+
+
+def _pool_of(clients):
+    return next(c for c in clients if hasattr(c, "close"))
+
+
+def test_caller_cancel_propagates_instead_of_becoming_a_result(tmp_path) -> None:
+    """A CANCELLED call must raise — never come back as a tool-error string.
+
+    The pool bridges each call onto its own loop with ``run_coroutine_threadsafe``,
+    and ``wrap_future`` marks that bridged future cancelled on the CALLER's cancel
+    too. Keying the "pool shut down" branch off ``future.cancelled()`` therefore
+    mistook a user Stop for a pool shutdown and degraded it to a normal result:
+    the a2a SDK cancels the producer task exactly once, so a swallowed
+    CancelledError left the turn running after Stop — with the model handed a
+    bogus "server unreachable" string that invites a retry.
+    """
+    cfg, _boot_file = _fixture_server_cfg(tmp_path)
+    clients, tools, _meta = build_mcp_tools(cfg)
+    hang = next(t for t in tools if t.name == "fix__hang")
+
+    async def _cancel_mid_call() -> None:
+        # wait_for cancels the inner call. If the cancel propagates, that surfaces
+        # as TimeoutError; if it is swallowed into a return VALUE, py3.12's
+        # timeout() sees a normal exit and hands the value back instead.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(hang.ainvoke({}), 2.0)
+
+    try:
+        asyncio.run(_cancel_mid_call())
+    finally:
+        _pool_of(clients).close(timeout=2.0)
+
+
+def test_pool_closed_mid_call_still_degrades_to_tool_error(tmp_path) -> None:
+    """The other side of the same branch: a pool-side cancel (config reload swaps
+    the pool out from under an in-flight call) must still degrade to a recoverable
+    tool error — the operator never asked for this turn to stop."""
+    cfg, _boot_file = _fixture_server_cfg(tmp_path)
+    clients, tools, _meta = build_mcp_tools(cfg)
+    hang = next(t for t in tools if t.name == "fix__hang")
+
+    async def _close_mid_call() -> str:
+        call = asyncio.create_task(hang.ainvoke({}))
+        await asyncio.sleep(0.5)  # let the request reach the server
+        # close() blocks on the slot lock the in-flight call holds, then cancels.
+        await asyncio.to_thread(_pool_of(clients).close, timeout=1.0)
+        return str(await call)
+
+    out = asyncio.run(_close_mid_call())
+    assert "Tool error" in out and "pool closed" in out
 
 
 def test_closed_pool_degrades_to_tool_error(tmp_path) -> None:
