@@ -450,24 +450,22 @@ async function handleA2AStream(req, res, body) {
   // enters its "streaming" / steering state) and never the terminal frame, until
   // the client disconnects. Lets the mid-turn steering ✕-cancel e2e (#1103) keep a
   // turn running deterministically instead of racing the ~40ms-gapped frames.
-  if (/hold the turn open/i.test(prompt)) {
-    for (const frame of frames.slice(0, 2)) {
+  // Both hold-open branches arm the disconnect listener BEFORE writing anything: the
+  // frames are ~40ms apart, so a client that closes mid-write would otherwise fire
+  // `close` before the listener existed, and the await below would hang on an event
+  // that already happened — a wedged mock handler for the rest of the run.
+  const clientGone = new Promise((resolve) => req.once("close", resolve));
+  const holdAfter = /hold the turn open/i.test(prompt)
+    ? 2 // opening frames only — the surface enters its streaming/steering state (#1103)
+    : /hold the tool open/i.test(prompt)
+      ? 3 // ...through the tool's START frame, so a tool card stays RUNNING (#2348)
+      : 0;
+  if (holdAfter) {
+    for (const frame of frames.slice(0, holdAfter)) {
       res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
       await new Promise((r) => setTimeout(r, 40));
     }
-    await new Promise((resolve) => req.on("close", resolve));
-    return res.end();
-  }
-  // Same idea one frame later: stream through the tool's START frame and then hold,
-  // so a spec sees a tool card that stays RUNNING for as long as it needs. This is the
-  // shape the elapsed-counter spec needs — and the shape of the real complaint, a tool
-  // call that has been in flight for fifteen minutes.
-  if (/hold the tool open/i.test(prompt)) {
-    for (const frame of frames.slice(0, 3)) {
-      res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
-      await new Promise((r) => setTimeout(r, 40));
-    }
-    await new Promise((resolve) => req.on("close", resolve));
+    await clientGone;
     return res.end();
   }
   // A SLOW turn stretches the frame gaps so a spec can interleave real actions

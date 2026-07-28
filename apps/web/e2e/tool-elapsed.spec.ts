@@ -2,14 +2,14 @@ import { expect, test } from "@playwright/test";
 
 // A running tool card used to show a spinner and nothing else. `durationMs` is only
 // computed at the tool-END frame, so while a call was in flight there was no duration to
-// render — and a spinner animates identically whether the call is doing real work or is
-// wedged. The reported symptom was three tool cards spinning for 15+ minutes with no way
-// to tell "still working" from "stuck", and no basis for deciding whether to hit Stop.
+// render — a card three seconds in looked exactly like one fifteen minutes in, which is
+// the number an operator needs before deciding whether to hit Stop.
 //
-// A ticking value is what tells them apart. This spec holds a tool open (the mock streams
-// through the tool's START frame and then stops) and pins the two things that matter:
-// the counter appears, and it CLIMBS.
-test("a long-running tool card shows an elapsed counter that climbs", async ({ page }) => {
+// The counter reports AGE, not liveness (it is `now - startedAt`, so it climbs whether or
+// not the server is doing anything — ending a wedged turn is the server's job, #2349).
+// This spec holds a tool open (the mock streams through the tool's START frame and then
+// stops) and pins the two things that matter: the counter appears, and it keeps counting.
+test("a long-running tool card shows an elapsed counter that keeps counting", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
@@ -24,8 +24,8 @@ test("a long-running tool card shows an elapsed counter that climbs", async ({ p
   const elapsed = card.locator(".tool-elapsed");
   await expect(elapsed).toBeVisible({ timeout: 15_000 });
 
-  // …and keeps moving. This is the whole signal: a value tracking wall-clock means the
-  // call is alive, which a spinner can never tell you.
+  // …and keeps counting, so the operator can watch it cross into "this is unusual"
+  // rather than being shown a spinner of unknowable age.
   const first = (await elapsed.innerText()).trim();
   await expect(elapsed).not.toHaveText(first, { timeout: 15_000 });
 });

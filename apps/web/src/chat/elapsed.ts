@@ -1,15 +1,17 @@
 // Live elapsed time for a RUNNING tool card.
 //
-// Why this exists: a running card showed a spinner and nothing else. `durationMs` is
-// only computed at the tool-END frame (ChatSurface.tsx), so while a call was in flight
-// the DS ToolCard had no duration to render — and a spinner animates identically whether
-// the call is doing real work or is wedged. A 15-minute filesystem search and a deadlock
-// looked exactly the same, and the only question the operator actually has ("is this still
-// working, or should I stop it?") had no answer on screen.
+// Why this exists: a running card showed a spinner and nothing else. `durationMs` is only
+// computed at the tool-END frame (ChatSurface.tsx), so while a call was in flight the DS
+// ToolCard had no duration to render. A card three seconds in and one fifteen minutes in
+// looked exactly the same, and "how long has this been going?" is the question behind
+// "should I stop it?". Everything needed is already on the wire — `startedAt` is stamped
+// when the tool-start frame arrives.
 //
-// A TICKING number answers it. Motion that tracks wall-clock is the signal; the spinner's
-// motion is not. Everything needed is already on the wire — `startedAt` is stamped when
-// the tool-start frame arrives.
+// What this is NOT: evidence the call is alive. The value is `now - startedAt`, computed
+// in the browser, so it climbs identically whether the tool is working or wedged. No
+// client-side clock can tell those apart — it would take a server-observed progress
+// signal. Ending a wedged turn is the server's job (the stall watchdog, #2349); this
+// just makes its AGE visible while it runs. Keep the copy honest about that.
 
 import { useEffect, useState } from "react";
 

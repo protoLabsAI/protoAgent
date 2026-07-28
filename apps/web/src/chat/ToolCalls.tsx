@@ -300,8 +300,12 @@ function ToolGroup({
 
   // Live elapsed, in the header, while the call is in flight. The DS renders `duration`
   // on the right once a call SETTLES; until then there is nothing to render, so a card
-  // that has been running for fifteen minutes looks identical to one that is wedged.
-  // A ticking value is what tells them apart — the spinner spins either way.
+  // three seconds in and one fifteen minutes in look identical — and "how long has this
+  // been going?" is the question behind "should I stop it?".
+  //
+  // It reports AGE, not liveness: the value is `now - startedAt`, so it climbs the same
+  // whether the call is working or wedged. Nothing client-side can tell those apart —
+  // that is the server's job (a wedged turn is failed by the stall watchdog, #2349).
   const elapsedMs = useElapsed(call.status === "running" ? call.startedAt : undefined);
   const showElapsed = elapsedMs !== undefined && elapsedMs >= SHOW_ELAPSED_AFTER_MS;
 
@@ -315,10 +319,7 @@ function ToolGroup({
         </span>
       ) : null}
       {showElapsed ? (
-        <span
-          className="tool-elapsed"
-          title="Time this call has been running — a value that keeps climbing means it is still working"
-        >
+        <span className="tool-elapsed" title="How long this call has been running">
           {" · "}
           {formatElapsed(elapsedMs)}
         </span>
