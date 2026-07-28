@@ -641,6 +641,23 @@ async def hang() -> str:
     return "never"
 
 
+_inflight = 0
+_peak = 0
+
+
+@mcp.tool()
+async def overlap() -> int:
+    """Report the peak number of concurrent calls this server has seen."""
+    global _inflight, _peak
+    _inflight += 1
+    _peak = max(_peak, _inflight)
+    try:
+        await asyncio.sleep(0.3)
+        return _peak
+    finally:
+        _inflight -= 1
+
+
 mcp.run(transport="stdio")
 '''
 
@@ -667,8 +684,8 @@ def test_persistent_session_reused_across_calls(tmp_path) -> None:
     cfg, boot_file = _fixture_server_cfg(tmp_path)
     clients, tools, meta = build_mcp_tools(cfg)
     try:
-        assert {t.name for t in tools} == {"fix__ping", "fix__die", "fix__hang"}
-        assert meta == [{"name": "fix", "transport": "stdio", "tool_count": 3, "tier": "private"}]
+        assert {t.name for t in tools} == {"fix__ping", "fix__die", "fix__hang", "fix__overlap"}
+        assert meta == [{"name": "fix", "transport": "stdio", "tool_count": 4, "tier": "private"}]
         ping = next(t for t in tools if t.name == "fix__ping")
         # Two invocations from two DIFFERENT event loops — the pool bridges every
         # call onto its own loop, so callers stay loop-agnostic like before.
@@ -734,6 +751,43 @@ def test_include_filter_applies_to_pooled_server(tmp_path) -> None:
 
 def _pool_of(clients):
     return next(c for c in clients if hasattr(c, "close"))
+
+
+def _texts(result) -> list[str]:
+    """Just the text payloads of a tool result. A LangChain content block carries
+    an `id` full of hex digits, so `str(result)` is useless for a numeric
+    assertion — it happily matches digits that never came from the server."""
+    if isinstance(result, list):
+        return [b.get("text", "") for b in result if isinstance(b, dict)]
+    return [str(result)]
+
+
+def test_calls_to_one_server_run_concurrently(tmp_path) -> None:
+    """A slow tool must not wedge every other call to the same server.
+
+    The slot lock used to wrap the whole request, so calls to one server were
+    strictly serialized: a 4-minute filesystem search held the lock and the two
+    calls queued behind it rendered as "running" spinners without having been
+    sent at all. The lock now guards only the session lifecycle.
+
+    Deterministic rather than timing-based: the fixture server reports its OWN
+    peak in-flight count, so serialization shows up as a peak of 1 regardless of
+    how slow the machine is.
+    """
+    cfg, boot_file = _fixture_server_cfg(tmp_path)
+    clients, tools, _meta = build_mcp_tools(cfg)
+    overlap = next(t for t in tools if t.name == "fix__overlap")
+
+    async def _fan_out() -> list:
+        return list(await asyncio.gather(*(overlap.ainvoke({}) for _ in range(3))))
+
+    try:
+        results = asyncio.run(_fan_out())
+        peak = max(int(t) for r in results for t in _texts(r) if t.strip().isdigit())
+        assert peak >= 2, f"calls were serialized (peak in-flight {peak}): {results}"
+        assert _boots(boot_file) == 1  # still ONE session, shared concurrently
+    finally:
+        _pool_of(clients).close(timeout=2.0)
 
 
 def test_caller_cancel_propagates_instead_of_becoming_a_result(tmp_path) -> None:

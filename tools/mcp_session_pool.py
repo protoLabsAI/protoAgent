@@ -23,12 +23,14 @@ Design constraints (verified against the pinned ``mcp`` / adapter sources):
   exactly like the stateless per-call design they replace.
 * **Concurrency** — the MCP SDK multiplexes concurrent in-flight requests over
   one session (responses are matched by JSON-RPC request id, see
-  ``BaseSession._response_streams``), so parallel calls are protocol-safe. We
-  still serialize per server with an asyncio lock: most community stdio servers
-  process requests sequentially anyway, and single-flight sessions make the
-  reconnect path race-free (a broken pipe cannot trigger competing respawns).
-  Serialized-but-pooled is still orders of magnitude faster than parallel
-  spawns; lifting the lock later would be a pure concurrency change.
+  ``BaseSession._response_streams``), so parallel calls are protocol-safe and
+  run concurrently. The slot lock guards the session LIFECYCLE only (open /
+  retire), never a request: it used to wrap the whole call, which meant one slow
+  tool wedged every other call to that server — three parallel searches showed
+  up as three spinners when only the first had even been sent. What the lock was
+  really protecting is the reconnect path (a broken pipe must not trigger
+  competing respawns); that is now the job of the slot GENERATION, which a
+  caller carries so N calls failing on the same dead session respawn it once.
 * **Reconnect** — a dead subprocess surfaces as ``McpError(CONNECTION_CLOSED)``
   on the in-flight call (the SDK's receive loop flushes pending requests with
   that error on EOF — so a dying server fails FAST, it does not hang) or as a
@@ -78,16 +80,20 @@ def _session_is_dead(exc: BaseException) -> bool:
 class _Slot:
     """Per-server pool state. Mutated only on the pool loop (single-threaded)."""
 
-    __slots__ = ("connection", "lock", "name", "session", "stop", "task")
+    __slots__ = ("connection", "generation", "lock", "name", "session", "stop", "task")
 
     def __init__(self, name: str, connection: dict) -> None:
         self.name = name
         self.connection = connection
-        # Binds to the pool loop on first use (asyncio.Lock is loop-lazy on 3.10+).
+        # Guards the session LIFECYCLE (open/retire) — never a request. Binds to
+        # the pool loop on first use (asyncio.Lock is loop-lazy on 3.10+).
         self.lock = asyncio.Lock()
         self.session: Any = None  # live ClientSession while open
         self.stop: asyncio.Event | None = None  # tells the owner task to exit
         self.task: asyncio.Task | None = None  # the owner task itself
+        # Bumped on every open. A caller carries the generation it used, so N
+        # concurrent calls failing on the SAME dead session respawn it once.
+        self.generation = 0
 
 
 class MCPSessionPool:
@@ -223,27 +229,56 @@ class MCPSessionPool:
             return self._loop
 
     async def _call(self, slot: _Slot, method: str, args: tuple, kwargs: dict) -> Any:
-        async with slot.lock:
-            fresh = slot.session is None
-            session = slot.session if not fresh else await self._open_locked(slot)
+        # The slot lock is taken only to OPEN or RETIRE a session — the request
+        # itself runs outside it, so a slow call no longer wedges the server for
+        # every other call. The MCP SDK multiplexes concurrent in-flight requests
+        # over one session (matched by JSON-RPC request id), and the generation
+        # guard keeps the reconnect path single-flight, which is the only thing
+        # the lock was ever really protecting.
+        session, generation, opened = await self._acquire(slot)
+        try:
+            return await getattr(session, method)(*args, **kwargs)
+        except Exception as exc:
+            if not _session_is_dead(exc):
+                raise  # protocol-level error from a live server — no reconnect
+            await self._retire(slot, generation)
+            if opened:
+                raise  # a brand-new session already failed — don't loop
+            log.warning("[mcp] %s: session died mid-call (%s) — reconnecting once", slot.name, exc)
+            session, generation, _opened = await self._acquire(slot)
             try:
                 return await getattr(session, method)(*args, **kwargs)
-            except Exception as exc:
-                if not _session_is_dead(exc):
-                    raise  # protocol-level error from a live server — no reconnect
+            except Exception as exc2:
+                if _session_is_dead(exc2):
+                    await self._retire(slot, generation)
+                raise
+
+    async def _acquire(self, slot: _Slot) -> tuple[Any, int, bool]:
+        """A live session for ``slot``, its generation, and whether WE opened it.
+
+        Holds the lifecycle lock only long enough to open one, never for the
+        request. ``opened`` preserves the old ``fresh`` rule: a session this call
+        just created and that immediately failed must not trigger a retry loop.
+        """
+        async with slot.lock:
+            if self._closed:
+                # A reconnect must never respawn a subprocess during shutdown.
+                raise RuntimeError(f"MCP session pool closed while calling server {slot.name!r}")
+            if slot.session is not None:
+                return slot.session, slot.generation, False
+            session = await self._open_locked(slot)
+            return session, slot.generation, True
+
+    async def _retire(self, slot: _Slot, generation: int) -> None:
+        """Tear down the session iff it is still ``generation``.
+
+        Without the guard, N concurrent calls all failing on the same dead
+        session would each tear down and respawn in turn — the competing-respawn
+        race the old single-flight lock existed to prevent.
+        """
+        async with slot.lock:
+            if slot.generation == generation and slot.session is not None:
                 await self._close_slot_locked(slot)
-                if fresh:
-                    raise  # a brand-new session already failed — don't loop
-                log.warning(
-                    "[mcp] %s: session died mid-call (%s) — reconnecting once", slot.name, exc
-                )
-                session = await self._open_locked(slot)
-                try:
-                    return await getattr(session, method)(*args, **kwargs)
-                except Exception as exc2:
-                    if _session_is_dead(exc2):
-                        await self._close_slot_locked(slot)
-                    raise
 
     async def _open_locked(self, slot: _Slot) -> Any:
         """Open ``slot``'s session (slot lock held) inside a dedicated owner task,
@@ -283,6 +318,7 @@ class MCPSessionPool:
             )
             raise
         slot.session, slot.stop, slot.task = session, stop, task
+        slot.generation += 1
         log.info("[mcp] %s: persistent session opened", slot.name)
         return session
 
