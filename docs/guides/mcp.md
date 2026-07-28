@@ -24,6 +24,7 @@ Prefer YAML? Add an `mcp` section to your config
 mcp:
   enabled: true
   timeout_seconds: 20        # per-server discovery timeout
+  call_timeout_seconds: 300  # bounds one tool CALL; 0 disables. See note below.
   denylist: []               # optional: drop specific (namespaced) tool names
   servers:
     # Local subprocess over stdio
@@ -42,6 +43,30 @@ mcp:
 Servers are discovered at startup (and on config reload). A server that's
 unreachable or errors is **logged and skipped** — it never blocks boot or the
 other servers.
+
+### How long a call may run
+
+`timeout_seconds` bounds **discovery**; `call_timeout_seconds` bounds a single
+tool **invocation**. They are separate on purpose — connecting to a server should
+be fast, but a legitimate call can be slow. `filesystem__search_files` over a
+large root, for instance, walks the tree with no default exclusions (it does not
+skip `node_modules` or `.git`) and no depth or result cap: one such call over a
+2.75M-entry tree measured ~4 minutes. That is why the default is a generous 300s
+— it is a backstop against a call that will *never* return, not a latency budget.
+
+When it trips, the call is cancelled and the model gets a recoverable tool error
+telling it to narrow the arguments; the turn is not failed. A server that
+genuinely needs longer sets `call_timeout` on its own entry (or `0` to opt out):
+
+```yaml
+    - name: archiver
+      transport: stdio
+      command: /usr/local/bin/archiver-mcp
+      call_timeout: 1800     # this one really does run for half an hour
+```
+
+If a call is being cut off that shouldn't be, prefer raising that server's
+`call_timeout` over disabling the bound globally.
 
 ## How tools show up
 

@@ -766,6 +766,14 @@ class LangGraphConfig:
     mcp_enabled: bool = False
     mcp_servers: list[dict] = field(default_factory=list)
     mcp_timeout_seconds: float = 20.0
+    # Bounds a single tool INVOCATION (``timeout_seconds`` above bounds only
+    # discovery/connect). Generous by design: legitimate calls really can run for
+    # minutes — a filesystem search over a large tree measured ~4 min — so this
+    # is a backstop against a call that will NEVER return, not a latency budget.
+    # A timeout degrades to a recoverable tool error the model can retry with
+    # narrower arguments, never a failed turn. ``0`` disables it; a single server
+    # entry can override with ``call_timeout``.
+    mcp_call_timeout_seconds: float = 300.0
     mcp_denylist: list[str] = field(default_factory=list)
     # Persistent sessions (default ON): each server keeps ONE long-lived MCP
     # session reused across tool calls, auto-reconnected once when it dies.
@@ -1387,6 +1395,9 @@ class LangGraphConfig:
             mcp_enabled=mcp.get("enabled", cls.mcp_enabled),
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
+            mcp_call_timeout_seconds=mcp.get(
+                "call_timeout_seconds", cls.mcp_call_timeout_seconds
+            ),
             mcp_denylist=list(mcp.get("denylist", []) or []),
             mcp_persistent_sessions=bool(
                 mcp.get("persistent_sessions", cls.mcp_persistent_sessions)

@@ -501,9 +501,10 @@ Connect external [Model Context Protocol](../guides/mcp.md) servers; their tools
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `false` | Connect the configured servers and expose their tools. |
-| `timeout_seconds` | `20` | Per-server discovery timeout. A slow/unreachable server is skipped, never fatal. |
+| `timeout_seconds` | `20` | Per-server **discovery** timeout. A slow/unreachable server is skipped, never fatal. Does not bound a tool call — that's `call_timeout_seconds`. |
+| `call_timeout_seconds` | `300` | Bounds a single tool **invocation**. A trip cancels that call and returns a recoverable tool error the model can retry with narrower arguments — never a failed turn. `0` disables it. Deliberately generous: real calls do run for minutes (a filesystem search over a large tree measured ~4 min), so this is a backstop against a call that will *never* return, not a latency budget. |
 | `denylist` | `[]` | Namespaced tool names to drop (e.g. `filesystem__write_file`). |
-| `servers` | `[]` | List of `{name, transport, …}`. `stdio` → `command`/`args`/`env`/`cwd`; `streamable_http`/`sse` → `url`/`headers`. Per-server: `enabled: false` skips connecting it (lazy); `tools: {include: [...], exclude: [...]}` filters which of its tools bind. |
+| `servers` | `[]` | List of `{name, transport, …}`. `stdio` → `command`/`args`/`env`/`cwd`; `streamable_http`/`sse` → `url`/`headers`. Per-server: `enabled: false` skips connecting it (lazy); `tools: {include: [...], exclude: [...]}` filters which of its tools bind; `call_timeout` overrides `call_timeout_seconds` for that server alone. |
 
 Per-server `tools.include` is an **allowlist** (only those tools bind) — the fix for a server with a large catalog flooding context; `exclude` drops from the remainder (`include` wins on conflict). The global `denylist` is the cross-server hard block. Both match the bare or namespaced tool name. See [ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md) on tool pollution.
 

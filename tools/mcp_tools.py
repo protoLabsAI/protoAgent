@@ -226,6 +226,49 @@ def _core_tool_names() -> set[str]:
         return set()
 
 
+def _bind_call_timeout(tool, *, server: str, timeout: float) -> None:
+    """Bound one MCP tool INVOCATION at ``timeout`` seconds (``<= 0`` disables).
+
+    Wrapped here at the binding layer rather than passed as the MCP protocol's
+    ``read_timeout_seconds`` for two reasons: it covers BOTH session modes (the
+    stateless ``persistent: false`` path never hands us a session to configure),
+    and it degrades to a ``ToolException`` — which ``handle_tool_error`` turns
+    into a recoverable result the model can retry with narrower arguments,
+    instead of a dead turn.
+
+    A CALLER cancel (turn Stop) is unaffected: ``wait_for`` only converts to
+    ``TimeoutError`` when its OWN deadline expired, and re-raises an outer
+    ``CancelledError`` untouched.
+    """
+    import asyncio
+    import functools
+
+    from langchain_core.tools import ToolException
+
+    inner = getattr(tool, "coroutine", None)
+    if timeout <= 0 or inner is None:
+        return
+
+    @functools.wraps(inner)
+    async def _bounded(*args, **kwargs):
+        try:
+            return await asyncio.wait_for(inner(*args, **kwargs), timeout)
+        except TimeoutError:
+            # Reads after handle_tool_error's "Tool error: " prefix, which also
+            # appends the generic retry advice — so stay specific and short.
+            raise ToolException(
+                f"MCP tool '{tool.name}' (server '{server}') timed out after "
+                f"{timeout:g}s and was cancelled — the server was doing far more "
+                f"work than these arguments suggest (an unfiltered filesystem root "
+                f"can mean millions of entries). Narrow the arguments and retry"
+            ) from None
+
+    try:
+        tool.coroutine = _bounded
+    except Exception:  # noqa: BLE001 — best-effort; never block tool registration
+        log.debug("[mcp] %s: could not bind a call timeout to %s", server, tool.name)
+
+
 def close_mcp_clients(clients) -> None:
     """Release the handles ``build_mcp_tools`` returned (best-effort, never raises).
 
@@ -311,6 +354,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
         return clients, tools, meta
 
     timeout = float(getattr(config, "mcp_timeout_seconds", 20.0))
+    call_timeout_default = float(getattr(config, "mcp_call_timeout_seconds", 300.0))
     denylist = set(getattr(config, "mcp_denylist", []) or [])
     core_names = _core_tool_names()
     # Persistent sessions (default ON): one long-lived session per server shared
@@ -349,6 +393,15 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
         exclude = {str(n) for n in (tool_filter.get("exclude") or [])}
 
         use_pool = persistent_default and server.get("persistent", True) is not False
+        # Per-server override for the invocation bound — a server that is known to
+        # do genuinely long work (or one that must never be cut off) sets its own.
+        try:
+            call_timeout = float(server.get("call_timeout", call_timeout_default))
+        except (TypeError, ValueError):
+            log.warning(
+                "[mcp] %s: ignoring non-numeric call_timeout %r", name, server.get("call_timeout")
+            )
+            call_timeout = call_timeout_default
 
         try:
             if use_pool:
@@ -416,6 +469,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
                 tool.handle_tool_error = _mcp_tool_error_handler
             except Exception:  # noqa: BLE001 — best-effort; never block tool registration
                 log.debug("[mcp] %s: could not set handle_tool_error on %s", name, tool.name)
+            _bind_call_timeout(tool, server=name, timeout=call_timeout)
             kept.append(tool)
 
         tools.extend(kept)

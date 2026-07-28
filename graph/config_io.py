@@ -473,6 +473,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "enabled": config.mcp_enabled,
                 "servers": list(config.mcp_servers),
                 "timeout_seconds": config.mcp_timeout_seconds,
+                "call_timeout_seconds": config.mcp_call_timeout_seconds,
                 "denylist": list(config.mcp_denylist),
                 "persistent_sessions": config.mcp_persistent_sessions,
             },
