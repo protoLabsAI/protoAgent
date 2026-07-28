@@ -31,6 +31,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Live elapsed on a RUNNING card (elapsed.ts). Only appears once a call passes
+   SHOW_ELAPSED_AFTER_MS, so its presence alone reads as "this one is taking a while".
+   Tabular numerals so a once-a-second tick doesn't jitter the header width. */
+.tool-elapsed {
+  color: var(--pl-color-fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Reasoning rendered as a tool-style card (ReasoningCard) — same DS ToolCard chrome,
    collapsed by default, so the model's native thinking stacks evenly with the tool cards
    instead of dominating the thread. */

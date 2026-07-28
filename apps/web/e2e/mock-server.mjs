@@ -458,6 +458,18 @@ async function handleA2AStream(req, res, body) {
     await new Promise((resolve) => req.on("close", resolve));
     return res.end();
   }
+  // Same idea one frame later: stream through the tool's START frame and then hold,
+  // so a spec sees a tool card that stays RUNNING for as long as it needs. This is the
+  // shape the elapsed-counter spec needs — and the shape of the real complaint, a tool
+  // call that has been in flight for fifteen minutes.
+  if (/hold the tool open/i.test(prompt)) {
+    for (const frame of frames.slice(0, 3)) {
+      res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    await new Promise((resolve) => req.on("close", resolve));
+    return res.end();
+  }
   // A SLOW turn stretches the frame gaps so a spec can interleave real actions
   // mid-stream (reload a sibling tab, fire the self-heal) — the #1938 repro shape:
   // a 20–60s image-tool turn, scaled down to CI time.

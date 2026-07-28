@@ -18,6 +18,7 @@ import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabs
 
 import type { ToolCall } from "../lib/types";
 import { useUI } from "../state/uiStore";
+import { SHOW_ELAPSED_AFTER_MS, formatElapsed, useElapsed } from "./elapsed";
 import { ToolValue } from "./tool-renderers";
 import { humanizeSeconds, parseWaitInput } from "./waitInfo";
 
@@ -296,18 +297,34 @@ function ToolGroup({
   // A running count of the subagent's tools, in the header — so a collapsed delegation
   // reads "task → researcher · 3 tools" at a glance without expanding.
   const kidCount = kids?.length ?? 0;
-  const name =
-    kidCount > 0 ? (
-      <>
-        {cardLabel(call)}
+
+  // Live elapsed, in the header, while the call is in flight. The DS renders `duration`
+  // on the right once a call SETTLES; until then there is nothing to render, so a card
+  // that has been running for fifteen minutes looks identical to one that is wedged.
+  // A ticking value is what tells them apart — the spinner spins either way.
+  const elapsedMs = useElapsed(call.status === "running" ? call.startedAt : undefined);
+  const showElapsed = elapsedMs !== undefined && elapsedMs >= SHOW_ELAPSED_AFTER_MS;
+
+  const name = (
+    <>
+      {cardLabel(call)}
+      {kidCount > 0 ? (
         <span className="tool-nested-count">
           {" · "}
           {kidCount} {kidCount === 1 ? "tool" : "tools"}
         </span>
-      </>
-    ) : (
-      cardLabel(call)
-    );
+      ) : null}
+      {showElapsed ? (
+        <span
+          className="tool-elapsed"
+          title="Time this call has been running — a value that keeps climbing means it is still working"
+        >
+          {" · "}
+          {formatElapsed(elapsedMs)}
+        </span>
+      ) : null}
+    </>
+  );
 
   return (
     <ToolCard
