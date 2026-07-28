@@ -153,6 +153,18 @@ FIELDS: list[Field] = [
         "Hard cap on the agent loop per turn.",
         minimum=1,
     ),
+    Field(
+        "model.turn_stall_timeout_seconds",
+        "turn_stall_timeout_seconds",
+        "Turn stall timeout (s)",
+        "number",
+        "Model & runtime",
+        "Fail a turn that goes this long without producing ANY output — a wedged step "
+        "that would otherwise leave the chat spinning forever. Not a limit on how long a "
+        "turn may take: a turn that keeps streaming is never cut off, however long it "
+        "runs. Raise it if a genuinely silent step is being killed; 0 disables.",
+        minimum=0,
+    ),
     # ── Favorite models (#1957) ──────────────────────────────────────────────
     Field(
         "model.favorites",

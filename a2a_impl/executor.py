@@ -61,6 +61,61 @@ REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
 from graph.components import COMPONENT_MIME  # noqa: E402
 
 
+class TurnStalled(RuntimeError):
+    """The agent stream produced no event for the whole stall window.
+
+    Not "the turn is long" — "the turn stopped saying anything". See
+    ``_stall_guarded``.
+    """
+
+
+async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
+    """Yield from ``stream``, raising :class:`TurnStalled` if no event arrives
+    for ``seconds``.
+
+    Measures the GAP BETWEEN events, never the total turn length. That
+    distinction is the whole design: a research turn making forty tool calls over
+    twenty minutes is healthy and must never be cut off, while a turn wedged
+    inside ONE tool call emits nothing at all — and only the second is a hang.
+    A wall-clock cap cannot tell them apart; silence can.
+
+    Without this a wedged turn sat in ``TASK_STATE_WORKING`` forever: nothing
+    server-side ever ended it, and the console's own watchdog deliberately keeps
+    waiting while the durable task still says WORKING (correctly — it can't
+    distinguish slow from stuck either), so the spinner ran until reload (#2344).
+
+    Cancelling the pending step is what actually frees the wedged work: the
+    ``wait_for`` cancel propagates into the tool call itself.
+
+    ``seconds <= 0`` disables the guard and passes the stream straight through.
+    """
+    if seconds <= 0:
+        async for item in stream:
+            yield item
+        return
+
+    iterator = stream.__aiter__()
+    while True:
+        try:
+            item = await asyncio.wait_for(iterator.__anext__(), seconds)
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            # The step is already cancelled by wait_for; aclose() finalizes the
+            # generator so its `finally` blocks run. Bounded and best-effort —
+            # a cleanup that hangs must not replace one hang with another.
+            try:
+                await asyncio.wait_for(stream.aclose(), 5.0)
+            except (Exception, asyncio.CancelledError):  # noqa: BLE001
+                logger.debug("[a2a] stalled stream did not close cleanly", exc_info=True)
+            raise TurnStalled(
+                f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
+                "It was stopped rather than left running invisibly — the last step never "
+                "returned. Retry, or narrow whatever that step was doing."
+            ) from None
+        yield item
+
+
 @dataclass
 class TurnOutcome:
     """Everything a host needs at the end of an A2A turn (ADR 0003 / 0006).
@@ -194,6 +249,7 @@ class ProtoAgentExecutor(AgentExecutor):
         stream_fn_factory: Callable[..., AsyncGenerator[tuple[str, Any], None]],
         structured_finalizer: Callable[[str, str], Any] | None = None,
         context_meta_provider: Callable[[], dict[str, Any]] | None = None,
+        stall_timeout_provider: Callable[[], float] | None = None,
     ) -> None:
         # ``stream_fn_factory(text, context_id, *, resume, caller_trace,
         # request_metadata)`` → async generator of (event_type, payload). This is
@@ -209,6 +265,25 @@ class ProtoAgentExecutor(AgentExecutor):
         # DataPart (#1372): {enabled, trigger, compactionAtTokens?}. Injected by server.py
         # (it reads STATE.graph_config) so the executor needn't import the config (layering).
         self._context_meta_provider = context_meta_provider
+        # ``stall_timeout_provider()`` → seconds of SILENCE after which a turn is
+        # declared wedged and failed (0 disables). Injected like the two above so the
+        # executor stays free of a config import, and read per turn so an operator's
+        # change takes effect on the next turn rather than needing a restart.
+        self._stall_timeout_provider = stall_timeout_provider
+
+    def _stall_timeout_seconds(self) -> float:
+        """The configured stall window, or 0 (guard off) if unavailable.
+
+        Never raises: a watchdog that can break a turn by misreading config would
+        be worse than the hang it exists to catch.
+        """
+        if self._stall_timeout_provider is None:
+            return 0.0
+        try:
+            return float(self._stall_timeout_provider() or 0.0)
+        except Exception:  # noqa: BLE001 — degrade to "no guard", never break the turn
+            logger.debug("[a2a] stall-timeout provider failed; guard disabled", exc_info=True)
+            return 0.0
 
     async def _append_structured(self, parts: list[Part], context: RequestContext, final_text: str) -> list[Part]:
         """If the turn targets a structured skill (``skillHint`` + a declared
@@ -436,14 +511,22 @@ class ProtoAgentExecutor(AgentExecutor):
                 trace_id=trace_id[0],
             )
 
+        # What the turn was last seen doing — read only when the stall guard trips,
+        # so the failure names the step that never returned instead of just "stalled".
+        last_activity = ["starting up"]
+
         try:
-            async for event_type, payload in self._stream_factory(
-                text,
-                context.context_id,
-                resume=resume,
-                caller_trace=caller_trace,
-                request_metadata=_md,
-                images=images,
+            async for event_type, payload in _stall_guarded(
+                self._stream_factory(
+                    text,
+                    context.context_id,
+                    resume=resume,
+                    caller_trace=caller_trace,
+                    request_metadata=_md,
+                    images=images,
+                ),
+                self._stall_timeout_seconds(),
+                last_activity,
             ):
                 _capture_trace_id()
                 # A contiguous reasoning run ends at the first non-reasoning event:
@@ -466,6 +549,12 @@ class ProtoAgentExecutor(AgentExecutor):
                     await _flush_text()
                     if event_type == "tool_start":
                         tool_calls += 1
+                        # The overwhelmingly likely thing to wedge a turn is a tool
+                        # that never returns, so name it for the stall message.
+                        name = payload.get("name") if isinstance(payload, dict) else None
+                        last_activity[0] = f"running the `{name}` tool" if name else "running a tool"
+                    else:
+                        last_activity[0] = "waiting for the model"
                     part, tc_meta = _tool_call_frame(event_type, payload)
                     if part is not None or tc_meta is not None:
                         await updater.update_status(
@@ -565,6 +654,18 @@ class ProtoAgentExecutor(AgentExecutor):
             # the SDK's cancel flow (the `canceled` frame) completes normally.
             _notify_terminal(_outcome("canceled", accumulated))
             raise
+
+        except TurnStalled as exc:
+            # A wedged turn, ended deliberately. Loud but not a crash — there is no
+            # traceback worth printing, the message IS the diagnosis. Terminating it
+            # is the point: the task leaves TASK_STATE_WORKING, the console stops
+            # spinning, and telemetry finally gets a turn row for the hang (#2344),
+            # which is what made this class of failure invisible.
+            logger.warning("[a2a] task %s stalled — failing it: %s", context.task_id, exc)
+            await _flush_reasoning()
+            await _flush_text()  # keep whatever the turn did manage to say
+            await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
+            _notify_terminal(_outcome("failed", accumulated))
 
         except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
             logger.exception("[a2a] execute crashed for task %s", context.task_id)

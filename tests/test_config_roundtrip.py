@@ -175,6 +175,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_attach_inline_budget": 8000,
     "llm_max_retries": 2,
     "max_iterations": 50,
+    "turn_stall_timeout_seconds": 900.0,
     "max_tokens": 32768,
     "media_public": False,
     "media_retention_days": 0,

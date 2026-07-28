@@ -323,6 +323,13 @@ class LangGraphConfig:
     temperature: float = 0.2
     max_tokens: int = 32768  # 32k — required headroom for the Qwen models we run
     max_iterations: int = 50
+    # Seconds of stream SILENCE after which a turn is declared wedged and failed
+    # (#2344). Deliberately a stall window, not a wall-clock cap: a long turn that
+    # keeps emitting frames is healthy and must never be cut off, while a turn stuck
+    # inside one tool call emits nothing at all. 900s clears the slowest legitimate
+    # single step by a wide margin (an MCP call is separately bounded at 300s by
+    # ``mcp.call_timeout_seconds``). ``0`` disables the guard.
+    turn_stall_timeout_seconds: float = 900.0
     # Native vision (ADR 0021): set true when `model_name` is image-capable (e.g.
     # protolabs/fast, protolabs/smart). The chat composer then sends attached
     # images as native multimodal parts straight to the model instead of routing
@@ -1267,6 +1274,9 @@ class LangGraphConfig:
             model_vision=model.get("vision", cls.model_vision),
             model_favorites=list(model.get("favorites", []) or []),
             max_iterations=model.get("max_iterations", cls.max_iterations),
+            turn_stall_timeout_seconds=model.get(
+                "turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds
+            ),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),
             top_p=model.get("top_p", cls.top_p),
