@@ -140,16 +140,20 @@ def test_import_requires_raw(monkeypatch):
 def test_catalog_lists_servers_and_marks_installed(monkeypatch):
     """GET /api/mcp/catalog serves the bundled config/mcp-catalog.json and flags which
     entries are already configured (by name)."""
-    _wire(monkeypatch, servers=[{"name": "filesystem", "transport": "stdio", "command": "npx"}])
+    _wire(monkeypatch, servers=[{"name": "git", "transport": "stdio", "command": "uvx"}])
     body = _client().get("/api/mcp/catalog").json()
     by_id = {s["id"]: s for s in body["servers"]}
-    assert {"filesystem", "github", "memory"} <= set(by_id)  # curated entries present
+    assert {"git", "github", "memory"} <= set(by_id)  # curated entries present
     # GitHub ships as a remote streamable-http template gated on a secret token.
     assert by_id["github"]["template"]["transport"] == "http"
     assert any(i.get("secret") for i in by_id["github"].get("inputs", []))
     # The configured server is flagged installed; the rest aren't.
-    assert by_id["filesystem"]["installed"] is True
+    assert by_id["git"]["installed"] is True
     assert by_id["memory"]["installed"] is False
+    # The third-party filesystem server is deliberately NOT recommended here: protoAgent
+    # ships fenced fs tools (ADR 0007) that cover the same ground, and that server's
+    # unbounded `search_files` wedged a real turn. See the catalog's _comment.
+    assert "filesystem" not in by_id
 
 
 # ── Box-commons share/unshare (ADR 0041) ──────────────────────────────────────

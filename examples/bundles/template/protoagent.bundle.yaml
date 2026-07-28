@@ -51,10 +51,14 @@ config:                                              # recommended defaults (you
 # this (its overlay merges dict leaves, not the `mcp.servers` list), which is why `mcp:` is
 # its own field. Omit the whole block if your bundle seeds no MCP servers.
 mcp:
-  - template: { name: filesystem, transport: stdio, command: npx,
-                args: ["-y", "@modelcontextprotocol/server-filesystem", "${path}"] }
+  # A path-input example (uvx/Python). Note what is NOT here: the third-party
+  # @modelcontextprotocol/server-filesystem. protoAgent ships its own fenced filesystem
+  # tools (ADR 0007, `filesystem.projects`), so seeding that server duplicates them —
+  # and its unbounded `search_files` has wedged a real turn. Reach for `filesystem.projects`.
+  - template: { name: git, transport: stdio, command: uvx,
+                args: ["mcp-server-git", "--repository", "${path}"] }
     inputs:
-      - { key: path, env: PROTOAGENT_MCP_FS_PATH, default: "~", required: true }
+      - { key: path, env: PROTOAGENT_MCP_GIT_REPO, default: "~", required: true }
   - template: { name: github, transport: http, url: "https://api.githubcopilot.com/mcp/",
                 headers: { Authorization: "Bearer ${token}" } }
     inputs:

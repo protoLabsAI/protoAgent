@@ -1,24 +1,6 @@
 {
-  "_comment": "Curated common MCP servers for the console quick-add picker (Settings ▸ MCP ▸ Browse common servers). Each entry's `template` is a partial mcp.servers config with ${input} placeholders the operator fills in before adding. Commands verified against upstream 2026-06-20: the reference servers live in modelcontextprotocol/servers (npx for Node, uvx for Python); GitHub/Brave have moved to their own official homes. Keep this in sync with sites/marketing if a public directory is added later.",
+  "_comment": "Curated common MCP servers for the console quick-add picker (Settings ▸ MCP ▸ Browse common servers). Each entry's `template` is a partial mcp.servers config with ${input} placeholders the operator fills in before adding. Every command, package and docs link re-verified against upstream 2026-07-27 (npm/PyPI resolution + HTTP status on each docs URL). The reference servers live in modelcontextprotocol/servers (npx for Node, uvx for Python); GitHub/Brave have moved to their own official homes. Keep this in sync with sites/marketing if a public directory is added later. DELIBERATELY NOT LISTED: @modelcontextprotocol/server-filesystem — protoAgent ships its own fenced filesystem tools (ADR 0007, `filesystem.projects`), which cover the same ground with a directory allowlist, and the third-party server's `search_files` walks its root with no default exclusions (it does not skip node_modules or .git) and no depth or result cap — one call over a 2.75M-entry tree measured 222.7s and wedged a real agent turn. Please don't re-add it as a recommendation.",
   "servers": [
-    {
-      "id": "filesystem",
-      "name": "Filesystem",
-      "category": "Files",
-      "tagline": "Read and write files under a directory you allow.",
-      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
-      "requires": "node",
-      "official": true,
-      "template": {
-        "name": "filesystem",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "${path}"]
-      },
-      "inputs": [
-        { "key": "path", "label": "Allowed directory", "placeholder": "/Users/you/project", "required": true }
-      ]
-    },
     {
       "id": "git",
       "name": "Git",
@@ -79,7 +61,7 @@
         "name": "sequential-thinking",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"]
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
       }
     },
     {

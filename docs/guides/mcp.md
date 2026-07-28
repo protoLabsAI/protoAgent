@@ -28,10 +28,10 @@ mcp:
   denylist: []               # optional: drop specific (namespaced) tool names
   servers:
     # Local subprocess over stdio
-    - name: filesystem
+    - name: git
       transport: stdio
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+      command: uvx
+      args: ["mcp-server-git", "--repository", "/data"]
       env: {}                # optional
     # Remote server over streamable HTTP
     - name: weather
@@ -43,6 +43,18 @@ mcp:
 Servers are discovered at startup (and on config reload). A server that's
 unreachable or errors is **logged and skipped** — it never blocks boot or the
 other servers.
+
+::: warning Want filesystem access? Use the built-in tools, not an MCP server.
+protoAgent ships **fenced filesystem tools** (`filesystem.projects`, [ADR 0007]
+(/adr/0007-directory-aware-operator-agent)) — `read_file` / `list_dir` /
+`find_files` / `search_files` / `write_file`, scoped to directories you name.
+They cover the same ground as `@modelcontextprotocol/server-filesystem` and are
+why it is **not** in the quick-add catalog: that server's `search_files` walks
+its root with no default exclusions (it does not skip `node_modules` or `.git`)
+and no depth or result cap — one call over a 2.75M-entry tree measured 222s and
+wedged a live agent turn. If you do wire it up anyway, give it a narrow root and
+pass `excludePatterns`.
+:::
 
 ### How long a call may run
 
