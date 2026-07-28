@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.121.0",
+    "date": "2026-07-28",
+    "changes": [
+      "mcp.call_timeout_seconds — an MCP tool call is now bounded (#2347).",
+      "A running tool card now shows how long it has been running (#2348).",
+      "A wedged turn is now failed instead of spinning forever (#2344, #2349).",
+      "The MCP quick-add catalog no longer offers the third-party filesystem server, and a broken entry was fixed (#2350).",
+      "A cancelled MCP tool call no longer comes back as a tool result, and a config reload no longer strands one forever (#2345).",
+      "One slow MCP tool no longer wedges every other call to that server (#2346)."
+    ]
+  },
+  {
     "version": "v0.120.0",
     "date": "2026-07-27",
     "changes": [

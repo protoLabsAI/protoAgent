@@ -11,6 +11,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.121.0] - 2026-07-28
+
+### Added
+- **`mcp.call_timeout_seconds` — an MCP tool call is now bounded (#2347).** There was
+  no invocation timeout at all: `mcp.timeout_seconds` governs only discovery and
+  connect, so a server that accepted a request and never answered hung the call, and
+  the turn with it, for the life of the process. The new bound defaults to a generous
+  300s — real calls do run for minutes, so this is a backstop against a call that will
+  *never* return, not a latency budget. A trip cancels that call and returns a
+  recoverable tool error telling the model to narrow its arguments; the turn is not
+  failed. Set `call_timeout` on a single server entry to override it, or `0` to opt
+  out.
+
+- **A running tool card now shows how long it has been running (#2348).** A tool call in
+  flight rendered a spinner and nothing else, so a card three seconds in looked exactly
+  like one fifteen minutes in — and how long it has been going is the number you need
+  before deciding whether to keep waiting or hit Stop. Cards that pass ~2s now carry a
+  live elapsed counter (`search_files · 15m 04s`) beside the name; quick calls are
+  unchanged. It reports elapsed time, not proof the call is alive — ending a genuinely
+  wedged turn is the server's job (`model.turn_stall_timeout_seconds`).
+
+- **A wedged turn is now failed instead of spinning forever (#2344, #2349).** A turn that
+  stopped producing any output — typically stuck inside one tool call — had no
+  server-side bound at all: the task stayed in `TASK_STATE_WORKING` indefinitely,
+  telemetry recorded no turn, and the console kept waiting because the task still
+  reported working. `model.turn_stall_timeout_seconds` (default 900s, `0` disables) fails
+  a turn that goes that long without emitting anything, cancels the step behind it, and
+  names what was running. It is a *silence* window, not a limit on turn length: a turn
+  that keeps streaming is never cut off, however long it runs.
+
+### Changed
+- **The MCP quick-add catalog no longer offers the third-party filesystem server, and a
+  broken entry was fixed (#2350).** `Sequential Thinking` pointed at
+  `@modelcontextprotocol/server-sequentialthinking`, which upstream renamed — the entry
+  had been a 404 behind a button. `Filesystem` is removed outright: protoAgent ships
+  fenced filesystem tools (`filesystem.projects`, ADR 0007) that cover the same ground
+  with a directory allowlist, while that server's `search_files` walks its root with no
+  default exclusions and no depth or result cap — one call over a 2.75M-entry tree
+  measured 222.7s and wedged a live turn. Every remaining entry's package and docs link
+  was re-verified. Existing configured servers are untouched; this only changes what is
+  *recommended*.
+
+### Fixed
+- **A cancelled MCP tool call no longer comes back as a tool result, and a config
+  reload no longer strands one forever (#2345).** Stopping a turn while an MCP tool
+  was in flight reported `MCP server '…' is unreachable (reconnect failed)` to the
+  model as a normal result instead of cancelling — and because the A2A layer cancels
+  a turn exactly once, the turn kept running after Stop, with a bogus "unreachable"
+  inviting the model to retry the call you just stopped. Separately, any config
+  reload (settings save, plugin rebuild) swaps the MCP session pool; a call in flight
+  at that moment was never resolved and hung for the life of the process.
+
+- **One slow MCP tool no longer wedges every other call to that server (#2346).**
+  Calls to a single MCP server were strictly serialized, so a filesystem search
+  that takes minutes held the connection for minutes — and the calls queued
+  behind it rendered as "running" tool cards in the console without having been
+  sent at all. Requests to one server now run concurrently over the shared
+  session (which the MCP protocol has always supported); the reconnect path stays
+  single-flight via a session generation, so a server that dies mid-call is still
+  respawned exactly once no matter how many calls were in flight.
+
 ## [0.120.0] - 2026-07-27
 
 ### Added
