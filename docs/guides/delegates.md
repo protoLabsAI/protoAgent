@@ -30,6 +30,14 @@ MCP, and Subagents). The panel:
   probe runs only the ACP `initialize` handshake — **not** a session — so it's cheap
   and side-effect-free, never opening a thread against the agent on a timer
   ([#1300](https://github.com/protoLabsAI/protoAgent/issues/1300));
+- shows a **`last call failed`** pill when the most recent real dispatch raised, with
+  the reason on hover. This is a *different* question from the health dot, and the two
+  can disagree: because an `acp` probe stops at the handshake, a coder whose binary
+  launches fine but fails every *session* shows **green** while every `delegate_to`
+  call fails. The pill is where that shows up outside the chat that triggered it. It
+  clears on the next successful dispatch, and only a failed dispatch counts — stopping
+  a turn isn't the delegate's fault, and a coder that runs but reports it couldn't do
+  the job dispatched fine;
 - **adds** one via a **type picker** (A2A agent / Model endpoint / Coding agent)
   and a form generated from each type's field schema;
 - **edits / deletes** existing ones; secrets you enter are routed to

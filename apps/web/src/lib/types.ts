@@ -998,6 +998,10 @@ export type DelegateTypeSpec = { type: string; label: string; blurb: string; fie
 // single source for the Delegates picker + the setup wizard's runtime choices.
 export type AcpAgent = { id: string; label: string; command: string; args: string[] };
 export type DelegateProbe = { ok: boolean | null; latency_ms?: number; error?: string; detail?: string; checked_at?: number };
+// Outcome of the last REAL dispatch, which is a different question from `health`: the
+// prober only asks whether the delegate is reachable (for acp, just the ACP handshake),
+// so a coder that launches fine but fails every session shows a green dot.
+export type DelegateDispatch = { ok: boolean; at: number; error?: string };
 export type DelegateView = {
   name: string;
   type: string;
@@ -1009,6 +1013,7 @@ export type DelegateView = {
   // set-but-masked. The masked env values come back as "***" in the `env` map.
   has_env_secrets?: boolean;
   health?: DelegateProbe;
+  last_dispatch?: DelegateDispatch;
   [key: string]: unknown;
 };
 

@@ -7,8 +7,10 @@ equivalent of ORBIS's ``registry.reload()`` + session refresh.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
+from . import status
 from .adapters import ADAPTERS, Delegate, DelegateError
 
 logger = logging.getLogger("protoagent.plugins.delegates")
@@ -77,4 +79,17 @@ class DelegateRegistry:
             import dataclasses
 
             d = dataclasses.replace(d, manage_git=False)
-        return await ADAPTERS[d.type].dispatch(d, query, item_id=item_id)
+        # Record the outcome HERE — the one funnel every caller goes through (the
+        # `delegate_to` tool, its background variant, the coder ladder, the board loop),
+        # so the panel's picture doesn't depend on which surface triggered the dispatch.
+        # A cancellation is deliberately not a failure: an operator stopping a turn says
+        # nothing about the delegate (see status.py).
+        try:
+            reply = await ADAPTERS[d.type].dispatch(d, query, item_id=item_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            status.record_failure(d.name, str(exc) or type(exc).__name__)
+            raise
+        status.record_success(d.name)
+        return reply

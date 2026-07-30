@@ -727,3 +727,109 @@ def test_is_secretish_matches_tokens_not_substrings():
     assert not is_secretish("AUTHORITATIVE_DNS")
     for good in ("AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "API_KEY", "MY_PASSWORD", "OAUTH_CLIENT", "GH_BEARER"):
         assert is_secretish(good), good
+
+
+# ── last-dispatch outcome (item 6: health ≠ "the work went through") ──────────
+
+
+@pytest.fixture(autouse=True)
+def _clean_dispatch_status():
+    from plugins.delegates import status
+
+    status.reset()
+    yield
+    status.reset()
+
+
+def _stub_registry(monkeypatch, behaviour):
+    """A registry with one acp delegate whose adapter dispatch does `behaviour`."""
+    from plugins.delegates.adapters import ADAPTERS
+
+    reg = DelegateRegistry([{"name": "codex", "type": "acp", "command": "x", "workdir": "/tmp"}])
+
+    async def _dispatch(d, query, *, timeout=None, item_id=None):
+        return behaviour()
+
+    monkeypatch.setattr(ADAPTERS["acp"], "dispatch", _dispatch)
+    return reg
+
+
+async def test_dispatch_failure_is_recorded_for_the_panel(monkeypatch):
+    """The reported failure mode: an acp probe only runs the ACP handshake, so a coder
+    that launches but fails every session shows a green health dot. The last dispatch is
+    the signal that disagrees."""
+    from plugins.delegates import status
+
+    def boom():
+        raise DelegateError("delegate 'codex' (codex-acp): Internal error (JSON-RPC -32603): 429")
+
+    reg = _stub_registry(monkeypatch, boom)
+    with pytest.raises(DelegateError):
+        await reg.dispatch("codex", "go")
+    last = status.snapshot()["codex"]
+    assert last["ok"] is False
+    assert "-32603" in last["error"]
+    assert last["at"] > 0
+
+
+async def test_dispatch_success_clears_a_stale_failure(monkeypatch):
+    """A failure that never clears reads as current and is worse than showing nothing."""
+    from plugins.delegates import status
+
+    status.record_failure("codex", "old news")
+    reg = _stub_registry(monkeypatch, lambda: "done")
+    assert await reg.dispatch("codex", "go") == "done"
+    assert status.snapshot()["codex"]["ok"] is True
+    assert "error" not in status.snapshot()["codex"]
+
+
+async def test_cancelled_dispatch_is_not_a_delegate_failure(monkeypatch):
+    """An operator hitting stop says nothing about the delegate — recording it would put
+    a red mark on a healthy coder every time a turn is interrupted."""
+    import asyncio
+
+    from plugins.delegates import status
+
+    def cancel():
+        raise asyncio.CancelledError()
+
+    reg = _stub_registry(monkeypatch, cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await reg.dispatch("codex", "go")
+    assert "codex" not in status.snapshot()
+
+
+async def test_unknown_delegate_records_nothing(monkeypatch):
+    """No delegate to attribute the failure to — a phantom row would be a bug, not a hint."""
+    from plugins.delegates import status
+
+    reg = DelegateRegistry([])
+    with pytest.raises(DelegateError):
+        await reg.dispatch("ghost", "go")
+    assert status.snapshot() == {}
+
+
+def test_status_prunes_deleted_delegates_and_caps_the_error():
+    from plugins.delegates import status
+
+    status.record_failure("gone", "x" * 5000)
+    status.record_success("stays")
+    assert len(status.snapshot()["gone"]["error"]) <= 400
+    status.prune({"stays"})
+    assert set(status.snapshot()) == {"stays"}
+
+
+def test_list_payload_exposes_last_dispatch(monkeypatch):
+    """The panel reads this off /api/delegates alongside `health`."""
+    from plugins.delegates import api, status
+    from plugins.delegates import store as S
+
+    monkeypatch.setattr(
+        S, "read_delegates_raw", lambda: [{"name": "codex", "type": "acp", "command": "x", "workdir": "/tmp"}]
+    )
+    monkeypatch.setattr(S, "secret_overlay", lambda: {})
+    monkeypatch.setattr(S, "env_secret_values", lambda overlay, name: {})
+    status.record_failure("codex", "Internal error (JSON-RPC -32603)")
+    row = api._list_payload()["delegates"][0]
+    assert row["last_dispatch"]["ok"] is False
+    assert "-32603" in row["last_dispatch"]["error"]

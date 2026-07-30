@@ -18,6 +18,7 @@ import asyncio
 import logging
 import time
 
+from . import status
 from .adapters import ADAPTERS
 
 log = logging.getLogger("protoagent.plugins.delegates")
@@ -91,6 +92,9 @@ async def _probe_all(now: float | None = None) -> None:
         _HEALTH.pop(stale, None)
         _FAILURES.pop(stale, None)
         _NEXT_DUE.pop(stale, None)
+    # This sweep already walks the live roster to prune its own caches; the
+    # last-dispatch cache needs the same treatment and has no loop of its own.
+    status.prune(seen)
 
 
 async def _loop(interval: float = _INTERVAL_S, initial_delay: float = _INITIAL_DELAY_S) -> None:

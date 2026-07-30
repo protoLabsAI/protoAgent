@@ -14,7 +14,7 @@ import { Lock, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { errMsg } from "../lib/format";
+import { ago, errMsg } from "../lib/format";
 import { acpAgentsQuery, delegatesQuery, delegateTypesQuery, queryKeys } from "../lib/queries";
 import type { DelegateFieldSpec, DelegateProbe, DelegateTypeSpec, DelegateView } from "../lib/types";
 import { SettingsSubPanel } from "./SettingsSubPanel";
@@ -160,6 +160,14 @@ export function DelegatesSection() {
                     ) : null}
                     {d.name} <Badge status="neutral">{d.type}</Badge>
                     {!d.configured ? <StatusPill label="unconfigured" tone="warning" /> : null}
+                    {/* The health dot can be green while every real call fails — an acp probe
+                        only runs the ACP handshake, not a session. Surface the last actual
+                        dispatch so that disagreement is visible here instead of only in chat. */}
+                    {d.last_dispatch?.ok === false ? (
+                      <span title={d.last_dispatch.error || "dispatch failed"}>
+                        <StatusPill label={`last call failed ${ago(d.last_dispatch.at)}`} tone="error" />
+                      </span>
+                    ) : null}
                     {d.has_secret ? <StatusPill label="secret set" tone="muted" /> : null}
                   </strong>
                   <span>{p ? probeLine(p) : d.description || d.error || ""}</span>

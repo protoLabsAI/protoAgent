@@ -69,9 +69,14 @@ def _public_view(raw: dict) -> dict:
 
 
 def _list_payload() -> dict:
+    from . import status
     from .health import health_snapshot
 
     health = health_snapshot()
+    # Health answers "can I reach it?", last_dispatch answers "did the work go through?".
+    # They disagree in the case that strands operators — an acp probe only runs the ACP
+    # handshake, so a coder that launches but fails every session shows a green dot.
+    dispatched = status.snapshot()
     out = []
     for r in store.read_delegates_raw():
         if not isinstance(r, dict):
@@ -80,6 +85,9 @@ def _list_payload() -> dict:
         h = health.get(view.get("name"))
         if h:
             view["health"] = h
+        last = dispatched.get(view.get("name"))
+        if last:
+            view["last_dispatch"] = last
         out.append(view)
     return {"delegates": out}
 
