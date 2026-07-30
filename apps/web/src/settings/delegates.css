@@ -25,3 +25,16 @@
 }
 .delegate-env-add { display: flex; align-items: center; gap: 6px; }
 .delegate-env-remove { margin-top: 4px; }
+
+/* Advanced field group — fields the backend marks `advanced` collapse behind a chevron so
+   the form asks for the handful of things that matter first. Mirrors the archetype
+   picker's advanced tier (.archetype-advanced) and reuses its toggle button style, so the
+   two disclosure affordances in Settings look and behave the same. */
+.delegate-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}

@@ -833,3 +833,47 @@ def test_list_payload_exposes_last_dispatch(monkeypatch):
     row = api._list_payload()["delegates"][0]
     assert row["last_dispatch"]["ok"] is False
     assert "-32603" in row["last_dispatch"]["error"]
+
+
+# ── field tiers: the form asks for what matters first ────────────────────────
+
+
+def test_every_type_has_a_workable_primary_tier():
+    """The console collapses `advanced` fields. The acp form was the complaint — 10 fields
+    flat, most of them defaults nobody changes. Assert the split stays sane per type rather
+    than pinning exact key lists, which would make adding a field a two-file chore."""
+    for typ, adapter in ADAPTERS.items():
+        fields = adapter.config_schema()
+        primary = [f for f in fields if not f.advanced]
+        assert primary, f"{typ}: every type needs at least one primary field"
+        assert len(primary) <= 4, f"{typ}: primary tier has grown to {len(primary)} — re-tier it"
+        # A required field is by definition not optional-with-a-sane-default.
+        assert all(not f.advanced for f in fields if f.required), f"{typ}: a required field is hidden"
+
+
+def test_env_editor_is_advanced_on_every_type():
+    """The env editor is the largest control on the form (rows + secret toggles + the
+    removal list) and most delegates never set one."""
+    for typ, adapter in ADAPTERS.items():
+        env = [f for f in adapter.config_schema() if f.kind == "envmap"]
+        assert env, f"{typ}: expected an env field"
+        assert all(f.advanced for f in env), f"{typ}: env should be advanced"
+
+
+def test_acp_keeps_permissions_primary():
+    """`permissions` governs whether the coding agent may run shell commands and delete
+    files in its workdir. It has a default like the other advanced fields, but hiding a
+    security control behind a collapsed section is a different kind of decision."""
+    acp = {f.key: f for f in ADAPTERS["acp"].config_schema()}
+    assert acp["permissions"].advanced is False
+    for key in ("command", "args", "workdir"):
+        assert acp[key].advanced is False, f"{key} must stay visible"
+    for key in ("timeout_s", "manage_git", "base_branch", "branch_prefix", "confirm"):
+        assert acp[key].advanced is True, f"{key} should be advanced"
+
+
+def test_field_tier_is_serialized_to_the_console():
+    """The form reads this off /api/delegate-types; without it in as_dict() the console
+    silently renders everything inline."""
+    for spec in delegate_types():
+        assert all("advanced" in f for f in spec["fields"]), spec["type"]

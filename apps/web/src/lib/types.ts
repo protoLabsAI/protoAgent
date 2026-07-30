@@ -992,6 +992,10 @@ export type DelegateFieldSpec = {
   placeholder: string;
   options: string[];
   default?: unknown;
+  // Backend-declared tier: the form collapses these behind "Advanced". Optional so an
+  // older server (or a fork whose adapter predates the field) just renders everything
+  // inline, exactly as before.
+  advanced?: boolean;
 };
 export type DelegateTypeSpec = { type: string; label: string; blurb: string; fields: DelegateFieldSpec[] };
 // A known ACP coding agent from the canonical backend catalog (/api/acp-agents) — the

@@ -10,8 +10,8 @@ import { StatusDot } from "@protolabsai/ui/data";
 import { StatusPill } from "../app/StatusPill";
 import { HelpLink } from "../app/ui-kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Lock, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
@@ -79,6 +79,16 @@ function seedEnvRows(initial: DelegateView | null): EnvRow[] {
 function seedEnvRemove(initial: DelegateView | null): string {
   const er = initial?.env_remove;
   return Array.isArray(er) ? er.map((x) => String(x)).join(", ") : "";
+}
+
+// Is this field carrying a value the operator actually chose? Blank means unset, and a
+// value equal to the field's declared default means "unchanged" — neither is a reason to
+// spring the Advanced section open. `seed()` only fills keys the delegate actually stores
+// (it does NOT prefill defaults), so anything else is a deliberate setting.
+function hasMeaningfulValue(raw: string | undefined, f: DelegateFieldSpec): boolean {
+  const v = (raw ?? "").trim();
+  if (!v) return false;
+  return v !== (f.default == null ? "" : String(f.default));
 }
 
 function probeLine(p: DelegateProbe): string {
@@ -247,6 +257,55 @@ function DelegateForm({
   const acpAgents = useQuery({ ...acpAgentsQuery(), enabled: type === "acp" });
 
   const hasEnvField = (current?.fields ?? []).some((f) => f.kind === "envmap");
+  const primaryFields = useMemo(() => (current?.fields ?? []).filter((f) => !f.advanced), [current]);
+  const advancedFields = useMemo(() => (current?.fields ?? []).filter((f) => f.advanced), [current]);
+
+  // Does this delegate ALREADY carry a non-default advanced value? Editing one with, say,
+  // `manage_git: true` must not hide that behind a collapsed section — the operator would
+  // read the form as a full description of the delegate and be wrong. So the section starts
+  // open when there's something in it, and otherwise stays shut.
+  const hasAdvancedValues = useMemo(
+    () =>
+      advancedFields.some((f) =>
+        f.kind === "envmap"
+          ? envRows.some((r) => r.key.trim()) || envRemove.trim() !== ""
+          : hasMeaningfulValue(vals[f.key], f),
+      ),
+    [advancedFields, vals, envRows, envRemove],
+  );
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Open once, on arrival at a delegate that has advanced values — not on every keystroke,
+  // so the operator can still collapse the section back while editing.
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const id = `${initial?.name ?? ""}:${type}`;
+    if (openedFor.current === id) return;
+    openedFor.current = id;
+    setAdvancedOpen(hasAdvancedValues);
+    // hasAdvancedValues is read once per delegate/type arrival by design (see above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial?.name, type]);
+
+  function renderField(f: DelegateFieldSpec) {
+    return f.kind === "envmap" ? (
+      <EnvEditor
+        key={f.key}
+        field={f}
+        rows={envRows}
+        setRows={setEnvRows}
+        envRemove={envRemove}
+        setEnvRemove={setEnvRemove}
+      />
+    ) : (
+      <DelegateField
+        key={f.key}
+        field={f}
+        value={vals[f.key] ?? ""}
+        hasStoredSecret={editing && f.kind === "secret" && Boolean(initial?.has_secret)}
+        onChange={(v) => setVals((m) => ({ ...m, [f.key]: v }))}
+      />
+    );
+  }
 
   function buildEntry(): Record<string, unknown> {
     const entry: Record<string, unknown> = { name, type, description };
@@ -339,26 +398,28 @@ function DelegateForm({
         </label>
       ) : null}
 
-      {(current?.fields ?? []).map((f) =>
-        f.kind === "envmap" ? (
-          <EnvEditor
-            key={f.key}
-            field={f}
-            rows={envRows}
-            setRows={setEnvRows}
-            envRemove={envRemove}
-            setEnvRemove={setEnvRemove}
-          />
-        ) : (
-          <DelegateField
-            key={f.key}
-            field={f}
-            value={vals[f.key] ?? ""}
-            hasStoredSecret={editing && f.kind === "secret" && Boolean(initial?.has_secret)}
-            onChange={(v) => setVals((m) => ({ ...m, [f.key]: v }))}
-          />
-        ),
-      )}
+      {primaryFields.map(renderField)}
+
+      {/* Advanced fields (backend-declared `advanced`) collapse behind a chevron, the same
+          shape as the archetype picker's advanced tier. This is the difference between an
+          acp form asking for 4 things and one asking for 10, when the other 6 have defaults
+          almost nobody changes. Hidden entirely when a type has none, so a fork whose
+          adapter predates the flag looks exactly as it did before. */}
+      {advancedFields.length ? (
+        <div className="delegate-advanced">
+          <button
+            type="button"
+            className="archetype-configure-toggle"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((o) => !o)}
+          >
+            {advancedOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span>Advanced ({advancedFields.length})</span>
+            {!advancedOpen && hasAdvancedValues ? <StatusPill label="set" tone="muted" /> : null}
+          </button>
+          {advancedOpen ? advancedFields.map(renderField) : null}
+        </div>
+      ) : null}
 
       {probe ? <p className="settings-inline-status">{probeLine(probe)}</p> : null}
       {err ? <p className="settings-status">{err}</p> : null}

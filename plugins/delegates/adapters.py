@@ -60,6 +60,14 @@ class FieldSpec:
     placeholder: str = ""
     options: list[str] = field(default_factory=list)  # for kind=select
     default: object = None
+    # Tier: True ⇒ the console collapses this field behind "Advanced". Reserved for fields
+    # with a sane default that most delegates never change (timeouts, git lifecycle, env).
+    # It lives HERE rather than as a list of key names in the console because this schema is
+    # already the single source the form is generated from — so a plugin or fork that adds a
+    # field classifies it in the same place it declares it, instead of the console needing to
+    # know about a field it has never heard of. Purely presentational: nothing about
+    # parsing, validation, or defaults changes.
+    advanced: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -71,6 +79,7 @@ class FieldSpec:
             "placeholder": self.placeholder,
             "options": self.options,
             "default": self.default,
+            "advanced": self.advanced,
         }
 
 
@@ -170,6 +179,10 @@ def _env_fields() -> list[FieldSpec]:
             "env",
             "Environment",
             "envmap",
+            # Advanced on every type: the env editor is the single largest control on the
+            # form (key/value rows + secret toggles + the removal list) and most delegates
+            # never set one.
+            advanced=True,
             help=(
                 "Extra environment variables for the spawned delegate. Values are verbatim — no "
                 "${VAR} expansion — and merge OVER the inherited process env AFTER the removals "
@@ -344,6 +357,7 @@ class A2aAdapter(Adapter):
                 "Task poll timeout (s)",
                 "number",
                 default=300,
+                advanced=True,
                 help="Max seconds to wait for a long-running delegated task to finish before "
                 "giving up locally — the peer keeps working. Also caps the initial synchronous "
                 "SendMessage read, so a peer that answers inline (protoAgent's own server does) "
@@ -578,9 +592,15 @@ class OpenAiAdapter(Adapter):
             ),
             FieldSpec("model", "Model", "text", required=True, placeholder="protolabs/reasoning"),
             FieldSpec("api_key", "API key", "secret", help="Stored in secrets.yaml (gitignored)."),
-            FieldSpec("system_prompt", "System prompt", "textarea", placeholder="Answer thoroughly but concisely."),
-            FieldSpec("max_tokens", "Max tokens", "number", default=1024),
-            FieldSpec("temperature", "Temperature", "number", default=0.4),
+            FieldSpec(
+                "system_prompt",
+                "System prompt",
+                "textarea",
+                placeholder="Answer thoroughly but concisely.",
+                advanced=True,
+            ),
+            FieldSpec("max_tokens", "Max tokens", "number", default=1024, advanced=True),
+            FieldSpec("temperature", "Temperature", "number", default=0.4, advanced=True),
             *_env_fields(),
         ]
 
@@ -704,15 +724,17 @@ class AcpAdapter(Adapter):
                 "select",
                 options=["false", "true"],
                 default="false",
+                advanced=True,
                 help="Ask the operator before each call.",
             ),
-            FieldSpec("timeout_s", "Timeout (s)", "number", default=600),
+            FieldSpec("timeout_s", "Timeout (s)", "number", default=600, advanced=True),
             FieldSpec(
                 "manage_git",
                 "Managed git",
                 "select",
                 options=["false", "true"],
                 default="false",
+                advanced=True,
                 help="Framework owns branch/commit/push/PR (ADR 0076); the coder only edits "
                 "files. Needs workdir to be a git checkout with an `origin` remote.",
             ),
@@ -721,6 +743,7 @@ class AcpAdapter(Adapter):
                 "Base branch",
                 "text",
                 placeholder="main",
+                advanced=True,
                 help="Managed git: branches are cut from fresh origin/<base> and PRs target it.",
             ),
             FieldSpec(
@@ -728,6 +751,7 @@ class AcpAdapter(Adapter):
                 "Branch prefix",
                 "text",
                 placeholder="(delegate name)",
+                advanced=True,
                 help="Managed git: branch names are <prefix>/<slug>-<id7>. Empty ⇒ the delegate's name.",
             ),
             *_env_fields(),

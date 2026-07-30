@@ -59,7 +59,10 @@ test("env editor serializes rows, a per-row secret, and env_remove into the payl
   await expect(dialog).toBeVisible();
   await dialog.getByPlaceholder("e.g. opus").fill("gateway");
 
-  // The env editor (#2114) is present on every type (default a2a).
+  // The env editor (#2114) is `advanced`, so it starts collapsed on a NEW delegate —
+  // that is the point of the section. Open it, then it behaves exactly as before.
+  await expect(dialog.getByText("Environment", { exact: true })).toHaveCount(0);
+  await dialog.getByRole("button", { name: /^Advanced \(/ }).click();
   await expect(dialog.getByText("Environment", { exact: true })).toBeVisible();
 
   // Add two rows.
@@ -98,6 +101,11 @@ test("editing an env-carrying delegate seeds masked secrets + env_remove", async
   const dialog = page.getByRole("dialog", { name: "Edit coder" });
   await expect(dialog).toBeVisible();
 
+  // This delegate carries env values, which live in the Advanced group — so the group
+  // must open ITSELF. A collapsed section here would read as "this delegate has no env",
+  // which is worse than a dense form.
+  await expect(dialog.getByRole("button", { name: /^Advanced \(/ })).toHaveAttribute("aria-expanded", "true");
+
   const rows = dialog.locator(".delegate-env-row");
   await expect(rows).toHaveCount(2);
   // Non-secret row shows its value; the secret row seeds set-but-masked (toggle on,
@@ -108,4 +116,30 @@ test("editing an env-carrying delegate seeds masked secrets + env_remove", async
   await expect(rows.nth(1).getByRole("button", { name: /^Secret —/ })).toBeVisible();
   // env_remove prefilled as a comma-joined list.
   await expect(dialog.getByPlaceholder("PROTOAGENT_, A2A_AUTH_TOKEN")).toHaveValue("PROTOAGENT_, A2A_AUTH_TOKEN");
+});
+
+test("advanced fields stay collapsed on a new delegate until asked for", async ({ page }) => {
+  // The complaint this answers: the acp form asked for 10 things at once, most of them
+  // defaults nobody changes. Primary fields render inline; the rest wait behind one click.
+  await openIntegrations(page);
+  await page.locator(".delegates-section").getByRole("button", { name: /Add delegate/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Add a delegate" });
+  await dialog.locator(".pl-radiocard", { hasText: "Coding agent" }).click();
+
+  // Primary tier is visible immediately — including `permissions`, which is deliberately
+  // NOT hidden: it governs shell/delete access in the workdir.
+  await expect(dialog.getByText("Command", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Workdir", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Permissions", { exact: false })).toBeVisible();
+
+  // Advanced tier is absent from the DOM, not merely hidden.
+  const toggle = dialog.getByRole("button", { name: /^Advanced \(/ });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(dialog.getByText("Managed git", { exact: false })).toHaveCount(0);
+  await expect(dialog.getByText("Timeout (s)", { exact: false })).toHaveCount(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(dialog.getByText("Managed git", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Timeout (s)", { exact: false })).toBeVisible();
 });

@@ -1131,10 +1131,12 @@ export const MEMORY_INJECTION_DETAILS = {
 // Delegate registry (ADR 0025) — types schema + a sample roster for the panel. Every
 // type carries the shared `env` (envmap) editor field (#2114) — the per-delegate env
 // map + env_remove list + per-row secret toggle.
+// Mirrors the real schema: the backend marks the env editor `advanced`, so it renders
+// inside the collapsible group rather than inline (see plugins/delegates/adapters.py).
 const ENV_FIELD = {
   key: "env", label: "Environment", kind: "envmap", required: false,
   help: "Extra environment variables. Values are verbatim (no ${VAR} expansion) and merge over the inherited env after the removals below.",
-  placeholder: "", options: [], default: null,
+  placeholder: "", options: [], default: null, advanced: true,
 };
 export const DELEGATE_TYPES = {
   types: [
@@ -1162,6 +1164,9 @@ export const DELEGATE_TYPES = {
         { key: "command", label: "Command", kind: "text", required: true, help: "", placeholder: "proto", options: [], default: null },
         { key: "args", label: "Args", kind: "args", required: false, help: "", placeholder: "--acp", options: [], default: null },
         { key: "workdir", label: "Workdir", kind: "path", required: true, help: "", placeholder: "~/dev/repo", options: [], default: null },
+        { key: "permissions", label: "Permissions", kind: "select", required: false, help: "", placeholder: "", options: ["auto", "allowlist", "readonly"], default: "auto" },
+        { key: "timeout_s", label: "Timeout (s)", kind: "number", required: false, help: "", placeholder: "", options: [], default: 600, advanced: true },
+        { key: "manage_git", label: "Managed git", kind: "select", required: false, help: "", placeholder: "", options: ["false", "true"], default: "false", advanced: true },
         ENV_FIELD,
       ],
     },
