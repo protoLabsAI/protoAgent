@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import signal
+from collections import deque
 from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -125,6 +126,18 @@ _STDOUT_LINE_LIMIT = 32 * 1024 * 1024  # 32 MB
 # JSON-RPC error code the agent returns from `session/new` when it has no
 # resolved auth (ACP `AUTH_REQUIRED`). The client surfaces an actionable message.
 AUTH_REQUIRED = -32000
+
+# How much of a JSON-RPC error's `data` member survives into the message. It is
+# free-form (a string, a stack, a whole upstream response body) and the message ends up
+# in an LLM's tool result, so cap it — but generously enough to hold a real stack trace.
+_ERROR_DETAIL_LIMIT = 2000
+
+# Lines of the agent's stderr kept for diagnostics. The subprocess's own error output is
+# the richest signal we have about why it died, and it was previously logged at DEBUG
+# (invisible under the default INFO level) and then dropped. Ring-buffered so a chatty
+# agent can't grow it without bound; the tail is attached to the errors raised when the
+# process exits or a request times out.
+_STDERR_TAIL_LINES = 50
 
 # Env markers Claude Code sets so a nested `claude` can detect "am I already running
 # inside another Claude Code session?". When protoAgent's own server was launched from
@@ -270,17 +283,43 @@ def _missing_binary_message(command: str) -> str:
     return msg
 
 
+def _format_rpc_error(err: dict) -> str:
+    """Render a JSON-RPC error object as one operator-legible line.
+
+    ``-32603 "Internal error"`` is the *generic* JSON-RPC code, so an agent that hits
+    an unexpected failure says exactly that and nothing else — the cause rides in the
+    optional ``data`` member. Reading only ``message`` (what we used to do) turned every
+    such failure into a bare ``Error: Internal error`` in the ``delegate_to`` reply, with
+    the diagnostic sitting unread one key away. Keep ``data`` and the code: the code
+    distinguishes "the agent refused" from "the transport broke", and ``data`` is where
+    codex-acp / claude-agent-acp put the upstream error.
+    """
+    message = str(err.get("message") or "").strip()
+    code = err.get("code")
+    head = message or "(no message)"
+    if code is not None:
+        head = f"{head} (JSON-RPC {code})"
+    data = err.get("data")
+    if data in (None, "", {}, []):
+        return head
+    detail = data if isinstance(data, str) else json.dumps(data, default=str)
+    detail = " ".join(str(detail).split())
+    return f"{head}: {detail[:_ERROR_DETAIL_LIMIT]}"
+
+
 class AcpError(Exception):
     """Any ACP transport / protocol failure. The caller speaks the message.
 
     Carries the JSON-RPC error ``code`` when the failure came from an agent
     error response (else ``None``), so callers can special-case e.g.
-    ``AUTH_REQUIRED``.
+    ``AUTH_REQUIRED``, plus the raw ``data`` member for a caller that wants the
+    structured cause rather than the rendered line.
     """
 
-    def __init__(self, message: str, *, code: int | None = None) -> None:
+    def __init__(self, message: str, *, code: int | None = None, data: object = None) -> None:
         super().__init__(message)
         self.code = code
+        self.data = data
 
 
 class AcpClient:
@@ -343,6 +382,9 @@ class AcpClient:
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()
+        # Ring buffer of the agent's most recent stderr lines. Kept (not just logged)
+        # so the errors we raise can say WHY the agent died — see `_STDERR_TAIL_LINES`.
+        self._stderr_tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
 
         # Per-turn state (one turn at a time).
         self._answer = ""
@@ -380,6 +422,9 @@ class AcpClient:
     async def _start(self, *, open_session: bool = True) -> None:
         if not Path(self.cwd).is_dir():
             raise AcpError(f"workdir does not exist: {self.cwd}")
+        # A pooled client that respawns must not report the PREVIOUS process's dying
+        # words as this one's — that would be worse than saying nothing.
+        self._stderr_tail.clear()
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 self.command,
@@ -498,7 +543,34 @@ class AcpClient:
         async for raw in self._proc.stderr:
             line = raw.decode(errors="replace").rstrip()
             if line:
+                self._stderr_tail.append(line)
                 logger.debug("[acp/%s/stderr] %s", self.name, line)
+
+    def stderr_tail(self, limit: int = 20) -> str:
+        """The agent's last stderr lines, newest-last, as one block ("" if silent).
+
+        A dead or wedged coder almost always says why on stderr. Because that stream was
+        only DEBUG-logged, the operator's error read ``agent exited`` while the actual
+        traceback existed and was discarded. Callers append this to a failure message.
+        """
+        lines = list(self._stderr_tail)[-max(1, limit) :]
+        return "\n".join(lines)
+
+    def _exit_detail(self) -> str:
+        """How the subprocess died, plus its parting words — appended to the errors
+        raised when the read loop ends or an in-flight request is orphaned."""
+        rc = self._proc.returncode if self._proc else None
+        if rc is None:
+            how = "process still running or never started"
+        elif rc < 0:
+            try:
+                how = f"killed by signal {signal.Signals(-rc).name}"
+            except ValueError:  # a signal number this platform doesn't name
+                how = f"killed by signal {-rc}"
+        else:
+            how = f"exit code {rc}"
+        tail = self.stderr_tail()
+        return f" ({how})" + (f"; last stderr:\n{tail}" if tail else "; no stderr output")
 
     async def _read_loop(self) -> None:
         assert self._proc and self._proc.stdout
@@ -530,10 +602,14 @@ class AcpClient:
         except Exception:  # noqa: BLE001 — surface WHY the loop ended (was silent → undiagnosable)
             logger.exception("[acp/%s] read loop ended on error", self.name)
         finally:
-            # Fail any in-flight requests if the process dies mid-turn.
+            # Fail any in-flight requests if the process dies mid-turn — WITH how it
+            # died and what it said on the way out. A bare "agent exited" is the least
+            # actionable message in this file: it is emitted for a crash, an OOM kill, a
+            # bad launch, and an upstream auth failure alike.
+            detail = self._exit_detail()
             for fut in self._pending.values():
                 if not fut.done():
-                    fut.set_exception(AcpError(f"{self.name} agent exited"))
+                    fut.set_exception(AcpError(f"{self.name} agent exited{detail}"))
             self._pending.clear()
 
     async def _handle(self, msg: dict) -> None:
@@ -544,7 +620,7 @@ class AcpClient:
                 if "error" in msg:
                     err = msg.get("error") or {}
                     if isinstance(err, dict):
-                        fut.set_exception(AcpError(str(err.get("message") or err), code=err.get("code")))
+                        fut.set_exception(AcpError(_format_rpc_error(err), code=err.get("code"), data=err.get("data")))
                     else:
                         fut.set_exception(AcpError(str(err)))
                 else:
@@ -712,7 +788,12 @@ class AcpClient:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError as exc:
             self._pending.pop(rid, None)
-            raise AcpError(f"{method} timed out after {timeout}s") from exc
+            # "timed out" alone can't distinguish a wedged agent from a working one that
+            # needs a longer budget. Its stderr usually can — a rate-limit notice, an auth
+            # prompt it is blocked on, a retry loop — so hand that to whoever reads this.
+            tail = self.stderr_tail()
+            hint = f"; last stderr:\n{tail}" if tail else ""
+            raise AcpError(f"{method} timed out after {timeout}s{hint}") from exc
 
     async def _respond(self, rid, result: dict) -> None:
         await self._send({"jsonrpc": "2.0", "id": rid, "result": result})

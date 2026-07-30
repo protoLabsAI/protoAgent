@@ -388,6 +388,54 @@ async def test_openai_dispatch(monkeypatch):
     assert await ADAPTERS["openai"].dispatch(d, "q") == "the answer"
 
 
+def _openai_delegate():
+    return ADAPTERS["openai"].parse({"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"})
+
+
+async def test_openai_http_error_names_the_delegate(monkeypatch):
+    """An unattributed `HTTP 401` tells an agent that fanned out to several delegates
+    neither which one failed nor why."""
+    import httpx
+
+    class _Failing(_FakeClient):
+        async def post(self, url, **kw):
+            return _FakeResp({"error": {"message": "invalid api key"}}, status=401)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Failing(None))
+    with pytest.raises(DelegateError) as ei:
+        await ADAPTERS["openai"].dispatch(_openai_delegate(), "q")
+    msg = str(ei.value)
+    assert "opus" in msg and "401" in msg and "invalid api key" in msg
+
+
+async def test_openai_transport_error_says_unreachable(monkeypatch):
+    """Previously a ConnectError escaped the adapter and reached the tool as a raw
+    exception type, so `unreachable` and `the model refused` read identically."""
+    import httpx
+
+    class _Refusing(_FakeClient):
+        async def post(self, url, **kw):
+            raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Refusing(None))
+    with pytest.raises(DelegateError) as ei:
+        await ADAPTERS["openai"].dispatch(_openai_delegate(), "q")
+    assert "opus" in str(ei.value) and "unreachable" in str(ei.value)
+
+
+async def test_openai_inline_error_object_beats_keyerror(monkeypatch):
+    """An OpenAI-compatible endpoint that refuses in-band answers 200 with an `error`
+    object and no `choices`; that used to surface as `unexpected response shape:
+    'choices'`, hiding the endpoint's own explanation."""
+    import httpx
+
+    payload = {"error": {"message": "context length exceeded", "type": "invalid_request_error"}}
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(payload))
+    with pytest.raises(DelegateError) as ei:
+        await ADAPTERS["openai"].dispatch(_openai_delegate(), "q")
+    assert "context length exceeded" in str(ei.value)
+
+
 async def test_a2a_dispatch_inline_reply(monkeypatch):
     import httpx
 

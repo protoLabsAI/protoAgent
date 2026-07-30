@@ -535,6 +535,138 @@ async def test_session_new_auth_required_raises_actionable(tmp_path):
     assert ei.value.code == -32000  # AUTH_REQUIRED preserved
 
 
+# ── error detail: the `data` member, stderr, and how the process died ─────────
+
+# Fails session/prompt the way a real adapter does when its upstream blows up: the
+# generic -32603 "Internal error", with the actual cause in the free-form `data`.
+_INTERNAL_ERROR_AGENT = r"""
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        send({"jsonrpc": "2.0", "id": mid, "error": {
+            "code": -32603, "message": "Internal error",
+            "data": {"cause": "model provider returned 429", "model": "gpt-5-codex"}}})
+"""
+
+# Writes a diagnostic to stderr, then exits mid-prompt without answering — the
+# "agent exited" case, where stderr is the only evidence of what went wrong.
+_DIES_AGENT = r"""
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        sys.stderr.write("FATAL: config file /etc/codex.toml is unreadable\n")
+        sys.stderr.flush()
+        sys.exit(3)
+"""
+
+
+async def test_rpc_error_surfaces_code_and_data_not_just_message(tmp_path):
+    """`-32603 "Internal error"` is the generic JSON-RPC code — the cause lives in
+    `data`. Reading only `message` reduced every such failure to a bare
+    `Error: Internal error` in the delegate_to reply, which is what an operator
+    reported: an error with nothing to act on."""
+    script = tmp_path / "internal_error_agent.py"
+    script.write_text(_INTERNAL_ERROR_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="codex")
+    try:
+        with pytest.raises(AcpError) as ei:
+            await client.prompt("build the thing", timeout=10.0)
+    finally:
+        await client.close()
+    msg = str(ei.value)
+    assert "Internal error" in msg  # the agent's own words are kept
+    assert "-32603" in msg  # …qualified by the code that explains how generic they are
+    assert "model provider returned 429" in msg  # the cause, previously dropped
+    assert "gpt-5-codex" in msg
+    assert ei.value.code == -32603
+    assert ei.value.data == {"cause": "model provider returned 429", "model": "gpt-5-codex"}
+
+
+async def test_agent_exit_reports_exit_code_and_stderr(tmp_path):
+    """A coder that dies mid-turn used to yield exactly `<name> agent exited` — the
+    same string for a crash, an OOM kill, and a bad config. Its stderr was read and
+    thrown away at DEBUG."""
+    script = tmp_path / "dies_agent.py"
+    script.write_text(_DIES_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="codex")
+    try:
+        with pytest.raises(AcpError) as ei:
+            await client.prompt("build the thing", timeout=10.0)
+    finally:
+        await client.close()
+    msg = str(ei.value)
+    assert "agent exited" in msg
+    assert "exit code 3" in msg
+    assert "/etc/codex.toml is unreadable" in msg  # the reason, from the retained stderr
+
+
+async def test_stderr_tail_is_bounded_and_reset_on_respawn(tmp_path):
+    """The tail is a ring buffer (a chatty agent can't grow it without bound), and a
+    pooled client that respawns must not report the previous process's dying words."""
+    from plugins.coding_agent.acp_client import _STDERR_TAIL_LINES
+
+    script = tmp_path / "dies_agent.py"
+    script.write_text(_DIES_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="codex")
+    try:
+        with pytest.raises(AcpError):
+            await client.prompt("go", timeout=10.0)
+        assert client.stderr_tail()  # captured from the dead process
+        client._stderr_tail.extend(f"line {i}" for i in range(_STDERR_TAIL_LINES * 2))
+        assert len(client._stderr_tail) == _STDERR_TAIL_LINES  # bounded
+        # The next prompt respawns (the process is dead) → the stale tail is dropped.
+        with pytest.raises(AcpError) as ei:
+            await client.prompt("go again", timeout=10.0)
+        assert "line 0" not in str(ei.value)
+        assert "/etc/codex.toml is unreadable" in str(ei.value)  # THIS process's stderr
+    finally:
+        await client.close()
+
+
+def test_format_rpc_error_degrades_cleanly():
+    """No `data`, no `message`, and a string `data` all have to render sanely — an
+    error formatter that raises would replace the diagnostic with its own traceback."""
+    from plugins.coding_agent.acp_client import _ERROR_DETAIL_LIMIT, _format_rpc_error
+
+    assert _format_rpc_error({"code": -32601, "message": "method not found"}) == ("method not found (JSON-RPC -32601)")
+    assert _format_rpc_error({"message": "boom"}) == "boom"
+    assert _format_rpc_error({"code": -32603}) == "(no message) (JSON-RPC -32603)"
+    assert _format_rpc_error({"code": 1, "message": "x", "data": "plain string"}) == ("x (JSON-RPC 1): plain string")
+    # Empty-ish data adds nothing rather than a bare ": {}".
+    assert _format_rpc_error({"code": 1, "message": "x", "data": {}}) == "x (JSON-RPC 1)"
+    # A peer that echoes a huge body is capped — these strings land in an LLM's context.
+    big = _format_rpc_error({"code": 1, "message": "x", "data": "y" * 10_000})
+    assert len(big) < _ERROR_DETAIL_LIMIT + 100
+
+
 # ── session lifecycle: load / close / version / thought (#970) ────────────────
 
 # Advertises the `loadSession` capability, records whether session/new vs

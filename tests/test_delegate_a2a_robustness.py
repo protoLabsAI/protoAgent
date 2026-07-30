@@ -59,6 +59,32 @@ def test_error_detail_generic_keeps_message():
     assert "boom" in msg
 
 
+def test_error_detail_keeps_code_and_data():
+    """`-32603 "Internal error"` is the generic JSON-RPC code and says nothing on its
+    own; the cause rides in `data`. Dropping it left the operator with two useless
+    words."""
+    d = Delegate(name="peer", type="a2a")
+    msg = _a2a_error_detail(
+        d, {"code": -32603, "message": "Internal error", "data": {"detail": "KeyError: session_id"}}
+    )
+    assert "peer" in msg
+    assert "Internal error" in msg
+    assert "-32603" in msg
+    assert "KeyError: session_id" in msg
+
+
+def test_error_detail_handles_missing_pieces():
+    """A peer may send no `data`, no `message`, or a non-dict error entirely — the
+    formatter has to stay legible rather than emit a dangling separator or raise."""
+    d = Delegate(name="peer", type="a2a")
+    assert _a2a_error_detail(d, {"code": -1, "message": "boom", "data": None}).endswith("boom (JSON-RPC -1)")
+    assert "(no message)" in _a2a_error_detail(d, {"code": -32603})
+    assert "just a string" in _a2a_error_detail(d, "just a string")
+    # A peer echoing a huge body can't flood the delegating agent's context.
+    long = _a2a_error_detail(d, {"code": -1, "message": "x", "data": "y" * 10_000})
+    assert len(long) < 2500
+
+
 # ── dispatch: transport + protocol error transparency ──────────────────────────
 
 

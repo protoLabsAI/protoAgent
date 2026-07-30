@@ -13,6 +13,7 @@ ADR 0024 ``AcpClient``; the a2a adapter reuses the ``a2a_parse`` A2A parse helpe
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -24,6 +25,12 @@ logger = logging.getLogger("protoagent.plugins.delegates")
 
 class DelegateError(Exception):
     """A dispatch/parse failure. The caller turns it into a tool error string."""
+
+
+# How much of a JSON-RPC error's free-form ``data`` member survives into the message the
+# delegating agent reads. Generous enough for a peer's traceback, capped so a peer that
+# echoes a whole request body can't flood the caller's context.
+_A2A_ERROR_DETAIL_LIMIT = 2000
 
 
 def _is_loopback_url(url: str) -> bool:
@@ -242,15 +249,29 @@ async def _timed(coro) -> tuple[object, int]:
 
 def _a2a_error_detail(d: Delegate, err: object) -> str:
     """Turn a JSON-RPC error payload into an operator-legible cause — especially the
-    version-skew case, which otherwise surfaces as an opaque ``-32009``."""
+    version-skew case, which otherwise surfaces as an opaque ``-32009``.
+
+    Every other code keeps its ``code`` **and** its ``data`` member. ``-32603 "Internal
+    error"`` is the generic JSON-RPC code: reading only ``message`` reduced a peer's real
+    failure to the two least informative words it could have sent, with the cause sitting
+    unread in ``data``."""
     code = err.get("code") if isinstance(err, dict) else None
-    msg = str(err.get("message")) if isinstance(err, dict) else str(err)
+    msg = str(err.get("message") or "").strip() if isinstance(err, dict) else str(err)
     if code == -32009 or "VERSION_NOT_SUPPORTED" in str(err).upper():
         return (
             f"delegate {d.name!r}: peer rejected A2A-Version 1.0 (VERSION_NOT_SUPPORTED) — it speaks "
             "an older A2A dialect. Upgrade the peer, or point its url at a 1.0 /a2a endpoint."
         )
-    return f"delegate {d.name!r}: {msg or err}"
+    if not isinstance(err, dict):
+        return f"delegate {d.name!r}: {err}"
+    head = msg or "(no message)"
+    if code is not None:
+        head = f"{head} (JSON-RPC {code})"
+    data = err.get("data")
+    if data in (None, "", {}, []):
+        return f"delegate {d.name!r}: {head}"
+    detail = data if isinstance(data, str) else json.dumps(data, default=str)
+    return f"delegate {d.name!r}: {head}: {' '.join(str(detail).split())[:_A2A_ERROR_DETAIL_LIMIT]}"
 
 
 # The A2A protocol version(s) our delegate client can speak (it sends the
@@ -596,15 +617,33 @@ class OpenAiAdapter(Adapter):
             headers["Authorization"] = f"Bearer {d.api_key}"
         url = d.url.rstrip("/") + "/chat/completions"
         payload = {"model": d.model, "messages": messages, "max_tokens": d.max_tokens, "temperature": d.temperature}
+        # Name the delegate and the CAUSE, the way the a2a leg does. These strings land in
+        # a tool result: an unattributed `HTTP 401` tells an agent fanned out across
+        # several delegates neither which one failed nor whether retrying is pointless.
         async with httpx.AsyncClient(timeout=timeout or 60) as client:
-            r = await client.post(url, json=payload, headers=headers)
+            try:
+                r = await client.post(url, json=payload, headers=headers)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                raise DelegateError(f"delegate {d.name!r} unreachable at {url} ({type(exc).__name__})") from exc
+            except httpx.TimeoutException as exc:
+                raise DelegateError(f"delegate {d.name!r} timed out contacting {url}") from exc
+            except httpx.HTTPError as exc:
+                raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
             if r.status_code >= 400:
-                raise DelegateError(f"HTTP {r.status_code}: {r.text[:200]}")
-            data = r.json()
+                raise DelegateError(f"delegate {d.name!r} HTTP {r.status_code} from {url}: {r.text[:400]}")
+            try:
+                data = r.json()
+            except ValueError as exc:
+                raise DelegateError(f"delegate {d.name!r} returned non-JSON from {url}: {r.text[:200]!r}") from exc
         try:
             return (data["choices"][0]["message"]["content"] or "").strip()
         except (KeyError, IndexError, TypeError) as exc:
-            raise DelegateError(f"unexpected response shape: {exc}")
+            # An OpenAI-compatible endpoint that refuses in-band answers 200 with an
+            # `error` object instead of `choices`; show it rather than the KeyError.
+            inline = data.get("error") if isinstance(data, dict) else None
+            if inline:
+                raise DelegateError(f"delegate {d.name!r} endpoint error: {json.dumps(inline, default=str)[:400]}")
+            raise DelegateError(f"delegate {d.name!r} unexpected response shape: {exc}")
 
     async def probe(self, d: Delegate) -> dict:
         import httpx
@@ -770,7 +809,9 @@ class AcpAdapter(Adapter):
             client.kill_now()
             raise
         except AcpError as exc:
-            raise DelegateError(str(exc))
+            # Attribute it. `delegate_to` renders a DelegateError as a bare `Error: <msg>`,
+            # so without the name a fan-out across several coders can't tell which one blew up.
+            raise DelegateError(f"delegate {d.name!r} ({d.command}): {exc}") from exc
 
     async def _dispatch_managed(
         self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
@@ -888,7 +929,12 @@ class AcpAdapter(Adapter):
         try:
             await asyncio.wait_for(client.handshake(), timeout=45)
         except asyncio.TimeoutError:
-            return {"ok": False, "error": f"ACP handshake timed out — does {d.command!r} speak ACP?"}
+            # A binary that isn't an ACP server typically prints its usage/error to stderr
+            # and then waits — indistinguishable from a slow handshake unless we show what
+            # it said. The client keeps a tail of that stream for exactly this.
+            tail = client.stderr_tail()
+            hint = f"\nIts stderr:\n{tail}" if tail else ""
+            return {"ok": False, "error": f"ACP handshake timed out — does {d.command!r} speak ACP?{hint}"}
         except Exception as exc:  # noqa: BLE001 — spawn/handshake failure → tool-visible string
             return {"ok": False, "error": f"ACP handshake failed: {type(exc).__name__}: {exc}"}
         finally:

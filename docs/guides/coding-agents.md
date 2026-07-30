@@ -150,6 +150,35 @@ Notes for whoever writes the `query`:
 - **Follow-up calls reuse the cached session** — so you can iterate
   (`delegate_to("proto", "now also add a test for it")`).
 
+### Reading a failure
+
+When a dispatch fails, the `delegate_to` reply names the delegate, its command, and the
+cause — the lead agent sees the same text you do, so it can act on it rather than just
+retrying:
+
+```
+Error: delegate 'codex' (codex-acp): Internal error (JSON-RPC -32603):
+  stream error: unexpected EOF from model provider (request id req_abc123)
+
+Error: delegate 'codex' (codex-acp): codex agent exited (exit code 1); last stderr:
+  Error: ENOENT: no such file or directory, open '/home/u/.codex/auth.json'
+```
+
+Three things to know when you read one:
+
+- **`-32603` is JSON-RPC's *generic* code.** The agent hit something it didn't classify;
+  the text after the colon is its `data` member — that's the real cause, not protoAgent's
+  guess at one.
+- **`last stderr:`** is the coder process's own output, kept as a rolling tail. It's the
+  first place to look when the agent exited or timed out. Set `LOG_LEVEL=debug` to see the
+  full stream live (`[acp/<name>/stderr]`) rather than just the tail.
+- **A timeout is not always a wedge.** If the stderr tail shows retries or rate limits, the
+  agent was working — raise `timeout_s`. If it shows nothing, suspect the launch.
+
+The Delegates panel's **Test** button reports the same detail for a launch that never
+completes the ACP handshake (e.g. `codex agent exited (exit code 1); last stderr: Error:
+stdin is not a terminal` — the giveaway that the binary isn't an ACP server).
+
 ## Permission posture
 
 A coding agent works in its **configured workdir** and uses its *own* file/shell
