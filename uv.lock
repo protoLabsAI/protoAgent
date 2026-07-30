@@ -1618,7 +1618,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
     { name = "markdown-it-py", specifier = ">=3.0" },
-    { name = "mcp", specifier = ">=1.2" },
+    { name = "mcp", specifier = ">=1.2,<2" },
     { name = "packaging", specifier = ">=23.2" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "protolabs-a2a", specifier = ">=0.3.0" },

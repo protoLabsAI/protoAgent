@@ -53,7 +53,14 @@ dependencies = [
   "langchain-openai>=1.0",
   "langgraph-checkpoint-sqlite>=2.0",
   "langchain-mcp-adapters>=0.2,<0.3",
-  "mcp>=1.2",
+  # Capped at <2 because langchain-mcp-adapters does not work on mcp 2.x — it imports
+  # `RequestContext` from `mcp.shared.context`, which mcp 2.0.0 removed. The cap has to
+  # live HERE, on the transitive dep, because the adapter's own metadata says `mcp>=1.24.0`
+  # with no upper bound: it declares a compatibility it does not have, so a resolver left
+  # to itself picks mcp 2.x and every MCP import fails. Verified against 0.3.1 (the newest
+  # release, past our own <0.3 cap) — it breaks the same way, so bumping the adapter is not
+  # the escape hatch. Lift this when a release of the adapter actually imports on mcp 2.x.
+  "mcp>=1.2,<2",
   "ddgs>=9.0",
   "beautifulsoup4>=4.12",
   "croniter>=2.0",
