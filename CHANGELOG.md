@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.122.0] - 2026-07-30
+
+### Added
+- **The Delegates panel now shows whether the last real call worked, not just whether the
+  delegate answers a ping (#2355).** The health dot asks "can I reach it?"; nothing asked
+  "did the work go through?" — and those come apart in the case that strands operators.
+  An `acp` probe deliberately stops at the ACP handshake (so it never opens a coding
+  session on a timer), which means a coder whose binary launches fine but fails every
+  *session* shows a **green dot while every `delegate_to` call fails**, with the failure
+  visible only in whichever chat triggered it. `GET /api/delegates` now returns
+  `last_dispatch` alongside `health`, and the panel shows a `last call failed <when>` pill
+  with the reason on hover. It clears on the next success — a stale error reads as current
+  — and neither a cancelled turn nor a coder that ran but couldn't do the job counts as a
+  failure, since neither says anything about the delegate.
+
+### Fixed
+- **A failing delegate now says why (#2353).** An operator running a codex ACP delegate
+  got back exactly `Error: Internal error`. That was the far side's message arriving
+  intact and being discarded one key short of the cause: `-32603 "Internal error"` is
+  JSON-RPC's *generic* code, and the real explanation rides in the `data` member, which
+  both JSON-RPC legs dropped. Three neighbours lost the same way — the coder's stderr was
+  read off the pipe and logged at `DEBUG` (invisible under the default `INFO`) then
+  retained nowhere; `<name> agent exited` was one string for a crash, an OOM kill, a
+  missing config and a bad launch; and the openai adapter raised `HTTP 401` with no
+  delegate name. Errors now carry the JSON-RPC code and `data`, a rolling tail of the
+  coder's stderr, the exit code or signal, and the delegate's name and command — so a
+  fan-out across several coders shows which one failed, and the lead agent can act on the
+  cause instead of blind-retrying. `Error: Internal error` becomes
+  `Error: delegate 'codex' (codex-acp): Internal error (JSON-RPC -32603): stream error:
+  unexpected EOF from model provider (request id req_abc123)`.
+
+- **Pin `mcp<2` — a transitive release turned CI red repo-wide (#2354).** mcp 2.0.0
+  removed `mcp.shared.context.RequestContext`, which `langchain-mcp-adapters` imports, so
+  every `Python tests` run began failing 34 tests on code that had not changed — the job
+  installs with plain `pip` off `pyproject.toml` and resolves fresh, and `mcp>=1.2` had no
+  upper bound. The cap goes on `mcp` rather than on the adapter because the adapter
+  declares `mcp>=1.24.0` with no upper bound, a compatibility it does not have: its newest
+  release (0.3.1) breaks identically, so bumping it is not an escape hatch. `uv.lock`
+  already held 1.27.2, so `uv sync` installs were unaffected.
+
 ## [0.121.0] - 2026-07-28
 
 ### Added

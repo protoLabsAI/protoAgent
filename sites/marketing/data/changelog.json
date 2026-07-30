@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.122.0",
+    "date": "2026-07-30",
+    "changes": [
+      "The Delegates panel now shows whether the last real call worked, not just whether the delegate answers a ping (#2355).",
+      "A failing delegate now says why (#2353).",
+      "Pin mcp<2 — a transitive release turned CI red repo-wide (#2354)."
+    ]
+  },
+  {
     "version": "v0.121.0",
     "date": "2026-07-28",
     "changes": [
