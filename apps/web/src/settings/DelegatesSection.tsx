@@ -276,15 +276,21 @@ function DelegateForm({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Open once, on arrival at a delegate that has advanced values — not on every keystroke,
   // so the operator can still collapse the section back while editing.
+  //
+  // `!current` is load-order, not paranoia: the field schema arrives from its own query, and
+  // Edit (unlike Add, which is disabled until the schema lands) can open the dialog first.
+  // Deciding while `current` is undefined means deciding against an EMPTY field list —
+  // hasAdvancedValues is false, the id gets recorded, and the section is latched shut for a
+  // delegate that does have advanced values. That is the exact "the form claims this
+  // delegate has no env" failure this effect exists to prevent. Waiting for the schema and
+  // re-evaluating when it lands is the whole fix; the id guard still makes it fire once.
   const openedFor = useRef<string | null>(null);
   useEffect(() => {
     const id = `${initial?.name ?? ""}:${type}`;
-    if (openedFor.current === id) return;
+    if (!current || openedFor.current === id) return;
     openedFor.current = id;
     setAdvancedOpen(hasAdvancedValues);
-    // hasAdvancedValues is read once per delegate/type arrival by design (see above).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial?.name, type]);
+  }, [initial?.name, type, current, hasAdvancedValues]);
 
   function renderField(f: DelegateFieldSpec) {
     return f.kind === "envmap" ? (
