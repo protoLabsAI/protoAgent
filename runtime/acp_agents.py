@@ -15,7 +15,15 @@ from __future__ import annotations
 
 ACP_AGENT_CATALOG: list[dict] = [
     {"id": "proto", "label": "proto (protoCLI)", "command": "proto", "args": ["--acp"]},
-    {"id": "codex", "label": "Codex", "command": "npx", "args": ["-y", "@zed-industries/codex-acp"]},
+    # The ACP-org adapter, NOT `@zed-industries/codex-acp`. The zed package is a sealed
+    # ~188 MB Rust bundle with a codex core compiled IN — it never invokes the `codex` on
+    # your PATH — and its last publish was 2026-06-08. So it pinned every protoAgent user
+    # to a June-era codex, and a newer model answered `400 … requires a newer version of
+    # Codex` with no way to act on it: upgrading the codex CLI does nothing, and `npx -y`
+    # already had the newest adapter. The ACP-org package is a thin TS wrapper that depends
+    # on `@openai/codex` as an ordinary npm dep, so the codex it drives tracks the real
+    # package instead of being frozen into a binary.
+    {"id": "codex", "label": "Codex", "command": "npx", "args": ["-y", "@agentclientprotocol/codex-acp"]},
     {"id": "claude", "label": "Claude Code", "command": "npx", "args": ["-y", "@agentclientprotocol/claude-agent-acp"]},
     {"id": "gemini", "label": "Gemini CLI", "command": "gemini", "args": ["--experimental-acp"]},
     {"id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"]},

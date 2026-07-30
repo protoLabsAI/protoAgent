@@ -308,7 +308,7 @@ operator_mcp:
   tools: [memory_recall, memory_ingest, task_create, task_list, notes_read, run_workflow]
 # acp:                           # optional — override an agent's launch command
 #   agents:
-#     codex: { command: npx, args: ["-y", "@zed-industries/codex-acp"] }
+#     codex: { command: npx, args: ["-y", "@agentclientprotocol/codex-acp"] }
 ```
 
 With this set, each turn is driven by the coding agent: protoAgent assembles the context

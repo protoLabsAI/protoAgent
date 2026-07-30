@@ -56,7 +56,7 @@ Any agent that speaks ACP works — just point `command`/`args` at it:
 delegates:
   - { name: proto,       type: acp, command: proto,       args: ["--acp"],              workdir: ~/dev/my-repo }
   - { name: claude-code, type: acp, command: claude-code, args: [],                     workdir: ~/dev/my-repo }   # alias → claude-agent-acp
-  - { name: codex,       type: acp, command: codex-acp,   args: [],                     workdir: ~/dev/my-repo }   # @zed-industries/codex-acp adapter (codex has no native ACP)
+  - { name: codex,       type: acp, command: codex-acp,   args: [],                     workdir: ~/dev/my-repo }   # @agentclientprotocol/codex-acp adapter (codex has no native ACP)
   - { name: opencode,    type: acp, command: opencode,    args: ["acp"],                workdir: ~/dev/my-repo }
   - { name: copilot,     type: acp, command: copilot,     args: ["--acp"],              workdir: ~/dev/my-repo }
   - { name: gemini,      type: acp, command: gemini,      args: ["--experimental-acp"], workdir: ~/dev/my-repo }
@@ -120,10 +120,42 @@ probe will tell you so.
 **Codex has no native ACP mode either.** Recent `codex` CLI (≥ 0.13x) dropped the
 `acp` subcommand — it speaks **MCP** natively, not ACP, so `command: codex, args:
 ["acp"]` no longer works (the probe fails). Drive it through the
-[`@zed-industries/codex-acp`](https://www.npmjs.com/package/@zed-industries/codex-acp)
-adapter: install it (`npm i -g @zed-industries/codex-acp`) → `command: codex-acp`, or
-run it zero-install with `command: npx, args: ["-y", "@zed-industries/codex-acp"]` (the
-form the [ACP-runtime](/guides/acp-runtime) and [MCP](/guides/mcp) guides use).
+[`@agentclientprotocol/codex-acp`](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)
+adapter: install it (`npm i -g @agentclientprotocol/codex-acp`) → `command: codex-acp`, or
+run it zero-install with `command: npx, args: ["-y", "@agentclientprotocol/codex-acp"]`
+(the form the [ACP-runtime](/guides/acp-runtime) and [MCP](/guides/mcp) guides use, and
+the built-in preset).
+
+::: warning `@zed-industries/codex-acp` is retired — and its failure mode is confusing
+The older Zed adapter is a **sealed ~188 MB Rust bundle with a codex core compiled in**.
+It never invokes the `codex` on your `PATH`, so its codex is frozen at whatever the
+adapter shipped — and its last publish was **2026-06-08**. Point a newer model at it and
+the API answers:
+
+```
+400 invalid_request_error — The '<model>' model requires a newer version of Codex.
+Please upgrade to the latest app or CLI and try again.
+```
+
+Truthful, and unactionable: upgrading your `codex` CLI changes nothing (the adapter
+doesn't use it), and `npx -y` already fetched the newest adapter there is. The ACP-org
+package is a thin wrapper that depends on **`@openai/codex` as an ordinary npm dep**, so
+the codex it drives tracks the real package. Switch the `args` and the error goes away.
+
+It's still a *pinned* dep (a caret on a `0.x` version only floats the patch), so the
+adapter can lag the CLI by a minor. If a brand-new model is rejected, check the adapter's
+resolved codex before assuming your setup is wrong:
+`npm view @agentclientprotocol/codex-acp dependencies`.
+:::
+
+::: tip Need a model the adapter is too old for, today?
+`codex mcp-server` runs **your** installed codex as an MCP server over stdio — so it's the
+binary you upgraded, at whatever version you're on. Wire it up as an [MCP
+server](/guides/mcp) rather than a delegate. The trade-off is real: codex becomes a set of
+tools bound to your agent, **not** a `delegate_to` target, so you lose the delegate framing
+— its own session, `workdir` confinement, [managed git](#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076),
+and the `background=True` fan-out path.
+:::
 
 **opencode** (`opencode acp`) and **GitHub Copilot CLI** (`copilot --acp`) ship native
 ACP servers — point `command`/`args` straight at them, no adapter needed.
@@ -218,7 +250,7 @@ Dockerfile + entrypoint, `COPY . /opt/protoagent/` already ships your config):
 
 **1. Bake the coder into the image.** For `proto` (a Node CLI), that's Node + one
 `npm i -g`; the other adapters install the same way (`@agentclientprotocol/claude-agent-acp`,
-`@zed-industries/codex-acp`, …):
+`@agentclientprotocol/codex-acp`, …):
 
 ```dockerfile
 ARG PROTOCLI_VERSION=latest

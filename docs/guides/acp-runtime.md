@@ -35,7 +35,7 @@ agent_runtime: acp:proto         # native (default) | acp:<agent>
 # acp:
 #   agents:
 #     proto:    { command: proto,  args: ["--acp"] }
-#     codex:    { command: npx,    args: ["-y", "@zed-industries/codex-acp"] }
+#     codex:    { command: npx,    args: ["-y", "@agentclientprotocol/codex-acp"] }
 #     claude:   { command: npx,    args: ["-y", "@agentclientprotocol/claude-agent-acp"] }
 #     opencode: { command: opencode, args: ["acp"] }
 ```

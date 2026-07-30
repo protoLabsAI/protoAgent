@@ -535,8 +535,14 @@ def test_adapters_derived_from_canonical_catalog():
     catalog_ids = {a["id"] for a in acp_agent_catalog()}
     assert set(_ACP_ADAPTERS) == catalog_ids
     assert ACP_MODEL_OPTIONS == acp_runtime_options() == [f"acp:{a['id']}" for a in acp_agent_catalog()]
-    # claude maps to the current adapter (the deprecated @zed-industries one is gone).
+    # Both node adapters map to the maintained ACP-org packages, not the retired
+    # @zed-industries ones. The codex half of this assertion is a REGRESSION guard: the
+    # zed codex adapter is a sealed bundle with a codex core compiled in, so when it went
+    # stale (last publish 2026-06-08) every user was pinned to a June-era codex and a newer
+    # model failed with "requires a newer version of Codex" that no CLI upgrade could fix.
     assert "@agentclientprotocol/claude-agent-acp" in _ACP_ADAPTERS["claude"]["args"]
+    assert "@agentclientprotocol/codex-acp" in _ACP_ADAPTERS["codex"]["args"]
+    assert not any("zed-industries" in a for spec in _ACP_ADAPTERS.values() for a in spec.get("args", []))
 
 
 def test_catalog_merges_registered_custom_agents():
