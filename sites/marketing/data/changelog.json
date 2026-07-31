@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.123.0",
+    "date": "2026-07-31",
+    "changes": [
+      "The delegate form asks for what matters first (#2358).",
+      "The Codex preset pointed at an adapter you couldn't upgrade (#2357)."
+    ]
+  },
+  {
     "version": "v0.122.0",
     "date": "2026-07-30",
     "changes": [

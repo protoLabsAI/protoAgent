@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.123.0] - 2026-07-31
+
+### Changed
+- **The delegate form asks for what matters first (#2358).** Setting up an `acp` coding
+  agent meant reading ten fields flat — command, args, workdir, permissions, confirm,
+  timeout_s, manage_git, base_branch, branch_prefix, env — six of which have defaults
+  almost nobody changes, and one of which (env) is a multi-row editor with per-row secret
+  toggles. Fields now carry a tier and the console collapses the advanced ones behind one
+  chevron: acp asks for 4 up front instead of 10, openai and a2a for 3. The tier is
+  declared on the backend `FieldSpec`, so a plugin or fork classifies a field where it
+  declares it; it is optional on the wire, so an older server renders exactly as before.
+  `permissions` deliberately stays visible — it governs shell and delete access in the
+  workdir, which is a different kind of decision from a timeout — and the section opens
+  itself when a delegate already has advanced values set, so an edit never hides a
+  delegate's own configuration.
+
+### Fixed
+- **The Codex preset pointed at an adapter you couldn't upgrade (#2357).** A codex delegate
+  failed every dispatch with `400 … The '<model>' model requires a newer version of Codex.
+  Please upgrade to the latest app or CLI` — while the operator was on the latest codex CLI
+  and the model worked there. Both true: `@zed-industries/codex-acp` is a sealed ~188 MB
+  Rust bundle with a codex core compiled **in**, so the `codex` on your PATH never
+  participates, and its last publish (2026-06-08) pinned every user to a June-era codex
+  that no CLI upgrade and no `npx -y` could move. The preset now uses the maintained
+  `@agentclientprotocol/codex-acp` — same org that took over the claude adapter — which is
+  a thin wrapper depending on `@openai/codex` as an ordinary npm dep, so the codex it
+  drives tracks the real package. Verified with a real ACP handshake, and guarded by a test
+  asserting no launch spec still names `zed-industries`. **Existing delegates with an
+  explicit `args:` are unchanged** — re-pick the preset or update `args` to move over.
+
 ## [0.122.0] - 2026-07-30
 
 ### Added
