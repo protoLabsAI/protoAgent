@@ -60,6 +60,18 @@ describe("resumedTurnRender", () => {
     expect(resumedTurnRender({ session_id: "chat-1", text: "", state: "failed", error: "boom" })!.key).toBe("chat-1:boom");
   });
 
+  it("treats a missing OR empty state as completed, not as a failure", () => {
+    // The direction of this fallback matters: an unknown state must not manufacture a
+    // "Turn failed" on a turn that went fine. Both shapes reach the same answer, and the
+    // server resolves it identically (`str(... or "completed")`).
+    for (const state of [undefined, "", null]) {
+      const r = resumedTurnRender({ session_id: "chat-1", text: "all good", state });
+      expect(r!.failed, `state=${JSON.stringify(state)}`).toBe(false);
+      expect(r!.status).toBe("done");
+      expect(r!.content).toBe("all good");
+    }
+  });
+
   it("treats any non-completed state as failed", () => {
     // `canceled` is terminal-but-not-successful too, and the executor reports it the same way.
     const r = resumedTurnRender({ session_id: "chat-1", text: "partial", state: "canceled", error: "operator cancelled" });

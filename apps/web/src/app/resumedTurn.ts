@@ -41,7 +41,12 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
   const session = String(data.session_id ?? "");
   const text = String(data.text ?? "");
   const taskId = String(data.task_id ?? "");
-  const state = String(data.state ?? "completed");
+  // `||`, not `??`: an EMPTY state must fall back too. `??` would leave "" in place, and
+  // "" !== "completed" reads as failed — so a payload from a publisher that sets the key
+  // but not a value would put a false "Turn failed" on a turn that went fine. A signal
+  // that cries wolf is worse than no signal, and the server already resolves it the same
+  // way (`str(... or "completed")`).
+  const state = String(data.state || "completed");
   const error = String(data.error ?? "");
   const failed = state !== "completed";
 
