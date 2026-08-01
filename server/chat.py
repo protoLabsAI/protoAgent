@@ -26,10 +26,21 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 
 
-# Chars of a background result injected into the spawning turn. Shrunk 6000 → 3000
+# Chars of a background *report* injected into the spawning turn. Shrunk 6000 → 3000
 # (ADR 0070 D2): a substantial report is now ALSO indexed into the knowledge store at
 # completion, so the notification carries a summary-sized excerpt plus a pointer to
 # the searchable full text instead of a third of the context window.
+#
+# This applies to ``spawn`` jobs only — an LLM subagent turn whose result is a REPORT an
+# autonomous worker wrote. A ``spawn_work`` job (``deterministic``; ``delegate_to``,
+# ``knowledge_ingest``) is a different thing: its result is the DELIVERABLE the caller
+# dispatched and is waiting on, and truncating that destroys the work product rather than
+# summarizing it (#2363, from #2352 — a delegate's reply arriving chopped at 3000 chars,
+# with the operator hand-copying the rest out of the console). Those are delivered whole.
+#
+# Foreground ``delegate_to`` was never capped, so capping the background path made the
+# SAME reply arrive differently depending on whether the orchestrator held its turn open —
+# background vs foreground is a transport choice, not a content policy.
 _BG_RESULT_CAP = 3000
 
 
@@ -40,6 +51,19 @@ def _drain_background_messages(session_id: str) -> list:
     Drains exactly-once (the store flips ``notified`` atomically), so a completion is
     announced to the model on the spawning session's next turn and never again. Returns
     ``[]`` when the manager is absent or nothing is pending — a no-op on a normal turn.
+
+    Two delivery shapes, keyed on what the result IS (#2363):
+
+    * a ``spawn`` job's result is a **report** an autonomous subagent wrote — excerpt it at
+      ``_BG_RESULT_CAP`` and point at the knowledge-store copy (ADR 0070 D2);
+    * a ``spawn_work`` job's result (``deterministic``) is the **deliverable** the caller
+      dispatched — deliver it whole.
+
+    The excerpt path's ``memory_recall`` pointer is only ever emitted for jobs that were
+    actually indexed: ``_spawn_report_index`` runs from the A2A terminal hook, i.e. for
+    ``spawn`` jobs, which are exactly the ones that reach the truncation branch. Keep those
+    two in step — a pointer at an index that never ran sends the model to an empty search
+    (#2362), which is worse than the truncation it is trying to soften.
     """
     mgr = getattr(STATE, "background_mgr", None)
     if mgr is None or not session_id:
@@ -56,7 +80,8 @@ def _drain_background_messages(session_id: str) -> list:
     msgs = []
     for j in jobs:
         result = j.result or ""
-        if len(result) > _BG_RESULT_CAP:
+        # A deterministic work job's result is the deliverable — deliver it whole (#2363).
+        if not getattr(j, "deterministic", False) and len(result) > _BG_RESULT_CAP:
             # Completed, non-incognito reports this size were indexed at completion
             # (ADR 0070 D2) — say so; incognito/failed/chained (background-origin)
             # ones only live in the jobs DB.

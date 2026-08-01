@@ -70,6 +70,22 @@ Cursor:
   description + job id; trust tier 2 — agent-derived). The drain notification
   shrinks to a summary-sized cap with an explicit pointer: full report searchable
   via `memory_recall`, openable by job id in the document viewer.
+
+  **Amended #2363 — D2 governs *reports*, not deliverables.** This applies to
+  `spawn` jobs (an LLM subagent turn, whose result is a report the worker wrote).
+  A `spawn_work` job — a deterministic coroutine, i.e. `delegate_to` and
+  `knowledge_ingest` — is a different thing: its result is the **deliverable** the
+  caller dispatched and is waiting on, so truncating it destroys the work product
+  instead of summarizing it. Those rows are stamped `deterministic` at creation
+  and the drain delivers them whole. Foreground `delegate_to` was never capped, so
+  capping the background path made the same reply arrive differently depending on
+  whether the orchestrator held its turn open — background vs foreground is a
+  transport choice, not a content policy.
+
+  The pointer and the index must stay in step: `_spawn_report_index` runs from the
+  A2A terminal hook (`spawn` jobs), which are now exactly the jobs that can reach
+  the truncation branch. A pointer at an index that never ran sends the model to an
+  empty `memory_recall` — worse than the truncation it softens (#2362).
 - **D3 — Disposable workers.** `background:*` sessions are excluded from session-
   summary persistence, from the `<prior_sessions>` digest loader (also filters
   legacy files), and from retirement harvest/fact extraction (mirroring the

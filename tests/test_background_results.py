@@ -654,6 +654,89 @@ class TestDrainPointer:
         assert "report card" in body
 
 
+# ── #2363: a deterministic work result is a DELIVERABLE, not a report ────────
+
+
+class TestDeterministicDeliverables:
+    """``spawn_work`` results (``delegate_to``, ``knowledge_ingest``) reach the origin
+    turn WHOLE. Truncating a report summarizes it; truncating a deliverable destroys the
+    thing the caller dispatched and is waiting on — #2352 was an operator hand-copying a
+    delegate's reply out of the console because the orchestrator only got 3000 chars."""
+
+    async def _drain_work_result(self, tmp_path, monkeypatch, *, result: str, origin="sess-W") -> str:
+        from runtime.state import STATE
+        from server.chat import _drain_background_messages
+
+        mgr = _manager(tmp_path)
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+
+        async def work():
+            return result
+
+        job_id = await mgr.spawn_work(
+            origin_session=origin, kind="delegate", description="delegate → andrew", work=work
+        )
+        await _settle_work_job(mgr.store, job_id)
+        msgs = _drain_background_messages(origin)
+        assert len(msgs) == 1
+        return msgs[0].content
+
+    async def test_long_delegate_reply_is_delivered_whole(self, tmp_path, monkeypatch):
+        from server.chat import _BG_RESULT_CAP
+
+        reply = "A" * (_BG_RESULT_CAP * 3) + "TAIL-SENTINEL"
+        body = await self._drain_work_result(tmp_path, monkeypatch, result=reply)
+        assert "TAIL-SENTINEL" in body, "the delegate's reply was truncated before the orchestrator saw it"
+        assert "truncated to" not in body
+        assert "memory_recall" not in body
+
+    async def test_spawn_work_row_is_marked_deterministic(self, tmp_path, monkeypatch):
+        """The flag is a FACT about the job recorded at creation — the drain reads it,
+        so a caller can't be capped by whichever policy core happens to hold."""
+        mgr = _manager(tmp_path)
+
+        async def work():
+            return "done"
+
+        job_id = await mgr.spawn_work(origin_session="s", kind="ingest", description="d", work=work)
+        await _settle_work_job(mgr.store, job_id)
+        assert mgr.store.get(job_id).deterministic is True
+
+    def test_spawn_job_row_is_not_deterministic(self, tmp_path):
+        """A subagent-turn job keeps the ADR 0070 D2 report treatment."""
+        mgr = _manager(tmp_path)
+        job_id = mgr.store.create(
+            agent_name="a", origin_session="s", subagent_type="researcher", description="d", prompt="p"
+        )
+        assert mgr.store.get(job_id).deterministic is False
+
+    def test_legacy_row_without_the_column_reads_as_report(self, tmp_path):
+        """A pre-#2363 DB has no ``deterministic`` column. Those rows keep the treatment
+        they were written under — the migration must not change a drain's shape."""
+        import sqlite3
+
+        from background import BackgroundStore
+
+        db_path = tmp_path / "legacy.db"
+        db = sqlite3.connect(db_path)
+        db.execute(
+            "CREATE TABLE background_jobs ("
+            " id TEXT PRIMARY KEY, agent_name TEXT NOT NULL, origin_session TEXT NOT NULL,"
+            " subagent_type TEXT NOT NULL, description TEXT NOT NULL, prompt TEXT NOT NULL,"
+            " status TEXT NOT NULL, result TEXT, notified INTEGER NOT NULL DEFAULT 0,"
+            " created_at TEXT NOT NULL, completed_at TEXT)"
+        )
+        db.execute(
+            "INSERT INTO background_jobs VALUES "
+            "('bg-legacy00000', 'a', 's', 'researcher', 'd', 'p', 'completed', 'r', 0, '2026-01-01', NULL)"
+        )
+        db.commit()
+        db.close()
+
+        store = BackgroundStore(str(db_path))  # runs the migration
+        assert store.get("bg-legacy00000").deterministic is False
+
+
 # ── D3: disposable workers ───────────────────────────────────────────────────
 
 

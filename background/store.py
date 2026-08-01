@@ -51,6 +51,15 @@ class BackgroundJob:
     # outlives the disposable worker (ADR 0070). ``list`` hides dismissed jobs from the panel;
     # ``get`` still returns them, so ``GET /api/background/{id}`` keeps working.
     dismissed: bool = False
+    # Created by ``spawn_work`` — a deterministic coroutine (``delegate_to``,
+    # ``knowledge_ingest``) rather than an LLM subagent turn (#2363). The distinction is
+    # what the RESULT IS, and it drives delivery policy in the drain: a ``spawn`` job's
+    # result is a *report* an autonomous worker wrote (excerpt + knowledge-store pointer,
+    # ADR 0070 D2), while a ``spawn_work`` job's result is the *deliverable* the caller
+    # dispatched and is waiting on — truncating it destroys the thing that was asked for.
+    # Recorded as a FACT about the job, not a per-caller policy knob: core owns the policy
+    # so a plugin spawning work can't get its own context budget wrong.
+    deterministic: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +77,7 @@ class BackgroundJob:
             "origin_incognito": self.origin_incognito,
             "batch_id": self.batch_id,
             "dismissed": self.dismissed,
+            "deterministic": self.deterministic,
         }
 
 
@@ -89,6 +99,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         origin_incognito=bool(row["origin_incognito"] if "origin_incognito" in keys else 0),
         batch_id=(row["batch_id"] if "batch_id" in keys else None) or None,
         dismissed=bool(row["dismissed"] if "dismissed" in keys else 0),
+        deterministic=bool(row["deterministic"] if "deterministic" in keys else 0),
     )
 
 
@@ -125,7 +136,8 @@ class BackgroundStore:
                     a2a_task_id    TEXT,
                     origin_incognito INTEGER NOT NULL DEFAULT 0,
                     batch_id       TEXT,
-                    dismissed      INTEGER NOT NULL DEFAULT 0
+                    dismissed      INTEGER NOT NULL DEFAULT 0,
+                    deterministic  INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -142,6 +154,11 @@ class BackgroundStore:
             # Migrate a pre-#1808 DB: soft-dismiss flag (existing rows are undismissed → 0).
             if "dismissed" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
+            # Migrate a pre-#2363 DB: deterministic-work flag. Existing rows default 0 —
+            # i.e. they keep the ADR 0070 report treatment, which is what they got when
+            # they were written, so a drain of an old row can't change shape under us.
+            if "deterministic" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN deterministic INTEGER NOT NULL DEFAULT 0")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -163,13 +180,15 @@ class BackgroundStore:
         prompt: str,
         origin_incognito: bool = False,
         batch_id: str | None = None,
+        deterministic: bool = False,
         now: datetime | None = None,
     ) -> str:
         """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``).
 
         ``batch_id`` (#1766) tags a job as a member of a fan-out spawned by one turn, so
         the completions coalesce into ONE push-resume; ``None`` (the default) is a
-        singleton spawn."""
+        singleton spawn. ``deterministic`` (#2363) marks a ``spawn_work`` job — its result
+        is a deliverable, not a report, and the drain delivers it whole."""
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
         created = (now or datetime.now(UTC)).isoformat()
         db = self._connect()
@@ -177,8 +196,9 @@ class BackgroundStore:
             db.execute(
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
-                " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, batch_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?)",
+                " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, "
+                " batch_id, deterministic) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?)",
                 (
                     job_id,
                     agent_name,
@@ -189,6 +209,7 @@ class BackgroundStore:
                     created,
                     1 if origin_incognito else 0,
                     batch_id or None,
+                    1 if deterministic else 0,
                 ),
             )
             db.commit()

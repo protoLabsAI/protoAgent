@@ -93,6 +93,20 @@ The configured delegate names + descriptions appear in the tool's description, s
 the model knows what it can reach. Each delegate is stateless from the caller's
 view — the `query` must be self-contained (the delegate doesn't see this chat).
 
+### Foreground vs background
+
+`delegate_to(..., background=True)` runs the delegation detached: the tool returns
+a job handle immediately and the delegate's reply is delivered back on a later
+turn, so a slow delegate (a coding agent building a PR) never holds the caller's
+turn open. Prefer it for anything that may take more than a couple of seconds, and
+for any fan-out across several delegates.
+
+**Either way the reply arrives whole.** A delegate's reply is the deliverable you
+dispatched, so the background path delivers it in full rather than excerpting it
+the way an unsolicited subagent *report* is excerpted (ADR 0070 D2, amended by
+#2363). Background vs foreground changes when the answer arrives, never how much
+of it you get.
+
 ## Secrets
 
 Auth tokens / API keys are stored in the gitignored `config/secrets.yaml`, never

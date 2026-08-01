@@ -175,7 +175,12 @@ class BackgroundManager:
         (stored as ``subagent_type``, e.g. ``"ingest"``); ``detail`` is recorded as the
         job's ``prompt`` (e.g. the source). Returns the opaque job id immediately. Use
         this for long deterministic operations (media transcription/ingest) that must
-        not block the foreground turn."""
+        not block the foreground turn.
+
+        The row is stamped ``deterministic`` (#2363): what comes back is the DELIVERABLE
+        the caller dispatched and is waiting on, not a report an autonomous worker wrote,
+        so the drain hands it to the origin turn whole instead of applying ADR 0070 D2's
+        excerpt-plus-pointer treatment."""
         job_id = self.store.create(
             agent_name=self.agent_name,
             origin_session=origin_session or "",
@@ -184,6 +189,7 @@ class BackgroundManager:
             prompt=detail,
             origin_incognito=origin_incognito,
             batch_id=batch_id,
+            deterministic=True,
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
