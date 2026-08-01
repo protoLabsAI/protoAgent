@@ -148,6 +148,12 @@ class TurnOutcome:
     # The Langfuse trace this turn ran under, so a telemetry row can deep-link to
     # the trace tree. Captured DURING the stream, not after — see ``execute``.
     trace_id: str = ""
+    # Why a non-``completed`` turn ended — the same text the task's terminal
+    # ``status.message`` carries. Kept on the outcome because a host surfacing a
+    # failed turn to an operator otherwise has only ``text`` (the partial answer,
+    # which reads as a completed one that trails off) and would have to re-fetch
+    # the task to say what went wrong. Empty for a completed turn.
+    error: str = ""
 
 
 # A terminal hook the host can register (ADR 0003 / 0006): invoked with a
@@ -492,7 +498,7 @@ class ProtoAgentExecutor(AgentExecutor):
             except Exception:  # noqa: BLE001 — telemetry must never break a turn
                 pass
 
-        def _outcome(state: str, final_text: str) -> TurnOutcome:
+        def _outcome(state: str, final_text: str, error: str = "") -> TurnOutcome:
             return TurnOutcome(
                 task_id=context.task_id,
                 context_id=context.context_id,
@@ -509,6 +515,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 priority=_priority,
                 stimulus=_stimulus,
                 trace_id=trace_id[0],
+                error=error,
             )
 
         # What the turn was last seen doing — read only when the stall guard trips,
@@ -636,7 +643,7 @@ class ProtoAgentExecutor(AgentExecutor):
 
                 elif event_type == "error":
                     await updater.failed(message=updater.new_agent_message([_text_part(str(payload))]))
-                    _notify_terminal(_outcome("failed", accumulated))
+                    _notify_terminal(_outcome("failed", accumulated, error=str(payload)))
                     return
 
             # Stream ended without an explicit terminal event — treat the
@@ -665,12 +672,12 @@ class ProtoAgentExecutor(AgentExecutor):
             await _flush_reasoning()
             await _flush_text()  # keep whatever the turn did manage to say
             await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
-            _notify_terminal(_outcome("failed", accumulated))
+            _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
 
         except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
             logger.exception("[a2a] execute crashed for task %s", context.task_id)
             await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
-            _notify_terminal(_outcome("failed", accumulated))
+            _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)

@@ -715,11 +715,24 @@ def _surface_resumed_chat_turn(outcome) -> None:
     turns it streamed, so a server-fired resume is otherwise invisible until the
     next interaction. Mirrors the ADR 0050 background path. Only server-fired
     origins qualify — scheduler resumes and ADR 0070 push-resume briefings; an
-    operator/A2A chat turn the browser already streamed does not."""
+    operator/A2A chat turn the browser already streamed does not.
+
+    Carries the turn's terminal ``state`` (+ ``error`` for a non-completed one) so the
+    console can render a FAILED resume as a failure. Without it every resume arrived
+    looking identical to a good one: a server-fired turn that crashed (a wedged tool, a
+    LangGraph ``recursion_limit``) published its partial narration as an ordinary
+    assistant message that simply trailed off mid-sentence, while the real reason sat
+    unread in the task's terminal ``status.message``. A crash BEFORE any text was worse
+    — the old empty-text guard dropped the event entirely, so the turn vanished with no
+    trace in the UI at all. That guard now applies only to a COMPLETED turn, where empty
+    text genuinely means "nothing to say"; a failure is published on the strength of its
+    error alone."""
     if getattr(outcome, "origin", "") not in ("scheduler", "background-resume"):
         return
     text = extract_output(outcome.text) or outcome.text
-    if not text.strip():
+    state = str(getattr(outcome, "state", "") or "completed")
+    error = str(getattr(outcome, "error", "") or "")
+    if not text.strip() and (state == "completed" or not error.strip()):
         return
     _event_bus.publish(
         "chat.resumed",
@@ -728,6 +741,8 @@ def _surface_resumed_chat_turn(outcome) -> None:
             "text": text,
             "task_id": getattr(outcome, "task_id", "") or "",
             "trigger": getattr(outcome, "trigger", "") or "",
+            "state": state,
+            "error": error,
         },
     )
 

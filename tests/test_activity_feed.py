@@ -104,3 +104,89 @@ def test_terminal_hook_skips_non_scheduler_chat_turn(tmp_path, monkeypatch):
         )
     )
     assert not any(ev == "chat.resumed" for ev, _ in published)
+
+
+def test_resumed_chat_turn_carries_state_and_error(tmp_path, monkeypatch):
+    # A server-fired turn that CRASHED must arrive labelled as a failure, carrying the
+    # reason. It used to publish only its partial narration, so the console rendered a
+    # normal bubble that trailed off mid-sentence — indistinguishable from the agent
+    # finishing, while the real cause sat unread in the task's terminal status.message.
+    monkeypatch.setattr(server.STATE, "activity_log", ActivityLog(str(tmp_path / "a.db")))
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    server._a2a_terminal(
+        TurnOutcome(
+            task_id="t10",
+            context_id="chat-xyz",
+            state="failed",
+            text="Grail Knight picks the ball up.",
+            origin="scheduler",
+            trigger="bloodbowl-turn-h1t1-away-turn",
+            error="Recursion limit of 200 reached without hitting a stop condition.",
+        )
+    )
+    resumed = next((d for ev, d in published if ev == "chat.resumed"), None)
+    assert resumed is not None
+    assert resumed["state"] == "failed"
+    assert "Recursion limit of 200" in resumed["error"]
+    assert resumed["text"] == "Grail Knight picks the ball up."  # the partial is kept, not dropped
+
+
+def test_resumed_chat_turn_publishes_a_failure_that_said_nothing(tmp_path, monkeypatch):
+    # The case that used to vanish: a turn that crashed BEFORE emitting any text. The old
+    # empty-text guard returned early, so nothing reached the console at all — the operator
+    # saw the typing indicator clear and no trace that a turn had ever run.
+    monkeypatch.setattr(server.STATE, "activity_log", ActivityLog(str(tmp_path / "a.db")))
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    server._a2a_terminal(
+        TurnOutcome(
+            task_id="t11",
+            context_id="chat-xyz",
+            state="failed",
+            text="",
+            origin="scheduler",
+            trigger="nightly",
+            error="the model gateway refused the request",
+        )
+    )
+    resumed = next((d for ev, d in published if ev == "chat.resumed"), None)
+    assert resumed is not None
+    assert resumed["state"] == "failed"
+    assert resumed["error"] == "the model gateway refused the request"
+    assert resumed["text"] == ""
+
+
+def test_resumed_chat_turn_still_drops_a_silent_completed_turn(tmp_path, monkeypatch):
+    # The restraint control for the pair above — widening the guard must not make an
+    # ORDINARY quiet turn publish an empty bubble. A completed turn with nothing to say
+    # is still dropped; so is a failure with no reason to give.
+    monkeypatch.setattr(server.STATE, "activity_log", ActivityLog(str(tmp_path / "a.db")))
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    server._a2a_terminal(
+        TurnOutcome(task_id="t12", context_id="chat-xyz", state="completed", text="  ", origin="scheduler")
+    )
+    server._a2a_terminal(
+        TurnOutcome(task_id="t13", context_id="chat-xyz", state="failed", text="", origin="scheduler", error="")
+    )
+    assert not any(ev == "chat.resumed" for ev, _ in published)
+
+
+def test_resumed_chat_turn_defaults_to_completed(tmp_path, monkeypatch):
+    # An ordinary resume keeps its old shape plus an explicit state, so a console that
+    # branches on it treats the untouched happy path as a success.
+    monkeypatch.setattr(server.STATE, "activity_log", ActivityLog(str(tmp_path / "a.db")))
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    server._a2a_terminal(
+        TurnOutcome(task_id="t14", context_id="chat-xyz", state="completed", text="done", origin="scheduler")
+    )
+    resumed = next((d for ev, d in published if ev == "chat.resumed"), None)
+    assert resumed is not None
+    assert resumed["state"] == "completed"
+    assert resumed["error"] == ""
