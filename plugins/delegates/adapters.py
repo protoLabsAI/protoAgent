@@ -680,6 +680,51 @@ class OpenAiAdapter(Adapter):
             return {"ok": False, "error": str(exc)[:200]}
 
 
+#: ACP ``stopReason`` values that mean the reply is CUT OFF rather than finished, mapped
+#: to what the caller should do about it. ``prompt()`` returns text either way, so without
+#: this an interrupted reply is indistinguishable from a complete one — the orchestrator
+#: acts on a half-answer and the operator only finds out downstream (#2352).
+_INCOMPLETE_STOP_REASONS = {
+    "max_tokens": (
+        "the coding agent hit its output-token limit mid-generation, so this reply is CUT OFF "
+        "and its final section may be missing or half-written. Do not treat it as complete: "
+        "either re-dispatch the remaining work as a narrower follow-up query, or ask the "
+        "delegate to continue from where it stopped."
+    ),
+    "refusal": (
+        "the coding agent declined to finish this request, so the reply is incomplete. "
+        "Re-dispatching the same query verbatim will decline again — restate the task or "
+        "pick a different delegate."
+    ),
+}
+
+
+def _mark_incomplete(reply: str, stop_reason: str | None) -> str:
+    """Append an operator/model-visible marker when the coder's turn ended for a reason
+    that means the text is truncated rather than finished.
+
+    ``AcpClient`` records ``last_stop_reason`` on every turn and had no production reader
+    at all — the signal existed and was dropped on the floor, which is exactly how a
+    ``max_tokens`` cut-off reached the orchestrator looking like a finished answer. Kept
+    OUT of ``prompt()`` itself: the coder ladder consumes replies as data and reads the
+    stop reason directly via ``dead_end()``; it's the *delegate* surface, whose reply goes
+    into a model's context as prose, that needs it spelled out.
+
+    ``cancelled`` is deliberately absent — an operator stopping a turn already knows.
+
+    Read immediately after the caller's own ``await client.prompt(...)`` returns. That is
+    exactly as reliable as the reply text itself: both are per-client state the same call
+    just wrote, on a client the pool already treats as single-flight (``prompt`` clears
+    ``_answer`` on entry, so a concurrent same-delegate prompt would corrupt the reply
+    long before it could confuse the stop reason).
+    """
+    reason = (stop_reason or "").strip()
+    note = _INCOMPLETE_STOP_REASONS.get(reason)
+    if not note:
+        return reply
+    return f"{reply}\n\n[incomplete reply — {note}]" if reply.strip() else f"[no reply — {note}]"
+
+
 class AcpAdapter(Adapter):
     type = "acp"
     label = "Coding agent (ACP)"
@@ -822,7 +867,11 @@ class AcpAdapter(Adapter):
         client = _client_for(spec)
         client._permission = _make_permission(spec)
         try:
-            return await client.prompt(query, timeout=timeout or d.timeout_s)
+            reply = await client.prompt(query, timeout=timeout or d.timeout_s)
+            # getattr: the pool hands back whatever client the spec resolves to, and a
+            # missing stop reason must degrade to 'no marker', never to an AttributeError
+            # that turns a working delegate into a hard dispatch failure.
+            return _mark_incomplete(reply, getattr(client, "last_stop_reason", None))
         except asyncio.CancelledError:
             # The turn was stopped (operator hit stop, or an orchestrator watchdog
             # fired). The client is POOLED, so without this its subprocess keeps

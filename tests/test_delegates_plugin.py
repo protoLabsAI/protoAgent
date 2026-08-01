@@ -877,3 +877,79 @@ def test_field_tier_is_serialized_to_the_console():
     silently renders everything inline."""
     for spec in delegate_types():
         assert all("advanced" in f for f in spec["fields"]), spec["type"]
+
+
+# ── #2352/#2363: an interrupted coder reply must not look like a finished one ──
+
+
+class _StopReasonClient:
+    """Minimal stand-in for the pooled ``AcpClient``: returns a canned reply and the
+    ``stopReason`` the real client records on every turn."""
+
+    def __init__(self, reply: str, stop_reason: str | None):
+        self._reply = reply
+        self.last_stop_reason = stop_reason
+        self._permission = None
+
+    async def prompt(self, query, timeout=None):
+        return self._reply
+
+
+def _acp_delegate():
+    from plugins.delegates.adapters import AcpAdapter
+
+    return AcpAdapter().parse(
+        {"name": "andrew", "type": "acp", "command": "claude-code", "workdir": "/tmp"}
+    )
+
+
+async def _dispatch_with(monkeypatch, reply: str, stop_reason: str | None) -> str:
+    import plugins.coding_agent as coding_agent
+    from plugins.delegates.adapters import AcpAdapter
+
+    monkeypatch.setattr(coding_agent, "_client_for", lambda spec: _StopReasonClient(reply, stop_reason))
+    monkeypatch.setattr(coding_agent, "_make_permission", lambda spec: None)
+    return await AcpAdapter()._prompt(_acp_delegate(), "do the thing")
+
+
+async def test_max_tokens_reply_is_marked_incomplete(monkeypatch):
+    """The reported failure (#2352): the model stopped at its output-token limit, the
+    adapter returned the partial text, and the orchestrator could not tell it apart from
+    a finished answer. `AcpClient.last_stop_reason` already knew — nothing read it."""
+    out = await _dispatch_with(monkeypatch, "Here is the plan, step 1", "max_tokens")
+    assert "Here is the plan, step 1" in out, "the partial work must be preserved"
+    assert "incomplete reply" in out
+    assert "CUT OFF" in out
+
+
+async def test_refusal_is_marked_and_says_not_to_retry_verbatim(monkeypatch):
+    out = await _dispatch_with(monkeypatch, "I can't help with that.", "refusal")
+    assert "incomplete reply" in out
+    assert "decline again" in out
+
+
+async def test_end_turn_reply_is_returned_untouched(monkeypatch):
+    """A normal completion must not grow a scary marker — the common path stays clean."""
+    out = await _dispatch_with(monkeypatch, "Done: added /healthz and the tests pass.", "end_turn")
+    assert out == "Done: added /healthz and the tests pass."
+
+
+async def test_missing_stop_reason_is_returned_untouched(monkeypatch):
+    """An ACP agent that omits stopReason must not be treated as truncated."""
+    out = await _dispatch_with(monkeypatch, "fine", None)
+    assert out == "fine"
+
+
+async def test_cancelled_is_not_marked(monkeypatch):
+    """An operator who hit stop already knows — mirrors status.py's rule that a
+    cancellation is not a delegate failure."""
+    out = await _dispatch_with(monkeypatch, "partial", "cancelled")
+    assert out == "partial"
+
+
+async def test_empty_reply_at_the_limit_still_explains_itself(monkeypatch):
+    """A coder that produced nothing before hitting the cap would otherwise hand back an
+    empty string — the one case where silence is the whole message."""
+    out = await _dispatch_with(monkeypatch, "   ", "max_tokens")
+    assert out.startswith("[no reply —")
+    assert "output-token limit" in out

@@ -107,6 +107,15 @@ the way an unsolicited subagent *report* is excerpted (ADR 0070 D2, amended by
 #2363). Background vs foreground changes when the answer arrives, never how much
 of it you get.
 
+### When a coder's reply is cut short
+
+protoAgent never truncates a delegate's reply — but the delegate itself can stop
+early. A coding agent may hit its output-token limit mid-generation, or decline the
+request outright. Those replies come back with an explicit `[incomplete reply — …]`
+note appended, so the delegating agent can tell a truncated answer from a finished
+one and re-dispatch the remainder rather than acting on half a result. A normal
+completion carries no marker.
+
 ## Secrets
 
 Auth tokens / API keys are stored in the gitignored `config/secrets.yaml`, never
