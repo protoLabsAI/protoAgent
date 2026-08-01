@@ -1,7 +1,8 @@
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Spinner } from "@protolabsai/ui/data";
-import { Bot, CheckCircle2, Square, Trash2, XCircle } from "lucide-react";
+import { Button } from "@protolabsai/ui/primitives";
+import { Bot, Check, CheckCircle2, Copy, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
@@ -327,12 +328,44 @@ function BgJobRow({
             </ToolCardList>
           ) : null}
           {hasResult ? (
-            <div className="bg-jobs-result">
-              <Markdown>{job.result || ""}</Markdown>
-            </div>
+            <>
+              <div className="bg-jobs-resulthead">
+                <CopyResult text={job.result || ""} />
+              </div>
+              <div className="bg-jobs-result">
+                <Markdown>{job.result || ""}</Markdown>
+              </div>
+            </>
           ) : null}
         </div>
       ) : null}
     </li>
+  );
+}
+
+/** Copy a finished job's FULL result to the clipboard (#2352).
+ *
+ * The row already holds the whole thing — the panel hydrates from
+ * `GET /api/background/{id}`, not from the `background.completed` bus event, whose
+ * `result` is a 2000-char preview. So this copies `job.result` directly; there is no
+ * second fetch and nothing to re-truncate.
+ *
+ * Why it still earns its place now that a delegate's reply reaches the orchestrator
+ * whole (#2363): the agent gets the reply, the *operator* often wants the artifact —
+ * to paste a coder's diff into a review, or keep a research report. Selecting several
+ * thousand words out of a scrolling markdown pane by hand is the friction.
+ */
+function CopyResult({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <Button size="sm" variant="ghost" onClick={copy} aria-label="Copy result to clipboard">
+      {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}
+    </Button>
   );
 }

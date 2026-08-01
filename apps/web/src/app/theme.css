@@ -293,6 +293,14 @@
 .bg-jobs-fail {
   color: var(--pl-color-status-error, #e5484d);
 }
+/* Action row above a finished job's result — currently just Copy (#2352). Sits between
+   the tool feed and the result so it can't scroll away inside .bg-jobs-result's own
+   overflow container, which is the whole point of a copy affordance on a long report. */
+.bg-jobs-resulthead {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px 0;
+}
 .bg-jobs-result {
   padding: 4px 12px 12px 33px;
   font-size: 13px;
@@ -320,8 +328,13 @@
   overscroll-behavior: contain;
 }
 /* Divider when a result is shown beneath the tool feed. */
-.bg-jobs-feed + .bg-jobs-result {
+.bg-jobs-feed + .bg-jobs-resulthead {
   border-top: 1px solid var(--border, #2a2a31);
+}
+/* The action row sits directly above the result, so the result never draws its own rule
+   when the row is present — that would double the separator. */
+.bg-jobs-resulthead + .bg-jobs-result {
+  border-top: none;
 }
 
 .topbar {
