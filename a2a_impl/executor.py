@@ -414,14 +414,25 @@ class ProtoAgentExecutor(AgentExecutor):
             nonlocal _text_buf, _answer_started
             if not _text_buf:
                 return
+            chunk = _text_buf
             await updater.add_artifact(
-                [_text_part(_text_buf)],
+                [_text_part(chunk)],
                 artifact_id=answer_aid,
                 append=_answer_started,
                 last_chunk=False,
             )
             _answer_started = True
             _text_buf = ""
+            # Realtime tap (#2361). The artifact frames above go to whoever holds THIS
+            # turn's A2A stream — for a server-fired turn that is the server itself, so
+            # an open console sees nothing for the whole turn. Mirror each flushed chunk
+            # onto the progress hook so a host can republish it. Already batched to
+            # _FLUSH_CHARS, so this is ~one frame per paragraph, not per token.
+            _notify_progress(
+                context.context_id,
+                context.task_id,
+                {"phase": "text", "text": chunk, "origin": _origin},
+            )
 
         async def _finalize(final_text: str) -> None:
             """Close the answer artifact + emit the cost/context DataParts.
@@ -572,7 +583,14 @@ class ProtoAgentExecutor(AgentExecutor):
                         )
                     # Realtime tap (ADR 0051) — surface the tool frame to any host hook.
                     if isinstance(payload, dict):
-                        _notify_progress(context.context_id, context.task_id, {"phase": event_type, **payload})
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            # origin AFTER the payload spread: it is the frame's own
+                            # provenance and a tool result carrying an "origin" key of its
+                            # own must not be able to masquerade as one.
+                            {"phase": event_type, **payload, "origin": _origin},
+                        )
 
                 elif event_type == "component":
                     # A renderable UI component (ADR 0051 Slice 2) — emit it as a

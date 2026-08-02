@@ -590,6 +590,66 @@ def _record_a2a_telemetry(outcome) -> None:
         log.exception("[trace_export] failed to export turn %s", outcome.task_id)
 
 
+# How much of one streamed narration chunk rides the bus. The executor already batches
+# text to its own flush threshold, so this is a backstop against a single pathological
+# flush (a tool that returns a novel, echoed into the answer), not the normal path.
+_CHAT_PROGRESS_TEXT_LIMIT = 2000
+# Tool output on a live card is a preview — the full result is in the turn's history.
+_CHAT_PROGRESS_OUTPUT_LIMIT = 500
+
+
+def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
+    """Republish a SERVER-FIRED turn's frames into its chat session as ``chat.progress``
+    (#2361), so an open console can watch the turn happen instead of staring at a typing
+    indicator for minutes.
+
+    A scheduled fire, a watch reaction, or a background push-resume runs by self-POSTing
+    into a session. The server holds that A2A stream, so the browser — which only renders
+    turns IT streamed — sees nothing until the terminal ``chat.resumed`` lands. #1767 gave
+    these turns a typing indicator; this gives them their content.
+
+    **Gated on origin, not on context shape.** A turn the browser is streaming itself must
+    NOT be republished — the console would render every tool card and narration chunk
+    twice, once from its own stream and once from the bus. ``is_autonomous_origin`` covers
+    exactly the set of turns nobody is holding a stream for, and the executor stamps each
+    frame with the origin it read from request metadata.
+
+    Published UNRETAINED: these frames are live-only. The replay ring holds 128 events
+    total, so one long turn would evict the durable events a reconnecting client needs —
+    and a replayed progress frame from a finished turn renders work that is already over.
+
+    Best-effort — never raises into the executor.
+    """
+    from server.chat import is_autonomous_origin  # local: server.chat imports heavy graph deps
+
+    if not is_autonomous_origin(frame.get("origin")):
+        return
+    phase = frame.get("phase")
+    if phase == "text":
+        text = str(frame.get("text") or "")
+        if not text:
+            return
+        data = {"phase": "text", "text": text[:_CHAT_PROGRESS_TEXT_LIMIT]}
+    elif phase in ("tool_start", "tool_end"):
+        out = frame.get("output")
+        if isinstance(out, str) and len(out) > _CHAT_PROGRESS_OUTPUT_LIMIT:
+            out = out[:_CHAT_PROGRESS_OUTPUT_LIMIT] + "…"
+        data = {
+            "phase": phase,
+            "tool": frame.get("name"),
+            "tool_call_id": frame.get("id"),
+            "output": out,
+            "error": bool(frame.get("error")),
+        }
+    else:
+        return
+    _event_bus.publish(
+        "chat.progress",
+        {"session_id": context_id, "task_id": task_id, **data},
+        retain=False,
+    )
+
+
 def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
     """Per-frame progress hook (ADR 0051). A HITL pause (``input_required``) is published
     for EVERY context as ``turn.input_required`` so a fleet console can surface "needs your
@@ -616,6 +676,7 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
         # Falls through: a resumed BACKGROUND turn still records its task id below.
         _event_bus.publish("turn.resumed", {"task_id": task_id, "context_id": context_id})
     if not context_id.startswith("background:"):
+        _publish_chat_progress(context_id, task_id, frame)
         return
     mgr = getattr(STATE, "background_mgr", None)
     if mgr is None:

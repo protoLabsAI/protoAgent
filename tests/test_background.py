@@ -807,12 +807,110 @@ class TestProgressHook:
         assert data["job_id"] == jid and data["tool"] == "web_search" and data["phase"] == "tool_start"
 
     def test_non_background_context_ignored(self, monkeypatch):
+        """An OPERATOR-driven chat turn publishes nothing: the browser is streaming that
+        turn itself, so republishing would render every tool card twice (#2361)."""
         import server.a2a as a2a
 
         published: list = []
-        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None, **kw: published.append((t, d)))
         a2a._a2a_progress("some-chat-session", "task-1", {"phase": "tool_start", "name": "x"})
         assert published == []
+        # …and explicitly so for a turn the operator started over plain A2A.
+        a2a._a2a_progress("chat-1", "task-1", {"phase": "text", "text": "hi", "origin": "a2a"})
+        assert published == []
+
+
+class TestChatProgress:
+    """#2361 — a SERVER-FIRED turn (scheduler / watch / background push-resume) self-POSTs
+    into a chat session and the server holds its A2A stream, so the browser sees nothing
+    for the whole turn. Its frames are republished on the bus as ``chat.progress``."""
+
+    @staticmethod
+    def _capture(monkeypatch):
+        import server.a2a as a2a
+
+        published: list = []
+        monkeypatch.setattr(
+            a2a._event_bus, "publish", lambda t, d=None, **kw: published.append((t, d, kw))
+        )
+        return a2a, published
+
+    def test_server_fired_text_frame_is_republished(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7", "task-9", {"phase": "text", "text": "Ball secured.", "origin": "scheduler"}
+        )
+        assert len(published) == 1
+        topic, data, kw = published[0]
+        assert topic == "chat.progress"
+        assert data == {"session_id": "chat-7", "task_id": "task-9", "phase": "text", "text": "Ball secured."}
+
+    def test_server_fired_tool_frame_is_republished(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "task-9",
+            {"phase": "tool_start", "id": "tc1", "name": "roll_block", "origin": "watch"},
+        )
+        topic, data, _ = published[0]
+        assert topic == "chat.progress"
+        assert data["tool"] == "roll_block" and data["tool_call_id"] == "tc1"
+
+    def test_published_unretained(self, monkeypatch):
+        """Live-only: the 128-event replay ring must not fill with one turn's progress,
+        and a reconnecting tab must not render frames from a turn that already ended."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress("chat-7", "task-9", {"phase": "text", "text": "x", "origin": "scheduler"})
+        assert published[0][2] == {"retain": False}
+
+    def test_every_autonomous_origin_is_covered(self, monkeypatch):
+        """The gate is the shared autonomy set — a new server-fired origin gets live
+        progress for free rather than silently staying invisible."""
+        from server.chat import _AUTONOMOUS_ORIGINS
+
+        for origin in _AUTONOMOUS_ORIGINS:
+            a2a, published = self._capture(monkeypatch)
+            a2a._a2a_progress("chat-7", "t", {"phase": "text", "text": "x", "origin": origin})
+            assert len(published) == 1, f"{origin} produced no chat.progress"
+
+    def test_empty_text_is_not_published(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress("chat-7", "t", {"phase": "text", "text": "", "origin": "scheduler"})
+        assert published == []
+
+    def test_unknown_phase_is_not_published(self, monkeypatch):
+        """turn_started / reasoning / anything new must not leak a malformed frame."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress("chat-7", "t", {"phase": "turn_started", "origin": "scheduler"})
+        assert published == []
+
+    def test_long_tool_output_is_previewed(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "t",
+            {"phase": "tool_end", "id": "tc1", "name": "read", "output": "z" * 5000, "origin": "scheduler"},
+        )
+        out = published[0][1]["output"]
+        assert len(out) < 5000 and out.endswith("…")
+
+    def test_background_context_still_takes_the_job_path(self, tmp_path, monkeypatch):
+        """A background:* context is a JOB card, not a chat session — it must keep
+        publishing background.progress and must not also emit chat.progress."""
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None, **kw: published.append((t, d)))
+        a2a._a2a_progress(
+            f"background:{jid}", "t", {"phase": "tool_start", "id": "c", "name": "x", "origin": "background"}
+        )
+        assert [t for t, _ in published] == ["background.progress"]
 
 
 class TestHitlTurnEvents:

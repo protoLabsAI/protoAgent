@@ -937,6 +937,17 @@ def _truthy(value) -> bool:
     return bool(value)
 
 
+def is_autonomous_origin(origin: object) -> bool:
+    """Whether ``origin`` names a SERVER-FIRED turn — one nobody is watching or holding a
+    stream for (see ``_AUTONOMOUS_ORIGINS``).
+
+    Public because two decisions now hinge on the same set and must not drift: this
+    module's HITL auto-answer (an unattended turn must not park for a human), and
+    ``server.a2a``'s live-progress republish (#2361 — a turn the browser is streaming
+    itself must NOT also come over the bus, or every tool card renders twice)."""
+    return str(origin or "").strip().lower() in _AUTONOMOUS_ORIGINS
+
+
 def _is_autonomous(request_metadata: dict | None) -> bool:
     """Whether this turn runs with no operator watching (see _AUTONOMOUS_ORIGINS).
 
@@ -947,7 +958,7 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
     md = request_metadata or {}
     if _truthy(md.get("unattended")):
         return True
-    return ((md.get("origin") or "").strip().lower()) in _AUTONOMOUS_ORIGINS
+    return is_autonomous_origin(md.get("origin"))
 
 
 def _awaiting_self_resume(session_id: str) -> bool:

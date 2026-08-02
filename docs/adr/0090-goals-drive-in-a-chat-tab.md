@@ -31,7 +31,9 @@ state; it drove on the session's *next* turn. We then made the set **kick** an i
 is **headless** — it runs in the `operator` session the operator isn't viewing. The work
 happened (tasks filed, background jobs completed) but **invisibly**: the browser never opens
 that turn's stream, and `ServerTurnWatch` only shows a typing indicator, with the final answer
-arriving later via `chat.resumed` — not a live stream. So a panel-set goal effectively
+arriving later via `chat.resumed` — not a live stream. *(Since #2361 a server-fired turn does
+republish its tool + narration frames as `chat.progress`, so it is no longer a blackout — but
+it is still a republish, not the turn's own stream, which is why D1 stands.)* So a panel-set goal effectively
 "disappeared" into the background. The fix is to give the goal a **visible, focused surface**
 to drive in.
 

@@ -6,6 +6,7 @@ import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
 import { resumedTurnRender } from "./resumedTurn";
+import { isLiveServerTurn } from "./serverTurnProgress";
 
 // Live surfacing of a `wait` / scheduled RESUME (ADR 0053, bd-k02) into the chat tab.
 // A `wait` yields and is re-triggered server-side by the scheduler, which fires a fresh
@@ -15,6 +16,12 @@ import { resumedTurnRender } from "./resumedTurn";
 // to that session as a normal assistant message (DISPLAY-ONLY — the backend owns
 // conversation history, so this never double-feeds the model) and toast. Dedup by task_id
 // so an EventSource replay (ADR 0039 ring buffer) on reconnect is idempotent.
+//
+// When the turn streamed live (#2361), ServerTurnWatch has already grown a preview bubble
+// for it. This event carries the AUTHORITATIVE final answer, so it REPLACES that bubble
+// in place rather than appending a second one — otherwise the operator ends a turn looking
+// at the same content twice, once mid-flight and once complete. Matched by the deterministic
+// live-message id (task id, else session), so the replacement can't grab a neighbouring turn.
 //
 // A FAILED resume renders as a failure, not as an answer. These turns don't stream to the
 // browser, so this event is the operator's only live view of them — and a crashed one used
@@ -38,15 +45,29 @@ export function ChatResumeWatch() {
       const target = chatStore.getSnapshot().sessions.find((s) => s.id === render.session);
       if (!target) return; // chat not open in this window — nothing to surface here
 
+      const liveIdx = target.messages.findIndex((m) =>
+        isLiveServerTurn(m, render.taskId, render.session),
+      );
+      const live = liveIdx >= 0 ? target.messages[liveIdx] : null;
       const msg: ChatMessage = {
-        id: `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: live?.id ?? `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         role: "assistant",
         content: render.content,
-        createdAt: Date.now(),
+        createdAt: live?.createdAt ?? Date.now(),
         status: render.status,
         taskId: render.taskId || undefined,
+        // Keep the tool cards the live view already rendered — the resume payload carries
+        // the final TEXT only, so dropping these would erase the turn's visible work.
+        // `parts` is deliberately not carried over: it interleaves the streamed text, which
+        // the authoritative `content` now supersedes, so the message falls back to the
+        // grouped tools→content layout history-loaded messages already use.
+        toolCalls: live?.toolCalls,
       };
-      chatStore.updateMessages(render.session, [...target.messages, msg]);
+      const next =
+        liveIdx >= 0
+          ? target.messages.map((m, i) => (i === liveIdx ? msg : m))
+          : [...target.messages, msg];
+      chatStore.updateMessages(render.session, next);
       toast(render.toast);
       notifyIfHidden(render.notify.title, render.notify.body);
     });

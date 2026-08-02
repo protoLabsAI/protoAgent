@@ -121,6 +121,26 @@ for a registered webhook (on every status/artifact frame, including terminal). N
 - **One general seam, many uses.** The progress hook fires for every turn; today only the
   `background:` filter consumes it, but `turn.started`/`turn.progress` for all contexts is a
   trivial extension (Slice 3).
+
+  **Slice 3 landed (#2361) — `chat.progress`.** A second host filter republishes a
+  SERVER-FIRED turn's frames into its chat session, so a scheduled fire / watch reaction /
+  background push-resume is watchable while it runs instead of showing a typing indicator
+  (#1767) for minutes and then the whole answer at once. Three things the shape of the
+  extension turned on:
+
+  * **Gate on ORIGIN, not on context shape.** A turn the browser is streaming itself must
+    never be republished or every tool card renders twice. The gate is
+    `server.chat.is_autonomous_origin` — the same set that decides HITL auto-answer, made
+    public precisely so the two can't drift.
+  * **Narration needed a new tap.** Only `tool_start`/`tool_end` went through the hook;
+    answer text went straight to the artifact stream. `_flush_text` now also notifies, which
+    is where the *substance* of a turn lives — tool cards alone prove the agent is busy, not
+    what it is doing. It is already batched to `_FLUSH_CHARS`, so this is ~a frame per
+    paragraph, not per token.
+  * **Published UNRETAINED** (`EventBus.publish(..., retain=False)`, added for this). The
+    replay ring holds 128 events total, so one long turn's progress would evict the durable
+    events a reconnecting client needs — and replaying a progress frame from a finished turn
+    renders work that is already over.
 - **Component rendering rides the proven DataPart pipeline** — new widgets are a MIME + a
   registry entry, not new transport.
 - **Cost note.** The progress hook is a no-op unless a host hook is registered; the

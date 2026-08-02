@@ -78,11 +78,24 @@ class EventBus:
         except RuntimeError:
             pass
 
-    def publish(self, event: str, data: dict[str, Any] | None = None) -> None:
+    def publish(self, event: str, data: dict[str, Any] | None = None, *, retain: bool = True) -> None:
         """Fan a topic out to SSE subscribers + matching in-process handlers (ADR 0039).
 
         Fire-and-forget: a handler that raises is logged and isolated — it can never
         break the publisher or another subscriber.
+
+        ``retain=False`` delivers the event live but keeps it OUT of the replay ring —
+        for high-rate, live-only topics (per-frame turn progress) whose value expires
+        the moment the turn ends. Two reasons, both load-bearing:
+
+        * the ring holds 128 events total, so one long turn's progress would evict the
+          durable events a reconnecting client actually needs to catch up on
+          (``chat.resumed``, ``background.completed``);
+        * replaying a stale progress frame is worse than dropping it — a tab that
+          reconnects after the turn finished would render tool cards for work that is
+          already over.
+
+        Retained (the default) is right for anything a late subscriber must not miss.
 
         Thread-safe: asyncio queues are not, so an off-loop call (a plugin middleware
         emitting from a sync hook LangGraph ran in a worker thread) is rerouted onto
@@ -94,16 +107,20 @@ class EventBus:
         except RuntimeError:  # off-loop (e.g. a sync middleware hook in a worker thread)
             loop = self._loop
             if loop is not None and not loop.is_closed():
-                loop.call_soon_threadsafe(self._publish_on_loop, event, data)
+                loop.call_soon_threadsafe(self._publish_on_loop, event, data, retain)
                 return
             # No live loop anywhere (sync tests, CLI): deliver inline. Safe — without
             # a loop there are no SSE queues to corrupt, and sync handlers run fine.
-        self._publish_on_loop(event, data)
+        self._publish_on_loop(event, data, retain)
 
-    def _publish_on_loop(self, event: str, data: dict[str, Any] | None) -> None:
+    def _publish_on_loop(self, event: str, data: dict[str, Any] | None, retain: bool = True) -> None:
         self._seq += 1
         payload = {"event": event, "data": data or {}, "seq": self._seq}
-        self._ring.append(payload)
+        # seq still advances for an unretained event: it is a global publish counter the
+        # SSE stream reports, not a ring index, so a client's `since` cursor stays honest
+        # about what it has already seen rather than silently rewinding.
+        if retain:
+            self._ring.append(payload)
 
         # SSE consoles — drop-oldest on overflow.
         for q in list(self._subscribers):

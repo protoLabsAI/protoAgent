@@ -261,3 +261,52 @@ def test_seq_stays_monotonic_across_threads():
 
     got = asyncio.run(run())
     assert [p["seq"] for p in got] == [1, 2, 3, 4, 5]
+
+
+def test_unretained_event_reaches_live_subscribers_but_not_the_ring():
+    """#2361: per-frame turn progress is live-only. It must still fan out to everyone
+    connected NOW, while staying out of the replay ring — the ring is 128 events, so one
+    long turn's progress would evict the durable events a reconnecting client needs, and a
+    replayed progress frame renders work that already finished."""
+
+    async def run():
+        bus = EventBus()
+        sub = bus.subscribe()
+        t = asyncio.ensure_future(sub.__anext__())  # prime: registers the queue
+        await asyncio.sleep(0)
+        bus.publish("chat.progress", {"i": 1}, retain=False)
+        live = await asyncio.wait_for(t, timeout=1)
+        await sub.aclose()
+        return live, list(bus._ring)
+
+    live, ring = asyncio.run(run())
+    assert live["event"] == "chat.progress"  # delivered live
+    assert ring == []  # but never retained
+
+
+def test_unretained_event_still_advances_seq():
+    """`seq` is a global publish counter the SSE stream reports, not a ring index. If an
+    unretained publish didn't advance it, a client's `since` cursor would rewind and
+    replay events it had already processed."""
+
+    async def run():
+        bus = EventBus()
+        bus.publish("durable.1", {})
+        bus.publish("chat.progress", {}, retain=False)
+        bus.publish("durable.2", {})
+        sub = bus.subscribe(since=1)
+        replayed = [await asyncio.wait_for(sub.__anext__(), timeout=1)]
+        await sub.aclose()
+        return replayed
+
+    replayed = asyncio.run(run())
+    # Only the two durable events are in the ring; the one after seq 1 is durable.2 at seq 3.
+    assert [p["event"] for p in replayed] == ["durable.2"]
+    assert replayed[0]["seq"] == 3
+
+
+def test_retain_defaults_true():
+    """Every existing caller must keep its replay semantics untouched."""
+    bus = EventBus()
+    bus.publish("durable", {"x": 1})
+    assert [p["event"] for p in bus._ring] == ["durable"]
