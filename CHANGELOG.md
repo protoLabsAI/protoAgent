@@ -11,6 +11,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.124.0] - 2026-08-03
+
+### Added
+- **Copy a background job's full result from the Background-agents panel (#2352).**
+  A finished job's expanded row gains a "Copy" button that writes the **whole** report to
+  the clipboard — the panel hydrates from `GET /api/background/{id}`, so it copies the
+  full text, not the 2,000-char `background.completed` preview. Reported by an operator
+  hand-selecting several thousand words of a delegate's reply out of a scrolling markdown
+  pane; the button sits above the result rather than inside it, so it stays reachable on a
+  long report instead of scrolling away with the text.
+
+### Fixed
+- **A coding-agent delegate whose reply was cut short now says so, instead of handing back a partial answer that looks finished (#2352).**
+  `AcpClient` records a `stopReason` on every turn — including `max_tokens`, the model
+  stopping mid-generation at its output limit — and nothing in production read it.
+  `delegate_to` returned the truncated text with no marker, so the orchestrating agent
+  could not tell a cut-off reply from a complete one and acted on half an answer. ACP
+  delegate replies that end in `max_tokens` or `refusal` now carry an explicit
+  `[incomplete reply — …]` note telling the caller what happened and what to do about it
+  (re-dispatch the remainder / restate the task). `end_turn`, `cancelled`, and a missing
+  stop reason are untouched — a normal completion doesn't grow a scary marker, and an
+  operator who hit stop already knows.
+
+- **A server-fired turn that fails now says so in chat, instead of trailing off or vanishing (#2360).**
+  Scheduled fires, watch reactions and background push-resumes never stream to the
+  browser, so the `chat.resumed` push is the operator's only live view of them — and it
+  carried no terminal state. A crashed turn arrived as an ordinary answer that stopped
+  mid-sentence, indistinguishable from the agent finishing; one that crashed *before*
+  saying anything hit an empty-text guard and was dropped entirely, leaving no trace that
+  a turn had ever run while the reason sat unread on the task's terminal status. The push
+  now carries `state` + `error`, the guard applies only to a completed turn, and a failed
+  resume renders as a failure with the reason the server already recorded.
+
+- **A server-fired turn is now watchable while it runs, instead of a typing indicator and then the whole answer at once (#2361).**
+  Scheduled fires, watch reactions and background push-resumes self-POST into a chat
+  session; the server holds that A2A stream, so the browser — which only renders turns it
+  streamed itself — showed *"responding to a background trigger…"* and nothing else. One
+  reported turn ran three minutes across 25 model calls and dozens of tool calls with no
+  visible output, indistinguishable from a hang. Those turns now republish their tool
+  frames **and their narration** as `chat.progress`, which the console folds into a growing
+  assistant bubble; the terminal `chat.resumed` then replaces that preview in place rather
+  than appending a duplicate. Gated on the turn's origin, so a turn the browser is
+  streaming itself is never double-rendered, and published unretained so a long turn can't
+  flush the event bus's replay ring.
+
+- **A background delegate's reply now reaches the orchestrator whole, instead of being cut at 3,000 characters (#2363).**
+  `delegate_to(background=True)` results were drained through ADR 0070 D2's report
+  treatment — excerpted to `_BG_RESULT_CAP` with a "searchable via `memory_recall`"
+  pointer. That cap is right for an *unsolicited subagent report*, but a delegate's
+  reply is the **deliverable** the caller dispatched and is waiting on, so truncating
+  it destroyed the work product and left operators hand-copying the rest out of the
+  console (#2352). Foreground `delegate_to` was never capped, so the same reply arrived
+  differently depending on whether the orchestrator held its turn open — background vs
+  foreground is a transport choice, not a content policy. `spawn_work` jobs
+  (`delegate_to`, `knowledge_ingest`) are now stamped `deterministic` at creation and
+  delivered in full; `spawn` subagent-turn reports keep the D2 excerpt-plus-pointer
+  shape unchanged. This also retires a false pointer (#2362): the truncation branch is
+  now reachable only by the jobs that are actually indexed, so the notification can no
+  longer send the model to an empty `memory_recall`.
+
 ## [0.123.0] - 2026-07-31
 
 ### Changed

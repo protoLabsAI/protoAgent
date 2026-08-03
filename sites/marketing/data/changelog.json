@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.124.0",
+    "date": "2026-08-03",
+    "changes": [
+      "Copy a background job's full result from the Background-agents panel (#2352).",
+      "A coding-agent delegate whose reply was cut short now says so, instead of handing back a partial answer that looks finished (#2352).",
+      "A server-fired turn that fails now says so in chat, instead of trailing off or vanishing (#2360).",
+      "A server-fired turn is now watchable while it runs, instead of a typing indicator and then the whole answer at once (#2361).",
+      "A background delegate's reply now reaches the orchestrator whole, instead of being cut at 3,000 characters (#2363)."
+    ]
+  },
+  {
     "version": "v0.123.0",
     "date": "2026-07-31",
     "changes": [
