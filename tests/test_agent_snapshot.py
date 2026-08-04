@@ -28,12 +28,19 @@ from graph.snapshot_op import (
 )
 
 # Distinctive values that must never survive an export. Each is shaped like the real thing
-# so the pattern layer is genuinely exercised, not just the structural one.
-GATEWAY_KEY = "sk-proj-LEAKCANARY000000000000000000000000"
-MCP_TOKEN = "ghp_LEAKCANARY1111111111111111111111111111"
-PLUGIN_SECRET = "xoxb-LEAKCANARY-2222222222-3333333333"
-PASTED_IN_SOUL = "sk-ant-LEAKCANARY44444444444444444444444444"
-PASTED_IN_FIELD = "AKIALEAKCANARY5555XY"  # AKIA + exactly 16 upper/digit chars
+# so the PATTERN layer is genuinely exercised, not just the structural one.
+#
+# Assembled at runtime rather than written as literals: a real-looking credential committed
+# to the tree trips the repo's gitleaks gate (it caught this file's AWS canary on the first
+# CI run). The alternative — allowlisting this path — would keep the literals readable but
+# blind the gate to a genuine secret accidentally added HERE later, which is a bad trade in
+# the one file whose whole job is proving secrets don't escape.
+_C = "LEAKCANARY"
+GATEWAY_KEY = "sk-" + "proj-" + _C + "0" * 24
+MCP_TOKEN = "ghp_" + _C + "1" * 30
+PLUGIN_SECRET = "xoxb-" + _C + "-2222222222-3333333333"
+PASTED_IN_SOUL = "sk-" + "ant-" + _C + "4" * 26
+PASTED_IN_FIELD = "AKIA" + _C + "5555XY"  # AKIA + exactly 16 upper/digit chars
 ALL_CANARIES = (GATEWAY_KEY, MCP_TOKEN, PLUGIN_SECRET, PASTED_IN_SOUL, PASTED_IN_FIELD)
 
 SECRET_KEYS = (("model", "api_key"), ("auth", "token"), ("discord", "bot_token"))
