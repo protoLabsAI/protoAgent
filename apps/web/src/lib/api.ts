@@ -1,4 +1,5 @@
 import type {
+  SnapshotReview,
   AcpAgent,
   ActivityHistory,
   AgentConfig,
@@ -1169,6 +1170,27 @@ export const api = {
       method: "POST",
       body: { api_base: apiBase, api_key: apiKey },
     });
+  },
+
+  // ── Agent snapshot (ADR 0091 Slice 1) ──
+  /** Review WITHOUT building the download: what would be stripped, what the target must
+   *  re-supply, what the pattern sweep matched. The export is meant to leave the machine,
+   *  so the console shows this first rather than handing over a zip nobody has read. */
+  snapshotReview() {
+    return request<SnapshotReview>("/api/agent/export", { method: "POST", body: { dry_run: true } });
+  },
+  /** The snapshot itself. Returns the Blob plus the server's filename — the name carries the
+   *  agent + timestamp, and re-deriving it client-side would drift from the artifact. */
+  async exportSnapshot(): Promise<{ blob: Blob; filename: string }> {
+    const res = await fetch(apiUrl("/api/agent/export"), {
+      method: "POST",
+      headers: applyAuth(new Headers({ "content-type": "application/json" })),
+      body: JSON.stringify({ dry_run: false }),
+    });
+    if (!res.ok) throw new Error(`export failed: ${res.status}`);
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = /filename="([^"]+)"/.exec(disposition);
+    return { blob: await res.blob(), filename: match?.[1] || "agent-snapshot.zip" };
   },
 
   // Real completion probe — the true auth check (unlike `models`, which only

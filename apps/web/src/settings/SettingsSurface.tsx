@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
 import { visibleSections } from "./sectionGate";
 import type { LucideIcon } from "lucide-react";
@@ -21,6 +21,7 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useUI } from "../state/uiStore";
 import { DelegatesSection } from "./DelegatesSection";
+import { SnapshotPanel } from "./SnapshotPanel";
 import { FleetSurface } from "./FleetSurface";
 import { KeybindingsPanel } from "./KeybindingsPanel";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
@@ -106,6 +107,9 @@ const AGENT_SECTIONS: Section[] = [
   // id falls back to the first visible section instead of a blank pane.
   { id: "secrets", label: "Secrets", icon: Lock, flag: "secrets-panel", render: () => <SecretsPanel /> },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
+  // Last in the group on purpose: a snapshot exports what every section above configures
+  // (identity, model, behavior, plugins) — it IS this agent's definition (ADR 0091).
+  { id: "snapshot", label: "Snapshot", icon: Package, render: () => <SnapshotPanel /> },
 ];
 
 // CAPABILITIES — what the agent is wired to (rich bespoke managers). Each manager owns its own

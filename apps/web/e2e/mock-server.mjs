@@ -683,6 +683,32 @@ const server = createServer(async (req, res) => {
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
     }
+    // Agent snapshot export (ADR 0091). Two modes on one route: dry_run → the JSON review,
+    // otherwise the zip as an attachment. The review deliberately carries BOTH finding kinds
+    // so the panel's credential-vs-machine-path split is exercised end to end.
+    if (pathname === "/api/agent/export" && req.method === "POST") {
+      const body = await readBody(req);
+      const review = {
+        filename: "vera-snapshot-20260804-120000.zip",
+        bytes: 4321,
+        required_secrets: [
+          { name: "model.api_key", kind: "config", description: "Gateway key.", was_set: true },
+          { name: "discord.bot_token", kind: "plugin", description: "Declared by discord.", was_set: false },
+          { name: "mcp.github.env.GITHUB_TOKEN", kind: "mcp_env", description: "For MCP github.", was_set: true },
+        ],
+        pattern_redactions: { "SOUL.md": ["anthropic-key"], "operator.project_dir": ["home-path"] },
+        notes: ["skipped unreadable skill asset: instance/logo.png"],
+      };
+      if (body?.dry_run) return sendJson(res, review);
+      // A real (tiny) zip: the console only needs bytes + the Content-Disposition name.
+      const zip = Buffer.from("UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==", "base64");
+      res.writeHead(200, {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="${review.filename}"`,
+        "x-snapshot-review": JSON.stringify({ required_secrets: review.required_secrets.map((s) => s.name) }),
+      });
+      return res.end(zip);
+    }
     // Mid-turn steering enqueue — accept + echo (the console ignores the body).
     if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname) && req.method === "POST") {
       const body = await readBody(req);

@@ -131,6 +131,9 @@ response differs:
 Redaction of free text is a safety net, not a guarantee — read the artifact before you
 publish it.
 
+The same export is in the console at **Settings ▸ Agent ▸ Snapshot**, which shows the review
+first and downloads the zip on a second click.
+
 ## Roadmap
 
 Later slices of ADR 0075 add a shared operation layer so every verb here has a matching

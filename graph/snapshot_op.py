@@ -105,9 +105,13 @@ class SnapshotResult:
     filename: str
     manifest: dict
     required_secrets: list[SecretRequirement] = field(default_factory=list)
-    #: Redaction kinds the PATTERN sweep matched, by where they were found. Non-empty means
-    #: something credential-shaped was sitting in free text — worth an operator's eyes even
-    #: though it has already been scrubbed.
+    #: Redaction kinds the PATTERN sweep matched, keyed by WHERE — a dotted config path
+    #: (``operator.project_dir``, ``notes.scratch[0]``) or a filename (``SOUL.md``). Non-empty
+    #: means something was scrubbed from free text and is worth an operator's eyes.
+    #:
+    #: The keys are deliberately config paths, not opaque labels: import (#2104) can prompt
+    #: for exactly these without re-deriving them by scanning the config for redaction
+    #: markers. A `home-path` hit is the machine-local value the target must re-point.
     pattern_redactions: dict[str, list[str]] = field(default_factory=dict)
     #: Human-facing notes (skipped files, absent optional pieces).
     notes: list[str] = field(default_factory=list)

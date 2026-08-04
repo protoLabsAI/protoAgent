@@ -61,6 +61,8 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     "Knowledge",
     "Secrets", // ADR 0080 — external secrets manager
     "Plugins",
+    // Last in the Agent group: it EXPORTS what every section above configures (ADR 0091).
+    "Snapshot",
     // Capabilities group (sharing knobs live on each manager's chip, not a separate panel)
     "Tools",
     "MCP",

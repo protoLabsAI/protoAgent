@@ -604,6 +604,27 @@ export type ComponentSpec = { component: string; props: Record<string, unknown> 
 // order — so a pre-tool preamble renders ABOVE the tool cards and post-tool text
 // below them. `ids` reference the canonical entries in `ChatMessage.toolCalls`, so
 // live status + subagent nesting stay in one place (resolved at render).
+/** One credential the target must re-supply after importing a snapshot (ADR 0091 D2).
+ *  Names and descriptions only — a value never crosses this boundary. */
+export type SnapshotSecret = {
+  name: string;
+  kind: "config" | "mcp_env" | "mcp_header" | "plugin" | string;
+  description: string;
+  /** Whether the EXPORTING agent had one. False = a plugin declares it but nobody filled
+   *  it in, so it is worth asking for but wasn't in use here. */
+  was_set: boolean;
+};
+
+/** The dry-run review of an agent snapshot export. */
+export type SnapshotReview = {
+  filename: string;
+  bytes: number;
+  required_secrets: SnapshotSecret[];
+  /** Pattern-sweep hits keyed by where they were found (`operator.project_dir`, `SOUL.md`). */
+  pattern_redactions: Record<string, string[]>;
+  notes: string[];
+};
+
 export type ChatPart =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
