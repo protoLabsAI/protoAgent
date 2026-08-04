@@ -21,7 +21,7 @@ def run_snapshot_cli(argv: list[str]) -> int:
         prog="protoagent agent",
         description="Export this agent as a portable, secret-free snapshot (ADR 0091).",
     )
-    sub = parser.add_subparsers(dest="cmd", metavar="<export>")
+    sub = parser.add_subparsers(dest="cmd", metavar="<export|import>")
     p_export = sub.add_parser("export", help="Write a secret-free snapshot zip")
     p_export.add_argument(
         "-o",
@@ -34,7 +34,29 @@ def run_snapshot_cli(argv: list[str]) -> int:
         action="store_true",
         help="Print the review — what is stripped, what the target must supply — and write nothing.",
     )
+    p_import = sub.add_parser("import", help="Stand up a fresh agent from a snapshot zip")
+    p_import.add_argument("zip", help="Path to the snapshot zip")
+    p_import.add_argument("--name", default="", help="Name for the new agent (default: the snapshot's)")
+    p_import.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan — plugins that would be installed, capabilities granted — and change nothing.",
+    )
+    p_import.add_argument(
+        "--yes",
+        action="store_true",
+        help="Acknowledge the plan non-interactively. Applying a snapshot RUNS the plugin code it names.",
+    )
+    p_import.add_argument(
+        "--secret",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Supply a required credential (repeatable). Values are written 0600 to the new agent only.",
+    )
     args = parser.parse_args(argv)
+    if args.cmd == "import":
+        return _cmd_import(args)
     if args.cmd != "export":
         parser.print_help()
         return 2
@@ -100,3 +122,101 @@ def run_snapshot_cli(argv: list[str]) -> int:
     note(f"Wrote {out}")
     note("Read REVIEW.md inside before publishing — pattern redaction is a safety net, not a guarantee.")
     return 0
+
+
+def _cmd_import(args) -> int:
+    """`protoagent agent import <zip>` — inspect, show the plan, then apply on acknowledgement.
+
+    The plan is printed BEFORE anything is written, every time, including with ``--yes``:
+    the point is that the operator (or the log of a scripted run) has a record of which
+    URLs were about to be executed, not just that someone said yes.
+    """
+    import sys
+    from pathlib import Path
+
+    from graph.snapshot_import import SnapshotError, apply_snapshot, inspect_snapshot
+
+    def out(line: str = "") -> None:
+        print(line, file=sys.stderr)
+
+    src = Path(args.zip).expanduser()
+    if not src.exists():
+        out(f"error: no such file: {src}")
+        return 1
+    data = src.read_bytes()
+
+    try:
+        from graph.plugins.installer import configured_allowlist
+
+        known = configured_allowlist()
+    except Exception:  # noqa: BLE001 — familiarity is advisory; never block an import on it
+        known = None
+
+    try:
+        plan = inspect_snapshot(data, known_sources=known)
+    except SnapshotError as exc:
+        out(f"error: {exc}")
+        return 1
+
+    name = (args.name or "").strip() or plan.agent_name
+    out(f"Import plan — {src.name} → agent {name!r}")
+    out()
+    if plan.plugins:
+        out("Plugins that will be INSTALLED AND RUN on this machine:")
+        for p in plan.plugins:
+            flag = "" if p.recognized else "   ⚠ unfamiliar source"
+            out(f"  {p.id:<24} {p.url}@{p.ref or 'HEAD'}{flag}")
+    else:
+        out("Plugins: none.")
+    if plan.capabilities:
+        out()
+        out("This snapshot's config grants:")
+        for key, grants in plan.capabilities:
+            out(f"  {key:<28} {grants}")
+    needed = [r for r in plan.required_secrets if r.get("was_set")]
+    if needed:
+        out()
+        out("Credentials you will need to supply (none travel in the snapshot):")
+        for r in needed:
+            out(f"  {r.get('name')}")
+    for n in plan.notes:
+        out(f"  note: {n}")
+
+    if args.dry_run:
+        out()
+        out("Dry run — nothing written.")
+        return 0
+
+    if not args.yes:
+        out()
+        out("Refusing to apply without acknowledgement: this installs and runs the code above.")
+        out("Re-run with --yes once you have read the plan.")
+        return 2
+
+    secrets: dict[str, str] = {}
+    for pair in args.secret or []:
+        key, sep, value = str(pair).partition("=")
+        if sep and key.strip():
+            secrets[key.strip()] = value
+
+    try:
+        res = apply_snapshot(data, name=name, acknowledged=True, secrets=secrets, plan=plan)
+    except SnapshotError as exc:
+        out(f"error: {exc}")
+        return 1
+
+    out()
+    out(f"Created {res.name!r} at {res.path}")
+    if res.installed:
+        out(f"  installed: {', '.join(res.installed)}")
+    for f in res.failed:
+        out(f"  FAILED {f.get('id')}: {f.get('error')}")
+    for n in res.notes:
+        out(f"  {n}")
+    if res.missing_secrets:
+        out()
+        out("INCOMPLETE — supply these before the agent will work:")
+        for m in res.missing_secrets:
+            out(f"  {m}")
+        out("  (`protoagent agent import … --secret NAME=VALUE`, or Settings ▸ Secrets on the new agent)")
+    return 0 if res.complete else 1

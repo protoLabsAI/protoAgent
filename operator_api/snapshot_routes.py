@@ -14,6 +14,13 @@ the review as JSON — what would be stripped, what the target must re-supply, w
 pattern sweep matched — with no bytes. Without it you get the zip, which carries the same
 review inside as ``REVIEW.md`` so the disclosure can never be separated from the artifact.
 
+`POST /api/agent/import` (ADR 0091 D3) is the mirror, with the mirrored hazard: import does
+not leak, it **executes**. Applying a snapshot clones the plugin repos it names and enables
+their code in-process, and the artifact is one someone handed you. So it has the same
+two-phase shape for the opposite reason — without ``acknowledged`` it returns the PLAN
+(every URL, every capability the config grants) and changes nothing; with it, it applies.
+The console must show the plan before it sets that flag.
+
 Auth: gated by the server-level ``/api/*`` bearer middleware like every operator route.
 That matters more here than most — this endpoint reads the agent's entire configuration,
 and while the response is secret-free by construction, the *shape* of an agent (its plugins,
@@ -25,10 +32,13 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import Body, HTTPException
+from fastapi import Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 log = logging.getLogger("protoagent.operator_api")
+
+
+MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
 def register_snapshot_routes(app) -> None:
@@ -84,3 +94,72 @@ def register_snapshot_routes(app) -> None:
                 "X-Snapshot-Review": header,
             },
         )
+
+    @app.post("/api/agent/import")
+    async def _agent_import(
+        file: UploadFile = File(..., description="The snapshot zip"),
+        name: str = Form("", description="Name for the new agent; blank uses the snapshot's"),
+        acknowledged: bool = Form(False, description="The operator has read the plan and consents to running its plugin code"),
+        secrets_json: str = Form("", description='JSON {"model.api_key": "…"} of supplied credentials'),
+    ):
+        """Inspect or apply an agent snapshot (ADR 0091 D3).
+
+        **Without ``acknowledged`` this only inspects** — it returns the plan (plugins that
+        would be installed and whether their source is familiar, capabilities the config
+        grants, credentials needed) and writes nothing. Applying installs and runs code the
+        snapshot names, so the console shows that plan and gets an explicit yes first.
+
+        Returns the plan (inspect) or the import result (apply). 400 on a malformed or
+        unsafe archive — traversal, zip-bomb, unsupported version — none of which reach disk.
+        """
+        import json
+
+        from graph.snapshot_import import SnapshotError, apply_snapshot, inspect_snapshot
+
+        data = await file.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"snapshot exceeds {MAX_UPLOAD_BYTES} bytes")
+
+        known = await asyncio.to_thread(_known_plugin_sources)
+        try:
+            plan = await asyncio.to_thread(inspect_snapshot, data, known_sources=known)
+        except SnapshotError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not acknowledged:
+            return JSONResponse({"mode": "plan", **plan.as_dict()})
+
+        supplied: dict = {}
+        if secrets_json.strip():
+            try:
+                parsed = json.loads(secrets_json)
+                supplied = {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="secrets_json is not valid JSON") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                apply_snapshot,
+                data,
+                name=(name or "").strip() or plan.agent_name,
+                acknowledged=True,
+                secrets=supplied,
+                plan=plan,
+            )
+        except SnapshotError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 — never leak a stack trace to the console
+            log.exception("[snapshot] import failed")
+            raise HTTPException(status_code=500, detail=f"Import failed: {type(exc).__name__}: {exc}") from exc
+        return JSONResponse({"mode": "applied", **result.as_dict()})
+
+
+def _known_plugin_sources() -> list[str] | None:
+    """`plugins.sources.allow`, used only to decide whether a pin's source is FAMILIAR.
+    Advisory — it sharpens the console's warning, never gates the import."""
+    try:
+        from graph.plugins.installer import configured_allowlist
+
+        return configured_allowlist()
+    except Exception:  # noqa: BLE001 — familiarity is advisory
+        return None

@@ -2,9 +2,10 @@
 
 **Status:** Accepted
 
-**Implementation:** **Slice 1 (export) shipped** — `#2103`, `graph/snapshot_op.py` +
-`POST /api/agent/export` + `protoagent agent export`. Slices 2–4 (import, knowledge seed, UX)
-remain: `#2104`, `#2105`, `#2106`. Slice plan in Consequences. The runtime knowledge-import we already ship in
+**Implementation:** **Slices 1–2 shipped** — export (`#2103`) and import (`#2104`):
+`graph/snapshot_op.py` / `graph/snapshot_import.py`, `POST /api/agent/export` + `/import`,
+`protoagent agent export|import`, and the Settings ▸ Agent ▸ Snapshot panel. Slices 3–4
+(knowledge seed, duplicate-from-snapshot UX) remain: `#2105`, `#2106`. Slice plan in Consequences. The runtime knowledge-import we already ship in
 `claude-bridge-plugin` (memory/CLAUDE.md → `knowledge_add`) is a working prototype of the D4
 knowledge-seed half.
 
@@ -140,8 +141,33 @@ DR snapshot as the portability format.
      *credential-shaped* (treat as exposed — rotate at the source) and *machine-local*
      (a home path — nothing to rotate, re-point on the target); conflating the two sends an
      operator hunting a breach that never happened.
-2. **Import / rehydrate** — feed the snapshot into a `create()`-style scaffold; **prompt for
-   `required_secrets`**. (Reuses `manager.create()`, `ensure_live_config`/`ensure_live_soul`.)
+2. ~~**Import / rehydrate**~~ — **SHIPPED (#2104)**: `protoagent agent import <zip>` +
+   `POST /api/agent/import`, via a new `manager.create(snapshot_config=…)` entry that writes
+   an EMPTY overlay (never `from_config`, which copies `secrets.yaml` verbatim).
+
+   **The asymmetry that shaped it:** export's hazard is *leaking* — an artifact that must be
+   safe to publish. Import's is *executing*: a snapshot is a file someone hands you, and
+   applying it clones the repos it names and enables their code in-process. So import has the
+   same inspect-then-commit shape for the opposite reason. `inspect_snapshot` has no side
+   effects and returns a plan naming every plugin URL (flagging unfamiliar sources), every
+   capability the config grants, and every credential needed; `apply_snapshot` refuses
+   without `acknowledged=True`. One deliberate decision that names each URL, instead of an
+   "Import" click that fans out into N code-execution decisions.
+
+   **Config applies verbatim, capabilities surfaced not stripped.** `filesystem.allow_run`,
+   `operator.allowed_dirs`, `mcp.servers` and `delegates` are part of the definition —
+   silently neutering them yields a duplicate that behaves differently for reasons no review
+   could enumerate. Consistent with ADR 0071 D1 (trust, not sandbox): show it, don't neuter
+   it. `ImportPlan.capabilities` is what makes showing it real.
+
+   **A snapshot is untrusted input.** Zip-slip, absolute-path and Windows-traversal members,
+   zip bombs, oversized member counts, and unsupported `snapshot_version`s are all refused
+   before anything reaches disk. An unpinned plugin entry is flagged: it would install the
+   branch tip, which is not the agent that was exported.
+
+   **`was_set` earns its keep on this side too.** Only credentials the SOURCE agent actually
+   had are reported missing; a merely-declared one isn't, or the operator would be told their
+   import is broken when it is in exactly the state the original was in.
 3. **Knowledge seed (opt-in)** — export knowledge domains as seed docs; re-ingest via `knowledge_add`
    on import. (The durable version of the claude-bridge memory import.)
 4. **Polish** — console/desktop "duplicate agent from snapshot" UX; converge the claude-bridge

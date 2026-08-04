@@ -59,6 +59,7 @@ then exits:
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent operations` | List the operations on the shared ops layer — name, read/write, one-line summary. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent agent export [-o PATH] [--dry-run]` | Write this agent's **secret-free snapshot** zip — the declarative recipe (SOUL, stripped config, plugin SHA pins, skills). Works on a **stopped** agent. | [0091](../adr/0091-agent-snapshot-portability.md) |
+| `protoagent agent import <zip> [--name N] [--dry-run] [--yes]` | Stand up a **fresh agent** from a snapshot. Prints the plan (plugins it will install and run, capabilities it grants) and refuses to apply without `--yes`. | [0091](../adr/0091-agent-snapshot-portability.md) |
 | `protoagent runtime use <rt>` · `list` | Select the agent runtime — `native` (LangGraph) or an ACP agent. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 | `protoagent hermes` | One-command **Hermes preset** — wrap protoAgent around your existing `~/.hermes` agent ([guide](hermes.md)). | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 
@@ -133,6 +134,28 @@ publish it.
 
 The same export is in the console at **Settings ▸ Agent ▸ Snapshot**, which shows the review
 first and downloads the zip on a second click.
+
+### Importing an agent
+
+```bash
+protoagent agent import vera-snapshot.zip --dry-run        # the plan; changes nothing
+protoagent agent import vera-snapshot.zip --name vera-2 --yes \
+  --secret model.api_key=sk-…
+```
+
+**Importing runs code.** A snapshot names plugin repos, and applying it clones them and
+enables them in-process — so `import` always prints its plan first (every URL, with
+unfamiliar sources flagged, plus the capabilities the config grants) and refuses to apply
+until you pass `--yes`. Read the plan; it is describing what is about to run on your machine.
+
+The config applies **verbatim**, including capability settings like `filesystem.allow_run`
+and `operator.allowed_dirs` — those are part of the agent's definition, so they're shown in
+the plan rather than silently stripped.
+
+The new agent arrives **incomplete** until its credentials are supplied: none travel in a
+snapshot. Pass them with `--secret NAME=VALUE` (repeatable, written `0600` to the new agent
+only), or set them afterwards in that agent's Settings ▸ Secrets. Only credentials the
+*source* agent actually had are reported missing.
 
 ## Roadmap
 

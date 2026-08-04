@@ -275,6 +275,7 @@ def create(
     bundle: str | None = None,
     port: int | None = None,
     shared_skills: bool = False,
+    snapshot_config: Path | None = None,
     soul: str | None = None,
     inputs: Mapping[str, str] | None = None,
     secrets: list[dict] | None = None,
@@ -284,6 +285,10 @@ def create(
     an installed plugin bundle. Does not start it.
 
     Config base, in precedence:
+      * ``snapshot_config`` — an agent SNAPSHOT's config (ADR 0091 D3, #2104). A secret-free
+        entry, deliberately NOT ``from_config``: that path copies ``secrets.yaml`` verbatim,
+        which is the exact property a snapshot exists to avoid. The overlay is created EMPTY
+        and credentials arrive only as operator-supplied values.
       * ``from_config`` — a FULL clone of another agent's config + secrets (identity re-stamped).
       * ``inherit_model`` — a BLANK template, but with only that agent's ``model:`` section +
         secrets popped over (the gateway), so it boots ready-to-chat WITHOUT inheriting its
@@ -319,7 +324,18 @@ def create(
     cfg_dir = ws / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     cfg = cfg_dir / "langgraph-config.yaml"
-    if from_config:
+    if snapshot_config:
+        src_cfg = Path(snapshot_config).expanduser()
+        if not src_cfg.exists():
+            shutil.rmtree(ws, ignore_errors=True)
+            raise WorkspaceError(f"snapshot config not found at {src_cfg}")
+        shutil.copyfile(src_cfg, cfg)
+        # ALWAYS a blank overlay — never copied, never inherited. A snapshot carries no
+        # credentials by construction (ADR 0091 D2), so anything here would be a leak from
+        # somewhere else.
+        (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
+        _stamp_identity(cfg, name, shared_skills, instance_id=wid)
+    elif from_config:
         src = Path(from_config).expanduser()
         src_cfg = src / "langgraph-config.yaml" if src.is_dir() else src
         if not src_cfg.exists():
