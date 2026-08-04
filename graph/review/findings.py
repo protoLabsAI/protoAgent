@@ -57,8 +57,13 @@ inside the fence):
 ```
 
 Rules: `line` is the NEW-file line number (0 if not line-anchored). `claim` states
-a defect, not a description of the code. `evidence` must quote or concretely
-reference the diff — a finding you cannot evidence does not go in the list. No
+a defect, not a description of the code. `evidence` must quote the diff/file
+VERBATIM — copy the exact bytes, never paraphrase, simplify, or stitch a composite
+line out of separate lines. A quote that isn't byte-for-byte cannot be grounded
+against the file, so its finding is downgraded to `uncertain` and loses the power
+to block — a real defect quoted loosely will not gate. If you cannot quote the
+exact offending text, cite `file:line` and describe the scenario in `claim` rather
+than inventing a quote. A finding you cannot evidence does not go in the list. No
 findings → an empty array `[]`. Prose around the fence is fine (your reasoning);
 the fenced array is the deliverable.
 
