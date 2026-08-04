@@ -82,3 +82,43 @@
   color: var(--fg-secondary);
   max-width: 62ch;
 }
+
+/* ── Import (ADR 0091 D3, #2106) ─────────────────────────────────────────────── */
+/* Source toggle at the top of New agent: an archetype or a snapshot. */
+.new-agent-source {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border, #2a2a31);
+}
+.new-agent-source button {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.new-agent-source button.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--accent, #7c8cff);
+}
+.snapshot-import {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.snapshot-import-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--pl-color-status-error, #e5484d);
+}
+.snapshot-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}

@@ -84,6 +84,14 @@ async function readBody(req) {
   }
 }
 
+/** The raw request body as text. `readBody` JSON-parses; a multipart upload (the snapshot
+ *  import) needs the bytes so the mock can read its form fields. */
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 // GET API routes → canned fixtures.
 // Git-installed plugins (ADR 0027) — mutable so install/uninstall round-trip in e2e.
 let INSTALLED_PLUGINS = [];
@@ -708,6 +716,47 @@ const server = createServer(async (req, res) => {
         "x-snapshot-review": JSON.stringify({ required_secrets: review.required_secrets.map((s) => s.name) }),
       });
       return res.end(zip);
+    }
+    // Agent snapshot IMPORT (ADR 0091 D3). Two modes on one route, keyed on `acknowledged`:
+    // without it the PLAN (no side effects), with it the applied result. The plan carries a
+    // plugin from an unfamiliar source and a capability grant so the console's consent
+    // surface is exercised, not just the happy path.
+    if (pathname === "/api/agent/import" && req.method === "POST") {
+      const raw = await readRawBody(req);
+      const acknowledged = /name="acknowledged"\r?\n\r?\ntrue/.test(raw);
+      if (!acknowledged) {
+        return sendJson(res, {
+          mode: "plan",
+          agent_name: "vera",
+          plugins: [
+            { id: "github", url: "https://github.com/protoLabsAI/github-plugin", ref: "abc1234", recognized: true },
+            { id: "acme", url: "https://gitlab.example/acme/acme-plugin", ref: "def5678", recognized: false },
+          ],
+          required_secrets: [
+            { name: "model.api_key", kind: "config", description: "Gateway key.", was_set: true },
+            { name: "discord.bot_token", kind: "plugin", description: "Declared.", was_set: false },
+          ],
+          capabilities: [{ key: "filesystem.allow_run", grants: "shell command execution (the `run_command` tool)" }],
+          has_soul: true,
+          skill_files: 3,
+          mcp_servers: ["github"],
+          notes: [],
+          runs_code: true,
+        });
+      }
+      const named = /name="name"\r?\n\r?\n([^\r\n]*)/.exec(raw);
+      const supplied = /name="secrets_json"/.test(raw);
+      return sendJson(res, {
+        mode: "applied",
+        name: (named && named[1]) || "vera",
+        workspace_id: "vera-ab12",
+        path: "/box/workspaces/vera-ab12",
+        installed: ["github", "acme"],
+        failed: [],
+        missing_secrets: supplied ? [] : ["model.api_key"],
+        notes: ["seeded 3 skill file(s)"],
+        complete: Boolean(supplied),
+      });
     }
     // Mid-turn steering enqueue — accept + echo (the console ignores the body).
     if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname) && req.method === "POST") {

@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
+
+import { ImportSnapshotPanel } from "./ImportSnapshotPanel";
 import { useMemo, useState } from "react";
 
 import { Input, RadioCard, RadioCardGroup, SecretInput } from "@protolabsai/ui/forms";
@@ -23,6 +25,12 @@ const NAME_RE = /^[A-Za-z0-9-_]+$/;
 // pushes them off-screen — the card list scrolls inside its own bounded container instead.
 // Creating from a bundle clones+installs it (a few seconds) — the POST returns once the
 // agent is up, so the button shows a spinner until then.
+//
+// A new agent has TWO sources (ADR 0091 #2106): an archetype (below) or a SNAPSHOT of an
+// existing agent. They share this one entry point rather than living in separate places,
+// because "where do new agents come from" should be one question with two answers. The
+// snapshot path is its own component: it has to show a plan and take consent before it can
+// create anything, which is a different shape from picking a card.
 export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) => void; onCancel?: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -38,6 +46,9 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
   // Advanced archetypes (tier: "advanced") collapse below the standard cards behind a
   // chevron toggle, so the picker leads with the everyday choices. Expand to pick one.
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Which source this new agent comes from. Archetype is the default because it's the
+  // common case; importing is deliberate and usually starts from a file you already have.
+  const [source, setSource] = useState<"archetype" | "snapshot">("archetype");
 
   // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
   // agent from a bundle and has no SOUL editor, so Custom would just duplicate Basic.
@@ -125,6 +136,30 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         }
       />
       <div className="stage-body">
+        <div className="new-agent-source" role="tablist" aria-label="New agent source">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={source === "archetype"}
+            className={source === "archetype" ? "is-active" : ""}
+            onClick={() => setSource("archetype")}
+          >
+            From an archetype
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={source === "snapshot"}
+            className={source === "snapshot" ? "is-active" : ""}
+            onClick={() => setSource("snapshot")}
+          >
+            From a snapshot
+          </button>
+        </div>
+        {source === "snapshot" ? (
+          <ImportSnapshotPanel onDone={(created) => onDone?.(created)} />
+        ) : (
+        <>
         <label className="field archetype-name-field">
           <span>Name</span>
           <Input
@@ -248,6 +283,8 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
             ) : null}
           </div>
         ) : null}
+        </>
+        )}
       </div>
     </section>
   );

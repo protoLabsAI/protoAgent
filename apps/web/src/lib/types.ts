@@ -625,6 +625,45 @@ export type SnapshotReview = {
   notes: string[];
 };
 
+/** One pinned plugin a snapshot would install (ADR 0091 D3). */
+export type SnapshotPluginPin = {
+  id: string;
+  url: string;
+  ref: string;
+  /** Whether this box already installs from that source. Advisory — it sharpens the
+   *  acknowledgement ("2 are from somewhere you haven't used"), it never gates. */
+  recognized: boolean;
+};
+
+/** What importing a snapshot WOULD do — returned before anything is applied. */
+export type SnapshotImportPlan = {
+  mode: "plan";
+  agent_name: string;
+  plugins: SnapshotPluginPin[];
+  required_secrets: SnapshotSecret[];
+  /** Config keys that GRANT a capability rather than describe one. */
+  capabilities: { key: string; grants: string }[];
+  has_soul: boolean;
+  skill_files: number;
+  mcp_servers: string[];
+  notes: string[];
+  /** True when applying would install and run plugin code. */
+  runs_code: boolean;
+};
+
+/** The outcome of an applied import. */
+export type SnapshotImportResult = {
+  mode: "applied";
+  name: string;
+  workspace_id: string;
+  path: string;
+  installed: string[];
+  failed: { id: string; url: string; error: string }[];
+  missing_secrets: string[];
+  notes: string[];
+  complete: boolean;
+};
+
 export type ChatPart =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }

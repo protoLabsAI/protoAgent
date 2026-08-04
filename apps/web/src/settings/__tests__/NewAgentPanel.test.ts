@@ -136,10 +136,29 @@ describe("NewAgentPanel — name + create above the archetype section (#2193)", 
     const focusables = [
       ...container.querySelectorAll<HTMLElement>("input, button, select, textarea, a[href], [tabindex]"),
     ].filter((el) => el.tabIndex >= 0 || el.matches("input, button"));
-    expect(focusables[0]?.getAttribute("aria-label")).toBe("Agent name");
+    // The source tablist (archetype | snapshot, #2106) is the ONE thing allowed ahead of
+    // the name: it decides which form you are filling in, so reaching Name first would mean
+    // typing into a field that then disappears. Everything else must still come after —
+    // that's the #2193 invariant, that a growing archetype list can't push name+create
+    // off-screen. Asserting the exception by ROLE keeps the guard: adding some other
+    // control above Name still fails this.
+    const beforeName = focusables.slice(
+      0,
+      focusables.findIndex((el) => el.getAttribute("aria-label") === "Agent name"),
+    );
+    expect(beforeName.every((el) => el.getAttribute("role") === "tab")).toBe(true);
+    expect(beforeName.length).toBeLessThanOrEqual(2);
+
     const nameInput = container.querySelector('input[aria-label="Agent name"]');
     expect(nameInput).not.toBeNull();
     expect(precedes(nameInput!, createButton())).toBe(true);
+  });
+
+  it("offers both new-agent sources, archetype first (#2106)", async () => {
+    await mountPanel();
+    const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
+    expect(tabs.map((t) => t.textContent)).toEqual(["From an archetype", "From a snapshot"]);
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
   });
 });
 

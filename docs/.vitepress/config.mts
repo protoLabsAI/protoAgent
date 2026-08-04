@@ -155,6 +155,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { text: "The protoagent command (CLI)", link: "/guides/cli" },
+            { text: "Agent snapshots (export, share, duplicate)", link: "/guides/agent-snapshots" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
             { text: "Deploy in Docker (seed + UI override)", link: "/guides/deploy-docker" },
             { text: "Deploy on Proxmox (reusable LXC template)", link: "/guides/deploy-proxmox" },

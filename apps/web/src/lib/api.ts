@@ -1,4 +1,6 @@
 import type {
+  SnapshotImportPlan,
+  SnapshotImportResult,
   SnapshotReview,
   AcpAgent,
   ActivityHistory,
@@ -1191,6 +1193,25 @@ export const api = {
     const disposition = res.headers.get("content-disposition") || "";
     const match = /filename="([^"]+)"/.exec(disposition);
     return { blob: await res.blob(), filename: match?.[1] || "agent-snapshot.zip" };
+  },
+
+  /** Inspect a snapshot WITHOUT applying it (ADR 0091 D3). Returns the plan: which plugins
+   *  would be installed and run, which capabilities the config grants, which credentials the
+   *  new agent needs. Writes nothing — the console shows this before asking for consent. */
+  snapshotPlan(file: File) {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<SnapshotImportPlan>("/api/agent/import", form);
+  },
+  /** Apply a snapshot. `acknowledged` asserts the operator has SEEN the plan — applying
+   *  installs and runs the plugin code it names, so this is never sent implicitly. */
+  snapshotImport(file: File, opts: { name: string; secrets: Record<string, string> }) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("name", opts.name);
+    form.append("acknowledged", "true");
+    if (Object.keys(opts.secrets).length) form.append("secrets_json", JSON.stringify(opts.secrets));
+    return requestForm<SnapshotImportResult>("/api/agent/import", form);
   },
 
   // Real completion probe — the true auth check (unlike `models`, which only

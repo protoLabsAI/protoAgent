@@ -4,8 +4,10 @@
 
 **Implementation:** **Slices 1–2 shipped** — export (`#2103`) and import (`#2104`):
 `graph/snapshot_op.py` / `graph/snapshot_import.py`, `POST /api/agent/export` + `/import`,
-`protoagent agent export|import`, and the Settings ▸ Agent ▸ Snapshot panel. Slices 3–4
-(knowledge seed, duplicate-from-snapshot UX) remain: `#2105`, `#2106`. Slice plan in Consequences. The runtime knowledge-import we already ship in
+`protoagent agent export|import`, and the Settings ▸ Agent ▸ Snapshot panel. Slice 4's
+console half shipped with `#2106` (Settings ▸ Fleet ▸ New agent ▸ *From a snapshot*, plus
+`docs/guides/agent-snapshots.md`); its claude-bridge convergence and the knowledge seed
+remain: `#2105`, `#2106`. Slice plan in Consequences. The runtime knowledge-import we already ship in
 `claude-bridge-plugin` (memory/CLAUDE.md → `knowledge_add`) is a working prototype of the D4
 knowledge-seed half.
 
@@ -170,5 +172,13 @@ DR snapshot as the portability format.
    import is broken when it is in exactly the state the original was in.
 3. **Knowledge seed (opt-in)** — export knowledge domains as seed docs; re-ingest via `knowledge_add`
    on import. (The durable version of the claude-bridge memory import.)
-4. **Polish** — console/desktop "duplicate agent from snapshot" UX; converge the claude-bridge
-   "export a translated bundle" roadmap onto this format.
+4. **Polish** — console "duplicate agent from snapshot" UX **SHIPPED (#2106)**: a source
+   toggle on the fleet's New-agent picker (archetype | snapshot), because "where do new
+   agents come from" should be one question with two answers rather than two places. The
+   import flow is file → **plan** → consent → create, and the consent lives on the button
+   that performs it (*"Install 2 plugins and create agent"*), not only in a paragraph above
+   it that can be scrolled past.
+
+   **Still open:** converging `claude-bridge-plugin`'s "export a translated bundle" roadmap
+   onto this format. That lives in a separate repo, so it is tracked on #2106 rather than
+   bundled into the console change.
