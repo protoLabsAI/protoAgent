@@ -53,7 +53,9 @@ test("downloads the zip under the server's filename", async ({ page }) => {
   ]);
   // The server names the artifact (agent + timestamp); re-deriving it client-side would drift.
   expect(download.suggestedFilename()).toBe("vera-snapshot-20260804-120000.zip");
-  await expect(page.locator(".pl-toast")).toContainText("Snapshot downloaded");
+  // Scope to OUR toast: toasts are app-global, so a bare `.pl-toast` also matches one left
+  // over from another spec running concurrently and trips strict mode (it did, in CI).
+  await expect(page.locator(".pl-toast", { hasText: "Snapshot downloaded" })).toBeVisible();
 });
 
 test("states plainly that scrubbing is not a guarantee", async ({ page }) => {
