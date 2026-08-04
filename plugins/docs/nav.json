@@ -217,6 +217,10 @@
           "title": "The protoagent command (CLI)"
         },
         {
+          "path": "guides/agent-snapshots.md",
+          "title": "Agent snapshots (export, share, duplicate)"
+        },
+        {
           "path": "guides/deploy.md",
           "title": "Deploy via GHCR"
         },
