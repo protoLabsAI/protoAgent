@@ -43,6 +43,9 @@ _FORWARD: dict[str, tuple[str, str]] = {
     # `hermes` = sugar for `runtime use hermes` — the one-command preset for Hermes users.
     "hermes": ("runtime.cli", "run_hermes_cli"),
     "operations": ("ops.cli", "run_operations_cli"),
+    # `agent export` — the ADR 0091 secret-free snapshot. Offline: reads the instance
+    # root directly, so it works on a STOPPED agent (the usual case when moving one).
+    "agent": ("graph.snapshot_cli", "run_snapshot_cli"),
     # `knowledge` lives in server/ (not graph/**) — it boots the instance's stores standalone.
     "knowledge": ("server.knowledge_cli", "run_knowledge_cli"),
     # Internal daemon verb: serve the operator tools over MCP stdio. The ACP runtime
@@ -63,6 +66,7 @@ _FORWARD_HELP = {
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
     "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
     "operator-mcp": "Serve the operator tools over MCP stdio (internal — mounted into ACP runtimes)",
+    "agent": "Export this agent as a portable, secret-free snapshot zip (ADR 0091)",
 }
 
 _LIFECYCLE_HELP = {

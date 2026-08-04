@@ -44,8 +44,13 @@ log = logging.getLogger(__name__)
 # enough shape for a reader to know *what* was removed without revealing the value.
 _REDACTORS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     # Vendor-shaped credentials — unambiguous, so match them before anything generic.
-    ("openai-key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted:openai-key]"),
+    # anthropic BEFORE openai: `sk-ant-…` also matches the broader `sk-…` rule, so with the
+    # generic one first the anthropic rule could never fire and every Anthropic key was
+    # reported as `openai-key`. Still redacted either way — but the report is what an
+    # operator reviews, and naming the wrong vendor sends them to the wrong console to
+    # rotate it. Specific-before-generic is load-bearing here, not cosmetic.
     ("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), "[redacted:anthropic-key]"),
+    ("openai-key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted:openai-key]"),
     ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "[redacted:github-token]"),
     ("aws-access-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[redacted:aws-access-key]"),
     ("slack-token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), "[redacted:slack-token]"),

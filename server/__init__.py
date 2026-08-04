@@ -769,6 +769,12 @@ def _main():
     from operator_api.memory_routes import register_memory_routes
 
     register_memory_routes(fastapi_app)
+
+    # Agent snapshot export (ADR 0091 D1/D2) — POST /api/agent/export: this agent's
+    # declarative, secret-free recipe as a zip. Bearer-gated like every operator route.
+    from operator_api.snapshot_routes import register_snapshot_routes
+
+    register_snapshot_routes(fastapi_app)
     register_plugin_routes(fastapi_app)
 
     # Operator server controls — POST /api/restart (graceful self-restart). Gated by

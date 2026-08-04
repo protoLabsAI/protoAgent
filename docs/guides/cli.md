@@ -58,6 +58,7 @@ then exits:
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent operations` | List the operations on the shared ops layer — name, read/write, one-line summary. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent agent export [-o PATH] [--dry-run]` | Write this agent's **secret-free snapshot** zip — the declarative recipe (SOUL, stripped config, plugin SHA pins, skills). Works on a **stopped** agent. | [0091](../adr/0091-agent-snapshot-portability.md) |
 | `protoagent runtime use <rt>` · `list` | Select the agent runtime — `native` (LangGraph) or an ACP agent. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 | `protoagent hermes` | One-command **Hermes preset** — wrap protoAgent around your existing `~/.hermes` agent ([guide](hermes.md)). | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 
@@ -104,6 +105,31 @@ protoagent operations
 # Stop it
 protoagent down
 ```
+
+### Exporting an agent
+
+```bash
+protoagent agent export --dry-run     # review only: what is stripped, what the target must supply
+protoagent agent export -o ~/snapshots/   # write the zip
+```
+
+The snapshot is a **recipe, not a backup**: SOUL, secret-stripped config, `plugins.lock`
+SHA pins, MCP server definitions and `SKILL.md` dirs. No runtime history, no credentials,
+no plugin code — importing yields a *fresh* agent, not a resumed one.
+
+Credentials never travel. What the target must re-supply is listed by name in a
+`required_secrets` inventory, and every zip carries a `REVIEW.md` spelling out what was
+stripped and what still needs re-pointing. Two things it distinguishes, because the
+response differs:
+
+- **Credential-shaped text found in free text** (a token pasted into `SOUL.md` or a config
+  field) — scrubbed from the artifact, but still in the *source* agent. Treat it as exposed
+  and rotate it.
+- **Machine-local paths** — scrubbed because they carry your username. Nothing to rotate;
+  re-point them after import.
+
+Redaction of free text is a safety net, not a guarantee — read the artifact before you
+publish it.
 
 ## Roadmap
 

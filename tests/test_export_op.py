@@ -24,6 +24,7 @@ from graph.export_op import export_thread, redact, render_markdown
     "raw, kind",
     [
         ("here is sk-abcdefghijklmnopqrstuvwxyz123456 ok", "openai-key"),
+        ("here is sk-ant-abcdefghijklmnopqrstuvwxyz123456 ok", "anthropic-key"),
         ("token ghp_abcdefghijklmnopqrstuvwxyz0123 ok", "github-token"),
         ("key AKIAIOSFODNN7EXAMPLE ok", "aws-access-key"),
         ("slack xoxb-1234567890-abcdefghij ok", "slack-token"),
@@ -39,6 +40,15 @@ def test_redact_catches_secret_shapes(raw, kind):
     out, kinds = redact(raw)
     assert kind in kinds, f"{kind} not detected in {raw!r} (got {kinds})"
     assert f"[redacted:{kind}]" in out or "[redacted:user]" in out
+
+
+def test_anthropic_key_is_named_anthropic_not_openai():
+    """`sk-ant-…` also matches the broader `sk-…` rule, so rule ORDER decides the label.
+    With the generic rule first the anthropic pattern could never fire and every Anthropic
+    key was reported as `openai-key` — redacted either way, but the report is what an
+    operator reviews, and the wrong vendor sends them to the wrong console to rotate it."""
+    _, kinds = redact("key sk-ant-abcdefghijklmnopqrstuvwxyz123456")
+    assert kinds == ["anthropic-key"]
 
 
 def test_redact_removes_the_actual_secret_value():

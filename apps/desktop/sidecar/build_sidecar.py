@@ -202,6 +202,7 @@ CLI_FORWARD_MODULES = [
     "ops.cli",
     "server.knowledge_cli",
     "server.operator_mcp",
+    "graph.snapshot_cli",
 ]
 
 

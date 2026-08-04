@@ -1,10 +1,10 @@
 # ADR 0091 — Agent snapshot portability: a declarative, secret-free bundle (not a raw state dump)
 
-**Status:** Proposed
+**Status:** Accepted
 
-**Implementation:** Not started. This ADR records the *shape* of the feature before code, so the
-"declarative recipe, not raw dump; secret-free by the 12-factor litmus" decision is on record.
-Slice plan in Consequences. The runtime knowledge-import we already ship in
+**Implementation:** **Slice 1 (export) shipped** — `#2103`, `graph/snapshot_op.py` +
+`POST /api/agent/export` + `protoagent agent export`. Slices 2–4 (import, knowledge seed, UX)
+remain: `#2104`, `#2105`, `#2106`. Slice plan in Consequences. The runtime knowledge-import we already ship in
 `claude-bridge-plugin` (memory/CLAUDE.md → `knowledge_add`) is a working prototype of the D4
 knowledge-seed half.
 
@@ -114,9 +114,32 @@ DR snapshot as the portability format.
 
 ### Slice plan
 
-1. **Export** — `agent snapshot export` CLI + `POST /api/agent/export`: secret-stripped config
-   (+ **MCP env/headers null**) + SOUL + `plugins.lock` + `SKILL.md` dirs + `required_secrets`
-   schema → zip. (Reuses `strip_secrets_from_doc`, `secret_paths`.)
+1. ~~**Export**~~ — **SHIPPED (#2103)**: `protoagent agent export` + `POST /api/agent/export`
+   (`?dry_run` for review-before-download) → zip carrying `agent.snapshot.yaml`, `SOUL.md`,
+   `skills/`, and a `REVIEW.md` disclosure.
+
+   **Correction to this ADR's own plan:** it said to reuse `strip_secrets_from_doc`. The
+   implementation deliberately does not, and the reason generalizes. That function is the
+   **save** path and fails **open** by design — if relocating a value into `secrets.yaml`
+   fails, it leaves the secret inline rather than lose the operator's credential (#1645) —
+   and it *writes* to `secrets.yaml` as a side effect. Both are correct for a file staying
+   on the box and wrong for an artifact leaving it. Export uses a pure, fail-**closed**
+   redactor (`snapshot_op.redact_config_for_export`) that reuses `secret_paths()` for the
+   key inventory only. **A redactor's failure mode has to match its artifact's destination.**
+
+   Two further things only a run against a real agent surfaced:
+   - **The inventory must walk `secret_paths()`, not the config's inline keys.** A
+     correctly-configured agent keeps credentials in `secrets.yaml`, so an inline-only walk
+     skipped exactly the real ones — `model.api_key`, the gateway key the agent cannot run
+     without, was absent from `required_secrets` entirely and import would have stood up a
+     dead agent without ever asking. The overlay is read (read-only) to answer *whether* a
+     credential is set; no value is read out of it.
+   - **A second, pattern-level layer is needed** (`export_op.redact` over every free-text
+     value that ships). The structural strip is key-shaped and cannot see a token pasted
+     into a plugin's text field or into `SOUL.md`. Its findings are reported, split between
+     *credential-shaped* (treat as exposed — rotate at the source) and *machine-local*
+     (a home path — nothing to rotate, re-point on the target); conflating the two sends an
+     operator hunting a breach that never happened.
 2. **Import / rehydrate** — feed the snapshot into a `create()`-style scaffold; **prompt for
    `required_secrets`**. (Reuses `manager.create()`, `ensure_live_config`/`ensure_live_soul`.)
 3. **Knowledge seed (opt-in)** — export knowledge domains as seed docs; re-ingest via `knowledge_add`
