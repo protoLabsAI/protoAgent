@@ -30,6 +30,11 @@ def run_snapshot_cli(argv: list[str]) -> int:
         help="Output path (default: ./<agent>-snapshot-<timestamp>.zip). A directory writes the default name inside it.",
     )
     p_export.add_argument(
+        "--include-knowledge",
+        action="store_true",
+        help="ALSO export this agent's knowledge as text. NOT publishable — see REVIEW.md.",
+    )
+    p_export.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the review — what is stripped, what the target must supply — and write nothing.",
@@ -65,12 +70,14 @@ def run_snapshot_cli(argv: list[str]) -> int:
     from infra.paths import instance_paths
 
     paths = instance_paths()
+    knowledge = _collect_knowledge() if getattr(args, "include_knowledge", False) else None
     result = build_snapshot(
         config_yaml=paths.config_yaml,
         soul_path=paths.soul_path,
         plugins_lock=paths.plugins_lock,
         secrets_yaml=paths.secrets_yaml,  # read-only, for `was_set` only
         skills_dirs={"instance": paths.skills_dir, "config": paths.config_dir / "skills"},
+        knowledge=knowledge,
     )
 
     # The review goes to STDERR so `--dry-run` stays greppable and a future `-o -` could
@@ -79,6 +86,13 @@ def run_snapshot_cli(argv: list[str]) -> int:
         print(line, file=sys.stderr)
 
     note(f"Snapshot for {result.manifest['agent']['name']} — {len(result.data)} bytes")
+    if result.carries_knowledge:
+        total = sum(result.knowledge.values())
+        note()
+        note(f"!! CARRIES A KNOWLEDGE SEED — {total} chunk(s). This file is NOT publishable.")
+        note("   Secret-free is not safe-to-share: no credentials, possibly private content.")
+        for domain, n in sorted(result.knowledge.items()):
+            note(f"     {domain:<28} {n}")
     if result.required_secrets:
         note()
         note("The target must supply these credentials (names only — no values travel):")
@@ -220,3 +234,30 @@ def _cmd_import(args) -> int:
             out(f"  {m}")
         out("  (`protoagent agent import … --secret NAME=VALUE`, or Settings ▸ Secrets on the new agent)")
     return 0 if res.complete else 1
+
+
+def _collect_knowledge():
+    """Build the opt-in knowledge seed from this instance's store. Returns None when there is
+    no store — an export must not fail because knowledge is unavailable."""
+    from graph.snapshot_op import collect_knowledge_seed
+
+    try:
+        from runtime.state import STATE
+
+        store = getattr(STATE, "knowledge_store", None)
+        if store is None:
+            # The CLI runs without a booted server, so build a store against this instance's
+            # db directly rather than reporting "no knowledge" for a store that plainly exists.
+            from infra.paths import instance_paths
+            from knowledge import KnowledgeStore
+
+            db = instance_paths().store("knowledge") / "agent.db"
+            if not db.exists():
+                return None
+            store = KnowledgeStore(str(db))
+        return collect_knowledge_seed(store)
+    except Exception:  # noqa: BLE001 — the seed is optional; never lose the export over it
+        import logging
+
+        logging.getLogger(__name__).warning("[snapshot] knowledge seed collection failed", exc_info=True)
+        return None

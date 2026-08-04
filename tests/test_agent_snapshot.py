@@ -323,7 +323,9 @@ class TestManifest:
         FRESH agent, not a resumed one (ADR 0091 D4)."""
         result = _build(agent_tree)
         assert "runtime_state" in result.manifest["excludes"]
-        assert "knowledge" in result.manifest["excludes"]
+        # Memory is excluded unconditionally; knowledge is opt-in and absent by default.
+        assert "memory" in result.manifest["excludes"]
+        assert result.manifest["knowledge"] is None
 
     def test_filename_is_stable_and_safe(self, agent_tree):
         result = _build(agent_tree)
@@ -438,3 +440,88 @@ class TestReviewDocument:
             review = zf.read("REVIEW.md").decode()
         assert "None — this agent had no configured credentials." in review
         assert "None — nothing credential-shaped was found in free text." in review
+
+
+# ── #2105: the opt-in knowledge seed ─────────────────────────────────────────────────
+
+
+class TestKnowledgeSeed:
+    """A knowledge seed is the one thing that can travel in a snapshot and NOT be safe to
+    publish. It carries no credentials and may still be the last thing you want public, so
+    it is opt-in, listed for review, and it retracts the artifact's publishable claim."""
+
+    def _seed(self):
+        from graph.snapshot_op import KnowledgeSeed
+
+        return KnowledgeSeed(
+            docs={"protocols": "# Blood Bowl\n\nA blitz is one per turn.\n", "general": "Notes.\n"},
+            counts={"protocols": 12, "general": 3},
+        )
+
+    def test_absent_by_default(self, agent_tree):
+        """The ordinary artifact stays publishable — that property is the whole feature."""
+        result = _build(agent_tree)
+        assert result.carries_knowledge is False
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            assert not any(n.startswith("knowledge/") for n in zf.namelist())
+
+    def test_included_when_asked_for(self, agent_tree):
+        result = _build(agent_tree, knowledge=self._seed())
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            assert "knowledge/protocols.md" in zf.namelist()
+            assert "A blitz is one per turn." in zf.read("knowledge/protocols.md").decode()
+        assert result.knowledge == {"protocols": 12, "general": 3}
+
+    def test_review_RETRACTS_the_publishable_claim(self, agent_tree):
+        """The point of the slice. An operator who opted in, then read a review still saying
+        "secret-free", would be told the truth and misled at the same time."""
+        result = _build(agent_tree, knowledge=self._seed())
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            review = zf.read("REVIEW.md").decode()
+        assert "do NOT treat it as publishable" in review
+        assert "Secret-free is not the same as safe-to-share" in review
+
+    def test_review_lists_domains_for_review(self, agent_tree):
+        result = _build(agent_tree, knowledge=self._seed())
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            review = zf.read("REVIEW.md").decode()
+        assert "| `protocols` | 12 |" in review
+
+    def test_a_definition_only_review_makes_no_such_warning(self, agent_tree):
+        """The warning must not become wallpaper — it appears only when it is true."""
+        result = _build(agent_tree)
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            review = zf.read("REVIEW.md").decode()
+        assert "publishable" not in review
+
+    def test_knowledge_is_swept_for_credentials_like_everything_else(self, agent_tree):
+        """It is the largest body of free text in the artifact and exactly where a pasted
+        token would sit unnoticed."""
+        from graph.snapshot_op import KnowledgeSeed
+
+        seed = KnowledgeSeed(docs={"notes": f"the key is {GATEWAY_KEY}\n"}, counts={"notes": 1})
+        result = _build(agent_tree, knowledge=seed)
+        assert GATEWAY_KEY.encode() not in result.data
+        assert "knowledge/notes" in result.pattern_redactions
+
+    def test_an_agent_authored_domain_cannot_steer_the_zip_path(self, agent_tree):
+        """Domains are agent-authored — a tool call can create one — so a hostile name must
+        not decide where the member lands."""
+        from graph.snapshot_op import KnowledgeSeed
+
+        seed = KnowledgeSeed(docs={"../../evil": "x"}, counts={"../../evil": 1})
+        result = _build(agent_tree, knowledge=seed)
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            names = [n for n in zf.namelist() if n.startswith("knowledge/")]
+        assert names == ["knowledge/evil.md"]
+
+    def test_manifest_records_the_domains_for_import(self, agent_tree):
+        result = _build(agent_tree, knowledge=self._seed())
+        assert result.manifest["knowledge"]["domains"] == {"protocols": 12, "general": 3}
+
+    def test_memory_is_never_included(self):
+        """#2105 left "seed memory too" open. The answer is no, and it's recorded IN the
+        artifact so a reader doesn't have to infer it from an absence."""
+        from graph.snapshot_op import MEMORY_DOMAINS
+
+        assert "hot" in MEMORY_DOMAINS and "session" in MEMORY_DOMAINS

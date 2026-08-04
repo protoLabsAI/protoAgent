@@ -51,6 +51,16 @@ log = logging.getLogger(__name__)
 SNAPSHOT_MANIFEST = "agent.snapshot.yaml"
 SNAPSHOT_VERSION = 1
 
+#: Domains never exported as a knowledge seed, whatever the operator asks for.
+#:
+#: ``hot`` and the session-summary domains are the agent's MEMORY (ADR 0069) — what it
+#: recalls about a specific person's sessions, not knowledge about a subject. That is a
+#: different kind of data with a different consent question, and a snapshot is a thing you
+#: hand to someone else. #2105 left "seed memory too" open; the answer here is no. Knowledge
+#: can be reviewed domain by domain before it travels; memory is accreted, personal, and
+#: nobody would enjoy auditing it line by line under time pressure.
+MEMORY_DOMAINS = frozenset({"hot", "session", "conversation", "finding"})
+
 #: Files that must never enter a snapshot, matched by name anywhere in the tree. The
 #: structural strip handles config VALUES; these are whole files that exist only to hold
 #: credentials or machine identity, so no amount of redaction makes them portable.
@@ -98,6 +108,25 @@ class SecretRequirement:
 
 
 @dataclass
+class KnowledgeSeed:
+    """Domain-tagged source docs carried by an OPT-IN export (ADR 0091 D4, #2105).
+
+    Deliberately documents, not the raw ``knowledge/agent.db``: sqlite is version-brittle
+    and carries embeddings computed against the SOURCE's gateway, which mean nothing on a
+    target that may use a different model. Text re-ingests anywhere.
+    """
+
+    #: domain → the concatenated markdown for that domain.
+    docs: dict[str, str] = field(default_factory=dict)
+    #: domain → chunk count, for the review.
+    counts: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def total_chars(self) -> int:
+        return sum(len(v) for v in self.docs.values())
+
+
+@dataclass
 class SnapshotResult:
     """The built artifact plus everything an operator needs to review before sharing."""
 
@@ -115,6 +144,13 @@ class SnapshotResult:
     pattern_redactions: dict[str, list[str]] = field(default_factory=dict)
     #: Human-facing notes (skipped files, absent optional pieces).
     notes: list[str] = field(default_factory=list)
+    #: domain → chunk count when a knowledge seed was included. Non-empty flips the whole
+    #: artifact from "publishable" to "review before sharing" — see ``render_review``.
+    knowledge: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def carries_knowledge(self) -> bool:
+        return bool(self.knowledge)
 
     def summary(self) -> dict:
         return {
@@ -123,6 +159,8 @@ class SnapshotResult:
             "required_secrets": [s.as_dict() for s in self.required_secrets],
             "pattern_redactions": self.pattern_redactions,
             "notes": self.notes,
+            "knowledge": self.knowledge,
+            "carries_knowledge": self.carries_knowledge,
         }
 
 
@@ -294,6 +332,13 @@ def _dedupe(requirements: list[SecretRequirement]) -> list[SecretRequirement]:
     return sorted(by_name.values(), key=lambda r: r.name)
 
 
+def _safe_domain(domain: str) -> str:
+    """A filename-safe domain. The domain is agent-authored (a tool call can create one), so
+    it must not be able to steer where the member lands inside the zip."""
+    cleaned = "".join(c if c.isalnum() or c in "-_" else "-" for c in str(domain))
+    return cleaned.strip("-") or "general"
+
+
 def _read_yaml(path: Path) -> dict:
     import yaml
 
@@ -338,6 +383,7 @@ def render_review(
     pattern_redactions: dict[str, list[str]],
     notes: list[str],
     exported_at: str,
+    knowledge: dict[str, int] | None = None,
 ) -> str:
     """The operator-facing review, written INTO the zip as ``REVIEW.md``.
 
@@ -348,6 +394,7 @@ def render_review(
     export is meant to leave the machine, so the operator reviews rather than trusting a
     silent filter.
     """
+    knowledge = knowledge or {}
     lines = [
         f"# Snapshot review — {agent_name}",
         "",
@@ -356,6 +403,37 @@ def render_review(
         "This is a **declarative recipe, not a state dump**: no runtime history, no",
         "credentials, no plugin code (plugins are pinned by SHA and re-installed on import).",
         "",
+    ]
+
+    # The framing has to change when knowledge rides along, and change LOUDLY.
+    #
+    # Every other export can be published anywhere — that is the 12-Factor litmus the whole
+    # feature is built to. A knowledge seed breaks it, and breaks it along a DIFFERENT axis
+    # than credentials: this text contains no secrets and may still be the last thing you
+    # want public. An operator who opted in, then read a review that still said "secret-free",
+    # would have been told the truth and misled at the same time. So the claim is retracted
+    # here, at the top, before the reassuring parts.
+    if knowledge:
+        total = sum(knowledge.values())
+        lines += [
+            "> [!WARNING]",
+            "> **This snapshot carries a knowledge seed — do NOT treat it as publishable.**",
+            f"> {total} chunk(s) of this agent's knowledge travel with it, as text.",
+            "> Secret-free is not the same as safe-to-share: none of it is a credential, and",
+            "> all of it may be private. The usual \"you could push this to a public gist\"",
+            "> property does **not** hold for this file. Share it the way you would share the",
+            "> source documents themselves.",
+            "",
+            "| Domain | Chunks |",
+            "| --- | --- |",
+            *[f"| `{d}` | {n} |" for d, n in sorted(knowledge.items())],
+            "",
+            "*The agent's MEMORY is never included — what it recalls about a person's sessions",
+            "is a different kind of data with a different consent question.*",
+            "",
+        ]
+
+    lines += [
         "## Credentials the target must supply",
         "",
     ]
@@ -429,11 +507,17 @@ def build_snapshot(
     secret_key_paths: tuple[tuple[str, str], ...] | None = None,
     plugin_requirements: list[SecretRequirement] | None = None,
     secrets_yaml: Path | None = None,
+    knowledge: KnowledgeSeed | None = None,
     now: datetime | None = None,
 ) -> SnapshotResult:
     """Build the snapshot zip in memory. Every input is an explicit path — no ``STATE``,
     no ``instance_paths()`` call — so a test can point it at a fixture tree and the caller
     (route or CLI) owns path resolution.
+
+    ``knowledge`` (#2105) is an OPT-IN seed the caller collects — default ``None`` means the
+    snapshot carries the definition only, which is what keeps the ordinary artifact
+    publishable. Passing one is a deliberate operator choice and changes what the review says
+    about sharing this file.
 
     ``secret_key_paths`` and ``plugin_requirements`` default to live discovery when the
     caller omits them; pass them explicitly to keep a test off the developer's machine
@@ -498,10 +582,13 @@ def build_snapshot(
         "required_secrets": [r.as_dict() for r in required],
         # Stated in the artifact so a reader knows what it is NOT: ADR 0091 D4 seeds runtime
         # history empty, and this slice carries no knowledge/memory seed at all (#2105).
+        # An opt-in knowledge seed (#2105) travels as domain-tagged docs under knowledge/.
+        # Recorded here so import can find and re-ingest them without guessing.
+        "knowledge": {"domains": dict(knowledge.counts)} if knowledge and knowledge.docs else None,
         "excludes": {
             "runtime_state": "checkpoints, telemetry, activity, inbox, a2a, scheduler, background — a snapshot yields a FRESH agent",
             "credentials": sorted(EXCLUDED_FILENAMES),
-            "knowledge": "not included in this slice (opt-in seed is #2105)",
+            "memory": "never included — what the agent recalls about a person's sessions is a different consent question",
         },
     }
 
@@ -525,6 +612,15 @@ def build_snapshot(
                     notes.append(f"skipped unreadable skill asset: {label}/{rel}")
                     continue
                 zf.writestr(f"skills/{label}/{rel}", _redact_text(text, f"skills/{label}/{rel}", pattern_hits))
+        for domain, body in sorted((knowledge.docs if knowledge else {}).items()):
+            if not body.strip():
+                continue
+            # Swept like everything else: knowledge is exactly where a pasted credential
+            # would sit unnoticed, and it is the largest body of free text in the artifact.
+            zf.writestr(
+                f"knowledge/{_safe_domain(domain)}.md",
+                _redact_text(body, f"knowledge/{domain}", pattern_hits),
+            )
         # Written LAST: the skill walk above can append notes and pattern hits, and the
         # review has to describe the finished artifact, not a partial one.
         zf.writestr(
@@ -535,12 +631,14 @@ def build_snapshot(
                 pattern_redactions=pattern_hits,
                 notes=notes,
                 exported_at=stamp,
+                knowledge=(knowledge.counts if knowledge else {}),
             ),
         )
 
     safe_name = "".join(c for c in agent_name if c.isalnum() or c in "-_") or "agent"
     filename = f"{safe_name}-snapshot-{(now or datetime.now(UTC)).strftime('%Y%m%d-%H%M%S')}.zip"
     return SnapshotResult(
+        knowledge=dict(knowledge.counts) if knowledge and knowledge.docs else {},
         data=buf.getvalue(),
         filename=filename,
         manifest=manifest,
@@ -548,3 +646,53 @@ def build_snapshot(
         pattern_redactions=pattern_hits,
         notes=notes,
     )
+
+
+def collect_knowledge_seed(store, *, domains: list[str] | None = None, max_chars: int = 2_000_000) -> KnowledgeSeed:
+    """Read a knowledge store into an exportable seed (#2105).
+
+    Separate from ``build_snapshot`` because it is the one part that needs a live store —
+    keeping it out means the builder stays host-free and the seed can be constructed in a
+    test without sqlite.
+
+    **Memory domains are dropped unconditionally** (``MEMORY_DOMAINS``), whatever the caller
+    asks for. What an agent recalls about a person's sessions is not knowledge about a
+    subject, and a snapshot is a thing you hand to someone else. A caller cannot opt into it
+    by naming the domain, because the decision is not the caller's to make here.
+
+    ``max_chars`` is a backstop against an unbounded export: a mature agent's knowledge base
+    can be very large, and a snapshot is meant to be a file you can hand over. Truncation is
+    reported by the caller rather than silently swallowing content.
+    """
+    seed = KnowledgeSeed()
+    try:
+        stats = store.stats() or {}
+    except Exception:  # noqa: BLE001 — a broken store must not fail the whole export
+        log.warning("[snapshot] knowledge stats failed — exporting no seed", exc_info=True)
+        return seed
+
+    wanted = [d for d in (domains or [k for k in stats if k != "total"]) if d not in MEMORY_DOMAINS]
+    used = 0
+    for domain in sorted(wanted):
+        try:
+            chunks = store.list_chunks(domain=domain, limit=10_000)
+        except Exception:  # noqa: BLE001 — skip a domain that won't read, keep the rest
+            log.warning("[snapshot] could not read knowledge domain %r", domain, exc_info=True)
+            continue
+        parts: list[str] = []
+        for chunk in chunks:
+            body = (getattr(chunk, "content", "") or "").strip()
+            if not body:
+                continue
+            heading = (getattr(chunk, "heading", "") or "").strip()
+            # Headings survive as markdown so a re-ingest chunks along the same seams the
+            # source did, instead of one undifferentiated wall of text.
+            piece = f"## {heading}\n\n{body}\n" if heading else f"{body}\n"
+            if used + len(piece) > max_chars:
+                break
+            parts.append(piece)
+            used += len(piece)
+        if parts:
+            seed.docs[domain] = "\n".join(parts)
+            seed.counts[domain] = len(parts)
+    return seed

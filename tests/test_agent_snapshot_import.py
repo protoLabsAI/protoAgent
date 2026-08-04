@@ -517,3 +517,60 @@ class TestImportRoute:
             data={"acknowledged": "true", "secrets_json": "{{{"},
         )
         assert res.status_code == 400
+
+
+# ── #2105: the knowledge seed, on the receiving end ──────────────────────────────────
+
+
+class TestKnowledgeSeedImport:
+    """A snapshot carrying knowledge is content, not just config — the importer is
+    receiving someone's material and should be told so before applying it."""
+
+    def _kb_snapshot(self) -> bytes:
+        return _zip(
+            {
+                "agent.snapshot.yaml": _manifest(
+                    plugins=[], knowledge={"domains": {"protocols": 12, "general": 3}}
+                ),
+                "SOUL.md": "# s",
+                "knowledge/protocols.md": "## Blitzing\n\nOne blitz per turn.\n",
+                "knowledge/general.md": "Notes.\n",
+            }
+        )
+
+    def test_the_plan_reports_the_seed(self):
+        plan = inspect_snapshot(self._kb_snapshot())
+        assert plan.knowledge == {"protocols": 12, "general": 3}
+        assert plan.as_dict()["carries_knowledge"] is True
+
+    def test_a_definition_only_snapshot_carries_none(self):
+        plan = inspect_snapshot(_snapshot_no_plugins())
+        assert plan.knowledge == {}
+        assert plan.as_dict()["carries_knowledge"] is False
+
+    def test_seed_is_ingested_into_the_new_agent(self, ws_root):
+        res = apply_snapshot(self._kb_snapshot(), name="vera-kb", acknowledged=True, install=False)
+        ws = Path(res.path)
+        # Searchable in the NEW agent's own store — the point of re-ingesting as text.
+        from knowledge import KnowledgeStore
+
+        store = KnowledgeStore(str(ws / "knowledge" / "agent.db"))
+        hits = store.search("blitz", k=5)
+        assert hits, "the seeded knowledge is not searchable in the imported agent"
+        assert any("blitz" in str(h.get("content", "")).lower() for h in hits)
+
+    def test_source_docs_are_kept_for_a_later_re_ingest(self, ws_root):
+        """Embeddings need the target's own gateway, which may not be configured yet. The
+        text stays so that can happen later without hunting for the original snapshot."""
+        res = apply_snapshot(self._kb_snapshot(), name="vera-kb", acknowledged=True, install=False)
+        assert (Path(res.path) / "knowledge-seed" / "protocols.md").exists()
+        assert any("knowledge chunk" in n for n in res.notes)
+
+    def test_a_snapshot_without_a_seed_creates_no_knowledge_store(self, ws_root):
+        res = apply_snapshot(_snapshot_no_plugins(), name="vera-plain", acknowledged=True, install=False)
+        assert not (Path(res.path) / "knowledge-seed").exists()
+
+    def test_a_hostile_knowledge_path_cannot_escape(self):
+        data = _zip({"agent.snapshot.yaml": _manifest(plugins=[]), "knowledge/../../evil.md": "x"})
+        with pytest.raises(SnapshotError, match="unsafe path"):
+            inspect_snapshot(data)

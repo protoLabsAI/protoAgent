@@ -170,8 +170,36 @@ DR snapshot as the portability format.
    **`was_set` earns its keep on this side too.** Only credentials the SOURCE agent actually
    had are reported missing; a merely-declared one isn't, or the operator would be told their
    import is broken when it is in exactly the state the original was in.
-3. **Knowledge seed (opt-in)** — export knowledge domains as seed docs; re-ingest via `knowledge_add`
-   on import. (The durable version of the claude-bridge memory import.)
+3. ~~**Knowledge seed (opt-in)**~~ — **SHIPPED (#2105)**: `--include-knowledge` /
+   `include_knowledge`, exporting domain-tagged markdown under `knowledge/` and re-ingesting
+   it into the target's own store on import.
+
+   **The seed breaks this ADR's headline property, and that had to be said out loud.**
+   Everything else here is built to the 12-Factor litmus — *publishable without leaking a
+   credential*. A knowledge seed holds **no** credentials and may still be the last thing you
+   want public: project detail, client names, internal notes. Those are two different axes,
+   and an operator who opted in and then read a review still saying "secret-free" would have
+   been told the truth and misled at once. So `REVIEW.md` **retracts the publishable claim at
+   the top**, above the reassuring sections, and lists every domain with its chunk count so
+   the decision can be made domain by domain. Off by default; turning it on is a deliberate
+   choice about a different question.
+
+   **Text, not sqlite.** The source's embeddings were computed against ITS gateway and mean
+   nothing on a target that may use another model, and a copied db is version-brittle.
+   Re-ingesting as text is what makes the seed portable at all. Import seeds the plain FTS
+   store offline — the target's gateway credential may not be supplied yet, and refusing to
+   seed until it is would break the ordinary "import, then configure" order — so knowledge is
+   **lexically searchable immediately**, with the source docs kept at `knowledge-seed/` so
+   `knowledge ingest` can add semantic recall later.
+
+   **D4 left "seed memory too" open. The answer is no**, unconditionally — not even with the
+   flag. What an agent recalls about a person's sessions is not knowledge about a subject; it
+   is accreted, personal, and a snapshot is something you hand to someone else. Knowledge can
+   be reviewed a domain at a time; memory realistically cannot be audited line by line under
+   time pressure. `MEMORY_DOMAINS` enforces it below the opt-in, so a caller cannot reach it
+   by naming a domain.
+4. **Polish** — console/desktop "duplicate agent from snapshot" UX; converge the claude-bridge
+   "export a translated bundle" roadmap onto this format.
 4. **Polish** — console "duplicate agent from snapshot" UX **SHIPPED (#2106)**: a source
    toggle on the fleet's New-agent picker (archetype | snapshot), because "where do new
    agents come from" should be one question with two answers rather than two places. The

@@ -43,17 +43,26 @@ MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 def register_snapshot_routes(app) -> None:
     @app.post("/api/agent/export")
-    async def _agent_export(dry_run: bool = Body(False, embed=True)):
+    async def _agent_export(
+        dry_run: bool = Body(False, embed=True),
+        include_knowledge: bool = Body(False, embed=True),
+    ):
         """Export this agent as a secret-free snapshot zip (ADR 0091).
 
         ``{"dry_run": true}`` → JSON review only (no bytes), for a console to show before
         the operator commits to a download. Otherwise → the zip as an attachment, with the
         review summary echoed in ``X-Snapshot-Review`` and written inside as ``REVIEW.md``.
+
+        ``include_knowledge`` (#2105) additionally carries the agent's knowledge as text.
+        **Default off, and it changes what the artifact is:** a definition-only snapshot is
+        publishable, one carrying knowledge is not — no credentials, possibly private
+        content. The review says so in both the JSON and ``REVIEW.md``.
         """
         from graph.snapshot_op import build_snapshot
         from infra.paths import instance_paths
 
         paths = instance_paths()
+        knowledge = await asyncio.to_thread(_collect_knowledge) if include_knowledge else None
         try:
             # Off-thread: reads config + SOUL + every SKILL.md and deflates a zip — small,
             # but all blocking I/O, and it must not stall the event loop mid-turn.
@@ -64,6 +73,7 @@ def register_snapshot_routes(app) -> None:
                 plugins_lock=paths.plugins_lock,
                 # read-only, for `was_set` only — the file itself can never become a zip member
                 secrets_yaml=paths.secrets_yaml,
+                knowledge=knowledge,
                 skills_dirs={"instance": paths.skills_dir, "config": paths.config_dir / "skills"},
                 # name defaults from the config's `identity.name` — see build_snapshot
             )
@@ -152,6 +162,22 @@ def register_snapshot_routes(app) -> None:
             log.exception("[snapshot] import failed")
             raise HTTPException(status_code=500, detail=f"Import failed: {type(exc).__name__}: {exc}") from exc
         return JSONResponse({"mode": "applied", **result.as_dict()})
+
+
+def _collect_knowledge():
+    """This instance's knowledge as an exportable seed, or None when there's no store.
+    Off the loop by the caller — reads every chunk in the base."""
+    from graph.snapshot_op import collect_knowledge_seed
+    from runtime.state import STATE
+
+    store = getattr(STATE, "knowledge_store", None)
+    if store is None:
+        return None
+    try:
+        return collect_knowledge_seed(store)
+    except Exception:  # noqa: BLE001 — the seed is optional; never lose the export over it
+        log.warning("[snapshot] knowledge seed collection failed", exc_info=True)
+        return None
 
 
 def _known_plugin_sources() -> list[str] | None:

@@ -99,6 +99,10 @@ class ImportPlan:
     has_soul: bool = False
     skill_files: int = 0
     mcp_servers: list[str] = field(default_factory=list)
+    #: domain → chunk count when the snapshot carries an opt-in knowledge seed (#2105).
+    #: Its presence means this artifact was NOT safe to publish, which is worth the
+    #: importer knowing too: they are receiving someone's content, not just a config.
+    knowledge: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -114,6 +118,8 @@ class ImportPlan:
             "has_soul": self.has_soul,
             "skill_files": self.skill_files,
             "mcp_servers": self.mcp_servers,
+            "knowledge": self.knowledge,
+            "carries_knowledge": bool(self.knowledge),
             "notes": self.notes,
             "runs_code": bool(self.plugins),
         }
@@ -239,7 +245,12 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
         # exported — say so rather than silently reproducing something else.
         notes.append(f"unpinned plugin(s) will install at branch tip, not the exported commit: {', '.join(unpinned)}")
 
+    kb = manifest.get("knowledge")
+    kb_domains = (kb or {}).get("domains") if isinstance(kb, dict) else None
+    knowledge = {str(k): int(v) for k, v in kb_domains.items()} if isinstance(kb_domains, dict) else {}
+
     return ImportPlan(
+        knowledge=knowledge,
         agent_name=str((manifest.get("agent") or {}).get("name") or "").strip() or "imported-agent",
         plugins=plugins,
         required_secrets=[r for r in (manifest.get("required_secrets") or []) if isinstance(r, dict)],
@@ -270,7 +281,7 @@ def stage_snapshot(data: bytes, dest: Path) -> dict:
         if rel == SNAPSHOT_MANIFEST:
             manifest = yaml.safe_load(zf.read(info.filename).decode("utf-8")) or {}
             continue
-        if rel != "SOUL.md" and not rel.startswith("skills/"):
+        if rel != "SOUL.md" and not rel.startswith("skills/") and not rel.startswith("knowledge/"):
             continue  # REVIEW.md and anything else is documentation, not definition
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -370,6 +381,8 @@ def apply_snapshot(
         copied = _copy_skills(staged / "skills", ws)
         if copied:
             notes.append(f"seeded {copied} skill file(s)")
+        if plan.knowledge:
+            notes.extend(_seed_knowledge(staged / "knowledge", ws))
 
     installed, failed = ([], [])
     if install and plan.plugins:
@@ -494,3 +507,52 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
         for r in plan.required_secrets
         if r.get("was_set") and str(r.get("name")) not in provided
     )
+
+
+def _seed_knowledge(src: Path, ws: Path) -> list[str]:
+    """Re-ingest an opt-in knowledge seed into the NEW agent's store (#2105).
+
+    Ingested as TEXT through the ordinary store, not by copying sqlite: the source's
+    embeddings were computed against ITS gateway and mean nothing here, and a copied db is
+    version-brittle. Re-ingesting is what makes the seed portable at all.
+
+    Done offline, against the plain FTS store, because the target's gateway credential may
+    not have been supplied yet — and refusing to seed until it is would make the useful case
+    (import, then configure) impossible. So the seed lands lexically searchable immediately.
+    The source docs are ALSO left in the workspace: a semantic index needs embeddings the
+    target must compute itself, and keeping the text means `protoagent knowledge ingest` can
+    do that later without the operator hunting for the original snapshot.
+    """
+    if not src.is_dir():
+        return []
+    import shutil
+
+    notes: list[str] = []
+    seed_dir = ws / "knowledge-seed"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    docs = sorted(p for p in src.glob("*.md") if p.is_file())
+    for doc in docs:
+        shutil.copyfile(doc, seed_dir / doc.name)
+
+    try:
+        from knowledge import KnowledgeStore
+
+        db_dir = ws / "knowledge"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        store = KnowledgeStore(str(db_dir / "agent.db"))
+        total = 0
+        for doc in docs:
+            body = doc.read_text(encoding="utf-8", errors="replace")
+            if not body.strip():
+                continue
+            ids = store.add_document(body, domain=doc.stem, source=f"snapshot:{doc.name}", source_type="snapshot_seed")
+            total += len(ids or [])
+        if total:
+            notes.append(
+                f"seeded {total} knowledge chunk(s) across {len(docs)} domain(s) — lexically searchable now; "
+                f"re-ingest from {seed_dir.name}/ once a gateway is configured to add semantic recall"
+            )
+    except Exception:  # noqa: BLE001 — the docs are on disk either way; never lose the agent over this
+        log.warning("[snapshot] knowledge seeding failed", exc_info=True)
+        notes.append(f"knowledge seed could not be indexed — the source docs are in {seed_dir.name}/")
+    return notes
