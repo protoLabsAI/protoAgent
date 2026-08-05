@@ -1266,16 +1266,71 @@ async def _secrets_refresh_loop() -> None:
             log.exception("[secrets] refresh failed")
 
 
+#: Filename for a per-agent store in its OWN instance-private store dir. A constant, because
+#: the dir is already the scope (``instance_root/<store>/``) — see ``_agent_store_db``.
+_AGENT_DB = "agent.db"
+
+
+def _agent_store_db(store: str, *, shared_dir: Path | None = None) -> Path:
+    """Path for one of this agent's per-agent SQLite stores (inbox / background / activity).
+
+    These were keyed by ``agent_name()`` — the **editable display name** — so renaming an
+    agent silently pointed it at a brand-new empty database: the inbox, the background-results
+    history and the activity feed all appeared to vanish. Nothing was deleted (both files sit
+    side by side on disk, e.g. ``inbox/traderAgent.db`` next to ``inbox/merchantBot.db``); the
+    agent just stopped looking at the old one. The name was never the scope in the first place
+    — ``instance_paths().store(...)`` is already private to this instance (a fleet member's is
+    inside its own workspace dir) — so the filename is now a constant and a rename can't move
+    it.
+
+    ``shared_dir`` (only the inbox's configured ``inbox_db_path``) keeps the name-keyed
+    filename: there the namespace is load-bearing, because several agents may be pointed at
+    one directory on purpose.
+
+    One-time adoption for existing installs: if the constant path doesn't exist yet but the
+    private dir holds exactly one ``*.db``, that file IS this agent's store under its old
+    name, so it's used as-is — no move, no copy, nothing to interrupt. Two or more (a
+    workspace that survived a rename before this fix) is genuinely ambiguous, so it logs both
+    and starts clean at the constant path rather than guessing.
+    """
+    if shared_dir is not None:
+        name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        return shared_dir / f"{name}.db"
+
+    base = instance_paths().store(store)
+    base.mkdir(parents=True, exist_ok=True)
+    target = base / _AGENT_DB
+    if target.exists():
+        return target
+    legacy = sorted(p for p in base.glob("*.db") if p.name != _AGENT_DB)
+    if len(legacy) == 1:
+        log.info("[%s] using this agent's existing store %s (name-keyed, pre-#2382)", store, legacy[0].name)
+        return legacy[0]
+    if legacy:
+        log.warning(
+            "[%s] %d name-keyed stores in %s (%s) — an earlier rename left more than one and "
+            "nothing on disk says which is current, so starting fresh at %s rather than "
+            "guessing. To keep one of them, rename it to %s (or move the others aside) while "
+            "the agent is stopped.",
+            store,
+            len(legacy),
+            base,
+            ", ".join(p.name for p in legacy),
+            _AGENT_DB,
+            _AGENT_DB,
+        )
+    return target
+
+
 def _build_inbox_store(config):
-    """Durable inbound inbox (ADR 0003), namespaced by agent name. ``inbox_db_path``
-    config (a dir) is used verbatim; else the per-instance ``instance_root/inbox`` store."""
+    """Durable inbound inbox (ADR 0003). ``inbox_db_path`` config (a dir) is used verbatim
+    and stays namespaced by agent name; else the per-instance ``instance_root/inbox`` store,
+    where the dir is already the scope (see ``_agent_store_db``)."""
     from inbox import InboxStore
 
-    name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
     configured = getattr(config, "inbox_db_path", "") or ""
-    base = Path(configured).expanduser() if configured else instance_paths().store("inbox")
-    db = base / f"{name}.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
+    db = _agent_store_db("inbox", shared_dir=Path(configured).expanduser() if configured else None)
     path = str(db)
     try:
         return InboxStore(path)
@@ -1319,7 +1374,7 @@ def _build_background_manager(config):
     """Background subagent manager (ADR 0050). Fires detached jobs as self-POSTed A2A
     turns, so it derives the invoke URL + auth exactly like ``_build_scheduler`` (so a
     wizard rename can't break self-invocation). The store is the per-instance
-    ``instance_root/background`` store, namespaced by agent name. Reconciles any
+    ``instance_root/background`` store (see ``_agent_store_db``). Reconciles any
     job left ``running`` by a prior crash on startup. Returns ``None`` when disabled or
     the store can't be built (the ``task`` tool then falls back to synchronous execution)."""
     if os.environ.get("BACKGROUND_DISABLED", "").lower() in ("1", "true", "yes"):
@@ -1327,10 +1382,7 @@ def _build_background_manager(config):
         return None
     from background import BackgroundManager, BackgroundStore
 
-    name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
-    db = instance_paths().store("background") / f"{name}.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    path = str(db)
+    path = str(_agent_store_db("background"))
     try:
         store = BackgroundStore(path)
     except Exception:
@@ -1363,7 +1415,9 @@ def _build_background_manager(config):
 
     try:
         return BackgroundManager(
-            agent_name=name,
+            # Recorded on each job row as descriptive metadata — never used to scope a query
+            # (unlike the scheduler's), so the live display name is the right value here.
+            agent_name=agent_name(),
             invoke_url=invoke_url,
             store=store,
             api_key=api_key,
@@ -1378,13 +1432,10 @@ def _build_background_manager(config):
 
 def _build_activity_log(config):
     """Provenance feed store (ADR 0022) — the per-instance ``instance_root/activity``
-    store, namespaced by agent name."""
+    store (see ``_agent_store_db``)."""
     from activity import ActivityLog
 
-    name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
-    db = instance_paths().store("activity") / f"{name}.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    path = str(db)
+    path = str(_agent_store_db("activity"))
     try:
         return ActivityLog(path)
     except Exception:
