@@ -55,7 +55,7 @@ def test_reload_threads_surviving_stores_into_the_rebuilt_graph(tmp_path, monkey
         ai,
         "_build_plugins",
         lambda *a, **k: SimpleNamespace(
-            mcp_servers=[], tools=[], tool_plugins={}, skill_dirs=[], meta=[],
+            mcp_servers=[], tools=[], tool_plugins={}, skill_dirs=[], meta=[], surfaces=[],
             chat_commands={}, subagents=[], middleware=[], late_tool_factories=[], routers=[],
         ),
     )
@@ -187,3 +187,38 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         assert STATE.plugin_workflow_dirs == new_workflow_dirs
     finally:
         gv.set_plugin_verifiers({})
+
+
+def test_pre_setup_reload_does_not_crash_on_the_surface_publish(tmp_path, monkeypatch):
+    """A reload while setup is still PENDING must not 500.
+
+    The setup-pending branch skips the whole plugin build, so `new_plugins` is never bound —
+    but the commit published `STATE.plugin_surfaces = new_plugins.surfaces` unconditionally
+    and raised UnboundLocalError. Every pre-setup reload 500'd: installing a plugin during
+    the wizard (its auto-enable reloads through here), or saving any setting before setup is
+    marked complete. This is the exact trap the sibling `new_middleware = []` was added to
+    close — the surface publish landed after it and missed the guard.
+    """
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: False)  # ← the wizard is still up
+    monkeypatch.setattr(ai, "_reload_plugin_surfaces", lambda cfg: None)
+    import security.egress as _egress
+    import security.policy as _policy
+
+    monkeypatch.setattr(_egress, "set_allowed_hosts", lambda *a, **k: None)
+    monkeypatch.setattr(_policy, "set_callback_allowlist", lambda *a, **k: None)
+    monkeypatch.setattr(STATE, "scheduler", None, raising=False)
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+    monkeypatch.setattr(STATE, "plugin_surfaces", ["stale"], raising=False)
+
+    ok, msg = ai._reload_langgraph_agent()
+
+    assert ok is True and "setup not complete" in msg
+    assert STATE.plugin_surfaces == []  # nothing wanted yet — the boot hook starts the real set

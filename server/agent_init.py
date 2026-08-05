@@ -1825,6 +1825,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
     new_plugin_tool_owner: dict = {}  # tool name -> owning plugin display name (Tools tab)
     new_plugin_chat_commands: dict = {}  # user-only /<name> control commands
+    # Pre-seeded like its siblings because the commit below publishes it UNCONDITIONALLY (the
+    # reconcile has to see a disabled plugin's surface leave the wanted set). Reading it off
+    # `new_plugins` there raised UnboundLocalError on the setup-pending branch, which never
+    # builds plugins — the same trap the `new_middleware = []` below already guards against.
+    new_plugin_surfaces: list = []
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
@@ -1850,6 +1855,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugin_skill_dirs = new_plugins.skill_dirs
             new_plugin_meta = new_plugins.meta
             new_plugin_chat_commands = new_plugins.chat_commands  # user-only /<name> control commands
+            new_plugin_surfaces = new_plugins.surfaces
             # Plugin knowledge backend (ADR 0031) — swap before the graph rebuild.
             new_store = _apply_plugin_knowledge_backend(new_config, new_store, new_plugins)
             _register_plugin_subagents(new_plugins.subagents)
@@ -1956,7 +1962,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # introspection) sees the CURRENT wanted surfaces — this is what lets a reload
     # hot-start a newly-enabled plugin's surface and stop a disabled one. Was
     # boot-only before, so surface enable/disable needed a restart.
-    STATE.plugin_surfaces = new_plugins.surfaces
+    STATE.plugin_surfaces = new_plugin_surfaces
     # Reconcile running surfaces against that set (ADR 0018/0019): stop surfaces whose
     # plugin was disabled/removed, hot-start newly-enabled ones, and fire each survivor's
     # reload hook so a Discord/Google-style gateway live-reconnects on a token/admin change.
