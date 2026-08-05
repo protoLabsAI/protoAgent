@@ -17,15 +17,25 @@ from scheduler.local import (
 
 def test_scheduler_db_path_nests_under_instance(tmp_path, monkeypatch):
     """The default jobs.db sits under the per-instance store
-    (``instance_root/scheduler/<agent>/jobs.db``), so two instances don't collide."""
+    (``instance_root/scheduler/agent/jobs.db``), so two instances don't collide.
+
+    The instance root IS the scope, so the segment is a constant — it used to be the agent's
+    editable display name, which meant a rename silently pointed the agent at an empty store
+    (#2382). The collision this test guards against is between INSTANCES, and that is the
+    ``alice`` tier of the path, not the leaf."""
     monkeypatch.delenv("SCHEDULER_DB_DIR", raising=False)
     monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "alice")
     paths.reset_instance_paths()
     from scheduler.local import _resolve_db_path
 
-    p = _resolve_db_path(None, "myagent")
-    assert p == tmp_path / "alice" / "scheduler" / "myagent" / "jobs.db"
+    assert _resolve_db_path(None, "myagent") == tmp_path / "alice" / "scheduler" / "agent" / "jobs.db"
+    # A rename cannot move it, which is the whole point.
+    assert _resolve_db_path(None, "renamed") == tmp_path / "alice" / "scheduler" / "agent" / "jobs.db"
+
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "bob")
+    paths.reset_instance_paths()
+    assert _resolve_db_path(None, "myagent") == tmp_path / "bob" / "scheduler" / "agent" / "jobs.db"
 
 
 def test_scheduler_db_dir_override_is_verbatim(tmp_path, monkeypatch):

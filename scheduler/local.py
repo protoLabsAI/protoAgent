@@ -95,23 +95,59 @@ def _release_jobs_lock(path: Path, fd) -> None:
         pass
 
 
-def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
-    """Pick a writable jobs.db path namespaced by agent name.
+#: Segment for this agent's jobs.db inside its OWN instance-private scheduler dir. A
+#: constant, because that dir is already the scope — see ``_resolve_db_path``.
+_AGENT_SEGMENT = "agent"
 
-    ``agent_name`` is sanitized to a single path segment before being
-    appended — operators set it via env or YAML, but defence in depth
-    against a value like ``../etc/passwd`` or ``/tmp/elsewhere`` is
-    cheap and prevents an exotic typo from putting a sqlite file
-    outside the configured scheduler dir.
+
+def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
+    """Pick a writable jobs.db path for this agent.
+
+    A **configured** dir (``SCHEDULER_DB_DIR`` / ``db_dir``) may deliberately be shared by
+    several agents, so there the path stays namespaced by agent name. ``agent_name`` is
+    sanitized to a single path segment first — operators set it via env or YAML, and defence
+    in depth against a value like ``../etc/passwd`` or ``/tmp/elsewhere`` is cheap and
+    prevents an exotic typo from putting a sqlite file outside the configured dir.
+
+    The **default** dir is ``instance_root/scheduler``, already private to this instance, so
+    the segment there is a constant. It used to be the agent's editable display name, which
+    meant renaming an agent silently pointed it at a brand-new empty jobs.db and every
+    scheduled job vanished from the console (nothing deleted — the old dir sits right beside
+    the new one, e.g. ``scheduler/myagent/`` next to ``scheduler/protoEngineer/``).
+
+    One-time adoption for existing installs: when the constant segment has no jobs.db yet but
+    exactly one sibling dir does, that store IS this agent's under its old name, so it's used
+    in place — no move, no copy. Empty leftover dirs from an earlier rename don't count, so
+    the common "renamed once, before any jobs existed" case still resolves cleanly. Two or
+    more real stores is genuinely ambiguous, so it starts fresh at the constant segment and
+    names them in the log rather than guessing whose schedule is current.
     """
-    safe_name = _safe_segment(agent_name)
     override = os.environ.get("SCHEDULER_DB_DIR") or db_dir
     if override:
-        base = Path(str(override)).expanduser() / safe_name
-    else:
-        from infra.paths import instance_paths
+        base = Path(str(override)).expanduser() / _safe_segment(agent_name)
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "jobs.db"
 
-        base = instance_paths().store("scheduler") / safe_name
+    from infra.paths import instance_paths
+
+    root = instance_paths().store("scheduler")
+    base = root / _AGENT_SEGMENT
+    if not (base / "jobs.db").exists() and root.is_dir():
+        legacy = sorted(d for d in root.iterdir() if d.name != _AGENT_SEGMENT and (d / "jobs.db").exists())
+        if len(legacy) == 1:
+            log.info("[scheduler] using this agent's existing store %s/jobs.db (name-keyed, pre-#2382)", legacy[0].name)
+            base = legacy[0]
+        elif legacy:
+            log.warning(
+                "[scheduler] %d name-keyed job stores in %s (%s) — an earlier rename left more "
+                "than one and nothing on disk says which is current, so starting fresh at %s/ "
+                "rather than guessing. To keep one, rename its dir to %s while the agent is stopped.",
+                len(legacy),
+                root,
+                ", ".join(d.name for d in legacy),
+                _AGENT_SEGMENT,
+                _AGENT_SEGMENT,
+            )
     base.mkdir(parents=True, exist_ok=True)
     return base / "jobs.db"
 
@@ -259,6 +295,21 @@ class LocalScheduler:
                 db.execute("ALTER TABLE jobs ADD COLUMN context_id TEXT")
             except sqlite3.OperationalError:
                 pass  # column already present
+            # Re-key rows written under a previous display name (#2382). Every jobs.db is
+            # single-agent by construction — the path carries either the constant segment or
+            # the agent's own name segment — so every row in THIS file is ours, whatever name
+            # it was stored under. Without this the path fix alone isn't enough: `get`, `list_jobs`,
+            # `update` and `delete` all filter `WHERE agent_name = ?`, so a renamed agent would
+            # open the right database and still see an empty schedule.
+            try:
+                n = db.execute(
+                    "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
+                    (self.agent_name, self.agent_name),
+                ).rowcount
+                if n:
+                    log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] re-keying jobs to %r failed at %s", self.agent_name, self.path)
             db.commit()
             db.close()
         except sqlite3.DatabaseError:

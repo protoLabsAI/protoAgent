@@ -906,3 +906,91 @@ class TestContextId:
         plain = s.add_job("plain", soon, job_id="plain")
         await s._fire(plain)
         assert _CapClient.posted["params"]["message"]["contextId"] == ACTIVITY_CONTEXT
+
+
+class TestRenameDoesNotOrphanJobs:
+    """#2382 — the scheduler was keyed TWICE by the agent's editable display name: the
+    jobs.db path segment, and an `agent_name` column every query filters on. Renaming an
+    agent therefore pointed it at a brand-new empty database AND, even aimed back at the
+    right file, would have shown an empty schedule. Nothing was deleted — a real member here
+    ended up with `scheduler/myagent/` sitting beside `scheduler/protoEngineer/`."""
+
+    def _instance_scheduler(self, root: Path, agent: str, monkeypatch) -> LocalScheduler:
+        """A scheduler on the DEFAULT per-instance path (no db_dir override)."""
+        import scheduler.local as sl
+
+        monkeypatch.setattr(
+            "infra.paths.instance_paths",
+            lambda: type("P", (), {"store": lambda _s, n: root / n})(),
+        )
+        assert sl._resolve_db_path  # the path under test
+        return LocalScheduler(agent_name=agent, invoke_url="http://127.0.0.1:7870", db_dir=None)
+
+    def test_a_rename_keeps_the_same_store_and_the_jobs_in_it(self, tmp_path, monkeypatch):
+        before = self._instance_scheduler(tmp_path, "traderAgent", monkeypatch)
+        before.add_job("weekly margin review", "0 9 * * 1")
+        assert before.path == tmp_path / "scheduler" / "agent" / "jobs.db"
+
+        # Rename the agent → same store, and the job is still listed (it was written under
+        # the old name, so the row re-key is what makes it visible).
+        after = self._instance_scheduler(tmp_path, "merchantAgent", monkeypatch)
+        assert after.path == before.path
+        jobs = after.list_jobs()
+        assert [j.prompt for j in jobs] == ["weekly margin review"]
+        assert jobs[0].agent_name == "merchantAgent"
+
+    def test_an_existing_name_keyed_store_is_adopted_in_place(self, tmp_path, monkeypatch):
+        """Existing installs keep their schedule: the private dir can only hold THIS agent's
+        store, so a lone name-keyed one is it — used as-is, no move."""
+        legacy = tmp_path / "scheduler" / "protoEngineer"
+        legacy.mkdir(parents=True)
+        (tmp_path / "scheduler" / "myagent").mkdir()  # empty leftover from an earlier rename
+        seeded = LocalScheduler(
+            agent_name="protoEngineer", invoke_url="http://127.0.0.1:7870", db_dir=tmp_path / "scheduler"
+        )
+        seeded.add_job("nightly sweep", "0 2 * * *")
+        assert seeded.path == legacy / "jobs.db"
+
+        # A fresh boot on the fixed code adopts it — the empty dir must not make it ambiguous.
+        s = self._instance_scheduler(tmp_path, "protoEngineer", monkeypatch)
+        assert s.path == legacy / "jobs.db"
+        assert [j.prompt for j in s.list_jobs()] == ["nightly sweep"]
+
+    def test_two_real_stores_start_clean_and_say_so(self, tmp_path, monkeypatch, caplog):
+        """Guessing between two schedules would silently resurrect (or bury) the wrong one."""
+        for name in ("traderAgent", "merchantBot"):
+            LocalScheduler(
+                agent_name=name, invoke_url="http://127.0.0.1:7870", db_dir=tmp_path / "scheduler"
+            ).add_job(f"{name} job", "0 9 * * *")
+
+        with caplog.at_level("WARNING"):
+            s = self._instance_scheduler(tmp_path, "merchantAgent", monkeypatch)
+        assert s.path == tmp_path / "scheduler" / "agent" / "jobs.db"
+        assert s.list_jobs() == []
+        assert "traderAgent" in caplog.text and "merchantBot" in caplog.text
+
+    def test_a_configured_dir_stays_namespaced_by_name(self, tmp_path):
+        """SCHEDULER_DB_DIR / db_dir may be shared by several agents on purpose — a constant
+        segment there would have them all open one jobs.db."""
+        a = LocalScheduler(agent_name="one", invoke_url="http://x", db_dir=tmp_path)
+        b = LocalScheduler(agent_name="two", invoke_url="http://x", db_dir=tmp_path)
+        assert a.path == tmp_path / "one" / "jobs.db"
+        assert b.path == tmp_path / "two" / "jobs.db"
+
+    def test_rows_written_under_an_old_name_are_adopted(self, tmp_path):
+        """The row half of the bug, isolated from the path half: every query filters
+        `WHERE agent_name = ?`, so rows stored under a previous display name are invisible
+        even when the store path is already correct. Uses a configured dir so the path is
+        held constant and only the re-key is under test."""
+        db_dir = tmp_path / "shared"
+        seeded = LocalScheduler(agent_name="traderAgent", invoke_url="http://x", db_dir=db_dir)
+        job = seeded.add_job("weekly margin review", "0 9 * * 1")
+
+        # Same file, opened by the renamed agent (the path segment is the old name on disk).
+        renamed = LocalScheduler(agent_name="merchantAgent", invoke_url="http://x", db_dir=db_dir)
+        renamed.path = seeded.path
+        renamed._init_db()
+
+        assert [j.prompt for j in renamed.list_jobs()] == ["weekly margin review"]
+        # …and addressable, not merely listed: cancel filters on agent_name too.
+        assert renamed.cancel_job(job.id) is True
