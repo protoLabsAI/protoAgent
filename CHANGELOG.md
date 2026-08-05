@@ -11,6 +11,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.125.0] - 2026-08-05
+
+### Added
+- **Export an agent as a portable, secret-free snapshot (#2103, ADR 0091 Slice 1).**
+  `protoagent agent export` (works on a stopped agent) and `POST /api/agent/export`
+  (`{"dry_run": true}` for a review without the bytes) emit a zip carrying the agent's
+  *recipe* — SOUL, secret-stripped config, `plugins.lock` SHA pins, MCP servers, and
+  `SKILL.md` dirs — not a state dump. The bar is 12-Factor's: the artifact could be pushed
+  to a public gist without leaking a credential, enforced by a test that greps the built
+  zip's bytes for known secrets. Credentials the target must re-supply travel as a
+  `required_secrets` inventory (names and descriptions, never values), and every export
+  carries a `REVIEW.md` disclosing what was stripped — inside the artifact, so it can't be
+  separated from what it describes. Import, knowledge seed, and the console UX are #2104,
+  #2105 and #2106.
+
+- **Import a snapshot to stand up a fresh agent (#2104, ADR 0091 Slice 2).**
+  `protoagent agent import <zip>` and `POST /api/agent/import` rehydrate an agent from a
+  Slice-1 snapshot — config, persona, skills and pinned plugins — through a new secret-free
+  entry into the workspace scaffold that writes an **empty** credential overlay (never the
+  `from_config` clone, which copies `secrets.yaml` verbatim).
+  **Importing runs code**, so it is two-phase: without acknowledgement it returns a *plan*
+  naming every plugin URL it would install (flagging unfamiliar sources), every capability
+  the config grants (`filesystem.allow_run`, `operator.allowed_dirs`, `mcp.servers`), and
+  every credential needed — and changes nothing. The CLI prints that plan and refuses to
+  apply without `--yes`. Capability config is applied verbatim and surfaced rather than
+  silently stripped (ADR 0071 D1 — trust, not sandbox). Hostile archives are refused before
+  anything reaches disk: zip-slip, absolute-path and Windows-style traversal, zip bombs,
+  oversized member counts, and unsupported snapshot versions. The new agent reports itself
+  **incomplete** until the credentials the source agent actually had are supplied.
+
+- **Opt-in knowledge seed in agent snapshots (#2105, ADR 0091 Slice 3).**
+  `protoagent agent export --include-knowledge` (or `include_knowledge` on
+  `POST /api/agent/export`) additionally carries the agent's knowledge as domain-tagged
+  markdown — text, not the raw sqlite, since the source's embeddings were computed against
+  *its* gateway. Import re-ingests it into the new agent's store, searchable immediately;
+  the source docs are kept at `knowledge-seed/` so semantic recall can be added once a
+  gateway is configured.
+  **Off by default, because it changes what the artifact is.** A definition-only snapshot is
+  publishable; one carrying knowledge is not — it holds no credentials and may still be the
+  last thing you want public. `REVIEW.md` retracts the publishable claim at the top and
+  lists every domain with its chunk count for review.
+  **Memory is never included**, flag or no flag: what an agent recalls about a person's
+  sessions is a different kind of data with a different consent question, and knowledge can
+  be reviewed a domain at a time where accreted personal memory realistically cannot.
+
+- **Duplicate an agent from a snapshot in the console (#2106, ADR 0091 Slice 4).**
+  Settings ▸ Fleet ▸ **New agent** now has two sources: an archetype, or a **snapshot** —
+  because "where do new agents come from" should be one question with two answers rather
+  than two places. Pick a snapshot file and you get a *plan* before anything happens: every
+  plugin it would install (with unfamiliar sources flagged), every capability its config
+  grants, and the credentials the new agent needs. Nothing is written until you press a
+  button that names what it will run — *"Install 2 plugins and create agent"* — because
+  applying a snapshot clones those repos and runs their code in-process. Only credentials
+  the source agent actually had are asked for, and an agent imported without them is
+  reported as needing setup rather than "ready". New guide:
+  [Agent snapshots](https://protolabs.studio/guides/agent-snapshots).
+
+- **Settings ▸ Agent ▸ Snapshot — export an agent from the console (#2103).**
+  The console surface for ADR 0091's secret-free export. It opens on the **review**, not the
+  download: which credentials the target must re-supply (names only, marked *set here* vs
+  *declared, unset*), what the pattern sweep scrubbed, and what was skipped — then downloads
+  the zip on a second, deliberate click. Findings are split by what to do about them: a
+  scrubbed credential is **still live in this agent** and wants rotating, while a scrubbed
+  home path just needs re-pointing on the target. It sits last in the Agent group because it
+  exports what every section above it configures.
+
 ## [0.124.0] - 2026-08-03
 
 ### Added

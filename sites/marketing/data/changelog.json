@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.125.0",
+    "date": "2026-08-05",
+    "changes": [
+      "Export an agent as a portable, secret-free snapshot (#2103, ADR 0091 Slice 1).",
+      "Import a snapshot to stand up a fresh agent (#2104, ADR 0091 Slice 2).",
+      "Opt-in knowledge seed in agent snapshots (#2105, ADR 0091 Slice 3).",
+      "Duplicate an agent from a snapshot in the console (#2106, ADR 0091 Slice 4).",
+      "Settings ▸ Agent ▸ Snapshot — export an agent from the console (#2103)."
+    ]
+  },
+  {
     "version": "v0.124.0",
     "date": "2026-08-03",
     "changes": [
