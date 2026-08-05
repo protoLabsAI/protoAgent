@@ -39,7 +39,9 @@ def test_new_ls_run_rm(root):
     with pytest.raises(manager.WorkspaceError):
         manager.create("alpha")  # display-name collision
 
-    assert "workspace" in manager.remove("alpha")["removed"] and not ws.exists()
+    # rm keeps the data by default (see TestRemoveKeepsDataUnlessPurged); purge is the
+    # irreversible one, and only it deletes the dir.
+    assert "workspace" in manager.remove("alpha", purge=True)["removed"] and not ws.exists()
 
 
 def test_pick_port_skips_os_occupied(root, monkeypatch):
@@ -636,3 +638,68 @@ def test_is_workspace_member_detects_spawned_instance(root, monkeypatch):
     paths.reset_instance_paths()
     assert str(ws) == env["PROTOAGENT_HOME"]
     assert manager.is_workspace_member() is True
+
+
+class TestRemoveKeepsDataUnlessPurged:
+    """#2384 — the console offered an opt-in "Also purge its workspace data (irreversible)"
+    switch, but `remove` rmtree'd the workspace either way. For a fleet member that dir IS its
+    whole instance root (PROTOAGENT_HOME=<ws>): config, SOUL, chat checkpoints, knowledge,
+    inbox, tasks. So leaving the switch OFF destroyed exactly the data it implied you kept."""
+
+    def test_remove_retires_the_agent_and_keeps_every_byte(self, root):
+        s = manager.create("ava")
+        ws = root / s["id"]
+        (ws / "checkpoints.db").write_bytes(b"a whole chat history")
+
+        rep = manager.remove("ava")
+
+        assert rep["removed"] == []  # nothing was deleted, and it says so
+        assert ws.exists() and (ws / "checkpoints.db").read_bytes() == b"a whole chat history"
+        assert (ws / "config" / "langgraph-config.yaml").exists()
+        # Out of the fleet, though — that's what "remove" has to mean.
+        assert manager.list_workspaces() == [] and manager._find(s["id"]) is None
+
+    def test_a_retired_agent_can_be_brought_back(self, root):
+        """Renaming the record aside IS the whole mechanism, so renaming it back is the whole
+        undo — the point of keeping the data is being able to use it again."""
+        s = manager.create("ava")
+        ws = root / s["id"]
+        manager.remove("ava")
+
+        (ws / manager._RETIRED_RECORD).rename(ws / "workspace.yaml")
+        back = manager._find(s["id"])
+        assert back and back["name"] == "ava" and back["id"] == s["id"]
+
+    def test_the_name_frees_up_so_a_replacement_can_reuse_it(self, root):
+        """A retired agent must not keep squatting its display name — 'remove then recreate'
+        is the flow this whole fix came out of."""
+        first = manager.create("ava")
+        manager.remove("ava")
+
+        second = manager.create("ava")  # no collision
+        assert second["id"] != first["id"] and (root / first["id"]).exists()
+
+    def test_purge_deletes_the_workspace(self, root):
+        s = manager.create("ava")
+        assert manager.remove("ava", purge=True)["removed"] == ["workspace"]
+        assert not (root / s["id"]).exists()
+
+    def test_purge_resolves_the_legacy_data_scope_through_the_box_root(self, root, tmp_path, monkeypatch):
+        """The legacy scope was hard-coded to `~/.protoagent/<id>`, ignoring
+        PROTOAGENT_BOX_ROOT — so on the desktop app (box root under ~/Library/Application
+        Support) the purge branch could never find anything to delete."""
+        box = tmp_path / "box"
+        monkeypatch.setattr(
+            "infra.paths.instance_paths", lambda: type("P", (), {"box_root": box})()
+        )
+        s = manager.create("ava")
+        legacy = box / s["id"]
+        legacy.mkdir(parents=True)
+        (legacy / "knowledge.db").write_bytes(b"x")
+
+        assert manager.remove("ava", purge=True)["removed"] == ["workspace", "data"]
+        assert not legacy.exists()
+
+    def test_remove_still_rejects_an_unknown_workspace(self, root):
+        with pytest.raises(manager.WorkspaceError):
+            manager.remove("never-existed")

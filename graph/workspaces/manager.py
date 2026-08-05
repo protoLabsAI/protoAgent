@@ -780,23 +780,56 @@ def run_exec(ident: str, passthrough: list[str]) -> tuple[dict, list[str]]:
     return env, argv
 
 
+#: A retired workspace's record, renamed aside so :func:`list_workspaces` stops seeing it.
+#: Renaming it back is the whole undo.
+_RETIRED_RECORD = "workspace.yaml.removed"
+
+
 def remove(ident: str, *, purge: bool = False) -> dict:
-    """Delete the workspace dir (by id or display name). With ``purge``, also remove
-    its scoped private data at ``~/.protoagent/<id>/``."""
+    """Take a workspace out of the fleet (by id or display name).
+
+    ``purge=False`` **keeps the agent's data.** The supervisor spawns members with
+    ``PROTOAGENT_HOME=<ws>``, so the workspace dir IS the member's entire instance root —
+    config, SOUL, chat checkpoints, knowledge, inbox, tasks and memory all live inside it.
+    This used to ``rmtree`` that dir unconditionally, so the console's opt-in "Also purge its
+    workspace data (irreversible)" switch changed nothing: leaving it off destroyed exactly
+    the data it implied you were keeping (#2384). Retiring the workspace now just renames its
+    record aside, which is what drops it out of :func:`list_workspaces` — the dir and every
+    byte in it stay put, and renaming the record back restores the agent.
+
+    ``purge=True`` is the irreversible one the switch always described: the whole workspace
+    dir goes, plus the legacy ``box_root/<id>`` data scope if this install has one. That path
+    was hard-coded to ``~/.protoagent/<id>``, which ignores ``PROTOAGENT_BOX_ROOT`` — so on
+    the desktop app (box root under ``~/Library/Application Support``) the purge branch could
+    never find anything to delete. It resolves through ``infra.paths`` now.
+
+    ``removed`` reports what actually went: ``[]`` for a retire, ``["workspace"]`` (plus
+    ``"data"`` when a legacy scope existed) for a purge.
+    """
     found = _find(ident)
     ws = Path(found["path"]) if found else _ws_dir(ident)
     rec = _read_record(ws)
     if not ws.exists():
         raise WorkspaceError(f"no workspace {ident!r}")
     iid = (rec or {}).get("id", ident)
+    name = (rec or {}).get("name", ident)
+
+    if not purge:
+        (ws / "workspace.yaml").rename(ws / _RETIRED_RECORD)
+        return {"name": name, "removed": [], "retired_at": str(ws)}
+
     shutil.rmtree(ws)
     removed = ["workspace"]
-    if purge:
-        data = Path.home() / ".protoagent" / _safe(str(iid))
-        if data.exists():
-            shutil.rmtree(data)
-            removed.append("data")
-    return {"name": (rec or {}).get("name", ident), "removed": removed}
+    # Pre-ADR-0041 installs scoped a member's private data to a sibling of the box root
+    # rather than into the workspace. Resolved (not hard-coded) so a non-default
+    # PROTOAGENT_BOX_ROOT is honored; absent on any modern install, hence the exists() guard.
+    from infra.paths import instance_paths
+
+    legacy_data = instance_paths().box_root / _safe(str(iid))
+    if legacy_data.exists() and legacy_data != ws:
+        shutil.rmtree(legacy_data)
+        removed.append("data")
+    return {"name": name, "removed": removed}
 
 
 def rename(ident: str, new_name: str) -> dict:

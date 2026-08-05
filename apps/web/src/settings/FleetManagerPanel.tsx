@@ -577,12 +577,20 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         }}
         onClose={() => setConfirmRemove(null)}
       >
-        <p>Stops the agent and removes it from the fleet.</p>
+        {/* Say which of the two this actually is. The switch used to change nothing — the
+            workspace dir (which IS a member's whole instance root: config, chats, knowledge,
+            tasks) was deleted either way, so "Remove" quietly did what "purge" advertised
+            (#2384). Now Remove retires the agent and leaves every byte on disk. */}
+        <p>
+          {purge
+            ? "Stops the agent, removes it from the fleet, and deletes its workspace — chats, knowledge, tasks and config. This cannot be undone."
+            : "Stops the agent and removes it from the fleet. Its workspace stays on disk, so nothing is lost."}
+        </p>
         <Switch
           className="fleet-purge"
           checked={purge}
           onCheckedChange={setPurge}
-          label="Also purge its workspace data (irreversible)"
+          label="Also delete its workspace data (irreversible)"
         />
       </ConfirmDialog>
     </section>

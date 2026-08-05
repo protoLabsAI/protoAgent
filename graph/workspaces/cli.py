@@ -33,9 +33,13 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument("name")
     pr.add_argument("rest", nargs=argparse.REMAINDER, help="extra args forwarded to the server")
 
-    pd = sub.add_parser("rm", help="remove a workspace")
+    pd = sub.add_parser("rm", help="take a workspace out of the fleet (its data is kept)")
     pd.add_argument("name")
-    pd.add_argument("--purge", action="store_true", help="also remove its scoped private data")
+    pd.add_argument(
+        "--purge",
+        action="store_true",
+        help="also DELETE the workspace — config, chats, knowledge, tasks. Irreversible.",
+    )
     return p
 
 
@@ -76,7 +80,12 @@ def run_workspace_cli(argv: list[str]) -> int:
             return 0  # unreachable
         if args.cmd == "rm":
             rep = manager.remove(args.name, purge=args.purge)
-            print(f"✓ removed workspace {args.name} ({', '.join(rep['removed'])})")
+            # Without --purge nothing is deleted, so say where the data is rather than
+            # printing an empty "(…)" that reads like the removal half-failed.
+            if rep["removed"]:
+                print(f"✓ removed workspace {args.name} ({', '.join(rep['removed'])})")
+            else:
+                print(f"✓ retired workspace {args.name} — data kept at {rep['retired_at']}")
             return 0
     except manager.WorkspaceError as exc:
         print(f"✗ {exc}", file=sys.stderr)
