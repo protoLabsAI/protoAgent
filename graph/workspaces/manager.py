@@ -15,6 +15,7 @@ format. ``run`` returns the env + argv for the CLI to ``exec`` the normal server
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,21 @@ def _safe(name: str) -> str:
     if not n or n != "".join(c for c in n if c.isalnum() or c in "-_"):
         raise WorkspaceError(f"invalid workspace name {name!r} — use letters, digits, '-' or '_'")
     return n
+
+
+def _slugify_display(name: str) -> str:
+    """Coerce a free-form name into one a workspace record can hold.
+
+    Workspace display names are constrained to ``[A-Za-z0-9_-]`` (see :func:`_safe`) because
+    the fleet control plane accepts an agent by name as well as by id. ``identity.name`` has
+    no such limit — "Blood Bowl Coach" is a perfectly reasonable thing to call an agent — so
+    a member syncing its own record **coerces** instead of refusing: any run of other
+    characters collapses to a single ``_``, and leading/trailing separators are trimmed.
+
+    Returns ``""`` when nothing usable survives (e.g. ``"!!!"``); that's the caller's call.
+    Only the derived record is normalized — the agent keeps the name the operator typed.
+    """
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", (name or "").strip()).strip("_-")
 
 
 def _ws_dir(name: str) -> Path:
@@ -123,11 +139,18 @@ def sync_self_display_name(new_name: str) -> str | None:
     the missing second half — the mirror image of hub-side :func:`rename`, which already
     stamps the record *and* the member's config.
 
-    No-op (returns ``None``) on a host/standalone instance — nothing owns a record there —
-    or when the record already matches. Returns a warning string when the record can't be
-    restamped (a name ``_safe`` rejects, or the reserved ``host`` slug); the caller logs it
-    rather than failing, because ``identity.name`` has already been accepted and the agent
-    is running under it — a stale switcher label beats a refused save.
+    A name the record can't hold verbatim is **normalized, not refused** (:func:`_slugify_display`):
+    ``identity.name`` is free-form and has already been accepted, so "Merchant Bot" becomes the
+    label ``Merchant_Bot`` rather than leaving the switcher stuck on a stale name with only a
+    log line to explain it. The agent keeps the name the operator typed — only the derived
+    record is normalized.
+
+    Returns a note for the operator, or ``None`` when there is nothing to say: a
+    host/standalone instance (nothing owns a record there), or a record already in step. The
+    note says what happened — the label it saved when normalization changed the name, or why
+    it couldn't save one at all (the reserved ``host`` slug, or a name with no usable
+    characters). The caller surfaces it and carries on: the agent is already running under
+    the new identity, so a stale label must never fail the reload.
 
     Uniqueness against SIBLING workspaces is deliberately not checked: ``workspaces_root()``
     is hub-scoped, so a member's own is empty by construction and it cannot see its peers.
@@ -141,20 +164,20 @@ def sync_self_display_name(new_name: str) -> str | None:
     rec = _read_record(root)
     if rec is None:  # host / standalone — no record to keep in step
         return None
-    try:
-        name = _safe(new_name)
-    except WorkspaceError as exc:
-        return str(exc)
+    name = _slugify_display(new_name)
+    if not name:
+        return f"fleet label unchanged: {new_name!r} has no characters a workspace name can hold"
     if name == rec.get("name"):
         return None
     if name.lower() in _RESERVED_NAMES:
-        return f"{name!r} is reserved — it's how the fleet addresses the host instance"
+        return f"fleet label unchanged: {name!r} is reserved — it's how the fleet addresses the host"
 
     import yaml
 
     rec["name"] = name
     atomic_write(root / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
-    return None
+    # Silent on the common path; speaks up only when the label had to differ from the identity.
+    return None if name == (new_name or "").strip() else f"fleet label saved as {name!r}"
 
 
 def capability_contract_warning(bound_tool_names) -> str | None:

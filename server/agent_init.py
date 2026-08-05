@@ -1916,14 +1916,16 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # (settings save, /api/config, an out-of-band YAML edit + reload) converges. No-op on a
     # host/standalone instance and when it's already in step, so this is also a cheap
     # boot-time reconcile after a hub-side rename.
+    # A label the record can't hold verbatim is normalized, not refused, so the note below is
+    # usually about a name that got slugified — not a failure.
     fleet_label_note = ""
     try:
         from graph.workspaces import manager as workspaces_manager
 
-        skipped = workspaces_manager.sync_self_display_name(new_config.identity_name)
-        if skipped:
-            log.warning("[fleet] workspace display name left unchanged: %s", skipped)
-            fleet_label_note = f" • fleet label unchanged: {skipped}"
+        note = workspaces_manager.sync_self_display_name(new_config.identity_name)
+        if note:
+            log.info("[fleet] %s", note)
+            fleet_label_note = f" • {note}"
     except Exception:  # noqa: BLE001 — a fleet label must never fail a reload
         log.exception("[fleet] workspace display-name sync failed")
     STATE.knowledge_store = new_store

@@ -89,13 +89,40 @@ def test_member_self_rename_restamps_its_own_record(root, monkeypatch):
     assert manager._find(s["id"])["name"] == "ranger"  # what the hub lists → the switcher label
     assert manager.sync_self_display_name("ranger") is None  # already in step → no-op
 
-    # Refusals are reported, never raised: identity.name is already saved and the agent is
-    # running under it, so a stale switcher label beats blowing up the reload.
-    assert manager.sync_self_display_name("host")  # reserved slug
-    assert manager.sync_self_display_name("not a slug")  # _safe rejects
-    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "ranger"
+    # A free-form identity.name the record can't hold verbatim is NORMALIZED, not refused —
+    # the agent keeps what the operator typed, the label follows as close as it can. Refusing
+    # would leave the switcher on a stale name with only a log line to explain it.
+    note = manager.sync_self_display_name("Merchant Bot!")
+    assert note == "fleet label saved as 'Merchant_Bot'"
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "Merchant_Bot"
+    assert manager._find(s["id"])["name"] == "Merchant_Bot"  # and the hub lists the slugified one
+
+    # Only the genuinely unusable is reported and skipped — never raised: identity.name is
+    # already saved and the agent is running under it, so a stale label beats a failed reload.
+    assert "reserved" in manager.sync_self_display_name("host")
+    assert "no characters" in manager.sync_self_display_name("!!!")
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "Merchant_Bot"
     # The id (dir, URL slug, data scope) never moves.
     assert yaml.safe_load((ws / "workspace.yaml").read_text())["id"] == s["id"]
+
+
+@pytest.mark.parametrize(
+    "raw,slug",
+    [
+        ("Merchant Bot", "Merchant_Bot"),
+        ("Blood Bowl Coach", "Blood_Bowl_Coach"),
+        ("  padded  ", "padded"),
+        ("a//b??c", "a_b_c"),  # runs of junk collapse to ONE separator, not one each
+        ("--edges__", "edges"),
+        ("keep-me_1", "keep-me_1"),  # already legal → untouched
+        ("!!!", ""),  # nothing usable survives
+        ("", ""),
+    ],
+)
+def test_slugify_display(raw, slug):
+    """`identity.name` is free-form; a workspace record's name is [A-Za-z0-9_-]. The coercion
+    has to be boring and predictable — this is what the fleet switcher ends up showing."""
+    assert manager._slugify_display(raw) == slug
 
 
 def test_sync_self_display_name_noop_on_host(root, tmp_path, monkeypatch):
