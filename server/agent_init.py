@@ -1908,6 +1908,24 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
     STATE.graph_config = new_config
+    # A fleet member's own ``workspace.yaml`` is what the HUB's fleet list — and so the
+    # console's agent switcher / header label — displays. Settings ▸ Agent ▸ Identity is
+    # agent-scoped, so on a member console it writes the MEMBER's identity.name and never
+    # touched that record: the tab title and A2A card renamed, the switcher didn't. Restamp
+    # it here, at the single choke point where the live identity changes, so every path
+    # (settings save, /api/config, an out-of-band YAML edit + reload) converges. No-op on a
+    # host/standalone instance and when it's already in step, so this is also a cheap
+    # boot-time reconcile after a hub-side rename.
+    fleet_label_note = ""
+    try:
+        from graph.workspaces import manager as workspaces_manager
+
+        skipped = workspaces_manager.sync_self_display_name(new_config.identity_name)
+        if skipped:
+            log.warning("[fleet] workspace display name left unchanged: %s", skipped)
+            fleet_label_note = f" • fleet label unchanged: {skipped}"
+    except Exception:  # noqa: BLE001 — a fleet label must never fail a reload
+        log.exception("[fleet] workspace display-name sync failed")
     STATE.knowledge_store = new_store
     STATE.skills_index = new_skills
     # Swap in the new MCP clients, then release the old ones — persistent session
@@ -1998,10 +2016,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
-        return True, "config reloaded • setup not complete"
+        return True, f"config reloaded • setup not complete{fleet_label_note}"
 
     log.info("LangGraph agent reloaded (model: %s)", STATE.graph_config.model_name)
-    return True, f"reloaded • model={STATE.graph_config.model_name}"
+    return True, f"reloaded • model={STATE.graph_config.model_name}{fleet_label_note}"
 
 
 async def _plugin_agent_invoke(prompt: str, session_id: str) -> str:

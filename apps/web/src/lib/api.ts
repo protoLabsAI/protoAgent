@@ -212,16 +212,14 @@ export function agentHref(slug: string): string {
  * checkpoint and touches it for keep-N-warm LRU. Every slug navigation is a full page load
  * (FleetSwitcher navigates), so this one boot call covers switch, reload and new-window.
  * Fire-and-forget: the shell's queries already retry through the resume window, and any
- * failure (non-fleet backend, unknown slug) just leaves today's behavior. The slug is the
- * agent's `id`; activate wants its `name` — map via the hub's fleet status. */
+ * failure (non-fleet backend, unknown slug) just leaves today's behavior. The slug IS the
+ * agent's `id`, and activate resolves id-or-name, so this goes straight there — it used to
+ * fetch the whole fleet first only to map the id back to a display name. */
 export async function activateSlugAgent(): Promise<void> {
   const slug = currentSlug();
   if (slug === "host") return;
   try {
-    const fleet = await api.fleet(); // hub control-plane path — never slug-scoped
-    const agent = fleet.agents.find((a) => a.id === slug || a.name === slug);
-    if (!agent || agent.host) return;
-    await api.activateAgent(agent.name);
+    await api.activateAgent(slug); // hub control-plane path — never slug-scoped
   } catch {
     // best-effort — the proxy 502s + query retries surface a truly unreachable agent
   }
@@ -1555,13 +1553,16 @@ export const api = {
       body,
     });
   },
-  startAgent(name: string) {
-    return request<{ ok: boolean; agent: FleetAgent }>(`/api/fleet/${encodeURIComponent(name)}/start`, {
+  // The fleet control plane resolves an agent by `id` OR display `name`, id first. Callers
+  // should pass the **id**: display names are editable — a member can even rename itself from
+  // its own Identity panel, where sibling names aren't knowable — so only the id is unique.
+  startAgent(ident: string) {
+    return request<{ ok: boolean; agent: FleetAgent }>(`/api/fleet/${encodeURIComponent(ident)}/start`, {
       method: "POST",
     });
   },
-  stopAgent(name: string) {
-    return request<{ ok: boolean; name: string; stopped: boolean }>(`/api/fleet/${encodeURIComponent(name)}/stop`, {
+  stopAgent(ident: string) {
+    return request<{ ok: boolean; name: string; stopped: boolean }>(`/api/fleet/${encodeURIComponent(ident)}/stop`, {
       method: "POST",
     });
   },
@@ -1597,15 +1598,15 @@ export const api = {
       body: { name },
     });
   },
-  removeAgent(name: string, purge = false) {
+  removeAgent(ident: string, purge = false) {
     return request<{ ok: boolean; name: string; removed: string[] }>(
-      `/api/fleet/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`,
+      `/api/fleet/${encodeURIComponent(ident)}${purge ? "?purge=true" : ""}`,
       { method: "DELETE" },
     );
   },
-  activateAgent(name: string) {
+  activateAgent(ident: string) {
     // #806: ensure-running + keep-N-warm touch (no server-side active pointer since slug routing).
-    return request<{ ok: boolean; evicted: string[] }>(`/api/fleet/${encodeURIComponent(name)}/activate`, {
+    return request<{ ok: boolean; evicted: string[] }>(`/api/fleet/${encodeURIComponent(ident)}/activate`, {
       method: "POST",
     });
   },

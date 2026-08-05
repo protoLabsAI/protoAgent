@@ -35,7 +35,12 @@ export const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : 
 export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const qc = useQueryClient();
   const fleet = useQuery(fleetQuery());
-  const [busy, setBusy] = useState<string | null>(null); // name currently being acted on
+  // The id (never the display name) of the row currently being acted on. Every fleet call
+  // below addresses agents by id for the same reason: display names are editable and — since
+  // a member can rename ITSELF from its own Identity panel, where sibling names aren't
+  // knowable — no longer guaranteed unique. The routes resolve id-first, so an id can never
+  // act on the wrong agent.
+  const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<FleetAgent | null>(null);
   const [purge, setPurge] = useState(false);
   // Transient action feedback (rename / start / stop / add / discover failures) is a TOAST —
@@ -69,8 +74,8 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
     },
   });
-  const act = (name: string, fn: () => Promise<unknown>) => {
-    setBusy(name);
+  const act = (id: string, fn: () => Promise<unknown>) => {
+    setBusy(id);
     run.mutate(fn);
   };
 
@@ -429,17 +434,17 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           <Pencil size={14} />
                         </Button>
                         {a.running ? (
-                          <Button icon variant="ghost" title="Stop" disabled={busy === a.name}
-                            onClick={() => act(a.name, () => api.stopAgent(a.name))}>
+                          <Button icon variant="ghost" title="Stop" disabled={busy === a.id}
+                            onClick={() => act(a.id, () => api.stopAgent(a.id))}>
                             <Square size={14} />
                           </Button>
                         ) : (
-                          <Button icon variant="ghost" title="Start" disabled={busy === a.name}
-                            onClick={() => act(a.name, () => api.startAgent(a.name))}>
+                          <Button icon variant="ghost" title="Start" disabled={busy === a.id}
+                            onClick={() => act(a.id, () => api.startAgent(a.id))}>
                             <Play size={14} />
                           </Button>
                         )}
-                        <Button icon variant="ghost" title="Remove" disabled={busy === a.name}
+                        <Button icon variant="ghost" title="Remove" disabled={busy === a.id}
                           onClick={() => { setPurge(false); setConfirmRemove(a); }}>
                           <Trash2 size={14} />
                         </Button>
@@ -568,7 +573,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           const a = confirmRemove;
           const wipe = purge;
           setConfirmRemove(null);
-          if (a) act(a.name, () => api.removeAgent(a.name, wipe));
+          if (a) act(a.id, () => api.removeAgent(a.id, wipe));
         }}
         onClose={() => setConfirmRemove(null)}
       >

@@ -74,6 +74,41 @@ def test_rename_changes_display_not_id(root):
         manager.rename("nova", "host")  # reserved slug
 
 
+def test_member_self_rename_restamps_its_own_record(root, monkeypatch):
+    """A member renaming ITSELF (Settings ▸ Agent ▸ Identity is proxied to the member, so it
+    writes the member's identity.name) must restamp its own workspace.yaml — that record is
+    what the HUB's fleet list, and so the console's agent switcher/header, displays. Without
+    it the tab title and A2A card renamed while the switcher kept the create-time name."""
+    s = manager.create("scout")
+    ws = root / s["id"]
+    # Run as that member: its instance root IS the workspace dir (PROTOAGENT_HOME=<ws>).
+    monkeypatch.setattr("infra.paths.instance_paths", lambda: type("P", (), {"instance_root": ws})())
+
+    assert manager.sync_self_display_name("ranger") is None
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "ranger"
+    assert manager._find(s["id"])["name"] == "ranger"  # what the hub lists → the switcher label
+    assert manager.sync_self_display_name("ranger") is None  # already in step → no-op
+
+    # Refusals are reported, never raised: identity.name is already saved and the agent is
+    # running under it, so a stale switcher label beats blowing up the reload.
+    assert manager.sync_self_display_name("host")  # reserved slug
+    assert manager.sync_self_display_name("not a slug")  # _safe rejects
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "ranger"
+    # The id (dir, URL slug, data scope) never moves.
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["id"] == s["id"]
+
+
+def test_sync_self_display_name_noop_on_host(root, tmp_path, monkeypatch):
+    """A host/standalone instance root carries no workspace.yaml — nothing to keep in step,
+    and the sync must not conjure one (that record is the 'I am a member' signal, #1708)."""
+    host_root = tmp_path / "host"
+    host_root.mkdir()
+    monkeypatch.setattr("infra.paths.instance_paths", lambda: type("P", (), {"instance_root": host_root})())
+    assert manager.sync_self_display_name("anything") is None
+    assert not (host_root / "workspace.yaml").exists()
+    assert manager.is_workspace_member() is False
+
+
 def test_from_config_clones_and_restamps(root, tmp_path):
     src = tmp_path / "src"
     src.mkdir()

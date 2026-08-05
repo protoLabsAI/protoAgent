@@ -92,7 +92,9 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
 
   const toggle = (a: FleetAgent) => {
     const on = a.running;
-    (on ? api.stopAgent(a.name) : api.startAgent(a.name))
+    // By id, not display name — names are editable (and a member can rename itself), so
+    // only the id is guaranteed to address the agent the operator clicked.
+    (on ? api.stopAgent(a.id) : api.startAgent(a.id))
       .then(() => {
         qc.invalidateQueries({ queryKey: queryKeys.fleet });
         toast({

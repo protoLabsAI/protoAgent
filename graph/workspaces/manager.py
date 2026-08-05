@@ -112,6 +112,51 @@ def is_workspace_member() -> bool:
     return _read_record(instance_paths().instance_root) is not None
 
 
+def sync_self_display_name(new_name: str) -> str | None:
+    """Restamp THIS member's own ``workspace.yaml`` display name to ``new_name``.
+
+    The console's agent switcher / header label reads the HUB's fleet list, whose display
+    name comes from each workspace's ``workspace.yaml`` record — *not* from the member's
+    own config. Settings ▸ Agent ▸ Identity is an agent-scoped path, so on a member console
+    it is proxied to the MEMBER: a rename there moved ``identity.name`` (tab title, A2A
+    card, chat placeholder) while the switcher kept the create-time name forever. This is
+    the missing second half — the mirror image of hub-side :func:`rename`, which already
+    stamps the record *and* the member's config.
+
+    No-op (returns ``None``) on a host/standalone instance — nothing owns a record there —
+    or when the record already matches. Returns a warning string when the record can't be
+    restamped (a name ``_safe`` rejects, or the reserved ``host`` slug); the caller logs it
+    rather than failing, because ``identity.name`` has already been accepted and the agent
+    is running under it — a stale switcher label beats a refused save.
+
+    Uniqueness against SIBLING workspaces is deliberately not checked: ``workspaces_root()``
+    is hub-scoped, so a member's own is empty by construction and it cannot see its peers.
+    Display names are therefore no longer guaranteed unique, which is why the fleet's
+    control plane addresses agents by the immutable ``id`` (see :func:`_find`, which
+    resolves ids first, and the console's fleet call sites).
+    """
+    from infra.paths import instance_paths
+
+    root = instance_paths().instance_root
+    rec = _read_record(root)
+    if rec is None:  # host / standalone — no record to keep in step
+        return None
+    try:
+        name = _safe(new_name)
+    except WorkspaceError as exc:
+        return str(exc)
+    if name == rec.get("name"):
+        return None
+    if name.lower() in _RESERVED_NAMES:
+        return f"{name!r} is reserved — it's how the fleet addresses the host instance"
+
+    import yaml
+
+    rec["name"] = name
+    atomic_write(root / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
+    return None
+
+
 def capability_contract_warning(bound_tool_names) -> str | None:
     """Warn when THIS agent's persona commits to actions it has no tool for (#2277).
 

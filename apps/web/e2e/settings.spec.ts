@@ -235,3 +235,28 @@ test("Identity: a name change saves via /api/settings, not /api/config (no opera
   await expect(page.locator(".pl-toast", { hasText: /Identity saved/i })).toBeVisible();
   expect(configPosted).toBe(false);
 });
+
+test("Identity: a REFUSED save reports the failure instead of 'Identity saved'", async ({ page }) => {
+  // /api/settings answers a refused write with 200 + {ok:false, messages} — the server rolls the
+  // YAML back so disk and the running agent stay on the old identity. This panel used to ignore
+  // `ok` and toast success either way, so a rolled-back rename looked like a console bug: the
+  // name reverted on the next render and nothing said why. Every other settings panel checks
+  // `ok`; assert this one does, and that it surfaces the server's reason.
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, messages: ["graph rebuild failed: boom", "rolled back"], restart_required: [] }),
+    });
+  });
+
+  await openSettings(page);
+  await section(page, "Identity");
+  await page.getByTestId("identity-name").fill("doomed-agent");
+  await page.getByTestId("identity-save").click();
+
+  await expect(page.locator(".pl-toast", { hasText: /Save failed/i })).toBeVisible();
+  await expect(page.locator(".pl-toast", { hasText: /graph rebuild failed: boom/i })).toBeVisible();
+  await expect(page.locator(".pl-toast", { hasText: /Identity saved/i })).toHaveCount(0);
+});

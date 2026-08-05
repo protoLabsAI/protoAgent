@@ -47,14 +47,32 @@ export function IdentityPanel() {
     mutationFn: async () => {
       // Name → the canonical schema cascade; SOUL (not a schema field) → /api/config with a null
       // config so nothing else in the config doc is touched. Only write what actually changed.
-      if (name.trim() !== baseName) await api.saveSettings({ "identity.name": name.trim() });
-      if (soul !== baseSoul) await api.applyConfig(null, soul);
+      const results = [];
+      if (name.trim() !== baseName) results.push(await api.saveSettings({ "identity.name": name.trim() }));
+      if (soul !== baseSoul) results.push(await api.applyConfig(null, soul));
+      // Both endpoints report a REFUSED save as `{ok:false, messages}` with a 200 — a failed
+      // reload rolls the write back on the server, leaving disk and the running agent on the
+      // old identity. This panel used to ignore that and toast "Identity saved · Agent
+      // reloaded" regardless, so a rolled-back rename read as a console bug ("I renamed it
+      // and nothing changed"). Every other settings panel checks `ok`; so does this one now.
+      return {
+        ok: results.every((r) => r.ok),
+        messages: results.flatMap((r) => r.messages ?? []),
+      };
     },
-    onSuccess: () => {
+    onSuccess: (r) => {
+      if (!r.ok) {
+        toast({ tone: "error", title: "Save failed", message: r.messages.join(" · ") || "Check the server log." });
+        return;
+      }
       qc.invalidateQueries({ queryKey: ["config"] });
       qc.invalidateQueries({ queryKey: queryKeys.runtime });
+      // The agent switcher / header label reads the HUB's fleet list, which the server
+      // restamps from this identity — refresh it so a rename lands without waiting out the
+      // switcher's 3s poll.
+      qc.invalidateQueries({ queryKey: queryKeys.fleet });
       qc.invalidateQueries({ queryKey: queryKeys.settings });
-      toast({ tone: "success", title: "Identity saved", message: "Agent reloaded." });
+      toast({ tone: "success", title: "Identity saved", message: r.messages.join(" · ") || "Agent reloaded." });
     },
     onError: () => toast({ tone: "error", title: "Save failed", message: "Check the server log." }),
   });

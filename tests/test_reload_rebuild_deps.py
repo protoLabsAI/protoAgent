@@ -222,3 +222,70 @@ def test_pre_setup_reload_does_not_crash_on_the_surface_publish(tmp_path, monkey
 
     assert ok is True and "setup not complete" in msg
     assert STATE.plugin_surfaces == []  # nothing wanted yet — the boot hook starts the real set
+
+
+def test_reload_restamps_a_members_fleet_display_name(tmp_path, monkeypatch):
+    """A fleet member's Settings ▸ Agent ▸ Identity save is proxied to the MEMBER, so it only
+    ever wrote the member's own identity.name — while the console's agent switcher/header
+    reads the HUB's fleet list, whose label comes from that workspace's `workspace.yaml`. The
+    tab title and A2A card renamed; the dropdown kept the create-time name forever. The reload
+    commit is the one choke point every identity change passes through, so it restamps there."""
+    import yaml
+
+    import graph.agent as ga
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    # This process IS a workspace member: its instance root is a workspace dir with a record.
+    ws = tmp_path / "scout-1a2b"
+    (ws / "config").mkdir(parents=True)
+    (ws / "workspace.yaml").write_text(yaml.safe_dump({"name": "scout", "id": "scout-1a2b", "port": 7871}))
+    monkeypatch.setattr("infra.paths.instance_paths", lambda: type("P", (), {"instance_root": ws})())
+
+    leaf = ws / "config" / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\nidentity:\n  name: ranger\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
+
+    for name, stub in (
+        ("_build_knowledge_store", lambda cfg: None),
+        ("_apply_plugin_knowledge_backend", lambda cfg, store, plugins: store),
+        ("_register_plugin_subagents", lambda subagents: None),
+        ("_apply_config_subagents", lambda cfg: None),
+        ("_resolve_plugin_middleware", lambda cfg, mw: []),
+        ("_build_skills_index", lambda cfg, extra_skill_dirs=None: None),
+        ("_build_inbox_store", lambda cfg: None),
+        ("_mount_plugin_routers", lambda routers: None),
+        ("_reload_plugin_surfaces", lambda cfg: None),
+        ("_apply_plugin_registries", lambda plugins: None),
+    ):
+        monkeypatch.setattr(ai, name, stub)
+    monkeypatch.setattr(ai, "_build_mcp", lambda *a, **k: ([], [], []))
+    monkeypatch.setattr(
+        ai,
+        "_build_plugins",
+        lambda *a, **k: SimpleNamespace(
+            mcp_servers=[], tools=[], tool_plugins={}, skill_dirs=[], meta=[],
+            chat_commands={}, subagents=[], middleware=[], late_tool_factories=[], routers=[],
+            public_paths=[], goal_verifiers={}, goal_hooks=[], watch_hooks=[], lifecycle_hooks=[],
+            surfaces=[], thread_id_resolver=None, a2a_skills=[], workflow_dirs=[],
+        ),
+    )
+    import security.egress as _egress
+    import security.policy as _policy
+
+    monkeypatch.setattr(_egress, "set_allowed_hosts", lambda *a, **k: None)
+    monkeypatch.setattr(_policy, "set_callback_allowlist", lambda *a, **k: None)
+    monkeypatch.setattr(ga, "create_agent_graph", lambda config, **kwargs: object())
+    for name in ("checkpointer", "tasks_store", "background_mgr"):
+        monkeypatch.setattr(STATE, name, object(), raising=False)
+    for name in ("scheduler", "graph", "workflow_registry", "workflow_run"):
+        monkeypatch.setattr(STATE, name, None, raising=False)
+
+    ok, msg = ai._reload_langgraph_agent()
+    assert ok is True, msg
+    # THE regression: the hub-visible display name now follows the member's own identity.
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "ranger"
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["id"] == "scout-1a2b"  # id immutable

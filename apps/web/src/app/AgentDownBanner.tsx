@@ -17,7 +17,7 @@ import { fleetQuery, queryKeys } from "../lib/queries";
  *  This hangs off the fleet status the FleetSwitcher already polls (queryKeys.fleet,
  *  3s — no extra traffic): when the agent THIS window is on has flipped to
  *  not-running, it renders a slim warning strip with a hub-routed Start. `startAgent`
- *  is a hub control-plane call (`/api/fleet/<name>/start`, never slug-scoped), so it
+ *  is a hub control-plane call (`/api/fleet/<id>/start`, never slug-scoped), so it
  *  works even though the focused member is down — "going back to the main instance".
  *  A REMOTE member has no local process to start from here, so it points back to the
  *  host instead. The host window, or a running agent, renders nothing. */
@@ -35,7 +35,7 @@ export function AgentDownBanner() {
     void (async () => {
       setStarting(true);
       try {
-        await api.startAgent(agent.name);
+        await api.startAgent(agent.id); // by id — the display name is editable, the id isn't
         // On success the next 3s poll reports running:true and this banner self-hides;
         // invalidate so it flips without waiting out the interval.
         await qc.invalidateQueries({ queryKey: queryKeys.fleet });
