@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.125.1",
+    "date": "2026-08-06",
+    "changes": [
+      "Renaming an agent in Settings ▸ Agent ▸ Identity now changes the header and the agent switcher too (#2377).",
+      "The Identity panel no longer reports a save that was refused (#2377).",
+      "Fleet start / stop / remove / activate address agents by their immutable id, not their display name (#2377).",
+      "A reload before setup is complete no longer 500s (#2379).",
+      "An agent name with spaces or punctuation now gets a normalized fleet label instead of a stale one (#2381).",
+      "Renaming an agent no longer orphans its inbox, background results and activity feed (#2382).",
+      "Removing an agent from the fleet no longer deletes its data (#2384).",
+      "The purge path honors PROTOAGENT_BOX_ROOT (#2384).",
+      "Renaming an agent no longer makes its scheduled jobs disappear (#2382)."
+    ]
+  },
+  {
     "version": "v0.125.0",
     "date": "2026-08-05",
     "changes": [

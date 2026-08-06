@@ -11,6 +11,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.125.1] - 2026-08-06
+
+### Fixed
+- **Renaming an agent in Settings ▸ Agent ▸ Identity now changes the header and the agent
+  switcher too (#2377).** On a fleet member's console the rename moved the tab title, the A2A
+  card and the chat placeholder, but the switcher label kept the create-time name forever.
+  Two sources, one writer: the Identity panel is agent-scoped, so it wrote the *member's*
+  `identity.name`, while the header reads the *hub's* `/api/fleet`, whose label comes from that
+  workspace's `workspace.yaml` record — and nothing wrote the new identity back to it. (The
+  hub-side rename in Settings ▸ Fleet always stamped both halves, which is why only this path
+  drifted.) The reload commit — the one choke point every identity change passes through — now
+  restamps the record, so the settings save, `/api/config` and an out-of-band YAML edit all
+  converge. The agent's immutable `id` (its URL slug, workspace dir and data scope) is
+  untouched, so open windows, bookmarks and checkpoints survive.
+- **The Identity panel no longer reports a save that was refused (#2377).** `/api/settings` and
+  `/api/config` answer a rejected write with `200 {ok: false, messages}` — the server rolls the
+  YAML back, leaving disk and the running agent on the old identity. The panel toasted
+  "Identity saved · Agent reloaded" either way, so a rolled-back rename read as a console bug
+  with nothing saying why. It now checks `ok` like every other settings panel and surfaces the
+  server's reason.
+- **Fleet start / stop / remove / activate address agents by their immutable `id`, not their
+  display name (#2377).** A member can now rename *itself*, from a console that can't see its
+  siblings' names, so display names are no longer guaranteed unique — an id can never act on
+  the wrong agent. This also drops a whole `/api/fleet` round-trip from every member window's
+  boot, which only existed to map the slug back to a display name.
+
+- **A reload before setup is complete no longer 500s (#2379).** `_reload_langgraph_agent`
+  skips the plugin build entirely while the wizard is still up, so `new_plugins` was never
+  bound — but the commit block published `STATE.plugin_surfaces = new_plugins.surfaces`
+  outside the `is_setup_complete()` guard every other read sits inside, raising
+  `UnboundLocalError`. That took out every pre-setup reload path: installing or enabling a
+  plugin during the wizard (its auto-enable reloads through here), `/api/config/reload`, and
+  any `/api/settings` write — where the YAML write lands first, so the config saved while the
+  caller saw a 500 and the running agent never picked it up. The wanted-surface set is now
+  pre-seeded empty like its siblings, which is the same guard the neighbouring
+  `new_middleware = []` was added for.
+
+- **An agent name with spaces or punctuation now gets a normalized fleet label instead of a
+  stale one (#2381).** Workspace display names are constrained to `[A-Za-z0-9_-]` because the
+  fleet control plane accepts an agent by name as well as by id, but `identity.name` is
+  free-form — "Merchant Bot" is a perfectly reasonable thing to call an agent. The member's
+  self-sync refused those outright, so the agent renamed itself while the switcher stayed on
+  the old label with only a log line to explain it. It now coerces (`Merchant Bot` →
+  `Merchant_Bot`) and reports the label it saved. The agent keeps the name the operator typed;
+  only the derived record is normalized. Genuinely unusable names — the reserved `host` slug,
+  or one with no usable characters at all — are still reported and skipped rather than raised,
+  since the identity is already committed and a stale label must never fail the reload.
+
+- **Renaming an agent no longer orphans its inbox, background results and activity feed
+  (#2382).** All three were keyed by `agent_name()` — the *editable* display name — so a
+  rename silently pointed the agent at brand-new empty databases and its history appeared to
+  vanish. Nothing was ever deleted (the old file sits right next to the new one, e.g.
+  `inbox/traderAgent.db` beside `inbox/merchantBot.db`); the agent just stopped looking at it.
+  The name was never the scope: `instance_root/<store>/` is already private to this instance,
+  so the filename is a constant now and a rename can't move it. Existing installs keep their
+  data — a lone pre-existing name-keyed store is adopted in place, with no move or copy. A
+  workspace already carrying two of them from an earlier rename is genuinely ambiguous, so it
+  starts clean and names both files in the log rather than guessing which history is current.
+  A configured `inbox_db_path` directory stays namespaced by agent name, since several agents
+  may be pointed at one on purpose. (The scheduler is keyed the same way *and* filters rows on
+  `agent_name`; that half is tracked separately in #2382.)
+
+- **Removing an agent from the fleet no longer deletes its data (#2384).** The console offered
+  an opt-in "Also purge its workspace data (irreversible)" switch, but `remove` deleted the
+  workspace directory either way — and for a fleet member that directory *is* its whole
+  instance root (config, SOUL, chat checkpoints, knowledge, inbox, tasks, memory), because the
+  supervisor spawns members with `PROTOAGENT_HOME=<ws>`. Leaving the switch off destroyed
+  exactly the data it implied you were keeping. Remove now retires the agent — its record is
+  renamed aside so it drops out of the fleet while every byte stays on disk, and renaming the
+  record back restores it. Purge is the irreversible one the switch always described. The
+  console and `workspace rm --purge` now say which of the two is about to happen.
+- **The purge path honors `PROTOAGENT_BOX_ROOT` (#2384).** It was hard-coded to
+  `~/.protoagent/<id>`, so on the desktop app — whose box root is under
+  `~/Library/Application Support` — the purge branch could never find the legacy data scope it
+  was meant to delete. It resolves through `infra.paths` now.
+
+- **Renaming an agent no longer makes its scheduled jobs disappear (#2382).** The scheduler
+  was keyed *twice* by the agent's editable display name: the `scheduler/<name>/jobs.db` path
+  segment, and an `agent_name` column that `list_jobs` / `update` / `cancel` all filter on. A
+  rename therefore pointed the agent at a brand-new empty database — and even aimed back at
+  the right file it would still have shown an empty schedule. Nothing was ever deleted (the
+  old directory sits right beside the new one). The default path is instance-private already,
+  so its segment is a constant now, and rows written under a previous name are adopted when
+  the store opens — every `jobs.db` is single-agent by construction, so every row in it is
+  this agent's whatever name it was stored under. Existing installs keep their schedule: a
+  lone pre-existing name-keyed store is used in place, and empty leftover directories from an
+  earlier rename don't make that ambiguous. A configured `SCHEDULER_DB_DIR` / `db_dir` stays
+  namespaced by agent name, since several agents may be pointed at one on purpose.
+
 ## [0.125.0] - 2026-08-05
 
 ### Added
