@@ -75,6 +75,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     from graph.config import LangGraphConfig
     from graph.config_io import (
+        apply_seed_merge,
         config_yaml_path,
         ensure_live_config,
         ensure_live_soul,
@@ -112,6 +113,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # config_yaml_path() resolves to <instance_root>/config/langgraph-config.yaml
     # (env-driven via PROTOAGENT_HOME / PROTOAGENT_INSTANCE), so load through it.
     ensure_live_config()
+    # Re-apply the baked seed's image-owned declarative keys (#2071). Opt-in via
+    # PROTOAGENT_SEED_MERGE; a no-op otherwise, so seed-once stays the default.
+    apply_seed_merge()
     # Seed the live SOUL.md the same way (seed-not-force) — and heal a lingering
     # starter placeholder so a persona baked into the bundle actually takes effect
     # instead of being shadowed forever by "Replace this file". No-op once authored.

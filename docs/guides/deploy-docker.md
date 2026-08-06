@@ -78,6 +78,8 @@ ENV PROTOAGENT_SEED_CONFIG=/opt/agent/seed/langgraph-config.yaml
 
 On first boot, protoAgent copies the seed to the live `langgraph-config.yaml` and **never clobbers it afterward** (`ensure_live_config` is idempotent). Updating the seed in a new image re-seeds only a **fresh** instance — an existing one keeps its live config.
 
+That last sentence is the catch, and it is why `PROTOAGENT_SEED_MERGE` exists (see below): with seed-once, the **declarative** half of your seed — agent identity, the A2A card `description`/`skills`, `plugins.enabled` — never reaches a volume that was seeded before you added it. The agent keeps serving the old value and nothing says so.
+
 **2. Persist the live config on a *named* volume** (not the image's anonymous one):
 
 ```yaml
@@ -90,6 +92,35 @@ Console/settings edits write here and survive reboots + image rolls.
 **3. Skip the wizard on a fresh instance** with `PROTOAGENT_HEADLESS_SETUP=1` — protoAgent validates the seed and auto-marks setup complete, so the instance comes up configured. Omit it if you'd rather complete setup interactively in the wizard.
 
 **4. Keep secrets in the env, not the seed.** The model key is read from `OPENAI_API_KEY`; the seed (and your image) carry no credentials. In the console the api-key field shows blank (`api_key_configured: false`) — that's expected, the key is env-sourced.
+
+## Merge-on-boot: keeping a declarative seed live
+
+Seed-once is right for **operator-owned** config — a console edit must never be undone by a restart. It is wrong for the **image-owned declarative** half, which is the part you actually want to change by rolling an image. Turn on merge-on-boot to get both:
+
+```yaml
+environment:
+  PROTOAGENT_SEED_MERGE: "1"
+```
+
+On every boot the seed is re-applied against the live config, **per key**:
+
+| in the live config | result |
+|---|---|
+| key is absent | take the seed's value — a newly-baked block appears |
+| key is untouched since the last roll | take the seed's value — it tracks the image |
+| key was edited by an operator | **keep the operator's value** — never clobbered |
+| key was dropped from the seed, untouched | removed, so config falls back to its default |
+
+The middle row is what makes this durable rather than a one-shot. protoAgent records the seed *as applied* in `<config-dir>/.seed-applied.yaml` and compares against that, so it can tell "the image changed this" from "a human changed this". Without that baseline, the live file — itself a copy of the old seed — would win on every key it already had, and the second image roll would silently go missing exactly like the first.
+
+Notes:
+
+- **Opt-in, and env-only.** Unset ⇒ today's seed-once behavior, byte for byte. It is deliberately not a config field: the flag would otherwise live in the very file being merged.
+- **Existing volumes are safe on the first merge boot.** With no `.seed-applied.yaml` yet there is no baseline, so every key already present is treated as operator-owned and kept; only genuinely new keys land. The baseline is written on the way out, and later rolls get the full behavior.
+- **Credentials never ride the merge.** Secret paths are skipped — they belong in `secrets.yaml`/the env, and writing one into the live YAML would put it in the exportable file in plaintext.
+- **Only `PROTOAGENT_SEED_CONFIG` is merge-eligible**, never the bundled `.example` template — that's a generic starter, not your declarative config.
+- Unknown/fork-added sections and YAML comments in the live file survive the rewrite.
+- A malformed seed logs and leaves the live config untouched; the agent still boots.
 
 ## Baking a persona (SOUL.md)
 
@@ -190,12 +221,13 @@ control (Cloudflare Access, an ngrok OAuth policy, or a fronting auth proxy) —
 | --- | --- |
 | Change a setting | Edit it in the console — it persists on the config volume. |
 | Roll out a new image | `docker compose pull && docker compose up -d` — live config (your edits) is preserved. |
-| Re-seed from an updated seed | `docker compose down && docker volume rm <project>_agent-config && docker compose up -d`. |
+| Re-seed from an updated seed | Set `PROTOAGENT_SEED_MERGE=1` and roll normally — image-owned keys re-apply, operator edits stay. Without it: `docker compose down && docker volume rm <project>_agent-config && docker compose up -d` (loses all operator state). |
 | Inspect the effective config | `GET /api/config` (or `/healthz` for `setup_complete`). |
 
 ## Reference
 
 - `PROTOAGENT_SEED_CONFIG` — file to seed the live config from on first boot (config-as-code).
+- `PROTOAGENT_SEED_MERGE` — `1` to **re-apply** that seed's image-owned keys on *every* boot instead of only the first. See [Merge-on-boot](#merge-on-boot-keeping-a-declarative-seed-live) below. Unset (the default) keeps seed-once.
 - `PROTOAGENT_SEED_SOUL` — file to seed the live `SOUL.md` persona from (persona-as-code); also heals a lingering starter placeholder. Falls back to the bundled `config/SOUL.md`.
 - `PROTOAGENT_CONFIG_DIR` — where the live config + setup marker live (default `/opt/protoagent/config`).
 - `PROTOAGENT_HEADLESS_SETUP` — validate the seed + auto-complete setup (no wizard).

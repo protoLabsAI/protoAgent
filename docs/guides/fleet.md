@@ -168,7 +168,10 @@ missing workspace or a failed spawn is logged and skipped — never blocks boot)
 `PROTOAGENT_SEED_CONFIG` and `PROTOAGENT_SEED_SOUL` on first boot (seed-not-force — operator
 edits persist), so the whole team ships in one image with no wizard. See
 [Deploy with Docker](./deploy-docker.md) for the seed pattern and the volume-shadow traps it
-avoids.
+avoids — in particular, add `PROTOAGENT_SEED_MERGE=1` if you expect to keep *changing* the
+baked config: without it, seeding is first-boot-only, so a member with a persisted config
+volume will go on serving the identity and card it was originally seeded with no matter what
+later images bake.
 
 Put together, a deployed team is **lead config seed + persona seed + `fleet.autostart` roster +
 [`delegate_to`](./delegates.md) wiring** — `docker compose up` brings up the lead, restarts the

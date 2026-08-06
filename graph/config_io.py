@@ -26,6 +26,7 @@ Three jobs:
 
 from __future__ import annotations
 
+import copy
 import difflib
 import hashlib
 import logging
@@ -39,6 +40,10 @@ from graph.config import LangGraphConfig, _deep_merge_dicts
 from infra.paths import instance_paths
 
 log = logging.getLogger("protoagent.config_io")
+
+# Absent-key sentinel for the three-way merge — distinct from a key explicitly set
+# to None, which is a real operator value the merge must respect.
+_MISSING = object()
 
 
 # ── Path accessors (resolved at call time from infra.paths.instance_paths) ───
@@ -80,6 +85,17 @@ def theme_json_path() -> Path:
 def config_example_path() -> Path:
     """Bundled, read-only ``.example`` template (App-tier seed)."""
     return instance_paths().config_example
+
+
+def seed_snapshot_path() -> Path:
+    """The baked seed exactly as last applied — ``<config_dir>/.seed-applied.yaml``.
+
+    The baseline half of merge-on-boot's three-way compare (#2071): it lets
+    ``apply_seed_merge`` tell "the operator edited this key" (live differs from the
+    snapshot) from "the image changed this key" (live still matches the snapshot, so
+    it can safely track the new seed). Written only by ``apply_seed_merge``; absent
+    on any instance that has never merged, which is the seed-once behavior."""
+    return config_yaml_path().parent / ".seed-applied.yaml"
 
 
 def soul_source_path() -> Path:
@@ -316,6 +332,9 @@ def ensure_live_config() -> bool:
     - Otherwise copy the bundled ``.example`` template (``config_example_path()``).
 
     Idempotent — does nothing once the live file exists, so edits are never clobbered.
+    That is the right contract for operator-owned config but leaves the seed's
+    *declarative* half stranded on an image roll; ``apply_seed_merge`` (opt-in, #2071)
+    is the boot-time companion that re-applies it without clobbering operator edits.
     """
     # Bridge an in-place upgrade first: if an old-layout config exists, copy it into the
     # new instance_root/config so the seed-from-.example branch below never strands it.
@@ -345,6 +364,195 @@ def ensure_live_config() -> bool:
     shutil.copyfile(source, live)
     log.info("[config] seeded live config %s from %s", live, source.name)
     return True
+
+
+# ── Merge-on-boot declarative seeding (#2071) ────────────────────────────────
+#
+# ``ensure_live_config`` is seed-ONCE: correct for operator-owned config (console
+# edits must never be clobbered), but it means the *image-owned declarative* half of
+# ``PROTOAGENT_SEED_CONFIG`` — agent identity, the A2A card description/skills,
+# ``plugins.enabled`` — never reaches an existing config volume on an image roll. A
+# fleet agent whose volume was seeded before a block existed keeps serving the stock
+# value forever, and the only fixes are wiping the volume (loses operator state) or
+# hand-POSTing /api/config. Both defeat config-as-code.
+#
+# The fix is a THREE-WAY merge against ``.seed-applied.yaml`` — the seed as it was
+# last applied. Per leaf:
+#
+#   key absent from live            → take the seed value   (new declarative key)
+#   live still equals the snapshot  → take the seed value   (operator never touched it)
+#   live differs from the snapshot  → keep live             (operator edited it — wins)
+#
+# The snapshot is what makes this durable. The simpler two-way form (deep-merge the
+# seed under live) fixes the first roll only: the live file was itself seeded from
+# the old seed, so it already carries every old key, and "live wins" then pins those
+# keys forever — the second image roll silently goes missing exactly like the first.
+#
+# Opt-in via the PROTOAGENT_SEED_MERGE env var, deliberately NOT a config field: the
+# flag would otherwise live in the very file being merged, so the seed's own value
+# would fight the operator's. Unset ⇒ seed-once, byte-for-byte unchanged.
+
+_SEED_MERGE_ENV = "PROTOAGENT_SEED_MERGE"
+
+
+def seed_merge_enabled() -> bool:
+    """True when merge-on-boot is opted into (``PROTOAGENT_SEED_MERGE``)."""
+    from infra.paths import _TRUTHY
+
+    return os.environ.get(_SEED_MERGE_ENV, "").strip().lower() in _TRUTHY
+
+
+def _seed_config_path() -> Path | None:
+    """The baked declarative seed (``PROTOAGENT_SEED_CONFIG``), or None.
+
+    Only the explicit baked seed is merge-eligible — never the bundled ``.example``
+    template. The template is a generic starter, not image-owned declarative config;
+    re-applying it every boot would fight the operator's wizard answers with defaults
+    they already replaced."""
+    raw = os.environ.get("PROTOAGENT_SEED_CONFIG", "").strip()
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    return p if p.is_file() else None
+
+
+def _merge_three_way(
+    live: Any, seed: Any, last: Any, *, prefix: str, secrets: set[str], out: dict[str, list[str]]
+) -> None:
+    """Recursively apply the seed→live three-way merge. Mutates ``live`` in place.
+
+    ``last`` is the corresponding subtree of the previously-applied seed, or ``{}``
+    when there is no baseline (a volume seeded before merge-on-boot existed). With no
+    baseline every existing key is treated as operator-owned and kept — so the first
+    merge boot can only ADD genuinely new keys, never overwrite. The snapshot written
+    afterwards gives every later boot a real baseline."""
+    last = last if isinstance(last, dict) else {}
+
+    for key, seed_val in seed.items():
+        dotted = f"{prefix}{key}"
+        if dotted in secrets:
+            continue  # credentials are deploy state, not declarative config — see below
+        live_val = live.get(key, _MISSING)
+        last_val = last.get(key, _MISSING)
+
+        if isinstance(seed_val, dict) and isinstance(live_val, dict):
+            _merge_three_way(
+                live_val, seed_val, last_val, prefix=f"{dotted}.", secrets=secrets, out=out
+            )
+        elif live_val is _MISSING:
+            live[key] = copy.deepcopy(seed_val)
+            out["added"].append(dotted)
+        elif last_val is _MISSING:
+            out["kept"].append(dotted)  # no baseline ⇒ assume operator-owned
+        elif live_val == last_val:
+            if live_val != seed_val:
+                live[key] = copy.deepcopy(seed_val)
+                out["updated"].append(dotted)
+        else:
+            out["kept"].append(dotted)  # operator edited it — operator wins
+
+    # Retraction: a key the image DROPPED from the seed and the operator never
+    # touched goes too, so the image can retract a setting as well as change one
+    # (LangGraphConfig then falls back to its dataclass default). Guarded tightly —
+    # the live value must still exactly equal the baseline.
+    for key, last_val in last.items():
+        dotted = f"{prefix}{key}"
+        if key in seed or dotted in secrets or isinstance(last_val, dict):
+            continue
+        if live.get(key, _MISSING) == last_val:
+            del live[key]
+            out["removed"].append(dotted)
+
+
+def apply_seed_merge() -> dict[str, list[str]] | None:
+    """Re-apply the baked seed's image-owned keys onto the live config (#2071).
+
+    Called at boot, right after ``ensure_live_config``. Returns a
+    ``{"added"|"updated"|"kept"|"removed": [dotted paths]}`` summary, or ``None``
+    when the merge did not run (flag off, no baked seed, or an unreadable one).
+
+    Never raises: a broken seed or an unwritable config dir logs and leaves the live
+    config exactly as it was. Booting with a stale card beats not booting.
+    """
+    if not seed_merge_enabled():
+        return None
+    seed_path = _seed_config_path()
+    if seed_path is None:
+        return None
+
+    try:
+        seed_doc = load_yaml_doc(seed_path)
+        if not isinstance(seed_doc, dict) or not seed_doc:
+            log.warning("[config] seed %s is empty or not a mapping — skipping merge", seed_path)
+            return None
+
+        live_path = config_yaml_path()
+        live_doc = load_yaml_doc(live_path)
+        if not isinstance(live_doc, dict):
+            log.warning("[config] live config %s is not a mapping — skipping merge", live_path)
+            return None
+
+        snap_path = seed_snapshot_path()
+        last_doc = load_yaml_doc(snap_path) if snap_path.exists() else {}
+        last_doc = last_doc if isinstance(last_doc, dict) else {}
+
+        # Credentials never ride the declarative merge: a secret belongs in
+        # secrets.yaml, and writing one into the live YAML would put it in the
+        # exportable/forkable file in plaintext (#877). Deploy state, not config.
+        secrets = {f"{section}.{key}" for section, key in secret_paths()}
+
+        out: dict[str, list[str]] = {"added": [], "updated": [], "kept": [], "removed": []}
+        _merge_three_way(live_doc, seed_doc, last_doc, prefix="", secrets=secrets, out=out)
+
+        changed = out["added"] or out["updated"] or out["removed"]
+        if changed:
+            save_yaml_doc(live_doc, live_path)
+            log.info(
+                "[config] merge-on-boot applied from %s — added=%s updated=%s removed=%s "
+                "(kept %d operator-owned)",
+                seed_path.name,
+                out["added"] or "-",
+                out["updated"] or "-",
+                out["removed"] or "-",
+                len(out["kept"]),
+            )
+        else:
+            log.debug("[config] merge-on-boot: live config already matches the seed")
+
+        # Always refresh the baseline, even on a no-op — a fresh volume that
+        # ``ensure_live_config`` just seeded verbatim has no snapshot yet, and
+        # without one the NEXT roll would have no baseline to compare against.
+        _write_seed_snapshot(seed_doc, snap_path)
+        return out
+    except Exception:
+        log.exception(
+            "[config] merge-on-boot failed for seed %s — leaving the live config "
+            "untouched (set %s= to disable)",
+            seed_path,
+            _SEED_MERGE_ENV,
+        )
+        return None
+
+
+def _write_seed_snapshot(seed_doc: Any, path: Path) -> None:
+    """Persist the seed as applied, 0600.
+
+    Mode matches ``secrets.yaml`` rather than the live config: the snapshot is a
+    verbatim copy of whatever the image baked, and a deploy that puts a credential
+    in its seed should not get a second, more readable copy of it here."""
+    import io
+
+    from infra.paths import atomic_write
+
+    buf = io.StringIO()
+    if _HAS_RUAMEL:
+        _ruamel.dump(seed_doc, buf)
+    else:
+        import yaml
+
+        yaml.safe_dump(seed_doc, buf, sort_keys=False, default_flow_style=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, buf.getvalue(), mode=0o600)
 
 
 def load_yaml_doc(path: Path | None = None) -> Any:

@@ -287,6 +287,261 @@ def test_seed_config_env_missing_falls_back_to_example(monkeypatch, tmp_path: Pa
     assert "from-template" in live.read_text()
 
 
+# ── apply_seed_merge (merge-on-boot declarative seeding, #2071) ──────────────
+#
+# The regression these guard is subtle: two-way "deep-merge the seed under live"
+# fixes the FIRST image roll and silently stops working on the second, because the
+# live file was itself seeded from the old seed and therefore already carries every
+# old key. ``test_..._second_roll_updates_untouched_key`` is the one that fails under
+# that simpler design, so keep it.
+
+
+def _seed_env(monkeypatch, tmp_path: Path, seed_text: str, live_text: str | None = None):
+    """Wire a baked seed + live config into a tmp instance dir with merging ON."""
+    from graph import config_io
+
+    seed = tmp_path / "baked-seed.yaml"
+    live = tmp_path / "langgraph-config.yaml"
+    seed.write_text(seed_text)
+    if live_text is not None:
+        live.write_text(live_text)
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
+    monkeypatch.setattr(config_io, "config_example_path", lambda: tmp_path / "absent.example.yaml")
+    monkeypatch.setenv("PROTOAGENT_SEED_CONFIG", str(seed))
+    monkeypatch.setenv("PROTOAGENT_SEED_MERGE", "1")
+    return seed, live
+
+
+def test_apply_seed_merge_noop_when_flag_unset(monkeypatch, tmp_path: Path) -> None:
+    """Unset PROTOAGENT_SEED_MERGE ⇒ seed-once behavior, byte-for-byte."""
+    from graph import config_io
+
+    _, live = _seed_env(monkeypatch, tmp_path, "a2a:\n  description: from-image\n", "model:\n  name: x\n")
+    monkeypatch.delenv("PROTOAGENT_SEED_MERGE", raising=False)
+
+    assert config_io.apply_seed_merge() is None
+    assert live.read_text() == "model:\n  name: x\n"
+    assert not config_io.seed_snapshot_path().exists()
+
+
+def test_apply_seed_merge_noop_without_baked_seed(monkeypatch, tmp_path: Path) -> None:
+    """The bundled .example is NOT merge-eligible — only PROTOAGENT_SEED_CONFIG."""
+    from graph import config_io
+
+    _, live = _seed_env(monkeypatch, tmp_path, "a2a:\n  description: x\n", "model:\n  name: x\n")
+    monkeypatch.delenv("PROTOAGENT_SEED_CONFIG", raising=False)
+
+    assert config_io.apply_seed_merge() is None
+    assert live.read_text() == "model:\n  name: x\n"
+
+
+def test_apply_seed_merge_adds_new_declarative_block(monkeypatch, tmp_path: Path) -> None:
+    """The reported bug: a volume seeded before ``a2a:`` existed never sees it."""
+    from graph import config_io
+
+    _seed_env(
+        monkeypatch,
+        tmp_path,
+        "model:\n  name: gpt\na2a:\n  description: Vera, PR reviewer\n",
+        "model:\n  name: gpt\n",  # seeded before the a2a block was baked
+    )
+
+    out = config_io.apply_seed_merge()
+    # A wholly-absent block lands as one subtree (so the seed's own comments for it
+    # ride along) and is reported by its root; per-leaf paths are for keys added
+    # into a section the live config already has.
+    assert out["added"] == ["a2a"]
+    assert config_io.load_yaml_doc(config_io.config_yaml_path())["a2a"]["description"] == (
+        "Vera, PR reviewer"
+    )
+
+
+def test_apply_seed_merge_adds_leaf_into_existing_section(monkeypatch, tmp_path: Path) -> None:
+    """A new key inside a section the live config already has is reported per-leaf."""
+    from graph import config_io
+
+    _, live = _seed_env(
+        monkeypatch,
+        tmp_path,
+        "a2a:\n  description: d\n  skills:\n    - pr_review\n",
+        "a2a:\n  description: d\n",
+    )
+
+    out = config_io.apply_seed_merge()
+    assert out["added"] == ["a2a.skills"]
+    assert config_io.load_yaml_doc(live)["a2a"]["skills"] == ["pr_review"]
+
+
+def test_apply_seed_merge_second_roll_updates_untouched_key(monkeypatch, tmp_path: Path) -> None:
+    """THE case two-way merge cannot do: the image CHANGES a key it already shipped.
+
+    Roll 1 introduces ``a2a.description``; roll 2 rewords it. The operator never
+    touched it, so it must track the image both times."""
+    from graph import config_io
+
+    seed, live = _seed_env(
+        monkeypatch, tmp_path, "model:\n  name: gpt\na2a:\n  description: Vera, PR reviewer\n", "model:\n  name: gpt\n"
+    )
+    config_io.apply_seed_merge()  # roll 1
+
+    seed.write_text("model:\n  name: gpt\na2a:\n  description: Vera, formal reviewer\n")
+    out = config_io.apply_seed_merge()  # roll 2
+
+    assert "a2a.description" in out["updated"]
+    assert config_io.load_yaml_doc(live)["a2a"]["description"] == "Vera, formal reviewer"
+
+
+def test_apply_seed_merge_keeps_operator_edit(monkeypatch, tmp_path: Path) -> None:
+    """An operator edit always wins and is never reverted by a later roll."""
+    from graph import config_io
+
+    seed, live = _seed_env(
+        monkeypatch, tmp_path, "model:\n  name: gpt\n  temperature: 0.2\n", "model:\n  name: gpt\n  temperature: 0.2\n"
+    )
+    config_io.apply_seed_merge()  # establish the baseline
+
+    live.write_text("model:\n  name: gpt\n  temperature: 0.9\n")  # operator edits in the console
+    seed.write_text("model:\n  name: gpt\n  temperature: 0.5\n")  # image bumps its default
+    out = config_io.apply_seed_merge()
+
+    assert "model.temperature" in out["kept"]
+    assert config_io.load_yaml_doc(live)["model"]["temperature"] == 0.9
+
+
+def test_apply_seed_merge_without_baseline_never_overwrites(monkeypatch, tmp_path: Path) -> None:
+    """Existing volumes have no snapshot: first merge boot may ADD but never overwrite."""
+    from graph import config_io
+
+    _, live = _seed_env(
+        monkeypatch,
+        tmp_path,
+        "model:\n  name: from-image\na2a:\n  description: new\n",
+        "model:\n  name: operator-chose-this\n",
+    )
+    assert not config_io.seed_snapshot_path().exists()
+
+    out = config_io.apply_seed_merge()
+    doc = config_io.load_yaml_doc(live)
+    assert doc["model"]["name"] == "operator-chose-this"  # untouched — no baseline
+    assert doc["a2a"]["description"] == "new"  # genuinely new key still lands
+    assert "model.name" in out["kept"]
+    assert config_io.seed_snapshot_path().exists()  # baseline now exists for roll 2
+
+
+def test_apply_seed_merge_writes_snapshot_on_noop(monkeypatch, tmp_path: Path) -> None:
+    """A fresh volume seeded verbatim still needs a baseline, or roll 2 has none."""
+    from graph import config_io
+
+    text = "model:\n  name: gpt\n"
+    _seed_env(monkeypatch, tmp_path, text, text)
+
+    out = config_io.apply_seed_merge()
+    assert out["added"] == [] and out["updated"] == []
+    assert config_io.seed_snapshot_path().exists()
+
+
+def test_apply_seed_merge_snapshot_is_0600(monkeypatch, tmp_path: Path) -> None:
+    """The snapshot copies whatever the image baked — keep it as tight as secrets.yaml."""
+    import stat
+
+    from graph import config_io
+
+    _seed_env(monkeypatch, tmp_path, "model:\n  name: gpt\n", "model:\n  name: gpt\n")
+    config_io.apply_seed_merge()
+
+    mode = stat.S_IMODE(config_io.seed_snapshot_path().stat().st_mode)
+    assert mode == 0o600, f"snapshot mode {oct(mode)}"
+
+
+def test_apply_seed_merge_retracts_untouched_dropped_key(monkeypatch, tmp_path: Path) -> None:
+    """The image can retract a setting it once shipped, not just change one."""
+    from graph import config_io
+
+    seed, live = _seed_env(
+        monkeypatch, tmp_path, "model:\n  name: gpt\n  top_p: 0.9\n", "model:\n  name: gpt\n  top_p: 0.9\n"
+    )
+    config_io.apply_seed_merge()
+
+    seed.write_text("model:\n  name: gpt\n")  # image drops top_p
+    out = config_io.apply_seed_merge()
+
+    assert "model.top_p" in out["removed"]
+    assert "top_p" not in config_io.load_yaml_doc(live)["model"]
+
+
+def test_apply_seed_merge_retraction_spares_operator_edit(monkeypatch, tmp_path: Path) -> None:
+    """Retraction is guarded: a key the operator edited survives the image dropping it."""
+    from graph import config_io
+
+    seed, live = _seed_env(
+        monkeypatch, tmp_path, "model:\n  name: gpt\n  top_p: 0.9\n", "model:\n  name: gpt\n  top_p: 0.9\n"
+    )
+    config_io.apply_seed_merge()
+
+    live.write_text("model:\n  name: gpt\n  top_p: 0.5\n")  # operator tuned it
+    seed.write_text("model:\n  name: gpt\n")  # image drops it
+    config_io.apply_seed_merge()
+
+    assert config_io.load_yaml_doc(live)["model"]["top_p"] == 0.5
+
+
+def test_apply_seed_merge_never_writes_a_secret_into_the_live_yaml(monkeypatch, tmp_path: Path) -> None:
+    """Credentials are deploy state — a baked secret must not land in the exportable YAML (#877)."""
+    from graph import config_io
+
+    section, key = config_io.secret_paths()[0]
+    _, live = _seed_env(
+        monkeypatch, tmp_path, f"{section}:\n  {key}: sk-baked-secret\nmodel:\n  name: gpt\n", "model:\n  name: gpt\n"
+    )
+
+    config_io.apply_seed_merge()
+    assert "sk-baked-secret" not in live.read_text()
+
+
+def test_apply_seed_merge_preserves_comments_and_unknown_keys(monkeypatch, tmp_path: Path) -> None:
+    """The merge rewrites the live YAML — fork sections and comments must survive."""
+    from graph import config_io
+
+    _, live = _seed_env(
+        monkeypatch,
+        tmp_path,
+        "model:\n  name: gpt\na2a:\n  description: new\n",
+        "# operator's own note\nmodel:\n  name: gpt\nfork_only_section:\n  keep: me\n",
+    )
+
+    config_io.apply_seed_merge()
+    text = live.read_text()
+    assert "fork_only_section" in text and "keep" in text
+    if config_io._HAS_RUAMEL:  # comment preservation is ruamel-only, as elsewhere
+        assert "operator's own note" in text
+
+
+def test_apply_seed_merge_survives_a_broken_seed(monkeypatch, tmp_path: Path) -> None:
+    """A malformed seed logs and leaves the live config alone — booting stale beats not booting."""
+    from graph import config_io
+
+    original = "model:\n  name: gpt\n"
+    seed, live = _seed_env(monkeypatch, tmp_path, original, original)
+    seed.write_text("model:\n  name: [unclosed\n")
+
+    assert config_io.apply_seed_merge() is None
+    assert live.read_text() == original
+
+
+def test_apply_seed_merge_respects_explicit_none(monkeypatch, tmp_path: Path) -> None:
+    """A key explicitly set to null is a real operator value, not an absent key."""
+    from graph import config_io
+
+    seed, live = _seed_env(monkeypatch, tmp_path, "model:\n  name: gpt\n", "model:\n  name: gpt\n")
+    config_io.apply_seed_merge()
+
+    live.write_text("model:\n  name: null\n")  # operator explicitly blanked it
+    seed.write_text("model:\n  name: from-image\n")
+    config_io.apply_seed_merge()
+
+    assert config_io.load_yaml_doc(live)["model"]["name"] is None
+
+
 # ── SOUL.md dual-path ────────────────────────────────────────────────────────
 
 

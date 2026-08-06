@@ -387,6 +387,7 @@ def _main():
     if args.setup:
         from graph.config import LangGraphConfig
         from graph.config_io import (
+            apply_seed_merge,
             config_yaml_path,
             ensure_live_config,
             ensure_live_soul,
@@ -395,6 +396,7 @@ def _main():
         )
 
         ensure_live_config()
+        apply_seed_merge()  # #2071 — opt-in, no-op without PROTOAGENT_SEED_MERGE
         ensure_live_soul()
         cfg = LangGraphConfig.from_yaml(config_yaml_path())
         ok, reason = validate_for_headless(cfg)
