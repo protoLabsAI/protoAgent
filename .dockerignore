@@ -36,6 +36,11 @@ config/secrets.yaml
 # config volume — never bake a developer's local copy into the image.
 config/langgraph-config.yaml
 
+# Merge-on-boot baseline (#2071) — written at runtime next to the live config.
+# Baking a developer's copy would hand every container a bogus "last applied
+# seed" and suppress the very re-apply the merge exists to do.
+config/.seed-applied.yaml
+
 # Tests — not needed at runtime; image stays lean
 tests/
 

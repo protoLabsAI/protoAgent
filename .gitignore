@@ -19,6 +19,11 @@ config/langgraph-config.yaml
 # Setup-wizard completion marker — per-deployment runtime state, written once
 # the wizard has been run. Not config to commit.
 config/.setup-complete
+
+# Merge-on-boot baseline (#2071) — a verbatim copy of whatever PROTOAGENT_SEED_CONFIG
+# baked, as last applied. Per-deployment runtime state written 0600, and it may carry
+# whatever a deploy put in its seed; never commit it.
+config/.seed-applied.yaml
 # Local UI theme overrides — a runtime artifact, not source. It was committed by
 # accident once (#2168) and should not be committable again.
 config/theme.json
