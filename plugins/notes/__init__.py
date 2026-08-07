@@ -3,8 +3,9 @@
 A single shared markdown note that BOTH the agent (via tools) and the operator
 (via a console panel) read and write. The plugin owns its whole vertical: storage,
 agent tools, and a sandboxed-iframe editor it serves itself (ADR 0038 — no host
-build, git-installable). Still one note: no tabs, no versioning — deliberately the
-basic notebook we actually want.
+build, git-installable). Still one note and no tabs — deliberately the basic
+notebook we actually want — but since 0.4.0 an overwrite is no longer destructive:
+each change archives the outgoing text first (see "History" below, #2022).
 
 The editor renders markdown AS YOU TYPE (CodeMirror 6, vendored — see _VENDOR_FILES):
 headings are sized, **bold** is bold, and the syntax chrome hides until your cursor
@@ -114,22 +115,226 @@ def _version(content: str) -> str:
     """Opaque version token for the optimistic-concurrency guard (an ETag by another
     name). Content-hashed rather than mtime-derived: mtime collides under filesystem
     timestamp granularity when two writes land in the same tick, and it's clock-skew
-    sensitive. A hash also means an idempotent rewrite never manufactures a conflict."""
+    sensitive. A hash also means an idempotent rewrite never manufactures a conflict.
+
+    NOTE: unrelated to the HISTORY ids below. This one answers "has the note moved since
+    I read it?" and lives for one save; a history id names a durable past state."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
+# ── History (#2022) ──────────────────────────────────────────────────────────
+#
+# The note was a single mutable blob: overwrite it and the previous text was gone. Now
+# every change ARCHIVES THE OUTGOING text first, so the live file is always exactly what
+# you typed (unchanged) and recovery is a separate, additive concern. Same shape as the
+# persona's history (`graph/config_io.py::snapshot_soul`, #1691): one file per version,
+# `<stamp>-<by>-<digest>.md`, lexical sort == chronological, pruned to a cap,
+# best-effort so a broken history can never block a save.
+#
+# THE THING THAT MAKES THIS DIFFERENT FROM SOUL, and the reason for the coalescing
+# window below: a persona save is a discrete operator action, but this note has a
+# CodeMirror editor that autosaves on a 700ms debounce (600ms on the palette page). So
+# "every write makes a version" — the obvious reading, and what the issue asks for —
+# would mint a version roughly every 700ms of typing. A minute of editing buries the
+# note's real history under ~85 keystroke snapshots and evicts everything worth keeping
+# from any sane cap. Versioning every write is not a feature here, it's a shredder.
+#
+# So a write that lands within `coalesce_seconds` of the newest snapshot BY THE SAME
+# AUTHOR is not archived: the state before the burst began is already recorded, and
+# that is the state anyone would want back. One editing session ⇒ one version.
+#
+# The window deliberately does NOT span authors. Agent-clobbers-operator (and the
+# reverse) is the single most valuable thing to be able to undo, so a change of author
+# always cuts a version even mid-burst.
+
+_BY_AGENT = "agent"
+_BY_OPERATOR = "operator"
+
+
+def _plugin_cfg() -> dict:
+    """This plugin's operator config (ADR 0019). Never raises — no host (tests) or a
+    config not yet loaded just means env + defaults.
+
+    Reads the `plugin_config` ATTRIBUTE of the SDK config object, exactly as the artifact
+    plugin does. It is not a dict lookup: `config().get(...)` would raise and be swallowed
+    here, leaving every Settings ▸ Plugins knob silently inert."""
+    try:
+        from graph.sdk import config
+
+        return (getattr(config(), "plugin_config", {}) or {}).get("notes", {}) or {}
+    except Exception:  # noqa: BLE001 — config is advisory; history must still work
+        return {}
+
+
+def _cfg_int(key: str, env: str, default: int, minimum: int = 0) -> int:
+    """Config int with env override — precedence env > Settings ▸ Plugins > default,
+    matching the artifact plugin's knobs. Read live so a change applies without restart."""
+    for raw in (os.environ.get(env, ""), _plugin_cfg().get(key)):
+        if raw not in (None, ""):
+            try:
+                return max(minimum, int(raw))
+            except (TypeError, ValueError):
+                pass  # bad value → next source, never crash
+    return default
+
+
+def _max_versions() -> int:
+    return _cfg_int("max_versions", "NOTES_MAX_VERSIONS", 50, minimum=1)
+
+
+def _coalesce_seconds() -> int:
+    """0 disables coalescing — every write archives. Only sane for an instance whose
+    note is written solely by tools; the editor's autosave will flood it otherwise."""
+    return _cfg_int("coalesce_seconds", "NOTES_COALESCE_SECONDS", 300)
+
+
+def _history_dir() -> Path:
+    d = _note_path().parent / "history"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _history_files() -> list[Path]:
+    """Oldest first — the lexical sort is chronological because the id leads with a
+    microsecond-precision UTC stamp."""
+    try:
+        return sorted(_history_dir().glob("*.md"))
+    except OSError:
+        return []
+
+
+def _parse_id(path: Path) -> tuple[str, str, str]:
+    """``<stamp>-<by>-<digest>.md`` → (id, iso_timestamp, by). A file that doesn't parse
+    still lists (with an empty timestamp) rather than vanishing — a version you can still
+    read and restore beats one hidden by a naming change."""
+    vid = path.stem
+    parts = vid.split("-")
+    if len(parts) < 3:
+        return vid, "", ""
+    stamp, by = parts[0], parts[1]
+    try:
+        ts = datetime.strptime(stamp, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        ts = ""
+    return vid, ts, by
+
+
+def _prune_history(cap: int | None = None) -> None:
+    """Keep the newest ``cap`` snapshots. Oldest-first sort, so the head is what goes."""
+    cap = _max_versions() if cap is None else cap
+    files = _history_files()
+    for stale in files[:-cap] if len(files) > cap else []:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
+def _snapshot(outgoing: str, by: str) -> Path | None:
+    """Archive the OUTGOING note text before it is replaced. Returns the path, or None
+    when skipped. Never raises — history is best-effort and must not block a save."""
+    if not outgoing:
+        return None  # nothing to lose; don't seed history with the empty first note
+    try:
+        files = _history_files()
+        newest = files[-1] if files else None
+        if newest is not None:
+            try:
+                if newest.read_text(encoding="utf-8") == outgoing:
+                    return None  # identical to the newest — a no-op save, as in snapshot_soul
+            except (OSError, ValueError):
+                pass  # an unreadable newest must not stop us archiving THIS one
+            window = _coalesce_seconds()
+            if window > 0:
+                _, ts, prev_by = _parse_id(newest)
+                # Same author, still inside the window ⇒ one editing burst, and its
+                # starting state is already the newest snapshot. Skip.
+                if prev_by == by and ts:
+                    age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
+                    if 0 <= age < window:
+                        return None
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        digest = hashlib.sha256(outgoing.encode("utf-8")).hexdigest()[:8]
+        path = _history_dir() / f"{stamp}-{by}-{digest}.md"
+        path.write_text(outgoing, encoding="utf-8")
+        _prune_history()
+        return path
+    except (OSError, ValueError) as exc:
+        log.warning("[notes] history snapshot failed: %s", exc)
+        return None
+
+
+def _list_versions() -> list[dict]:
+    """Newest first: ``{id, timestamp, by, chars, snippet}``. Snippet is the first
+    non-blank line, so a list reads as content rather than as a column of hashes."""
+    out: list[dict] = []
+    for path in reversed(_history_files()):
+        vid, ts, by = _parse_id(path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        snippet = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        out.append(
+            {
+                "id": vid,
+                "timestamp": ts,
+                "by": by,
+                "chars": len(text),
+                "snippet": snippet[:120],
+            }
+        )
+    return out
+
+
+def _read_version(version_id: str) -> str | None:
+    """Text of one archived version, or None if unknown. The id is matched against the
+    known filenames rather than joined onto a path — this takes operator/agent input, so
+    it must not be able to name a file outside the history dir."""
+    for path in _history_files():
+        if path.stem == version_id:
+            try:
+                return path.read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                return None
+    return None
+
+
+def _diff(a_text: str, b_text: str, a_label: str, b_label: str) -> str:
+    import difflib
+
+    lines = list(
+        difflib.unified_diff(
+            a_text.splitlines(), b_text.splitlines(), fromfile=a_label, tofile=b_label, lineterm=""
+        )
+    )
+    return "\n".join(lines) if lines else "(identical)"
+
+
 @tool
-def read_note() -> str:
+def read_note(version: str = "") -> str:
     """Read the shared notes document (markdown). Use it to recall what you or the
-    operator have written. Returns the full note text (empty string if blank)."""
+    operator have written. Returns the full note text (empty string if blank).
+
+    Pass ``version`` (an id from list_note_versions) to read an archived version
+    instead of the current note."""
+    if version:
+        text = _read_version(version.strip())
+        if text is None:
+            return f"No such note version: {version!r}. Use list_note_versions to see what exists."
+        return text
     return _read()
 
 
 @tool
 def write_note(content: str) -> str:
     """Replace the entire shared notes document with ``content`` (markdown). This
-    OVERWRITES the note — read_note first if you mean to keep the existing text."""
-    _write(content)
+    OVERWRITES the note — read_note first if you mean to keep the existing text.
+    The outgoing text is archived first, so an overwrite is recoverable via
+    list_note_versions / restore_note_version."""
+    with _LOCK:
+        _snapshot(_read(), _BY_AGENT)
+        _write(content)
     return f"Note saved ({len(content)} chars)."
 
 
@@ -137,10 +342,57 @@ def write_note(content: str) -> str:
 def append_note(text: str) -> str:
     """Append ``text`` to the shared notes document (markdown), on a new line.
     Use this to add an entry without disturbing what's already there."""
-    cur = _read()
-    sep = "" if (not cur or cur.endswith("\n")) else "\n"
-    _write(f"{cur}{sep}{text}\n")
+    with _LOCK:
+        cur = _read()
+        _snapshot(cur, _BY_AGENT)
+        sep = "" if (not cur or cur.endswith("\n")) else "\n"
+        _write(f"{cur}{sep}{text}\n")
     return f"Appended {len(text)} chars to the note."
+
+
+@tool
+def list_note_versions() -> str:
+    """List archived versions of the shared note, newest first — id, when, who wrote it,
+    size and the first line. Use an id with read_note(version=...) or
+    restore_note_version."""
+    versions = _list_versions()
+    if not versions:
+        return "No archived versions yet — the note has not been overwritten since history began."
+    lines = [f"{len(versions)} version(s), newest first:"]
+    for v in versions:
+        when = v["timestamp"] or "unknown time"
+        lines.append(f"- {v['id']}  ({when}, by {v['by'] or '?'}, {v['chars']} chars)  {v['snippet']}")
+    return "\n".join(lines)
+
+
+@tool
+def restore_note_version(version: str) -> str:
+    """Restore an archived version (id from list_note_versions) as the current note.
+    The text being replaced is itself archived first, so a restore is undoable."""
+    vid = version.strip()
+    text = _read_version(vid)
+    if text is None:
+        return f"No such note version: {version!r}. Use list_note_versions to see what exists."
+    with _LOCK:
+        _snapshot(_read(), _BY_AGENT)
+        _write(text)
+    return f"Restored note version {vid} ({len(text)} chars)."
+
+
+@tool
+def diff_note_version(version: str, against: str = "") -> str:
+    """Unified diff between two states of the note. ``version`` is an archived id;
+    ``against`` is another archived id, or empty to compare with the CURRENT note."""
+    vid = version.strip()
+    a_text = _read_version(vid)
+    if a_text is None:
+        return f"No such note version: {version!r}. Use list_note_versions to see what exists."
+    if against.strip():
+        b_text = _read_version(against.strip())
+        if b_text is None:
+            return f"No such note version: {against!r}."
+        return _diff(a_text, b_text, vid, against.strip())
+    return _diff(a_text, _read(), vid, "current")
 
 
 def _build_view_router():
@@ -232,8 +484,47 @@ def _build_data_router():
                         "updated_at": _updated_at(),
                     },
                 )
+            # Archive the outgoing text before it goes (#2022). Coalesced, so the
+            # editor's 700ms autosave doesn't mint a version per keystroke.
+            _snapshot(current, _BY_OPERATOR)
             _write(content)
         return {"ok": True, "updated_at": _updated_at(), "version": _version(content)}
+
+    @router.get("/versions")
+    async def _versions() -> dict:
+        """Archived versions, newest first — the history list's payload."""
+        return {"versions": _list_versions()}
+
+    @router.get("/versions/{version_id}")
+    async def _version_get(version_id: str):
+        """One archived version's full text, plus its unified diff against the current
+        note so the panel can show either without a second round trip."""
+        text = _read_version(version_id)
+        if text is None:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "no such version"})
+        return {
+            "ok": True,
+            "id": version_id,
+            "content": text,
+            "diff": _diff(text, _read(), version_id, "current"),
+        }
+
+    @router.post("/versions/{version_id}/restore")
+    async def _version_restore(version_id: str):
+        """Make an archived version current. The replaced text is archived first, so the
+        restore is itself undoable — there is no way to lose content through this route."""
+        text = _read_version(version_id)
+        if text is None:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "no such version"})
+        with _LOCK:
+            _snapshot(_read(), _BY_OPERATOR)
+            _write(text)
+        return {
+            "ok": True,
+            "content": text,
+            "updated_at": _updated_at(),
+            "version": _version(text),
+        }
 
     return router
 
@@ -245,7 +536,16 @@ def register(registry) -> None:
     dropped by the host's de-dupe — see server.agent_init._mount_plugin_routers):
     the view PAGE under the public ``/plugins/notes`` (ungated, iframe-loadable) and
     the DATA routes under ``/api/plugins/notes`` (gated, fetched with the token)."""
-    registry.register_tools([read_note, write_note, append_note])
+    registry.register_tools(
+        [
+            read_note,
+            write_note,
+            append_note,
+            list_note_versions,
+            restore_note_version,
+            diff_note_version,
+        ]
+    )
     # View PAGE: public /plugins/notes (ungated) — iframe nav can't carry a bearer.
     registry.register_router(_build_view_router(), prefix="/plugins/notes")
     # DATA routes: gated /api/plugins/notes — fetched with the handshake token.
@@ -314,6 +614,35 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   #conflict{display:flex;gap:6px}
   #ed{flex:1;min-height:0;overflow:hidden}
 
+  /* History drawer (#2022). Overlays the editor rather than resizing it: the panel is
+     narrow and transient, and reflowing a live-preview CodeMirror to make room re-wraps
+     every line under the reader. Tokens only, like everything else here. */
+  /* `hidden` alone is not enough for either the drawer or its buttons: the attribute is
+     a UA rule, so ANY author `display` wins over it — and the DS gives .pl-btn one. Same
+     trap (and same fix) as #conflict above; without it the detail-view actions sit on the
+     LIST view offering to restore nothing. */
+  #histwrap[hidden],#hrestore[hidden],#hback[hidden]{display:none}
+  #histwrap{position:absolute;inset:0;display:flex;flex-direction:column;
+    background:var(--pl-color-bg-raised);z-index:2}
+  #histhead{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:6px 10px;border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border);
+    font-size:12px;color:var(--pl-color-fg-muted)}
+  #histbody{flex:1;min-height:0;overflow:auto}
+  #histempty{padding:16px;font-size:12px;color:var(--pl-color-fg-subtle)}
+  .hrow{display:block;width:100%;text-align:left;border:0;background:transparent;
+    color:var(--pl-color-fg);padding:8px 10px;cursor:pointer;font:inherit;
+    border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border)}
+  .hrow:hover{background:var(--pl-color-bg-inset)}
+  .hmeta{font-size:11px;color:var(--pl-color-fg-subtle);display:flex;gap:6px}
+  .hsnip{font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Unified diff. Colour comes from the DS success/danger tokens so it survives a
+     re-theme; falls back to plain text where a theme omits them. */
+  #hdiff{margin:0;padding:10px;font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);
+    font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .dadd{color:var(--pl-color-success,inherit)}
+  .ddel{color:var(--pl-color-danger,inherit)}
+  .dhdr{color:var(--pl-color-fg-subtle)}
+
   /* CodeMirror hooks. It ships no colours of its own, so these are the whole theme.
      EVERY rule below is scoped with `.cm-editor` ON PURPOSE, and it is not cosmetic:
      CM's baseTheme injects `.ͼ1 .cm-scroller{font-family:monospace}` — a GENERATED
@@ -356,9 +685,23 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
         <button id="mine" class="pl-btn pl-btn--sm" type="button">Keep mine</button>
         <button id="theirs" class="pl-btn pl-btn--sm" type="button">Take theirs</button>
       </span>
+      <button id="histbtn" class="pl-btn pl-btn--sm" type="button" title="Past versions of this note">History</button>
     </span>
   </div>
-  <div id="ed"></div>
+  <div id="edwrap" style="position:relative;flex:1;min-height:0;display:flex">
+    <div id="ed"></div>
+    <div id="histwrap" hidden>
+      <div id="histhead">
+        <span id="histtitle">History</span>
+        <span style="display:flex;gap:6px">
+          <button id="hrestore" class="pl-btn pl-btn--sm" type="button" hidden>Restore this version</button>
+          <button id="hback" class="pl-btn pl-btn--sm" type="button" hidden>Back</button>
+          <button id="hclose" class="pl-btn pl-btn--sm" type="button">Close</button>
+        </span>
+      </div>
+      <div id="histbody"></div>
+    </div>
+  </div>
 </div>
 <script type="module">
   "use strict";
@@ -541,6 +884,80 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   // Be a good desktop citizen: don't poll while the window is hidden/minimized; refresh on return.
   setInterval(function(){ if(!document.hidden && !dirty && !conflicted) load(); }, 4000);
   document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty && !conflicted) load(); });
+
+  // ── history drawer (#2022) ────────────────────────────────────────────────────
+  // Read-only until you press Restore, and Restore is non-destructive on the server
+  // (it archives the text it replaces first), so there is no confirm step to click
+  // through — the undo for a mis-click is the version this action just created.
+  var hb=document.getElementById("histbtn"), hw=document.getElementById("histwrap"),
+      hbody=document.getElementById("histbody"), hclose=document.getElementById("hclose"),
+      hback=document.getElementById("hback"), hrestore=document.getElementById("hrestore"),
+      htitle=document.getElementById("histtitle"), viewing=null;
+
+  function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+  function when(iso){ if(!iso) return "unknown time";
+    try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; } }
+
+  function showList(versions){
+    viewing=null; htitle.textContent="History"; hrestore.hidden=true; hback.hidden=true;
+    if(!versions.length){
+      hbody.innerHTML='<div id="histempty">No past versions yet. Every change archives the '+
+        'text it replaces, so this fills as the note is edited.</div>';
+      return; }
+    hbody.innerHTML = versions.map(function(v){
+      return '<button class="hrow" data-id="'+esc(v.id)+'">'+
+        '<span class="hmeta"><span>'+esc(when(v.timestamp))+'</span><span>·</span>'+
+        '<span>'+esc(v.by||"?")+'</span><span>·</span><span>'+v.chars+' chars</span></span>'+
+        '<div class="hsnip">'+esc(v.snippet||"(blank)")+'</div></button>'; }).join("");
+    Array.prototype.forEach.call(hbody.querySelectorAll(".hrow"), function(el){
+      el.onclick=function(){ showVersion(el.getAttribute("data-id")); }; });
+  }
+
+  function renderDiff(diff){
+    return '<pre id="hdiff">'+diff.split("\n").map(function(ln){
+      var cls = ln.charAt(0)==="+" ? "dadd" : ln.charAt(0)==="-" ? "ddel"
+              : (ln.charAt(0)==="@"||ln.indexOf("---")===0||ln.indexOf("+++")===0) ? "dhdr" : "";
+      return cls ? '<span class="'+cls+'">'+esc(ln)+'</span>' : esc(ln); }).join("\n")+'</pre>';
+  }
+
+  async function openHist(){
+    hw.hidden=false; hbody.innerHTML='<div id="histempty">Loading…</div>';
+    try{
+      var a=await kit.apiFetch("/api/plugins/notes/versions").then(function(r){return r.json();});
+      showList(a.versions||[]);
+    }catch(e){ hbody.innerHTML='<div id="histempty">Could not load history.</div>'; }
+  }
+
+  async function showVersion(id){
+    hbody.innerHTML='<div id="histempty">Loading…</div>';
+    try{
+      var a=await kit.apiFetch("/api/plugins/notes/versions/"+encodeURIComponent(id))
+              .then(function(r){return r.json();});
+      if(!a.ok){ hbody.innerHTML='<div id="histempty">That version is gone.</div>'; return; }
+      viewing=id; htitle.textContent="Changes since this version";
+      hrestore.hidden=false; hback.hidden=false;
+      hbody.innerHTML=renderDiff(a.diff||"(identical)");
+    }catch(e){ hbody.innerHTML='<div id="histempty">Could not load that version.</div>'; }
+  }
+
+  hb.onclick=openHist;
+  hclose.onclick=function(){ hw.hidden=true; };
+  hback.onclick=openHist;
+  hrestore.onclick=async function(){
+    if(!viewing) return;
+    // Flush a pending autosave first. Editor text that never reached the server is the
+    // one thing a restore COULD lose — the server can only archive what it has.
+    if(dirty){ clearTimeout(t); await save(); }
+    try{
+      var r=await kit.apiFetch("/api/plugins/notes/versions/"+encodeURIComponent(viewing)+"/restore",
+                               {method:"POST"});
+      if(!r.ok) throw 0;
+      var a=await r.json();
+      setDocText(a.content); lastSynced=a.content; baseVersion=a.version; dirty=false;
+      clearConflict(); hw.hidden=true; st.textContent="Restored ✓";
+    }catch(e){ st.textContent="Restore failed"; }
+  };
 </script></body></html>"""
 
 

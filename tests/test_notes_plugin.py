@@ -266,3 +266,246 @@ def test_quick_palette_view_follows_the_four_rules() -> None:
     assert 'import(window.__base + "/_ds/plugin-kit.js")' in html  # ESM dynamic import
     assert "#0a0a0c" not in html
     assert 'addEventListener("message"' not in html
+
+
+# ── History (#2022) ──────────────────────────────────────────────────────────
+#
+# The load-bearing test in here is `test_an_editing_burst_collapses_to_one_version`.
+# The obvious implementation — archive on every write — is silently destructive with
+# this plugin's 700ms autosave: a minute of typing mints ~85 versions and evicts the
+# note's real history from any cap. If that test is ever "simplified" away, the feature
+# is back to shredding the thing it exists to protect.
+
+
+def _hist(notes):
+    return sorted(p.name for p in notes._history_dir().glob("*.md"))
+
+
+def _age_history(notes, seconds: int) -> None:
+    """Rewrite each snapshot's filename stamp to `seconds` ago, so the coalescing window
+    can be tested without sleeping. Exercises _parse_id's real format as a side effect."""
+    from datetime import datetime, timedelta, timezone
+
+    for p in sorted(notes._history_dir().glob("*.md")):
+        _, _, by = notes._parse_id(p)
+        old = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        stamp = old.strftime("%Y%m%dT%H%M%S.%fZ")
+        p.rename(p.with_name(f"{stamp}-{by}-{p.stem.split('-')[-1]}.md"))
+
+
+def test_write_note_archives_the_outgoing_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "first"})
+    assert _hist(notes) == []  # nothing to lose yet — history isn't seeded with the empty note
+
+    _age_history(notes, 9999)
+    notes.write_note.invoke({"content": "second"})
+    versions = notes._list_versions()
+    assert len(versions) == 1
+    assert notes._read_version(versions[0]["id"]) == "first"  # the OUTGOING text
+    assert notes.read_note.invoke({}) == "second"
+
+
+def test_an_editing_burst_collapses_to_one_version(tmp_path, monkeypatch) -> None:
+    """The autosave case. Successive same-author writes inside the window share a version,
+    and the one kept is the state BEFORE the burst — that's what you'd want back."""
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "ORIGINAL"})
+    _age_history(notes, 9999)
+    for text in ("typing a", "typing ab", "typing abc", "typing abcd"):
+        notes.write_note.invoke({"content": text})
+
+    versions = notes._list_versions()
+    assert len(versions) == 1, f"autosave burst should collapse, got {len(versions)}"
+    assert notes._read_version(versions[0]["id"]) == "ORIGINAL"
+    assert notes.read_note.invoke({}) == "typing abcd"
+
+
+def test_the_window_expiring_cuts_a_new_version(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "300")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "one"})
+    notes.write_note.invoke({"content": "two"})  # archives "one"
+    assert len(notes._list_versions()) == 1
+    _age_history(notes, 600)  # window passed
+    notes.write_note.invoke({"content": "three"})  # archives "two" as its own version
+    assert len(notes._list_versions()) == 2
+
+
+def test_a_change_of_author_always_cuts_a_version(tmp_path, monkeypatch) -> None:
+    """Agent-clobbers-operator is the case most worth undoing, so it must survive the
+    coalescing window rather than be swallowed by it."""
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+    c = _client(notes)
+
+    notes.write_note.invoke({"content": "agent one"})
+    notes.write_note.invoke({"content": "agent two"})  # archives "agent one" (by agent)
+    # Operator saves immediately after — same window, different author.
+    c.put("/api/plugins/notes/note", json={"content": "operator edit"})
+
+    versions = notes._list_versions()
+    assert [v["by"] for v in versions] == ["operator", "agent"]  # newest first
+    assert notes._read_version(versions[0]["id"]) == "agent two"  # the clobbered text
+
+
+def test_coalesce_seconds_zero_archives_every_write(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    for text in ("a", "b", "c", "d"):
+        notes.write_note.invoke({"content": text})
+    assert len(notes._list_versions()) == 3  # a, b, c archived; d is current
+
+
+def test_an_identical_rewrite_does_not_pile_up(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "same"})
+    notes.write_note.invoke({"content": "same"})
+    notes.write_note.invoke({"content": "same"})
+    assert len(notes._list_versions()) <= 1
+
+
+def test_retention_prunes_the_oldest(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.setenv("NOTES_MAX_VERSIONS", "3")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    for i in range(8):
+        notes.write_note.invoke({"content": f"v{i}"})
+    versions = notes._list_versions()
+    assert len(versions) == 3
+    # Newest-first, and it's the OLDEST that got dropped.
+    assert [notes._read_version(v["id"]) for v in versions] == ["v6", "v5", "v4"]
+
+
+def test_read_note_can_target_a_version(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "old text"})
+    notes.write_note.invoke({"content": "new text"})
+    vid = notes._list_versions()[0]["id"]
+    assert notes.read_note.invoke({"version": vid}) == "old text"
+    assert notes.read_note.invoke({}) == "new text"
+    # An unknown id explains itself instead of returning "" (which reads as an empty note).
+    assert "No such note version" in notes.read_note.invoke({"version": "nope"})
+
+
+def test_a_version_id_cannot_escape_the_history_dir(tmp_path, monkeypatch) -> None:
+    """The id comes from agent/operator input and is matched against known filenames,
+    never joined onto a path."""
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+    (tmp_path / "secret.md").write_text("SECRET", encoding="utf-8")
+
+    for attempt in ("../secret", "../../secret", "/etc/passwd", "../secret.md"):
+        assert notes._read_version(attempt) is None
+        assert "No such note version" in notes.read_note.invoke({"version": attempt})
+
+
+def test_restore_is_itself_undoable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "wanted"})
+    notes.write_note.invoke({"content": "clobbered it"})
+    vid = notes._list_versions()[0]["id"]
+
+    notes.restore_note_version.invoke({"version": vid})
+    assert notes.read_note.invoke({}) == "wanted"
+    # The text the restore replaced is archived too — nothing is lost by recovering.
+    assert any(notes._read_version(v["id"]) == "clobbered it" for v in notes._list_versions())
+
+
+def test_diff_compares_a_version_with_the_current_note(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "line one\nline two"})
+    notes.write_note.invoke({"content": "line one\nline TWO"})
+    vid = notes._list_versions()[0]["id"]
+
+    out = notes.diff_note_version.invoke({"version": vid})
+    assert "-line two" in out and "+line TWO" in out
+
+
+def test_history_routes_list_read_and_restore(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTES_COALESCE_SECONDS", "0")
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+    c = _client(notes)
+
+    notes.write_note.invoke({"content": "original"})
+    notes.write_note.invoke({"content": "replaced"})
+
+    listed = c.get("/api/plugins/notes/versions").json()["versions"]
+    assert len(listed) == 1 and listed[0]["snippet"] == "original"
+
+    got = c.get(f"/api/plugins/notes/versions/{listed[0]['id']}").json()
+    assert got["content"] == "original" and "-original" in got["diff"]
+
+    assert c.get("/api/plugins/notes/versions/nope").status_code == 404
+    assert c.post("/api/plugins/notes/versions/nope/restore").status_code == 404
+
+    r = c.post(f"/api/plugins/notes/versions/{listed[0]['id']}/restore")
+    assert r.status_code == 200 and r.json()["content"] == "original"
+    assert notes.read_note.invoke({}) == "original"
+
+
+def test_a_broken_history_dir_never_blocks_a_save(tmp_path, monkeypatch) -> None:
+    """History is best-effort: losing it is bad, but failing the write would be worse."""
+    monkeypatch.setenv("NOTES_DIR", str(tmp_path))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    notes = _load_notes()
+    notes.write_note.invoke({"content": "before"})
+
+    def _boom():
+        raise OSError("history dir unavailable")
+
+    monkeypatch.setattr(notes, "_history_dir", _boom)
+    notes.write_note.invoke({"content": "after"})  # must not raise
+    assert notes.read_note.invoke({}) == "after"
+
+
+def test_history_ui_is_wired_and_four_rules_compliant() -> None:
+    """The history drawer must reach its data the same slug-aware, authed way as the
+    rest of the page — a bare fetch() here would 401 on a gated instance and hit the
+    HOST rather than the member through the fleet proxy."""
+    html = _load_notes()._EDITOR_HTML
+    assert 'id="histbtn"' in html and 'id="histwrap"' in html
+    assert 'apiFetch("/api/plugins/notes/versions")' in html
+    assert 'apiFetch("/api/plugins/notes/versions/"' in html
+    # Version ids are interpolated into a URL and into markup — encode + escape both.
+    assert "encodeURIComponent(" in html
+    assert "function esc(" in html
+    # Still no hand-rolled colour: the drawer and the diff are --pl-* tokens only.
+    assert "#histwrap{position:absolute" in html
+    for hexish in ("#0a0a0c", "#fff;", "#000;"):
+        assert hexish not in html

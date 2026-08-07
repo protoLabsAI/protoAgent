@@ -1,15 +1,30 @@
 id: notes
 name: Notes
-version: 0.3.0
+version: 0.4.0
 description: >-
-  A single shared markdown note the agent and the operator both read and write.
-  The flagship reference plugin (ADR 0034 S4) — it owns its storage, its agent
-  tools, and a live-preview markdown editor it serves itself (ADR 0038), with
-  CodeMirror vendored so it runs offline. Replaces the legacy native Notes surface.
+  A single shared markdown note the agent and the operator both read and write,
+  with recoverable history. The flagship reference plugin (ADR 0034 S4) — it owns
+  its storage, its agent tools, and a live-preview markdown editor it serves itself
+  (ADR 0038), with CodeMirror vendored so it runs offline. Replaces the legacy
+  native Notes surface.
 enabled: true            # first-party — shipped on
 capabilities:
   network: []            # literally true since 0.3.0 — CM6 is vendored, no CDN
-  filesystem: scoped     # one note file in the instance data dir
+  filesystem: scoped     # one note file + its history/ dir in the instance data dir
+
+# History knobs (#2022). `coalesce_seconds` is the load-bearing one: the editor autosaves
+# on a 700ms debounce, so archiving every write would mint a version per keystroke and
+# evict the note's real history within a minute of typing. A write landing inside this
+# window, from the SAME author as the newest snapshot, is not archived — one editing
+# session becomes one version. A change of author always cuts a version regardless, since
+# agent-clobbers-operator is the case most worth undoing. Set 0 to archive every write
+# (only sane where nothing autosaves into the note).
+config:
+  max_versions: 50
+  coalesce_seconds: 300
+settings:
+  - { key: max_versions, label: "Versions kept", type: number, description: "How many past versions of the note to keep; the oldest is pruned past this." }
+  - { key: coalesce_seconds, label: "Coalesce window (seconds)", type: number, description: "Successive edits by the same author within this window share one version, so the editor's autosave doesn't create one per keystroke. 0 archives every write." }
 # The plugin self-serves its editor page (ADR 0038) — a sandboxed iframe, no host build, so it's
 # git-installable like any plugin. (Was a federated `ui: react` remote; federation retired.)
 views:
