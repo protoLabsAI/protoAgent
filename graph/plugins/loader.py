@@ -643,7 +643,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             result.chat_commands[token] = handler
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
-        entry["skills"] = len(registry.skill_dirs)
+        # Count the conventional skills/ dir too (auto-discovered above) — counting only
+        # explicit register_skill_dir calls made every convention-shipped skill read as
+        # "0 skill dir(s)" in the meta + boot log while actually loading fine.
+        entry["skills"] = len(registry.skill_dirs) + (1 if (manifest.path / "skills").is_dir() else 0)
         entry["routers"] = len(registry.routers)
         entry["surfaces"] = len(registry.surfaces)
         entry["subagents"] = [getattr(c, "name", "?") for c in registry.subagents]
@@ -655,7 +658,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             "%d surface(s), %d subagent(s), %d middleware, %d mcp server(s), %d chat command(s)",
             manifest.id,
             len(kept),
-            len(registry.skill_dirs),
+            entry["skills"],
             len(registry.routers),
             len(registry.surfaces),
             len(registry.subagents),

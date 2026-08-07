@@ -38,6 +38,9 @@ def test_devkit_loads_as_a_full_bundle(monkeypatch, tmp_path):
     assert meta["loaded"], meta.get("error")
     for name in ("scaffold_plugin", "plugin_list_files", "plugin_read_file", "plugin_write_file", "test_plugin"):
         assert name in meta["tools"]
+    # The conventional skills/ dir counts in the meta (it always LOADED; the count
+    # said 0, which read as "no skill shipped" in the boot log and runtime status).
+    assert meta["skills"] >= 1
     assert any(s.name == "plugin-architect" for s in res.subagents)
     assert any(p.name == "skills" and "plugin-devkit" in str(p) for p in res.skill_dirs)
     assert any(p.name == "workflows" and "plugin-devkit" in str(p) for p in res.workflow_dirs)
@@ -130,11 +133,16 @@ def test_scaffold_enable_hot_reloads_when_live(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_init, "_apply_settings_changes", _fake_apply)
     # _live_enable now confirms the plugin actually LOADED (not just that the config
     # reload ran) — the loader publishes that on STATE.plugin_meta.
-    monkeypatch.setattr(STATE, "plugin_meta", [{"id": "live-one", "enabled": True, "loaded": True}], raising=False)
+    monkeypatch.setattr(
+        STATE,
+        "plugin_meta",
+        [{"id": "live-one", "enabled": True, "loaded": True, "tools": ["live_one_hello"]}],
+        raising=False,
+    )
 
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
     msg = _run(scaffold.ainvoke({"name": "Live One"}))  # enable defaults True
-    assert "enabled + loaded live" in msg
+    assert "enabled + loaded live" in msg and "live_one_hello" in msg
     assert captured["config"]["plugins"]["enabled"] == ["existing", "live-one"]
 
 
@@ -500,3 +508,62 @@ def test_projects_config_write_validates_end_to_end(monkeypatch, tmp_path):
 
     doc = _yaml.safe_load(leaf.read_text())
     assert doc["projects"] == [entry]
+
+
+def test_live_enable_flags_a_silent_noop_plugin(monkeypatch):
+    """Live QA 2026-08-07: a model-authored register() that RETURNED tools instead of
+    calling registry.register_tool loads cleanly with ZERO contributions — and every
+    message called it live, so the agent couldn't self-correct. 'Loaded' alone is not
+    success: the message must say it registered nothing and name the contract."""
+    mod = _load_devkit_module(None)
+    import server.agent_init as agent_init
+    from runtime.state import STATE
+
+    class _Cfg:
+        plugins_enabled: list = []
+        plugins_disabled: list = []
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "graph_config", _Cfg(), raising=False)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **k: (True, []))
+    monkeypatch.setattr(
+        STATE,
+        "plugin_meta",
+        [{"id": "noop-one", "enabled": True, "loaded": True, "tools": [], "skills": 0}],
+        raising=False,
+    )
+    out = _run(mod.enable_plugin.ainvoke({"plugin_id": "noop-one"}))
+    assert "registered NOTHING" in out and "registry.register_tool" in out
+
+
+def test_reload_flags_silent_noop_only_under_devkit_roots(monkeypatch, tmp_path):
+    """The zero-contribution sweep is scoped to plugins in the devkit's dirs — a
+    bundled plugin contributing only meta-invisible surface (middleware, late-tool
+    factories, e.g. execute_code) must not trip it."""
+    from graph.plugins import scaffold as scaffold_mod
+
+    mod = _load_devkit_module(tmp_path)
+    root = tmp_path / "live-plugins"
+    (root / "quiet-one").mkdir(parents=True)
+    (root / "quiet-one" / "protoagent.plugin.yaml").write_text("id: quiet-one\nname: Q\nversion: 0.0.1\n")
+    monkeypatch.setattr(scaffold_mod, "live_plugins_dir", lambda: root)
+
+    import server.agent_init as agent_init
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **k: (True, []))
+    monkeypatch.setattr(
+        STATE,
+        "plugin_meta",
+        [
+            {"id": "quiet-one", "enabled": True, "loaded": True, "tools": [], "skills": 0},
+            # loaded, zero visible contributions, but NOT under the devkit roots (a
+            # bundled late-tools plugin) — must stay unflagged.
+            {"id": "execute_code", "enabled": True, "loaded": True, "tools": [], "skills": 0},
+        ],
+        raising=False,
+    )
+    out = _run(mod.reload_plugins.ainvoke({}))
+    assert "quiet-one" in out and "registered NOTHING" in out
+    assert "execute_code" not in out

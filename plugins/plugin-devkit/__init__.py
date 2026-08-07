@@ -68,6 +68,51 @@ def _failure_detail(meta: dict) -> str:
     return err
 
 
+_CONTRACT_CRIB = (
+    "register(registry) must CALL registry.register_tool(<a @tool function>) / "
+    "register_subagent / register_router — a RETURNED list is silently ignored by the "
+    "loader. Read the building-plugins skill, or plugin_read_file('hello', '__init__.py') "
+    "for a working example."
+)
+
+
+def _contribution_summary(meta: dict) -> str:
+    """What a loaded plugin actually CONTRIBUTED — 'loaded' alone is not success.
+
+    Live QA (2026-08-07) found the one failure shape the loop couldn't self-correct:
+    a model-authored ``register()`` that *returned* hand-rolled tool objects instead of
+    calling ``registry.register_tool`` loads cleanly with zero contributions, and every
+    message called it live. The agent fixed both traceback failures on its own; the
+    silent no-op it never saw. Empty string = contributed nothing this meta can see."""
+    tools = meta.get("tools") or []
+    parts = []
+    if tools:
+        parts.append(f"{len(tools)} tool(s): {', '.join(tools[:8])}")
+    for key, label in (
+        ("subagents", "subagent(s)"),
+        ("routers", "route(s)"),
+        ("surfaces", "surface(s)"),
+        ("skills", "skill dir(s)"),
+        ("mcp_servers", "MCP server(s)"),
+        ("chat_commands", "chat command(s)"),
+    ):
+        v = meta.get(key)
+        n = len(v) if isinstance(v, list) else int(v or 0)
+        if n:
+            parts.append(f"{n} {label}")
+    return ", ".join(parts)
+
+
+def _zero_contribution_warning(meta: dict) -> str | None:
+    """A warning line when a loaded plugin registered nothing visible — or None.
+    Callers scope this to plugins under the DEVKIT's roots: a bundled plugin that
+    contributes only meta-invisible surface area (middleware, late-tool factories)
+    must not trip it."""
+    if _contribution_summary(meta):
+        return None
+    return f"⚠ {meta.get('id')}: loaded, but registered NOTHING (no tools/views/subagents) — {_CONTRACT_CRIB}"
+
+
 # ── the devkit's own fence (ADR 0096 D2) ─────────────────────────────────────
 # The plugins dir is the devkit's domain: file tools resolve ONLY under the live
 # plugins dir (or the configured target_dir). The operator fs fence (ADR 0007) is
@@ -152,7 +197,13 @@ def _live_enable(pid: str) -> tuple[bool, str]:
                 f"enabled, but it FAILED to load: {_failure_detail(meta)}\n"
                 f"— fix it (plugin_read_file / plugin_write_file), then call reload_plugins",
             )
-        return (True, "enabled + loaded live")
+        summary = _contribution_summary(meta)
+        if not summary:
+            return (
+                True,
+                f"enabled + loaded — but it registered NOTHING (no tools/views/subagents). {_CONTRACT_CRIB}",
+            )
+        return (True, f"enabled + loaded live — {summary}")
     except Exception as e:  # noqa: BLE001 — enable is best-effort; the skeleton still landed
         return (False, f"auto-enable failed: {e}")
 
@@ -565,8 +616,13 @@ def _build_develop_tool(config: dict | None):
                 lines.append(f"— reload failed: {'; '.join(msgs)}")
             elif fresh is not None and not fresh.get("loaded"):
                 lines.append(f"— reloaded, but it FAILED to load: {_failure_detail(fresh)}")
+            elif fresh is not None and (warn := _zero_contribution_warning(fresh)):
+                lines.append(f"— reloaded, but {warn}")
             else:
-                lines.append("— reloaded: the coder's changes are live on the next turn")
+                summary = _contribution_summary(fresh) if fresh else ""
+                lines.append(
+                    "— reloaded: the coder's changes are live on the next turn" + (f" ({summary})" if summary else "")
+                )
         else:
             lines.append(f"— not enabled yet: call enable_plugin({plugin_id!r}) to load it live")
         return "\n".join(lines)
@@ -688,6 +744,27 @@ async def reload_plugins() -> str:
         if failed:
             detail = "\n".join(f"{pid}: {err}" for pid, err in failed)
             return f"⚠ reloaded, but these plugins FAILED to load — fix the code and reload again:\n{detail}"
+
+        # The silent-no-op catch (live QA 2026-08-07): a plugin that LOADED but
+        # registered nothing. Scoped to plugins under the devkit's roots — a bundled
+        # plugin contributing only meta-invisible surface (middleware, late-tool
+        # factories) must not trip it, and those never live in the scaffold dirs.
+        def _under_devkit_roots(pid: str) -> bool:
+            try:
+                _plugin_dir(pid, None)
+                return True
+            except ValueError:
+                return False
+
+        quiet = [
+            w
+            for m in (getattr(STATE, "plugin_meta", []) or [])
+            if m.get("enabled") and m.get("loaded") and _under_devkit_roots(str(m.get("id")))
+            for w in [_zero_contribution_warning(m)]
+            if w
+        ]
+        if quiet:
+            return "✓ reloaded, but:\n" + "\n".join(quiet)
         return "✓ reloaded — your plugin edits are live on the next turn."
     except Exception as e:  # noqa: BLE001
         return f"✗ reload failed: {e}"
