@@ -39,6 +39,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Estimated context cost on a SETTLED card (toolCost.ts, #2282). Like .tool-elapsed it
+   only appears past a threshold, so its presence is itself the signal — the operator is
+   looking for the expensive call, not reading a number off every row. Same subtle
+   treatment: this is an estimate and must not out-shout the tool's own name. */
+.tool-ctx-cost {
+  color: var(--pl-color-fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Reasoning rendered as a tool-style card (ReasoningCard) — same DS ToolCard chrome,
    collapsed by default, so the model's native thinking stacks evenly with the tool cards
    instead of dominating the thread. */

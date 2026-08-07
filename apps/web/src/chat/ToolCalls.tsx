@@ -16,10 +16,12 @@ import type { ReactNode } from "react";
 
 import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabsai/ui/tool-card";
 
+import { tokens } from "../lib/format";
 import type { ToolCall } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { SHOW_ELAPSED_AFTER_MS, formatElapsed, useElapsed } from "./elapsed";
 import { ToolValue } from "./tool-renderers";
+import { CHARS_PER_TOKEN, toolCostTokens } from "./toolCost";
 import { humanizeSeconds, parseWaitInput } from "./waitInfo";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
@@ -309,6 +311,11 @@ function ToolGroup({
   const elapsedMs = useElapsed(call.status === "running" ? call.startedAt : undefined);
   const showElapsed = elapsedMs !== undefined && elapsedMs >= SHOW_ELAPSED_AFTER_MS;
 
+  // Context cost of the result, estimated from its size (#2282). Only on settled calls
+  // that returned something substantial, so its presence alone reads as "this one was
+  // expensive" — same design as the elapsed chip above.
+  const costTokens = toolCostTokens(call);
+
   const name = (
     <>
       {cardLabel(call)}
@@ -322,6 +329,21 @@ function ToolGroup({
         <span className="tool-elapsed" title="How long this call has been running">
           {" · "}
           {formatElapsed(elapsedMs)}
+        </span>
+      ) : null}
+      {costTokens !== null ? (
+        <span
+          className="tool-ctx-cost"
+          title={
+            "Estimated context cost of this result — about " +
+            `${costTokens.toLocaleString()} tokens, from its size (${CHARS_PER_TOKEN} chars ≈ 1 token).\n\n` +
+            "An estimate, not a measurement: it doesn't know how much of the output the " +
+            "model actually reads, or whether compaction trims it first. The cost lands on " +
+            "the next model call."
+          }
+        >
+          {" · ~"}
+          {tokens(costTokens)} ctx
         </span>
       ) : null}
     </>

@@ -694,6 +694,16 @@ function scenarioFor(prompt) {
     return { name: "web_search", input: { query: "x" }, output: "Error: DuckDuckGo search failed: rate limited", answer: "Search failed." };
   if (t.includes("OVERFLOW"))
     return { name: "web_search", input: { token: "x".repeat(400) }, output: "y".repeat(400), answer: "done" };
+  if (t.includes("BIGRESULT"))
+    // A fat tool result — the shape the per-call context-cost chip exists for (#2282).
+    // 8000 chars ≈ 2000 estimated tokens, well over MIN_SHOWN_TOKENS; every other
+    // scenario here returns far too little to cross it, which is the point.
+    return {
+      name: "fetch_url",
+      input: { url: "https://example.com/big" },
+      output: `[200] https://example.com/big\n\n${"z".repeat(8000)}`,
+      answer: "Fetched a large page.",
+    };
   if (t.includes("STREAM"))
     return {
       name: "web_search",
