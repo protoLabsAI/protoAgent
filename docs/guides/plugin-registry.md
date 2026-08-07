@@ -112,7 +112,9 @@ workflow, with the rules commented inline:
 > `reload_plugins` (re-exec after an edit — a load failure reports with its
 > traceback), `develop_plugin` (hand a substantial build to a configured `acp`
 > coding delegate — it works scoped inside the plugin dir, then the host auto-runs
-> test + reload), `enable_plugin`, `scaffold_bundle`, plus a `plugin-architect`
+> test + reload), `register_plugin_project` (graduate a plugin to an ADR 0095
+> managed project — fs tools, github picker, and a projectBoard can then target
+> it), `enable_plugin`, `scaffold_bundle`, plus a `plugin-architect`
 > subagent + `design-plugin` workflow + the `building-plugins` skill. Pass
 > `git_init=True` (CLI: `--git`) to scaffold a repo from birth. With it on, ask the
 > agent to *"build a plugin that …"* and it scaffolds, edits, tests, and hot-swaps it

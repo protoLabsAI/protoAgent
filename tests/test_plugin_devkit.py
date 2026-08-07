@@ -409,3 +409,94 @@ def test_develop_plugin_without_delegate_names_the_fix(monkeypatch, tmp_path):
     dev = mod._build_develop_tool({"target_dir": str(out_root)})
     out = _run(dev.ainvoke({"plugin_id": "lonely", "instructions": "do a thing"}))
     assert out.startswith("✗") and "no `acp` coding delegate configured" in out
+
+
+def test_register_plugin_project_appends_scoped_entry(monkeypatch, tmp_path):
+    """register_plugin_project (ADR 0096 D6): appends a {name, path, write} entry to
+    the ADR 0095 registry (preserving existing entries), carries github when given,
+    and reads default_branch off a git_init scaffold."""
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Grad Uate", "git_init": True, "enable": False}))
+    pdir = out_root / "grad-uate"
+
+    import server.agent_init as agent_init
+    from runtime.state import STATE
+
+    class _Cfg:
+        projects = [{"name": "existing", "path": "/elsewhere"}]
+
+    captured: dict = {}
+
+    def _fake_apply(config=None, soul=None, layer="agent"):
+        captured["config"] = config
+        return (True, [])
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "graph_config", _Cfg(), raising=False)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", _fake_apply)
+
+    reg = mod._build_register_project_tool({"target_dir": str(out_root)})
+    out = _run(reg.ainvoke({"plugin_id": "grad-uate", "github": "protoLabsAI/grad-uate"}))
+    assert out.startswith("✓ registered")
+    projects = captured["config"]["projects"]
+    assert projects[0] == {"name": "existing", "path": "/elsewhere"}  # preserved
+    entry = projects[1]
+    assert entry["name"] == "grad-uate" and entry["path"] == str(pdir) and entry["write"] is True
+    assert entry["github"] == "protoLabsAI/grad-uate"
+    assert entry.get("default_branch")  # a git_init scaffold has a branch to read
+
+    # idempotent: registering again is a no-op, not a duplicate
+    registered = projects
+
+    class _Cfg2:
+        projects = registered
+
+    monkeypatch.setattr(STATE, "graph_config", _Cfg2(), raising=False)
+    assert "already registered" in _run(reg.ainvoke({"plugin_id": "grad-uate"}))
+
+
+def test_register_plugin_project_refuses_bad_input(monkeypatch, tmp_path):
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Fenced", "enable": False}))
+
+    from runtime.state import STATE
+
+    reg = mod._build_register_project_tool({"target_dir": str(out_root)})
+    # unknown id → fence refusal (only real plugin dirs are addressable)
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    assert "✗" in _run(reg.ainvoke({"plugin_id": "not-a-plugin"}))
+    # malformed github
+    assert "owner/repo" in _run(reg.ainvoke({"plugin_id": "fenced", "github": "not a repo!"}))
+    # no live agent
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+    assert "not running" in _run(reg.ainvoke({"plugin_id": "fenced"}))
+
+
+def test_projects_config_write_validates_end_to_end(monkeypatch, tmp_path):
+    """The one integration risk: `_apply_settings_changes(config={"projects": [...]})`
+    must pass config validation and land the list in the YAML leaf — the registry's
+    first runtime write path (ADR 0095 had no POST)."""
+    import graph.config_io as cio
+    import server.agent_init as ai
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("model:\n  name: m\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "secrets_yaml_path", lambda: tmp_path / "secrets.yaml")
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (True, "reloaded"))
+    monkeypatch.setattr(ai, "_sync_autostart_with_config", lambda *_a, **_k: None)
+
+    entry = {"name": "grad-uate", "path": str(tmp_path), "write": True, "github": "o/r"}
+    ok, msgs = ai._apply_settings_changes(config={"projects": [entry]})
+    assert ok, msgs
+
+    import yaml as _yaml
+
+    doc = _yaml.safe_load(leaf.read_text())
+    assert doc["projects"] == [entry]

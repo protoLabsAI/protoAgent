@@ -277,6 +277,18 @@ From the shell (no agent): `python -m server plugin new "My Plugin" --view --ski
 scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`
 scaffolds an ADR-0040 bundle.
 
+## 6b. Graduate it (optional — ADR 0096 D6)
+A plugin that outgrows the in-place loop becomes a first-class project:
+1. Scaffold with `git_init=True` (or `git init` later) so it has history.
+2. Create + push a remote (`gh repo create`, an operator step).
+3. **`register_plugin_project("<id>", github="owner/repo")`** — registers the plugin
+   dir in the managed-projects registry (ADR 0095): fs tools address it by name, the
+   github plugin's repo picker sees it, and a projectBoard instance can target it via
+   `project_board.project: <id>`. Scoped to the plugins dir — arbitrary paths stay an
+   operator/console action.
+4. Long-lived iteration then flows through the board's worktree → PR → CI loop; the
+   running agent consumes releases via the normal update path.
+
 ## 7. Distribute (optional)
 Publish as a git repo; others install by URL:
 `python -m server plugin install <git-url> --ref <tag>` (or the console Plugins

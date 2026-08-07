@@ -574,6 +574,81 @@ def _build_develop_tool(config: dict | None):
     return develop_plugin
 
 
+# ── graduation (ADR 0096 D6) ─────────────────────────────────────────────────
+# The ADR 0095 managed-projects registry's first runtime write path — scoped to
+# the plugins dir ONLY. A registry entry is also an fs-fence grant (ADR 0095 D3),
+# so the agent must never widen its own fence outside the domain it already owns;
+# general project registration stays an operator/console action.
+
+
+def _current_branch(pdir) -> str:
+    try:
+        out = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=pdir,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:  # noqa: BLE001 — identity garnish, never load-bearing
+        return ""
+
+
+def _build_register_project_tool(config: dict | None):
+    target_dir = (config or {}).get("target_dir") or None
+
+    @tool
+    async def register_plugin_project(plugin_id: str, github: str = "") -> str:
+        """Register a plugin's dir as a managed project (ADR 0095) — the graduation
+        step for a plugin that outgrows the in-place loop. Once registered it's a
+        first-class project: the fs tools address it by name, the github plugin's
+        repo picker sees ``github``, and a projectBoard instance can target it via
+        ``project_board.project``.
+
+        Typical graduation: ``scaffold_plugin(..., git_init=True)`` → create + push a
+        remote → ``register_plugin_project(id, github="owner/repo")`` → point a board
+        at it. Scoped to the plugins dir — this cannot register arbitrary paths."""
+        try:
+            pdir = _plugin_dir(plugin_id, target_dir)
+        except ValueError as e:
+            return f"✗ {e}"
+        if github and not _re.match(r"^[\w.-]+/[\w.-]+$", github):
+            return f"✗ github must be owner/repo (got {github!r})"
+        from runtime.state import STATE
+
+        if getattr(STATE, "graph", None) is None:
+            return "✗ not running — register it when the agent is live"
+        projects = [dict(p) for p in (getattr(STATE.graph_config, "projects", None) or []) if isinstance(p, dict)]
+        for p in projects:
+            if p.get("name") == plugin_id or p.get("path") == str(pdir):
+                return f"✓ already registered as {p.get('name')!r} — nothing to do"
+        entry: dict = {"name": plugin_id, "path": str(pdir), "write": True}
+        if github:
+            entry["github"] = github
+        if (pdir / ".git").is_dir():
+            branch = _current_branch(pdir)
+            if branch:
+                entry["default_branch"] = branch
+        from server.agent_init import _apply_settings_changes
+
+        # Heavy graph recompile — off the event loop, explicitly (ADR 0096 D9).
+        ok, msgs = await asyncio.to_thread(_apply_settings_changes, config={"projects": [*projects, entry]})
+        if not ok:
+            return f"✗ register failed: {'; '.join(msgs)}"
+        lines = [
+            f"✓ registered {plugin_id!r} as a managed project ({entry['path']})",
+            "  fs tools now address it by name; a projectBoard can target it via project_board.project",
+        ]
+        if github:
+            lines.append(f"  github: {github} (the github plugin's repo picker sees it)")
+        elif not (pdir / ".git").is_dir():
+            lines.append("  tip: scaffold_plugin(..., git_init=True) next time — a repo graduates cleaner")
+        return "\n".join(lines)
+
+    return register_plugin_project
+
+
 @tool
 async def enable_plugin(plugin_id: str) -> str:
     """Enable an already-present plugin (one you scaffolded or installed) by id and
@@ -737,6 +812,7 @@ def register(registry) -> None:
         registry.register_tool(t)
     registry.register_tool(_build_test_tool(registry.config))  # run its pytest suite (ADR 0096 D3)
     registry.register_tool(_build_develop_tool(registry.config))  # hand a build to the ACP coder (ADR 0096 D5)
+    registry.register_tool(_build_register_project_tool(registry.config))  # graduate to a managed project (ADR 0096 D6)
     registry.register_tool(enable_plugin)  # turn on an on-disk plugin live
     registry.register_tool(reload_plugins)  # pick up edits live
     registry.register_subagent(_plugin_architect())  # a subagent
