@@ -230,6 +230,11 @@ the whole loop is tool-driven (ADR 0096): scaffold → edit → test → hot-swa
 - A load failure reports **with its traceback** — read it, fix with
   `plugin_write_file`, `reload_plugins` again. `reload_plugins` reports only
   *enabled* plugins that failed.
+- For a **substantial build** (multi-file logic, a real feature), hand the edit step
+  to a coding agent: **`develop_plugin("<id>", "…what to build…")`** dispatches the
+  configured `acp` delegate into the plugin dir (fresh session, git off), then
+  auto-runs `test_plugin` + `reload_plugins` and reports all three. Small edits:
+  do them yourself with `plugin_write_file`.
 - Built a plugin some other way (CLI / by hand)? Call **`enable_plugin("<id>")`** to
   turn it on + hot-reload, or toggle it in the console Plugins panel (#822).
 - `GET /api/runtime/status` → the plugin shows `loaded: true` with its tools/views.

@@ -12,6 +12,8 @@ the running graph.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -380,6 +382,7 @@ def scaffold_plugin(
     with_workflow: bool = False,
     with_comms: bool = False,
     with_tests: bool = False,
+    git_init: bool = False,
     target_dir: str | None = None,
 ) -> Scaffolded:
     """Write a new plugin SKELETON (manifest + ``register()`` + optional
@@ -391,7 +394,10 @@ def scaffold_plugin(
     requirements-dev + pyproject** so a standalone-repo plugin is green from birth
     (skip it for a plugin bundled inside protoAgent, which uses the host's tests/CI;
     not written for ``with_comms`` plugins, which import the host at module top).
-    Raises ``FileExistsError`` if the id already exists.
+    ``git_init=True`` makes the scaffold a **repo from birth** (ADR 0096 D6): init +
+    an initial commit, so a plugin meant to outlive its first session has history
+    and can graduate to a remote/board later. Raises ``FileExistsError`` if the id
+    already exists.
     """
     pid = slug(name)
     id_us = pid.replace("-", "_")
@@ -411,6 +417,8 @@ def scaffold_plugin(
             sk.mkdir(parents=True)
             (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name))
             made.append("skills/")
+        if git_init:
+            _maybe_git_init(target, made)
         return Scaffolded(id=pid, path=target, made=made, kind="comms")
 
     views_block = (
@@ -444,8 +452,40 @@ def scaffold_plugin(
     if with_tests:
         _write_test_harness(target, pid=pid, id_us=id_us, name=name)
         made += ["tests/", ".github/workflows/ci.yml", "requirements-dev.txt", "pyproject.toml"]
+    if git_init:
+        _maybe_git_init(target, made)
 
     return Scaffolded(id=pid, path=target, made=made, kind="plugin")
+
+
+def _maybe_git_init(target: Path, made: list[str]) -> None:
+    """Make the scaffold a git repo with an initial commit (ADR 0096 D6). Best-effort:
+    no git on PATH or a failed command is NOTED in ``made``, never fatal — the skeleton
+    already landed. The commit carries an explicit identity so it works on hosts with
+    no global git config (CI, fresh machines)."""
+    if shutil.which("git") is None:
+        made.append("(git not on PATH — repo not initialized)")
+        return
+    try:
+        for cmd in (
+            ["git", "init", "-q"],
+            ["git", "add", "-A"],
+            [
+                "git",
+                "-c",
+                "user.name=protoagent-devkit",
+                "-c",
+                "user.email=devkit@protoagent.local",
+                "commit",
+                "-q",
+                "-m",
+                "scaffold: initial skeleton (plugin-devkit)",
+            ],
+        ):
+            subprocess.run(cmd, cwd=target, check=True, capture_output=True, text=True, timeout=30)
+        made.append(".git (initial commit)")
+    except Exception as exc:  # noqa: BLE001 — repo-from-birth is a bonus, not a gate
+        made.append(f"(git init failed: {exc})")
 
 
 def _write_test_harness(target: Path, *, pid: str, id_us: str, name: str) -> None:

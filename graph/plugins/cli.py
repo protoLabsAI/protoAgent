@@ -36,6 +36,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="include a host-free test suite + CI + requirements-dev (for a standalone-repo plugin)",
     )
+    pn.add_argument(
+        "--git",
+        action="store_true",
+        help="git init + initial commit — a repo from birth (ADR 0096 D6)",
+    )
     pn.add_argument("--dir", default=None, help="target dir (default: the live plugins dir the loader discovers)")
 
     pnb = sub.add_parser("new-bundle", help="scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040)")
@@ -87,6 +92,7 @@ def run_plugin_cli(argv: list[str]) -> int:
                     with_workflow=args.workflow,
                     with_comms=args.comms,
                     with_tests=args.tests,
+                    git_init=args.git,
                     target_dir=args.dir,
                 )
             except FileExistsError as e:

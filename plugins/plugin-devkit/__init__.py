@@ -171,6 +171,7 @@ def _build_scaffold_tool(config: dict | None):
         with_workflow: bool = False,
         with_comms: bool = False,
         with_tests: bool = False,
+        git_init: bool = False,
         enable: bool = True,
     ) -> str:
         """Scaffold a new protoAgent plugin SKELETON on disk AND enable it live —
@@ -189,7 +190,9 @@ def _build_scaffold_tool(config: dict | None):
         Set ``with_tests=True`` to also write a host-free test suite + CI +
         requirements-dev + pyproject — use it when scaffolding a STANDALONE-repo
         plugin (its own git repo) so it's shippable + green from birth; skip it for a
-        plugin bundled inside protoAgent (which rides the host's tests/CI).
+        plugin bundled inside protoAgent (which rides the host's tests/CI). Pair it
+        with ``git_init=True`` for a repo from birth (init + initial commit) when the
+        plugin should outlive this session or graduate to its own remote.
 
         Use this when asked to create/build/scaffold a plugin; see the building-plugins
         skill for the contract.
@@ -205,6 +208,7 @@ def _build_scaffold_tool(config: dict | None):
                 with_workflow=with_workflow,
                 with_comms=with_comms,
                 with_tests=with_tests,
+                git_init=git_init,
                 target_dir=target_dir,
             )
         except FileExistsError as e:
@@ -429,6 +433,147 @@ def _build_test_tool(config: dict | None):
     return test_plugin
 
 
+# ── the delegated lane (ADR 0096 D5) ─────────────────────────────────────────
+# A substantial build is handed to a configured ACP coding delegate (ADR 0025)
+# working directly in the plugin dir, then re-joins the spine at *test*. The
+# delegates plugin is `builtin: true` (core runtime infrastructure, always
+# loaded), so importing its registry here follows the projectBoard precedent —
+# it is the one plugin that is really a core surface, not a peer.
+
+_DEVELOP_TIMEOUT_S = 900
+_CODER_REPLY_CAP = 2_000
+
+_DEVELOP_PROMPT = """You are implementing a protoAgent plugin. Your working directory IS the plugin
+directory — edit ONLY files inside it. The contract: `protoagent.plugin.yaml` is the
+manifest (data, read without importing); `__init__.py` exposes `register(registry)`
+(registry.register_tool / register_subagent / register_router / emit); `skills/` and
+`workflows/` are auto-discovered data. Keep it the smallest change that satisfies the
+task. Write or update tests under `tests/` when the plugin has a suite. Do NOT run
+git, do NOT create commits or PRs, do NOT touch anything outside this directory —
+the host runs the tests and reloads the plugin after you finish.
+
+Task:
+{instructions}"""
+
+
+def _resolve_coder(config: dict | None):
+    """``(delegate, error)`` — the ACP coding delegate develop_plugin dispatches to.
+    ``plugin_devkit.coder`` names one; otherwise the sole configured acp delegate
+    wins; anything else is an actionable error, mirroring the delegates plugin's own
+    degrade posture (no roster → say what to configure, don't guess)."""
+    try:
+        from plugins.delegates import _load_delegates_config
+        from plugins.delegates.registry import DelegateRegistry
+
+        reg = DelegateRegistry(_load_delegates_config())
+    except Exception as e:  # noqa: BLE001 — a broken roster is an answer, not a crash
+        return None, f"delegate registry unavailable: {e}"
+    want = (config or {}).get("coder") or ""
+    if want:
+        d = reg.get(want)
+        if d is None:
+            return None, f"no delegate named {want!r} (plugin_devkit.coder) — check list_agents"
+        if d.type != "acp":
+            return None, f"{want!r} is type {d.type!r} — develop_plugin needs an `acp` coding delegate"
+        return d, None
+    acp = [d for d in (reg.get(n) for n in reg.names()) if d is not None and d.type == "acp"]
+    if len(acp) == 1:
+        return acp[0], None
+    if not acp:
+        return None, (
+            "no `acp` coding delegate configured — add one under `delegates:` "
+            "(docs/guides/coding-agents.md) or set plugin_devkit.coder"
+        )
+    return None, f"multiple acp delegates ({', '.join(d.name for d in acp)}) — set plugin_devkit.coder to pick one"
+
+
+def _build_develop_tool(config: dict | None):
+    target_dir = (config or {}).get("target_dir") or None
+
+    @tool
+    async def develop_plugin(plugin_id: str, instructions: str) -> str:
+        """Hand a plugin's implementation to the configured ACP coding delegate — the
+        heavy-build lane of the loop. The coder works directly in the plugin dir
+        (scoped: fresh session, git lifecycle off), then the host automatically runs
+        ``test_plugin`` and ``reload_plugins`` and reports all three results.
+
+        Use for substantial changes (multi-file logic, a real feature); for small
+        edits prefer ``plugin_write_file`` yourself. Requires an ``acp`` delegate
+        (docs/guides/coding-agents.md); ``plugin_devkit.coder`` picks one when
+        several are configured."""
+        import dataclasses
+
+        try:
+            pdir = _plugin_dir(plugin_id, target_dir)
+        except ValueError as e:
+            return f"✗ {e}"
+        if not (instructions or "").strip():
+            return "✗ empty instructions — say what to build/change"
+        coder, err = _resolve_coder(config)
+        if coder is None:
+            return f"✗ {err}"
+
+        from plugins.delegates.adapters import ADAPTERS, DelegateError
+
+        adapter = ADAPTERS["acp"]
+        # The projectBoard dispatch pattern: a per-call scoped copy (registry
+        # untouched) with the plugin dir as workdir; manage_git force-off — the
+        # devkit owns the lifecycle here (test + reload), a PR would be noise.
+        overrides: dict = {"workdir": str(pdir)}
+        if any(f.name == "manage_git" for f in dataclasses.fields(coder)):
+            overrides["manage_git"] = False
+        scoped = dataclasses.replace(coder, **overrides)
+        timeout = float(getattr(coder, "timeout_s", 0) or _DEVELOP_TIMEOUT_S)
+        prompt = _DEVELOP_PROMPT.format(instructions=instructions.strip())
+        try:
+            await adapter.forget_session(scoped)  # fresh session — no stale memory of prior runs
+        except Exception:  # noqa: BLE001 — best-effort; a stale session must not block the build
+            pass
+        try:
+            reply = await asyncio.wait_for(adapter.dispatch(scoped, prompt, timeout=timeout), timeout)
+        except asyncio.TimeoutError:
+            return f"✗ coder timed out after {int(timeout)}s — split the task or raise the delegate's timeout_s"
+        except DelegateError as e:
+            return f"✗ coder dispatch failed: {e}"
+        finally:
+            try:
+                await adapter.teardown(scoped)  # reap the workdir-scoped subprocess
+            except Exception:  # noqa: BLE001 — never let teardown mask the result
+                pass
+
+        reply = (reply or "").strip()
+        if len(reply) > _CODER_REPLY_CAP:
+            reply = reply[:_CODER_REPLY_CAP] + " … ✂"
+        lines = [f"✓ coder ({coder.name}) finished on {plugin_id!r}:", reply or "(no reply text)", ""]
+
+        # Re-join the spine at *test* (D5): verify, then hot-swap.
+        lines.append("— test_plugin —")
+        lines.append(await asyncio.to_thread(_run_pytest, pdir))
+
+        from runtime.state import STATE
+
+        if getattr(STATE, "graph", None) is None:
+            lines.append("— reload skipped (no live agent) — call enable_plugin when running")
+            return "\n".join(lines)
+        meta = _plugin_meta(plugin_id)
+        if meta is not None and meta.get("enabled"):
+            from server.agent_init import _apply_settings_changes
+
+            ok, msgs = await asyncio.to_thread(_apply_settings_changes)  # D9: off the loop
+            fresh = _plugin_meta(plugin_id)
+            if not ok:
+                lines.append(f"— reload failed: {'; '.join(msgs)}")
+            elif fresh is not None and not fresh.get("loaded"):
+                lines.append(f"— reloaded, but it FAILED to load: {_failure_detail(fresh)}")
+            else:
+                lines.append("— reloaded: the coder's changes are live on the next turn")
+        else:
+            lines.append(f"— not enabled yet: call enable_plugin({plugin_id!r}) to load it live")
+        return "\n".join(lines)
+
+    return develop_plugin
+
+
 @tool
 async def enable_plugin(plugin_id: str) -> str:
     """Enable an already-present plugin (one you scaffolded or installed) by id and
@@ -591,6 +736,7 @@ def register(registry) -> None:
     for t in _build_file_tools(registry.config):  # inspect + edit the plugin (ADR 0096 D2)
         registry.register_tool(t)
     registry.register_tool(_build_test_tool(registry.config))  # run its pytest suite (ADR 0096 D3)
+    registry.register_tool(_build_develop_tool(registry.config))  # hand a build to the ACP coder (ADR 0096 D5)
     registry.register_tool(enable_plugin)  # turn on an on-disk plugin live
     registry.register_tool(reload_plugins)  # pick up edits live
     registry.register_subagent(_plugin_architect())  # a subagent

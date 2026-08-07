@@ -1,6 +1,6 @@
 id: plugin-devkit
 name: Plugin Devkit
-version: 0.3.0
+version: 0.4.0
 description: >-
   The plugin-authoring kit + the canonical reference plugin. It demonstrates EVERY
   contribution type in one repo — tools (`scaffold_plugin`, `plugin_read_file`,
@@ -18,12 +18,15 @@ capabilities:
   network: []
   filesystem: scoped
 
-# Config + Settings (ADR 0019) — where scaffolded plugins are written.
+# Config + Settings (ADR 0019) — where scaffolded plugins are written, and which
+# ACP coding delegate develop_plugin dispatches to (ADR 0096 D5).
 config_section: plugin_devkit
 config:
   target_dir: ""
+  coder: ""
 settings:
   - { key: target_dir, label: "Scaffold target dir", type: string, description: "Where scaffold_plugin writes new plugins (blank = the live plugins dir)." }
+  - { key: coder, label: "Coding delegate", type: string, description: "The acp delegate develop_plugin dispatches to (blank = the sole configured acp delegate)." }
 
 # Event bus (ADR 0039) — the topics this plugin broadcasts (declared for discovery).
 emits:

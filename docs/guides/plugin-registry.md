@@ -110,8 +110,11 @@ workflow, with the rules commented inline:
 > `plugin_list_files` / `plugin_read_file` / `plugin_write_file` (inspect + edit it,
 > fenced to the plugins dir), `test_plugin` (runs its pytest suite in a subprocess),
 > `reload_plugins` (re-exec after an edit — a load failure reports with its
-> traceback), `enable_plugin`, `scaffold_bundle`, plus a `plugin-architect` subagent
-> + `design-plugin` workflow + the `building-plugins` skill. With it on, ask the
+> traceback), `develop_plugin` (hand a substantial build to a configured `acp`
+> coding delegate — it works scoped inside the plugin dir, then the host auto-runs
+> test + reload), `enable_plugin`, `scaffold_bundle`, plus a `plugin-architect`
+> subagent + `design-plugin` workflow + the `building-plugins` skill. Pass
+> `git_init=True` (CLI: `--git`) to scaffold a repo from birth. With it on, ask the
 > agent to *"build a plugin that …"* and it scaffolds, edits, tests, and hot-swaps it
 > **in the same session — no restart**. Prefer the shell? `python -m server plugin
 > new "My Plugin" --view --skill` (and `plugin new-bundle` for an ADR-0040 stack)

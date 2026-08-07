@@ -285,3 +285,127 @@ def test_loader_records_traceback(monkeypatch, tmp_path):
     assert not meta["loaded"] and "kapow" in meta["error"]
     tb = meta.get("traceback", "")
     assert "ValueError" in tb and "kapow" in tb and len(tb) <= 2000
+
+
+def test_scaffold_git_init_makes_a_repo_from_birth(tmp_path):
+    """git_init=True (ADR 0096 D6): the scaffold is a git repo with an initial commit."""
+    import subprocess
+
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    msg = _run(scaffold.ainvoke({"name": "Repo Born", "git_init": True, "enable": False}))
+    assert ".git (initial commit)" in msg
+    pdir = out_root / "repo-born"
+    assert (pdir / ".git").is_dir()
+    log = subprocess.run(["git", "log", "--oneline"], cwd=pdir, capture_output=True, text=True, check=True).stdout
+    assert "scaffold: initial skeleton" in log
+
+
+def _acp_raw(name, tmp_path, **extra):
+    return {"name": name, "type": "acp", "command": "true", "workdir": str(tmp_path), **extra}
+
+
+def test_resolve_coder_degrades_honestly(monkeypatch, tmp_path):
+    """develop_plugin's delegate resolution (ADR 0096 D5): no roster / wrong name /
+    wrong type / ambiguity each name the fix instead of guessing."""
+    import plugins.delegates as delegates_mod
+
+    mod = _load_devkit_module(tmp_path)
+
+    monkeypatch.setattr(delegates_mod, "_load_delegates_config", lambda: [])
+    d, err = mod._resolve_coder(None)
+    assert d is None and "no `acp` coding delegate configured" in err
+
+    monkeypatch.setattr(delegates_mod, "_load_delegates_config", lambda: [_acp_raw("proto", tmp_path)])
+    d, err = mod._resolve_coder(None)
+    assert err is None and d.name == "proto"
+
+    d, err = mod._resolve_coder({"coder": "nope"})
+    assert d is None and "no delegate named 'nope'" in err
+
+    monkeypatch.setattr(
+        delegates_mod,
+        "_load_delegates_config",
+        lambda: [_acp_raw("proto", tmp_path), _acp_raw("opus", tmp_path)],
+    )
+    d, err = mod._resolve_coder(None)
+    assert d is None and "multiple acp delegates" in err
+    d, err = mod._resolve_coder({"coder": "opus"})
+    assert err is None and d.name == "opus"
+
+
+class _FakeAcpAdapter:
+    """Stands in for AcpAdapter in ADAPTERS — but the DelegateRegistry parses raw
+    entries through the adapter too, so delegate parsing stays the real thing."""
+
+    type = "acp"
+
+    def __init__(self):
+        from plugins.delegates.adapters import AcpAdapter
+
+        self._real = AcpAdapter()
+        self.calls: dict = {}
+
+    def parse(self, raw):
+        return self._real.parse(raw)
+
+    async def forget_session(self, d):
+        self.calls["forgot"] = True
+
+    async def dispatch(self, d, prompt, timeout=None):
+        self.calls["delegate"] = d
+        self.calls["prompt"] = prompt
+        return "done: implemented the feature"
+
+    async def teardown(self, d):
+        self.calls["torn"] = True
+
+
+def test_develop_plugin_dispatches_scoped_and_rejoins_the_spine(monkeypatch, tmp_path):
+    """develop_plugin (ADR 0096 D5): the coder is dispatched with a per-call scoped
+    copy (workdir = the plugin dir, manage_git off, fresh session, teardown), then
+    the host re-joins the spine at test (+ reload when live)."""
+    import plugins.delegates as delegates_mod
+    from plugins.delegates import adapters as adapters_mod
+    from runtime.state import STATE
+
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Coded Up", "enable": False}))
+    pdir = out_root / "coded-up"
+
+    monkeypatch.setattr(delegates_mod, "_load_delegates_config", lambda: [_acp_raw("proto", tmp_path)])
+    fake = _FakeAcpAdapter()
+    monkeypatch.setitem(adapters_mod.ADAPTERS, "acp", fake)
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+
+    dev = mod._build_develop_tool({"target_dir": str(out_root)})
+    out = _run(dev.ainvoke({"plugin_id": "coded-up", "instructions": "add a frobnicate tool"}))
+
+    scoped = fake.calls["delegate"]
+    assert scoped.workdir == str(pdir)  # per-call override, registry untouched
+    assert getattr(scoped, "manage_git", False) is False  # devkit owns the lifecycle
+    assert fake.calls["forgot"] and fake.calls["torn"]  # fresh session + reaped subprocess
+    assert "add a frobnicate tool" in fake.calls["prompt"]
+    assert "edit ONLY files inside it" in fake.calls["prompt"]
+    assert "done: implemented the feature" in out
+    assert "— test_plugin —" in out  # re-joined the spine at *test*
+    assert "reload skipped (no live agent)" in out
+
+
+def test_develop_plugin_without_delegate_names_the_fix(monkeypatch, tmp_path):
+    import plugins.delegates as delegates_mod
+
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Lonely", "enable": False}))
+    monkeypatch.setattr(delegates_mod, "_load_delegates_config", lambda: [])
+    dev = mod._build_develop_tool({"target_dir": str(out_root)})
+    out = _run(dev.ainvoke({"plugin_id": "lonely", "instructions": "do a thing"}))
+    assert out.startswith("✗") and "no `acp` coding delegate configured" in out
