@@ -2520,6 +2520,22 @@ def _apply_settings_changes(
                     )
                 except Exception:  # noqa: BLE001 — never mask the original failure
                     log.exception("[config] autostart re-sync after rollback failed")
+    if ok and (config is None or "plugins" in config):
+        # ADR 0096 D8: a plugin-state change must reach EVERY open console, not just
+        # the tab that clicked — console mutations invalidate their own queries, but
+        # the devkit tools (agent-initiated enable/reload) and autoupdate have no tab
+        # at all. One publish on the reload seam covers all callers; the console's
+        # PluginChangeWatch subscribes to `plugin.#`. A bare call is a pure reload
+        # (plugins re-exec), a `plugins` key is an enable/disable — other settings
+        # saves don't change plugin state and stay quiet. Guarded: a bus hiccup must
+        # never fail a save (same posture as the autoupdate publish).
+        try:
+            _event_bus.publish(
+                "plugin.changed",
+                {"scope": "plugins" if config is not None else "reload"},
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("[config] plugin.changed publish failed")
     return ok, messages
 
 

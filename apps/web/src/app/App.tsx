@@ -62,6 +62,7 @@ import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
+import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
@@ -859,6 +860,10 @@ export function App() {
           drive the chat typing indicator off turn.started/turn.finished so the app doesn't
           look hung during its longest turns. */}
       <ServerTurnWatch />
+      {/* Agent-initiated plugin changes (ADR 0096 D8): the devkit's build loop and the
+          autoupdate sweep publish plugin.changed/plugin.updated — refetch the plugin
+          queries so a rail view the agent just enabled appears without a manual refresh. */}
+      <PluginChangeWatch />
       {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
           a fork booted on the old port), drop the previous tenant's persisted chat view.
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps

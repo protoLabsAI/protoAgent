@@ -280,7 +280,6 @@ function LocalTab() {
   // Lock-backed inventory: which plugins live in the writable plugins dir (uninstallable —
   // in-tree built-ins are not) + which are locked-but-missing on disk.
   const installed = useQuery(installedPluginsQuery());
-  const qc = useQueryClient();
   const toast = useToast();
   const [installOpen, setInstallOpen] = useState(false);
   const [uninstallPending, setUninstallPending] = useState<Plugin | null>(null);
@@ -295,11 +294,10 @@ function LocalTab() {
   const toggle = useMutation({
     mutationFn: (p: Plugin) => api.setPluginEnabled(p.id, !p.enabled),
     onSuccess: (res, p) => {
-      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      // Enable/disable changes which plugins contribute Settings fields (ADR 0019), so
-      // refetch the schema — else a just-enabled plugin's config section won't appear
-      // until a restart clears the 5-min-stale cache (#1423).
-      qc.invalidateQueries({ queryKey: queryKeys.settings });
+      // The shared plugin invalidation set (runtime + installed + freshness + settings
+      // schema, #1423) — one refresh definition for every path that mutates plugin
+      // state, console- or agent-initiated (ADR 0096 D8).
+      refreshAll();
       // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
       // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
       toast(
