@@ -313,7 +313,10 @@ def register_plugin_routes(app) -> None:
 
         from server.agent_init import _apply_settings_changes
 
-        ok, messages = _apply_settings_changes(
+        # Offload off the event loop (#2210 class) — the reload's graph recompile is
+        # heavy and this handler is async; a direct call would freeze the server.
+        ok, messages = await asyncio.to_thread(
+            _apply_settings_changes,
             config={"plugins": {"enabled": enabled, "disabled": disabled}},
         )
         if not ok:

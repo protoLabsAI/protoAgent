@@ -1,13 +1,15 @@
 id: plugin-devkit
 name: Plugin Devkit
-version: 0.2.0
+version: 0.3.0
 description: >-
   The plugin-authoring kit + the canonical reference plugin. It demonstrates EVERY
-  contribution type in one repo — a tool (`scaffold_plugin`), a subagent
+  contribution type in one repo — tools (`scaffold_plugin`, `plugin_read_file`,
+  `plugin_write_file`, `test_plugin`, `reload_plugins`, …), a subagent
   (`plugin-architect`), a bundled `SKILL.md` skill, a workflow (`design-plugin`),
-  a console view, config/settings, and an event-bus emit (ADR 0039) — and it gives
-  the agent what it needs to build its own plugins: the building-plugins skill (the
-  how) + the scaffold tool (the doing). Enable it, then ask the agent to build a plugin.
+  a console view, config/settings, and an event-bus emit (ADR 0039) — and it closes
+  the ADR 0096 self-building loop: the agent scaffolds a plugin, edits it, runs its
+  pytest suite, and hot-swaps it into itself — no restart. Enable it, then ask the
+  agent to build a plugin.
 enabled: false
 
 # Declarative (surfaced, not enforced): scaffold_plugin writes plugin skeletons

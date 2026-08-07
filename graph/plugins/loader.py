@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sys
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -543,6 +544,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 )
             else:
                 entry["error"] = str(exc)
+                # The agent iterates on this (ADR 0096 D4): ``str(exc)`` alone gives a
+                # NameError with no location. Bounded — the meta rides /api/runtime/status.
+                entry["traceback"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-2000:]
             log.warning("[plugins] %s failed to load: %s — skipping", manifest.id, entry["error"])
             result.meta.append(entry)
             continue

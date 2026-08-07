@@ -105,14 +105,17 @@ workflow, with the rules commented inline:
 
 > **Start from the devkit.** Enable the bundled **`plugin-devkit`** plugin
 > (`plugins: { enabled: [plugin-devkit] }`) — it's the canonical full-bundle
-> example *and* it gives the agent the authoring tools: `scaffold_plugin` (writes a
-> skeleton **and enables it live**), `reload_plugins` (re-exec after you edit it),
-> `enable_plugin`, `scaffold_bundle`, plus a `plugin-architect` subagent +
-> `design-plugin` workflow + the `building-plugins` skill. With it on, ask the agent
-> to *"build a plugin that …"* and it scaffolds, enables, and tests it **in the same
-> session — no restart**. Prefer the shell? `python -m server plugin new "My Plugin"
-> --view --skill` (and `plugin new-bundle` for an ADR-0040 stack) scaffold without
-> the plugin enabled.
+> example *and* it gives the agent the whole self-building loop (ADR 0096):
+> `scaffold_plugin` (writes a skeleton **and enables it live**),
+> `plugin_list_files` / `plugin_read_file` / `plugin_write_file` (inspect + edit it,
+> fenced to the plugins dir), `test_plugin` (runs its pytest suite in a subprocess),
+> `reload_plugins` (re-exec after an edit — a load failure reports with its
+> traceback), `enable_plugin`, `scaffold_bundle`, plus a `plugin-architect` subagent
+> + `design-plugin` workflow + the `building-plugins` skill. With it on, ask the
+> agent to *"build a plugin that …"* and it scaffolds, edits, tests, and hot-swaps it
+> **in the same session — no restart**. Prefer the shell? `python -m server plugin
+> new "My Plugin" --view --skill` (and `plugin new-bundle` for an ADR-0040 stack)
+> scaffold without the plugin enabled.
 
 A plugin is a directory (its own repo) with a manifest + a `register()`. The
 **conventional layout** — everything here is picked up when the plugin is enabled:

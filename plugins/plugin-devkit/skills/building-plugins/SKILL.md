@@ -216,11 +216,20 @@ These generalize the patterns the SpaceTraders two-loop fleet proved (its `manag
 skill is the worked example: a deterministic engine steered by an agentic OODA loop).
 
 ## 6. Test it — live, no restart
-You don't need to restart to try a plugin you built. With **plugin-devkit** enabled:
+You don't need to restart to try a plugin you built. With **plugin-devkit** enabled,
+the whole loop is tool-driven (ADR 0096): scaffold → edit → test → hot-swap.
 - `scaffold_plugin(...)` already **enabled** it (the default) — its tools/view are
   live on your **next turn**. Call its `<id>_hello` to confirm.
-- Iterate: edit the plugin's `__init__.py`, then call **`reload_plugins`** — the
-  loader re-execs the file, so your change is live next turn (no restart).
+- Inspect + edit it with **`plugin_list_files` / `plugin_read_file` /
+  `plugin_write_file`** (fenced to the plugins dir — they can't touch anything else),
+  then call **`reload_plugins`** — the loader re-execs every file, so your change is
+  live next turn (no restart).
+- **`test_plugin("<id>")`** runs the plugin's own pytest suite in a subprocess
+  (scaffold with `with_tests=True` to get one) and reports pass/fail + the output
+  tail — go green before you hand it to the user.
+- A load failure reports **with its traceback** — read it, fix with
+  `plugin_write_file`, `reload_plugins` again. `reload_plugins` reports only
+  *enabled* plugins that failed.
 - Built a plugin some other way (CLI / by hand)? Call **`enable_plugin("<id>")`** to
   turn it on + hot-reload, or toggle it in the console Plugins panel (#822).
 - `GET /api/runtime/status` → the plugin shows `loaded: true` with its tools/views.

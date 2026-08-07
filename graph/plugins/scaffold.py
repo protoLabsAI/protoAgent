@@ -456,7 +456,17 @@ def _write_test_harness(target: Path, *, pid: str, id_us: str, name: str) -> Non
     and a conftest that uses it to load the plugin as a package."""
     tdir = target / "tests"
     tdir.mkdir()
-    testkit_src = (Path(__file__).with_name("testkit.py")).read_text()
+    # In the frozen desktop app this module lives in the PYZ with no source on disk —
+    # the sidecar bundles testkit.py as data beside it (build_sidecar BUNDLED_DATA) so
+    # this path resolves there too. Fail with the fix, not a bare FileNotFoundError.
+    kit = Path(__file__).with_name("testkit.py")
+    if not kit.is_file():
+        raise FileNotFoundError(
+            "plugin testkit source unavailable in this build — scaffold without "
+            "with_tests, or update the desktop app (the sidecar must bundle "
+            "graph/plugins/testkit.py)"
+        )
+    testkit_src = kit.read_text()
     (tdir / "_plugin_testkit.py").write_text(testkit_src)
     (tdir / "conftest.py").write_text(_CONFTEST_STUB.format(id=pid))
     (tdir / f"test_{id_us}.py").write_text(_TEST_STUB.format(id=pid, name=name))

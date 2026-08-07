@@ -1,19 +1,27 @@
-"""Plugin Devkit — the plugin-authoring kit + the reference plugin (ADR 0027).
+"""Plugin Devkit — the plugin-authoring kit + the reference plugin (ADR 0027, ADR 0096).
 
 The featured full-bundle example: in ONE plugin it contributes **tools**
-(`scaffold_plugin`, `scaffold_bundle`, `enable_plugin`, `reload_plugins`), a
+(`scaffold_plugin`, `scaffold_bundle`, `enable_plugin`, `reload_plugins`,
+`plugin_list_files`, `plugin_read_file`, `plugin_write_file`, `test_plugin`), a
 **subagent** (`plugin-architect`), a bundled **skill** (`skills/building-plugins`),
 a **workflow** (`workflows/design-plugin`), a **console view** (`/guide`), and
 **config/settings** — every contribution type.
 
-Enable it to let the agent build its own plugins *and test them live*: it has the
-*how* (the skill), the *doing* (scaffold), and — new — the *running it* (enable +
-hot-reload, no restart). The scaffolders themselves live in core
+Enable it to let the agent build its own plugins *and test them live* — the ADR 0096
+self-building loop: scaffold → edit (`plugin_write_file`) → test (`test_plugin`) →
+hot-swap (`reload_plugins`), no restart. The scaffolders themselves live in core
 (`graph.plugins.scaffold`) so the `plugin new` CLI shares them; this file is the
 agent-facing half + the live-enable that needs the running graph.
 """
 
 from __future__ import annotations
+
+import asyncio
+import os
+import re as _re
+import subprocess
+import sys
+from pathlib import Path
 
 from langchain_core.tools import tool
 
@@ -23,6 +31,15 @@ from graph.subagents.config import SubagentConfig
 # Captured at register() so the scaffold tools can broadcast on the event bus (ADR 0039) —
 # the devkit dogfoods its own lesson.
 _REGISTRY = None
+
+# test_plugin bounds — a runaway suite must not wedge a turn.
+_TEST_TIMEOUT_S = 180
+_TEST_OUTPUT_CAP = 6_000
+# plugin_read_file / plugin_write_file bounds.
+_READ_CAP = 48_000
+_WRITE_CAP = 262_144
+_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", ".ruff_cache", "node_modules", ".venv"}
+_ID_RE = _re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _emit_scaffolded(pid: str, kind: str) -> None:
@@ -41,6 +58,60 @@ def _plugin_meta(pid: str) -> dict | None:
     return next((m for m in (getattr(STATE, "plugin_meta", []) or []) if m.get("id") == pid), None)
 
 
+def _failure_detail(meta: dict) -> str:
+    """The agent-facing failure text: the error line PLUS the loader's bounded traceback
+    (ADR 0096 D4) — ``name 'foo' is not defined`` with no location is not fixable."""
+    err = meta.get("error") or "unknown error"
+    tb = (meta.get("traceback") or "").strip()
+    if tb and tb not in err:
+        err = f"{err}\n{tb}"
+    return err
+
+
+# ── the devkit's own fence (ADR 0096 D2) ─────────────────────────────────────
+# The plugins dir is the devkit's domain: file tools resolve ONLY under the live
+# plugins dir (or the configured target_dir). The operator fs fence (ADR 0007) is
+# deliberately NOT reused or widened — enabling a build tool must not change what
+# the operator granted elsewhere.
+
+
+def _devkit_roots(target_dir: str | None) -> list[Path]:
+    roots: list[Path] = []
+    if target_dir:
+        roots.append(Path(target_dir).expanduser().resolve())
+    try:
+        roots.append(scaffold.live_plugins_dir().resolve())
+    except Exception:  # noqa: BLE001 — a broken instance path just narrows the fence
+        pass
+    return roots
+
+
+def _plugin_dir(pid: str, target_dir: str | None) -> Path:
+    """Resolve a plugin id to its on-disk dir under the devkit's roots, or raise
+    ``ValueError`` with an agent-facing message. Only real plugin dirs (a
+    ``protoagent.plugin.yaml`` present) are addressable — the fence is by id, not path."""
+    if not _ID_RE.match(pid or ""):
+        raise ValueError(f"invalid plugin id {pid!r} — ids are lowercase slugs like 'my-plugin'")
+    for root in _devkit_roots(target_dir):
+        cand = (root / pid).resolve()
+        if cand.parent != root:  # a crafted id must not resolve outside the root
+            continue
+        if (cand / "protoagent.plugin.yaml").is_file():
+            return cand
+    raise ValueError(f"no plugin {pid!r} in the plugins dir — scaffold_plugin creates one, or check the id")
+
+
+def _resolve_member(pdir: Path, rel: str) -> Path:
+    """A path INSIDE the plugin dir: relative only, no ``..``, symlink escapes refused."""
+    p = Path(rel or "")
+    if not rel or p.is_absolute() or any(part == ".." for part in p.parts):
+        raise ValueError(f"path must be relative, inside the plugin dir (got {rel!r})")
+    out = (pdir / p).resolve()
+    if out != pdir and pdir not in out.parents:
+        raise ValueError(f"path escapes the plugin dir: {rel!r}")
+    return out
+
+
 def _live_enable(pid: str) -> tuple[bool, str]:
     """Enable a plugin in the RUNNING agent + hot-reload — the same path the console
     enable toggle uses (#822): tools/subagents/middleware/MCP rebuild with the graph
@@ -50,7 +121,11 @@ def _live_enable(pid: str) -> tuple[bool, str]:
     Crucially it confirms the plugin actually LOADED — ``load_plugins`` is best-effort
     per-plugin, so a ``register()`` that raises is *skipped*, not fatal: the config
     reload "succeeds" while the plugin is silently not live. We surface that instead of
-    a false 'loaded live', so the agent can fix-and-reload instead of testing a no-op."""
+    a false 'loaded live', so the agent can fix-and-reload instead of testing a no-op.
+
+    Blocking by design (the reload's graph recompile is heavy) — async tool bodies call
+    it via ``asyncio.to_thread`` (ADR 0096 D9), never inline.
+    """
     try:
         from runtime.state import STATE
 
@@ -74,7 +149,8 @@ def _live_enable(pid: str) -> tuple[bool, str]:
         if not meta.get("loaded"):
             return (
                 False,
-                f"enabled, but it FAILED to load: {meta.get('error') or 'unknown error'} — fix __init__.py, then call reload_plugins",
+                f"enabled, but it FAILED to load: {_failure_detail(meta)}\n"
+                f"— fix it (plugin_read_file / plugin_write_file), then call reload_plugins",
             )
         return (True, "enabled + loaded live")
     except Exception as e:  # noqa: BLE001 — enable is best-effort; the skeleton still landed
@@ -86,7 +162,7 @@ def _build_scaffold_tool(config: dict | None):
     target_dir = (config or {}).get("target_dir") or None
 
     @tool
-    def scaffold_plugin(
+    async def scaffold_plugin(
         name: str,
         summary: str = "A protoAgent plugin.",
         with_tool: bool = True,
@@ -102,8 +178,8 @@ def _build_scaffold_tool(config: dict | None):
 
         Writes the manifest + ``register()`` + optional view/skill/workflow stubs,
         then (``enable=True``, the default) turns it on and hot-reloads the agent:
-        its tools/views are live on your NEXT turn. Iterate by editing the plugin's
-        ``__init__.py`` and calling ``reload_plugins`` to pick up the change live.
+        its tools/views are live on your NEXT turn. Iterate with ``plugin_write_file``
+        + ``reload_plugins``; verify with ``test_plugin``.
 
         Set ``with_comms=True`` for a **communication plugin** (Discord/Slack/Telegram-
         style): it writes a ``ChatAdapter`` skeleton (ADR 0029) — you fill in
@@ -119,7 +195,8 @@ def _build_scaffold_tool(config: dict | None):
         skill for the contract.
         """
         try:
-            res = scaffold.scaffold_plugin(
+            res = await asyncio.to_thread(
+                scaffold.scaffold_plugin,
                 name,
                 summary=summary,
                 with_tool=with_tool,
@@ -146,11 +223,14 @@ def _build_scaffold_tool(config: dict | None):
             return "\n".join(lines)
 
         if enable:
-            ok, detail = _live_enable(res.id)
+            # Heavy graph recompile — off the event loop, explicitly (ADR 0096 D9).
+            ok, detail = await asyncio.to_thread(_live_enable, res.id)
             if ok:
                 hello = f"{res.id.replace('-', '_')}_hello" if with_tool else "its tools"
                 lines.append(f"  ✓ {detail} — call {hello} on your NEXT turn to test it (no restart).")
-                lines.append(f"  iterate: edit {res.path}/__init__.py, then call reload_plugins to go live.")
+                lines.append(
+                    f"  iterate: plugin_write_file({res.id!r}, …) then reload_plugins; test_plugin({res.id!r}) runs its suite."
+                )
             else:
                 lines.append(f"  ⚠ scaffolded but not auto-enabled ({detail}) — call enable_plugin({res.id!r}).")
         else:
@@ -203,22 +283,170 @@ def _build_scaffold_bundle_tool(config: dict | None):
     return scaffold_bundle
 
 
+# ── the edit half of the loop (ADR 0096 D2) ──────────────────────────────────
+
+
+def _build_file_tools(config: dict | None) -> list:
+    target_dir = (config or {}).get("target_dir") or None
+
+    @tool
+    def plugin_list_files(plugin_id: str) -> str:
+        """List the files of a plugin in the plugins dir (one you scaffolded or
+        installed) — relative paths + sizes. Use before reading/editing it."""
+        try:
+            pdir = _plugin_dir(plugin_id, target_dir)
+        except ValueError as e:
+            return f"✗ {e}"
+        rows = []
+        for p in sorted(pdir.rglob("*")):
+            if any(part in _SKIP_DIRS for part in p.relative_to(pdir).parts):
+                continue
+            if p.is_file():
+                rows.append(f"{p.relative_to(pdir)}  ({p.stat().st_size} B)")
+            if len(rows) >= 200:
+                rows.append("… (truncated at 200 files)")
+                break
+        return f"{pdir}:\n" + "\n".join(rows)
+
+    @tool
+    def plugin_read_file(plugin_id: str, path: str) -> str:
+        """Read a file inside a plugin's dir (relative path, e.g. ``__init__.py``).
+        This is how you inspect a plugin you're iterating on — pair with
+        ``plugin_write_file`` + ``reload_plugins``."""
+        try:
+            pdir = _plugin_dir(plugin_id, target_dir)
+            target = _resolve_member(pdir, path)
+        except ValueError as e:
+            return f"✗ {e}"
+        if not target.is_file():
+            return f"✗ no file {path!r} in {plugin_id!r} — plugin_list_files shows what's there"
+        text = target.read_text(errors="replace")
+        if len(text) > _READ_CAP:
+            return text[:_READ_CAP] + f"\n… ✂ truncated ({len(text)} chars total)"
+        return text
+
+    @tool
+    def plugin_write_file(plugin_id: str, path: str, content: str) -> str:
+        """Write/overwrite a file inside a plugin's dir (relative path). The edit half
+        of the build loop: write, then ``reload_plugins`` to go live, ``test_plugin``
+        to verify. Fenced to the plugins dir — this cannot touch anything else."""
+        try:
+            pdir = _plugin_dir(plugin_id, target_dir)
+            target = _resolve_member(pdir, path)
+        except ValueError as e:
+            return f"✗ {e}"
+        if len(content) > _WRITE_CAP:
+            return f"✗ content too large ({len(content)} chars > {_WRITE_CAP}) — split the file"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+        return (
+            f"✓ wrote {path} ({len(content)} chars) — call reload_plugins to make it live, "
+            f"test_plugin({plugin_id!r}) to run its suite"
+        )
+
+    return [plugin_list_files, plugin_read_file, plugin_write_file]
+
+
+# ── the test half of the loop (ADR 0096 D3) ──────────────────────────────────
+
+
+def _test_interpreter() -> tuple[str | None, str | None]:
+    """``(python, error)`` — the interpreter to run pytest with. Source-run →
+    ``sys.executable``; frozen → the ADR 0094 managed runtime or an actionable
+    refusal (never a system-Python fallback)."""
+    if getattr(sys, "frozen", False):
+        try:
+            from infra.python_runtime import managed_python_exe
+        except Exception:  # noqa: BLE001 — ancient build without the runtime module
+            return None, "no Python available to run pytest in this packaged build"
+        exe = managed_python_exe()
+        if exe is None:
+            return None, (
+                "no Python to run pytest in the packaged app — install the managed runtime "
+                "(Settings ▸ Tools, ~35 MB), then try again"
+            )
+        return str(exe), None
+    return sys.executable, None
+
+
+def _run_pytest(pdir: Path) -> str:
+    py, err = _test_interpreter()
+    if py is None:
+        return f"✗ {err}"
+    # Scrubbed env (the execute_code posture): the suite is host-free by design and
+    # must not inherit gateway keys/tokens from the server process.
+    env = {
+        k: os.environ[k]
+        for k in ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "SYSTEMROOT")
+        if k in os.environ
+    }
+    env["PYTHONNOUSERSITE"] = "1"
+    try:
+        proc = subprocess.run(
+            [py, "-m", "pytest", "-q", "--color=no"],
+            cwd=pdir,
+            capture_output=True,
+            text=True,
+            timeout=_TEST_TIMEOUT_S,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return f"✗ tests timed out after {_TEST_TIMEOUT_S}s — is something blocking on network/input?"
+    out = (proc.stdout + "\n" + proc.stderr).strip()
+    if len(out) > _TEST_OUTPUT_CAP:
+        out = "… ✂ …\n" + out[-_TEST_OUTPUT_CAP:]
+    if proc.returncode == 0:
+        return f"✓ tests passed\n{out}"
+    if proc.returncode == 5:
+        return (
+            "✗ no tests collected — write tests/test_*.py (scaffold_plugin with_tests=True generates a host-free suite)"
+        )
+    if "No module named pytest" in out:
+        hint = (
+            "pytest isn't installed in the managed runtime — install the plugin's dev deps first"
+            if getattr(sys, "frozen", False)
+            else f"pytest isn't installed in this environment ({py})"
+        )
+        return f"✗ {hint}"
+    return f"✗ tests failed (exit {proc.returncode})\n{out}"
+
+
+def _build_test_tool(config: dict | None):
+    target_dir = (config or {}).get("target_dir") or None
+
+    @tool
+    async def test_plugin(plugin_id: str) -> str:
+        """Run a plugin's own pytest suite (``tests/``, host-free via the vendored
+        testkit) in a subprocess and report pass/fail + the output tail. The verify
+        step of the build loop: scaffold → edit → **test** → reload. Bounded by a
+        timeout and an output cap."""
+        try:
+            pdir = _plugin_dir(plugin_id, target_dir)
+        except ValueError as e:
+            return f"✗ {e}"
+        return await asyncio.to_thread(_run_pytest, pdir)
+
+    return test_plugin
+
+
 @tool
-def enable_plugin(plugin_id: str) -> str:
+async def enable_plugin(plugin_id: str) -> str:
     """Enable an already-present plugin (one you scaffolded or installed) by id and
     hot-reload it live — no restart. Use when a plugin is on disk but turned off."""
-    ok, detail = _live_enable(plugin_id)
+    # Heavy graph recompile — off the event loop, explicitly (ADR 0096 D9).
+    ok, detail = await asyncio.to_thread(_live_enable, plugin_id)
     return f"✓ {plugin_id}: {detail}" if ok else f"✗ {plugin_id}: {detail}"
 
 
 @tool
-def reload_plugins() -> str:
+async def reload_plugins() -> str:
     """Hot-reload all enabled plugins — re-exec their code (every file, not just
     ``__init__.py``) so edits you made take effect WITHOUT a restart. Use after editing
     a plugin you're iterating on; the new tools/views are live on your NEXT turn.
 
-    Reports which plugins FAILED to load (a syntax error, a bad import) so you fix-and-
-    reload instead of testing stale/no-op code — a failed plugin is skipped, never fatal."""
+    Reports which ENABLED plugins FAILED to load (a syntax error, a bad import — with
+    the traceback) so you fix-and-reload instead of testing stale/no-op code — a failed
+    plugin is skipped, never fatal."""
     try:
         from runtime.state import STATE
 
@@ -226,17 +454,20 @@ def reload_plugins() -> str:
             return "✗ no live agent to reload (run inside the server)."
         from server.agent_init import _apply_settings_changes
 
-        ok, msgs = _apply_settings_changes()  # bare call = pure reload (picks up file edits)
+        # Bare call = pure reload (picks up file edits). Heavy — off the event loop (D9).
+        ok, msgs = await asyncio.to_thread(_apply_settings_changes)
         if not ok:
             return f"✗ reload failed: {'; '.join(msgs)}"
         failed = [
-            (m["id"], m.get("error") or "unknown error")
+            (m["id"], _failure_detail(m))
             for m in (getattr(STATE, "plugin_meta", []) or [])
-            if not m.get("loaded")
+            # enabled-only: a DISABLED plugin never loads by design — reporting it as a
+            # failure buried real breakage in ~a dozen lines of "unknown error" noise.
+            if m.get("enabled") and not m.get("loaded")
         ]
         if failed:
-            detail = "; ".join(f"{pid}: {err}" for pid, err in failed)
-            return f"⚠ reloaded, but these plugins FAILED to load — fix the code and reload again: {detail}"
+            detail = "\n".join(f"{pid}: {err}" for pid, err in failed)
+            return f"⚠ reloaded, but these plugins FAILED to load — fix the code and reload again:\n{detail}"
         return "✓ reloaded — your plugin edits are live on the next turn."
     except Exception as e:  # noqa: BLE001
         return f"✗ reload failed: {e}"
@@ -305,11 +536,15 @@ def _build_guide_router():
           <h1>Plugin Devkit</h1>
           <p>This plugin gives the agent what it needs to build plugins — and is itself
           the full-bundle example. Ask the agent: <em>"build a plugin that …"</em>.</p>
-          <h2>Build it live (no restart)</h2>
+          <h2>The build loop (no restart — ADR 0096)</h2>
           <ul>
             <li><code>scaffold_plugin</code> — writes a skeleton <strong>and enables it</strong>; its
                 tools/view are live on the next turn (pass <code>with_tests</code> for a shippable repo)</li>
-            <li>edit the plugin's <code>__init__.py</code>, then <code>reload_plugins</code> — your change goes live</li>
+            <li><code>plugin_list_files</code> / <code>plugin_read_file</code> /
+                <code>plugin_write_file</code> — inspect + edit it (fenced to the plugins dir)</li>
+            <li><code>test_plugin</code> — run its pytest suite in a subprocess, pass/fail + output</li>
+            <li><code>reload_plugins</code> — re-exec every plugin file; edits go live next turn
+                (a load failure reports WITH its traceback)</li>
             <li><code>enable_plugin</code> — turn on a plugin that's on disk but off</li>
             <li><code>scaffold_bundle</code> — a <code>protoagent.bundle.yaml</code> stack (ADR 0040)</li>
           </ul>
@@ -353,6 +588,9 @@ def register(registry) -> None:
     _REGISTRY = registry  # for the bus emit (ADR 0039)
     registry.register_tool(_build_scaffold_tool(registry.config))  # scaffold a plugin (+ enable live)
     registry.register_tool(_build_scaffold_bundle_tool(registry.config))  # scaffold a bundle
+    for t in _build_file_tools(registry.config):  # inspect + edit the plugin (ADR 0096 D2)
+        registry.register_tool(t)
+    registry.register_tool(_build_test_tool(registry.config))  # run its pytest suite (ADR 0096 D3)
     registry.register_tool(enable_plugin)  # turn on an on-disk plugin live
     registry.register_tool(reload_plugins)  # pick up edits live
     registry.register_subagent(_plugin_architect())  # a subagent
