@@ -778,6 +778,10 @@
           "title": "0095 — Managed projects registry: one place to declare a project"
         },
         {
+          "path": "adr/0096-self-building-loop.md",
+          "title": "0096 — The self-building loop: plugin-devkit closes design → build → test → hot-swap"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
