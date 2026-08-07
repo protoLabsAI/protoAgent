@@ -1,6 +1,6 @@
 id: plugin-devkit
 name: Plugin Devkit
-version: 0.5.1
+version: 0.6.0
 description: >-
   The plugin-authoring kit + the canonical reference plugin. It demonstrates EVERY
   contribution type in one repo — tools (`scaffold_plugin`, `plugin_read_file`,
