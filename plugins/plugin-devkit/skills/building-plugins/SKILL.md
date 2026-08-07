@@ -226,7 +226,10 @@ the whole loop is tool-driven (ADR 0096): scaffold → edit → test → hot-swa
   live next turn (no restart).
 - **`test_plugin("<id>")`** runs the plugin's own pytest suite in a subprocess
   (scaffold with `with_tests=True` to get one) and reports pass/fail + the output
-  tail — go green before you hand it to the user.
+  tail — go green before you hand it to the user. It runs against a **disposable
+  copy** of the plugin dir, so a destructive test can't touch live files. Still:
+  keep runtime STATE (data files, logs) **out of the plugin dir** — an update or
+  reinstall wipes it; write under the instance root instead.
 - A load failure reports **with its traceback** — read it, fix with
   `plugin_write_file`, `reload_plugins` again. `reload_plugins` reports only
   *enabled* plugins that failed.

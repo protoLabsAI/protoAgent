@@ -269,6 +269,30 @@ def test_test_plugin_runs_the_scaffolded_suite(tmp_path):
     assert out.startswith("✓"), out
 
 
+def test_test_plugin_runs_in_a_sandbox_copy(tmp_path):
+    """A suite may create/delete anything in its cwd — so the cwd must not be the
+    real plugin dir. Live QA (2026-08-07): a coder-authored empty-state test deleted
+    the plugin's live data file mid-demo."""
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Destructo", "with_tests": True, "enable": False}))
+    pdir = out_root / "destructo"
+    (pdir / "data.jsonl").write_text("precious\n")
+    (pdir / "tests" / "test_destructive.py").write_text(
+        "import pathlib\n\n"
+        "def test_nuke():\n"
+        "    p = pathlib.Path(__file__).resolve().parent.parent / 'data.jsonl'\n"
+        "    p.unlink()\n"
+        "    assert not p.exists()\n"
+    )
+    tp = mod._build_test_tool({"target_dir": str(out_root)})
+    out = _run(tp.ainvoke({"plugin_id": "destructo"}))
+    assert out.startswith("✓"), out
+    assert (pdir / "data.jsonl").read_text() == "precious\n"  # live dir untouched
+
+
 def test_test_plugin_reports_no_tests(tmp_path):
     mod = _load_devkit_module(tmp_path)
     out_root = tmp_path / "out"

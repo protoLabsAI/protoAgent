@@ -428,6 +428,22 @@ def _run_pytest(pdir: Path) -> str:
     py, err = _test_interpreter()
     if py is None:
         return f"✗ {err}"
+    # Run the suite against a disposable COPY of the plugin dir, never in place.
+    # Live QA (2026-08-07): a coder-authored empty-state test deleted the plugin's
+    # live data file mid-demo — a suite is free to create/delete anything in its
+    # cwd, so the cwd must not be the real plugin. A suite that passes in a copy
+    # passes in place; state a plugin keeps beside its code is the anti-pattern the
+    # skill now warns about, but the sandbox protects it regardless.
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    with _tempfile.TemporaryDirectory(prefix="devkit_test_") as td:
+        sandbox = Path(td) / pdir.name
+        _shutil.copytree(pdir, sandbox, ignore=_shutil.ignore_patterns(*_SKIP_DIRS))
+        return _run_pytest_in(py, sandbox)
+
+
+def _run_pytest_in(py: str, pdir: Path) -> str:
     # Scrubbed env (the execute_code posture): the suite is host-free by design and
     # must not inherit gateway keys/tokens from the server process.
     env = {
