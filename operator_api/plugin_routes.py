@@ -13,10 +13,9 @@ router route) — is hot-mounted on the same reload (``_mount_plugin_routers`` i
 ``server.agent_init``, #822). So enabling a view-contributing plugin needs no
 restart; ``restart_recommended`` stays False for enable.
 
-DISABLE is the residual restart case: FastAPI has no route-removal API, so a
-disabled plugin's view/route lingers on the live app until a process restart
-(documented in ``_mount_plugin_routers``). We flag ``restart_recommended`` only
-when disabling a plugin that contributed a view/route/surface.
+DISABLE no longer lingers: the reload reconcile stops surfaces (ADR 0018) and
+``_mount_plugin_routers`` now UNMOUNTS a roster-absent plugin's routes (ADR 0096
+live QA), so ``restart_recommended`` stays False on disable too.
 
 FORCE RE-INSTALL (and UPDATE, which is a force re-install at the recorded ref) is
 the other residual case (#942): the reload re-registers the plugin's router, but the
@@ -67,14 +66,14 @@ def _has_surface(meta: dict | None) -> bool:
 
 
 def _lingers_on_disable(meta: dict | None) -> bool:
-    """True when DISABLING the plugin leaves something that outlives the reload — a
-    **view or router** (FastAPI has no route-removal API, so the route lingers mounted).
+    """True when DISABLING the plugin leaves something that outlives the reload.
 
-    A background **surface** is deliberately excluded: it now stops cleanly on the
-    config reload (``_reload_plugin_surfaces`` reconcile, ADR 0018), so a surface-only
-    plugin no longer needs a restart to go quiet. A real comms plugin also registers a
-    router (its Test route), so it still recommends a restart — for the router, correctly."""
-    return bool(meta and (meta.get("views") or meta.get("routers")))
+    Nothing does anymore: surfaces stop on the reload reconcile (ADR 0018), and
+    routers/views now UNMOUNT on it too (``_mount_plugin_routers`` removes a
+    roster-absent plugin's Route objects — ADR 0096 live QA retired the last
+    "FastAPI can't unmount" linger). Kept as the single seam deciding
+    ``restart_recommended`` so a future lingering contribution has one home."""
+    return False
 
 
 def _mounted_router_ids() -> set[str]:

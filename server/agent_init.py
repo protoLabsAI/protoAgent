@@ -133,9 +133,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     from security import egress
 
-    egress.set_allowed_hosts(
-        STATE.graph_config.egress_allowed_hosts, also_allow_url=STATE.graph_config.api_base
-    )
+    egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts, also_allow_url=STATE.graph_config.api_base)
     # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
     from security import policy
 
@@ -390,26 +388,33 @@ def _build_knowledge_store(config):
                 from knowledge.hybrid_store import HybridKnowledgeStore
 
                 store = HybridKnowledgeStore(
-                    db_path=db_path, scoped=scoped, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn,
-                    vector_k=config.knowledge_vector_k, rrf_k=config.knowledge_rrf_k,
+                    db_path=db_path,
+                    scoped=scoped,
+                    embed_fn=embed_fn,
+                    embed_batch_fn=embed_batch_fn,
+                    vector_k=config.knowledge_vector_k,
+                    rrf_k=config.knowledge_rrf_k,
                     min_score=config.knowledge_min_score,
                     breaker_threshold=config.knowledge_embed_breaker_threshold,
                     breaker_cooldown_s=config.knowledge_embed_breaker_cooldown_s,
                     preview_chars=config.knowledge_recall_preview_chars,
                     chunk_max_chars=config.knowledge_chunk_max_chars,
                     chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
-                    chunk_min_chars=config.knowledge_chunk_min_chars, context_fn=context_fn,
+                    chunk_min_chars=config.knowledge_chunk_min_chars,
+                    context_fn=context_fn,
                 )
                 # Off-thread route probe (#1681): a dead embedding route opens the
                 # breaker BEFORE the first chat turn instead of freezing it.
                 store.warm_probe()
                 return store
             return KnowledgeStore(
-                db_path=db_path, scoped=scoped,
+                db_path=db_path,
+                scoped=scoped,
                 preview_chars=config.knowledge_recall_preview_chars,
                 chunk_max_chars=config.knowledge_chunk_max_chars,
                 chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
-                chunk_min_chars=config.knowledge_chunk_min_chars, context_fn=context_fn,
+                chunk_min_chars=config.knowledge_chunk_min_chars,
+                context_fn=context_fn,
             )
 
         private = _make(config.knowledge_db_path, scoped=True)
@@ -436,7 +441,9 @@ def _build_knowledge_store(config):
                     "[knowledge] commons %s was built with embed model %r but this agent uses %r — "
                     "serving the commons tier FTS5-only (no vector fusion). Align the fleet's embed_model, "
                     "or point this agent at a different commons.path.",
-                    commons_path, stamped, want,
+                    commons_path,
+                    stamped,
+                    want,
                 )
         commons = _make(commons_path, scoped=False, force_plain=force_plain)
 
@@ -964,9 +971,7 @@ def _judge_soul_drift(cfg, report: dict) -> dict | None:
         current = read_soul()
         if not baseline or not current:
             return None
-        verdict = judge_soul_drift(
-            baseline, current, model=(getattr(cfg, "soul_drift_judge_model", "") or None)
-        )
+        verdict = judge_soul_drift(baseline, current, model=(getattr(cfg, "soul_drift_judge_model", "") or None))
     except Exception:  # noqa: BLE001 — never break the pass over the optional tier
         log.exception("[soul-drift] semantic tier failed")
         return None
@@ -1110,9 +1115,7 @@ async def _autoupdate_one_plugin(plugin_id: str, entry: dict, status: dict, cfg,
 
     allow = list(getattr(cfg, "plugins_sources_allow", []) or []) or None
     try:
-        summary = await asyncio.to_thread(
-            installer.install, source_url, ref, force=True, by="autoupdate", allow=allow
-        )
+        summary = await asyncio.to_thread(installer.install, source_url, ref, force=True, by="autoupdate", allow=allow)
     except installer.InstallError as exc:
         log.warning("[plugin-autoupdate] install failed for %s: %s", plugin_id, exc)
         return
@@ -1629,12 +1632,12 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
 
 
 def _mount_plugin_routers(routers: list[dict]) -> None:
-    """Mount plugin routers (ADR 0018) onto the live app, skipping any already
-    mounted (keyed ``(plugin_id, prefix)``). Called at boot AND on every config
-    reload, so enabling a route-bearing plugin (e.g. ``delegates``) takes effect
-    without a restart — the #797 fleet blocker ("hot-reload rebuilds the graph
-    but routes bind at startup"). FastAPI accepts ``include_router`` after
-    startup; new routes are appended (no existing /api catch-all shadows them).
+    """Mount plugin routers (ADR 0018) onto the live app, keyed ``(plugin_id,
+    prefix)``. Called at boot AND on every config reload, so enabling a
+    route-bearing plugin (e.g. ``delegates``) takes effect without a restart —
+    the #797 fleet blocker ("hot-reload rebuilds the graph but routes bind at
+    startup"). FastAPI accepts ``include_router`` after startup; new routes are
+    appended (no existing /api catch-all shadows them).
 
     Plugin prefix enforcement (#870): plugin routes SHOULD live under
     ``/plugins/<id>/...``. Routes at non-conforming prefixes are still mounted
@@ -1642,44 +1645,40 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
     but a WARNING is logged. The default-deny auth middleware guards all
     non-public paths regardless of prefix, so the security gap is closed.
 
-    Disabling can't UNmount (FastAPI has no route-removal API) — a disabled
-    plugin's routes stay until restart, same as before this helper existed.
+    REMOUNT, not skip (ADR 0096 live QA): every reload re-execs ``register()``, so
+    each call carries FRESH router objects for the CURRENT code. A key that is
+    already mounted gets its previous Route objects removed from
+    ``app.router.routes`` (a plain list Starlette iterates per request — "FastAPI
+    can't unmount" is only true of the public API) and the new ones served.
+    Previously the first mount won forever: iterating on a scaffolded VIEW served
+    the stale page until a restart (the #942 class — the agent correctly told the
+    operator "needs a restart" mid-demo). A key ABSENT from this call's roster
+    (plugin disabled/uninstalled) has its routes removed outright, retiring the
+    router half of restart_recommended. During a swap the OLD route matches first
+    (it precedes the new in the list) — a transient serves stale, never a 404.
     Best-effort per router so one bad plugin can't break boot or a reload."""
     app = STATE.fastapi_app
     if app is None:
         return
     from graph.plugins.registry import _prefix_conforms
 
-    # Every call re-passes the full live router list (boot AND each reload rebuilds
-    # it from scratch), so most "key already in plugin_router_keys" hits are just
-    # the routine hot-reload no-op — not a misconfiguration. Only warn when the
-    # SAME key shows up twice within THIS call: that's a plugin genuinely handing
-    # us two distinct routers for one prefix (the projectBoard /board 404 case).
     seen_this_call: set[tuple[str, str]] = set()
     for r in routers:
         plugin_id = r.get("plugin_id", "")
         prefix = r.get("prefix") or ""
         key = (plugin_id, prefix)
-        if key in STATE.plugin_router_keys:
-            if key in seen_this_call:
-                # A plugin registered a SECOND router at the SAME prefix — the first
-                # already won the slot, so this one is silently dropped and its routes
-                # never serve (projectBoard's /board 404'd for exactly this reason).
-                # Mount distinct prefixes for distinct route groups (e.g. a public
-                # /plugins/<id> view router + a gated /api/plugins/<id> data router).
-                log.warning(
-                    "[plugins] %s registered a second router at prefix %s — dropped "
-                    "(its routes won't be served; mount each router at a distinct prefix)",
-                    plugin_id,
-                    prefix or "/",
-                )
-            else:
-                seen_this_call.add(key)
-                log.debug(
-                    "[plugins] %s: router at %s already mounted — hot-reload no-op",
-                    plugin_id,
-                    prefix or "/",
-                )
+        if key in seen_this_call:
+            # A plugin registered a SECOND router at the SAME prefix — the first
+            # already won the slot, so this one is silently dropped and its routes
+            # never serve (projectBoard's /board 404'd for exactly this reason).
+            # Mount distinct prefixes for distinct route groups (e.g. a public
+            # /plugins/<id> view router + a gated /api/plugins/<id> data router).
+            log.warning(
+                "[plugins] %s registered a second router at prefix %s — dropped "
+                "(its routes won't be served; mount each router at a distinct prefix)",
+                plugin_id,
+                prefix or "/",
+            )
             continue
         seen_this_call.add(key)
         # Warn for non-conforming prefixes (#870 plugin prefix enforcement).
@@ -1700,11 +1699,39 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             )
         try:
             _install_error_envelope(r["router"], plugin_id)
+            before = len(app.router.routes)
             app.include_router(r["router"], prefix=prefix)
+            fresh = list(app.router.routes[before:])
+            stale = STATE.plugin_router_routes.pop(key, [])
+            for route in stale:
+                try:
+                    app.router.routes.remove(route)
+                except ValueError:  # already gone — never fatal
+                    pass
+            STATE.plugin_router_routes[key] = fresh
             STATE.plugin_router_keys.add(key)
-            log.info("[plugins] mounted router from %s at %s", plugin_id, prefix or "/")
+            if stale:
+                log.debug(
+                    "[plugins] remounted router from %s at %s (%d stale route(s) replaced)",
+                    plugin_id,
+                    prefix or "/",
+                    len(stale),
+                )
+            else:
+                log.info("[plugins] mounted router from %s at %s", plugin_id, prefix or "/")
         except Exception:  # noqa: BLE001
             log.exception("[plugins] failed to mount router from %s", plugin_id)
+
+    # Roster-absent keys = the plugin was disabled or uninstalled this reload —
+    # its routes leave NOW instead of lingering until a restart.
+    for key in [k for k in STATE.plugin_router_routes if k not in seen_this_call]:
+        for route in STATE.plugin_router_routes.pop(key, []):
+            try:
+                app.router.routes.remove(route)
+            except ValueError:
+                pass
+        STATE.plugin_router_keys.discard(key)
+        log.info("[plugins] unmounted router from %s at %s (disabled/removed)", key[0], key[1] or "/")
 
 
 def _install_error_envelope(router, plugin_id: str) -> None:
@@ -2395,9 +2422,7 @@ _WRITE_ANNOUNCEMENTS = ("config saved", "host config saved")
 def _drop_undone_write_messages(messages: list[str]) -> list[str]:
     """Strip the now-false "saved" lines after a rollback, keeping the failure reason."""
     return [
-        m
-        for m in messages
-        if not (m in _WRITE_ANNOUNCEMENTS or m.startswith("reset ") and m.endswith("to inherited"))
+        m for m in messages if not (m in _WRITE_ANNOUNCEMENTS or m.startswith("reset ") and m.endswith("to inherited"))
     ]
 
 
@@ -2463,8 +2488,7 @@ def _apply_settings_changes(
                 cleared = _prune_shadowing_agent_keys(host_only)
                 if cleared:
                     messages.append(
-                        "cleared shadowing agent override(s) so the host value wins: "
-                        + ", ".join(sorted(cleared))
+                        "cleared shadowing agent override(s) so the host value wins: " + ", ".join(sorted(cleared))
                     )
             except Exception as e:
                 log.exception("[config] host YAML write failed")
@@ -2516,7 +2540,13 @@ def _apply_settings_changes(
             if layer != "host" and config and "runtime" in config:
                 try:
                     _sync_autostart_with_config(
-                        {"runtime": {"autostart_on_boot": bool(getattr(STATE.graph_config, "runtime_autostart_on_boot", False))}}
+                        {
+                            "runtime": {
+                                "autostart_on_boot": bool(
+                                    getattr(STATE.graph_config, "runtime_autostart_on_boot", False)
+                                )
+                            }
+                        }
                     )
                 except Exception:  # noqa: BLE001 — never mask the original failure
                     log.exception("[config] autostart re-sync after rollback failed")
