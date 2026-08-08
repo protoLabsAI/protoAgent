@@ -184,7 +184,7 @@ def test_run_command_declined_returns_not_raises(workspace, monkeypatch):
     )
     out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _LIST_COMMAND}))
     assert "declined by the operator" in out
-    assert "ls" in out
+    assert _LIST_COMMAND in out
     assert "Do not re-run" in out
 
 

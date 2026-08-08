@@ -17,6 +17,7 @@ offensive-security specifics. Complements ``tools/gh_cli.py`` (which is
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 from dataclasses import dataclass
@@ -50,7 +51,14 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await killer.communicate()
+            try:
+                await asyncio.wait_for(killer.communicate(), timeout=5)
+            except asyncio.TimeoutError:
+                # A stalled taskkill must not extend run_command past its own
+                # timeout — reap it and fall through to the immediate kill.
+                with contextlib.suppress(ProcessLookupError):
+                    killer.kill()
+                await killer.wait()
         except (FileNotFoundError, OSError):
             # Fall through to killing the immediate process if taskkill is
             # unavailable in a constrained Windows environment.
