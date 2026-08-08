@@ -11,6 +11,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.126.0] - 2026-08-07
+
+### Added
+- **The shared note is no longer destructively overwritten — it keeps recoverable history (#2022).** `write_note`
+  is a documented full overwrite and the operator's editor autosaves over the same file, so anything either side
+  replaced was gone for good: no history, no undo, no diff. Every change now archives the OUTGOING text first
+  (`<notes-dir>/history/`, one file per version, attributed to the agent or the operator), and the live note file
+  is untouched — still exactly the markdown you typed. New tools `list_note_versions`, `restore_note_version` and
+  `diff_note_version`, plus `read_note(version=…)`; the editor gains a **History** drawer that lists versions,
+  shows a unified diff against the current note, and restores one in a click. A restore archives the text it
+  replaces, so recovering is itself undoable.
+- **Notes settings: `Versions kept` (default 50) and `Coalesce window` (default 300s).** The window is why
+  versioning the note is useful rather than noisy: the editor autosaves on a 700ms debounce, so archiving every
+  write would mint a version per keystroke and evict the note's real history within a minute of typing. Successive
+  edits by the same author inside the window share one version — one editing session, one version — while a change
+  of author always cuts a version, because agent-clobbers-operator is the case most worth undoing.
+
+- **Merge-on-boot declarative seeding — a baked config seed can now stay live across image rolls (#2071).**
+  `ensure_live_config` is seed-once, so the *image-owned* half of `PROTOAGENT_SEED_CONFIG` (agent identity, the
+  A2A card `description`/`skills`, `plugins.enabled`) never reached a config volume that had been seeded before
+  those keys existed — a fleet agent kept serving the stock card and nothing said so. The only fixes were wiping
+  the volume (losing operator state) or hand-POSTing `/api/config`; both defeat config-as-code. Setting
+  `PROTOAGENT_SEED_MERGE=1` now re-applies the seed on every boot as a **three-way** merge against
+  `<config-dir>/.seed-applied.yaml` (the seed as last applied): a key the operator never touched tracks the image,
+  a key they edited always wins, a newly-baked block appears, and a key the image drops falls back to its default.
+  The snapshot is what makes it durable — comparing the seed against the live file alone would pin every
+  already-present key forever, so only the *first* roll would land. Opt-in and env-only (unset ⇒ seed-once, byte
+  for byte); secret paths are excluded so a baked credential can never be written into the exportable YAML;
+  comments and fork-added sections survive; a malformed seed logs and leaves the live config untouched.
+
+- **Tool cards show what a call cost you in context (#2282).** A tool card carried name, status, input/output
+  preview and duration — but nothing about context cost, so a `fetch_url` returning 8KB of HTML and a
+  `current_time` returning 40 characters read identically, and the first is what eats a context budget.
+  Settled cards whose result clears ~250 tokens now carry an estimate in the header (`fetch_url · ~2.0k ctx`),
+  using the same `chars ÷ 4` arithmetic as the prompt viewer's budget rows so the two numbers are comparable.
+  It stays off small results, in-flight calls (output arrives with the end frame, so any mid-flight number would
+  be wrong) and failures — its presence is itself the signal that a call was expensive. Labelled `~` with a
+  tooltip saying plainly that it is an estimate, not a measurement: it cannot know how much of the output the
+  model reads, or whether compaction trims it first, and the cost lands on the *next* model call. Real
+  per-call attribution needs a counting seam at the tool-execution boundary that the engine does not have
+  (usage is tracked per model call, and one model call can emit several tool calls) — that remains open.
+
+- **The plugin-devkit now closes the whole build loop — scaffold → edit → test → hot-swap, no restart
+  (#2394).** ADR 0096 slice 1: `plugin_list_files` / `plugin_read_file` / `plugin_write_file` edit a
+  plugin in place (fenced to the plugins dir), `test_plugin` runs its pytest suite in a subprocess
+  (managed-runtime-aware on desktop), load failures report with a bounded traceback, `reload_plugins`
+  no longer drowns real failures in disabled-plugin noise, and the reload-triggering tools offload the
+  graph recompile off the event loop.
+
+- **`develop_plugin` — the self-building loop's delegated build lane (#2395).** ADR 0096 slice 2: hand
+  a substantial plugin build to a configured `acp` coding delegate working scoped inside the plugin
+  dir (fresh session, git lifecycle off, guaranteed teardown), then the host auto-runs the plugin's
+  tests and hot-reloads it and reports all three results. `scaffold_plugin` gains `git_init`
+  (CLI `--git`) for a repo from birth.
+
+- **Agent-initiated plugin changes now push a live console refresh (#2396).** ADR 0096 D8: the reload
+  seam publishes `plugin.changed`, and a `PluginChangeWatch` subscriber refetches the plugin queries —
+  so a rail view the agent just built and enabled appears immediately in every open console. Also
+  gives the autoupdate loop's `plugin.updated` its first console consumer and unifies the
+  Plugins-panel toggle on the shared refresh.
+
+- **`register_plugin_project` — graduate a self-built plugin to a managed project (#2397).** ADR 0096
+  D6: the ADR 0095 registry's first runtime write path, scoped to the plugins dir, so fs tools address
+  the plugin by name, the GitHub repo picker sees it, and a projectBoard can target it via
+  `project_board.project`.
+
+- **The devkit ships a `self-building-demo` skill (#2400).** The rehearsed script for demoing
+  protoAgent building, testing, and hot-swapping its own plugins live, with the live-QA lessons
+  (next-turn tool binding, the `register()` contract, state placement) baked into the beats.
+
+### Fixed
+- **Review findings must quote evidence VERBATIM — the findings contract now says so (#2373).**
+  A finding whose `evidence` paraphrases or reconstructs code, rather than copying the file's exact bytes,
+  cannot be grounded against that file, so the pr-reviewer grounding guard downgrades it to `uncertain` and it
+  loses the power to block. Larger models paraphrase far more than smaller ones: after the QA reviewer moved to
+  a deepseek-class 1M model the panel's grounding-downgrade rate went from ~0% to ~30% over a few days, and two
+  of those were major-severity — the underlying defect was real, only the quote was a reconstruction
+  (`not origin_incognito` where the file has `not getattr(j, "origin_incognito", False)`; a composite Rust line
+  stitched from separate lines). A PR whose sole blocker was such a finding would leak past the gate.
+  `FINDINGS_CONTRACT` — the canonical schema snippet every finder interpolates — now requires byte-for-byte
+  quotes and says to cite `file:line` rather than invent a loose one. Grounding itself is unchanged; it *should*
+  reject non-verbatim quotes, so the fix is source-side, making the finders quote correctly.
+
+- **The devkit's build loop no longer calls a plugin that loaded with zero contributions "live"
+  (#2398).** `enable_plugin`/`reload_plugins`/`develop_plugin` report what a plugin actually registered
+  and flag a silent no-op `register()` with the contract fix (found by the first live run of the
+  ADR 0096 self-building loop — a returned tool list is ignored by the loader). The boot log and
+  runtime status also now count convention-shipped `skills/` dirs.
+
+- **`test_plugin` now runs a plugin's suite against a disposable copy of the plugin dir (#2399).** A
+  destructive test (e.g. an empty-state test that deletes a data file, as a coding delegate wrote
+  during ADR 0096 live QA) can no longer touch live files. The building-plugins skill now steers
+  runtime state out of the plugin dir entirely.
+
+### Docs
+- **ADR 0096 — the self-building loop (#2393).** The architectural record for plugin-devkit closing
+  design → scaffold → edit → test → hot-swap (one spine, three build lanes: in-place, delegated ACP
+  coder, board-driven), with the 2026-08 audit of the eight open seams and the deferred-guardrails
+  decision recorded.
+
 ## [0.125.1] - 2026-08-06
 
 ### Fixed

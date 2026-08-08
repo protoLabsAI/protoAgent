@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.126.0",
+    "date": "2026-08-07",
+    "changes": [
+      "The shared note is no longer destructively overwritten — it keeps recoverable history (#2022).",
+      "Notes settings: Versions kept (default 50) and Coalesce window (default 300s).",
+      "Merge-on-boot declarative seeding — a baked config seed can now stay live across image rolls (#2071).",
+      "Tool cards show what a call cost you in context (#2282).",
+      "The plugin-devkit now closes the whole build loop — scaffold → edit → test → hot-swap, no restart (#2394).",
+      "develop_plugin — the self-building loop's delegated build lane (#2395).",
+      "Agent-initiated plugin changes now push a live console refresh (#2396).",
+      "register_plugin_project — graduate a self-built plugin to a managed project (#2397).",
+      "The devkit ships a self-building-demo skill (#2400).",
+      "Review findings must quote evidence VERBATIM — the findings contract now says so (#2373).",
+      "The devkit's build loop no longer calls a plugin that loaded with zero contributions \"live\" (#2398).",
+      "test_plugin now runs a plugin's suite against a disposable copy of the plugin dir (#2399).",
+      "ADR 0096 — the self-building loop (#2393)."
+    ]
+  },
+  {
     "version": "v0.125.1",
     "date": "2026-08-06",
     "changes": [

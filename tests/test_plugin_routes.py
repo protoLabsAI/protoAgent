@@ -66,21 +66,21 @@ def test_enabling_a_view_plugin_does_not_recommend_restart(monkeypatch):
     assert body == {"ok": True, "enabled": True, "reloaded": True, "restart_recommended": False}
 
 
-def test_disabling_a_view_plugin_recommends_restart(monkeypatch):
-    # DISABLE is the residual restart case — FastAPI can't unmount the view's router, so
-    # the stale route lingers until a process restart.
+def test_disabling_a_view_plugin_no_longer_recommends_restart(monkeypatch):
+    # Disable used to be the residual restart case — the view's route lingered
+    # mounted. _mount_plugin_routers now UNMOUNTS a roster-absent plugin's routes
+    # on the reload (ADR 0096 live QA), so nothing lingers and no restart is needed.
     _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[{"id": "boardy", "views": [{"id": "board"}]}])
     body = _client().post("/api/plugins/boardy/enabled", json={"enabled": False}).json()
     assert body["enabled"] is False
-    assert body["restart_recommended"] is True
+    assert body["restart_recommended"] is False
 
 
-def test_disabling_a_route_only_plugin_recommends_restart(monkeypatch):
-    # A plugin with no views but a contributed router still leaves a stale route on
-    # disable → restart recommended.
+def test_disabling_a_route_only_plugin_no_longer_recommends_restart(monkeypatch):
+    # Same for a router-only plugin: its routes unmount on the disable reload.
     _wire(monkeypatch, enabled=["routeplug"], disabled=[], meta=[{"id": "routeplug", "views": [], "routers": 1}])
     body = _client().post("/api/plugins/routeplug/enabled", json={"enabled": False}).json()
-    assert body["restart_recommended"] is True
+    assert body["restart_recommended"] is False
 
 
 def test_disabling_a_builtin_plugin_is_rejected(monkeypatch):
