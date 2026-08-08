@@ -822,9 +822,22 @@ def _status_payload(target_dir: str | None) -> dict:
     plugins never appear — the view is about what this agent built for itself."""
     from runtime.state import STATE
 
+    # Installed-vs-built discriminator (live QA: the git-installed google plugin —
+    # 18 Gmail tool chips — drowned the page). An INSTALL is tracked in plugins.lock;
+    # an agent-scaffolded plugin is untracked in the same dir. Best-effort empty set
+    # on any error keeps the view permissive rather than blank.
+    try:
+        from graph.plugins.loader import _tracked_ids
+
+        installed = _tracked_ids()
+    except Exception:  # noqa: BLE001
+        installed = set()
+
     rows = []
     for m in getattr(STATE, "plugin_meta", []) or []:
         pid = str(m.get("id") or "")
+        if pid in installed:
+            continue
         try:
             pdir = _plugin_dir(pid, target_dir)
         except ValueError:
@@ -964,8 +977,12 @@ def _build_guide_router():
           }
           document.getElementById("refresh").addEventListener("click", load);
           document.getElementById("guide-link").href = BASE + "/plugins/plugin-devkit/guide";
-          // Live refresh: the console relays every bus topic into plugin iframes as
-          // protoagent:event postMessages — a build-loop change re-renders in place.
+          // Live refresh (ADR 0039 relay, #1640): the host forwards bus events ONLY to
+          // pages that SUBSCRIBE — declare the patterns first, or no event ever arrives
+          // (the live-QA bug: listening without subscribing looks identical to working
+          // until a build happens off-screen). Then a build-loop change re-renders in place.
+          window.parent.postMessage(
+            { type: "protoagent:subscribe", patterns: ["plugin.#", "plugin-devkit.#"] }, "*");
           let t = null;
           window.addEventListener("message", (m) => {
             const d = m && m.data;
