@@ -3,13 +3,6 @@
     "status": "Planned",
     "items": [
       {
-        "title": "Signed Windows installer",
-        "detail": "Authenticode-sign the desktop setup.exe — Windows leaves the notify-me gate when it ships.",
-        "refs": [
-          "#1689"
-        ]
-      },
-      {
         "title": "Federation token follow-ups",
         "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
         "refs": [
