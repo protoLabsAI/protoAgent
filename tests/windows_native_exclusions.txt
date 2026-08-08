@@ -1,0 +1,64 @@
+# Windows-native test exclusions — the #2412 burndown list.
+#
+# Every file here failed natively on windows-latest in the 2026-08-08 baseline
+# (run 31279874742 → 180 failures across these 41 files; 4654 tests pass and
+# GATE the PR). The `Windows tests (native)` job in checks.yml skips exactly
+# these files. Same contract as pyproject's `ignore_imports` burndown:
+# SHRINK this list — fix the test (or the runtime) and delete the line —
+# never grow it. A new POSIX-only test fails the Windows job; make it
+# portable or add it here WITH a reason in your PR.
+#
+# Section placement is provisional (from failure signatures, not full
+# diagnosis); the authoritative fact per line is "failed natively at the
+# baseline". Reclassify freely as files get diagnosed.
+
+# ── POSIX process lifecycle: process groups, signals, sh/sleep children ──
+# The #2412 phase-2 target (shared cross-platform process-tree abstraction).
+tests/test_acp_reaping.py
+tests/test_coder_plugin.py
+tests/test_coding_agent_plugin.py
+tests/test_delegates_api.py
+tests/test_delegates_plugin.py
+tests/test_execute_code.py
+tests/test_fleet_reap.py
+tests/test_fleet_supervisor.py
+tests/test_goal_controller.py
+tests/test_goal_fresh_context.py
+tests/test_goal_harness.py
+tests/test_goal_lifecycle.py
+tests/test_goal_no_progress_limit.py
+tests/test_goal_verifiers.py
+tests/test_pid_alive.py
+tests/test_plugin_installer.py
+tests/test_plugin_lifecycle_smoke.py
+tests/test_watch_controller.py
+tests/test_watch_operator.py
+tests/test_watch_tool.py
+tests/test_workflow_run_state.py
+
+# ── POSIX permission bits: 0600 assertions (Windows reports 0666) ──
+# The #2412 phase-4 target (define + test the Windows ACL privacy contract).
+tests/test_atomic_writes.py
+tests/test_config_secrets.py
+tests/test_fleet_service_token.py
+tests/test_settings_save_atomicity.py
+tests/test_wheel_installer.py
+
+# ── Path semantics: tilde/separators/symlinks/`:`-in-filename expectations ──
+tests/test_agent_snapshot_import.py
+tests/test_browse_routes.py
+tests/test_config_io.py
+tests/test_config_routes.py
+tests/test_egress.py
+tests/test_fs_tools.py
+tests/test_instance_paths.py
+tests/test_media_store.py
+tests/test_memory_load.py
+tests/test_memory_routes.py
+tests/test_projects_registry.py
+tests/test_store_tier_resolvers.py
+tests/test_workspaces.py
+
+# ── POSIX shell scripts under test (bash/sh fixtures) ──
+tests/test_changelog_gate.py
+tests/test_reset_script.py
