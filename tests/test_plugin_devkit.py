@@ -269,6 +269,84 @@ def test_test_plugin_runs_the_scaffolded_suite(tmp_path):
     assert out.startswith("✓"), out
 
 
+def test_status_payload_lists_only_devkit_root_plugins(monkeypatch, tmp_path):
+    """The /status view's data (ADR 0096 D8): plugins under the devkit's roots with
+    load state + contributions; bundled plugins (not under the roots) never appear."""
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Seen One", "enable": False}))
+
+    from runtime.state import STATE
+
+    monkeypatch.setattr(
+        STATE,
+        "plugin_meta",
+        [
+            {
+                "id": "seen-one",
+                "enabled": True,
+                "loaded": True,
+                "version": "0.1.0",
+                "tools": ["seen_one_hello"],
+                "skills": 0,
+            },
+            {"id": "artifact", "enabled": True, "loaded": True, "tools": ["show_artifact"], "skills": 1},
+        ],
+        raising=False,
+    )
+    payload = mod._status_payload(str(out_root))
+    assert [p["id"] for p in payload["plugins"]] == ["seen-one"]
+    row = payload["plugins"][0]
+    assert row["loaded"] and "seen_one_hello" in row["tools"] and row["summary"]
+    assert str(out_root) in payload["roots"][0]
+
+
+def test_status_routes_exist(tmp_path):
+    """Page (public) + data (gated) — the two-router pattern for the status view."""
+    mod = _load_devkit_module(tmp_path)
+    router = mod._build_guide_router()
+    page_paths = [r.path for r in router.routes]
+    assert "/status" in page_paths and "/guide" in page_paths
+    data_paths = [r.path for r in mod._build_status_api_router(None).routes]
+    assert "/status" in data_paths
+    # The live-QA bug: the relay only forwards to SUBSCRIBERS — the page must send
+    # protoagent:subscribe, or listening for protoagent:event silently gets nothing.
+    status_route = next(r for r in router.routes if r.path == "/status")
+    import inspect
+
+    src = inspect.getsource(status_route.endpoint)
+    assert "protoagent:subscribe" in src and "plugin.#" in src
+
+
+def test_status_payload_excludes_installed_plugins(monkeypatch, tmp_path):
+    """Live QA: the git-installed google plugin (18 tool chips) drowned the page.
+    plugins.lock-tracked ids are INSTALLS, not agent builds — excluded."""
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Mine", "enable": False}))
+    _run(scaffold.ainvoke({"name": "Installed Thing", "enable": False}))  # same dir, but lock-tracked
+
+    import graph.plugins.loader as loader_mod
+    from runtime.state import STATE
+
+    monkeypatch.setattr(loader_mod, "_tracked_ids", lambda: {"installed-thing"})
+    monkeypatch.setattr(
+        STATE,
+        "plugin_meta",
+        [
+            {"id": "mine", "enabled": True, "loaded": True, "tools": ["mine_hello"], "skills": 0},
+            {"id": "installed-thing", "enabled": True, "loaded": True, "tools": ["x"], "skills": 0},
+        ],
+        raising=False,
+    )
+    payload = mod._status_payload(str(out_root))
+    assert [p["id"] for p in payload["plugins"]] == ["mine"]
+
+
 def test_test_plugin_runs_in_a_sandbox_copy(tmp_path):
     """A suite may create/delete anything in its cwd — so the cwd must not be the
     real plugin dir. Live QA (2026-08-07): a coder-authored empty-state test deleted

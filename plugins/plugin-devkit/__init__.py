@@ -815,11 +815,186 @@ def _plugin_architect() -> SubagentConfig:
     )
 
 
+def _status_payload(target_dir: str | None) -> dict:
+    """The live build-status the /status view renders: every plugin under the
+    DEVKIT's roots (the ones the agent built or installed there) with its load
+    state, contributions, and failure detail off ``STATE.plugin_meta``. Bundled
+    plugins never appear — the view is about what this agent built for itself."""
+    from runtime.state import STATE
+
+    # Installed-vs-built discriminator (live QA: the git-installed google plugin —
+    # 18 Gmail tool chips — drowned the page). An INSTALL is tracked in plugins.lock;
+    # an agent-scaffolded plugin is untracked in the same dir. Best-effort empty set
+    # on any error keeps the view permissive rather than blank.
+    try:
+        from graph.plugins.loader import _tracked_ids
+
+        installed = _tracked_ids()
+    except Exception:  # noqa: BLE001
+        installed = set()
+
+    rows = []
+    for m in getattr(STATE, "plugin_meta", []) or []:
+        pid = str(m.get("id") or "")
+        if pid in installed:
+            continue
+        try:
+            pdir = _plugin_dir(pid, target_dir)
+        except ValueError:
+            continue
+        rows.append(
+            {
+                "id": pid,
+                "version": m.get("version"),
+                "enabled": bool(m.get("enabled")),
+                "loaded": bool(m.get("loaded")),
+                "error": m.get("error"),
+                "traceback": m.get("traceback"),
+                "tools": list(m.get("tools") or []),
+                "summary": _contribution_summary(m),
+                "path": str(pdir),
+            }
+        )
+    rows.sort(key=lambda r: r["id"])
+    return {"plugins": rows, "roots": [str(r) for r in _devkit_roots(target_dir)]}
+
+
+def _build_status_api_router(config: dict | None):
+    """The GATED data half of the status view (ADR 0026 two-router pattern): the
+    page is public (an iframe load can't carry a bearer), its data rides
+    ``/api/plugins/plugin-devkit`` which kit.apiFetch() authenticates."""
+    from fastapi import APIRouter
+    from fastapi.responses import JSONResponse
+
+    target_dir = (config or {}).get("target_dir") or None
+    router = APIRouter()
+
+    @router.get("/status")
+    async def _status():
+        return JSONResponse(_status_payload(target_dir))
+
+    return router
+
+
 def _build_guide_router():
     from fastapi import APIRouter
     from fastapi.responses import HTMLResponse
 
     router = APIRouter()
+
+    # The rail view (ADR 0096 D8): the self-building loop's visible face — what the
+    # agent has built, live. Kit handshake + gated data + bus-relay refresh; all
+    # agent-authored strings land via textContent (never innerHTML interpolation).
+    @router.get("/status")
+    async def _status_page():
+        html = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <script>
+          // RULE 3 — slug-aware base ("" on host, "/agents/<slug>" through the fleet proxy).
+          var BASE = location.pathname.split("/plugins/")[0];
+          // RULE 4 — link the DS kit CSS off BASE so the page themes live (no hardcoded hex).
+          (function(){ var l=document.createElement("link"); l.rel="stylesheet";
+            l.href=BASE+"/_ds/plugin-kit.css"; document.head.appendChild(l); })();
+        </script>
+        <style>
+          html,body{margin:0;background:var(--pl-color-bg);color:var(--pl-color-fg);
+            font-family:var(--pl-font-sans, ui-sans-serif,system-ui,sans-serif)}
+          .wrap{max-width:64ch;margin:0 auto;padding:32px 28px;line-height:1.55}
+          .top{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+          h1{color:var(--pl-color-accent);font-size:22px;margin:0}
+          .sub{color:var(--pl-color-fg-muted);font-size:13px;margin:6px 0 18px}
+          button{background:var(--pl-color-bg-raised);color:var(--pl-color-fg);
+            border:1px solid var(--pl-color-border, var(--pl-color-bg-raised));
+            border-radius:var(--pl-radius,6px);padding:4px 12px;font-size:12px;cursor:pointer}
+          .card{background:var(--pl-color-bg-raised);border-radius:var(--pl-radius,8px);
+            padding:14px 16px;margin:10px 0}
+          .head{display:flex;align-items:baseline;gap:10px}
+          .name{font-weight:600;font-size:15px}
+          .ver{color:var(--pl-color-fg-muted);font-size:12px}
+          .badge{margin-left:auto;font-size:11px;padding:2px 8px;border-radius:999px;
+            background:var(--pl-color-bg);color:var(--pl-color-fg-muted)}
+          .badge.ok{color:var(--pl-color-accent)}
+          .badge.err{color:var(--pl-color-danger, var(--pl-color-fg))}
+          .sum{color:var(--pl-color-fg-muted);font-size:13px;margin:6px 0 0}
+          .chips{margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px}
+          .chip{background:var(--pl-color-bg);color:var(--pl-color-accent);
+            padding:2px 8px;border-radius:var(--pl-radius,5px);font-size:12px}
+          .errline{color:var(--pl-color-danger, var(--pl-color-fg));font-size:13px;margin:8px 0 0}
+          .tb{background:var(--pl-color-bg);color:var(--pl-color-fg-muted);font-size:11px;
+            padding:10px;border-radius:var(--pl-radius,6px);overflow-x:auto;white-space:pre;margin:8px 0 0}
+          .path{color:var(--pl-color-fg-muted);font-size:11px;margin:8px 0 0;word-break:break-all}
+          .empty{padding:28px 16px;text-align:center;color:var(--pl-color-fg-muted)}
+          .empty b{color:var(--pl-color-fg)}
+          .foot{margin-top:20px;font-size:13px}
+          a{color:var(--pl-color-accent)}
+        </style></head><body><div class="wrap">
+          <div class="top"><h1>Plugin Devkit</h1><button id="refresh">Refresh</button></div>
+          <p class="sub">The self-building loop, live: scaffold → edit → test → hot-swap (ADR 0096).
+            These are the plugins this agent built for itself.</p>
+          <div id="list"><p class="sub">Loading…</p></div>
+          <p class="foot"><a id="guide-link" href="#">The plugin contract &amp; authoring guide →</a></p>
+        <script type="module">
+          const kit = await import(BASE + "/_ds/plugin-kit.js");
+          kit.initPluginView();
+          const list = document.getElementById("list");
+          const el = (tag, cls, text) => { const n = document.createElement(tag);
+            if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+          async function load() {
+            try {
+              const r = await kit.apiFetch("/api/plugins/plugin-devkit/status");
+              render((await r.json()).plugins || []);
+            } catch (e) { list.replaceChildren(el("p", "sub", "Couldn't load status: " + e)); }
+          }
+          function render(plugins) {
+            list.replaceChildren();
+            if (!plugins.length) {
+              const d = el("div", "empty");
+              d.append(el("p", null, "Nothing built yet."));
+              const p = el("p", null, ""); p.append("Ask the agent: ", Object.assign(el("b"), {textContent: '"build a plugin that …"'}),
+                " — it scaffolds, implements, tests, and hot-swaps it. Live.");
+              d.append(p); list.append(d); return;
+            }
+            for (const p of plugins) {
+              const card = el("div", "card");
+              const head = el("div", "head");
+              head.append(el("span", "name", p.id), el("span", "ver", p.version || ""));
+              head.append(p.loaded ? el("span", "badge ok", "● live")
+                : p.enabled ? el("span", "badge err", "✗ failed") : el("span", "badge", "○ off"));
+              card.append(head);
+              if (p.summary) card.append(el("p", "sum", p.summary));
+              if (p.tools && p.tools.length) {
+                const row = el("div", "chips");
+                for (const t of p.tools) row.append(el("code", "chip", t));
+                card.append(row);
+              }
+              if (!p.loaded && p.enabled) {
+                card.append(el("p", "errline", p.error || "failed to load"));
+                if (p.traceback) card.append(el("pre", "tb", p.traceback));
+              }
+              card.append(el("p", "path", p.path));
+              list.append(card);
+            }
+          }
+          document.getElementById("refresh").addEventListener("click", load);
+          document.getElementById("guide-link").href = BASE + "/plugins/plugin-devkit/guide";
+          // Live refresh (ADR 0039 relay, #1640): the host forwards bus events ONLY to
+          // pages that SUBSCRIBE — declare the patterns first, or no event ever arrives
+          // (the live-QA bug: listening without subscribing looks identical to working
+          // until a build happens off-screen). Then a build-loop change re-renders in place.
+          window.parent.postMessage(
+            { type: "protoagent:subscribe", patterns: ["plugin.#", "plugin-devkit.#"] }, "*");
+          let t = null;
+          window.addEventListener("message", (m) => {
+            const d = m && m.data;
+            if (!d || d.type !== "protoagent:event") return;
+            const topic = String(d.topic || "");
+            if (topic.startsWith("plugin.") || topic.startsWith("plugin-devkit.")) {
+              clearTimeout(t); t = setTimeout(load, 400);
+            }
+          });
+          await load();
+        </script></div></body></html>"""
+        return HTMLResponse(html)
 
     # This page is itself a four-rules-compliant view (the reference plugin should
     # model the contract): it derives a slug-aware BASE, links the DS plugin-kit off
@@ -912,4 +1087,6 @@ def register(registry) -> None:
     # PUBLIC /plugins/plugin-devkit (ADR 0026) — the console iframes /guide, and an
     # iframe page-load can't carry a bearer, so the page route must NOT be gated.
     registry.register_router(_build_guide_router(), prefix="/plugins/plugin-devkit")
+    # GATED data for the /status view (ADR 0026 two-router pattern + ADR 0096 D8).
+    registry.register_router(_build_status_api_router(registry.config), prefix="/api/plugins/plugin-devkit")
     # skills/ + workflows/ auto-discover — no call needed (ADR 0027).

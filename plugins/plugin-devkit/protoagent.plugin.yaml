@@ -1,6 +1,6 @@
 id: plugin-devkit
 name: Plugin Devkit
-version: 0.6.0
+version: 0.7.0
 description: >-
   The plugin-authoring kit + the canonical reference plugin. It demonstrates EVERY
   contribution type in one repo — tools (`scaffold_plugin`, `plugin_read_file`,
@@ -36,4 +36,4 @@ emits:
 # PUBLIC /plugins/<id> prefix: an iframe page-load can't carry a bearer, so the page
 # must NOT be bearer-gated (data routes, if any, ride /api/plugins/<id>).
 views:
-  - { id: guide, label: "Plugin Devkit", icon: Boxes, path: /plugins/plugin-devkit/guide }
+  - { id: devkit, label: "Plugin Devkit", icon: Boxes, path: /plugins/plugin-devkit/status }
