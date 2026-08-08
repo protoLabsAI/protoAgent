@@ -147,6 +147,50 @@ jobs:
           . .venv/bin/activate
           python -m pytest tests/ -q
 
+  windows-tests:
+    name: Windows tests (native)
+    # Phase-3 gate from #2412: protoAgent ships a Windows desktop release, but
+    # until this job the only native PR feedback was a contributor's own
+    # machine. Runs the suite minus the tracked POSIX-only backlog (below);
+    # anything not excluded failing on Windows gates the PR.
+    runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 35
+    env:
+      # PEP 686 direction, and half the historic Windows-only failures were
+      # cp1252 UnicodeEncodeErrors in test output rather than real defects.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # Mirrors the Ubuntu tests job (venv per #175); git-bash keeps the
+        # steps byte-comparable with the POSIX legs.
+        shell: bash
+        run: |
+          python -m venv .venv
+          source .venv/Scripts/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Full-suite survey (TEMPORARY — curating the native subset)
+        # Survey mode: run everything, never fail, and print the failing-file
+        # histogram. Replaced by a real gate (suite minus named exclusions)
+        # once this run's data fixes the exclusion list.
+        shell: bash
+        continue-on-error: true
+        run: |
+          source .venv/Scripts/activate
+          python -m pytest tests/ -q --tb=no -rf 2>&1 | tee pytest-survey.txt || true
+      - name: Failing-file histogram
+        shell: bash
+        run: |
+          echo "== failures per file =="
+          grep '^FAILED ' pytest-survey.txt | sed 's/^FAILED //' | cut -d: -f1 | sort | uniq -c | sort -rn || true
+          echo "== totals =="
+          tail -3 pytest-survey.txt
+
   fleet-integration:
     name: Fleet integration (multi-instance)
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
