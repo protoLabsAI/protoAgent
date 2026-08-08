@@ -24,6 +24,7 @@ Security (ADR 0007 §4):
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +37,13 @@ log = logging.getLogger("protoagent.fs")
 _MAX_READ_CHARS = 50_000
 _MAX_LIST = 400
 _MAX_MATCHES = 200
+
+
+def _platform_shell_argv(command: str) -> list[str]:
+    """Return the native non-interactive shell invocation for ``command``."""
+    if os.name == "nt":
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
+    return ["/bin/sh", "-c", command]
 
 
 @dataclass
@@ -351,8 +359,8 @@ def build_fs_tools(config) -> list:
 
             Powerful + dual-use (like execute_code) — use it for read-only
             inspection (`git status`, `gh pr list`, `br list`) and only mutate in
-            read-write projects. Runs via ``/bin/sh -c``, so shell operators
-            (``&&``, ``|``, ``>``, ``$(…)``) work.
+            read-write projects. Runs via the platform shell (``cmd.exe`` on
+            Windows, ``/bin/sh`` elsewhere), so native shell operators work.
             """
             try:
                 root = registry.resolve(project, ".")
@@ -390,7 +398,7 @@ def build_fs_tools(config) -> list:
                 # Bypass-permissions mode (the operator's explicit per-turn /bypass toggle): the
                 # approval gate is skipped. AUDIT every command that runs without confirmation.
                 log.warning("[fs] run_command ran under bypass-permissions (no approval): %s", command)
-            res = await _shell_run(["/bin/sh", "-c", command], cwd=str(root), timeout=timeout)
+            res = await _shell_run(_platform_shell_argv(command), cwd=str(root), timeout=timeout)
             if res.error:
                 raise ToolException(res.error)
             body = res.stdout or "(no output)"

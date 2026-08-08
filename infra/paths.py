@@ -189,12 +189,12 @@ DATA_VERSION: int = 1
 
 
 def data_version() -> int:
-    """Read ``.data-version`` from ``data_home()``, return the ``data_version`` int,
+    """Read ``.data-version`` from the box root, return the ``data_version`` int,
     or 0 if absent/malformed. Best-effort (never raises)."""
     import json
 
     try:
-        f = data_home() / ".data-version"
+        f = _box_root() / ".data-version"
         if f.exists():
             return json.loads(f.read_text()).get("data_version", 0)
     except Exception:  # noqa: BLE001
@@ -209,7 +209,7 @@ def stamp_data_version(version: int | None = None) -> int:
 
     v = version if version is not None else DATA_VERSION
     try:
-        f = data_home() / ".data-version"
+        f = _box_root() / ".data-version"
         atomic_write(f, json.dumps({"data_version": v}))
         return v
     except Exception:  # noqa: BLE001

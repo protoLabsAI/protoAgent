@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 import pytest
 
 from tools.fs_tools import Project, ProjectRegistry, build_fs_tools
+
+_LIST_COMMAND = "dir /b" if os.name == "nt" else "ls"
 
 
 @dataclass
@@ -143,12 +146,12 @@ def test_run_command_executes_in_project_cwd(workspace):
             filesystem_run_requires_approval=False,
         )
     )
-    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _LIST_COMMAND}))
     assert "README.md" in out
 
 
 def test_run_command_runs_via_shell(workspace):
-    """run_command goes through /bin/sh -c, so shell operators (&&, |, >, $()) work."""
+    """run_command goes through the platform shell, so native shell operators work."""
     _, a, _ = workspace
     t = _tools(
         _Cfg(
@@ -160,7 +163,7 @@ def test_run_command_runs_via_shell(workspace):
     out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "echo one && echo two"}))
     # Exact lines (not substrings): the old argv path would print the literal "one && echo two",
     # so this assertion specifically fails unless the && actually chained two commands.
-    assert out.splitlines() == ["one", "two"]
+    assert [line.rstrip() for line in out.splitlines()] == ["one", "two"]
 
 
 def test_run_command_declined_returns_not_raises(workspace, monkeypatch):
@@ -179,7 +182,7 @@ def test_run_command_declined_returns_not_raises(workspace, monkeypatch):
             filesystem_run_requires_approval=True,
         )
     )
-    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _LIST_COMMAND}))
     assert "declined by the operator" in out
     assert "ls" in out
     assert "Do not re-run" in out
@@ -203,7 +206,7 @@ def test_run_command_bypass_skips_approval(workspace, monkeypatch):
         )
     )
     with request_metadata_scope({"bypass_permissions": True}):
-        out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+        out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _LIST_COMMAND}))
     assert "README.md" in out
 
 

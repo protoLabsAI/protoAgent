@@ -55,6 +55,11 @@ TypeScript is the console.
   redacted) — the way to answer "where is my config / where did my key go".
 - **Python deps:** managed with `uv` (`pyproject.toml [project.dependencies]` is
   the source of truth; `uv.lock` is tracked). `uv sync` to install.
+- **Windows checkout path:** keep the repository and its `.venv` near the drive
+  root (for example `C:\src\protoAgent`). On Windows hosts without effective
+  long-path support, a deep checkout can push generated dependency filenames to
+  the 260-character boundary: the file installs but Python reports a misleading
+  `ModuleNotFoundError`. A short checkout path avoids that host limitation.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is
   `@protoagent/web`). **Changing/bumping a dependency requires npm ≥ 11**
   (`npm install -g npm@11`) — see the npm-10 no-op gotcha below.

@@ -63,6 +63,18 @@ def test_stamp_data_version_writes_explicit_version(tmp_path, monkeypatch):
     assert json.loads((tmp_path / ".data-version").read_text()) == {"data_version": 5}
 
 
+def test_data_version_marker_honors_box_root(tmp_path, monkeypatch):
+    default_home = tmp_path / "default"
+    box_root = tmp_path / "isolated-box"
+    monkeypatch.setattr(paths, "data_home", _mock_data_home(default_home))
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box_root))
+
+    assert paths.stamp_data_version(7) == 7
+    assert paths.data_version() == 7
+    assert json.loads((box_root / ".data-version").read_text()) == {"data_version": 7}
+    assert not (default_home / ".data-version").exists()
+
+
 # ── check_data_version() ─────────────────────────────────────────────────────
 
 

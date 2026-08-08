@@ -35,6 +35,39 @@ class ShellResult:
         return self.error is None and not self.timed_out and self.returncode == 0
 
 
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Best-effort termination of ``proc`` and every child it spawned."""
+    if os.name == "nt":
+        # Windows has no os.killpg(). taskkill /T is the built-in process-tree
+        # primitive and is available on supported desktop/server releases.
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(proc.pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.communicate()
+        except (FileNotFoundError, OSError):
+            # Fall through to killing the immediate process if taskkill is
+            # unavailable in a constrained Windows environment.
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    try:
+        proc.kill()
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 async def run_command(
     argv: list[str],
     *,
@@ -63,8 +96,8 @@ async def run_command(
             stderr=asyncio.subprocess.PIPE,
             env=merged_env,
             cwd=cwd,
-            # Own process group so a timeout can kill the whole tree — a shell command
-            # (run_command goes through /bin/sh -c) may spawn children via |, &, $(…).
+            # Own process group so a timeout can kill the whole tree — the launched
+            # command may create children of its own.
             start_new_session=True,
         )
     except FileNotFoundError:
@@ -81,10 +114,7 @@ async def run_command(
     except asyncio.TimeoutError:
         # Kill the whole process group, not just the immediate child: a shell command can
         # spawn children (pipes, &, $(…)) that would otherwise be orphaned on timeout.
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
+        await _kill_process_tree(proc)
         try:
             await proc.communicate()
         except Exception:  # noqa: BLE001 — process already killed; draining is best-effort
