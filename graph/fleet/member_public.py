@@ -37,18 +37,25 @@ _PLUGIN_NS_RE = re.compile(r"^/(?:api/)?plugins/[^/]+/")
 
 _TTL = 30.0  # how long a member's fetched list is trusted
 _NEG_TTL = 5.0  # unreachable / bad member — retry soon, don't hammer
+# A MISS on an entry older than this may force ONE revalidating refetch — the
+# enable→click race (ADR 0096 D8): enabling a view plugin on a member hot-mounts
+# its page and the console's push-refresh lands the rail icon instantly, but the
+# hub's cached (pre-enable) list 401'd the brand-new page for up to _TTL. A miss
+# on a fresh-enough entry stays an answer, so misses can't hammer the member.
+_MISS_REVALIDATE_FLOOR = 2.0
 _MAX_PREFIXES = 256  # cap a hostile/buggy member's list
 
-# slug -> (expires_at_monotonic, prefixes)
-_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+# slug -> (expires_at_monotonic, fetched_at_monotonic, prefixes)
+_cache: dict[str, tuple[float, float, tuple[str, ...]]] = {}
 
 
-async def member_public_prefixes(slug: str) -> tuple[str, ...]:
-    """The member's live plugin public-prefix list, TTL-cached; ``()`` when unknown."""
+async def member_public_prefixes(slug: str, *, force: bool = False) -> tuple[str, ...]:
+    """The member's live plugin public-prefix list, TTL-cached; ``()`` when unknown.
+    ``force=True`` bypasses a live cache entry (the miss-revalidate path)."""
     now = time.monotonic()
     hit = _cache.get(slug)
-    if hit and now < hit[0]:
-        return hit[1]
+    if hit and now < hit[0] and not force:
+        return hit[2]
 
     from graph.fleet import proxy
 
@@ -58,9 +65,7 @@ async def member_public_prefixes(slug: str) -> tuple[str, ...]:
     if target is not None:
         base = target[0]  # never send stored credentials — the endpoint is public
         try:
-            resp = await proxy._get_client().get(
-                f"{base}{WELL_KNOWN_PATH}", timeout=httpx.Timeout(3.0, connect=2.0)
-            )
+            resp = await proxy._get_client().get(f"{base}{WELL_KNOWN_PATH}", timeout=httpx.Timeout(3.0, connect=2.0))
             if resp.status_code == 200:
                 raw = resp.json().get("public_paths")
                 if not isinstance(raw, list):
@@ -69,10 +74,19 @@ async def member_public_prefixes(slug: str) -> tuple[str, ...]:
                 ttl = _TTL
         except Exception as exc:  # noqa: BLE001 — unreachable/bad member = no prefixes (fail closed)
             log.debug("[fleet] public-paths fetch for %r failed: %s", slug, exc)
-    _cache[slug] = (now + ttl, prefixes)
+    _cache[slug] = (now + ttl, now, prefixes)
     return prefixes
 
 
 async def is_member_public(slug: str, rest: str) -> bool:
     """Would the member at ``slug`` serve ``rest`` anonymously? (the auth resolver, #1890)"""
-    return any(rest.startswith(p) for p in await member_public_prefixes(slug))
+    if any(rest.startswith(p) for p in await member_public_prefixes(slug)):
+        return True
+    # Miss → bounded revalidate: the member's list may have GROWN since the fetch
+    # (a plugin enabled seconds ago — the ADR 0096 enable→click race). Re-ask the
+    # member once, at most every _MISS_REVALIDATE_FLOOR per slug; a genuinely
+    # private path still fails closed, just one refetch later.
+    hit = _cache.get(slug)
+    if hit is not None and time.monotonic() - hit[1] < _MISS_REVALIDATE_FLOOR:
+        return False
+    return any(rest.startswith(p) for p in await member_public_prefixes(slug, force=True))
