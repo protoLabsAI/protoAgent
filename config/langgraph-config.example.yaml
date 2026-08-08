@@ -17,7 +17,17 @@ model:
   #   name: protolabs/reasoning        # LiteLLM gateway alias → swapping the model
   #                                    # is a gateway edit, not a fork code change
   #   api_base: http://gateway:4000/v1
-  api_key: ""  # falls back to OPENAI_API_KEY env
+  #
+  # Native OAuth-subscription providers (ADR 0097) — run Claude / ChatGPT on your OWN
+  # coding-agent plan, straight through the native pipeline (no gateway, no ACP):
+  #   provider: anthropic-oauth        # Claude Pro/Max. Reads Claude Code's own token
+  #   name: claude-sonnet-4-5          # (~/.claude/.credentials.json or
+  #                                    # CLAUDE_CODE_OAUTH_TOKEN). name must be a real
+  #                                    # Claude model id, NOT a gateway alias.
+  #   provider: openai-codex           # ChatGPT/Codex plan (Responses API). Bootstraps
+  #   name: gpt-5-codex                # from ~/.codex/auth.json, then owns its refresh.
+  #                                    # ToS gray area — opt-in. name = real OpenAI id.
+  api_key: ""  # falls back to OPENAI_API_KEY env (gateway path only)
   temperature: 0.2
   max_tokens: 32768  # 32k — required headroom for the Qwen models we run
   max_iterations: 50

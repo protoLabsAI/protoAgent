@@ -51,6 +51,10 @@ langchain>=1.2.3
 langchain-core>=1.0
 langgraph>=1.1.0
 langchain-openai>=1.0
+# Native Anthropic Messages client for the anthropic-oauth provider (ADR 0097) —
+# Claude on a subscription OAuth token through the native pipeline. The default
+# gateway path never imports it (the graph/llm.py branch is lazy).
+langchain-anthropic>=1.0
 # Durable conversation history — SQLite checkpointer so multi-turn chats
 # survive a server restart (graph/checkpointer.py).
 langgraph-checkpoint-sqlite>=2.0

@@ -209,6 +209,15 @@ def _build_middleware(
         if mw is not None:
             middleware.append(mw)
 
+    # Claude Code OAuth (ADR 0097) requires its identity line to LEAD the system
+    # prompt or Anthropic's OAuth infra refuses the traffic. Added innermost among
+    # system-touching middleware (last word on system_message, after PromptCache /
+    # context injection) and only for anthropic-oauth — a hard no-op elsewhere.
+    if (getattr(config, "model_provider", "") or "").strip().lower() == "anthropic-oauth":
+        from graph.middleware.claude_code_identity import ClaudeCodeIdentityMiddleware
+
+        middleware.append(ClaudeCodeIdentityMiddleware())
+
     middleware.append(MessageCaptureMiddleware())
 
     return middleware

@@ -782,6 +782,10 @@
           "title": "0096 — The self-building loop: plugin-devkit closes design → build → test → hot-swap"
         },
         {
+          "path": "adr/0097-native-oauth-subscription-providers.md",
+          "title": "0097 — Native OAuth-subscription providers (run Claude / ChatGPT on your own plan)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

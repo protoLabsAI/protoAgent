@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable
 
 import httpcore
 import httpx
+from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from graph.config import LangGraphConfig
@@ -237,15 +238,17 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
 
 def create_llm(
     config: LangGraphConfig, *, model_name: str | None = None, reasoning_effort: str | None = None
-) -> ChatOpenAI:
+) -> BaseChatModel:
     """Create a LangChain ChatModel from config.
 
-    Routes through the LiteLLM gateway which handles provider
-    routing (Anthropic, OpenAI, vLLM, etc.) behind a single
-    OpenAI-compatible endpoint. Pass ``model_name`` to build an instance
-    for a different model on the same gateway (used for compaction /
-    fallback models). Pass ``reasoning_effort`` to override the config's
-    effort for THIS build (the per-turn /effort chat command).
+    Default: routes through the LiteLLM gateway which handles provider routing
+    (Anthropic, OpenAI, vLLM, etc.) behind a single OpenAI-compatible endpoint.
+    When ``model.provider`` is a native OAuth-subscription provider
+    (``anthropic-oauth`` / ``openai-codex``, ADR 0097) this returns a Claude/OpenAI
+    client authenticated by a coding-agent OAuth token instead — same native pipeline,
+    no gateway. Pass ``model_name`` to build an instance for a different model (used
+    for compaction / fallback / subagent slots). Pass ``reasoning_effort`` to override
+    the config's effort for THIS build (the per-turn /effort chat command).
     """
     # Explicit per-slot ACP override: an `acp:<agent>` model name (e.g. `aux_model: acp:claude`,
     # `goal.eval_model: acp:claude`, `compaction.model: acp:claude`, or a subagent's model) routes
@@ -272,6 +275,19 @@ def create_llm(
             return make_acp_aux_model(config)
     except Exception:  # noqa: BLE001 — never let the ACP path break native model creation
         log.debug("[llm] ACP aux-model resolution skipped", exc_info=True)
+
+    # Native OAuth-subscription providers (ADR 0097): authenticate THIS call with a
+    # coding-agent OAuth token straight through the native pipeline — no gateway, no
+    # ACP. Gated on model.provider so the default gateway path below is unchanged. The
+    # branch that isn't taken imports nothing (builders are lazy). A per-slot `acp:`
+    # override above still wins; an explicit gateway `model_name` here means the aux
+    # slot inherits the native provider (must be a real Claude/OpenAI model id).
+    from graph.providers import build_native_oauth_llm, is_native_oauth_provider
+
+    if is_native_oauth_provider(getattr(config, "model_provider", "")):
+        return build_native_oauth_llm(
+            config.model_provider, config, model_name=model_name, reasoning_effort=reasoning_effort
+        )
 
     kwargs = _build_llm_kwargs(config)
     if model_name:
