@@ -140,7 +140,7 @@ export function IdentityPanel() {
                   placeholder="# You are …"
                   data-testid="identity-soul"
                   className="soul-textarea"
-                  style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "13px", lineHeight: 1.5 }}
+                  style={{ fontFamily: "var(--pl-font-mono, monospace)", fontSize: "13px", lineHeight: 1.5 }}
                 />
               ) : (
                 <div className="soul-preview markdown-body" data-testid="identity-soul-preview" onDoubleClick={() => setEditing(true)}>

@@ -9,10 +9,10 @@
   align-items: center;
   gap: 10px;
   padding: 10px 4px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 .fleet-row.active {
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 /* The row status dot is the DS <StatusDot> now (FleetSwitcher + FleetManager both use it);
    the hand-rolled .fleet-dot* is retired. */
@@ -40,7 +40,7 @@
   text-decoration: underline;
 }
 .fleet-name-link:focus-visible {
-  outline: 1px solid var(--fg);
+  outline: 1px solid var(--pl-color-fg);
   outline-offset: 2px;
 }
 /* Inline display-rename sizing — the chrome is the DS EditableText (.pl-editable__input);
@@ -52,8 +52,8 @@
 /* .fleet-active-tag retired (#832) — now DS <Badge status="info">. */
 .fleet-meta {
   font-size: 12px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
 }
 .fleet-row-actions {
   flex: 0 0 auto;
@@ -63,7 +63,7 @@
 /* .fleet-empty retired (#832) — the manager + discover empty states now render
    the DS <Empty> (.pl-empty). .fleet-section-label keeps its muted color. */
 .fleet-section-label {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 .fleet-section-label {
   font-size: 11px;
@@ -90,7 +90,7 @@
 .fleet-discover {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--pl-color-border);
 }
 
 .fleet-discover-actions {
@@ -105,8 +105,8 @@
   gap: 10px;
   margin: 10px 0 4px;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 8px);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius, 8px);
   background: var(--pl-color-bg-raised, transparent);
 }
 

@@ -3,7 +3,7 @@
 .snapshot-lede {
   margin: 0 0 16px;
   font-size: 13px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   max-width: 62ch;
 }
 .snapshot-loading {
@@ -12,12 +12,12 @@
   gap: 8px;
   padding: 12px 0;
   font-size: 13px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .snapshot-section {
   margin-bottom: 20px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--border, #2a2a31);
+  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
 }
 .snapshot-section:last-of-type {
   border-bottom: none;
@@ -39,7 +39,7 @@
 .snapshot-none {
   margin: 0 0 8px;
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   max-width: 62ch;
 }
 .snapshot-list {
@@ -66,12 +66,12 @@
 }
 .snapshot-kinds {
   flex: none;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 11px;
 }
 .snapshot-note {
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .snapshot-caveat {
   margin: 16px 0 0;
@@ -79,7 +79,7 @@
   border-radius: 6px;
   background: var(--pl-color-bg-inset, rgba(255, 255, 255, 0.03));
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   max-width: 62ch;
 }
 
@@ -89,7 +89,7 @@
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
-  border-bottom: 1px solid var(--border, #2a2a31);
+  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
 }
 .new-agent-source button {
   padding: 8px 14px;
@@ -97,13 +97,13 @@
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   background: transparent;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 13px;
   cursor: pointer;
 }
 .new-agent-source button.is-active {
-  color: var(--fg);
-  border-bottom-color: var(--accent, #7c8cff);
+  color: var(--pl-color-fg);
+  border-bottom-color: var(--pl-color-accent, #7c8cff);
 }
 .snapshot-import {
   display: flex;

@@ -19,7 +19,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 7px 2px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 .tools-row:last-child {
   border-bottom: 0;
@@ -32,13 +32,13 @@
   flex-wrap: wrap;
 }
 .tools-name {
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 12.5px;
-  color: var(--fg);
+  color: var(--pl-color-fg);
 }
 .tools-desc {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   min-width: 0;
 }
 /* The per-row on/off switch must not shrink against a long description. */
@@ -48,7 +48,7 @@
 /* Toggled-off rows stay listed (so they can be re-enabled) but read as inert. */
 .tools-row--off .tools-name,
 .tools-row--off .tools-desc {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   opacity: 0.65;
 }
 
@@ -62,8 +62,8 @@
 @keyframes tools-row-target-pulse {
   0%,
   25% {
-    background: color-mix(in srgb, var(--accent, #7c8cff) 22%, transparent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #7c8cff) 45%, transparent);
+    background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 22%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pl-color-accent, #7c8cff) 45%, transparent);
   }
   100% {
     background: transparent;
@@ -98,7 +98,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
 }
 .fs-projects-actions {
@@ -115,9 +115,9 @@
   margin: 0;
   padding: 8px 10px;
   border-radius: 8px;
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  color: var(--pl-color-status-warning);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl-color-status-warning) 35%, transparent);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -138,7 +138,7 @@
 }
 /* The group carries settings — a muted glyph on its header, next to the count. */
 .tools-group-cog {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   opacity: 0.75;
   flex-shrink: 0;
 }

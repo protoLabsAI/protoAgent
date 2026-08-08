@@ -9,9 +9,9 @@
 }
 
 .inbox-item {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elevated, #111114);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised, #111114);
   padding: 8px 10px;
 }
 
@@ -24,8 +24,8 @@
 
 .inbox-source {
   font-size: 11px;
-  color: var(--fg-secondary);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-muted);
+  font-family: var(--pl-font-mono);
 }
 
 .inbox-dismiss {
@@ -43,12 +43,12 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--fg-tertiary, #555);
+  background: var(--pl-color-fg-subtle, #555);
   flex: none;
   transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .live-dot.is-live {
-  background: var(--success, #3fb950);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #3fb950) 25%, transparent);
+  background: var(--pl-color-status-success, #3fb950);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-success, #3fb950) 25%, transparent);
 }

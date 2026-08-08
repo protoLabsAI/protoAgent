@@ -9,7 +9,7 @@
   padding: 4px 0;
 }
 .app-drawer-group + .app-drawer-group {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--pl-color-border);
   margin-top: 4px;
   padding-top: 8px;
 }
@@ -17,7 +17,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   margin: 0 6px 4px;
 }
 .app-drawer-item {
@@ -28,21 +28,21 @@
   border-radius: 8px;
   border: 0;
   background: transparent;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-size: 14px;
   text-align: left;
   text-decoration: none;
   cursor: pointer;
 }
 .app-drawer-item:hover {
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 .app-drawer-item.on {
   background: color-mix(in srgb, var(--pl-color-brand-lavender) 16%, transparent);
 }
 .app-drawer-ico {
   display: inline-flex;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 
 /* Footer content: version badge + "built by protoLabs.studio" branding. Lives inside
@@ -60,17 +60,17 @@
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 999px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-variant-numeric: tabular-nums;
 }
 .app-drawer-built {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   text-decoration: none;
 }
 .app-drawer-built strong {
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-weight: 600;
 }
 .app-drawer-built:hover,
@@ -91,5 +91,5 @@
 .app-drawer-identity {
   padding: 4px 8px 10px;
   margin-bottom: 4px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }

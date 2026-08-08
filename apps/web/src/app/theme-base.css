@@ -17,26 +17,11 @@
   /* sister-agent (a2a) accent — the only non-semantic origin tint in the activity feed */
   --brand-pink: #f472b6;
 
-  /* Light-mode ready: the legacy app vars are now ALIASES of the @protolabsai/design
-     `--pl-*` tokens (imported in main.tsx), so the whole console — DS components AND
-     the remaining hand-rolled CSS — flips with the OS / `data-theme`. The old dark
-     values stay as fallbacks if the tokens ever fail to load. */
-  --bg: var(--pl-color-bg, #0a0a0c);
-  --bg-raised: var(--pl-color-bg-raised, #131316);
-  --bg-panel: var(--pl-color-bg-raised, #101013);
-  --bg-hover: var(--pl-color-bg-hover, #19191d);
-  /* --bg-elevated/--fg-tertiary/--danger were USED across the chrome but never
-     DEFINED here, so `var(--x, <dark>)` always resolved to the dark literal and
-     never flipped in light mode (#842). Aliased to the same --pl-* tokens as their
-     siblings so they flip too. */
-  --bg-elevated: var(--pl-color-bg-raised, #16161a);
-  --fg: var(--pl-color-fg, #ededed);
-  --fg-secondary: var(--pl-color-fg-muted, #a3a3ad);
-  --fg-muted: var(--pl-color-fg-subtle, #8b8b94);
-  --fg-tertiary: var(--pl-color-fg-subtle, #6b6b73);
-  --border: var(--pl-color-border, rgba(255, 255, 255, 0.08));
-  --border-strong: var(--pl-color-border-strong, rgba(255, 255, 255, 0.18));
-  --accent: var(--pl-color-accent, #7c8cff);
+  /* The legacy --bg/--fg/--border/--accent/--font/--radius alias families are RETIRED
+     (#2233): every reference in apps/web now uses the canonical --pl-* tokens directly
+     (imported in main.tsx), so the bridge no longer defines them. Only the status-tone
+     compat aliases below remain — statusTokenGuard.test.ts pins them here as the one
+     sanctioned home for legacy status names (#2224). */
 
   /* Status tones alias the DS --pl-color-status-* set — the ONLY names the design
      package defines; bare --pl-color-{info,warning,danger} are phantoms (#2224).
@@ -48,9 +33,6 @@
   --danger: var(--pl-color-status-error, #f07458);
   --info: var(--pl-color-status-info, #7aa2ff);
 
-  --font-sans: var(--pl-font-sans, "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  --font-mono: var(--pl-font-mono, "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace);
-  --radius: var(--pl-radius, 6px);
 }
 
 * {
@@ -67,9 +49,9 @@ body,
 }
 
 body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-sans);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-sans);
   font-size: 14px;
   line-height: 1.45;
   overflow: hidden;
@@ -92,7 +74,7 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 1px solid var(--fg);
+  outline: 1px solid var(--pl-color-fg);
   outline-offset: 2px;
 }
 

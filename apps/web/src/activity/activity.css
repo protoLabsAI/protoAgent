@@ -32,14 +32,14 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--fg-tertiary, var(--fg-secondary));
+  color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted));
 }
 
 .activity-content {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 8px 12px;
-  background: var(--bg-elevated, #111114);
+  background: var(--pl-color-bg-raised, #111114);
   font-size: 14px;
 }
 
@@ -52,8 +52,8 @@
   gap: 6px;
   margin: 0 0 6px;
   padding-left: 8px;
-  border-left: 2px solid var(--border);
-  color: var(--fg-muted);
+  border-left: 2px solid var(--pl-color-border);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
   min-width: 0;
 }
@@ -77,7 +77,7 @@
 }
 
 .activity-user .activity-content {
-  background: color-mix(in srgb, var(--accent, #7c8cff) 12%, transparent);
+  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 12%, transparent);
 }
 
 /* Read-only since the 2026-06 IA pass — the reply composer is gone (Activity is a
@@ -85,9 +85,9 @@
 .activity-error {
   margin: 8px 12px 0;
   padding: 8px 12px;
-  border: 1px solid var(--danger, #e5484d);
-  border-radius: var(--radius);
-  color: var(--danger, #e5484d);
+  border: 1px solid var(--pl-color-status-error, #e5484d);
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-status-error, #e5484d);
   font-size: 13px;
 }
 
@@ -116,7 +116,7 @@
 .activity-entry-open {
   opacity: 0;
   flex: none;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   transition: opacity 0.1s ease;
 }
 .activity-entry:hover .activity-entry-open,
@@ -137,14 +137,14 @@
   padding: 2px 7px;
   border-radius: 999px;
   font-weight: 600;
-  border: 1px solid var(--border);
-  color: var(--fg-secondary);
+  border: 1px solid var(--pl-color-border);
+  color: var(--pl-color-fg-muted);
 }
 .activity-origin svg { flex: 0 0 auto; }
-.activity-origin-scheduler { color: var(--brand-indigo-bright); border-color: color-mix(in srgb, var(--brand-indigo-bright) 45%, var(--border)); }
-.activity-origin-inbox     { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
-.activity-origin-webhook   { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
-.activity-origin-a2a       { color: var(--brand-pink); border-color: color-mix(in srgb, var(--brand-pink) 45%, var(--border)); }
-.activity-origin-operator  { color: var(--accent, #7c8cff); border-color: color-mix(in srgb, var(--accent, #7c8cff) 45%, var(--border)); }
-.activity-trigger { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-secondary); }
-.activity-time { margin-left: auto; color: var(--fg-tertiary, var(--fg-secondary)); }
+.activity-origin-scheduler { color: var(--brand-indigo-bright); border-color: color-mix(in srgb, var(--brand-indigo-bright) 45%, var(--pl-color-border)); }
+.activity-origin-inbox     { color: var(--pl-color-status-success); border-color: color-mix(in srgb, var(--pl-color-status-success) 45%, var(--pl-color-border)); }
+.activity-origin-webhook   { color: var(--pl-color-status-warning); border-color: color-mix(in srgb, var(--pl-color-status-warning) 45%, var(--pl-color-border)); }
+.activity-origin-a2a       { color: var(--brand-pink); border-color: color-mix(in srgb, var(--brand-pink) 45%, var(--pl-color-border)); }
+.activity-origin-operator  { color: var(--pl-color-accent, #7c8cff); border-color: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 45%, var(--pl-color-border)); }
+.activity-trigger { font-family: var(--pl-font-mono, ui-monospace, monospace); color: var(--pl-color-fg-muted); }
+.activity-time { margin-left: auto; color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted)); }

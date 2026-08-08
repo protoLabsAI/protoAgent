@@ -26,7 +26,7 @@
   display: flex;
   align-items: center;
   padding: 4px 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 
 /* One card = one destination: role=button, so it gets the full interactive treatment —
@@ -34,9 +34,9 @@
 .work-card {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
   overflow: hidden;
   cursor: pointer;
   transition:
@@ -48,10 +48,10 @@
   transform: translateY(-1px);
   /* Raised-element shadow — same literal fallback as .chat-report-card / .pl-convo__jump. */
   box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
-  border-color: var(--border-strong);
+  border-color: var(--pl-color-border-strong);
 }
 .work-card:focus-visible {
-  outline: 1px solid var(--fg);
+  outline: 1px solid var(--pl-color-fg);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -85,7 +85,7 @@
 .work-card-pulse {
   margin: 4px 0 0;
   padding: 0 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
 }
 
@@ -117,7 +117,7 @@
 .work-row-meta {
   flex: none;
   margin-left: auto;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }

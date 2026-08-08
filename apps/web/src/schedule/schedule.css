@@ -15,21 +15,21 @@
   display: inline-flex;
   gap: 4px;
   padding: 3px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   align-self: flex-start;
 }
 .schedule-modes button {
   border: none;
   background: transparent;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   padding: 5px 14px;
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
 }
 .schedule-modes button.active {
-  background: var(--accent, #9b87f2);
+  background: var(--pl-color-accent, #9b87f2);
   color: var(--pl-color-fg-on-accent);
 }
 .schedule-repeat {
@@ -40,17 +40,17 @@
 .schedule-preview {
   margin: 0;
   font-size: 13px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .schedule-preview code {
   margin-left: 8px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--bg-raised, #131316);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg-raised, #131316);
+  border: 1px solid var(--pl-color-border);
   font-size: 12px;
 }
-.schedule-preview .muted { color: var(--fg-muted, #71717a); }
+.schedule-preview .muted { color: var(--pl-color-fg-subtle, #71717a); }
 
 /* A job row's content is a button so the whole row opens the detail dialog; it must
    look like the plain .subagent-row > div content (grid, no button chrome). */
@@ -68,7 +68,7 @@
   color: inherit;
   font: inherit;
 }
-.schedule-row-open:hover strong { color: var(--accent, #9b87f2); }
+.schedule-row-open:hover strong { color: var(--pl-color-accent, #9b87f2); }
 .schedule-row-open strong {
   min-width: 0;
   overflow: hidden;
@@ -91,16 +91,16 @@
   margin: 0;
   font-size: 13px;
 }
-.schedule-detail-grid dt { color: var(--fg-muted, #71717a); }
+.schedule-detail-grid dt { color: var(--pl-color-fg-subtle, #71717a); }
 .schedule-detail-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .schedule-detail-grid code {
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--bg-raised, #131316);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg-raised, #131316);
+  border: 1px solid var(--pl-color-border);
   font-size: 12px;
 }
-.schedule-detail-grid .muted { color: var(--fg-muted, #71717a); }
+.schedule-detail-grid .muted { color: var(--pl-color-fg-subtle, #71717a); }
 .schedule-detail-promptbody {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -114,10 +114,10 @@
 .schedule-once-fields .field { flex: 1; }
 
 .cal {
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   padding: 8px;
-  background: var(--bg-panel);
+  background: var(--pl-color-bg-raised);
   user-select: none;
 }
 .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
@@ -125,29 +125,29 @@
 .cal-nav {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: 6px;
-  border: 1px solid transparent; background: transparent; color: var(--fg); cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: var(--pl-color-fg); cursor: pointer;
 }
-.cal-nav:hover { background: var(--bg-hover, rgba(127,127,127,.14)); }
+.cal-nav:hover { background: var(--pl-color-bg-hover, rgba(127,127,127,.14)); }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
 .cal-dow { margin-bottom: 2px; }
-.cal-wd { text-align: center; font-size: 11px; color: var(--fg-muted); padding: 2px 0; }
+.cal-wd { text-align: center; font-size: 11px; color: var(--pl-color-fg-subtle); padding: 2px 0; }
 .cal-day {
   aspect-ratio: 1 / 1; min-height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid transparent; border-radius: 6px;
-  background: transparent; color: var(--fg); font-size: 12px; cursor: pointer;
+  background: transparent; color: var(--pl-color-fg); font-size: 12px; cursor: pointer;
 }
-.cal-day:hover { background: var(--bg-hover, rgba(127,127,127,.14)); }
-.cal-out { color: var(--fg-muted); opacity: .55; }
-.cal-today { border-color: var(--border); font-weight: 600; }
+.cal-day:hover { background: var(--pl-color-bg-hover, rgba(127,127,127,.14)); }
+.cal-out { color: var(--pl-color-fg-subtle); opacity: .55; }
+.cal-today { border-color: var(--pl-color-border); font-weight: 600; }
 .cal-sel { background: var(--brand-violet-light, #6d5efc); color: #fff; border-color: transparent; }
 .cal-sel:hover { background: var(--brand-violet-light, #6d5efc); }
 
 .field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hour-toggle {
   font-size: 11px; padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--border); background: transparent; color: var(--fg-muted); cursor: pointer;
+  border: 1px solid var(--pl-color-border); background: transparent; color: var(--pl-color-fg-subtle); cursor: pointer;
 }
-.hour-toggle:hover { color: var(--fg); border-color: var(--fg-muted); }
+.hour-toggle:hover { color: var(--pl-color-fg); border-color: var(--pl-color-fg-subtle); }
 .time-12h { display: flex; gap: 6px; }
 .time-12h > * { flex: 1; }

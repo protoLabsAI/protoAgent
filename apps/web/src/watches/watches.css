@@ -10,7 +10,7 @@
   display: grid;
   gap: 4px;
   padding: 10px 34px 10px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
   min-width: 0;
 }
 
@@ -38,8 +38,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 11px;
   line-height: 1.45;
   min-width: 0;
@@ -55,14 +55,14 @@
 .watch-row-fact:not(:last-child)::after {
   content: "·";
   margin: 0 0.4em;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   opacity: 0.7;
 }
 
 /* Only a lapsed deadline is tinted — it means the watch is about to finish `expired`
    rather than met. */
 .watch-row-fact-warn {
-  color: var(--warning);
+  color: var(--pl-color-status-warning);
 }
 
 /* The verifier's reason is free-form and can be long, so it alone may break internally. */

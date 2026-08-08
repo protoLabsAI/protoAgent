@@ -1,7 +1,7 @@
 /* Workflows surface --------------------------------------------------------- */
 .workflow-desc {
   margin: 0 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 13px;
 }
 
@@ -24,8 +24,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 10px;
 }
 
@@ -35,7 +35,7 @@
   justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .builder-row {
@@ -48,9 +48,9 @@
 .builder-row select,
 .builder-prompt {
   flex: 1;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  border: 1px solid var(--pl-color-border);
   border-radius: 5px;
   padding: 6px 8px;
   font: inherit;
@@ -60,7 +60,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-left: 2px solid var(--border);
+  border-left: 2px solid var(--pl-color-border);
   padding-left: 8px;
 }
 
@@ -74,7 +74,7 @@
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 
 .workflow-step {
@@ -82,26 +82,26 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elevated, #111114);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised, #111114);
   font-size: 13px;
 }
 
 .workflow-step svg {
-  color: var(--accent, #7c8cff);
+  color: var(--pl-color-accent, #7c8cff);
   flex: none;
 }
 
 .workflow-step-sub {
-  color: var(--fg-secondary);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-muted);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
 .workflow-step-dep {
   margin-left: auto;
-  color: var(--fg-tertiary, var(--fg-secondary));
+  color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted));
   font-size: 11px;
 }
 
@@ -114,7 +114,7 @@
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .workflow-result details {
@@ -123,7 +123,7 @@
 
 .workflow-result summary {
   cursor: pointer;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 12px;
   padding: 4px 0;
 }
@@ -131,7 +131,7 @@
 .workflow-step-out strong {
   display: block;
   margin: 6px 12px 2px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -142,7 +142,7 @@
   gap: 8px;
   margin: 0 0 8px;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 
 .workflow-gates-head {
@@ -157,14 +157,14 @@
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .workflow-gate-count {
   min-width: 18px;
   padding: 1px 6px;
   border-radius: 9px;
-  background: var(--accent, #7c8cff);
+  background: var(--pl-color-accent, #7c8cff);
   color: var(--pl-color-fg-on-accent);
   font-size: 11px;
   font-weight: 600;
@@ -177,9 +177,9 @@
   gap: 6px;
   margin: 0 12px;
   padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elevated, #111114);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised, #111114);
 }
 
 .workflow-gate-head {
@@ -190,7 +190,7 @@
 }
 
 .workflow-gate-head svg {
-  color: var(--accent, #7c8cff);
+  color: var(--pl-color-accent, #7c8cff);
   flex: none;
 }
 
@@ -203,12 +203,12 @@
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  border: 1px solid var(--pl-color-border);
   border-radius: 5px;
   padding: 8px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -217,7 +217,7 @@
   align-items: center;
   gap: 6px;
   justify-content: flex-end;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 12px;
 }
 

@@ -1,9 +1,9 @@
 /* Inline chat components (ADR 0051 Slice 2) — table / key-value / timeline. */
 .chat-comp {
   margin: 8px 0;
-  border: 1px solid var(--border, #2a2a31);
+  border: 1px solid var(--pl-color-border, #2a2a31);
   border-radius: 8px;
-  background: var(--bg-elevated, #16161b);
+  background: var(--pl-color-bg-raised, #16161b);
   padding: 10px 12px;
   font-size: 13px;
   overflow-x: auto;
@@ -27,7 +27,7 @@
   display: contents;
 }
 .chat-comp-kv dt {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .chat-comp-kv dd {
   margin: 0;
@@ -53,15 +53,15 @@
   height: 9px;
   margin-top: 4px;
   border-radius: 999px;
-  border: 1.5px solid var(--fg-tertiary, #555);
+  border: 1.5px solid var(--pl-color-fg-subtle, #555);
 }
 .chat-comp-step.is-done .chat-comp-step-dot {
-  background: var(--accent, #7c8cff);
-  border-color: var(--accent, #7c8cff);
+  background: var(--pl-color-accent, #7c8cff);
+  border-color: var(--pl-color-accent, #7c8cff);
 }
 .chat-comp-step.is-active .chat-comp-step-dot {
-  border-color: var(--accent, #7c8cff);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #7c8cff) 25%, transparent);
+  border-color: var(--pl-color-accent, #7c8cff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-accent, #7c8cff) 25%, transparent);
 }
 .chat-comp-step-body {
   display: flex;
@@ -70,13 +70,13 @@
   min-width: 0;
 }
 .chat-comp-step-detail {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 12px;
 }
 .chat-comp-step.is-done .chat-comp-step-label {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .chat-comp-unknown {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 12px;
 }

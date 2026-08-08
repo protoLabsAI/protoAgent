@@ -11,7 +11,7 @@
 /* The delegate-type picker is the DS RadioCardGroup/RadioCard now (matches the
    archetype picker in NewAgentPanel) — the hand-rolled .delegate-type-tile* tiles
    are retired. */
-.delegate-field-help { font-size: 11px; color: var(--fg-muted); }
+.delegate-field-help { font-size: 11px; color: var(--pl-color-fg-subtle); }
 /* .delegate-health* retired — the row health indicator is a DS <StatusDot> now. */
 
 /* Per-delegate env editor (#2114): key/value rows + a secret toggle + delete. */
@@ -36,5 +36,5 @@
   gap: 10px;
   margin-top: 4px;
   padding-top: 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--pl-color-border);
 }

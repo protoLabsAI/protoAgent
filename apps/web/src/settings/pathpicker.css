@@ -37,7 +37,7 @@
   direction: rtl; /* keep the DEEPEST segment visible when it overflows */
   text-align: left;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 .path-browser-note {
   display: flex;
@@ -45,14 +45,14 @@
   gap: 6px;
   margin: 0;
   font-size: 12px;
-  color: var(--warning);
+  color: var(--pl-color-status-warning);
 }
 .path-browser-list {
   display: flex;
   flex-direction: column;
   height: 260px;
   overflow-y: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   padding: 4px;
 }
@@ -65,7 +65,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font: inherit;
   font-size: 13px;
   text-align: left;
@@ -73,7 +73,7 @@
 }
 .path-browser-row:hover,
 .path-browser-row:focus-visible {
-  background: var(--bg-panel);
+  background: var(--pl-color-bg-raised);
 }
 .path-browser-row.is-selected {
   background: color-mix(in srgb, var(--brand-violet-light) 22%, transparent);
@@ -87,7 +87,7 @@
 }
 .path-browser-into {
   flex: none;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 .path-browser-empty {
   display: flex;
@@ -95,7 +95,7 @@
   gap: 8px;
   margin: auto;
   padding: 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 13px;
 }
 .path-browser-actions {
@@ -113,7 +113,7 @@
   direction: rtl;
   text-align: left;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 .path-browser-buttons {
   display: flex;

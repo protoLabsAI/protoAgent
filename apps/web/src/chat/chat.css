@@ -18,22 +18,22 @@
   height: 7px;
   flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--fg-muted);
+  background: var(--pl-color-fg-subtle);
 }
 
 .session-dot.streaming {
-  background: var(--warning);
+  background: var(--pl-color-status-warning);
 }
 
 .session-dot.error {
-  background: var(--error);
+  background: var(--pl-color-status-error);
 }
 
 /* A background server turn (push-resume / scheduled / watch reaction) is running on this
    tab — a pulsing dot so an unfocused tab doing work reads as active, not idle. Same
    cadence as the Chat rail dot. */
 .session-dot.processing {
-  background: var(--warning);
+  background: var(--pl-color-status-warning);
   animation: session-dot-pulse 1.4s ease-in-out infinite;
 }
 @keyframes session-dot-pulse {
@@ -189,8 +189,8 @@
   align-items: center;
   gap: 12px;
   margin-top: 7px;
-  color: var(--fg-secondary, var(--fg-muted));
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
+  font-family: var(--pl-font-mono);
   font-size: 12.5px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
@@ -211,7 +211,7 @@
   height: 4px;
   margin-left: 2px;
   border-radius: 2px;
-  background: var(--border);
+  background: var(--pl-color-border);
   overflow: hidden;
   vertical-align: middle;
 }
@@ -219,10 +219,10 @@
   display: block;
   height: 100%;
   border-radius: 2px;
-  background: var(--fg-muted);
+  background: var(--pl-color-fg-subtle);
 }
 .chat-usage-bar-fill[data-warn="true"] {
-  background: var(--warning, #d98324);
+  background: var(--pl-color-status-warning, #d98324);
 }
 
 /* Hover card (DS Tooltip content): a compact label/value breakdown of the turn. */
@@ -231,7 +231,7 @@
   flex-direction: column;
   gap: 5px;
   min-width: 190px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-variant-numeric: tabular-nums;
   text-align: left;
 }
@@ -242,7 +242,7 @@
   gap: 16px;
 }
 .chat-usage-tip-label {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -254,7 +254,7 @@
 }
 .chat-usage-tip-sub {
   display: block;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-weight: 400;
   font-size: 10.5px;
 }
@@ -262,8 +262,8 @@
   margin: 3px 0 0;
   padding-top: 6px;
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  color: var(--fg-muted);
-  font-family: var(--font-sans, inherit);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-sans, inherit);
   font-size: 11px;
   line-height: 1.4;
   white-space: normal;
@@ -360,7 +360,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-style: italic;
 }
 
@@ -370,14 +370,14 @@
    .pl-message--user (anchored under .chat-session-slot), so it outranks the DS base
    user-bubble rule regardless of import order. */
 .chat-session-slot .pl-message--user.chat-slash-msg .pl-message__content {
-  background: color-mix(in srgb, var(--brand-violet) 12%, var(--bg-raised));
-  border-color: color-mix(in srgb, var(--brand-violet) 40%, var(--border-strong));
+  background: color-mix(in srgb, var(--brand-violet) 12%, var(--pl-color-bg-raised));
+  border-color: color-mix(in srgb, var(--brand-violet) 40%, var(--pl-color-border-strong));
 }
 .chat-user-text.chat-slash-cmd {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 0.9em;
 }
 .chat-slash-badge {
@@ -469,7 +469,7 @@
   gap: 4px;
   font: inherit;
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   background: none;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -479,9 +479,9 @@
 }
 .composer-model-select:hover,
 .composer-model-select:focus-visible {
-  color: var(--fg);
-  border-color: var(--border);
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-border);
+  background: var(--pl-color-bg-raised, rgba(255, 255, 255, 0.03));
 }
 .composer-model-select:disabled {
   opacity: 0.6;
@@ -509,9 +509,9 @@
   z-index: 20;
   max-height: 240px;
   overflow-y: auto;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border-strong);
+  border-radius: var(--pl-radius);
   box-shadow: var(--pl-shadow-popover);
 }
 .slash-item {
@@ -523,17 +523,17 @@
   padding: 8px 12px;
   background: none;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
   cursor: pointer;
 }
 .slash-item:last-child {
   border-bottom: 0;
 }
 .slash-item.active {
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 .slash-name {
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 13px;
   color: var(--brand-violet-light);
 }
@@ -550,12 +550,12 @@
   letter-spacing: 0.04em;
   padding: 1px 6px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
+  border: 1px solid var(--pl-color-border);
+  color: var(--pl-color-fg-subtle);
 }
 .slash-desc {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -568,7 +568,7 @@
   gap: 8px;
   margin-top: 12px;
   font-size: 12.5px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
-.chat-delete-harvest input { accent-color: var(--accent); }
+.chat-delete-harvest input { accent-color: var(--pl-color-accent); }

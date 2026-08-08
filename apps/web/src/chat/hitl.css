@@ -56,8 +56,8 @@
   margin: 0 12px 8px;
   padding: 12px 14px;
   border: 1px solid var(--pl-color-accent, var(--brand-indigo, #6366f1));
-  border-radius: var(--radius);
-  background: var(--bg-raised);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -68,7 +68,7 @@
 }
 
 .hitl-prompt {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 13px;
 }
 
@@ -81,7 +81,7 @@
 .hitl-step-title {
   font-weight: 600;
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .hitl-field {
@@ -92,7 +92,7 @@
 }
 
 .hitl-field > span {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .hitl-field-bool {
@@ -105,16 +105,16 @@
 .hitl-field select,
 .hitl-field textarea,
 .hitl-freetext {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  border: 1px solid var(--pl-color-border);
   border-radius: 5px;
   padding: 6px 8px;
   font: inherit;
 }
 
 .hitl-field small {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 
 .hitl-freetext {
@@ -125,14 +125,14 @@
 .hitl-detail {
   margin: 0;
   padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg);
+  border: 1px solid var(--pl-color-border);
   border-radius: 5px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   /* A long command (e.g. an agent-built `gh issue create` with a full body) must
      scroll inside the approval card, not push Approve/Deny off-screen (#1691). */
   max-height: 260px;
@@ -161,7 +161,7 @@
 
 .hitl-step-count {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   white-space: nowrap;
 }
 
@@ -174,7 +174,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--border);
+  background: var(--pl-color-border);
 }
 
 .hitl-dot[data-state="active"] {
@@ -182,12 +182,12 @@
 }
 
 .hitl-dot[data-state="done"] {
-  background: var(--fg-muted);
+  background: var(--pl-color-fg-subtle);
 }
 
 /* Option cards (AskUserQuestion-style choice fields). */
 .hitl-field-choice > span {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .hitl-cards {
@@ -202,9 +202,9 @@
   gap: 8px;
   text-align: left;
   padding: 10px;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  border: 1px solid var(--pl-color-border);
   border-radius: 6px;
   cursor: pointer;
   font: inherit;
@@ -224,7 +224,7 @@
 
 .hitl-card-option[data-selected] {
   border-color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
-  background: color-mix(in srgb, var(--pl-color-accent, var(--brand-indigo, #6366f1)) 12%, var(--bg));
+  background: color-mix(in srgb, var(--pl-color-accent, var(--brand-indigo, #6366f1)) 12%, var(--pl-color-bg));
 }
 
 .hitl-card-mark {
@@ -245,5 +245,5 @@
 
 .hitl-card-desc {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }

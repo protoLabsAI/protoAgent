@@ -14,7 +14,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--pl-color-bg);
 }
 /* The DS AppShell (rails + columns + utility bar) fills the height below our topbar.
    Override the DS frame's height:100% so flex sizing (not 100vh) governs it. */
@@ -59,25 +59,25 @@
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: var(--fg-tertiary, #555);
+  background: var(--pl-color-fg-subtle, #555);
   cursor: pointer;
   flex: none;
   transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .status-dot.tone-ok {
-  background: var(--success, #3fb950);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #3fb950) 22%, transparent);
+  background: var(--pl-color-status-success, #3fb950);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-success, #3fb950) 22%, transparent);
 }
 
 .status-dot.tone-warning {
-  background: var(--warning, #d29922);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning, #d29922) 22%, transparent);
+  background: var(--pl-color-status-warning, #d29922);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-warning, #d29922) 22%, transparent);
 }
 
 .status-dot.tone-error {
-  background: var(--danger, #ff6b6b);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger, #ff6b6b) 22%, transparent);
+  background: var(--pl-color-status-error, #ff6b6b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-error, #ff6b6b) 22%, transparent);
 }
 
 .status-dot:hover {
@@ -90,8 +90,8 @@
   align-items: center;
   gap: 8px;
   padding: 0 10px 8px;
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  border-top: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg);
   font-size: 11px;
 }
 
@@ -108,14 +108,14 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 11px;
   cursor: pointer;
 }
 
 .util-btn:not(:disabled):hover {
-  background: var(--bg-elevated, #1a1a1f);
-  color: var(--fg);
+  background: var(--pl-color-bg-raised, #1a1a1f);
+  color: var(--pl-color-fg);
 }
 
 /* Fully disabled toggle (#1234): the rail/dock it controls has no views, so the
@@ -130,7 +130,7 @@
 }
 
 .util-btn.is-off {
-  color: var(--accent, #7c8cff);
+  color: var(--pl-color-accent, #7c8cff);
 }
 
 /* Utility-widget dialog (2026-06): the body registers its reload into the dialog header
@@ -169,10 +169,10 @@
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--accent, #7c8cff);
+  background: var(--pl-color-accent, #7c8cff);
 }
 .bg-jobs-empty {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 13px;
 }
 .bg-jobs-list {
@@ -187,9 +187,9 @@
   overflow-y: auto;
 }
 .bg-jobs-row {
-  border: 1px solid var(--border, #2a2a31);
+  border: 1px solid var(--pl-color-border, #2a2a31);
   border-radius: 8px;
-  background: var(--bg-elevated, #16161b);
+  background: var(--pl-color-bg-raised, #16161b);
 }
 .bg-jobs-rowhead {
   display: flex;
@@ -204,7 +204,7 @@
   padding: 9px 11px;
   border: 0;
   background: transparent;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   text-align: left;
   cursor: pointer;
 }
@@ -212,7 +212,7 @@
   cursor: default;
 }
 .bg-jobs-rowmain:not(:disabled):hover {
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 .bg-jobs-stop {
   flex: none;
@@ -221,14 +221,14 @@
   justify-content: center;
   width: 30px;
   border: 0;
-  border-left: 1px solid var(--border, #2a2a31);
+  border-left: 1px solid var(--pl-color-border, #2a2a31);
   background: transparent;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
 .bg-jobs-stop:hover {
   color: var(--pl-color-status-error, #e5484d);
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 .bg-jobs-toolbar {
   display: flex;
@@ -241,10 +241,10 @@
   gap: 5px;
   padding: 4px 9px;
   font-size: 12px;
-  border: 1px solid var(--border, #2a2a31);
+  border: 1px solid var(--pl-color-border, #2a2a31);
   border-radius: 6px;
   background: transparent;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
 .bg-jobs-clear:hover {
@@ -267,7 +267,7 @@
 }
 .bg-jobs-sub {
   font-size: 11px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   text-transform: capitalize;
 }
 .bg-jobs-tools {
@@ -276,19 +276,19 @@
   gap: 4px 8px;
   margin-top: 3px;
   font-size: 10px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
 }
 .bg-jobs-tool.is-run {
-  color: var(--accent, #7c8cff);
+  color: var(--pl-color-accent, #7c8cff);
 }
 .bg-jobs-tool.is-done {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .bg-jobs-tool.is-err {
   color: var(--pl-color-status-error, #e5484d);
 }
 .bg-jobs-ok {
-  color: var(--accent, #7c8cff);
+  color: var(--pl-color-accent, #7c8cff);
 }
 .bg-jobs-fail {
   color: var(--pl-color-status-error, #e5484d);
@@ -304,7 +304,7 @@
 .bg-jobs-result {
   padding: 4px 12px 12px 33px;
   font-size: 13px;
-  border-top: 1px solid var(--border, #2a2a31);
+  border-top: 1px solid var(--pl-color-border, #2a2a31);
   /* A long report (research agents emit thousands of words) scrolls within the row
      so the whole thing is readable without the dialog growing unbounded. */
   max-height: 50vh;
@@ -315,7 +315,7 @@
 /* Expanded row body: a live tool-by-tool feed (DS ToolCard) and/or the result. The wrapper
    owns the single top separator; the nested result drops its own to avoid a double rule. */
 .bg-jobs-detail {
-  border-top: 1px solid var(--border, #2a2a31);
+  border-top: 1px solid var(--pl-color-border, #2a2a31);
 }
 .bg-jobs-detail .bg-jobs-result {
   border-top: none;
@@ -329,7 +329,7 @@
 }
 /* Divider when a result is shown beneath the tool feed. */
 .bg-jobs-feed + .bg-jobs-resulthead {
-  border-top: 1px solid var(--border, #2a2a31);
+  border-top: 1px solid var(--pl-color-border, #2a2a31);
 }
 /* The action row sits directly above the result, so the result never draws its own rule
    when the row is present — that would double the separator. */
@@ -343,8 +343,8 @@
   justify-content: space-between;
   gap: 16px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  border-bottom: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg);
 }
 
 /* macOS desktop (invisible title bar): inset the brand so it clears the native
@@ -388,8 +388,8 @@
 .metric span,
 .subagent-row span,
 .issue-row span {
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -417,13 +417,13 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px 8px;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--pl-color-border);
 }
 
 /* Right rail mirrors the left, bordered on its left edge (ADR 0035 D1). */
 .rail-right {
   border-right: none;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--pl-color-border);
 }
 
 .rail button {
@@ -434,9 +434,9 @@
   justify-content: center;
   gap: 4px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--pl-radius);
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   cursor: pointer;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
 }
@@ -445,22 +445,22 @@
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 10px;
 }
 
 .rail button:hover,
 .rail button.active {
-  border-color: var(--border);
-  background: var(--bg-hover);
-  color: var(--fg);
+  border-color: var(--pl-color-border);
+  background: var(--pl-color-bg-hover);
+  color: var(--pl-color-fg);
 }
 
 .stage {
   min-width: 0;
   min-height: 0;
   padding: 12px;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--pl-color-border);
 }
 
 .right-panel {
@@ -508,14 +508,14 @@
   content: "";
   width: 2px;
   height: 100%;
-  background: var(--border);
+  background: var(--pl-color-border);
   transition: background 120ms ease, width 120ms ease;
 }
 .resize-handle:hover::before,
 .resize-handle:focus-visible::before,
 .resize-handle:active::before {
   width: 4px;
-  background: color-mix(in srgb, var(--accent, #7c8cff) 60%, transparent);
+  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 60%, transparent);
 }
 .resize-handle:focus-visible {
   outline: none;
@@ -524,9 +524,9 @@
 .panel {
   min-width: 0;
   min-height: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
   overflow: hidden;
 }
 
@@ -551,10 +551,10 @@
 .pl-appshell__bottom > .pl-tabs-wrap {
   flex: 0 0 auto;
   padding: 8px 12px 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-bottom: none;
-  border-radius: var(--radius) var(--radius) 0 0;
-  background: var(--bg-panel);
+  border-radius: var(--pl-radius) var(--pl-radius) 0 0;
+  background: var(--pl-color-bg-raised);
 }
 .pl-appshell__col > .pl-tabs + .panel,
 .pl-appshell__col > .pl-tabs-wrap + .panel,
@@ -765,9 +765,9 @@ select:disabled {
   flex-direction: column;
   gap: 6px;
   padding: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 9px;
-  background: var(--bg-raised);
+  background: var(--pl-color-bg-raised);
 }
 .mcp-catalog-card-head {
   display: flex;
@@ -784,13 +784,13 @@ select:disabled {
   letter-spacing: 0.04em;
   padding: 1px 7px;
   border-radius: 999px;
-  background: var(--bg-hover);
-  color: var(--fg-muted);
+  background: var(--pl-color-bg-hover);
+  color: var(--pl-color-fg-subtle);
   white-space: nowrap;
 }
 .mcp-catalog-tagline {
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   margin: 0;
   flex: 1;
 }
@@ -806,11 +806,11 @@ select:disabled {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   text-decoration: none;
 }
 .mcp-catalog-docs:hover {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .mcp-catalog-back {
   display: inline-flex;
@@ -818,14 +818,14 @@ select:disabled {
   gap: 4px;
   background: none;
   border: 0;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   cursor: pointer;
   font-size: 12px;
   padding: 0;
   margin-bottom: 8px;
 }
 .mcp-catalog-back:hover {
-  color: var(--fg);
+  color: var(--pl-color-fg);
 }
 .mcp-catalog-config-head {
   display: flex;
@@ -838,7 +838,7 @@ select:disabled {
   gap: 4px;
   margin: 10px 0 0;
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 /* Scroll regions use @protolabsai/ui <ScrollArea> (.pl-scroll). Bridge the bits
@@ -851,7 +851,7 @@ select:disabled {
   scrollbar-gutter: stable;
 }
 .pl-scroll:focus-visible {
-  outline: 1px solid var(--fg);
+  outline: 1px solid var(--pl-color-fg);
   outline-offset: -2px;
 }
 
@@ -928,11 +928,11 @@ input,
 textarea,
 select {
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   /* token-bridged so inputs flip in light mode (was a hardcoded #0c0c0f dark). */
   background: var(--pl-color-bg-inset, #0c0c0f);
-  color: var(--fg);
+  color: var(--pl-color-fg);
   padding: 8px 10px;
 }
 
@@ -952,8 +952,8 @@ textarea {
 .field {
   display: grid;
   gap: 6px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -978,13 +978,13 @@ textarea {
 /* Identity panel — the SOUL.md field — moved to src/agent/identity.css (#832). */
 
 .field-hint {
-  color: var(--fg-subtle, var(--fg-muted));
+  color: var(--pl-color-fg-subtle);
   font-size: 11px;
   opacity: 0.75;
 }
 
 .field-warn {
-  color: var(--danger, #d97706);
+  color: var(--pl-color-status-error, #d97706);
   opacity: 1;
 }
 
@@ -1010,8 +1010,8 @@ textarea {
 .batch-task-row {
   display: grid;
   gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 10px;
 }
 
@@ -1021,8 +1021,8 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -1038,7 +1038,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 13px;
 }
 
@@ -1058,12 +1058,12 @@ textarea {
   max-height: 260px;
   overflow: auto;
   margin: 0 12px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
   padding: 10px;
-  color: var(--fg-secondary);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-muted);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
   white-space: pre-wrap;
 }
@@ -1081,7 +1081,7 @@ textarea {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--success);
+  background: var(--pl-color-status-success);
   animation: rail-dot-pulse 1.4s ease-in-out infinite;
 }
 @keyframes rail-dot-pulse {
@@ -1113,15 +1113,15 @@ textarea {
 }
 
 .inbox-pri-now {
-  background: var(--danger, #ff6b6b);
+  background: var(--pl-color-status-error, #ff6b6b);
 }
 
 .inbox-pri-next {
-  background: var(--accent, #7c8cff);
+  background: var(--pl-color-accent, #7c8cff);
 }
 
 .inbox-pri-later {
-  background: var(--fg-tertiary, #555);
+  background: var(--pl-color-fg-subtle, #555);
 }
 
 /* Live event-stream indicator (ADR 0003) — moved to src/inbox/inbox.css (#832). */
@@ -1130,7 +1130,7 @@ textarea {
    .workflow-failed below which is shared (TasksPanel renders it too). */
 .workflow-failed {
   margin: 0 12px;
-  color: var(--danger, #ff6b6b);
+  color: var(--pl-color-status-error, #ff6b6b);
   font-size: 13px;
 }
 
@@ -1138,8 +1138,8 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
-  border-bottom: 1px solid var(--border);
-  background: var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
+  background: var(--pl-color-border);
 }
 
 .metric {
@@ -1150,7 +1150,7 @@ textarea {
   align-content: center;
   column-gap: 8px;
   row-gap: 0;
-  background: var(--bg-panel);
+  background: var(--pl-color-bg-raised);
   padding: 6px 12px;
 }
 
@@ -1174,7 +1174,7 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
   padding: 8px 12px;
 }
 
@@ -1197,8 +1197,8 @@ textarea {
 /* What the subagent DOES (#1660) — plain prose (not the mono tools line), clamped:
    the registry descriptions are written for the model and run several sentences. */
 .subagent-row span.subagent-desc {
-  color: var(--fg);
-  font-family: var(--font-sans);
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-sans);
   font-size: 12px;
   line-height: 1.4;
   display: -webkit-box;
@@ -1210,7 +1210,7 @@ textarea {
 .notes-editor {
   height: 100%;
   border: 0;
-  border-radius: 0 0 var(--radius) var(--radius);
+  border-radius: 0 0 var(--pl-radius) var(--pl-radius);
   background: transparent;
   padding: 12px;
 }
@@ -1220,16 +1220,16 @@ textarea {
   gap: 6px;
   overflow-x: auto;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 
 .notes-tabbar button {
   max-width: 140px;
   height: 28px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--pl-radius);
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   padding: 0 9px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1239,9 +1239,9 @@ textarea {
 
 .notes-tabbar button.active,
 .notes-tabbar button:hover {
-  border-color: var(--border);
-  background: var(--bg-hover);
-  color: var(--fg);
+  border-color: var(--pl-color-border);
+  background: var(--pl-color-bg-hover);
+  color: var(--pl-color-fg);
 }
 
 .notes-meta {
@@ -1250,7 +1250,7 @@ textarea {
   gap: 8px;
   align-items: center;
   padding: 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 
 .notes-meta input {
@@ -1262,7 +1262,7 @@ textarea {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 
 .issue-create-meta {
@@ -1285,7 +1285,7 @@ textarea {
   justify-content: center;
   gap: 8px;
   padding: 28px 16px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 13px;
 }
 
@@ -1296,13 +1296,13 @@ textarea {
   gap: 8px 10px;
   margin: 12px;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--error) 6%, transparent);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: color-mix(in srgb, var(--pl-color-status-error) 6%, transparent);
 }
 
 .panel-error svg:first-child {
-  color: var(--error);
+  color: var(--pl-color-status-error);
 }
 
 .panel-error > div {
@@ -1316,7 +1316,7 @@ textarea {
 }
 
 .panel-error span {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
   word-break: break-word;
 }
@@ -1332,7 +1332,7 @@ textarea {
 
 .issue-group {
   min-width: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 
 .issue-group:last-child {
@@ -1348,11 +1348,11 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-inset);
   padding: 6px 10px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -1389,7 +1389,7 @@ textarea {
   min-height: 36px;
   display: grid;
   gap: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
   padding: 10px;
 }
 
@@ -1426,19 +1426,19 @@ textarea {
   min-height: 20px;
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 1px 6px;
 }
 
 .issue-badges .issue-time {
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .issue-description-block {
   min-width: 0;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -1449,14 +1449,14 @@ textarea {
 }
 
 .issue-description-block summary:focus-visible {
-  outline: 1px solid var(--fg);
+  outline: 1px solid var(--pl-color-fg);
   outline-offset: 2px;
 }
 
 .issue-description {
   margin-top: 6px;
-  color: var(--fg-secondary);
-  font-family: var(--font-sans);
+  color: var(--pl-color-fg-muted);
+  font-family: var(--pl-font-sans);
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -1500,7 +1500,7 @@ textarea {
   width: 28px;
   height: 4px;
   border-radius: 999px;
-  background: var(--border-strong);
+  background: var(--pl-color-border-strong);
 }
 
 .setup-progress span.done,
@@ -1513,9 +1513,9 @@ textarea {
 }
 
 .setup-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
 }
 
 .setup-step {
@@ -1531,8 +1531,8 @@ textarea {
 }
 
 .setup-heading p {
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -1542,7 +1542,7 @@ textarea {
   display: grid;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--brand-violet) 36%, transparent);
-  border-radius: var(--radius);
+  border-radius: var(--pl-radius);
   color: var(--brand-violet-light);
 }
 
@@ -1560,14 +1560,14 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 8px 10px;
 }
 
 .status-line {
   justify-content: flex-start;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 
 .status-line svg {
@@ -1586,12 +1586,12 @@ textarea {
    ellipsis-clipped status-line labels). */
 .setup-intro {
   margin: 0;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 13px;
   line-height: 1.55;
 }
 .setup-intro-foot {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
 }
 
@@ -1621,7 +1621,7 @@ textarea {
 .setup-editor {
   min-height: 240px;
   resize: vertical;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 12px;
 }
 
@@ -1632,27 +1632,27 @@ textarea {
 .setup-error,
 .setup-message {
   margin: 0 18px;
-  border-radius: var(--radius);
+  border-radius: var(--pl-radius);
   padding: 9px 10px;
 }
 
 .setup-error {
-  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
-  background: color-mix(in srgb, var(--error) 14%, transparent);
-  color: var(--error);
+  border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 30%, transparent);
+  background: color-mix(in srgb, var(--pl-color-status-error) 14%, transparent);
+  color: var(--pl-color-status-error);
 }
 
 .setup-message {
-  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--pl-color-status-success) 28%, transparent);
+  background: color-mix(in srgb, var(--pl-color-status-success) 16%, transparent);
+  color: var(--pl-color-status-success);
 }
 
 /* "Test connection" result line in the model step. */
 /* Short explanatory line under a field/step (replaces ad-hoc inline `opacity` smalls). */
 .setup-hint {
   margin: 8px 0 0;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -1663,13 +1663,13 @@ textarea {
   padding: 0;
   border: none;
   background: none;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
 }
 .archetype-preview-link:hover {
-  color: var(--fg);
+  color: var(--pl-color-fg);
   text-decoration: underline;
 }
 
@@ -1678,7 +1678,7 @@ textarea {
 .archetype-runtime-notice {
   margin: 8px 0 0;
   font-size: 12px;
-  color: var(--warning);
+  color: var(--pl-color-status-warning);
 }
 .archetype-preview {
   display: flex;
@@ -1693,8 +1693,8 @@ textarea {
   gap: 8px;
 }
 .archetype-preview-member {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 10px 12px;
 }
 .archetype-preview-member-head {
@@ -1704,13 +1704,13 @@ textarea {
 }
 .archetype-preview-desc {
   margin: 4px 0 0;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   font-size: 12.5px;
   line-height: 1.45;
 }
 .archetype-preview-muted {
   margin: 4px 0 0;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
 }
 .archetype-preview-skills {
@@ -1720,18 +1720,18 @@ textarea {
   margin-top: 8px;
 }
 .archetype-preview-chip {
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 999px;
   padding: 1px 8px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 11px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .archetype-preview-soul {
   margin: 6px 0 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
   font-size: 11.5px;
   line-height: 1.5;
@@ -1748,7 +1748,7 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   padding: 18px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--pl-color-border);
 }
 
 /* The app `.spin` keyframe is retired — busy spinners now come from the DS
@@ -1810,7 +1810,7 @@ textarea {
   .setup-actions {
     position: sticky;
     bottom: 0;
-    background: var(--bg-panel);
+    background: var(--pl-color-bg-raised);
   }
 
   /* Touch ergonomics: the DS icon button is 30px (26px in --sm) — below the ~44px
@@ -1842,8 +1842,8 @@ textarea {
 .settings-status {
   margin: 0 0 10px;
   font-size: 0.8rem;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
+  color: var(--pl-color-fg-subtle);
+  font-family: var(--pl-font-mono);
 }
 .settings-help-link,
 .setup-link {
@@ -1868,35 +1868,35 @@ textarea {
   width: 100%;
   padding: 8px 12px;
   margin-bottom: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-raised);
-  color: var(--fg);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg);
   font-size: 13px;
 }
-.playbook-search:focus { outline: none; border-color: var(--border-strong); }
+.playbook-search:focus { outline: none; border-color: var(--pl-color-border-strong); }
 .playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .playbook-card {
   display: flex;
   justify-content: space-between;
   gap: 16px;
   padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-raised);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
 }
-.playbook-card:hover { border-color: var(--border-strong); }
+.playbook-card:hover { border-color: var(--pl-color-border-strong); }
 .playbook-main { min-width: 0; }
 .playbook-title { display: flex; align-items: center; gap: 8px; }
 .playbook-title strong { font-size: 13.5px; }
 /* .playbook-badge / .pinned / .learned retired (#832) — pinned/learned/domain/
    finding-type tags are now DS <Badge> (info / success / neutral). */
-.playbook-desc { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-secondary); }
+.playbook-desc { margin: 6px 0 0; font-size: 12.5px; color: var(--pl-color-fg-muted); }
 .playbook-tools { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
-.playbook-tools code { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--bg-hover); color: var(--fg-muted); }
+.playbook-tools code { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); }
 .playbook-meta {
   display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-  font-size: 11.5px; color: var(--fg-muted); white-space: nowrap;
+  font-size: 11.5px; color: var(--pl-color-fg-subtle); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1917,12 +1917,12 @@ textarea {
 .kb-group-header {
   flex: 1; min-width: 0;
   display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--bg-raised); color: var(--fg); cursor: pointer; text-align: left;
+  padding: 8px 12px; border: 1px solid var(--pl-color-border); border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised); color: var(--pl-color-fg); cursor: pointer; text-align: left;
 }
-.kb-group-header:hover { border-color: var(--border-strong); }
+.kb-group-header:hover { border-color: var(--pl-color-border-strong); }
 .kb-group-delete { flex: none; }
-.kb-group-caret { flex: none; color: var(--fg-muted); transition: transform 0.12s ease; }
+.kb-group-caret { flex: none; color: var(--pl-color-fg-subtle); transition: transform 0.12s ease; }
 .kb-group-title {
   flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1943,30 +1943,30 @@ textarea {
   border: 1px dashed var(--pl-color-border);
   border-radius: 8px;
   background: var(--pl-color-bg-inset);
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 13px;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .knowledge-ingest-drop.is-drag {
-  border-color: var(--accent, #7c8cff);
+  border-color: var(--pl-color-accent, #7c8cff);
   border-style: solid;
   background: var(--pl-color-bg-raised);
 }
 .knowledge-ingest-drop.is-busy { opacity: 0.6; pointer-events: none; }
 .knowledge-ingest-pick {
-  color: var(--accent, #7c8cff);
+  color: var(--pl-color-accent, #7c8cff);
   cursor: pointer;
   text-decoration: underline;
   font-weight: 500;
 }
-.knowledge-ingest-note { color: var(--fg-muted); font-size: 12px; align-self: center; }
+.knowledge-ingest-note { color: var(--pl-color-fg-subtle); font-size: 12px; align-self: center; }
 
 /* Ingest preview (dry-run gate, #1801) — shown in place of the drop-zone once a
    source is picked; Confirm ingests, Cancel returns to selection. */
 .knowledge-ingest-preview { display: flex; flex-direction: column; gap: 10px; }
 .knowledge-ingest-preview-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .knowledge-ingest-preview-source {
-  font-size: 12px; color: var(--fg-muted);
+  font-size: 12px; color: var(--pl-color-fg-subtle);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
 .knowledge-ingest-preview-snippet {
@@ -1984,8 +1984,8 @@ textarea {
 /* Plugin-contributed console views (ADR 0026) — optional subnav above, iframe fills. */
 .plugin-view { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .plugin-view-body { position: relative; flex: 1; min-height: 0; }
-.plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--bg); display: block; }
-.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--fg-muted); font-size: 13px; }
+.plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--pl-color-bg); display: block; }
+.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--pl-color-fg-subtle); font-size: 13px; }
 /* A plugin view hosted in a utility-widget DIALOG (vs the stage): give it a fixed height
    so the iframe has room to fill (the stage normally supplies that via its flex column). */
 .plugin-widget-dialog { display: flex; flex-direction: column; height: 70vh; height: 70dvh; min-height: 0; }
@@ -1995,7 +1995,7 @@ textarea {
    .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint
    + .btn-icon.danger:hover) — moved to src/settings/plugins.css (#832). The bare
    .plugin-row stays here: it's shared with the MCP panel + the Plugins surface. */
-.plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 9px; }
+.plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: var(--pl-color-bg-raised); border: 1px solid var(--pl-color-border); border-radius: 9px; }
 
 /* Federated plugin view (ADR 0034) — loading + bounded error card (D6). */
 .federated-loading,
@@ -2005,16 +2005,16 @@ textarea {
   gap: 8px;
   padding: 14px;
   font-size: 0.85rem;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 .federated-loading { align-items: center; }
-.federated-error { color: var(--warning); }
-.federated-error strong { color: var(--fg); }
+.federated-error { color: var(--pl-color-status-warning); }
+.federated-error strong { color: var(--pl-color-fg); }
 .federated-error-detail {
   margin: 4px 0 8px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 0.78rem;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   word-break: break-word;
 }
 
@@ -2046,7 +2046,7 @@ textarea {
   padding: 0;
   border: none;
   background: none;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -2072,7 +2072,7 @@ textarea {
 }
 .field-hint {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 
 /* Topbar fleet switcher (ADR 0042) — the agent name as a DS Menu trigger (#1078).
@@ -2087,14 +2087,14 @@ textarea {
   border: none;
   padding: 2px 4px;
   margin: -2px -4px;
-  border-radius: var(--radius);
+  border-radius: var(--pl-radius);
   color: inherit;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
 }
 .fleet-switcher-trigger:hover {
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 
 .fleet-switcher-name {
@@ -2105,7 +2105,7 @@ textarea {
 }
 .fleet-switcher-check {
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--pl-color-accent);
 }
 
 /* Tooltip-wrapped menu row (#1708 — the disabled "Fleet settings" item on a fleet
@@ -2223,8 +2223,8 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 10px 12px;
 }
 .setup-postinstall-info {
@@ -2233,12 +2233,12 @@ textarea {
   gap: 2px;
 }
 .setup-postinstall-info > span {
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
   font-size: 12px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
 }
 .setup-postinstall-error {
-  color: var(--error);
+  color: var(--pl-color-status-error);
   font-size: 12px;
 }
 

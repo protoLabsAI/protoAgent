@@ -242,7 +242,7 @@
   background: var(--pl-color-bg-raised, var(--pl-color-bg));
   border: 1px solid var(--pl-color-border-strong, var(--pl-color-border));
   border-radius: 10px;
-  box-shadow: 0 -10px 28px -14px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--pl-shadow-popover, 0 -10px 28px -14px rgba(0, 0, 0, 0.45));
 }
 .flr__mention {
   display: flex;

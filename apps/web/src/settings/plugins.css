@@ -38,20 +38,20 @@
 .plugin-install-form { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
 /* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input). */
 .plugin-install-form input { flex: 1; min-width: 220px; }
-.plugin-install-status { font-size: 12px; color: var(--fg-secondary); margin: 4px 0 10px; }
+.plugin-install-status { font-size: 12px; color: var(--pl-color-fg-muted); margin: 4px 0 10px; }
 /* .plugin-sync-banner retired — the locked-but-missing notice is a DS <Alert status="warning"> now. */
 .plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .plugin-row-main { flex: 1; min-width: 0; }
 .plugin-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.plugin-ver { font-size: 11px; color: var(--fg-muted); }
+.plugin-ver { font-size: 11px; color: var(--pl-color-fg-subtle); }
 /* .plugin-state* retired — enabled / not-enabled / missing / local are DS <Badge>s now. */
-.plugin-desc { font-size: 12px; color: var(--fg-secondary); margin: 4px 0; }
-.plugin-meta { font-size: 11px; color: var(--fg-muted); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
-.plugin-review { font-size: 11px; color: var(--fg-muted); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
-.plugin-review .warn { color: var(--warning); display: inline-flex; align-items: center; gap: 3px; }
-.plugin-enable-hint { font-size: 11px; color: var(--fg-secondary); margin: 6px 0 0; }
-.btn-icon.danger:hover { color: var(--danger); }
-.plugin-restart-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plugin-desc { font-size: 12px; color: var(--pl-color-fg-muted); margin: 4px 0; }
+.plugin-meta { font-size: 11px; color: var(--pl-color-fg-subtle); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
+.plugin-review { font-size: 11px; color: var(--pl-color-fg-subtle); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.plugin-review .warn { color: var(--pl-color-status-warning); display: inline-flex; align-items: center; gap: 3px; }
+.plugin-enable-hint { font-size: 11px; color: var(--pl-color-fg-muted); margin: 6px 0 0; }
+.btn-icon.danger:hover { color: var(--pl-color-status-error); }
+.plugin-restart-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--pl-color-border); }
 .plugin-restart-row > span { margin: 0; }
 
 /* Discover (ADR 0059) — the in-app official-plugin directory: search + category
@@ -61,14 +61,14 @@
    styling now; the controls row just sizes the search to fill. */
 .plugin-search { flex: 1; min-width: 200px; }
 .plugin-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-.plugin-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-raised); }
+.plugin-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--pl-color-border); border-radius: 9px; background: var(--pl-color-bg-raised); }
 .plugin-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .plugin-card-head strong { font-size: 14px; }
-.plugin-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--bg-hover); color: var(--fg-muted); white-space: nowrap; }
-.plugin-card-tagline { font-size: 12px; color: var(--fg-secondary); margin: 0; flex: 1; }
+.plugin-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); white-space: nowrap; }
+.plugin-card-tagline { font-size: 12px; color: var(--pl-color-fg-muted); margin: 0; flex: 1; }
 .plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-muted); text-decoration: none; }
-.plugin-card-repo:hover { color: var(--fg-secondary); }
+.plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--pl-color-fg-subtle); text-decoration: none; }
+.plugin-card-repo:hover { color: var(--pl-color-fg-muted); }
 
 /* Installed plugins TABLE — the list outgrew the two-section row layout once a box
    could hold dozens of plugins; now one sortable/filterable table (search + status
@@ -86,11 +86,11 @@
   background: none; border: 0; padding: 0; cursor: pointer;
   font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
 }
-.plugin-th-btn:hover { color: var(--fg); }
+.plugin-th-btn:hover { color: var(--pl-color-fg); }
 /* Chips live in an inner flex wrapper — flexing the <td> itself would knock it out
    of table-cell layout. */
 .plugin-status-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.plugin-cell-contrib { font-size: 12px; color: var(--fg-secondary); white-space: nowrap; }
+.plugin-cell-contrib { font-size: 12px; color: var(--pl-color-fg-muted); white-space: nowrap; }
 /* Name · version · badge on one baseline-aligned line with real breathing room
    (the old layout jammed the version + badge straight against the name). */
 .plugin-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
@@ -99,7 +99,7 @@
    verbose manifest can't stretch every row; the full text rides the title attribute. */
 .plugin-row-desc {
   font-size: 12px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   margin: 3px 0 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -109,9 +109,9 @@
 }
 .plugin-row-head .plugin-ver { font-weight: 400; }
 .plugin-cell-actions .plugin-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-shrink: 0; }
-.plugin-row-danger:hover:not(:disabled) { color: var(--danger); }
+.plugin-row-danger:hover:not(:disabled) { color: var(--pl-color-status-error); }
 .settings-flat-group { display: flex; flex-direction: column; }
-.plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--pl-color-border); }
 
 /* Category filter overflow (#2319). The DS segmented Tabs is an `inline-flex` strip with
    no max-width and no scroll, and its `responsive` collapse keys on the CONTAINER's width

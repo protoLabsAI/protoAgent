@@ -67,7 +67,7 @@
   min-height: 0;
   overflow-y: auto;
   padding-right: 12px;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--pl-color-border);
 }
 /* The content column hosts the section's full .stage-panel; let it own its scroll.
    It's a size container so the field rows can stack when the column is narrow (the
@@ -112,7 +112,7 @@
     padding-right: 0;
     padding-bottom: 10px;
     border-right: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--pl-color-border);
   }
   .settings-shell > .pl-sidenav-wrap--responsive > .pl-sidenav {
     display: none;
@@ -126,7 +126,7 @@
    tint so field labels render at full contrast, and let the dirty-count badge sit
    inline in the trigger title. */
 .settings-groups { margin-bottom: 16px; }
-.settings-groups .pl-accordion__panel { color: var(--fg); padding-top: var(--pl-space-2); }
+.settings-groups .pl-accordion__panel { color: var(--pl-color-fg); padding-top: var(--pl-space-2); }
 .settings-group-head {
   display: inline-flex;
   align-items: center;
@@ -181,7 +181,7 @@
 }
 .settings-inline-status {
   font-size: 0.8rem;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 .setting-row {
   display: grid;
@@ -189,7 +189,7 @@
   gap: 28px;
   align-items: center;
   padding: 26px 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 .setting-row.dirty {
   /* subtle marker that this field has unsaved edits */
@@ -202,14 +202,14 @@
   align-items: center;
   gap: 7px;
   font-size: 0.86rem;
-  color: var(--fg);
+  color: var(--pl-color-fg);
 }
 /* .setting-restart retired — the "restart" / "box-shared" markers are DS <Badge>s now. */
 .setting-desc {
   margin: 3px 0 0;
   font-size: 0.76rem;
   line-height: 1.45;
-  color: var(--fg-muted);
+  color: var(--pl-color-fg-subtle);
 }
 /* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
 .setting-inheritance {
@@ -224,21 +224,21 @@
   margin: 4px 0 0;
   font-size: 0.74rem;
   line-height: 1.4;
-  color: var(--warning);
+  color: var(--pl-color-status-warning);
 }
 .setting-control { min-width: 0; }
 /* The DS control (Input/Select/Combobox/Textarea → .pl-input) owns its chrome,
    sizing, and accent focus ring. The only deviation we keep is mono for the
    technical settings values (model names, API bases, paths), which read better
    monospaced — we no longer re-border, re-background, or override the focus. */
-.setting-input { font-family: var(--font-mono); }
+.setting-input { font-family: var(--pl-font-mono); }
 .setting-toggle {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 0.8rem;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
 
@@ -261,7 +261,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--pl-color-border);
   padding-top: 14px;
   margin-top: 6px;
 }
@@ -278,7 +278,7 @@
 }
 .secrets-status-meta {
   font-size: 0.8rem;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }
 .secrets-status-vars {
   display: flex;
@@ -286,10 +286,10 @@
   gap: 6px;
 }
 .secrets-status-vars code {
-  font-family: var(--font-mono);
+  font-family: var(--pl-font-mono);
   font-size: 0.72rem;
   padding: 2px 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--pl-color-border);
   border-radius: 6px;
-  color: var(--fg-secondary);
+  color: var(--pl-color-fg-muted);
 }

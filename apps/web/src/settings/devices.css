@@ -4,10 +4,10 @@
    header/padding/scroll/row treatment can't drift away from the rest of Settings. */
 
 .devices-error {
-  color: var(--fg);
+  color: var(--pl-color-fg);
   padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
 }
 
@@ -17,9 +17,9 @@
   align-items: center;
   margin: 10px 0 14px;
   padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-raised, var(--bg));
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
 }
 
 /* The server sends an SVG sized to its own viewBox; pin it to a scannable square on a
@@ -62,15 +62,15 @@
 }
 .devices-host {
   padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   background: none;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-size: 11px;
 }
 .devices-host.on {
-  background: var(--bg-hover);
-  border-color: var(--border-strong, var(--border));
+  background: var(--pl-color-bg-hover);
+  border-color: var(--pl-color-border-strong, var(--pl-color-border));
 }
 
 /* First load — a spinner beats an empty panel, which reads as "no devices". */
@@ -102,9 +102,9 @@
   gap: 8px;
   margin: 10px 0 14px;
   padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-raised, var(--bg));
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
 }
 
 /* A minted token, shown ONCE. It's a secret the operator has no other way to see —
@@ -114,8 +114,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
 }
 .devices-token code {

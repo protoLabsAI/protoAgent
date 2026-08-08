@@ -8,7 +8,7 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg);
+  background: var(--pl-color-bg);
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────────
@@ -22,8 +22,8 @@
   padding-top: env(safe-area-inset-top);
   min-height: calc(52px + env(safe-area-inset-top));
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-raised, var(--bg));
+  border-bottom: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
 }
 
 .mshell-head-btn {
@@ -36,8 +36,8 @@
   min-height: 44px;
   border: none;
   background: none;
-  color: var(--fg);
-  border-radius: var(--radius);
+  color: var(--pl-color-fg);
+  border-radius: var(--pl-radius);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -56,7 +56,7 @@
   padding: 0 4px;
   border: none;
   background: none;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-size: 15px;
   font-weight: 600;
   -webkit-tap-highlight-color: transparent;
@@ -100,7 +100,7 @@
   z-index: 2;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: var(--pl-color-bg);
   animation: mshell-push-in 0.22s cubic-bezier(0.32, 0.72, 0, 1);
 }
 @keyframes mshell-push-in {
@@ -183,7 +183,7 @@
   max-height: 70dvh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-raised, var(--bg));
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding-bottom: env(safe-area-inset-bottom);
@@ -211,7 +211,7 @@
   width: 36px;
   height: 4px;
   border-radius: 2px;
-  background: var(--border);
+  background: var(--pl-color-border);
   margin: 8px auto 4px;
   flex: 0 0 auto;
 }
@@ -234,10 +234,10 @@
   gap: 5px;
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   background: none;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-size: 14px;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
@@ -257,10 +257,10 @@
 .session-sheet-row {
   display: flex;
   align-items: center;
-  border-radius: var(--radius);
+  border-radius: var(--pl-radius);
 }
 .session-sheet-row.is-current {
-  background: var(--bg-hover);
+  background: var(--pl-color-bg-hover);
 }
 .session-sheet-pick {
   flex: 1;
@@ -272,7 +272,7 @@
   padding: 0 8px;
   border: none;
   background: none;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   font-size: 15px;
   text-align: left;
   -webkit-tap-highlight-color: transparent;
@@ -296,7 +296,8 @@
   min-height: 44px;
   border: none;
   background: none;
-  color: var(--fg-subtle, var(--fg));
+  /* --fg-subtle was never defined, so this always resolved to the fallback — keep it. */
+  color: var(--pl-color-fg);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }

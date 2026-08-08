@@ -29,12 +29,12 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
   padding: 12px 18px;
-  background: color-mix(in srgb, var(--fg) 3%, transparent);
-  color: var(--fg);
-  font-family: var(--font-sans, inherit);
+  background: color-mix(in srgb, var(--pl-color-fg) 3%, transparent);
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-sans, inherit);
   cursor: text;
 }
 .soul-preview > :first-child { margin-top: 0; }
@@ -72,12 +72,12 @@
   overflow-y: auto;
 }
 .soul-history-item {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--fg) 2%, transparent);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: color-mix(in srgb, var(--pl-color-fg) 2%, transparent);
 }
 .soul-history-item.is-current {
-  border-color: color-mix(in srgb, var(--accent, var(--fg)) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--pl-color-accent, var(--pl-color-fg)) 45%, var(--pl-color-border));
 }
 .soul-history-row {
   display: flex;
@@ -95,7 +95,7 @@
   border: 0;
   padding: 2px;
   cursor: pointer;
-  color: var(--fg);
+  color: var(--pl-color-fg);
   text-align: left;
   font: inherit;
 }
@@ -104,7 +104,7 @@
   flex-shrink: 0;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--fg) 78%, transparent);
+  color: color-mix(in srgb, var(--pl-color-fg) 78%, transparent);
 }
 .soul-history-badge {
   flex-shrink: 0;
@@ -114,8 +114,8 @@
   text-transform: uppercase;
   padding: 1px 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent, var(--fg)) 18%, transparent);
-  color: color-mix(in srgb, var(--accent, var(--fg)) 90%, var(--fg));
+  background: color-mix(in srgb, var(--pl-color-accent, var(--pl-color-fg)) 18%, transparent);
+  color: color-mix(in srgb, var(--pl-color-accent, var(--pl-color-fg)) 90%, var(--pl-color-fg));
 }
 .soul-history-preview {
   flex: 1;
@@ -124,7 +124,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: color-mix(in srgb, var(--fg) 52%, transparent);
+  color: color-mix(in srgb, var(--pl-color-fg) 52%, transparent);
 }
 .soul-history-confirm {
   display: flex;
@@ -137,12 +137,12 @@
   padding: 10px 12px;
   max-height: 260px;
   overflow: auto;
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  font-family: var(--font-mono, monospace);
+  border-radius: var(--pl-radius);
+  background: color-mix(in srgb, var(--pl-color-fg) 4%, transparent);
+  font-family: var(--pl-font-mono, monospace);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--fg);
+  color: var(--pl-color-fg);
 }
