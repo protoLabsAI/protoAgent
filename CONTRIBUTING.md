@@ -7,8 +7,22 @@ before sending code.
 By participating in this project you agree to abide by the
 [Code of Conduct](./CODE_OF_CONDUCT.md).
 
-This file covers the one thing GitHub surfaces directly on the *New issue* page:
-**what a good issue needs.**
+This file covers what GitHub surfaces directly on the *New issue* and *New pull
+request* pages: **what a good issue needs**, and the three PR habits that keep
+an external PR mergeable.
+
+## Sending a pull request
+
+The gates and gotchas live in [PROTO.md](./PROTO.md) — run the "Must pass before
+opening a PR" table locally first. Beyond green checks:
+
+1. **Add a changelog fragment** — `changelog.d/<pr>.<kind>.md`, a markdown
+   bullet with a **bold lead-in** ending in `(#NNNN)`. Shape and kinds:
+   [changelog.d/README.md](./changelog.d/README.md). The `Changelog entry` check
+   fails without one (or the `skip-changelog` label for CI/test-only changes).
+2. **Tick "Allow edits by maintainers"** so we can push small fixups (a
+   fragment, a review nit) to your branch instead of superseding your PR.
+3. **Base on current `main`** — the suite and gates move fast here.
 
 ## Filing an issue
 
