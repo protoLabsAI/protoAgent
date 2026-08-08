@@ -56,7 +56,15 @@ VIEW_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <script type="module">
 let kit;
 try { kit = await import(BASE + "/_ds/plugin-kit.js"); }
-catch (e) { kit = { initPluginView(){}, apiFetch: (p, i) => fetch(BASE + p, i) }; }
+catch (e) {
+  // Fail LOUDLY and name the real cause (#2392): the old bearer-less fetch substitute
+  // turned "kit missing" into an HTTP 401 that sent operators auditing tokens.
+  const err = document.getElementById("err");
+  err.hidden = false;
+  err.textContent = "The DS plugin kit failed to load — the console bundle (/_ds) is missing or stale " +
+    "(a source install without a web build, or a packaging regression). This view cannot authenticate without it.";
+  throw e;
+}
 const api = async (p, init) => {
   const r = await kit.apiFetch(p, init);
   const d = await r.json().catch(() => { throw new Error("HTTP " + r.status + " (non-JSON response)"); });

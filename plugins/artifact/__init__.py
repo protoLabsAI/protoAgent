@@ -1210,11 +1210,20 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   // re-themes onto the --pl-* tokens) and slug-aware authed fetches — replacing the
   // hand-rolled listener/theme map this page carried. plugin-kit.js is an ES MODULE,
   // so it loads via dynamic import (a classic <script src> throws on its exports;
-  // see protoAgent docs/how-to/build-a-plugin-view.md). Older host without /_ds:
-  // fall back to a tokenless same-origin shim.
+  // see protoAgent docs/how-to/build-a-plugin-view.md). If the kit fails to load,
+  // fail LOUDLY and name it (#2392) — a tokenless shim silently 401s every gated
+  // call on an authed host, and the kit ships with the host bundle on every tier,
+  // so absence means a broken/partial install, not a downlevel host to paper over.
   let kit;
   try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
-  catch (e) { kit = { initPluginView(){}, apiFetch: (p, i) => fetch(window.__base + p, i) }; }
+  catch (e) {
+    var kerr = document.createElement("div");
+    kerr.style.cssText = "padding:14px 16px;color:var(--pl-color-danger,#f85149);font:13px/1.5 var(--pl-font-sans,system-ui)";
+    kerr.textContent = "The DS plugin kit failed to load — the console bundle (/_ds) is missing or stale " +
+      "(a source install without a web build, or a packaging regression). Artifacts cannot authenticate without it.";
+    document.body.prepend(kerr);
+    throw e;
+  }
   // Store mirror: arts = [{id,kind,title,versions:[{code,ts,by}]}], curId = focused.
   // selId/selVer = the artifact + version the USER is viewing (selVer null = latest, so
   // it auto-follows new versions). followNewest jumps to the newest artifact on create

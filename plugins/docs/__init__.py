@@ -186,7 +186,16 @@ document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.cs
 </div>
 <script type="module">
 const base = window.__base;
-let kit; try { kit = await import(base+"/_ds/plugin-kit.js"); } catch(e){ kit = { initPluginView(){}, apiFetch:(p,i)=>fetch(base+p,i) }; }
+let kit;
+try { kit = await import(base+"/_ds/plugin-kit.js"); }
+catch(e){
+  // Fail LOUDLY and name the real cause (#2392). No bearer-less fetch substitute: the
+  // token arrives THROUGH the kit's handshake, so a fallback can only 401 — silently.
+  document.getElementById("list").innerHTML =
+    '<div class="empty">The DS plugin kit failed to load — the console bundle (/_ds) is missing or stale '+
+    '(a source install without a web build, or a packaging regression). Docs cannot authenticate without it.</div>';
+  throw e;
+}
 kit.initPluginView(()=>{});
 if (new URLSearchParams(location.search).get("mode")==="search") document.body.classList.add("mode-search");
 const $list=document.getElementById("list"), $reader=document.getElementById("reader"), $q=document.getElementById("q"), $back=document.getElementById("back");
@@ -194,7 +203,15 @@ const $list=document.getElementById("list"), $reader=document.getElementById("re
 const isPhone=()=>matchMedia("(max-width:767px)").matches;
 $back.onclick=()=>{ document.body.classList.remove("reading"); $reader.scrollTop=0; };
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-async function api(p){ try{ const r=await kit.apiFetch("/api/plugins/docs"+p); return r.ok?await r.json():null; }catch(e){ return null; } }
+// 404 → null is a NORMAL answer (the cross-reference handler probes candidate paths);
+// anything else non-ok THROWS — a 401 mapped to null renders exactly like "no docs" (#2392).
+async function api(p){
+  const r=await kit.apiFetch("/api/plugins/docs"+p);
+  if(r.status===404) return null;
+  if(!r.ok) throw new Error("HTTP "+r.status+(r.status===401?" — bearer missing or rejected":""));
+  return r.json();
+}
+const showErr=(el,e)=>{ el.innerHTML='<div class="empty">Couldn\\'t load docs — '+esc(String((e&&e.message)||e))+'</div>'; };
 const LIVE_DOCS="https://agent.protolabs.studio/docs/";  // Cloudflare build folds the docs in here (config.mts)
 const slugify=s=>String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").toLowerCase();
 let currentPath=null;
@@ -230,7 +247,10 @@ function renderDoc(path, d, anchor){
   [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
   scrollToAnchor(anchor);
 }
-async function openDoc(path){ const d=await fetchDoc(path); if(d) renderDoc(path,d); else $reader.innerHTML='<div class="empty">Could not load.</div>'; }
+async function openDoc(path){
+  try{ const d=await fetchDoc(path); if(d) renderDoc(path,d); else $reader.innerHTML='<div class="empty">Could not load.</div>'; }
+  catch(e){ showErr($reader,e); }
+}
 // In-content cross-reference links: don't let the click reload the target INSIDE this iframe
 // (cramped, loses the docs chrome). Resolve to a corpus doc → open in-panel (preferred);
 // else open the live docs site in a new tab (fallback). In-page anchors scroll the reader;
@@ -243,7 +263,9 @@ $reader.addEventListener("click", async (e)=>{
   e.preventDefault();
   const hi=href.indexOf("#"); const rawPath=hi>=0?href.slice(0,hi):href; const anchor=hi>=0?href.slice(hi+1):"";
   if(!rawPath){ scrollToAnchor(anchor); return; }
-  for(const c of candidatePaths(currentPath||"", rawPath)){ const d=await fetchDoc(c); if(d){ renderDoc(c,d,anchor); return; } }
+  // Probing tolerates absent docs (404→null); an auth/infra THROW falls through to the
+  // live site — the link's destination anyway — instead of dead-ending the click.
+  try{ for(const c of candidatePaths(currentPath||"", rawPath)){ const d=await fetchDoc(c); if(d){ renderDoc(c,d,anchor); return; } } }catch(e){}
   window.open(liveDocsUrl(currentPath||"", rawPath, anchor), "_blank", "noopener,noreferrer");
 });
 function renderTree(sections){
@@ -258,9 +280,12 @@ function renderResults(rows){
   [...$list.querySelectorAll(".res")].forEach(d=>d.onclick=()=>openDoc(d.dataset.path));
 }
 let tree=null;
-async function showTree(){ if(!tree){ const t=await api("/tree"); tree=(t&&t.sections)||[]; } renderTree(tree); }
+async function showTree(){
+  try{ if(!tree){ const t=await api("/tree"); tree=(t&&t.sections)||[]; } renderTree(tree); }
+  catch(e){ showErr($list,e); }  // tree stays null → the next call retries
+}
 let timer;
-$q.oninput=()=>{ clearTimeout(timer); timer=setTimeout(async()=>{ const q=$q.value.trim(); if(!q){ showTree(); return; } const r=await api("/search?q="+encodeURIComponent(q)); renderResults((r&&r.results)||[]); }, 180); };
+$q.oninput=()=>{ clearTimeout(timer); timer=setTimeout(async()=>{ const q=$q.value.trim(); if(!q){ showTree(); return; } try{ const r=await api("/search?q="+encodeURIComponent(q)); renderResults((r&&r.results)||[]); }catch(e){ showErr($list,e); } }, 180); };
 showTree();
 </script></body></html>
 """

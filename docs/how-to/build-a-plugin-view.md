@@ -56,6 +56,11 @@ The console serves the design-system kit same-origin at `<base>/_ds/plugin-kit.{
 </script>
 ```
 
+If the kit import fails, **fail loudly** (render an error naming the kit) — do **not**
+substitute a bare `fetch`. The bearer arrives *through* the kit's `protoagent:init`
+handshake, so a tokenless fallback can only 401 your gated data routes, silently or with
+a message that blames auth instead of the missing `/_ds` bundle (#2392).
+
 ## Next
 
 - **[Building a plugin view](/guides/building-react-plugin-views)** — the full guide: the `slot: "chat"`
