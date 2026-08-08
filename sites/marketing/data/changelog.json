@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.127.0",
+    "date": "2026-08-08",
+    "changes": [
+      "The devkit's rail view is now a live build-status page (#2401).",
+      "Plugin routers hot-remount on reload and unmount on disable (#2404).",
+      "Enabling a plugin on a fleet member no longer 401s its just-added view (#2405)."
+    ]
+  },
+  {
     "version": "v0.126.0",
     "date": "2026-08-07",
     "changes": [

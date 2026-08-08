@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.127.0] - 2026-08-08
+
+### Added
+- **The devkit's rail view is now a live build-status page (#2401).** ADR 0096 D8: every
+  plugin the agent built for itself, with live/failed badges, tool chips, and traceback
+  blocks for failures — auto-refreshing in place as the agent builds. The authoring guide
+  card stays at `/guide`.
+
+### Fixed
+- **Plugin routers hot-remount on reload and unmount on disable (#2404).** Iterating on a
+  plugin's console view goes live without a restart — previously the first-mounted route
+  served stale forever (the #942 class, hit within an hour of the self-building loop's
+  first live demo) — and disabling a view/router plugin no longer recommends a restart.
+
+- **Enabling a plugin on a fleet member no longer 401s its just-added view (#2405).** The
+  hub's member-public path cache now revalidates against the member on a miss (bounded
+  per slug), closing the enable→click race the self-building loop's instant rail refresh
+  made easy to hit.
+
 ## [0.126.0] - 2026-08-07
 
 ### Added
