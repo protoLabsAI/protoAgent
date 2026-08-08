@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { openDocument } from "../docviewer";
 import { api, ApiError } from "../lib/api";
 import type { PromptCall } from "../lib/types";
-import { budgetRows, callTabs, fmtTok, promptText, splitLine, usageLine } from "./promptView";
+import { budgetRows, callTabs, diffLine, fmtTok, promptText, sectionDiff, splitLine, usageLine } from "./promptView";
 
 export function openPromptViewer(taskId: string): void {
   openDocument({
@@ -24,6 +24,8 @@ export function openPromptViewer(taskId: string): void {
 
 function PromptViewerBody({ taskId }: { taskId: string }) {
   const [calls, setCalls] = useState<PromptCall[] | null>(null);
+  const [subs, setSubs] = useState<PromptCall[]>([]);
+  const [prev, setPrev] = useState<PromptCall | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "disabled" | "empty" | "error">("loading");
   const [error, setError] = useState("");
   const [active, setActive] = useState("0");
@@ -39,6 +41,8 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
           setStatus("disabled");
         } else {
           setCalls(res.calls);
+          setSubs(res.subagents ?? []);
+          setPrev(res.prev ?? null);
           setActive(String(res.calls[0]?.call_index ?? 0));
           setStatus("ready");
         }
@@ -84,9 +88,29 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
     return <div className="prompt-viewer__status">Couldn't load the prompt — {error}</div>;
   }
 
-  const call = calls.find((c) => String(c.call_index) === active) ?? calls[0];
+  // Tabs: main-loop calls, then any subagent calls nested under this turn (#2388 P3,
+  // keyed "sub:<i>" so they can't collide with main call indexes).
+  const call =
+    (active.startsWith("sub:") ? subs[Number(active.slice(4))] : undefined) ??
+    calls.find((c) => String(c.call_index) === active) ??
+    calls[0];
   const usage = usageLine(call);
   const budget = budgetRows(call);
+  // Diff anchor (#2388 P3): a later call diffs against the previous call of the SAME
+  // turn (in-payload); the first call diffs against the previous TURN's last call
+  // (`prev` — null on the first turn, an incognito gap, or a retention trim). Only
+  // meaningful when both sides carry P2 section rows; degrade honestly otherwise.
+  const isSub = active.startsWith("sub:");
+  const anchorCall = isSub ? null : (calls.find((c) => c.call_index === call.call_index - 1) ?? prev);
+  const anchorName = isSub
+    ? ""
+    : calls.some((c) => c.call_index === call.call_index - 1)
+      ? `call ${call.call_index}`
+      : "previous turn";
+  const deltas =
+    anchorCall && anchorCall.sections?.length && call.sections?.length
+      ? sectionDiff(anchorCall.sections, call.sections)
+      : null;
   const copy = () => {
     void navigator.clipboard.writeText(promptText(call)).then(() => {
       setCopied(true);
@@ -96,12 +120,15 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
 
   return (
     <div className="prompt-viewer">
-      {calls.length > 1 ? (
+      {calls.length > 1 || subs.length ? (
         <Tabs
           variant="segmented"
           responsive
           ariaLabel="model calls this turn"
-          items={callTabs(calls)}
+          items={[
+            ...callTabs(calls),
+            ...subs.map((s, i) => ({ id: `sub:${i}`, label: s.subagent_type || "subagent" })),
+          ]}
           active={active}
           onSelect={setActive}
         />
@@ -115,6 +142,11 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
           {copied ? "Copied" : "Copy"}
         </Button>
       </div>
+      {!isSub ? (
+        <div className="prompt-viewer__diff" aria-label="changes vs the comparison call">
+          {diffLine(deltas, anchorName)}
+        </div>
+      ) : null}
       {budget.length ? (
         <div className="prompt-viewer__budget" aria-label="context budget by section">
           {budget.map((row, i) => (

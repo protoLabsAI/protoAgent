@@ -13,9 +13,7 @@ from operator_api.prompt_routes import register_prompt_routes
 def _client(monkeypatch, *, capture=True):
     import runtime.state as rs
 
-    monkeypatch.setattr(
-        rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=capture), raising=False
-    )
+    monkeypatch.setattr(rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=capture), raising=False)
     app = FastAPI()
     register_prompt_routes(app)
     return TestClient(app)
@@ -74,3 +72,60 @@ def test_last_returns_sessions_newest_call(monkeypatch):
     # No captures yet for an unknown session → null call, not a 404 (the
     # /prompt note renders "nothing captured yet").
     assert c.get("/api/prompts/last?session_id=empty").json() == {"enabled": True, "call": None}
+
+
+# ── #2388 P3: subagents + prev on the task route; the preview route ───────────
+
+
+def test_task_detail_carries_subagents_and_prev(monkeypatch):
+    c = _client(monkeypatch)
+    store = prompt_snapshots()
+    store.record(task_id="turn-1", session_id="s-p3", stable_text="T1")
+    store.record(task_id="turn-2", session_id="s-p3", stable_text="T2")
+    store.record(parent_task_id="turn-2", subagent_type="researcher", stable_text="SUB")
+    body = c.get("/api/prompts/turn-2").json()
+    assert body["enabled"] is True and len(body["calls"]) == 1
+    assert [s["subagent_type"] for s in body["subagents"]] == ["researcher"]
+    # prev = the previous turn's last main call; subagent rows never anchor it.
+    assert body["prev"]["system"]["stable"] == "T1"
+    # The first turn has no anchor — null, never an error (#2388 degrade rule).
+    assert c.get("/api/prompts/turn-1").json()["prev"] is None
+
+
+def test_preview_runs_compose_without_recording(monkeypatch):
+    import runtime.state as rs
+
+    calls = {}
+
+    class _KM:
+        def compose_context(self, state, runtime=None, *, record=True):
+            calls["record"] = record
+            return {"context": "TAIL", "context_sections": [{"label": "Skills index", "chars": 4}]}
+
+    graph = SimpleNamespace(
+        system_prompt_parts=[("SOUL", "STABLE-A"), ("Guidelines", "STABLE-B")],
+        knowledge_middleware=_KM(),
+        aget_state=None,
+    )
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
+    body = c.get("/api/prompts/preview").json()
+    assert calls["record"] is False  # speculation must NOT write the injection log
+    call = body["call"]
+    assert call["preview"] is True
+    assert call["system"]["stable"] == "STABLE-A\n\nSTABLE-B"
+    assert call["system"]["context"] == "TAIL"
+    labels = [s["label"] for s in call["sections"]]
+    assert labels == ["SOUL", "Guidelines", "Skills index"]
+    assert call["usage"]["input_tokens"] == 0  # nothing ran
+
+
+def test_preview_degrades_without_graph_stamps(monkeypatch):
+    import runtime.state as rs
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "graph", SimpleNamespace(), raising=False)
+    body = c.get("/api/prompts/preview").json()
+    assert body["enabled"] is True and body["call"] is None and body["reason"]
+    c2 = _client(monkeypatch, capture=False)
+    assert c2.get("/api/prompts/preview").json()["enabled"] is False

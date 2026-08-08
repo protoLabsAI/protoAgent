@@ -9,6 +9,12 @@
   min-height: 0;
 }
 
+.prompt-viewer__diff {
+  font-size: 12px;
+  color: var(--pl-color-fg-muted);
+  padding: 2px 0 0;
+}
+
 .prompt-viewer__meta {
   display: flex;
   align-items: center;

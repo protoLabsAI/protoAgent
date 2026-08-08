@@ -265,9 +265,7 @@ class KnowledgeMiddleware(AgentMiddleware):
             if sched is not None:
                 jobs = list(sched.list_jobs())[:_WS_SCHED_CAP]
                 if jobs:
-                    lines = "\n".join(
-                        f"- {j.id} next={j.next_fire or '?'}: {(j.prompt or '')[:60]}" for j in jobs
-                    )
+                    lines = "\n".join(f"- {j.id} next={j.next_fire or '?'}: {(j.prompt or '')[:60]}" for j in jobs)
                     sections.append(f"PENDING SCHEDULES:\n{lines}")
         except Exception as exc:  # noqa: BLE001
             log.debug("[working_state] schedule read failed: %s", exc)
@@ -281,7 +279,16 @@ class KnowledgeMiddleware(AgentMiddleware):
         )
 
     def before_model(self, state, runtime) -> dict | None:
-        """Query knowledge store with last user message, inject context.
+        """Query knowledge store with last user message, inject context."""
+        return self.compose_context(state, runtime, record=True)
+
+    def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
+        """The dynamic-context composer behind ``before_model``.
+
+        ``record=False`` is the SPECULATIVE path (#2388 P3 next-call preview): it
+        runs the full dynamic layer — digest, hot memory, RAG retrieval, skill
+        index, working state — but skips the ADR 0069 D6 injection-log write, so
+        previewing a prompt never fabricates a "this entered the turn" record.
 
         Also prepends prior session summaries on the first call so the
         agent has cross-session continuity from the very first LLM turn.
@@ -390,7 +397,8 @@ class KnowledgeMiddleware(AgentMiddleware):
                 bits.append(f"{len(rag_ids)} docs")
             label = "Injected memory" + (f" ({' · '.join(bits)})" if bits else "")
             parts.append((label, _wrap_injected_memory(memory_parts)))
-            self._record_injection(state, memory_parts, digest_ids, hot_ids, rag_ids)
+            if record:
+                self._record_injection(state, memory_parts, digest_ids, hot_ids, rag_ids)
         if skill_block:
             parts.append(("Skills index", skill_block))
 

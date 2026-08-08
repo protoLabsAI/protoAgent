@@ -2,8 +2,10 @@
 
 **Status:** P1 + P2 shipped (2026-07-24) — capture middleware + store + routes +
 View-prompt dialog + `/prompt` + delete-purge, plus composer-annotated section
-budgets (`*_parts()` composers, per-section storage, breakdown UI). P3 (diffs,
-subagents, next-call preview) remains. Tracking issue:
+budgets (`*_parts()` composers, per-section storage, breakdown UI). P3 shipped 2026-08-08 (#2388):
+section-level diffs vs previous call/turn, subagent capture nested under the delegating
+tool-call id, and the explicit `/api/prompts/preview` speculative route
+(`compose_context(record=False)` — no injection-log write). Tracking issue:
 [#2243](https://github.com/protoLabsAI/protoAgent/issues/2243).
 **Owner:** console + `graph/middleware` + `observability`.
 

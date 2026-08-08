@@ -366,6 +366,22 @@ async def _run_subagent(
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
+    if getattr(config, "prompt_capture_enabled", False):
+        # #2388 P3: subagent prompts were invisible (P1 was main-loop only). The
+        # subagent stack has no PromptCache, so the whole system message captures
+        # as the stable half with a single labeled section; rows nest under the
+        # delegating tool-call id rather than claiming the turn's task_id.
+        from graph.middleware.prompt_capture import PromptCaptureMiddleware
+
+        _sub_prompt = build_subagent_prompt(subagent_type)
+        sub_middleware.append(
+            PromptCaptureMiddleware(
+                retention_days=getattr(config, "prompt_capture_retention_days", 30),
+                stable_sections=[{"label": f"{subagent_type} system prompt", "chars": len(_sub_prompt)}],
+                parent_task_id=parent_task_id or "",
+                subagent_type=subagent_type,
+            )
+        )
     if getattr(config, "enforcement_enabled", False) and (
         config.enforcement_disallowed_tools or config.enforcement_rate_limits
     ):
@@ -1092,6 +1108,14 @@ def create_agent_graph(
     # The denylist's complement — what ``tools.disabled`` dropped, kept as tool objects
     # so /api/tools can list them (name/description/category) as toggle-off rows.
     agent.disabled_tools = list(disabled_tools)
+    # #2388 P3 (true next-call preview): the prompt-preview route needs (a) the exact
+    # labeled stable parts THIS graph was built with, and (b) the live KnowledgeMiddleware
+    # so it can run compose_context(record=False) speculatively. Stamped like bound_tools —
+    # consumers read what's BOUND rather than re-deriving and drifting.
+    agent.system_prompt_parts = list(prompt_parts)
+    agent.knowledge_middleware = next(
+        (m for m in middleware if m.__class__.__name__ == "KnowledgeMiddleware"), None
+    )
     return agent
 
 

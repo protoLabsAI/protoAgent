@@ -76,3 +76,68 @@ export function promptNoteMarkdown(call: PromptCall, cap: number = PROMPT_NOTE_C
     : "";
   return `${header}\n\n\`\`\`\`text\n${shown}\n\`\`\`\`${tail}`;
 }
+
+// ── #2388 P3: section-level diff ─────────────────────────────────────────────
+
+/** One section-level change vs the comparison call. `delta` is chars (cur − prev). */
+export type SectionDelta = {
+  label: string;
+  kind: "added" | "removed" | "resized" | "relabeled";
+  delta: number;
+};
+
+/** Labels carry live counts ("Injected memory (2 sessions · 3 memories)") — match
+ *  sections across calls on the base name, so a count change reads as the SAME
+ *  section changing size, not a vanish+appear pair. */
+export const baseLabel = (l: string): string => l.replace(/\s*\(.*\)\s*$/, "");
+
+/** Section-level diff (#2388 P3): what appeared, vanished, or changed size between
+ *  two captured calls — computed from the P2 section rows, no text diffing. */
+export function sectionDiff(
+  prev: PromptSection[] | undefined | null,
+  cur: PromptSection[] | undefined | null,
+): SectionDelta[] {
+  const p = prev ?? [];
+  const c = cur ?? [];
+  const pby = new Map<string, PromptSection>();
+  for (const s of p) if (!pby.has(baseLabel(s.label))) pby.set(baseLabel(s.label), s);
+  const seen = new Set<string>();
+  const out: SectionDelta[] = [];
+  for (const s of c) {
+    const key = baseLabel(s.label);
+    seen.add(key);
+    const was = pby.get(key);
+    if (!was) {
+      out.push({ label: s.label, kind: "added", delta: s.chars });
+    } else if (was.chars !== s.chars) {
+      out.push({ label: s.label, kind: "resized", delta: s.chars - was.chars });
+    } else if (was.label !== s.label) {
+      // Same size, new count-carrying label ("2 memories" → "3 memories · 1 docs"
+      // can keep chars equal only by coincidence, but reordered counts can't hide).
+      out.push({ label: s.label, kind: "relabeled", delta: 0 });
+    }
+  }
+  for (const s of p) {
+    if (!seen.has(baseLabel(s.label))) out.push({ label: s.label, kind: "removed", delta: -s.chars });
+  }
+  return out;
+}
+
+/** The one-line diff summary for the meta strip. `deltas === null` = no comparison
+ *  target (first turn, incognito gap, retention trim, unsegmented capture) — say so
+ *  honestly instead of pretending "unchanged". */
+export function diffLine(deltas: SectionDelta[] | null, anchor: string): string {
+  if (deltas === null) return "no comparison available";
+  if (!deltas.length) return `unchanged vs ${anchor}`;
+  const bits = deltas.slice(0, 4).map((d) =>
+    d.kind === "added"
+      ? `+ ${d.label}`
+      : d.kind === "removed"
+        ? `− ${baseLabel(d.label)}`
+        : d.kind === "relabeled"
+          ? `${d.label}`
+          : `${baseLabel(d.label)} ${d.delta > 0 ? "+" : "−"}${fmtTok(Math.abs(d.delta))} chars`,
+  );
+  const more = deltas.length > 4 ? ` · ${deltas.length - 4} more` : "";
+  return `vs ${anchor}: ${bits.join(" · ")}${more}`;
+}

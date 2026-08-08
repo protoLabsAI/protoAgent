@@ -61,6 +61,7 @@ def _shape(row: dict) -> dict:
             "context": row.get("context_text") or "",
         },
         "sections": _sections(row),
+        "subagent_type": row.get("subagent_type") or "",
         "usage": {
             "input_tokens": int(row.get("input_tokens") or 0),
             "output_tokens": int(row.get("output_tokens") or 0),
@@ -91,11 +92,70 @@ def register_prompt_routes(app) -> None:
         row = await asyncio.to_thread(prompt_snapshots().last_for_session, session_id.strip())
         return {"enabled": True, "call": _shape(row) if row else None}
 
+    @app.get("/api/prompts/preview")
+    async def _api_prompts_preview(session_id: str = ""):
+        """The TRUE next-call preview (#2388 P3) — speculatively runs the dynamic
+        layer (digest, hot memory, RAG keyed on the session's latest human message,
+        skill index, working state) via ``KnowledgeMiddleware.compose_context``
+        with ``record=False``, so previewing never writes an injection-log record.
+        A distinct, explicit route rather than a ``/last`` default because the
+        speculative retrieval is not free. ``call`` is null with a ``reason``
+        when the live graph can't preview (no graph, no stamps, no session)."""
+        import asyncio
+
+        from runtime.state import STATE
+
+        if not _capture_enabled():
+            return {"enabled": False, "call": None, "reason": "capture disabled"}
+        graph = STATE.graph
+        parts = list(getattr(graph, "system_prompt_parts", None) or [])
+        km = getattr(graph, "knowledge_middleware", None)
+        if graph is None or not parts:
+            return {"enabled": True, "call": None, "reason": "live graph has no prompt stamps"}
+
+        state: dict = {"messages": [], "incognito": False}
+        sid = session_id.strip()
+        if sid:
+            aget_state = getattr(graph, "aget_state", None)
+            if aget_state is not None:
+                try:
+                    from operator_api.chat_routes import _resolve_thread_id
+
+                    snapshot = await aget_state({"configurable": {"thread_id": _resolve_thread_id(None, sid)}})
+                    state["messages"] = (getattr(snapshot, "values", None) or {}).get("messages") or []
+                except Exception:  # noqa: BLE001 — a fresh/unreadable session previews without history
+                    pass
+
+        ctx = None
+        if km is not None:
+            try:
+                ctx = await asyncio.to_thread(km.compose_context, state, None, record=False)
+            except Exception:  # noqa: BLE001 — preview degrades to the stable half, honestly flagged
+                log.debug("[prompts] speculative compose failed", exc_info=True)
+        stable_text = "\n\n".join(text for _label, text in parts)
+        row = {
+            "call_index": -1,
+            "ts": "",
+            "model": "",
+            "stable_text": stable_text,
+            "context_text": (ctx or {}).get("context") or "",
+            "stable_sections": [{"label": label, "chars": len(text)} for label, text in parts],
+            "context_sections": (ctx or {}).get("context_sections"),
+        }
+        shaped = _shape(row)
+        shaped["preview"] = True
+        return {"enabled": True, "call": shaped, "reason": ""}
+
     @app.get("/api/prompts/{task_id}")
     async def _api_prompts_for_task(task_id: str):
         """Every captured model call of one A2A turn, in call order — the
         "View prompt" dialog's payload (one tab per call). 404 when the task
-        has no snapshots (never captured, trimmed by retention, or purged)."""
+        has no snapshots (never captured, trimmed by retention, or purged).
+
+        #2388 P3 additions, both additive: ``subagents`` — calls captured under
+        this turn's delegating tool-call ids (nested tabs); ``prev`` — the
+        previous turn's last main-loop call in the same session (the diff
+        anchor), null when there is none (first turn, incognito gap, retention)."""
         import asyncio
 
         from fastapi.responses import JSONResponse
@@ -104,7 +164,17 @@ def register_prompt_routes(app) -> None:
 
         if not _capture_enabled():
             return {"enabled": False, "calls": []}
-        rows = await asyncio.to_thread(prompt_snapshots().calls_for_task, task_id)
+        store = prompt_snapshots()
+        rows = await asyncio.to_thread(store.calls_for_task, task_id)
         if not rows:
             return JSONResponse({"detail": "no prompt snapshots for that task"}, status_code=404)
-        return {"enabled": True, "calls": [_shape(r) for r in rows]}
+        sub_rows = await asyncio.to_thread(store.calls_for_parent, task_id)
+        prev = await asyncio.to_thread(
+            store.previous_main_call, rows[0].get("session_id") or "", rows[0].get("ts") or ""
+        )
+        return {
+            "enabled": True,
+            "calls": [_shape(r) for r in rows],
+            "subagents": [_shape(r) for r in sub_rows],
+            "prev": _shape(prev) if prev else None,
+        }

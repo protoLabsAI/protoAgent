@@ -172,3 +172,25 @@ def test_capture_absent_when_disabled():
     cfg = LangGraphConfig(api_key="k", prompt_capture_enabled=False)
     names = [type(m).__name__ for m in _build_middleware(cfg, None)]
     assert "PromptCaptureMiddleware" not in names
+
+
+def test_subagent_identity_nests_rows_under_parent():
+    """#2388 P3: a subagent-built capture claims NO task_id — even with a turn's
+    a2a.task_id in scope, its rows nest under the delegating tool-call id + type
+    (its own call_index space), so the main-loop tabs stay uncontaminated."""
+    req = _Req("claude-opus-4-7", SystemMessage(content="SUB PROMPT"))
+    capture = PromptCaptureMiddleware(
+        stable_sections=[{"label": "researcher system prompt", "chars": 10}],
+        parent_task_id="call-xyz",
+        subagent_type="researcher",
+    )
+    with request_metadata_scope({"a2a.task_id": "task-77"}):
+        _run_chained(req, _response(), capture=capture)
+
+    assert prompt_snapshots().calls_for_task("task-77") == []
+    subs = prompt_snapshots().calls_for_parent("call-xyz")
+    assert len(subs) == 1
+    row = subs[0]
+    assert (row["task_id"], row["parent_task_id"], row["subagent_type"]) == ("", "call-xyz", "researcher")
+    assert row["stable_text"] == "SUB PROMPT"
+    assert row["stable_sections"] == [{"label": "researcher system prompt", "chars": 10}]

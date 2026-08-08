@@ -1039,7 +1039,20 @@ export type PromptCall = {
   system: { stable: string; context: string };
   // Optional for skew with pre-P2 servers; empty = captured unsegmented.
   sections?: PromptSection[];
+  // #2388 P3 — set on rows captured inside a subagent run; "" on main-loop calls.
+  subagent_type?: string;
+  // #2388 P3 — true on the speculative next-call preview (usage is all zeros).
+  preview?: boolean;
   usage: PromptCallUsage;
+};
+
+// The /api/prompts/{task_id} payload (#2388 P3: subagents + prev are additive;
+// optional for skew with older servers).
+export type PromptTaskResponse = {
+  enabled: boolean;
+  calls: PromptCall[];
+  subagents?: PromptCall[];
+  prev?: PromptCall | null;
 };
 
 // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.

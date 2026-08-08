@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PromptCall } from "../lib/types";
-import { budgetRows, callTabs, fmtTok, promptNoteMarkdown, promptText, sectionsLine, splitLine, usageLine } from "./promptView";
+import { budgetRows, callTabs, diffLine, fmtTok, promptNoteMarkdown, promptText, sectionDiff, sectionsLine, splitLine, usageLine } from "./promptView";
 
 function mk(over: Partial<PromptCall> = {}): PromptCall {
   return {
@@ -124,5 +124,69 @@ describe("promptNoteMarkdown", () => {
     // The outer 4-tick fence still closes AFTER the embedded 3-tick block.
     expect(md.indexOf("````text")).toBeLessThan(md.indexOf("```py"));
     expect(md.lastIndexOf("````")).toBeGreaterThan(md.indexOf("```py"));
+  });
+});
+
+describe("sectionDiff (#2388 P3)", () => {
+  const sec = (label: string, chars: number, scope: "stable" | "context" = "context") => ({
+    label,
+    chars,
+    approx_tokens: Math.floor(chars / 4),
+    scope,
+  });
+
+  it("matches sections on the base label so count-carrying labels resize instead of vanish+appear", () => {
+    const prev = [sec("Injected memory (2 memories)", 100)];
+    const cur = [sec("Injected memory (3 memories · 1 docs)", 160)];
+    expect(sectionDiff(prev, cur)).toEqual([
+      { label: "Injected memory (3 memories · 1 docs)", kind: "resized", delta: 60 },
+    ]);
+  });
+
+  it("reports added and removed sections with signed char deltas", () => {
+    const prev = [sec("Skills index", 50)];
+    const cur = [sec("Working state", 30)];
+    expect(sectionDiff(prev, cur)).toEqual([
+      { label: "Working state", kind: "added", delta: 30 },
+      { label: "Skills index", kind: "removed", delta: -50 },
+    ]);
+  });
+
+  it("flags a same-size label change as relabeled", () => {
+    const prev = [sec("Injected memory (2 memories)", 100)];
+    const cur = [sec("Injected memory (1 sessions)", 100)];
+    expect(sectionDiff(prev, cur)).toEqual([
+      { label: "Injected memory (1 sessions)", kind: "relabeled", delta: 0 },
+    ]);
+  });
+
+  it("returns [] for identical sections", () => {
+    const rows = [sec("SOUL", 10, "stable"), sec("Skills index", 20)];
+    expect(sectionDiff(rows, rows)).toEqual([]);
+  });
+});
+
+describe("diffLine (#2388 P3)", () => {
+  it("says so honestly when there is no comparison target", () => {
+    expect(diffLine(null, "previous turn")).toBe("no comparison available");
+  });
+
+  it("says unchanged against the named anchor", () => {
+    expect(diffLine([], "call 2")).toBe("unchanged vs call 2");
+  });
+
+  it("summarizes deltas and truncates past four", () => {
+    const deltas = [
+      { label: "A", kind: "added" as const, delta: 10 },
+      { label: "B (2 memories)", kind: "removed" as const, delta: -20 },
+      { label: "C (1 docs)", kind: "resized" as const, delta: 1200 },
+      { label: "D", kind: "relabeled" as const, delta: 0 },
+      { label: "E", kind: "added" as const, delta: 5 },
+    ];
+    const line = diffLine(deltas, "previous turn");
+    expect(line).toContain("vs previous turn: + A");
+    expect(line).toContain("− B");
+    expect(line).toContain("C +1.2k chars");
+    expect(line).toContain("1 more");
   });
 });

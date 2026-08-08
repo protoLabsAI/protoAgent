@@ -37,6 +37,7 @@ import type {
   MemoryInjectionRow,
   MemorySessionDigest,
   PromptCall,
+  PromptTaskResponse,
   NodeRuntimePayload,
   PythonRuntimePayload,
   RuntimeStatus,
@@ -1048,9 +1049,19 @@ export const api = {
 
   // Prompt snapshots (#2243): every captured model call of one turn, in call
   // order — the "View prompt" dialog's payload. 404s when the task has none.
+  // #2388 P3: also carries `subagents` (calls nested under this turn's delegations)
+  // and `prev` (the previous turn's last call — the diff anchor), both additive.
   promptsForTask(taskId: string) {
-    return request<{ enabled: boolean; calls: PromptCall[] }>(
-      `/api/prompts/${encodeURIComponent(taskId)}`,
+    return request<PromptTaskResponse>(`/api/prompts/${encodeURIComponent(taskId)}`);
+  },
+  // The TRUE next-call preview (#2388 P3): speculatively runs the dynamic layer
+  // (incl. retrieval) without a model call or an injection-log write. Explicit
+  // route — the speculation isn't free, so it's never the default.
+  promptPreview(sessionId = "") {
+    const q = new URLSearchParams();
+    if (sessionId) q.set("session_id", sessionId);
+    return request<{ enabled: boolean; call: PromptCall | null; reason?: string }>(
+      `/api/prompts/preview?${q}`,
     );
   },
   // The most recent captured call of one session (backs /prompt). `call` is

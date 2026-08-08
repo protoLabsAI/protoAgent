@@ -172,9 +172,7 @@ def test_route_emits_budget_rows(monkeypatch):
         stable_sections=[{"label": "SOUL", "chars": 40}],
         context_sections=[{"label": "Working state", "chars": 4}],
     )
-    monkeypatch.setattr(
-        rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=True), raising=False
-    )
+    monkeypatch.setattr(rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=True), raising=False)
     app = FastAPI()
     register_prompt_routes(app)
     body = TestClient(app).get("/api/prompts/t-sec").json()
@@ -192,10 +190,29 @@ def test_route_sections_empty_for_unsegmented_rows(monkeypatch):
     from operator_api.prompt_routes import register_prompt_routes
 
     prompt_snapshots().record(task_id="t-old", stable_text="P")
-    monkeypatch.setattr(
-        rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=True), raising=False
-    )
+    monkeypatch.setattr(rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=True), raising=False)
     app = FastAPI()
     register_prompt_routes(app)
     body = TestClient(app).get("/api/prompts/t-old").json()
     assert body["calls"][0]["sections"] == []
+
+
+# --- #2388 P3: speculative compose skips the injection log --------------------
+
+
+def test_compose_context_record_false_skips_injection_log(tmp_path, monkeypatch):
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("deploys go out Fridays", domain="hot", heading="ops")
+    km = KnowledgeMiddlewareFactory(store)
+    recorded = []
+    monkeypatch.setattr(km, "_record_injection", lambda *a, **k: recorded.append(True))
+
+    state = {"messages": [HumanMessage(content="anything")]}
+    preview = km.compose_context(state, None, record=False)
+    assert preview is not None and preview["context"]  # the full dynamic layer ran
+    assert recorded == []  # …but nothing claims "this entered a turn" (ADR 0069 D6)
+
+    km.before_model(state, runtime=None)
+    assert recorded == [True]  # the real path still records

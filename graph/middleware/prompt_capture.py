@@ -79,7 +79,14 @@ def _usage_from(response) -> dict:
 
 
 class PromptCaptureMiddleware(AgentMiddleware):
-    def __init__(self, *, retention_days: int = 30, stable_sections: list | None = None):
+    def __init__(
+        self,
+        *,
+        retention_days: int = 30,
+        stable_sections: list | None = None,
+        parent_task_id: str = "",
+        subagent_type: str = "",
+    ):
         super().__init__()
         self._retention_days = int(retention_days)
         # Labeled section boundaries of the stable prefix (#2243 P2) —
@@ -87,6 +94,11 @@ class PromptCaptureMiddleware(AgentMiddleware):
         # prompt is joined from, persisted once per blob hash. None = unsegmented
         # (a caller that built its prompt without parts).
         self._stable_sections = list(stable_sections) if stable_sections else None
+        # Subagent identity (#2388 P3): a subagent build passes the delegating
+        # tool-call id + its type; rows then nest under the parent turn instead
+        # of claiming a task_id/session of their own. Main-loop builds leave both "".
+        self._parent_task_id = parent_task_id or ""
+        self._subagent_type = subagent_type or ""
 
     def _store(self):
         # Lazy — the store's path resolution must not run at graph build
@@ -121,9 +133,13 @@ class PromptCaptureMiddleware(AgentMiddleware):
                 context_sections = (getattr(request, "state", None) or {}).get("context_sections")
 
             self._store().record(
-                task_id=str(current_request_metadata().get("a2a.task_id") or ""),
+                # A subagent row never claims the turn's task_id — it nests under it
+                # via parent_task_id, so the main-loop tabs stay uncontaminated.
+                task_id=("" if self._parent_task_id else str(current_request_metadata().get("a2a.task_id") or "")),
                 session_id=tracing.current_session_id() or "",
                 trace_id=tracing.current_trace_id() or "",
+                parent_task_id=self._parent_task_id,
+                subagent_type=self._subagent_type,
                 stable_text=stable,
                 context_text=context_tail,
                 model=_model_name(request),

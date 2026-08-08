@@ -126,3 +126,41 @@ def test_reopen_is_idempotent(tmp_path):
     s.record(task_id="t1", stable_text="P")
     again = PromptSnapshotStore(s.path)
     assert len(again.calls_for_task("t1")) == 1
+
+
+# ── #2388 P3: subagent nesting + the previous-turn diff anchor ────────────────
+
+
+def test_subagent_rows_nest_under_parent_not_task(tmp_path):
+    # A subagent call claims NO task_id — it nests under the delegating tool-call
+    # id, so the main-loop tabs stay uncontaminated and call_index scopes per
+    # (parent, subagent type).
+    s = _store(tmp_path)
+    s.record(task_id="t1", session_id="s1", stable_text="MAIN")
+    s.record(parent_task_id="call-abc", subagent_type="researcher", stable_text="SUB")
+    s.record(parent_task_id="call-abc", subagent_type="researcher", stable_text="SUB")
+    s.record(parent_task_id="call-abc", subagent_type="verifier", stable_text="SUB2")
+    assert len(s.calls_for_task("t1")) == 1  # main turn untouched
+    subs = s.calls_for_parent("call-abc")
+    assert [(r["subagent_type"], r["call_index"]) for r in subs] == [
+        ("researcher", 0),
+        ("researcher", 1),
+        ("verifier", 0),
+    ]
+    assert all(r["task_id"] == "" for r in subs)
+
+
+def test_previous_main_call_anchors_the_turn_diff(tmp_path):
+    # The diff anchor: the newest MAIN-LOOP call of the same session strictly
+    # older than the current turn's first row. Subagent rows are not turns.
+    s = _store(tmp_path)
+    s.record(task_id="t1", session_id="s1", stable_text="TURN1")
+    s.record(parent_task_id="call-x", subagent_type="researcher", session_id="s1", stable_text="SUB")
+    s.record(task_id="t2", session_id="s1", stable_text="TURN2")
+    t2 = s.calls_for_task("t2")[0]
+    prev = s.previous_main_call("s1", t2["ts"])
+    assert prev is not None and prev["task_id"] == "t1"
+    # First turn / missing history degrades to None — "no comparison available".
+    t1 = s.calls_for_task("t1")[0]
+    assert s.previous_main_call("s1", t1["ts"]) is None
+    assert s.previous_main_call("", t2["ts"]) is None
