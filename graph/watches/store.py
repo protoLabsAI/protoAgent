@@ -93,7 +93,7 @@ class WatchStore:
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                 json.dump(watch.to_dict(), fh, indent=2, default=str)
-            os.rename(tmp_path, path)
+            os.replace(tmp_path, path)
             tmp_path = None
             _publish("watch.changed", {"id": watch.id})
         except OSError as exc:

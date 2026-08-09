@@ -2,6 +2,8 @@
 
 import json
 
+import sys
+
 import pytest
 
 from graph.goals.verifiers import VerifyContext, run_verifier
@@ -29,7 +31,10 @@ async def test_command_missing_field():
 
 @pytest.mark.asyncio
 async def test_test_verifier_surfaces_last_line():
-    res = await run_verifier({"type": "test", "command": "echo '5 passed in 1.2s'; exit 0"}, VerifyContext())
+    # A python one-liner, not `echo …; exit 0`: cmd.exe has no `;` chaining, and
+    # the command runs through the PLATFORM shell now (#2412 phase 5).
+    cmd = f'"{sys.executable}" -c "print(\'5 passed in 1.2s\')"'
+    res = await run_verifier({"type": "test", "command": cmd}, VerifyContext())
     assert res.met is True
     assert "5 passed" in res.reason
 

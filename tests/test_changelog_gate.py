@@ -15,10 +15,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.bashpath import real_bash
+
 SCRIPT = Path(__file__).parent.parent / "scripts" / "changelog_gate.sh"
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None or shutil.which("git") is None,
+    real_bash() is None or shutil.which("git") is None,
     reason="changelog gate is a bash+git script — nothing to exercise without them",
 )
 
@@ -60,7 +62,7 @@ def _run_gate(
         event_path.write_text(json.dumps(event), encoding="utf-8")
         env["GITHUB_EVENT_PATH"] = str(event_path)
     return subprocess.run(
-        ["bash", str(SCRIPT), "main"],
+        [real_bash(), str(SCRIPT), "main"],
         cwd=repo,
         env=env,
         capture_output=True,
@@ -86,9 +88,7 @@ def test_editing_changelog_directly_no_longer_satisfies_the_gate(tmp_path: Path)
     fragments exist to remove, so it must not green a PR. The transitional acceptance was
     retired once the PR queue drained to zero — nothing was grandfathered."""
     repo = _pr_repo(tmp_path)
-    (repo / "CHANGELOG.md").write_text(
-        "# Changelog\n\n## [Unreleased]\n\n### Added\n- a thing\n", encoding="utf-8"
-    )
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n### Added\n- a thing\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "with entry")
 
     result = _run_gate(repo)
@@ -195,9 +195,7 @@ def test_labeling_retriggers_the_gate() -> None:
     `gh run rerun` (replays the original payload) can get it in there. Without
     `labeled` in the trigger types, applying `skip-changelog` does nothing until
     someone pushes an empty commit."""
-    workflow = (
-        Path(__file__).parent.parent / ".github" / "workflows" / "changelog.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "changelog.yml").read_text(encoding="utf-8")
     types = workflow.split("types:", 1)[1].split("\n", 1)[0]
     for action in ("opened", "synchronize", "reopened", "labeled", "unlabeled"):
         assert action in types, f"changelog.yml must trigger on {action!r}, got {types.strip()}"

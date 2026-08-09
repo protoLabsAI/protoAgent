@@ -15,20 +15,23 @@ from pathlib import Path
 
 import pytest
 
+from tests.bashpath import real_bash
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "reset.sh"
 
 # box_root prefers /sandbox over $HOME/.protoagent; if it exists the script would
 # target it instead of our test HOME, so skip there (CI has no /sandbox).
 _SANDBOX = pytest.mark.skipif(Path("/sandbox").is_dir(), reason="box_root would target /sandbox")
+pytestmark = pytest.mark.skipif(
+    real_bash() is None, reason="reset.sh is a bash script — nothing to exercise without a real bash"
+)
 
 
 def _run(args: list[str], home: Path):
     env = {**os.environ, "HOME": str(home)}
     env.pop("PROTOAGENT_BOX_ROOT", None)  # let the script derive box_root from HOME
-    return subprocess.run(
-        ["bash", str(SCRIPT), *args], capture_output=True, text=True, env=env, cwd=str(REPO)
-    )
+    return subprocess.run([real_bash(), str(SCRIPT), *args], capture_output=True, text=True, env=env, cwd=str(REPO))
 
 
 def _seed_instance(root: Path) -> None:

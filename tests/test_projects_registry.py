@@ -5,6 +5,7 @@ that project it: ``fenced_projects`` (registry → fence shape) and
 ``effective_filesystem_projects`` (the precedence the agent actually gets).
 """
 
+import os
 import textwrap
 from pathlib import Path
 
@@ -14,7 +15,21 @@ from graph.config import LangGraphConfig
 from graph.config_io import config_to_dict
 
 
+def _p(posix: str) -> str:
+    """A platform-absolute fixture path from a POSIX-flavored literal.
+
+    Identity on POSIX. On Windows ``/tmp/a`` is NOT absolute (no drive), and the
+    registry drops non-absolute entries by design — every fixture here fell to
+    that validator natively (#2412 phase 5). Anchor to the cwd drive instead."""
+    if os.name != "nt" or not posix.startswith("/"):
+        return posix
+    return str(Path(Path.cwd().anchor) / posix.lstrip("/"))
+
+
 def _cfg(**kw) -> LangGraphConfig:
+    for entry in kw.get("projects") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            entry["path"] = _p(entry["path"])
     return LangGraphConfig(**kw)
 
 
@@ -24,7 +39,7 @@ def _r(path: str) -> str:
     It resolves (matching tools/fs_tools.py and the OpenShell policy), and on macOS
     /tmp is itself a symlink to /private/tmp — so a hard-coded expectation would be
     asserting the unresolved value the QA panel flagged as the bug."""
-    return str(Path(path).resolve())
+    return str(Path(_p(path)).resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +101,7 @@ def test_write_false_projects_read_only():
 
 def test_no_delete_carries_through():
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "no_delete": True}])
-    assert cfg.fenced_projects() == [
-        {"name": "a", "path": _r("/tmp/a"), "write": True, "no_delete": True}
-    ]
+    assert cfg.fenced_projects() == [{"name": "a", "path": _r("/tmp/a"), "write": True, "no_delete": True}]
 
 
 def test_fs_false_opts_out_of_the_fence():
@@ -147,9 +160,7 @@ def test_explicit_filesystem_projects_win_over_the_registry():
 
 def test_registry_projects_onto_the_fence_when_no_explicit_list():
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "write": False}])
-    assert cfg.effective_filesystem_projects() == [
-        {"name": "a", "path": _r("/tmp/a"), "write": False}
-    ]
+    assert cfg.effective_filesystem_projects() == [{"name": "a", "path": _r("/tmp/a"), "write": False}]
 
 
 def test_filesystem_disabled_yields_no_fence_even_with_a_registry():

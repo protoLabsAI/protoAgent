@@ -98,7 +98,7 @@ class GoalStore:
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                 fh.write(content)
-            os.rename(tmp_path, path)
+            os.replace(tmp_path, path)
         except OSError as exc:
             log.warning("[goal] failed to write plan %s: %s", path, exc)
         finally:
@@ -125,7 +125,7 @@ class GoalStore:
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                 json.dump(state.to_dict(), fh, indent=2, default=str)
-            os.rename(tmp_path, path)
+            os.replace(tmp_path, path)
             tmp_path = None
             _publish("goal.changed", {"session_id": state.session_id})
         except OSError as exc:

@@ -20,15 +20,6 @@ tests/test_coding_agent_plugin.py
 tests/test_delegates_api.py
 tests/test_delegates_plugin.py
 tests/test_execute_code.py
-tests/test_goal_controller.py
-tests/test_goal_fresh_context.py
-tests/test_goal_harness.py
-tests/test_goal_lifecycle.py
-tests/test_goal_no_progress_limit.py
-tests/test_goal_verifiers.py
-tests/test_watch_controller.py
-tests/test_watch_operator.py
-tests/test_watch_tool.py
 tests/test_workflow_run_state.py
 
 # ── Path semantics: tilde/separators/symlinks/`:`-in-filename expectations ──
@@ -42,10 +33,7 @@ tests/test_instance_paths.py
 tests/test_media_store.py
 tests/test_memory_load.py
 tests/test_memory_routes.py
-tests/test_projects_registry.py
 tests/test_store_tier_resolvers.py
 tests/test_workspaces.py
 
 # ── POSIX shell scripts under test (bash/sh fixtures) ──
-tests/test_changelog_gate.py
-tests/test_reset_script.py

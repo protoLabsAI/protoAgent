@@ -21,6 +21,8 @@ operator action — only set goals from trusted input. See docs/guides/goal-mode
 
 from __future__ import annotations
 
+import os
+
 import ast
 import json
 import logging
@@ -139,7 +141,14 @@ async def _verify_command(spec: dict, ctx: VerifyContext) -> VerifyResult:
         return VerifyResult(False, "command verifier missing 'command'", "")
     timeout = float(spec.get("timeout") or getattr(ctx.config, "goal_verify_timeout", 120))
     cwd = spec.get("cwd") or ctx.cwd
-    res = await run_command(["bash", "-c", command], timeout=timeout, cwd=cwd)
+    # POSIX keeps bash exactly as always (user verifiers may rely on bashisms).
+    # Windows has no bash on PATH — or worse, the WSL stub — so use the native
+    # shell there (#2412 phase 5; same contract as tools/fs_tools run_command).
+    if os.name == "nt":
+        argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
+    else:
+        argv = ["bash", "-c", command]
+    res = await run_command(argv, timeout=timeout, cwd=cwd)
     evidence = _tail("\n".join(p for p in (res.stdout, res.stderr) if p))
     if res.error:
         return VerifyResult(False, f"command could not run: {res.error}", evidence)

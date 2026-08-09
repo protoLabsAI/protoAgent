@@ -465,7 +465,7 @@ class SkillCurator:
             if size > AUDIT_MAX_BYTES:
                 ts = _now_utc().strftime("%Y-%m-%d")
                 archive = os.path.join(audit_dir, f"audit-{ts}.jsonl")
-                os.rename(self.audit_path, archive)
+                os.replace(self.audit_path, archive)
                 log.warning("[curator] audit.jsonl exceeded 100 MB — archived to %s", archive)
 
         with open(self.audit_path, "a", encoding="utf-8") as fh:
