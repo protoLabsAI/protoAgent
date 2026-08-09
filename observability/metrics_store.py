@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -50,13 +51,23 @@ class MetricsStore:
         # <= 0 disables the corresponding cap (age / point-count).
         self.retention_days = int(retention_days)
         self.max_points = int(max_points)
+        # Serialize IN-PROCESS writers (#2428): sqlite's busy wait is a retry
+        # loop, not a queue — under a tight multi-thread write loop one thread
+        # can win the file lock repeatedly until the other's 5s budget expires
+        # ("database is locked" with busy_timeout armed; seen on Windows CI,
+        # where slow I/O widens every hold). The lock removes intra-process
+        # starvation; busy_timeout still covers cross-process writers.
+        self._write_lock = threading.Lock()
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
-        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
+        # busy_timeout FIRST: on the fresh-db path the WAL transition itself takes
+        # locks, and only statements issued after the pragma get the busy wait
+        # (#2428 hardening; knowledge/scheduler already order it this way).
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
+        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
         db.row_factory = sqlite3.Row
         return db
 
@@ -85,6 +96,10 @@ class MetricsStore:
         (two samples in the same second are both kept, insert order preserved)."""
         now = time.time()
         ts = now if ts is None else float(ts)
+        with self._write_lock:
+            self._record_locked(series, value, ts, now)
+
+    def _record_locked(self, series: str, value: float, ts: float, now: float) -> None:
         db = self._connect()
         try:
             db.execute(

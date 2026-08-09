@@ -65,8 +65,11 @@ class ActivityLog:
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
-        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
+        # busy_timeout FIRST: the WAL pragma itself takes a lock, so setting the
+        # timeout after it leaves an unguarded window that raises "database is
+        # locked" under contention (#2428 — wide enough to flake on Windows).
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
+        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
         db.row_factory = sqlite3.Row
         return db
 

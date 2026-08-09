@@ -86,8 +86,9 @@ def build_sqlite_checkpointer(db_path: str) -> ThreadedSqliteSaver:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     # WAL lets the periodic pruner (separate connection) run while the agent
     # writes; busy_timeout avoids spurious "database is locked" under contention.
-    conn.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout FIRST: the WAL pragma itself takes a lock (#2428).
     conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA journal_mode=WAL")
     # auto_vacuum=INCREMENTAL must be set BEFORE any tables are created so
     # freed pages are tracked in the freelist — the pruner can then reclaim
     # them on demand without a full VACUUM rewrite.

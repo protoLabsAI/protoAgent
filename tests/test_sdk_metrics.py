@@ -189,3 +189,35 @@ def test_two_threads_recording_concurrently(store):
     for pid in ("alpha", "beta"):
         assert len(sdk.metric_history("shared", limit=1000, plugin_id=pid)) == 50
         assert len(sdk.metric_history("own", limit=1000, plugin_id=pid)) == 50
+
+
+def test_record_succeeds_while_another_connection_holds_the_write_lock(store):
+    """A write issued while a FOREIGN connection holds the file's write lock must
+    busy-WAIT and land, never surface "database is locked" (#2428 pins the other
+    half in-process: `record()` serializes same-process writers so sqlite's
+    retry-loop busy wait can't be starved by a tight sibling-thread write loop)."""
+    import sqlite3
+
+    blocker = sqlite3.connect(store.path)
+    blocker.execute("PRAGMA busy_timeout=5000")
+    blocker.execute("BEGIN EXCLUSIVE")  # hold the write lock like a slow writer
+
+    result: dict = {}
+
+    def contended_write() -> None:
+        try:
+            result["res"] = sdk.record_metric("contended", 1.0, ts=T0, plugin_id="alpha")
+        except Exception as e:  # noqa: BLE001 — surfaced to the main thread below
+            result["exc"] = e
+
+    t = threading.Thread(target=contended_write)
+    t.start()
+    time.sleep(0.8)  # long enough that an unguarded WAL pragma has already blown up
+    blocker.rollback()  # release the lock — the busy-waiting writer should now land
+    blocker.close()
+    t.join(timeout=10)
+
+    assert not t.is_alive(), "contended write never returned"
+    assert "exc" not in result, f"contended write raised: {result.get('exc')!r}"
+    assert result["res"]["ok"] is True, result["res"]
+    assert sdk.metric_history("contended", plugin_id="alpha") == [(T0, 1.0)]
