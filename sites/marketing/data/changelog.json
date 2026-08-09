@@ -1,5 +1,28 @@
 [
   {
+    "version": "v0.128.0",
+    "date": "2026-08-09",
+    "changes": [
+      "The system-prompt viewer answers \"what changed?\" and \"what's next?\" (#2415).",
+      "PRs are now gated by a native Windows test job (#2419).",
+      "One cross-platform process-tree lifecycle — infra/proc (#2424).",
+      "The console now uses the canonical --pl-* design tokens everywhere (#2414).",
+      "Plugin views fail loudly when the DS kit is missing instead of silently 401ing (#2409).",
+      "Windows shell and desktop paths are native (#2416).",
+      "Pure-Python wheel installs now work on Windows and keep dependency pins in the canonical lock schema (#2417, #2418).",
+      "The desktop sidecar now serves the console at /app — mobile QR pairing works from desktop installs (#2423).",
+      "Stopping an ACP delegate on Windows no longer leaks its backend (#2425).",
+      "Rapid persona saves can no longer prune the wrong history snapshot (#2426).",
+      "Fleet stop and protoagent down work on Windows — and take the whole member tree (#2427).",
+      "Concurrent metric writes can no longer be starved into \"database is locked\" (#2429).",
+      "Windows install/uninstall now sweeps the sidecar's stranded _MEI runtime dirs (#2430).",
+      "Installing a plugin from a local path works on Windows (#2433).",
+      "Watches and goals work on Windows — state writes no longer fail, verifiers no longer hit the WSL stub (#2434).",
+      "Windows credential files now have a real privacy contract (#2431).",
+      "The external-PR path is documented (#2421)."
+    ]
+  },
+  {
     "version": "v0.127.0",
     "date": "2026-08-08",
     "changes": [

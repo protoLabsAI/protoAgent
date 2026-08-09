@@ -11,6 +11,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.128.0] - 2026-08-09
+
+### Added
+- **The system-prompt viewer answers "what changed?" and "what's next?" (#2415).** P3 of
+  the viewer: each call shows a section-level diff vs the previous call or turn ("Injected
+  memory +312 chars"), subagent prompts are captured and nest as tabs under their turn,
+  and an explicit preview route speculatively composes the next call's prompt — retrieval
+  included, no model call, no injection-log write.
+
+- **PRs are now gated by a native Windows test job (#2419).** `checks.yml` runs the
+  Python suite on `windows-latest` minus a named 41-file POSIX-only backlog
+  (`tests/windows_native_exclusions.txt`, the #2412 burndown — shrink it, never grow
+  it), so ~4650 tests must pass natively before merge. Until now the only Windows
+  feedback was the desktop release leg or a contributor's own machine.
+
+- **One cross-platform process-tree lifecycle — `infra/proc` (#2424).** ADR 0098: spawn
+  anchoring (`group_kwargs`/`detached_kwargs`) and tree teardown
+  (`kill_tree`/`akill_tree`/`terminate_tree`) work on Windows (`taskkill /T`, bounded
+  waits) and POSIX (`killpg`) alike, with the proven `pid_alive` probe alongside. The
+  agent shell tool is migrated; ACP delegates, fleet members, and `protoagent up/down`
+  follow — burning down the Windows test-exclusion list as they land.
+
+### Changed
+- **The console now uses the canonical `--pl-*` design tokens everywhere (#2414).** The
+  legacy `--bg`/`--fg`/`--border`/`--accent` bridge aliases are retired from
+  `theme-base.css` (status-tone compat aliases remain, as pinned by the token guard);
+  zero visual change by construction.
+
+### Fixed
+- **Plugin views fail loudly when the DS kit is missing instead of silently 401ing (#2409).**
+  docs, orgchart, and artifact substituted a bearer-less fetch when the plugin-kit failed to
+  import — on gated instances docs rendered as empty and orgchart blamed auth. All three now
+  name the missing `/_ds` bundle, and docs distinguishes an absent doc (404) from an auth
+  failure.
+
+- **Windows shell and desktop paths are native (#2416).** Timed-out agent commands
+  terminate their whole process tree via `taskkill /T /F` (with a bounded wait), the
+  fenced `run_command` tool uses `cmd.exe` on Windows instead of `/bin/sh`, and the
+  desktop sidecar keeps all writable box-tier state (`.data-version`, host-config,
+  commons, cache) inside its app-config directory instead of leaking into
+  `~/.protoagent`. Contributed by Dennis F (@RomeoRaven) in #2413.
+
+- **Pure-Python wheel installs now work on Windows and keep dependency pins in the canonical lock schema (#2417, #2418).**
+  Valid nested wheel members use path-aware containment instead of POSIX separators, legacy top-level dependency pins migrate into the `plugins` list, and the Windows desktop release leg exercises the wheel flow.
+
+- **The desktop sidecar now serves the console at `/app` — mobile QR pairing works from
+  desktop installs (#2423).** The frozen sidecar bundled no console build, so `--ui
+  console` logged a missing-build warning on every launch and a paired phone got a 404
+  (pairing loads the SPA from the sidecar, not the desktop webview). The sidecar now
+  bundles `apps/web/dist`, the build hard-fails if the console build is missing, and the
+  per-platform desktop smoke asserts `/app` serves.
+
+- **Stopping an ACP delegate on Windows no longer leaks its backend (#2425).** Delegate
+  teardown killed by POSIX process group only; on Windows the spawned backend survived a
+  stop. All three teardown paths (graceful close, hard stop, cancel) now go through the
+  ADR 0098 `signal_tree` primitive — `taskkill /T` on Windows, `killpg` on POSIX — and the
+  orphan-reaping regressions run natively on the Windows CI gate.
+
+- **Rapid persona saves can no longer prune the wrong history snapshot (#2426).** Soul
+  history relied on microsecond timestamps for ordering; on hosts whose clock ticks
+  coarser (Windows), two rapid saves could share a stamp and the content hash decided
+  which snapshot the cap deleted. Snapshot stamps are now strictly increasing.
+
+- **Fleet stop and `protoagent down` work on Windows — and take the whole member tree
+  (#2427).** Fleet lifecycle referenced POSIX-only `signal.SIGKILL`/`os.WNOHANG` and
+  crashed with `AttributeError` on Windows; liveness checks and stops could not work.
+  Member/server teardown now goes through the ADR 0098 tree primitives on both
+  platforms, and a stopped member's children (managed MCP servers, node runtimes) die
+  with it instead of relying on parent-death watchdogs.
+
+- **Concurrent metric writes can no longer be starved into "database is locked"
+  (#2429).** SQLite's busy wait is a retry loop, not a queue — a tight write loop on
+  one engine thread could re-win the file lock until a sibling thread's 5s budget
+  expired and its sample was dropped. Metric writes now serialize in-process (the busy
+  timeout still covers cross-process writers), and every connection-per-call store
+  arms its busy timeout before the WAL pragma.
+
+- **Windows install/uninstall now sweeps the sidecar's stranded `_MEI` runtime dirs
+  (#2430).** Force-stopping the onefile sidecar skips PyInstaller's own temp cleanup,
+  stranding ~140 MB per stop — and a graceful close isn't reachable from the installer
+  (the desktop app absorbs it into close-to-tray). Both installer hooks now delete only
+  the `%TEMP%\_MEI*` dirs that contain protoAgent's own bundled marker package, so
+  upgrades also reclaim residue left by older versions and no other application's
+  extraction can ever match.
+
+- **Installing a plugin from a local path works on Windows (#2433).** The installer's
+  source validator only recognized POSIX absolute paths, so every drive-letter path
+  (`C:\src\my-plugin`) was rejected as an unsupported source — one line that accounted
+  for 38 of the remaining Windows-native test failures. Drive-absolute paths now pass,
+  and the plugin-installer suite runs natively on the Windows CI gate.
+
+- **Watches and goals work on Windows — state writes no longer fail, verifiers no
+  longer hit the WSL stub (#2434).** Both stores swapped atomic renames for
+  overwrite-atomic `os.replace` (Windows `rename` refuses to overwrite, so every state
+  update after the first silently failed), and goal command-verifiers run through the
+  native shell on Windows instead of `bash` — which resolves to the WSL stub on a stock
+  install. Twelve more test files run natively on the Windows CI gate.
+
+### Security
+- **Windows credential files now have a real privacy contract (#2431).** POSIX `chmod
+  0600` is decorative on Windows (`stat` reports 0666), so secrets, fleet tokens, and
+  imported snapshot secrets are now ACL-hardened — inheritance stripped, owner-only
+  grant, the OpenSSH-for-Windows private-key posture — and the suite asserts the
+  contract natively on both platforms (no broad principal may hold access).
+
+### Docs
+- **The external-PR path is documented (#2421).** PROTO.md's gates table now lists the
+  changelog-fragment gate (and its `skip-changelog` escape hatch), and CONTRIBUTING.md
+  gained a "Sending a pull request" section — fragment shape, allow-maintainer-edits,
+  base-on-current-main — so outside contributions stop hitting the gate blind (#2413).
+
 ## [0.127.0] - 2026-08-08
 
 ### Added
