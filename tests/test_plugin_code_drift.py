@@ -16,6 +16,18 @@ def _clean_registry():
     loader._SOURCE_FINGERPRINTS.clear()
 
 
+def _bump_mtime(path) -> None:
+    """Advance the file's mtime past the fingerprint's stamp explicitly.
+
+    The drift fingerprint is (relpath, mtime_ns, size) BY DESIGN (no content
+    hashing on a poll path) — and these rewrites keep the size identical, so on
+    a coarse filesystem-timestamp tick (Windows CI) an in-tick rewrite is
+    invisible and the test flakes. A real edit happens seconds after import;
+    model that."""
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000))
+
+
 def _checkout(tmp_path, body="VALUE = 1\n"):
     """A 'live checkout' the plugin dir will symlink to."""
     src = tmp_path / "checkout"
@@ -64,6 +76,7 @@ def test_a_branch_switch_under_the_running_process_is_detected(tmp_path):
 
     # Branch switch: file contents (and mtimes) change under the live process.
     (src / "__init__.py").write_text("VALUE = 2\n")
+    _bump_mtime(src / "__init__.py")
     os.utime(src / "__init__.py", (1, 1))
 
     warning = loader.code_drift_warning()
@@ -109,6 +122,7 @@ def test_reimport_clears_the_warning(tmp_path):
     link.symlink_to(src)
     loader._record_source_fingerprint(_manifest(link))
     (src / "__init__.py").write_text("VALUE = 3\n")
+    _bump_mtime(src / "__init__.py")
     assert loader.code_drift_warning()
 
     loader._record_source_fingerprint(_manifest(link))  # what a reload does
