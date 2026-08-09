@@ -86,9 +86,19 @@ before the PR, not after. CI is the merge gate; a red PR is wasted cycles.
 | Lean-image smoke | `python scripts/live_smoke.py` |
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
 | Web e2e | `npm run test:e2e --workspace @protoagent/web` (Playwright/chromium) |
+| Changelog entry | a `changelog.d/<pr>.<kind>.md` fragment — shape and kinds in [changelog.d/README.md](./changelog.d/README.md) (bullet with a **bold lead-in** ending in `(#NNNN)`; never edit `CHANGELOG.md` directly) |
+| Windows tests | `python -m pytest tests/ -q` minus [tests/windows_native_exclusions.txt](./tests/windows_native_exclusions.txt) — CI runs it on `windows-latest`; run locally only on a Windows host. The exclusion list is the #2412 burndown: shrink it, never grow it |
 
 If a change is genuinely test-free (docs, config, pure refactor), say so
 explicitly in the PR description — but that is the exception, not the default.
+A change with nothing release-notes-worthy (CI plumbing, test-only) can skip the
+changelog fragment with the `skip-changelog` label — applying the label re-runs
+the gate on its own.
+
+External contributors: base your branch on current `main`, and please tick
+**"Allow edits by maintainers"** on the PR — without it, small fixups (a
+changelog fragment, a review nit) force a maintainer to supersede the PR with a
+new one instead of pushing to your branch.
 
 ## Filing issues
 

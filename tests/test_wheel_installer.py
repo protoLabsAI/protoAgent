@@ -101,12 +101,12 @@ def test_resolve_follows_transitive_and_dedupes(monkeypatch):
 
 
 def test_resolve_drops_marker_gated_and_extra_deps(monkeypatch):
-    # requires_dist with a false marker (extra) + a platform marker that won't match.
-    graph = {"top": ['colorama ; extra == "windows"', 'pywin32 ; sys_platform == "win32"']}
+    # requires_dist with a false marker (extra) + a platform marker that cannot match.
+    graph = {"top": ['colorama ; extra == "windows"', 'pywin32 ; sys_platform == "not-a-real-platform"']}
     monkeypatch.setattr(wi, "_select", lambda n, s: ("1.0.0", _wheel_file(n, "1.0.0")))
     monkeypatch.setattr(wi, "_deps_of", lambda n, v: graph.get(n, []))
     names = [n for n, _v, _w in wi.resolve(["top"], already_satisfied=lambda n: False)]
-    assert names == ["top"]  # extra-gated dropped; win32 marker false on this host (CI is linux/mac)
+    assert names == ["top"]  # both marker-gated dependencies are dropped on every host
 
 
 def test_resolve_guards_cycles(monkeypatch):
@@ -160,7 +160,88 @@ def test_install_end_to_end_unpacks_pins_and_syspaths(box, monkeypatch):
     assert str(dest) in sys.path
     # …and the resolved dep is pinned in the lock.
     lock = json.loads((box / "plugins.lock").read_text())
-    assert lock["demoplug"]["deps"] == [{"name": "demolib", "version": "1.0.0", "sha256": sha}]
+    assert lock["plugins"] == [{"id": "demoplug", "deps": [{"name": "demolib", "version": "1.0.0", "sha256": sha}]}]
+
+
+def test_record_lock_preserves_regular_plugin_entry(box, monkeypatch):
+    import graph.plugins.installer as inst
+
+    lock_path = box / "plugins.lock"
+    monkeypatch.setattr(inst, "lock_path", lambda: lock_path)
+    lock_path.write_text(
+        json.dumps(
+            {
+                "plugins": [
+                    {
+                        "id": "demoplug",
+                        "source_url": "https://example.test/demoplug.git",
+                        "resolved_sha": "a" * 40,
+                    }
+                ]
+            }
+        )
+    )
+
+    wi._record_lock("demoplug", [("demolib", "1.0.0", "b" * 64)])
+
+    lock = json.loads(lock_path.read_text())
+    assert set(lock) == {"plugins"}
+    assert lock["plugins"] == [
+        {
+            "id": "demoplug",
+            "source_url": "https://example.test/demoplug.git",
+            "resolved_sha": "a" * 40,
+            "deps": [{"name": "demolib", "version": "1.0.0", "sha256": "b" * 64}],
+        }
+    ]
+
+
+def test_read_lock_migrates_legacy_top_level_wheel_deps(box, monkeypatch):
+    import graph.plugins.installer as inst
+
+    lock_path = box / "plugins.lock"
+    monkeypatch.setattr(inst, "lock_path", lambda: lock_path)
+    deps = [{"name": "demolib", "version": "1.0.0", "sha256": "c" * 64}]
+    lock_path.write_text(
+        json.dumps(
+            {
+                "plugins": [{"id": "demoplug", "source_url": "https://example.test/demoplug.git"}],
+                "demoplug": {"deps": deps},
+            }
+        )
+    )
+
+    lock = inst._read_lock()
+    assert "demoplug" not in lock
+    assert lock["plugins"][0]["deps"] == deps
+    inst._write_lock(lock)
+    persisted = json.loads(lock_path.read_text())
+    assert persisted == {
+        "plugins": [
+            {
+                "id": "demoplug",
+                "source_url": "https://example.test/demoplug.git",
+                "deps": deps,
+            }
+        ]
+    }
+
+
+def test_lock_migration_preserves_malformed_plugin_ids(box, monkeypatch):
+    import graph.plugins.installer as inst
+
+    lock_path = box / "plugins.lock"
+    monkeypatch.setattr(inst, "lock_path", lambda: lock_path)
+    malformed = {"id": [], "note": "preserve opaque data"}
+    deps = [{"name": "demolib", "version": "1.0.0", "sha256": "d" * 64}]
+    lock_path.write_text(json.dumps({"plugins": [malformed], "demoplug": {"deps": deps}}))
+
+    lock = inst._read_lock()
+    inst._write_lock(lock)
+
+    persisted = json.loads(lock_path.read_text())
+    assert malformed in persisted["plugins"]
+    assert {"id": "demoplug", "deps": deps} in persisted["plugins"]
 
 
 def test_unpack_wheel_rejects_traversal(box):

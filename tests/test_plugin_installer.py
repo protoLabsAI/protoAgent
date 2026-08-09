@@ -90,6 +90,10 @@ def test_reinstall_same_source_same_commit_is_up_to_date(env):
 def test_reinstall_same_source_new_commit_updates_without_force(env):
     repo = _make_plugin_repo(env)
     first = installer.install(str(repo))
+    deps = [{"name": "demolib", "version": "1.0.0", "sha256": "a" * 64}]
+    lock = installer._read_lock()
+    next(e for e in lock["plugins"] if e["id"] == "demo_ext")["deps"] = deps
+    installer._write_lock(lock)
     (repo / "extra.py").write_text("x = 1\n")
     _git(repo, "add", "-A")
     _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "update")
@@ -99,6 +103,7 @@ def test_reinstall_same_source_new_commit_updates_without_force(env):
     assert (installer.live_plugins_dir() / "demo_ext" / "extra.py").exists()
     lock = installer._read_lock()
     assert [e["resolved_sha"] for e in lock["plugins"] if e["id"] == "demo_ext"] == [updated["resolved_sha"]]
+    assert next(e for e in lock["plugins"] if e["id"] == "demo_ext")["deps"] == deps
 
 
 def test_same_id_from_different_source_requires_force(env):

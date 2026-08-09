@@ -147,6 +147,43 @@ jobs:
           . .venv/bin/activate
           python -m pytest tests/ -q
 
+  windows-tests:
+    name: Windows tests (native)
+    # Phase-3 gate from #2412: protoAgent ships a Windows desktop release, but
+    # until this job the only native PR feedback was a contributor's own
+    # machine. Runs the suite minus the tracked POSIX-only backlog (below);
+    # anything not excluded failing on Windows gates the PR.
+    runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 35
+    env:
+      # PEP 686 direction, and half the historic Windows-only failures were
+      # cp1252 UnicodeEncodeErrors in test output rather than real defects.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # Mirrors the Ubuntu tests job (venv per #175); git-bash keeps the
+        # steps byte-comparable with the POSIX legs.
+        shell: bash
+        run: |
+          python -m venv .venv
+          source .venv/Scripts/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Run tests (suite minus the tracked POSIX-only backlog)
+        # tests/windows_native_exclusions.txt is the #2412 burndown: files that
+        # failed natively at the 2026-08-08 baseline. Everything else (~4650
+        # tests) must pass on Windows or this job fails the PR.
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          IGNORES=$(grep -vE '^\s*(#|$)' tests/windows_native_exclusions.txt | sed 's|^|--ignore=|' || true)
+          python -m pytest tests/ -q $IGNORES
+
   fleet-integration:
     name: Fleet integration (multi-instance)
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free

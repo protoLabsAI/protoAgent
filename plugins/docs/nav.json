@@ -786,6 +786,10 @@
           "title": "0097 — Native OAuth-subscription providers (run Claude / ChatGPT on your own plan)"
         },
         {
+          "path": "adr/0098-process-tree-lifecycle.md",
+          "title": "0098 — One process-tree lifecycle: `infra/proc` anchors and kills every child tree"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

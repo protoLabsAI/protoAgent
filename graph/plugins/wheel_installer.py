@@ -198,7 +198,9 @@ def _unpack_wheel(data: bytes, dest: Path) -> None:
             if member.endswith("/"):
                 continue
             target = (dest / member).resolve()
-            if target != dest and not str(target).startswith(str(dest) + "/"):
+            try:
+                target.relative_to(dest)
+            except ValueError:
                 raise WheelInstallError(f"unsafe path in wheel: {member!r}")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(zf.read(member))
@@ -232,18 +234,14 @@ def _record_lock(plugin_id: str, pins: list[tuple[str, str, str]]) -> None:
     (``deps: [{name, version, sha256}]``) — reproducible + tamper-evident re-install.
     Best-effort: a lock write failure logs but never loses the working install."""
     try:
-        import json
+        from graph.plugins.installer import _read_lock, _write_lock
 
-        from graph.plugins.installer import lock_path
-
-        lp = lock_path()
-        lock = json.loads(lp.read_text()) if lp.exists() else {}
-        entry = lock.get(plugin_id)
-        if not isinstance(entry, dict):
-            entry = {} if entry is None else {"_": entry}
+        lock = _read_lock()
+        entry: dict[str, object] | None = next((e for e in lock["plugins"] if e.get("id") == plugin_id), None)
+        if entry is None:
+            entry = {"id": plugin_id}
+            lock["plugins"].append(entry)
         entry["deps"] = [{"name": n, "version": v, "sha256": h} for n, v, h in pins]
-        lock[plugin_id] = entry
-        lp.parent.mkdir(parents=True, exist_ok=True)
-        lp.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
+        _write_lock(lock)
     except Exception:  # noqa: BLE001 — the lock is provenance, not the install itself
         log.warning("[wheel] failed to record deps for %s in plugins.lock", plugin_id, exc_info=True)
