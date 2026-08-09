@@ -18,21 +18,22 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import sys
+import tempfile
 
 import pytest
 
+from infra.proc import group_kwargs, pid_alive
 from plugins.coding_agent.acp_client import AcpClient
 
 
 def _alive(pid: int) -> bool:
-    """True if ``pid`` is a live (non-zombie) process."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    """True if ``pid`` is a live (non-zombie) process — portable (ADR 0098)."""
+    if not pid_alive(pid):
         return False
-    except PermissionError:
-        return True
-    # Exists, but a zombie/defunct is effectively dead — distinguish via ps.
+    if os.name == "nt":
+        return True  # no zombies on Windows — alive means alive
+    # POSIX: exists, but a zombie/defunct is effectively dead — distinguish via ps.
     out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
     return bool(out) and not out.startswith("Z")
 
@@ -45,23 +46,29 @@ async def _wait_dead(*pids: int, timeout: float = 5.0) -> None:
 
 
 async def _spawn_group_with_grandchild() -> tuple[asyncio.subprocess.Process, int]:
-    """A parent shell in its OWN process group that backgrounds a grandchild ``sleep``
-    (the stand-in for the adapter's backend), prints the grandchild pid, then waits."""
+    """A parent in its OWN process tree that spawns a grandchild sleeper (the
+    stand-in for the adapter's backend), prints the grandchild pid, then waits."""
+    code = (
+        "import subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)']); "
+        "print(child.pid, flush=True); "
+        "child.wait()"
+    )
     proc = await asyncio.create_subprocess_exec(
-        "sh",
+        sys.executable,
         "-c",
-        "sleep 300 & echo $! ; wait",
+        code,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,  # same isolation _start() now uses
+        **group_kwargs(),  # same anchoring _start() now uses (ADR 0098)
     )
-    line = await asyncio.wait_for(proc.stdout.readline(), timeout=5)
+    line = await asyncio.wait_for(proc.stdout.readline(), timeout=10)
     return proc, int(line.decode().strip())
 
 
 def _client_holding(proc: asyncio.subprocess.Process) -> AcpClient:
-    client = AcpClient("sh", ["-c", "true"], cwd="/tmp", name="reap-test")
+    client = AcpClient(sys.executable, ["-c", "pass"], cwd=tempfile.gettempdir(), name="reap-test")
     client._proc = proc  # bypass the ACP handshake — we only exercise teardown
     return client
 

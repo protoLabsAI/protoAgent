@@ -13,8 +13,8 @@
 # baseline". Reclassify freely as files get diagnosed.
 
 # ── POSIX process lifecycle: process groups, signals, sh/sleep children ──
-# The #2412 phase-2 target (shared cross-platform process-tree abstraction).
-tests/test_acp_reaping.py
+# The #2412 phase-2 target (shared cross-platform process-tree abstraction,
+# ADR 0098). test_acp_reaping.py came off with the acp_client migration.
 tests/test_coder_plugin.py
 tests/test_coding_agent_plugin.py
 tests/test_delegates_api.py

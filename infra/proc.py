@@ -86,6 +86,39 @@ def detached_kwargs() -> dict[str, Any]:
 # ── tree teardown ────────────────────────────────────────────────────────────
 
 
+def signal_tree(pid: int, *, force: bool = True) -> None:
+    """Synchronous, NON-BLOCKING tree signal — the cancel/teardown-path
+    primitive, safe where awaiting is impossible (a ``CancelledError`` handler)
+    and blocking the event loop is not acceptable.
+
+    POSIX: ``killpg(SIGKILL|SIGTERM)`` with a direct-PID fallback — a fast
+    syscall. Windows: fire-and-forget ``taskkill /T [/F]`` (no wait — the
+    caller observes the effect through its own ``proc.wait()`` timeout), with a
+    direct root ``TerminateProcess`` only when taskkill couldn't spawn (killing
+    the root first would break taskkill's tree walk). A graceful (non-``/F``)
+    taskkill often cannot stop console-less children — fine: callers escalate
+    to ``force=True``, exactly like the POSIX TERM→KILL ladder. Never raises.
+    """
+    if _WINDOWS:
+        argv = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if force else [])
+        spawned = False
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            spawned = True
+        except (FileNotFoundError, OSError):
+            pass
+        if force and not spawned:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)  # TerminateProcess on Windows
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.killpg(os.getpgid(pid), sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, sig)
+
+
 def _taskkill(pid: int, *, force: bool) -> None:
     """Run ``taskkill /T`` against ``pid``, wait bounded, never raise."""
     argv = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if force else [])
@@ -210,5 +243,6 @@ __all__ = [
     "group_kwargs",
     "kill_tree",
     "pid_alive",
+    "signal_tree",
     "terminate_tree",
 ]

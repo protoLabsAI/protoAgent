@@ -39,6 +39,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from infra.proc import group_kwargs, signal_tree
+
 logger = logging.getLogger("protoagent.plugins.coding_agent")
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -438,12 +440,12 @@ class AcpClient:
                 # doesn't inherit host identity/credentials or refuse to launch "inside
                 # another Claude Code session" (#1296); the delegate's env is overlaid last.
                 env=_launch_env(self.env, self.env_remove),
-                # Put the agent in its OWN session/process group so teardown can kill
-                # the WHOLE tree (the adapter *and* the backend it spawns). Without
-                # this, terminate() signals only the adapter; its child reparents to
-                # init and leaks — the codex-acp / claude-agent-acp orphan pile that
-                # piled up to ~20 GB. POSIX-only (start_new_session ⇒ setsid()).
-                start_new_session=True,
+                # Anchor the agent as its OWN tree root so teardown can kill the
+                # WHOLE tree (the adapter *and* the backend it spawns). Without
+                # this, terminate() signals only the adapter; its child reparents
+                # to init and leaks — the codex-acp / claude-agent-acp orphan pile
+                # that piled up to ~20 GB. Cross-platform via ADR 0098.
+                **group_kwargs(),
                 # Raise the per-line buffer ceiling — ACP messages exceed the 64 KB
                 # default and would otherwise raise LimitOverrunError (kills the turn).
                 limit=_STDOUT_LINE_LIMIT,
@@ -476,15 +478,12 @@ class AcpClient:
 
     @staticmethod
     def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
-        """Send ``sig`` to the subprocess's whole process GROUP (the agent plus the
-        backend it spawned), falling back to the bare process if the group is already
-        gone. Synchronous syscall + swallows ProcessLookup, so it's safe to call from
-        a teardown/cancel path where the event loop won't run our coroutines."""
-        try:
-            os.killpg(os.getpgid(proc.pid), sig)
-        except (ProcessLookupError, PermissionError, OSError):
-            with contextlib.suppress(ProcessLookupError, OSError):
-                proc.send_signal(sig)
+        """Signal the subprocess's whole TREE (the agent plus the backend it
+        spawned) via ``infra.proc.signal_tree`` — synchronous and non-blocking,
+        so it's safe from a teardown/cancel path where the event loop won't run
+        our coroutines (ADR 0098). ``sig`` keeps the POSIX ladder shape:
+        ``SIGKILL`` ⇒ force; anything else is the graceful step."""
+        signal_tree(proc.pid, force=sig == signal.SIGKILL)
 
     def kill_now(self) -> None:
         """Synchronously SIGKILL the agent's whole process group — no awaits, so it's
