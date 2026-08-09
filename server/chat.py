@@ -785,9 +785,15 @@ async def _run_turn_stream(
             # The answer is the model's content, streamed directly — no <scratch_pad>/<output>
             # protocol. (extract_output at the terminal still strips any stray legacy tag.)
             if hasattr(chunk, "content") and chunk.content:
-                text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-                accumulated_raw += text
-                yield ("text", text)
+                # Content is a plain string (gateway / chat-completions) or LangChain
+                # content blocks (the Responses API — the openai-codex provider, ADR
+                # 0097). `.text` concatenates the text blocks (skipping reasoning items)
+                # and returns a string unchanged, so the answer never renders as a raw
+                # "[{'type': 'text', ...}]" list. A reasoning-only chunk yields "".
+                text = chunk.content if isinstance(chunk.content, str) else chunk.text
+                if text:
+                    accumulated_raw += text
+                    yield ("text", text)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             # Finalize each tool card with its full args, keyed by the tool_call id.
@@ -1918,7 +1924,9 @@ async def _chat_langgraph_impl(
                 # whose stream dies after its first chunk looks like.
                 for msg in reversed(this_turn_messages(result)):
                     if isinstance(msg, AIMessage) and msg.content:
-                        return msg.content if isinstance(msg.content, str) else str(msg.content)
+                        # `.text` flattens Responses-API content blocks (openai-codex,
+                        # ADR 0097) to a string; a plain string passes through unchanged.
+                        return msg.content if isinstance(msg.content, str) else msg.text
                 return ""
 
             # When a goal is already active, the whole turn is goal-driven —

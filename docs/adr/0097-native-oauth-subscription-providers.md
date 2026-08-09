@@ -75,16 +75,35 @@ avoids racing the Codex CLI to a 401.
   grayer area — those tokens are intended for the Codex CLI/IDE — so `openai-codex` is
   opt-in and off by default.
 
-## Open items (the live gate)
+## Live validation (2026-08-08)
 
-Unit tests cover dispatch, auth headers, credential resolution/refresh, and the identity
-middleware, but a real subscription round-trip can't run in CI. To verify live:
+`openai-codex` was validated end-to-end against a real ChatGPT subscription on a dev
+instance: single-turn chat, streaming, and a **multi-turn tool loop** (with `store=false`)
+all work and render clean text. Five Codex-backend constraints surfaced live and are now
+handled — worth recording because none are in langchain's generic Responses support:
 
-1. **Claude** end-to-end turn on a Pro/Max token — tool loop, streaming, `cache_control`.
-2. **Codex** multi-turn **encrypted-reasoning replay** across the LangGraph checkpointer with
-   `store=false` — the one place langchain's Responses converter may fall short of Hermes's
-   hand-rolled adapter, and the item most likely to need follow-up.
-3. Token **refresh** under a real expiry; confirm we never rotate the Codex CLI's file.
+1. **Model ids are per-account.** `gpt-5.3-codex` is rejected ("not supported when using
+   Codex with a ChatGPT account"); the account's real list comes from
+   `GET /backend-api/codex/models` (here: `gpt-5.5`, `gpt-5.4-mini`, the `*-terra`/`*-luna`
+   code-mode models). Use a real slug for `model.name`.
+2. **No system-role input items** ("System messages are not allowed") — the system prompt
+   must ride the Responses `instructions` field. Handled by `CodexResponsesInputMiddleware`.
+3. **`max_output_tokens` is rejected** (the backend owns truncation) — the builder omits
+   `max_tokens`.
+4. **`stream=true` is mandatory** — protoAgent always streams, so this is automatic.
+5. **List content rendering.** langchain-openai's Responses mode always returns
+   *content blocks* (not a string), which protoAgent's answer pipeline — built for the
+   gateway's string content — stringified raw. Fixed by extracting `AIMessage(.text)` at the
+   stream + final-answer sites (a no-op for string content).
 
-Follow-ups: a native `protoagent auth login` device-code flow (vs. import-then-own); per-tab
-provider switching (relates to ADR 0082); mixed native-main / gateway-aux slots.
+Encrypted-reasoning replay across turns did **not** block the tool loop in practice, so the
+feared adapter gap is smaller than expected; deep multi-turn reasoning continuity across many
+tool calls is still worth watching.
+
+## Open items
+
+- **Claude (`anthropic-oauth`) not yet live-validated** — no Claude Code credentials on the
+  test box. Needs an end-to-end turn on a Pro/Max token (tool loop, streaming, `cache_control`).
+- Token **refresh** under a real expiry; confirm we never rotate the Codex CLI's file.
+- Follow-ups: a native `protoagent auth login` device-code flow (vs. import-then-own);
+  per-tab provider switching (relates to ADR 0082); mixed native-main / gateway-aux slots.

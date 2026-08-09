@@ -66,6 +66,25 @@ def test_build_native_oauth_llm_rejects_unknown():
         build_native_oauth_llm("openai", LangGraphConfig())
 
 
+def test_headless_setup_exempts_native_oauth_from_api_key():
+    """A native OAuth provider needs no api_base/api_key to pass setup validation —
+    it authenticates from a credential store (mirrors the ACP exemption)."""
+    from graph.config_io import validate_for_headless
+
+    # gateway provider with no key → blocked
+    ok, _ = validate_for_headless(LangGraphConfig(model_provider="openai", api_base="", api_key=""))
+    assert not ok
+    # native OAuth provider with no key/base → allowed
+    ok, reason = validate_for_headless(
+        LangGraphConfig(model_provider="openai-codex", api_base="", api_key="")
+    )
+    assert ok, reason
+    ok, reason = validate_for_headless(
+        LangGraphConfig(model_provider="anthropic-oauth", api_base="", api_key="")
+    )
+    assert ok, reason
+
+
 # ── anthropic-oauth ─────────────────────────────────────────────────────────────
 
 
@@ -269,3 +288,47 @@ def test_identity_prepends_block_list():
     content = req.system_message.content
     assert len(content) == 2
     assert content[0]["text"] == CLAUDE_CODE_SYSTEM_PREFIX
+
+
+# ── codex responses-input middleware ────────────────────────────────────────────
+
+
+class _FakeCodexReq:
+    def __init__(self, sysmsg, model):
+        self.system_message = sysmsg
+        self.model = model
+
+    def override(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+        return self
+
+
+def test_codex_moves_system_to_instructions():
+    """The Codex backend forbids system-role items; the middleware moves the system
+    prompt to a bound `instructions` kwarg and clears the system message."""
+    from langchain_core.messages import SystemMessage
+
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    class _Model:
+        def __init__(self):
+            self.bound = None
+
+        def bind(self, **kw):
+            self.bound = kw
+            return self
+
+    model = _Model()
+    # block-structured system (post-PromptCache) flattens to text
+    sysmsg = SystemMessage(content=[{"type": "text", "text": "You are Aria."}, {"type": "text", "text": "Be terse."}])
+    req = CodexResponsesInputMiddleware()._transform(_FakeCodexReq(sysmsg, model))
+    assert req.system_message is None
+    assert model.bound == {"instructions": "You are Aria.\n\nBe terse."}
+
+
+def test_codex_middleware_noop_without_system():
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    req = _FakeCodexReq(None, object())
+    assert CodexResponsesInputMiddleware()._transform(req) is req

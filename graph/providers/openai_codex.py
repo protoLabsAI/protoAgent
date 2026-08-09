@@ -75,13 +75,19 @@ def build_codex_llm(
         "base_url": creds.base_url,
         "api_key": creds.access_token,
         "use_responses_api": True,
-        "output_version": "responses/v1",
-        # The ChatGPT backend mandates store=false; encrypted reasoning is threaded
-        # back across turns via include so reasoning models keep a coherent chain.
+        # Pin legacy string content. langchain-openai now DEFAULTS output_version to
+        # "responses/v1", which packs the answer into structured content blocks that
+        # protoAgent's answer/rendering pipeline stringifies raw (the console would show
+        # "[{'type':'text',...}]"). "v0" gives a plain string. The block format enables
+        # cross-turn encrypted-reasoning replay — that's the ADR 0097 multi-turn
+        # follow-up, wired once the pipeline understands the blocks.
+        "output_version": "v0",
+        # The ChatGPT backend mandates store=false; include still requests encrypted
+        # reasoning so a follow-up can thread it once the block path is wired.
         "store": False,
         "include": ["reasoning.encrypted_content"],
-        "max_tokens": config.max_tokens,
-        "temperature": config.temperature,
+        # The Codex backend manages its own output truncation and rejects
+        # max_output_tokens (which langchain derives from max_tokens), so we omit it.
         "timeout": config.request_timeout,
         "max_retries": config.llm_max_retries,
         "streaming": True,

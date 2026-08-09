@@ -1573,6 +1573,15 @@ def validate_for_headless(config) -> tuple[bool, str]:
     if str(getattr(config, "agent_runtime", "native") or "native").startswith("acp:"):
         return True, "ok"
 
+    # Native OAuth-subscription providers (ADR 0097) authenticate from a coding-agent
+    # credential store (Claude Code / Codex OAuth token), not an api_base + api_key —
+    # so, like the ACP exemption above, they need no gateway endpoint. A missing/expired
+    # token surfaces as a clean OAuthCredentialError at the first turn, not here.
+    from graph.providers import is_native_oauth_provider
+
+    if is_native_oauth_provider(getattr(config, "model_provider", "")):
+        return True, "ok"
+
     if not str(getattr(config, "api_base", "") or "").strip():
         return False, "model.api_base is not set"
     key = str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
