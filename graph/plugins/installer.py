@@ -104,8 +104,11 @@ def _git(*args: str, cwd: Path | None = None, timeout: float | None = None, env:
 
 
 def _validate_url(url: str) -> None:
-    if not any(url.startswith(s) for s in _ALLOWED_SCHEMES):
-        raise InstallError(f"unsupported source {url!r} — use https://, ssh://, git@, or a local path.")
+    if any(url.startswith(s) for s in _ALLOWED_SCHEMES):
+        return
+    if re.match(r"^[A-Za-z]:[\\/]", url):
+        return  # a Windows drive-absolute local path (C:\src\my-plugin) — the "/" entry's sibling
+    raise InstallError(f"unsupported source {url!r} — use https://, ssh://, git@, or a local path.")
 
 
 def _validate_ref(ref: str) -> None:
