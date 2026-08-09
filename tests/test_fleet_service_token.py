@@ -7,6 +7,8 @@ create + persistence + 0600 (a hub), stability, and the process cache.
 
 from __future__ import annotations
 
+from tests.privacy_asserts import assert_owner_only
+
 import pytest
 
 from graph.fleet import service_token as st
@@ -32,7 +34,7 @@ def test_reads_or_creates_and_persists_0600(tmp_path):
     token = st.resolve_service_token()
     path = tmp_path / ".fleet-token"
     assert token and path.read_text("utf-8").strip() == token
-    assert (path.stat().st_mode & 0o777) == 0o600  # a service credential, even on loopback
+    assert_owner_only(path)  # a service credential, even on loopback
 
 
 def test_second_process_reads_the_same_token(monkeypatch, tmp_path):

@@ -33,13 +33,6 @@ tests/test_watch_operator.py
 tests/test_watch_tool.py
 tests/test_workflow_run_state.py
 
-# ── POSIX permission bits: 0600 assertions (Windows reports 0666) ──
-# The #2412 phase-4 target (define + test the Windows ACL privacy contract).
-tests/test_atomic_writes.py
-tests/test_config_secrets.py
-tests/test_fleet_service_token.py
-tests/test_settings_save_atomicity.py
-
 # ── Path semantics: tilde/separators/symlinks/`:`-in-filename expectations ──
 tests/test_agent_snapshot_import.py
 tests/test_browse_routes.py

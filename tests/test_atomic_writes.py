@@ -16,9 +16,10 @@ Three guarantees pinned here:
 
 from __future__ import annotations
 
+from tests.privacy_asserts import assert_owner_only
+
 import json
 import logging
-import stat
 import threading
 import time
 
@@ -44,7 +45,7 @@ def test_atomic_write_replaces_existing(tmp_path):
 def test_atomic_write_mode_0600(tmp_path):
     p = tmp_path / "secret.json"
     atomic_write(p, "{}", mode=0o600)
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert_owner_only(p)
 
 
 def test_atomic_write_leaves_no_temp_droppings(tmp_path):
@@ -86,7 +87,7 @@ def test_remotes_written_0600(tmp_path, monkeypatch):
 
     supervisor._save_remotes({"r1": {"url": "http://h:7870", "token": "tok"}})
     p = supervisor._remotes_path()
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert_owner_only(p)
     assert supervisor._load_remotes()["r1"]["token"] == "tok"
 
 

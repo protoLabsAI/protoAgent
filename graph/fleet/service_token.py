@@ -29,6 +29,8 @@ import os
 import secrets
 from pathlib import Path
 
+from infra.paths import harden_private_file
+
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "PROTOAGENT_FLEET_TOKEN"
@@ -70,6 +72,7 @@ def _read_or_create() -> str:
         tmp.write_text(token, "utf-8")
         os.chmod(tmp, 0o600)  # 0600 before the rename — a service credential, even on loopback.
         os.replace(tmp, path)  # atomic
+        harden_private_file(path)  # the Windows ACL belt (POSIX: same chmod again) — #2412 phase 4
         # Re-read: a concurrent creator may have won the replace race.
         winner = path.read_text("utf-8").strip()
         return winner or token

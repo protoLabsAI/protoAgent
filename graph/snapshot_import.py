@@ -43,6 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from infra.paths import harden_private_file
+
 log = logging.getLogger(__name__)
 
 SNAPSHOT_MANIFEST = "agent.snapshot.yaml"
@@ -235,7 +237,9 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
 
     capabilities = [(key, desc) for key, desc in CAPABILITY_KEYS if _dotted(config, key)]
     servers = _dotted(config, "mcp.servers")
-    mcp_servers = [str(s.get("name") or "?") for s in servers if isinstance(s, dict)] if isinstance(servers, list) else []
+    mcp_servers = (
+        [str(s.get("name") or "?") for s in servers if isinstance(s, dict)] if isinstance(servers, list) else []
+    )
 
     notes: list[str] = []
     unpinned = [p.id for p in plugins if not p.ref]
@@ -457,7 +461,9 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
             _enable_installed_in_config(ws / "config" / "langgraph-config.yaml", ws / "plugins.lock")
         except Exception:  # noqa: BLE001 — installed but not enabled is recoverable in Settings
             log.warning("[snapshot] enabling imported plugins failed", exc_info=True)
-            failed.append({"id": "*", "url": "", "error": "installed, but auto-enable failed — enable in Settings ▸ Plugins"})
+            failed.append(
+                {"id": "*", "url": "", "error": "installed, but auto-enable failed — enable in Settings ▸ Plugins"}
+            )
     return installed, failed
 
 
@@ -499,13 +505,11 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
         for section, values in doc.items():
             existing.setdefault(section, {}).update(values)
         path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
-        path.chmod(0o600)
+        harden_private_file(path)  # portable owner-only (POSIX chmod 0600 / Windows ACL) — #2412 phase 4
 
     provided = set(supplied or {})
     return sorted(
-        str(r.get("name"))
-        for r in plan.required_secrets
-        if r.get("was_set") and str(r.get("name")) not in provided
+        str(r.get("name")) for r in plan.required_secrets if r.get("was_set") and str(r.get("name")) not in provided
     )
 
 

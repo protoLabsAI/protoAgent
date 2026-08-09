@@ -27,6 +27,40 @@ from pathlib import Path
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
+def harden_private_file(path: Path | str) -> None:
+    """Owner-only access for a file carrying credentials — the portable 0600
+    contract (#2412 phase 4).
+
+    POSIX: ``chmod 0600``. Windows: POSIX mode bits are decorative there
+    (``stat`` reports 0666 regardless), so strip ACL inheritance and grant only
+    the owning user — the OpenSSH-for-Windows private-key posture
+    (``icacls /inheritance:r /grant:r <user>:F``). Best-effort: a hardening
+    failure warns and never breaks the save; instance dirs live under the user
+    profile, whose inherited ACLs already exclude broad principals, so the
+    fallback state is still private (that inherited posture is exactly what
+    ``tests/privacy_asserts.assert_owner_only`` pins).
+    """
+    import logging
+
+    p = str(Path(path))
+    if os.name != "nt":
+        os.chmod(p, 0o600)
+        return
+    import getpass
+    import subprocess
+
+    try:
+        user = os.environ.get("USERNAME") or getpass.getuser()
+        subprocess.run(
+            ["icacls", p, "/inheritance:r", "/grant:r", f"{user}:F"],
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — privacy belt, not a save gate
+        logging.getLogger(__name__).warning("[paths] could not harden %s to owner-only: %s", p, exc)
+
+
 def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> None:
     """Crash-safe text write: temp file in the same directory + ``os.replace``.
 
@@ -48,6 +82,12 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
         if mode is not None:
             os.chmod(tmp, mode)
         os.replace(tmp, path)
+        # An owner-only request is the credential contract; on Windows the chmod
+        # above was decorative, so apply the real ACL belt to the landed file
+        # (#2412 phase 4 — mkstemp under a user-profile dir is already privately
+        # inherited, so the pre-harden window carries no broad access).
+        if mode is not None and (mode & 0o077) == 0 and os.name == "nt":
+            harden_private_file(path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)

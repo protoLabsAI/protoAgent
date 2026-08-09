@@ -12,8 +12,8 @@ Invariants:
 
 from __future__ import annotations
 
-import os
-import stat
+from tests.privacy_asserts import assert_owner_only
+
 from pathlib import Path
 
 
@@ -77,7 +77,7 @@ def test_save_and_load_secrets_round_trip(monkeypatch, tmp_path: Path) -> None:
     loaded = config_io.load_secrets()
     assert loaded == {"model": {"api_key": "sk-1"}, "auth": {"token": "bearer-2"}}
     # owner-only perms
-    assert stat.S_IMODE(os.stat(secrets_path).st_mode) == 0o600
+    assert_owner_only(secrets_path)
 
 
 def test_save_secrets_noop_on_empty(monkeypatch, tmp_path: Path) -> None:
@@ -246,7 +246,7 @@ def test_strip_relocates_inline_secret_to_secrets_yaml(monkeypatch, tmp_path: Pa
     assert "api_key" not in doc["model"]  # stripped from the tracked YAML…
     assert secrets_path.exists()  # …because it landed in the overlay
     assert config_io.load_secrets() == {"model": {"api_key": "sk-seeded"}}
-    assert stat.S_IMODE(os.stat(secrets_path).st_mode) == 0o600  # still owner-only
+    assert_owner_only(secrets_path)  # still owner-only
 
 
 def test_strip_keeps_secret_inline_when_overlay_write_fails(monkeypatch, tmp_path: Path) -> None:

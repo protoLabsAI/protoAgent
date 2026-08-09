@@ -19,6 +19,8 @@ correct response, not a guess.
 
 from pathlib import Path
 
+from tests.privacy_asserts import assert_owner_only
+
 import pytest
 import yaml as _yaml
 
@@ -53,9 +55,7 @@ def test_failed_reload_rolls_the_config_back(monkeypatch, isolated_config) -> No
     before = leaf.read_bytes()
 
     # The exact live failure: the rebuild can't construct a gateway model without a key.
-    monkeypatch.setattr(
-        ai, "_reload_langgraph_agent", lambda: (False, "graph rebuild failed: Missing credentials")
-    )
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (False, "graph rebuild failed: Missing credentials"))
 
     ok, messages = ai._apply_settings_changes(config={"agent_runtime": "native"})
 
@@ -73,9 +73,7 @@ def test_a_rolled_back_save_does_not_also_claim_it_saved(monkeypatch, isolated_c
     import server.agent_init as ai
 
     leaf.write_text("agent_runtime: acp:proto\n")
-    monkeypatch.setattr(
-        ai, "_reload_langgraph_agent", lambda: (False, "graph rebuild failed: Missing credentials")
-    )
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (False, "graph rebuild failed: Missing credentials"))
 
     _ok, messages = ai._apply_settings_changes(config={"agent_runtime": "native"})
 
@@ -126,7 +124,7 @@ def test_rollback_preserves_secrets_file_mode(monkeypatch, isolated_config) -> N
     ai._apply_settings_changes(config={"model": {"api_key": "sk-new"}})
 
     assert _read(secrets) == {"model": {"api_key": "sk-old"}}
-    assert secrets.stat().st_mode & 0o777 == 0o600
+    assert_owner_only(secrets)
 
 
 def test_failed_reset_rolls_back_too(monkeypatch, isolated_config) -> None:
@@ -157,9 +155,7 @@ def test_soul_is_not_rolled_back(monkeypatch, isolated_config, tmp_path: Path) -
     leaf.write_text("model:\n  name: m\n")
     written: list[str] = []
     monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (False, "graph rebuild failed: boom"))
-    monkeypatch.setattr(
-        "graph.config_io.write_soul", lambda s: (written.append(s), [tmp_path / "SOUL.md"])[1]
-    )
+    monkeypatch.setattr("graph.config_io.write_soul", lambda s: (written.append(s), [tmp_path / "SOUL.md"])[1])
 
     ok, _ = ai._apply_settings_changes(soul="# New persona")
 

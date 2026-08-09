@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from graph.config import LangGraphConfig, _deep_merge_dicts
-from infra.paths import instance_paths
+from infra.paths import harden_private_file, instance_paths
 
 log = logging.getLogger("protoagent.config_io")
 
@@ -949,6 +949,7 @@ def save_secrets(secret_updates: dict[str, Any], path: Path | None = None) -> No
         _yaml.safe_dump(current, f, sort_keys=False, default_flow_style=False)
     os.chmod(tmp, 0o600)
     os.replace(tmp, secrets_path)
+    harden_private_file(secrets_path)  # the Windows ACL belt (POSIX: same chmod again) — #2412 phase 4
 
 
 def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
