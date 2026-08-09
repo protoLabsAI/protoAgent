@@ -2679,10 +2679,19 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # …unless the runtime is ACP (acp:<agent>): the coding agent is the brain and
         # may have no gateway key at all (ADR 0033). Probing a gateway we won't use would
         # wrongly block setup, so skip it — the model block is still persisted for native
-        # delegates/fallback if the operator filled it in.
+        # delegates/fallback if the operator filled it in. Native OAuth providers
+        # (anthropic-oauth / openai-codex, ADR 0097) are the same: they authenticate from a
+        # credential store, not api_base/key, so this gateway probe would fall back to the
+        # SAVED gateway base + a Claude/Codex model and 401 ("No api key passed in"). The
+        # wizard's own Test-connection button covers the real OAuth check.
+        from graph.providers import is_native_oauth_provider
+
         _runtime = str((config or {}).get("agent_runtime", "native") or "native")
-        if not _runtime.startswith("acp:") and config is not None and isinstance(config.get("model"), dict):
-            m = config["model"]
+        _model_cfg = (config or {}).get("model")
+        _provider = str((_model_cfg or {}).get("provider", "") or "") if isinstance(_model_cfg, dict) else ""
+        _skip_probe = _runtime.startswith("acp:") or is_native_oauth_provider(_provider)
+        if not _skip_probe and config is not None and isinstance(_model_cfg, dict):
+            m = _model_cfg
             test_base = m.get("api_base") or (STATE.graph_config.api_base if STATE.graph_config else "")
             test_key = m.get("api_key") or (STATE.graph_config.api_key if STATE.graph_config else "")
             test_model = m.get("name") or (STATE.graph_config.model_name if STATE.graph_config else "")
