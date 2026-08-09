@@ -40,10 +40,10 @@ def fleet(tmp_path, monkeypatch):
     # Fake spawns never bind a port — short-circuit the boot watch to "it's up".
     monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
-    def fake_kill(pid, sig):  # SIGTERM/SIGKILL "kills" the fake process
+    def fake_kill(pid, *, force):  # any tree signal "kills" the fake process
         alive.discard(int(pid))
 
-    monkeypatch.setattr(supervisor.os, "kill", fake_kill)
+    monkeypatch.setattr(supervisor, "signal_tree", fake_kill)
     return alive
 
 
@@ -96,7 +96,7 @@ def test_keep_n_warm_evicts_lru(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
-    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
+    monkeypatch.setattr(supervisor, "signal_tree", lambda pid, *, force: alive.discard(int(pid)))
 
     ids = {}
     for nm in ("a", "b", "c"):  # a started first → least-recently-active
@@ -360,7 +360,7 @@ def test_remotes_lock_serializes_concurrent_adds(tmp_path, monkeypatch):
 # ── spin-down on host exit (version-coherence Axis 1) ─────────────────────────
 def _multi_fleet(tmp_path, monkeypatch):
     """Fleet with INCREMENTING fake pids (distinct members) + a recording kill.
-    Returns (alive set, killed list of (pid, signal))."""
+    Returns (alive set, killed list of (pid, force))."""
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     alive: set[int] = set()
     seq = {"n": 6000}
@@ -382,11 +382,11 @@ def _multi_fleet(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
-    def fake_kill(pid, sig):
-        killed.append((int(pid), int(sig)))
-        alive.discard(int(pid))  # the fake dies on its first signal (SIGTERM)
+    def fake_kill(pid, *, force):
+        killed.append((int(pid), force))
+        alive.discard(int(pid))  # the fake dies on its first (graceful) tree signal
 
-    monkeypatch.setattr(supervisor.os, "kill", fake_kill)
+    monkeypatch.setattr(supervisor, "signal_tree", fake_kill)
     return alive, killed
 
 
@@ -879,7 +879,7 @@ def test_stop_on_a_recycled_pid_reaps_without_signalling(fleet, monkeypatch):
     supervisor.start("recycled")
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: False)
     signalled: list[int] = []
-    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: signalled.append(pid))
+    monkeypatch.setattr(supervisor, "signal_tree", lambda pid, *, force: signalled.append(pid))
 
     res = supervisor.stop("recycled")
 

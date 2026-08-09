@@ -33,7 +33,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     # Fake spawns never bind a port — short-circuit the boot watch to "it's up".
     monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
-    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
+    monkeypatch.setattr(supervisor, "signal_tree", lambda pid, *, force: alive.discard(int(pid)))
 
     app = FastAPI()
     register_fleet_routes(app)
