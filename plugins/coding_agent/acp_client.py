@@ -477,13 +477,14 @@ class AcpClient:
         )
 
     @staticmethod
-    def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
+    def _signal_group(proc: asyncio.subprocess.Process, *, force: bool) -> None:
         """Signal the subprocess's whole TREE (the agent plus the backend it
         spawned) via ``infra.proc.signal_tree`` — synchronous and non-blocking,
         so it's safe from a teardown/cancel path where the event loop won't run
-        our coroutines (ADR 0098). ``sig`` keeps the POSIX ladder shape:
-        ``SIGKILL`` ⇒ force; anything else is the graceful step."""
-        signal_tree(proc.pid, force=sig == signal.SIGKILL)
+        our coroutines (ADR 0098). ``force`` is the TERM→KILL ladder: False =
+        the graceful ask, True = hard kill. (No signal constants in the API —
+        ``signal.SIGKILL`` doesn't exist on Windows.)"""
+        signal_tree(proc.pid, force=force)
 
     def kill_now(self) -> None:
         """Synchronously SIGKILL the agent's whole process group — no awaits, so it's
@@ -493,7 +494,7 @@ class AcpClient:
         graceful one."""
         proc = self._proc
         if proc and proc.returncode is None:
-            self._signal_group(proc, signal.SIGKILL)
+            self._signal_group(proc, force=True)
         for task in (self._reader_task, self._stderr_task):
             if task and not task.done():
                 task.cancel()
@@ -516,17 +517,17 @@ class AcpClient:
                 task.cancel()
         proc = self._proc
         if proc and proc.returncode is None:
-            self._signal_group(proc, signal.SIGTERM)
+            self._signal_group(proc, force=False)
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                self._signal_group(proc, signal.SIGKILL)
+                self._signal_group(proc, force=True)
                 with contextlib.suppress(Exception):
                     await proc.wait()
             except asyncio.CancelledError:
                 # We're being torn down — guarantee the tree is dead, then let the
                 # cancellation propagate (don't swallow it).
-                self._signal_group(proc, signal.SIGKILL)
+                self._signal_group(proc, force=True)
                 raise
         # Close the subprocess transport too, so its pipe transports don't linger to
         # a post-loop-close GC — reaping the process (above) leaves the stdin write-
