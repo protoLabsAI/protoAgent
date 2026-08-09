@@ -23,28 +23,28 @@
 ; taskkill on a non-running process is a no-op (nsExec swallows the exit
 ; code); /T reaps child trees; the kept %APPDATA% data dir is never touched.
 
-!macro PROTOAGENT_STOP_AND_SWEEP
+!macro PROTOAGENT_STOP_AND_SWEEP suffix
   nsExec::Exec 'taskkill /F /IM protoagent_desktop.exe /T'
   Pop $0
   nsExec::Exec 'taskkill /F /IM protoagent-server.exe /T'
   Pop $0
   Sleep 500
   FindFirst $0 $1 "$TEMP\_MEI*"
-  mei_loop_${__LINE__}:
-    StrCmp $1 "" mei_done_${__LINE__}
-    IfFileExists "$TEMP\$1\protolabs_a2a\*.*" 0 mei_next_${__LINE__}
+  mei_loop_${suffix}:
+    StrCmp $1 "" mei_done_${suffix}
+    IfFileExists "$TEMP\$1\protolabs_a2a\*.*" 0 mei_next_${suffix}
       RMDir /r "$TEMP\$1"
-    mei_next_${__LINE__}:
+    mei_next_${suffix}:
     FindNext $0 $1
-    Goto mei_loop_${__LINE__}
-  mei_done_${__LINE__}:
+    Goto mei_loop_${suffix}
+  mei_done_${suffix}:
   FindClose $0
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
-  !insertmacro PROTOAGENT_STOP_AND_SWEEP
+  !insertmacro PROTOAGENT_STOP_AND_SWEEP pre
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  !insertmacro PROTOAGENT_STOP_AND_SWEEP
+  !insertmacro PROTOAGENT_STOP_AND_SWEEP preun
 !macroend
