@@ -59,6 +59,13 @@ def _parse_args() -> argparse.Namespace:
         default=90.0,
         help="seconds to wait for /healthz (frozen onefile binaries self-extract on first boot)",
     )
+    ap.add_argument(
+        "--expect-console",
+        action="store_true",
+        help="boot `--ui console` (instead of the lean `none` tier) and assert /app/ "
+        "serves the SPA — the desktop-sidecar contract (#2411): the frozen binary "
+        "bundles apps/web/dist, so a paired phone can load the console from it",
+    )
     return ap.parse_args()
 
 
@@ -107,15 +114,16 @@ def main() -> int:
         "PYTHONPATH": str(ROOT),
     }
 
+    ui_tier = "console" if args.expect_console else "none"
     if args.bin_path:
         # Frozen sidecar: run from a neutral cwd with no PYTHONPATH so the repo
         # checkout can't paper over PyInstaller under-collection — the desktop
         # app won't have the repo on disk either.
         env.pop("PYTHONPATH", None)
-        agent_cmd = [str(Path(args.bin_path).resolve()), "--ui", "none", "--port", str(agent_port)]
+        agent_cmd = [str(Path(args.bin_path).resolve()), "--ui", ui_tier, "--port", str(agent_port)]
         agent_cwd = str(home_dir)
     else:
-        agent_cmd = [sys.executable, "-m", "server", "--ui", "none", "--port", str(agent_port)]
+        agent_cmd = [sys.executable, "-m", "server", "--ui", ui_tier, "--port", str(agent_port)]
         agent_cwd = str(ROOT)
 
     fake = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "fake_openai_server.py"), str(fake_port)])
@@ -125,6 +133,16 @@ def main() -> int:
             print("FAIL: /healthz never returned 200 (server did not become ready)")
             return 1
         print("ok: /healthz 200 (lean server booted + graph compiled)")
+
+        if args.expect_console:
+            # The desktop-sidecar contract (#2411): /app serves the bundled SPA.
+            # 200 here is only reachable when mount_react_app found dist/index.html
+            # — a 404 means the freeze ran before the web build (ordering bug).
+            with urllib.request.urlopen(f"http://127.0.0.1:{agent_port}/app/", timeout=5) as r:
+                page = r.read().decode("utf-8", errors="replace")
+                assert r.status == 200, f"/app/ returned {r.status}"
+            assert "<div id=" in page, "/app/ did not serve the SPA index"
+            print("ok: /app/ serves the bundled console SPA")
 
         # Agent card serves + has identity.
         with urllib.request.urlopen(f"http://127.0.0.1:{agent_port}/.well-known/agent-card.json", timeout=5) as r:

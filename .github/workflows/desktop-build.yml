@@ -142,25 +142,29 @@ jobs:
           mv "$CONF.tmp" "$CONF"
           echo "tauri.conf.json version -> $V"
 
-      - name: Stage the DS plugin-kit + install web deps
+      - name: Build the console for the sidecar (+ install web deps)
         shell: bash
-        # The frozen sidecar serves /_ds/plugin-kit.{css,js} — the theme kit every plugin
-        # iframe loads to match the console — from apps/web/dist/_ds. The web build emits
-        # it there, but that runs LATER (tauri's beforeBuildCommand), so the sidecar would
-        # freeze WITHOUT it and plugin views (Notes, …) render with no design system on
-        # desktop. Generate it now (into public/_ds) so build_sidecar can bundle it. The
-        # root install also wires the @protoagent/web workspace for the tauri build below.
+        # The frozen sidecar bundles apps/web/dist and serves it at /app (#2411):
+        # `--ui console` is truthful, and mobile QR pairing works — a paired phone
+        # loads the SPA from the SIDECAR, not the Tauri webview. So the console
+        # build (default base /app/, which also emits dist/_ds — the plugin-kit
+        # every plugin iframe loads) must run BEFORE the freeze; build_sidecar
+        # hard-fails without it. Tauri's beforeBuildCommand later REBUILDS dist
+        # with `--base /` for its own webview — harmless, the sidecar's copy is
+        # already frozen into the binary by then. The root install also wires the
+        # @protoagent/web workspace for that tauri build.
         run: |
           npm install -g npm@11  # npm-11-shaped lockfile — npm 10's `ci` rejects it (see PROTO.md)
           npm ci
           node apps/web/scripts/copy-plugin-kit.mjs
-          ls -la apps/web/public/_ds/
+          npm run build --workspace @protoagent/web
+          ls -la apps/web/dist/ apps/web/dist/_ds/
 
       - name: Build server sidecar (PyInstaller)
         shell: bash
         # Freezes `server` into binaries/protoagent-server-<triple> — the
-        # externalBin Tauri bundles. The React console is the UI; no server-side
-        # UI extras are bundled.
+        # externalBin Tauri bundles. Bundles the console build from the step
+        # above (served at /app — the #2411 contract); hard-fails if it's absent.
         # mcp[cli] is a build-env requirement, not a runtime dep: --collect-all
         # mcp imports every mcp submodule, and mcp.cli hard-errors at import
         # when typer is missing (broke all legs once an unpinned mcp drifted).
@@ -184,7 +188,7 @@ jobs:
         run: |
           BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"
           if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
-          python scripts/live_smoke.py --bin "${BIN}" --timeout 180
+          python scripts/live_smoke.py --bin "${BIN}" --timeout 180 --expect-console
 
       - name: Run Windows-native path and process regressions
         if: runner.os == 'Windows'
