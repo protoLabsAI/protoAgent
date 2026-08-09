@@ -158,7 +158,7 @@ def register_config_routes(app) -> None:
 
         body = req or ModelsProbeRequest()
         # Native OAuth providers list the subscription account's models, not the gateway's.
-        provider = (body.provider or (STATE.graph_config.model_provider if STATE.graph_config else "")).strip().lower()
+        provider = (body.provider or getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
         from graph.providers import is_native_oauth_provider
 
         if is_native_oauth_provider(provider):
@@ -197,7 +197,7 @@ def register_config_routes(app) -> None:
         model = body.model or (STATE.graph_config.model_name if STATE.graph_config else "")
         # Native OAuth providers (ADR 0097) test through the subscription, not a gateway
         # key — build the real client and stream a 1-token turn.
-        provider = (body.provider or (STATE.graph_config.model_provider if STATE.graph_config else "")).strip().lower()
+        provider = (body.provider or getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
         from graph.providers import is_native_oauth_provider
 
         if is_native_oauth_provider(provider):
