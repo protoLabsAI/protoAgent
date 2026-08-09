@@ -44,6 +44,15 @@ class ModelsProbeRequest(BaseModel):
     provider: str = ""
 
 
+class OAuthLoginRequest(BaseModel):
+    """Drives the in-console OAuth sign-in (ADR 0097): `provider` starts a flow,
+    `flow_id` (+ `code` for Claude) advances it."""
+
+    provider: str = ""
+    flow_id: str = ""
+    code: str = ""
+
+
 class SettingsUpdateRequest(BaseModel):
     updates: dict[str, Any] = {}
     # Cascade layer the write lands in (ADR 0047 slice 3): "agent" (the leaf, default)
@@ -180,6 +189,38 @@ def register_config_routes(app) -> None:
         from graph.providers.discovery import all_oauth_status
 
         return {"providers": await asyncio.to_thread(all_oauth_status)}
+
+    @app.post("/api/config/oauth/start")
+    async def _api_oauth_start(req: OAuthLoginRequest):
+        """Begin an in-console OAuth sign-in (ADR 0097). Codex returns a device code +
+        URL to poll; Claude returns an authorize URL to open + complete with a code."""
+        from graph.providers.oauth_login import OAuthLoginError, login_start
+
+        try:
+            return await asyncio.to_thread(login_start, req.provider)
+        except OAuthLoginError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/config/oauth/poll")
+    async def _api_oauth_poll(req: OAuthLoginRequest):
+        """Poll a Codex device sign-in — returns {status: pending|complete|error}. On
+        completion the tokens are stored and oauth-status flips to signed in."""
+        from graph.providers.oauth_login import OAuthLoginError, codex_login_poll
+
+        try:
+            return await asyncio.to_thread(codex_login_poll, req.flow_id)
+        except OAuthLoginError as exc:
+            return {"status": "error", "error": str(exc)}
+
+    @app.post("/api/config/oauth/complete")
+    async def _api_oauth_complete(req: OAuthLoginRequest):
+        """Complete a Claude sign-in with the pasted `code#state` — exchanges + stores."""
+        from graph.providers.oauth_login import OAuthLoginError, anthropic_login_complete
+
+        try:
+            return await asyncio.to_thread(anthropic_login_complete, req.flow_id, req.code)
+        except OAuthLoginError as exc:
+            return {"status": "error", "error": str(exc)}
 
     @app.post("/api/config/test-model")
     async def _api_test_model(req: ModelsProbeRequest | None = None):

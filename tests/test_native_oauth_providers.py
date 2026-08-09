@@ -409,3 +409,108 @@ def test_provider_select_still_accepts_custom_value():
 
     ok, _ = validate_flat({"model.provider": "my-custom-gateway"})
     assert ok
+
+
+# ── in-console OAuth sign-in flows ──────────────────────────────────────────────
+
+
+def test_anthropic_login_start_url_is_well_formed():
+    from graph.providers import oauth_login as login
+
+    r = login.anthropic_login_start()
+    assert r["mode"] == "redirect"
+    url = r["authorize_url"]
+    assert url.startswith("https://platform.claude.com/oauth/authorize?")
+    assert "client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e" in url
+    assert "code_challenge_method=S256" in url
+    assert "user%3Ainference" in url  # scope url-encoded
+
+
+def test_login_flow_store_roundtrip_and_expiry():
+    from graph.providers import oauth_login as login
+
+    fid = login._new_flow("anthropic-oauth", {"state": "s", "code_verifier": "v"})
+    assert login._get_flow(fid, "anthropic-oauth").data["state"] == "s"
+    # wrong provider → treated as expired/invalid
+    with pytest.raises(login.OAuthLoginError):
+        login._get_flow(fid, "openai-codex")
+
+
+def test_anthropic_login_complete_exchanges_and_stores(monkeypatch, tmp_path):
+    from graph.providers import oauth as oauth_mod2
+    from graph.providers import oauth_login as login
+
+    store = tmp_path / "anthropic-oauth.json"
+    monkeypatch.setattr(oauth_mod2, "_anthropic_store_path", lambda paths=None: store)
+
+    started = login.anthropic_login_start()
+    flow = login._FLOWS[started["flow_id"]]
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "cc-NEW", "refresh_token": "cc-REF", "expires_in": 3600}
+
+    monkeypatch.setattr(login.httpx, "post", lambda url, **kw: _Resp())
+    # code arrives as `<code>#<state>`
+    result = login.anthropic_login_complete(started["flow_id"], f"the-code#{flow.data['state']}")
+    assert result["status"] == "complete"
+    assert store.exists()
+    saved = json.loads(store.read_text())
+    assert saved["access_token"] == "cc-NEW"
+    assert saved["refresh_token"] == "cc-REF"
+    # and the resolver now sees it
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    creds = oauth_mod2.resolve_anthropic_oauth()
+    assert creds.access_token == "cc-NEW"
+    assert creds.source == "instance_store"
+
+
+def test_anthropic_login_complete_rejects_state_mismatch():
+    from graph.providers import oauth_login as login
+
+    started = login.anthropic_login_start()
+    result = login.anthropic_login_complete(started["flow_id"], "code#WRONGSTATE")
+    assert result["status"] == "error"
+    assert "state" in result["error"].lower()
+
+
+def test_codex_login_poll_pending_then_error(monkeypatch):
+    from graph.providers import oauth_login as login
+
+    fid = login._new_flow("openai-codex", {"device_auth_id": "d", "user_code": "u"})
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(login.httpx, "post", lambda url, **kw: _Resp(404))
+    assert login.codex_login_poll(fid)["status"] == "pending"
+    monkeypatch.setattr(login.httpx, "post", lambda url, **kw: _Resp(500))
+    assert login.codex_login_poll(fid)["status"] == "error"
+
+
+def test_anthropic_store_refreshes_when_expiring(monkeypatch, tmp_path):
+    """A stored token past expiry is refreshed via the refresh_token on resolve."""
+    from graph.providers import oauth as oauth_mod2
+
+    store = tmp_path / "anthropic-oauth.json"
+    store.write_text(json.dumps({"access_token": "cc-OLD", "refresh_token": "cc-R", "expires_at": 1.0}))
+    monkeypatch.setattr(oauth_mod2, "_anthropic_store_path", lambda paths=None: store)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "cc-FRESH", "expires_in": 3600}
+
+    monkeypatch.setattr(oauth_mod2.httpx, "post", lambda url, **kw: _Resp())
+    creds = oauth_mod2.resolve_anthropic_oauth()
+    assert creds.access_token == "cc-FRESH"
+    # refresh_token preserved (response omitted it)
+    assert json.loads(store.read_text())["refresh_token"] == "cc-R"

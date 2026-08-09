@@ -1193,6 +1193,34 @@ export const api = {
     }>("/api/config/oauth-status");
   },
 
+  /** Begin an in-console OAuth sign-in (ADR 0097). `mode: "device"` (Codex) returns a
+   *  user_code + verification_uri to poll; `mode: "redirect"` (Claude) returns an
+   *  authorize_url to open and complete with the pasted code. */
+  oauthStart(provider: string) {
+    return request<{
+      flow_id: string;
+      mode: "device" | "redirect";
+      user_code?: string;
+      verification_uri?: string;
+      interval?: number;
+      authorize_url?: string;
+    }>("/api/config/oauth/start", { method: "POST", body: { provider } });
+  },
+  /** Poll a Codex device sign-in until the user approves. */
+  oauthPoll(flowId: string) {
+    return request<{ status: "pending" | "complete" | "error"; error?: string }>(
+      "/api/config/oauth/poll",
+      { method: "POST", body: { flow_id: flowId } },
+    );
+  },
+  /** Complete a Claude sign-in with the pasted `code#state`. */
+  oauthComplete(flowId: string, code: string) {
+    return request<{ status: "complete" | "error"; error?: string }>(
+      "/api/config/oauth/complete",
+      { method: "POST", body: { flow_id: flowId, code } },
+    );
+  },
+
   // ── Agent snapshot (ADR 0091 Slice 1) ──
   /** Review WITHOUT building the download: what would be stripped, what the target must
    *  re-supply, what the pattern sweep matched. The export is meant to leave the machine,

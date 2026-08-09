@@ -62,12 +62,17 @@ _CLAUDE_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 _CLAUDE_CREDS_FILE = Path.home() / ".claude" / ".credentials.json"
 # Refresh 60s early so a token that expires mid-turn isn't handed out.
 _ANTHROPIC_REFRESH_SKEW_S = 60
+# Claude Code's OAuth endpoints + public client id — used to REFRESH tokens that
+# protoAgent's own in-console sign-in minted (graph/providers/oauth_login.py). See the
+# ToS note there: minting via this client is opt-in and the operator's call.
+_ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"  # noqa: S105 — public OAuth endpoint
+_ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 
 @dataclass(frozen=True)
 class AnthropicOAuthCreds:
     access_token: str
-    source: str  # "env" | "credentials_file"
+    source: str  # "env" | "credentials_file" | "instance_store"
     expires_at: float | None = None  # epoch seconds, when known
 
 
@@ -84,17 +89,90 @@ def _read_claude_credentials_file() -> dict[str, Any] | None:
     return doc if isinstance(doc, dict) else None
 
 
-def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
-    """Return a live Claude Code OAuth access token, or raise OAuthCredentialError.
+def _anthropic_store_path(paths: InstancePaths | None = None) -> Path:
+    """protoAgent's own Claude token copy (from in-console sign-in), instance-scoped."""
+    return (paths or instance_paths()).config_dir / "anthropic-oauth.json"
 
-    Order (explicit intent first): ``$CLAUDE_CODE_OAUTH_TOKEN`` env → the
-    ``~/.claude/.credentials.json`` ``claudeAiOauth.accessToken``. We do *not*
-    refresh — Claude Code refreshes on its own use, and a truly-dead token surfaces
-    as a clean 401 the caller maps to a relogin hint.
+
+def _read_anthropic_store() -> dict[str, Any] | None:
+    try:
+        doc = json.loads(_anthropic_store_path().read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return doc if isinstance(doc, dict) and doc.get("access_token") else None
+
+
+def _write_anthropic_store(tokens: dict[str, Any]) -> None:
+    """Persist a freshly minted/refreshed Claude token set. Stamps ``expires_at`` from
+    the response's ``expires_in`` so the resolver can refresh proactively."""
+    access = str(tokens.get("access_token", "") or "").strip()
+    if not access:
+        return
+    expires_in = tokens.get("expires_in")
+    expires_at = _now() + float(expires_in) if isinstance(expires_in, (int, float)) else None
+    doc = {
+        "access_token": access,
+        "refresh_token": str(tokens.get("refresh_token", "") or ""),
+        "expires_at": expires_at,
+    }
+    path = _anthropic_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, json.dumps(doc), mode=0o600)
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _refresh_anthropic_tokens(refresh_token: str, *, timeout_s: float = 20.0) -> dict[str, Any]:
+    resp = httpx.post(
+        _ANTHROPIC_TOKEN_URL,
+        json={"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": _ANTHROPIC_CLIENT_ID},
+        headers={"Content-Type": "application/json"},
+        timeout=httpx.Timeout(max(5.0, float(timeout_s))),
+    )
+    if resp.status_code != 200:
+        raise OAuthCredentialError(
+            f"Claude token refresh failed (HTTP {resp.status_code}). Sign in again.",
+            provider="anthropic-oauth",
+            relogin=resp.status_code in {400, 401, 403},
+        )
+    tokens = resp.json()
+    if not str(tokens.get("access_token", "") or ""):
+        raise OAuthCredentialError(
+            "Claude token refresh returned no access_token.", provider="anthropic-oauth"
+        )
+    return tokens
+
+
+def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
+    """Return a live Claude OAuth access token, or raise OAuthCredentialError.
+
+    Order (explicit intent first): ``$CLAUDE_CODE_OAUTH_TOKEN`` env → protoAgent's own
+    store from in-console sign-in (refreshed when expiring) → ``~/.claude/.credentials.json``.
+    Only our own store is refreshed here; Claude Code owns refresh for its file, and a
+    truly-dead CLI token surfaces as a clean 401 the caller maps to a relogin hint.
     """
     env_token = os.environ.get(_CLAUDE_ENV_VAR, "").strip()
     if env_token:
         return AnthropicOAuthCreds(access_token=env_token, source="env")
+
+    store = _read_anthropic_store()
+    if store:
+        access = str(store["access_token"]).strip()
+        expires_at = store.get("expires_at")
+        expiring = isinstance(expires_at, (int, float)) and expires_at <= _now() + _ANTHROPIC_REFRESH_SKEW_S
+        if expiring and str(store.get("refresh_token", "") or ""):
+            refreshed = _refresh_anthropic_tokens(str(store["refresh_token"]))
+            # A refresh may not return a new refresh_token — keep the old one.
+            refreshed.setdefault("refresh_token", store["refresh_token"])
+            _write_anthropic_store(refreshed)
+            return AnthropicOAuthCreds(access_token=str(refreshed["access_token"]).strip(), source="instance_store")
+        return AnthropicOAuthCreds(
+            access_token=access,
+            source="instance_store",
+            expires_at=expires_at if isinstance(expires_at, (int, float)) else None,
+        )
 
     doc = _read_claude_credentials_file()
     if doc:
@@ -114,9 +192,8 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
                 )
 
     raise OAuthCredentialError(
-        "No Claude Code OAuth credential found. Sign in with the Claude Code CLI "
-        "(`claude`), or set CLAUDE_CODE_OAUTH_TOKEN to a setup token "
-        "(`claude setup-token`).",
+        "No Claude OAuth credential found. Sign in from the console, the Claude Code CLI "
+        "(`claude`), or set CLAUDE_CODE_OAUTH_TOKEN to a setup token (`claude setup-token`).",
         provider="anthropic-oauth",
     )
 

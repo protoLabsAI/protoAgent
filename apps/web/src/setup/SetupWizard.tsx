@@ -232,6 +232,20 @@ export function SetupWizard({
   const [oauthStatus, setOauthStatus] = useState<
     Record<string, { signed_in: boolean; detail: string; hint: string }>
   >({});
+  // Active in-console OAuth sign-in (ADR 0097): the running device/redirect flow, the
+  // pasted code (Claude), and its busy/error state. null = no sign-in in progress.
+  const [login, setLogin] = useState<null | {
+    provider: string;
+    mode: "device" | "redirect";
+    flowId: string;
+    userCode?: string;
+    verifyUri?: string;
+    authorizeUrl?: string;
+  }>(null);
+  const [loginCode, setLoginCode] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Post-install dependency report: set when the archetype bundle installed fine
   // but some members declare pip deps the runtime lacks. Non-null = the finish
   // step stays up showing one-click installs instead of unmounting to a toast.
@@ -275,6 +289,8 @@ export function SetupWizard({
   useEffect(() => {
     setModels([]);
     autoProbedBase.current = "";
+    clearLogin();
+    setLoginError("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.provider, state.runtimeKind]);
 
@@ -294,6 +310,82 @@ export function SetupWizard({
     if (step === "brain") void refreshOauthStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
+
+  // ── in-console OAuth sign-in (ADR 0097) ──
+  const clearLogin = () => {
+    if (pollRef.current) {
+      clearTimeout(pollRef.current);
+      pollRef.current = null;
+    }
+    setLogin(null);
+    setLoginCode("");
+  };
+  // Stop any poll when leaving the wizard / unmounting.
+  useEffect(() => () => clearLogin(), []);
+
+  const onSignedIn = () => {
+    clearLogin();
+    setLoginError("");
+    setModels([]);
+    autoProbedBase.current = "";
+    void refreshOauthStatus();
+  };
+
+  const pollDevice = (flowId: string, intervalMs: number) => {
+    pollRef.current = setTimeout(async () => {
+      try {
+        const r = await api.oauthPoll(flowId);
+        if (r.status === "complete") onSignedIn();
+        else if (r.status === "error") {
+          setLoginError(r.error || "Sign-in failed.");
+          clearLogin();
+        } else pollDevice(flowId, intervalMs);
+      } catch (exc) {
+        setLoginError(errMsg(exc));
+        clearLogin();
+      }
+    }, intervalMs);
+  };
+
+  async function startSignIn(provider: string) {
+    setLoginBusy(true);
+    setLoginError("");
+    clearLogin();
+    try {
+      const r = await api.oauthStart(provider);
+      setLogin({
+        provider,
+        mode: r.mode,
+        flowId: r.flow_id,
+        userCode: r.user_code,
+        verifyUri: r.verification_uri,
+        authorizeUrl: r.authorize_url,
+      });
+      // Open the provider's page for the user (device: enter the code; redirect: approve).
+      const url = r.mode === "device" ? r.verification_uri : r.authorize_url;
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      if (r.mode === "device") pollDevice(r.flow_id, (r.interval ?? 5) * 1000);
+    } catch (exc) {
+      setLoginError(errMsg(exc));
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  async function completeSignIn() {
+    if (!login) return;
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      const r = await api.oauthComplete(login.flowId, loginCode.trim());
+      if (r.status === "complete") onSignedIn();
+      else setLoginError(r.error || "Sign-in failed.");
+    } catch (exc) {
+      setLoginError(errMsg(exc));
+    } finally {
+      setLoginBusy(false);
+    }
+  }
 
   const canGoNext = useMemo(() => {
     // Brain step: ACP needs neither gateway nor model (the coding agent is the brain);
@@ -736,23 +828,69 @@ export function SetupWizard({
                 </FormField>
               ) : oauthProvider ? (
                 <>
-                  {/* Native OAuth (ADR 0097): no gateway base/key — just sign-in status,
-                      a model pick from the subscription account, and a real test turn. */}
-                  <Callout tone={oauthState?.signed_in ? "success" : "warning"}>
-                    {oauthState?.signed_in ? (
-                      <>
-                        <ShieldCheck size={15} /> Signed in — {oauthState.detail || "credentials found"}.
-                      </>
-                    ) : (
-                      <>
-                        <KeyRound size={15} /> Not signed in.{" "}
-                        {oauthState?.hint || "Sign in with the provider's CLI, then re-check."}
-                      </>
-                    )}{" "}
-                    <Button type="button" onClick={() => void refreshOauthStatus()}>
-                      Re-check
-                    </Button>
-                  </Callout>
+                  {/* Native OAuth (ADR 0097): no gateway base/key — sign in from here,
+                      pick a model from the subscription account, run a real test turn. */}
+                  {oauthState?.signed_in ? (
+                    <Callout tone="success">
+                      <ShieldCheck size={15} /> Signed in — {oauthState.detail || "credentials found"}.{" "}
+                      <Button type="button" onClick={() => void refreshOauthStatus()}>
+                        Re-check
+                      </Button>
+                    </Callout>
+                  ) : login && login.provider === state.provider ? (
+                    <Callout tone="warning">
+                      {login.mode === "device" ? (
+                        <>
+                          <KeyRound size={15} /> In the tab that opened, enter code{" "}
+                          <code>{login.userCode}</code> at{" "}
+                          <a href={login.verifyUri} target="_blank" rel="noreferrer">
+                            {login.verifyUri}
+                          </a>
+                          . <Spinner size={13} /> Waiting for approval…{" "}
+                          <Button type="button" onClick={clearLogin}>
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <div className="setup-grid model-row">
+                          <FormField label="Approve in the opened tab, then paste the code shown">
+                            <Input
+                              value={loginCode}
+                              onChange={(event) => setLoginCode(event.target.value)}
+                              placeholder="paste the code (looks like abc123#xyz)"
+                            />
+                          </FormField>
+                          <Button
+                            type="button"
+                            onClick={() => void completeSignIn()}
+                            disabled={loginBusy || !loginCode.trim()}
+                          >
+                            {loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
+                            Complete sign-in
+                          </Button>
+                          <Button type="button" onClick={clearLogin}>
+                            Cancel
+                          </Button>
+                        </div>
+                      )}
+                    </Callout>
+                  ) : (
+                    <Callout tone="warning">
+                      <KeyRound size={15} /> Not signed in.{" "}
+                      <Button
+                        type="button"
+                        onClick={() => void startSignIn(state.provider)}
+                        disabled={loginBusy}
+                      >
+                        {loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
+                        Sign in with {OAUTH_LABEL[state.provider]?.replace(" subscription", "")}
+                      </Button>{" "}
+                      <Button type="button" onClick={() => void refreshOauthStatus()}>
+                        Re-check
+                      </Button>
+                    </Callout>
+                  )}
+                  {loginError ? <Alert status="error">{loginError}</Alert> : null}
                   <div className="setup-grid model-row">
                     <FormField label="Model">
                       <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />

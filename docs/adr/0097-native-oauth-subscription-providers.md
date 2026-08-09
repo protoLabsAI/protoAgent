@@ -100,10 +100,29 @@ Encrypted-reasoning replay across turns did **not** block the tool loop in pract
 feared adapter gap is smaller than expected; deep multi-turn reasoning continuity across many
 tool calls is still worth watching.
 
+## In-console sign-in (2026-08-09)
+
+Signing in no longer requires a terminal — the setup wizard (and Settings) drive the OAuth
+flow directly (`graph/providers/oauth_login.py`, `/api/config/oauth/{start,poll,complete}`):
+
+- **openai-codex** — OpenAI's device-code flow: "Sign in" requests a user-code, opens
+  `auth.openai.com/codex/device`, and the console polls until the user approves, then
+  exchanges + stores tokens. Validated live (real device codes issued).
+- **anthropic-oauth** — Claude Code's PKCE flow: "Sign in" opens
+  `platform.claude.com/oauth/authorize`; the user approves, Anthropic displays a
+  `code#state`, they paste it back, and we exchange at `platform.claude.com/v1/oauth/token`
+  and store the tokens (instance-scoped `anthropic-oauth.json`), refreshed on use.
+
+**ToS escalation (deliberate, operator's call):** the Claude flow authenticates with Claude
+Code's *own* public OAuth client id (`9d1c250a-…`) — i.e. protoAgent performs the login *as*
+Claude Code, a step beyond reading the CLI's existing credentials. Opt-in; the operator
+accepted it for this build. The Codex device flow uses OpenAI's published Codex client, the
+same mechanism the Codex CLI uses.
+
 ## Open items
 
-- **Claude (`anthropic-oauth`) not yet live-validated** — no Claude Code credentials on the
-  test box. Needs an end-to-end turn on a Pro/Max token (tool loop, streaming, `cache_control`).
-- Token **refresh** under a real expiry; confirm we never rotate the Codex CLI's file.
-- Follow-ups: a native `protoagent auth login` device-code flow (vs. import-then-own);
-  per-tab provider switching (relates to ADR 0082); mixed native-main / gateway-aux slots.
+- **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +
+  refresh are unit-tested and the flow runs, but no Pro/Max approval has been driven here yet
+  (tool loop, streaming, `cache_control`).
+- Follow-ups: surface sign-in in the Settings model panel too (wizard done); per-tab provider
+  switching (relates to ADR 0082); mixed native-main / gateway-aux slots.

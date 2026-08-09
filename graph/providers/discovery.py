@@ -47,6 +47,13 @@ _SIGN_IN_HINTS = {
 def _anthropic_status() -> OAuthStatus:
     if os.environ.get(_oauth._CLAUDE_ENV_VAR, "").strip():
         return OAuthStatus("anthropic-oauth", True, "env", "CLAUDE_CODE_OAUTH_TOKEN", "")
+    store = _oauth._read_anthropic_store()
+    if store:
+        exp = store.get("expires_at")
+        detail = "Claude subscription (signed in here)"
+        if isinstance(exp, (int, float)) and exp <= _oauth._now():
+            detail += " (token will refresh on use)"
+        return OAuthStatus("anthropic-oauth", True, "instance_store", detail, "")
     doc = _oauth._read_claude_credentials_file()
     oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
     if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
