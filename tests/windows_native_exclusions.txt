@@ -20,15 +20,12 @@ tests/test_coding_agent_plugin.py
 tests/test_delegates_api.py
 tests/test_delegates_plugin.py
 tests/test_execute_code.py
-tests/test_fleet_reap.py
-tests/test_fleet_supervisor.py
 tests/test_goal_controller.py
 tests/test_goal_fresh_context.py
 tests/test_goal_harness.py
 tests/test_goal_lifecycle.py
 tests/test_goal_no_progress_limit.py
 tests/test_goal_verifiers.py
-tests/test_pid_alive.py
 tests/test_plugin_installer.py
 tests/test_plugin_lifecycle_smoke.py
 tests/test_watch_controller.py

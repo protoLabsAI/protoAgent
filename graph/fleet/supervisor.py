@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -25,6 +24,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from infra.paths import pid_alive
+from infra.proc import detached_kwargs, signal_tree
 
 from graph.workspaces import manager
 
@@ -127,7 +127,12 @@ def _reap(pid: int) -> None:
     A *targeted* non-blocking ``waitpid`` reaps only this pid — it never steals another
     child's exit status (the SIGCHLD-reaper footgun), and it raises ``ECHILD`` (ignored)
     when the pid isn't our child (e.g. a member reparented to init after a hub restart —
-    which init then reaps itself, so it never becomes a lingering zombie here anyway)."""
+    which init then reaps itself, so it never becomes a lingering zombie here anyway).
+
+    Windows has no zombies (and no ``os.WNOHANG`` — accessing it raised
+    ``AttributeError`` straight through ``_alive``, ADR 0098): nothing to reap."""
+    if os.name == "nt":
+        return
     try:
         os.waitpid(int(pid), os.WNOHANG)
     except (OSError, ValueError):
@@ -274,8 +279,9 @@ def start(ident: str) -> dict:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_offset = log_path.stat().st_size if log_path.exists() else 0
         logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
-        # start_new_session detaches it from this CLI's process group so it survives exit.
-        proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
+        # Detached (ADR 0098): its own tree root, so it survives this CLI's exit
+        # and stop()/shutdown_all() can take down the whole member tree later.
+        proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, **detached_kwargs())
         from infra.paths import package_version
 
         now = datetime.now(timezone.utc).isoformat()
@@ -320,8 +326,8 @@ def start(ident: str) -> dict:
 
 
 def stop(ident: str, *, timeout: float = 8.0) -> dict:
-    """SIGTERM the agent (by id or display name) and reap its registry entry (SIGKILL
-    if it lingers).
+    """Gracefully tree-signal the agent (by id or display name) and reap its registry
+    entry (hard tree-kill if it lingers) — ADR 0098: the member's children die with it.
 
     NOTE: this blocks (busy-wait) up to ``timeout`` — call it off the event loop
     (``asyncio.to_thread``); the routes do. The registry entry is removed under the lock
@@ -345,14 +351,18 @@ def stop(ident: str, *, timeout: float = 8.0) -> dict:
         # recycled). Reaping the entry is right and `stopped` is true — but say why we
         # never signalled, so an operator reading the log isn't left guessing.
         log.warning("[fleet] %s pid %d is not our agent (pid reuse?) — reaped entry, no kill", name, pid)
-        return {"name": name, "stopped": True, "note": f"pid {pid} is not a protoAgent server (pid reuse?) — no signal sent"}
+        return {
+            "name": name,
+            "stopped": True,
+            "note": f"pid {pid} is not a protoAgent server (pid reuse?) — no signal sent",
+        }
     try:
-        os.kill(pid, signal.SIGTERM)
+        signal_tree(pid, force=False)
         deadline = time.monotonic() + timeout
         while _alive(pid) and time.monotonic() < deadline:
             time.sleep(0.2)
         if _alive(pid):
-            os.kill(pid, signal.SIGKILL)
+            signal_tree(pid, force=True)
             # SIGKILL is not instantaneous — the kernel still has to tear the process down,
             # and _alive() reaps a zombie child first. Give it a bounded grace so we report
             # the settled truth rather than a race.
@@ -532,7 +542,9 @@ def update_remote(ident: str, *, name: str | None = None, url: str | None = None
             new_name = manager._safe(name)
             if new_name.lower() in manager._RESERVED_NAMES:
                 raise FleetError(f"{new_name!r} is reserved — it's how the fleet addresses this instance")
-            others = {r["name"] for k, r in remotes.items() if k != rid} | {w["name"] for w in manager.list_workspaces()}
+            others = {r["name"] for k, r in remotes.items() if k != rid} | {
+                w["name"] for w in manager.list_workspaces()
+            }
             if new_name in others:
                 raise FleetError(f"an agent named {new_name!r} already exists")
             rec["name"] = new_name
@@ -733,7 +745,7 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
     """Stop every running LOCAL member — called from the hub's shutdown hook so a
     member can't outlive the host that spawned it.
 
-    Members are spawned detached (``start_new_session=True`` in ``start``) so they
+    Members are spawned detached (``detached_kwargs()`` in ``start``) so they
     survive the CLI/hub that launched them — durable by design, but it also means a
     hub rebuild+restart strands a member running the OLD code (it's in its own
     session, gets no signal, and is never re-execed — see
@@ -746,8 +758,8 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
     so inside a member ``_load_state`` reads its own (empty) ``fleet.json`` and this
     no-ops. Only the hub's registry holds members.
 
-    SIGTERMs all members **at once** (not sequentially), then waits one shared
-    ``timeout`` before SIGKILLing stragglers — so teardown stays bounded regardless of
+    Gracefully tree-signals all members **at once** (not sequentially), then waits one
+    shared ``timeout`` before hard-killing straggler trees — so teardown stays bounded regardless of
     member count and fits the hub's graceful-shutdown window. Best-effort throughout.
     """
     if keep_members_on_exit():
@@ -761,21 +773,15 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
         for k, _ in live:
             state.pop(k, None)
         _save_state(state)
-    for _, pid in live:  # SIGTERM everyone first — concurrent, not 8s-each
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
+    for _, pid in live:  # graceful tree-signal everyone first — concurrent, not 8s-each
+        signal_tree(pid, force=False)
     deadline = time.monotonic() + timeout
     pending = [pid for _, pid in live]
     while pending and time.monotonic() < deadline:
         time.sleep(0.1)
         pending = [pid for pid in pending if _alive(pid)]
-    for pid in pending:  # SIGKILL stragglers past the shared deadline
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    for pid in pending:  # hard-kill straggler trees past the shared deadline
+        signal_tree(pid, force=True)
     names = [k for k, _ in live]
     log.info("[fleet] host exiting — spun down %d member(s): %s", len(names), ", ".join(names))
     return names

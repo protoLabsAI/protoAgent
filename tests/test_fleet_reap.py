@@ -33,6 +33,7 @@ def test_alive_true_for_running_child():
         p.wait()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX zombie semantics — Windows has no zombie state")
 def test_alive_false_for_sigkilled_zombie_child():
     p = _spawn_sleeper()
     pid = p.pid
@@ -63,7 +64,7 @@ def test_alive_false_for_none_and_zero():
     assert supervisor._alive(0) is False
 
 
-@pytest.mark.skipif(not hasattr(os, "waitpid"), reason="POSIX waitpid only")
+@pytest.mark.skipif(os.name == "nt", reason="POSIX zombie semantics — Windows os.waitpid takes handles, not pids")
 def test_reap_does_not_steal_other_childs_status():
     """Targeted reap must not consume a DIFFERENT child's exit status (the SIGCHLD
     reaper footgun) — a concurrent child we still want to wait() on stays wait()-able."""

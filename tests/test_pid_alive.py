@@ -12,6 +12,8 @@ from __future__ import annotations
 import ctypes
 import os
 
+import pytest
+
 from infra import paths
 
 
@@ -20,6 +22,7 @@ def test_posix_running_process_is_alive():
     assert paths.pid_alive(os.getpid()) is True
 
 
+@pytest.mark.skipif(os.name == "nt", reason="exercises the POSIX os.kill branch — Windows takes _pid_alive_windows")
 def test_posix_only_process_lookup_error_means_gone(monkeypatch):
     def _kill(pid, sig):
         raise ProcessLookupError
@@ -28,6 +31,7 @@ def test_posix_only_process_lookup_error_means_gone(monkeypatch):
     assert paths.pid_alive(12345) is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="exercises the POSIX os.kill branch — Windows takes _pid_alive_windows")
 def test_posix_permission_error_means_alive(monkeypatch):
     """EPERM = the process EXISTS but isn't ours to signal — the old watchdog's bare
     `except OSError` misread this as dead."""

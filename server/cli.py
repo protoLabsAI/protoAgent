@@ -20,13 +20,13 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
-import os
-import signal
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from infra.proc import detached_kwargs, pid_alive, signal_tree
 
 # Management subcommands re-parented from `python -m server <sub>` — name → the
 # (module, callable) implementing it. Each is `run_*_cli(argv: list[str]) -> int`,
@@ -126,14 +126,6 @@ def _read_pidfile() -> dict | None:
         return None
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except (OSError, ProcessLookupError):
-        return False
-    return True
-
-
 def _port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
     """True if something is accepting connections on ``host:port``."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -186,11 +178,10 @@ def _cmd_up(rest: list[str]) -> int:
     if args.host:
         argv += ["--host", args.host]
 
-    # Detached: own session so it outlives this CLI process; output tees to the log.
+    # Detached (ADR 0098): its own tree root so it outlives this CLI process and
+    # `down` can take the whole tree with it; output tees to the log.
     with open(log_path, "ab") as logf:
-        proc = subprocess.Popen(
-            argv, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True
-        )
+        proc = subprocess.Popen(argv, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL, **detached_kwargs())
 
     deadline = time.monotonic() + args.wait
     while time.monotonic() < deadline:
@@ -206,7 +197,10 @@ def _cmd_up(rest: list[str]) -> int:
             return 0
         time.sleep(0.3)
 
-    print(f"protoagent: started (pid {proc.pid}) but port {args.port} didn't bind in {args.wait:g}s — see {log_path}", file=sys.stderr)
+    print(
+        f"protoagent: started (pid {proc.pid}) but port {args.port} didn't bind in {args.wait:g}s — see {log_path}",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -214,25 +208,28 @@ def _cmd_down(rest: list[str]) -> int:
     args = _lifecycle_parser("down").parse_args(rest)
     rec = _read_pidfile()
     pid = (rec or {}).get("pid")
-    if not pid or not _pid_alive(int(pid)):
+    if not pid or not pid_alive(int(pid)):
         # No pidfile / dead pid — but something may still hold the port (started by
         # hand). Be honest rather than kill a process we didn't launch.
         port = int((rec or {}).get("port") or args.port)
         _pid_path().unlink(missing_ok=True)
         if _port_open(port):
-            print(f"protoagent: a server is on :{port} but wasn't started by `protoagent up` — stop it where it runs", file=sys.stderr)
+            print(
+                f"protoagent: a server is on :{port} but wasn't started by `protoagent up` — stop it where it runs",
+                file=sys.stderr,
+            )
             return 1
         print("protoagent: not running")
         return 0
 
     pid = int(pid)
-    os.kill(pid, signal.SIGTERM)
+    signal_tree(pid, force=False)
     for _ in range(40):  # up to ~8s for a graceful stop
-        if not _pid_alive(pid):
+        if not pid_alive(pid):
             break
         time.sleep(0.2)
     else:
-        os.kill(pid, signal.SIGKILL)
+        signal_tree(pid, force=True)
     _pid_path().unlink(missing_ok=True)
     print(f"protoagent: stopped (pid {pid})")
     return 0

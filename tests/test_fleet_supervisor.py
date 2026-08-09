@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import os
-import signal
 import socket
 import time
 
 import pytest
 
 from graph.workspaces import manager
+from infra.proc import kill_tree
+
 from graph.fleet import supervisor
 
 
@@ -444,18 +444,18 @@ def test_shutdown_all_sigkills_straggler(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
-    def stubborn_kill(pid, sig):  # ignores SIGTERM; dies only on SIGKILL
-        sigs.append(int(sig))
-        if int(sig) == int(supervisor.signal.SIGKILL):
+    def stubborn_kill(pid, *, force):  # ignores the graceful ask; dies only on force
+        sigs.append(force)
+        if force:
             alive.discard(int(pid))
 
-    monkeypatch.setattr(supervisor.os, "kill", stubborn_kill)
+    monkeypatch.setattr(supervisor, "signal_tree", stubborn_kill)
     manager.create("a")
     supervisor.start("a")
 
     assert supervisor.shutdown_all(timeout=0.2)  # returns the stopped member
     assert not alive  # SIGKILL'd after the bounded wait
-    assert int(supervisor.signal.SIGTERM) in sigs and int(supervisor.signal.SIGKILL) in sigs
+    assert False in sigs and True in sigs  # graceful ask first, then the hard kill
 
 
 # ── first-boot-after-update reconcile (version-coherence P2) ──────────────────
@@ -621,11 +621,7 @@ def test_start_returns_once_port_binds(tmp_path, monkeypatch):
     import sys
 
     port = _free_port()  # a genuinely free port for the fake member to bind
-    child = (
-        "import socket,time\n"
-        f"s=socket.socket(); s.bind(('127.0.0.1',{port})); s.listen(1)\n"
-        "time.sleep(30)\n"
-    )
+    child = f"import socket,time\ns=socket.socket(); s.bind(('127.0.0.1',{port})); s.listen(1)\ntime.sleep(30)\n"
     _real_spawn_env(tmp_path, monkeypatch, [sys.executable, "-c", child])
     manager.create("binds", port=port)
     t0 = time.monotonic()
@@ -635,7 +631,7 @@ def test_start_returns_once_port_binds(tmp_path, monkeypatch):
         assert time.monotonic() - t0 < supervisor._BOOT_WATCH_SECONDS  # early exit on bind, not the full watch
     finally:
         try:
-            os.kill(rec["pid"], signal.SIGKILL)
+            kill_tree(rec["pid"])
         except (OSError, UnboundLocalError):
             pass
 
@@ -856,7 +852,7 @@ def test_stop_reports_failure_and_restores_entry_when_process_survives(fleet, mo
     invisible to the hub yet still holding its port (#2286)."""
     manager.create("stubborn", port=7891)
     supervisor.start("stubborn")
-    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: None)  # ignores every signal
+    monkeypatch.setattr(supervisor, "signal_tree", lambda pid, *, force: None)  # ignores every signal
     monkeypatch.setattr(supervisor, "_KILL_GRACE", 0.05)
 
     res = supervisor.stop("stubborn", timeout=0.1)
