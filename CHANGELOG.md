@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.129.0] - 2026-08-09
+
+### Added
+- **Run Claude or ChatGPT on your own coding-agent subscription, natively (#2420).** Two new
+  `model.provider` values authenticate protoAgent's native pipeline with an OAuth
+  subscription instead of a gateway API key — no gateway, no ACP. `anthropic-oauth` drives
+  Claude Pro/Max through a Claude Code OAuth token (read live from `~/.claude`), and
+  `openai-codex` drives ChatGPT/Codex through the Responses API (bootstrapped from
+  `~/.codex`, then self-refreshed). Everything downstream — tool loop, streaming,
+  compaction, subagents — is unchanged, because the graph already treats the model as a
+  plug-in client. Opt-in per agent; see ADR 0097.
+- **Setup wizard: pick a subscription brain, no config-file editing (#2420).** The
+  first-run wizard's "brain" step now offers Gateway · Claude subscription · ChatGPT
+  subscription · Coding agent as one choice. The subscription options auto-detect your
+  Claude Code / Codex sign-in ("✓ Signed in — Max plan" or the exact sign-in command),
+  populate the model dropdown from your account's real model list, and Test connection
+  runs a real turn on your plan — no API key, no api_base, no hand-picked model id. The
+  `model.provider` setting is now a dropdown everywhere.
+- **Sign in to Claude / ChatGPT from the console — no terminal (#2420).** The subscription
+  cards now have a "Sign in" button that runs the OAuth flow in-app: ChatGPT/Codex uses a
+  device code (enter it at the opened page; the console polls until you approve), and Claude
+  opens the approve page and takes the code you paste back. Tokens are stored and refreshed
+  for you. See ADR 0097 for the Claude client-id note.
+
 ## [0.128.0] - 2026-08-09
 
 ### Added

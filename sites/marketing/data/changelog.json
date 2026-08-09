@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.129.0",
+    "date": "2026-08-09",
+    "changes": [
+      "Run Claude or ChatGPT on your own coding-agent subscription, natively (#2420).",
+      "Setup wizard: pick a subscription brain, no config-file editing (#2420).",
+      "Sign in to Claude / ChatGPT from the console — no terminal (#2420)."
+    ]
+  },
+  {
     "version": "v0.128.0",
     "date": "2026-08-09",
     "changes": [
