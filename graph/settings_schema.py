@@ -64,6 +64,11 @@ class Field:
 # (runtime/acp_agents.py) so the list lives in exactly one place.
 ACP_MODEL_OPTIONS = acp_runtime_options()
 
+# model.provider dropdown suggestions (ADR 0097): the gateway default plus the native
+# OAuth-subscription providers. Dynamic (options_source="providers"), so validate_flat
+# does NOT enforce it — a custom gateway provider label still saves.
+_PROVIDER_OPTIONS = ["openai", "anthropic-oauth", "openai-codex"]
+
 
 # Ordered registry. Section order here is the order the UI renders groups in.
 FIELDS: list[Field] = [
@@ -107,7 +112,18 @@ FIELDS: list[Field] = [
         options_source="models",
         scope="host",
     ),
-    Field("model.provider", "model_provider", "Provider", "string", "Model & runtime", scope="host"),
+    Field(
+        "model.provider",
+        "model_provider",
+        "Provider",
+        "select",
+        "Model & runtime",
+        "Gateway (openai) uses the API base + key below; anthropic-oauth / openai-codex "
+        "run Claude / ChatGPT on your own subscription (ADR 0097) and ignore them.",
+        scope="host",
+        # Dynamic (not a strict enum) so a custom gateway provider label still validates.
+        options_source="providers",
+    ),
     Field("model.api_base", "api_base", "API base URL", "string", "Model & runtime", scope="host"),
     Field("model.api_key", "api_key", "API key", "secret", "Model & runtime", "Stored in secrets.yaml, never echoed back."),
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
@@ -1362,6 +1378,8 @@ def build_schema(
                 if f.options_source == "models+acp"
                 else ["native", *acp_opts]
                 if f.options_source == "runtime"
+                else _PROVIDER_OPTIONS
+                if f.options_source == "providers"
                 else list(f.options)
             ),
             "default": _jsonable(getattr(defaults, f.attr, None)),

@@ -1,0 +1,200 @@
+"""Console read-layer for native OAuth providers (ADR 0097).
+
+Powers the setup wizard + Settings: "is the user signed in?" and "what models can
+this subscription run?" — so nobody has to hand-edit YAML or guess a model id. Both
+answers are read-only probes; nothing here refreshes or writes a token (the status
+check must be a safe, repeatable poll).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
+
+import httpx
+
+from graph.providers import NATIVE_OAUTH_PROVIDERS
+from graph.providers import oauth as _oauth
+
+if TYPE_CHECKING:
+    from graph.config import LangGraphConfig
+
+log = logging.getLogger("protoagent.providers.discovery")
+
+
+@dataclass(frozen=True)
+class OAuthStatus:
+    provider: str
+    signed_in: bool
+    source: str  # where the credential came from ("" when not signed in)
+    detail: str  # human context: plan, account, expiry — "" when unknown
+    hint: str  # the exact sign-in step when not signed in ("" when signed in)
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+_SIGN_IN_HINTS = {
+    "anthropic-oauth": "Sign in with the Claude Code CLI (`claude`), or run `claude "
+    "setup-token` and set CLAUDE_CODE_OAUTH_TOKEN.",
+    "openai-codex": "Sign in with the Codex CLI (`codex`) — protoAgent imports the "
+    "credential once and keeps its own refreshed copy.",
+}
+
+
+def _anthropic_status() -> OAuthStatus:
+    if os.environ.get(_oauth._CLAUDE_ENV_VAR, "").strip():
+        return OAuthStatus("anthropic-oauth", True, "env", "CLAUDE_CODE_OAUTH_TOKEN", "")
+    doc = _oauth._read_claude_credentials_file()
+    oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
+    if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
+        plan = str(oauth.get("subscriptionType", "") or "").strip()
+        detail = f"{plan} plan" if plan else "Claude Code credentials"
+        return OAuthStatus("anthropic-oauth", True, "credentials_file", detail, "")
+    return OAuthStatus("anthropic-oauth", False, "", "", _SIGN_IN_HINTS["anthropic-oauth"])
+
+
+def _codex_status() -> OAuthStatus:
+    """Read-only: is a Codex token present (our store or the CLI file), unexpired?
+    Never refreshes or writes — a status poll must be side-effect-free."""
+    from infra.paths import instance_paths
+
+    store = _oauth._codex_store_path(instance_paths())
+    tokens = _oauth._read_codex_tokens(store)
+    source = "instance_store"
+    if tokens is None:
+        tokens = _oauth._read_codex_tokens(_oauth._CODEX_CLI_AUTH_FILE)
+        source = "codex_cli"
+    if not tokens or not str(tokens.get("access_token", "") or "").strip():
+        return OAuthStatus("openai-codex", False, "", "", _SIGN_IN_HINTS["openai-codex"])
+    acct = _oauth._codex_account_id(tokens)
+    expiring = _oauth._jwt_is_expiring(str(tokens["access_token"]), 0)
+    detail = "ChatGPT account" + (f" …{acct[-6:]}" if acct else "")
+    if expiring:
+        # Token itself is stale but the refresh token is likely still good — we'll
+        # refresh transparently on first use, so still "signed in".
+        detail += " (token will refresh on use)"
+    return OAuthStatus("openai-codex", True, source, detail, "")
+
+
+def oauth_status(provider: str) -> OAuthStatus:
+    """Read-only sign-in status for a native OAuth provider."""
+    provider = (provider or "").strip().lower()
+    if provider == "anthropic-oauth":
+        return _anthropic_status()
+    if provider == "openai-codex":
+        return _codex_status()
+    raise ValueError(f"not a native OAuth provider: {provider!r}")
+
+
+def all_oauth_status() -> list[dict]:
+    """Status for every native OAuth provider — the wizard renders all of them."""
+    return [oauth_status(p).as_dict() for p in sorted(NATIVE_OAUTH_PROVIDERS)]
+
+
+# ── model listing ────────────────────────────────────────────────────────────
+
+# Fallback Claude ids if the live /models probe fails (offline, or the OAuth token
+# can't list). Kept short and current; the live probe is preferred.
+_ANTHROPIC_FALLBACK_MODELS = [
+    "claude-opus-4-1",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+]
+_MODELS_TIMEOUT_S = 15.0
+
+
+def _list_codex_models(config: "LangGraphConfig") -> tuple[list[str], str]:
+    try:
+        creds = _oauth.resolve_codex_oauth()
+    except _oauth.OAuthCredentialError as exc:
+        return [], str(exc)
+    headers = {
+        "Authorization": f"Bearer {creds.access_token}",
+        "User-Agent": "codex-cli",
+        "originator": "codex_cli_rs",
+    }
+    if creds.account_id:
+        headers["ChatGPT-Account-Id"] = creds.account_id
+    try:
+        resp = httpx.get(
+            f"{creds.base_url}/models?client_version=1.0.0",
+            headers=headers,
+            timeout=_MODELS_TIMEOUT_S,
+        )
+        resp.raise_for_status()
+        models = [
+            str(m.get("slug"))
+            for m in resp.json().get("models", [])
+            if isinstance(m, dict) and m.get("slug")
+        ]
+        return models, ""
+    except httpx.HTTPError as exc:
+        return [], f"Could not list Codex models: {exc}"
+
+
+def _list_anthropic_models() -> tuple[list[str], str]:
+    try:
+        creds = _oauth.resolve_anthropic_oauth()
+    except _oauth.OAuthCredentialError as exc:
+        return _ANTHROPIC_FALLBACK_MODELS, str(exc)
+    from graph.providers.anthropic_oauth import oauth_default_headers
+
+    headers = {"Authorization": f"Bearer {creds.access_token}", "anthropic-version": "2023-06-01"}
+    headers.update(oauth_default_headers())
+    try:
+        resp = httpx.get("https://api.anthropic.com/v1/models", headers=headers, timeout=_MODELS_TIMEOUT_S)
+        resp.raise_for_status()
+        models = [
+            str(m.get("id")) for m in resp.json().get("data", []) if isinstance(m, dict) and m.get("id")
+        ]
+        return (models or _ANTHROPIC_FALLBACK_MODELS), ""
+    except httpx.HTTPError:
+        # The OAuth token may not carry models:list scope — fall back to the curated set.
+        return _ANTHROPIC_FALLBACK_MODELS, ""
+
+
+def list_provider_models(provider: str, config: "LangGraphConfig") -> tuple[list[str], str]:
+    """Return ``(models, error)`` for a native OAuth provider's account.
+
+    Codex is probed live from the account's ``/models`` endpoint; Claude tries the
+    Anthropic ``/v1/models`` API and falls back to a curated list.
+    """
+    provider = (provider or "").strip().lower()
+    if provider == "openai-codex":
+        return _list_codex_models(config)
+    if provider == "anthropic-oauth":
+        return _list_anthropic_models()
+    raise ValueError(f"not a native OAuth provider: {provider!r}")
+
+
+def validate_oauth_connection(
+    provider: str, model: str, config: "LangGraphConfig"
+) -> tuple[bool, str]:
+    """The wizard/Settings "Test connection" for a native OAuth provider.
+
+    Builds the real client and streams a 1-token turn (Codex requires streaming and
+    forbids a system message, so we send a bare user prompt). Returns ``(ok, error)``.
+    """
+    provider = (provider or "").strip().lower()
+    if provider not in NATIVE_OAUTH_PROVIDERS:
+        return False, f"not a native OAuth provider: {provider!r}"
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from graph.providers import build_native_oauth_llm
+
+        llm = build_native_oauth_llm(provider, config, model_name=(model or "").strip() or None)
+        got = False
+        for _chunk in llm.stream([HumanMessage("Reply with: ok")]):
+            got = True
+            break
+        if not got:
+            return False, "The provider accepted the request but streamed no response."
+        return True, ""
+    except _oauth.OAuthCredentialError as exc:
+        return False, str(exc)
+    except Exception as exc:  # noqa: BLE001 — surface the provider's own error text
+        return False, str(exc)

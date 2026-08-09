@@ -332,3 +332,80 @@ def test_codex_middleware_noop_without_system():
 
     req = _FakeCodexReq(None, object())
     assert CodexResponsesInputMiddleware()._transform(req) is req
+
+
+# ── discovery (console read-layer) ──────────────────────────────────────────────
+
+
+def test_oauth_status_not_signed_in(monkeypatch, tmp_path):
+    from graph.providers import discovery
+
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "none.json")
+    s = discovery.oauth_status("anthropic-oauth")
+    assert s.provider == "anthropic-oauth"
+    assert s.signed_in is False
+    assert "claude" in s.hint.lower()
+
+
+def test_oauth_status_signed_in_via_env(monkeypatch):
+    from graph.providers import discovery
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-X")
+    s = discovery.oauth_status("anthropic-oauth")
+    assert s.signed_in is True
+    assert s.source == "env"
+    assert s.hint == ""
+
+
+def test_all_oauth_status_covers_every_provider(monkeypatch, tmp_path):
+    from graph.providers import discovery
+
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "none.json")
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "none.json")
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "store.json")
+    rows = discovery.all_oauth_status()
+    assert {r["provider"] for r in rows} == {"anthropic-oauth", "openai-codex"}
+    assert all(set(r) == {"provider", "signed_in", "source", "detail", "hint"} for r in rows)
+
+
+def test_list_provider_models_rejects_unknown():
+    from graph.providers import discovery
+
+    with pytest.raises(ValueError, match="not a native OAuth provider"):
+        discovery.list_provider_models("openai", LangGraphConfig())
+
+
+def test_anthropic_models_fall_back_without_creds(monkeypatch, tmp_path):
+    from graph.providers import discovery
+
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "none.json")
+    models, error = discovery.list_provider_models("anthropic-oauth", LangGraphConfig())
+    assert models  # curated fallback, never empty
+    assert error  # explains why the live probe was skipped
+
+
+# ── settings schema: provider is a suggest-dropdown, not a strict enum ───────────
+
+
+def test_provider_field_is_a_dropdown():
+    from graph.settings_schema import FIELDS, build_schema
+
+    field = next(f for f in FIELDS if f.key == "model.provider")
+    assert field.type == "select"
+    assert field.options_source == "providers"
+    # build_schema fills the provider options for the console.
+    schema = build_schema(LangGraphConfig())
+    entry = next(
+        f for group in schema for f in group["fields"] if f["key"] == "model.provider"
+    )
+    assert "anthropic-oauth" in entry["options"]
+    assert "openai-codex" in entry["options"]
+
+
+def test_provider_select_still_accepts_custom_value():
+    """options_source (dynamic) means validate_flat must NOT reject a custom provider."""
+    from graph.settings_schema import validate_flat
+
+    ok, _ = validate_flat({"model.provider": "my-custom-gateway"})
+    assert ok

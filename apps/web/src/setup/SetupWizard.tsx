@@ -55,9 +55,13 @@ const steps: Step[] = ["welcome", "agent", "brain", "finish"];
 type WizardState = {
   agentName: string;
   operatorName: string;
-  // Where turns run. "native" = the LangGraph loop on the gateway below; "acp" = hand
-  // each turn to the chosen CLI coding agent (agent_runtime: acp:<acpAgent>) — ADR 0033.
+  // Where turns run. "native" = the LangGraph loop below; "acp" = hand each turn to the
+  // chosen CLI coding agent (agent_runtime: acp:<acpAgent>) — ADR 0033.
   runtimeKind: "native" | "acp";
+  // For the native runtime: which provider authenticates it (ADR 0097). "openai" = the
+  // gateway (api_base + key); "anthropic-oauth" / "openai-codex" = a Claude / ChatGPT
+  // subscription (no gateway key — the model list + test route through the OAuth path).
+  provider: string;
   acpAgent: string;
   apiBase: string;
   apiKey: string;
@@ -82,6 +86,7 @@ function defaultState(): WizardState {
     agentName: "protoagent",
     operatorName: "",
     runtimeKind: "native",
+    provider: "openai",
     acpAgent: "proto",
     apiBase: "https://api.proto-labs.ai/v1",
     apiKey: "",
@@ -112,6 +117,7 @@ function hydrateState(payload: ConfigPayload): WizardState {
     agentName: config.identity.name || "protoagent",
     operatorName: config.identity.operator || "",
     runtimeKind: rt.startsWith("acp:") ? "acp" : "native",
+    provider: String(config.model.provider || "openai"),
     acpAgent: rt.startsWith("acp:") ? rt.slice(4) || "proto" : "proto",
     apiBase: config.model.api_base || "https://api.proto-labs.ai/v1",
     apiKey: "",
@@ -138,6 +144,40 @@ function hydrateState(payload: ConfigPayload): WizardState {
     initTasks: false,
   };
 }
+
+// Native OAuth-subscription providers (ADR 0097) — auth from a Claude Code / Codex
+// token instead of a gateway key, so the brain step hides api_base/api_key for them.
+const OAUTH_PROVIDERS = ["anthropic-oauth", "openai-codex"] as const;
+function isOAuthProvider(provider: string): boolean {
+  return (OAUTH_PROVIDERS as readonly string[]).includes(provider);
+}
+
+// The brain step presents ONE choice with four cards; each maps to a (runtimeKind,
+// provider) pair. Keeping the two config axes separate underneath (ADR 0033/0047) while
+// the UI is a single "what's your brain?" pick.
+type BrainKind = "gateway" | "claude" | "codex" | "acp";
+function brainKindOf(s: Pick<WizardState, "runtimeKind" | "provider">): BrainKind {
+  if (s.runtimeKind === "acp") return "acp";
+  if (s.provider === "anthropic-oauth") return "claude";
+  if (s.provider === "openai-codex") return "codex";
+  return "gateway";
+}
+function brainKindPatch(kind: BrainKind): Partial<WizardState> {
+  switch (kind) {
+    case "acp":
+      return { runtimeKind: "acp" };
+    case "claude":
+      return { runtimeKind: "native", provider: "anthropic-oauth" };
+    case "codex":
+      return { runtimeKind: "native", provider: "openai-codex" };
+    default:
+      return { runtimeKind: "native", provider: "openai" };
+  }
+}
+const OAUTH_LABEL: Record<string, string> = {
+  "anthropic-oauth": "Claude subscription",
+  "openai-codex": "ChatGPT subscription",
+};
 
 // A probe/test against a possibly-wrong or slow gateway must never hang the wizard —
 // race it against a timeout so `busy` always clears and the step never locks (which
@@ -186,6 +226,12 @@ export function SetupWizard({
   // Result of the last "Test connection" probe (a real completion). null = not
   // yet tested; invalidated whenever the key/base/model changes.
   const [tested, setTested] = useState<null | { ok: boolean; error: string }>(null);
+  // Sign-in status for the native OAuth providers (ADR 0097), keyed by provider id —
+  // drives the "✓ signed in" / sign-in-hint line in the brain step. Refetched when the
+  // step is entered and via a manual "Re-check" (the user may sign in out-of-band).
+  const [oauthStatus, setOauthStatus] = useState<
+    Record<string, { signed_in: boolean; detail: string; hint: string }>
+  >({});
   // Post-install dependency report: set when the archetype bundle installed fine
   // but some members declare pip deps the runtime lacks. Non-null = the finish
   // step stays up showing one-click installs instead of unmounting to a toast.
@@ -219,18 +265,46 @@ export function SetupWizard({
     };
   }, [open]);
 
-  // A changed key/base/model invalidates a prior connection test.
+  // A changed key/base/model/provider invalidates a prior connection test.
   useEffect(() => {
     setTested(null);
-  }, [state.apiBase, state.apiKey, state.modelName]);
+  }, [state.apiBase, state.apiKey, state.modelName, state.provider]);
+
+  // Switching the brain (provider or native↔acp) clears the stale model list + probe
+  // marker so the new provider's models are fetched fresh.
+  useEffect(() => {
+    setModels([]);
+    autoProbedBase.current = "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.provider, state.runtimeKind]);
+
+  // Refresh OAuth sign-in status when the brain step is entered (the user may have
+  // signed into Claude Code / Codex out-of-band since the wizard opened).
+  const refreshOauthStatus = async () => {
+    try {
+      const r = await api.oauthStatus();
+      const map: Record<string, { signed_in: boolean; detail: string; hint: string }> = {};
+      for (const p of r.providers) map[p.provider] = { signed_in: p.signed_in, detail: p.detail, hint: p.hint };
+      setOauthStatus(map);
+    } catch {
+      /* status is advisory — a failed probe just leaves the line blank */
+    }
+  };
+  useEffect(() => {
+    if (step === "brain") void refreshOauthStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   const canGoNext = useMemo(() => {
-    // On the brain step, a native model needs a gateway + model name. ACP needs
-    // neither (the coding agent is the brain), so don't gate on the model fields.
-    if (step === "brain")
-      return Boolean(state.runtimeKind === "acp" || (state.apiBase.trim() && state.modelName.trim()));
+    // Brain step: ACP needs neither gateway nor model (the coding agent is the brain);
+    // an OAuth provider needs a model but no gateway/key; a gateway needs base + model.
+    if (step === "brain") {
+      if (state.runtimeKind === "acp") return true;
+      if (isOAuthProvider(state.provider)) return Boolean(state.modelName.trim());
+      return Boolean(state.apiBase.trim() && state.modelName.trim());
+    }
     return true;
-  }, [state.apiBase, state.modelName, state.runtimeKind, step]);
+  }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, step]);
 
   function update(patch: Partial<WizardState>) {
     setState((current) => ({ ...current, ...patch }));
@@ -242,7 +316,11 @@ export function SetupWizard({
     setError("");
     if (!silent) setModels([]);
     try {
-      const response = await withTimeout(api.models(state.apiBase, state.apiKey), 15000, "Probe");
+      const response = await withTimeout(
+        api.models(state.apiBase, state.apiKey, isOAuthProvider(state.provider) ? state.provider : ""),
+        15000,
+        "Probe",
+      );
       if (response.error) {
         if (!silent) setError(response.error); // auto-probe stays quiet — the user may still be typing creds
         return;
@@ -266,13 +344,18 @@ export function SetupWizard({
   // silent so a not-yet-entered key doesn't flash an error. (bd-hbf)
   const autoProbedBase = useRef("");
   useEffect(() => {
+    if (step !== "brain" || state.runtimeKind !== "native") return;
+    // OAuth providers probe the subscription account (no gateway base needed); the
+    // gateway probes when a base is filled. Fire once per (provider, base) key.
+    const oauth = isOAuthProvider(state.provider);
     const base = state.apiBase.trim();
-    if (step !== "brain" || state.runtimeKind !== "native" || !base) return;
-    if (autoProbedBase.current === base || models.length > 0) return;
-    autoProbedBase.current = base;
+    if (!oauth && !base) return;
+    const probeKey = oauth ? `oauth:${state.provider}` : base;
+    if (autoProbedBase.current === probeKey || models.length > 0) return;
+    autoProbedBase.current = probeKey;
     void probeModels({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, state.runtimeKind, state.apiBase]);
+  }, [step, state.runtimeKind, state.provider, state.apiBase]);
 
   // The real auth check: a 1-token completion down the same path as chat, so a
   // bad key / wrong model is caught here in the UI rather than as a failed turn.
@@ -282,7 +365,12 @@ export function SetupWizard({
     setTested(null);
     try {
       const r = await withTimeout(
-        api.testModel(state.apiBase.trim(), state.apiKey.trim(), state.modelName.trim()),
+        api.testModel(
+          state.apiBase.trim(),
+          state.apiKey.trim(),
+          state.modelName.trim(),
+          isOAuthProvider(state.provider) ? state.provider : "",
+        ),
         25000,
         "Test connection",
       );
@@ -331,21 +419,31 @@ export function SetupWizard({
   const acpAgent = acpAgentList.find((a) => a.id === state.acpAgent);
   const acpAgentLabel = acpAgent?.label ?? state.acpAgent;
   const acpLaunchHint = acpAgent ? `${acpAgent.command} ${acpAgent.args.join(" ")}`.trim() : state.acpAgent;
+  // Brain step derived view (ADR 0097): the selected card + whether it's an OAuth provider.
+  const brainKind = brainKindOf(state);
+  const oauthProvider = isOAuthProvider(state.provider) ? state.provider : "";
+  const oauthState = oauthProvider ? oauthStatus[oauthProvider] : undefined;
 
   async function finishSetup() {
     setBusy(true);
     setError("");
     setMessage("");
     try {
+      // ACP runs on whatever provider is configured elsewhere; a native brain carries
+      // its provider (gateway "openai", or a native OAuth provider — ADR 0097).
+      const provider = state.runtimeKind === "acp" ? state.provider || "openai" : state.provider;
+      const oauth = isOAuthProvider(provider);
       const model: AgentConfig["model"] = {
-        provider: "openai",
+        provider,
         name: state.modelName.trim(),
-        api_base: state.apiBase.trim(),
+        // OAuth providers authenticate from a credential store, not a gateway endpoint —
+        // don't pin an irrelevant api_base for them.
+        api_base: oauth ? "" : state.apiBase.trim(),
         temperature: Number(state.temperature),
         max_tokens: Number(state.maxTokens),
         max_iterations: Number(state.maxIterations),
       };
-      if (state.apiKey.trim()) {
+      if (!oauth && state.apiKey.trim()) {
         model.api_key = state.apiKey.trim();
       }
       // The project you're setting up should be operable, so fold its path
@@ -588,23 +686,39 @@ export function SetupWizard({
             <StepBody
               icon={<Cpu size={20} />}
               title="Brain"
-              kicker={state.runtimeKind === "acp" ? "coding agent over ACP" : "OpenAI-compatible gateway"}
+              kicker={
+                brainKind === "acp"
+                  ? "coding agent over ACP"
+                  : brainKind === "gateway"
+                    ? "OpenAI-compatible gateway"
+                    : `${OAUTH_LABEL[state.provider]} — your own plan`
+              }
             >
-              {/* How this agent thinks: native LangGraph loop on a gateway, or hand each
-                  turn to a CLI coding agent over ACP (ADR 0033). A radiogroup, so it gets a
-                  plain label (not a FormField <label>, which should point at one control). */}
+              {/* One choice, four brains: a gateway (api key), your own Claude / ChatGPT
+                  subscription over OAuth (ADR 0097), or a CLI coding agent over ACP (ADR
+                  0033). A radiogroup, so it gets a plain label (not a FormField <label>). */}
               <div className="pl-field">
                 <span className="pl-field__label">How this agent thinks</span>
                 <RadioCardGroup
-                  name="runtime"
-                  value={state.runtimeKind}
-                  onValueChange={(kind) => update({ runtimeKind: kind as WizardState["runtimeKind"] })}
+                  name="brain"
+                  value={brainKind}
+                  onValueChange={(kind) => update(brainKindPatch(kind as BrainKind))}
                 >
-                  <RadioCard value="native" title="Native model" blurb="Run turns on an OpenAI-compatible gateway." />
+                  <RadioCard value="gateway" title="Gateway model" blurb="An OpenAI-compatible gateway with an API key." />
+                  <RadioCard
+                    value="claude"
+                    title="Claude subscription"
+                    blurb="Run Claude on your Pro/Max plan — no API key, uses your Claude Code login."
+                  />
+                  <RadioCard
+                    value="codex"
+                    title="ChatGPT subscription"
+                    blurb="Run ChatGPT/Codex on your plan — no API key, uses your Codex CLI login."
+                  />
                   <RadioCard value="acp" title="Coding agent (ACP)" blurb="Hand each turn to a CLI coding agent — it's the brain, no gateway key needed." />
                 </RadioCardGroup>
               </div>
-              {state.runtimeKind === "acp" ? (
+              {brainKind === "acp" ? (
                 <FormField
                   label="Coding agent"
                   hint={
@@ -620,10 +734,55 @@ export function SetupWizard({
                     options={acpAgentList.map((a) => ({ value: a.id, label: a.label }))}
                   />
                 </FormField>
+              ) : oauthProvider ? (
+                <>
+                  {/* Native OAuth (ADR 0097): no gateway base/key — just sign-in status,
+                      a model pick from the subscription account, and a real test turn. */}
+                  <Callout tone={oauthState?.signed_in ? "success" : "warning"}>
+                    {oauthState?.signed_in ? (
+                      <>
+                        <ShieldCheck size={15} /> Signed in — {oauthState.detail || "credentials found"}.
+                      </>
+                    ) : (
+                      <>
+                        <KeyRound size={15} /> Not signed in.{" "}
+                        {oauthState?.hint || "Sign in with the provider's CLI, then re-check."}
+                      </>
+                    )}{" "}
+                    <Button type="button" onClick={() => void refreshOauthStatus()}>
+                      Re-check
+                    </Button>
+                  </Callout>
+                  <div className="setup-grid model-row">
+                    <FormField label="Model">
+                      <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
+                      <datalist id="model-options">
+                        {models.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
+                    </FormField>
+                    <Button type="button" onClick={() => void probeModels()} disabled={busy}>
+                      {busy ? <Spinner size={15} /> : <Search size={15} />}
+                      Load models
+                    </Button>
+                    <TestConnectionButton
+                      onClick={() => void testConnection()}
+                      pending={busy}
+                      disabled={!state.modelName.trim()}
+                    />
+                  </div>
+                  {tested ? (
+                    <Alert status={tested.ok ? "success" : "error"}>
+                      {tested.ok
+                        ? "Connection OK — the model responded on your subscription."
+                        : `Connection failed — ${tested.error || "the model did not respond."}`}
+                    </Alert>
+                  ) : null}
+                </>
               ) : (
                 <>
-                  {/* Native gateway config — only when the runtime is the native model.
-                      ACP hands turns to the coding agent, so the gateway isn't shown there.
+                  {/* Gateway config — only when the brain is the gateway model.
                       Temperature / max-tokens / max-turns are sensible defaults a new user
                       shouldn't have to tune — they flow through finishSetup; tweak later in
                       Settings. */}
@@ -674,8 +833,13 @@ export function SetupWizard({
             <StepBody icon={<Check size={20} />} title="You're all set" kicker="Review & finish">
               <div className="finish-list">
                 <StatusLine icon={<Bot size={15} />} label={`Agent · ${state.agentName || "protoagent"}`} />
-                {state.runtimeKind === "acp" ? (
+                {brainKind === "acp" ? (
                   <StatusLine icon={<KeyRound size={15} />} label={`Runtime · ${acpAgentLabel} (acp:${state.acpAgent})`} />
+                ) : oauthProvider ? (
+                  <StatusLine
+                    icon={<ShieldCheck size={15} />}
+                    label={`${OAUTH_LABEL[state.provider]} · ${state.modelName || "—"}`}
+                  />
                 ) : (
                   <StatusLine icon={<KeyRound size={15} />} label={`Model · ${state.modelName || "—"}`} />
                 )}

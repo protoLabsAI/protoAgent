@@ -1176,11 +1176,21 @@ export const api = {
     );
   },
 
-  models(apiBase: string, apiKey: string) {
+  models(apiBase: string, apiKey: string, provider = "") {
     return request<{ models: string[]; error: string }>("/api/config/models", {
       method: "POST",
-      body: { api_base: apiBase, api_key: apiKey },
+      // `provider` (ADR 0097): a native OAuth provider lists the subscription
+      // account's models instead of the gateway's; blank = gateway.
+      body: { api_base: apiBase, api_key: apiKey, provider },
     });
+  },
+
+  /** Sign-in status for the native OAuth providers (ADR 0097) — "✓ signed in" or a
+   *  sign-in hint per provider, so the setup UX never asks for a key it doesn't need. */
+  oauthStatus() {
+    return request<{
+      providers: { provider: string; signed_in: boolean; source: string; detail: string; hint: string }[];
+    }>("/api/config/oauth-status");
   },
 
   // ── Agent snapshot (ADR 0091 Slice 1) ──
@@ -1234,10 +1244,12 @@ export const api = {
   },
 
   // lists). Blank fields fall back to the saved config (Settings re-test).
-  testModel(apiBase: string, apiKey: string, model: string) {
+  testModel(apiBase: string, apiKey: string, model: string, provider = "") {
     return request<{ ok: boolean; error: string }>("/api/config/test-model", {
       method: "POST",
-      body: { api_base: apiBase, api_key: apiKey, model },
+      // `provider` (ADR 0097): a native OAuth provider tests through the subscription
+      // (a real streamed turn), ignoring api_base/api_key; blank = gateway.
+      body: { api_base: apiBase, api_key: apiKey, model, provider },
     });
   },
 
