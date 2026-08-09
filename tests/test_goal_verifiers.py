@@ -30,11 +30,13 @@ async def test_command_missing_field():
 
 
 @pytest.mark.asyncio
-async def test_test_verifier_surfaces_last_line():
-    # A python one-liner, not `echo …; exit 0`: cmd.exe has no `;` chaining, and
-    # the command runs through the PLATFORM shell now (#2412 phase 5).
-    cmd = f'"{sys.executable}" -c "print(\'5 passed in 1.2s\')"'
-    res = await run_verifier({"type": "test", "command": cmd}, VerifyContext())
+async def test_test_verifier_surfaces_last_line(tmp_path):
+    # A script FILE, not an inline one-liner: the command crosses cmd.exe's
+    # /s /c quote-stripping on Windows and bash -c on POSIX — a file path with
+    # no quotes survives both (runner interpreters live at space-free paths).
+    script = tmp_path / "emit.py"
+    script.write_text("print('5 passed in 1.2s')\n")
+    res = await run_verifier({"type": "test", "command": f"{sys.executable} {script}"}, VerifyContext())
     assert res.met is True
     assert "5 passed" in res.reason
 

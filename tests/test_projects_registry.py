@@ -234,6 +234,7 @@ def test_relative_path_is_refused_and_warns(caplog):
 
 def test_tilde_is_expanded_so_every_consumer_agrees(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows expanduser reads THIS, not HOME
     fenced = _cfg(projects=[{"name": "a", "path": "~/dev/x"}]).fenced_projects()
     assert fenced[0]["path"] == str(tmp_path / "dev/x")
     assert "~" not in fenced[0]["path"]
