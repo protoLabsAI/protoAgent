@@ -32,7 +32,7 @@ import hashlib
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -353,8 +353,8 @@ def ensure_live_config() -> bool:
     else:
         if seed_override:
             log.warning(
-                "[config] PROTOAGENT_SEED_CONFIG=%r is not a readable file — "
-                "seeding from the default template instead", seed_override
+                "[config] PROTOAGENT_SEED_CONFIG=%r is not a readable file — seeding from the default template instead",
+                seed_override,
             )
         source = config_example_path()
     if not source.exists():
@@ -436,9 +436,7 @@ def _merge_three_way(
         last_val = last.get(key, _MISSING)
 
         if isinstance(seed_val, dict) and isinstance(live_val, dict):
-            _merge_three_way(
-                live_val, seed_val, last_val, prefix=f"{dotted}.", secrets=secrets, out=out
-            )
+            _merge_three_way(live_val, seed_val, last_val, prefix=f"{dotted}.", secrets=secrets, out=out)
         elif live_val is _MISSING:
             live[key] = copy.deepcopy(seed_val)
             out["added"].append(dotted)
@@ -508,8 +506,7 @@ def apply_seed_merge() -> dict[str, list[str]] | None:
         if changed:
             save_yaml_doc(live_doc, live_path)
             log.info(
-                "[config] merge-on-boot applied from %s — added=%s updated=%s removed=%s "
-                "(kept %d operator-owned)",
+                "[config] merge-on-boot applied from %s — added=%s updated=%s removed=%s (kept %d operator-owned)",
                 seed_path.name,
                 out["added"] or "-",
                 out["updated"] or "-",
@@ -526,8 +523,7 @@ def apply_seed_merge() -> dict[str, list[str]] | None:
         return out
     except Exception:
         log.exception(
-            "[config] merge-on-boot failed for seed %s — leaving the live config "
-            "untouched (set %s= to disable)",
+            "[config] merge-on-boot failed for seed %s — leaving the live config untouched (set %s= to disable)",
             seed_path,
             _SEED_MERGE_ENV,
         )
@@ -1166,7 +1162,18 @@ def snapshot_soul(text: str) -> Path | None:
                 return None  # already the latest recorded version — dedupe
         except (OSError, ValueError):
             pass  # a corrupt/unreadable newest snapshot must not stop us archiving THIS one
-        path = hist / f"{_soul_version_id(text, datetime.now(timezone.utc))}.md"
+        when = datetime.now(timezone.utc)
+        if existing and _SOUL_VERSION_RE.match(existing[-1].stem):
+            # The lexical-sort==chronological invariant needs strictly increasing
+            # stamps — but Windows' clock can tick coarser than a microsecond, so
+            # two rapid saves can share one, and then the HASH decides which
+            # snapshot the prune deletes. Stamp strictly after the newest.
+            prev_when = datetime.strptime(existing[-1].stem.split("-")[0], "%Y%m%dT%H%M%S.%fZ").replace(
+                tzinfo=timezone.utc
+            )
+            if when <= prev_when:
+                when = prev_when + timedelta(microseconds=1)
+        path = hist / f"{_soul_version_id(text, when)}.md"
         path.write_text(text, encoding="utf-8")
         _prune_soul_history(hist)
         return path
