@@ -174,15 +174,17 @@ jobs:
           source .venv/Scripts/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-asyncio
-      - name: Run tests (suite minus the tracked POSIX-only backlog)
-        # tests/windows_native_exclusions.txt is the #2412 burndown: files that
-        # failed natively at the 2026-08-08 baseline. Everything else (~4650
-        # tests) must pass on Windows or this job fails the PR.
+      - name: SURVEY the exclusion backlog (throwaway branch — never merge)
+        # Runs ONLY the excluded files with short tracebacks so every remaining
+        # native failure is diagnosable from one run (#2412 phase 5).
         shell: bash
+        continue-on-error: true
         run: |
           source .venv/Scripts/activate
-          IGNORES=$(grep -vE '^\s*(#|$)' tests/windows_native_exclusions.txt | sed 's|^|--ignore=|' || true)
-          python -m pytest tests/ -q $IGNORES
+          FILES=$(grep -vE '^\s*(#|$)' tests/windows_native_exclusions.txt | tr '\n' ' ')
+          python -m pytest $FILES -q --tb=short -rf 2>&1 | tee survey.txt || true
+          echo "=== failure histogram ==="
+          grep '^FAILED ' survey.txt | sed 's/^FAILED //' | cut -d: -f1 | sort | uniq -c | sort -rn || true
 
   fleet-integration:
     name: Fleet integration (multi-instance)
