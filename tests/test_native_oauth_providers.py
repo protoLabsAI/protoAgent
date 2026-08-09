@@ -126,6 +126,30 @@ def test_create_llm_anthropic_oauth_uses_bearer(monkeypatch):
     assert "x-api-key" not in {k.lower() for k in llm._client.default_headers}
 
 
+def test_anthropic_oauth_omits_temperature(monkeypatch):
+    """The current Claude models reject `temperature` ("deprecated for this model"),
+    so anthropic-oauth must NOT forward config.temperature."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-X")
+    from graph.providers.anthropic_oauth import build_anthropic_oauth_llm
+
+    llm = build_anthropic_oauth_llm(
+        LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-opus-5", temperature=0.2)
+    )
+    assert llm.temperature is None  # not the config's 0.2
+
+
+def test_anthropic_oauth_empty_token_fails_clearly(monkeypatch):
+    """A malformed store (empty token) must fail with a clear message, not the SDK's
+    confusing "No api key passed in" 401."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    import graph.providers.anthropic_oauth as ao
+    from graph.providers.oauth import AnthropicOAuthCreds
+
+    monkeypatch.setattr(ao, "resolve_anthropic_oauth", lambda: AnthropicOAuthCreds("", "instance_store"))
+    with pytest.raises(RuntimeError, match="empty access token"):
+        ao.build_anthropic_oauth_llm(LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-opus-5"))
+
+
 def test_anthropic_oauth_rejects_gateway_alias(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-X")
     cfg = LangGraphConfig(model_provider="anthropic-oauth", model_name="protolabs/reasoning")

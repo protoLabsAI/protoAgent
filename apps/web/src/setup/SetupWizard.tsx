@@ -409,7 +409,10 @@ export function SetupWizard({
     if (!silent) setModels([]);
     try {
       const response = await withTimeout(
-        api.models(state.apiBase, state.apiKey, isOAuthProvider(state.provider) ? state.provider : ""),
+        // Always send the SELECTED provider so the endpoint doesn't fall back to the
+        // saved config mid-wizard (a gateway probe must not route through a saved
+        // openai-codex, and vice-versa). "openai" → gateway path server-side.
+        api.models(state.apiBase, state.apiKey, state.provider),
         15000,
         "Probe",
       );
@@ -418,9 +421,11 @@ export function SetupWizard({
         return;
       }
       setModels(response.models);
-      // Only auto-select on an explicit probe; auto-probe must not clobber a
-      // model the user (or a hydrated config) already chose.
-      if (!silent && response.models.length && !response.models.includes(state.modelName)) {
+      // Auto-select a valid model when the current one isn't offered by this provider
+      // (blank after a brain switch, or a stale model from the previous provider — e.g.
+      // 'gpt-5.5' left over when switching to Claude). A model that IS in the list is
+      // kept, so a hydrated/typed choice survives.
+      if (response.models.length && (!state.modelName.trim() || !response.models.includes(state.modelName))) {
         update({ modelName: response.models[0] });
       }
     } catch (exc) {
@@ -461,7 +466,9 @@ export function SetupWizard({
           state.apiBase.trim(),
           state.apiKey.trim(),
           state.modelName.trim(),
-          isOAuthProvider(state.provider) ? state.provider : "",
+          // Send the selected provider (not "") so the test can't fall back to the
+          // saved config's provider mid-wizard. "openai" → gateway path server-side.
+          state.provider,
         ),
         25000,
         "Test connection",
@@ -794,7 +801,11 @@ export function SetupWizard({
                 <RadioCardGroup
                   name="brain"
                   value={brainKind}
-                  onValueChange={(kind) => update(brainKindPatch(kind as BrainKind))}
+                  onValueChange={(kind) =>
+                    // Clear the model on a brain switch so a provider's model id never
+                    // carries into another provider (the auto-probe picks a valid one).
+                    update({ ...brainKindPatch(kind as BrainKind), modelName: "" })
+                  }
                 >
                   <RadioCard value="gateway" title="Gateway model" blurb="An OpenAI-compatible gateway with an API key." />
                   <RadioCard

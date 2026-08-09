@@ -125,14 +125,23 @@ def build_anthropic_oauth_llm(
             "Claude model id (e.g. 'claude-sonnet-4-5', 'claude-opus-4-1')."
         )
 
+    token = (creds.access_token or "").strip()
+    if not token:
+        # resolve_anthropic_oauth raises when there's no credential, so this only guards
+        # a malformed store — but an empty token would reach Anthropic as "no api key
+        # passed in" (a confusing 401), so fail clearly instead.
+        raise RuntimeError("anthropic-oauth resolved an empty access token — sign in again.")
+
     kwargs: dict[str, Any] = {
         "model": name,
-        "oauth_token": creds.access_token,
+        "oauth_token": token,
         # ChatAnthropic requires *some* api_key value even though we override it away;
         # a sentinel makes an accidental x-api-key leak obvious in a capture.
         "api_key": "oauth-via-auth-token",
         "max_tokens": config.max_tokens,
-        "temperature": config.temperature,
+        # NOTE: we do NOT send `temperature`. The current Claude models (the 5 family and
+        # newer) reject it ("`temperature` is deprecated for this model"), and it's not a
+        # knob worth breaking every turn over — omit it and let the model default.
         "timeout": config.request_timeout,
         "max_retries": config.llm_max_retries,
         "streaming": True,
@@ -141,12 +150,8 @@ def build_anthropic_oauth_llm(
     }
     effort = reasoning_effort if reasoning_effort is not None else config.reasoning_effort
     if config.thinking == "enabled" or effort:
-        # Extended thinking. Budget scales with the requested effort; Anthropic
-        # requires temperature unset (=1) when thinking is on.
+        # Extended thinking. Budget scales with the requested effort.
         budget = {"low": 4096, "medium": 8192, "high": 16384, "max": 24576}.get(effort or "medium", 8192)
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
-        kwargs.pop("temperature", None)
-    if config.top_p is not None:
-        kwargs["top_p"] = config.top_p
 
     return _OAuthChatAnthropic(**kwargs)
