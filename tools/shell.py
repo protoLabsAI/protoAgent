@@ -17,10 +17,10 @@ offensive-security specifics. Complements ``tools/gh_cli.py`` (which is
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
-import signal
 from dataclasses import dataclass
+
+from infra.proc import akill_tree, group_kwargs
 
 
 @dataclass
@@ -34,46 +34,6 @@ class ShellResult:
     @property
     def ok(self) -> bool:
         return self.error is None and not self.timed_out and self.returncode == 0
-
-
-async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
-    """Best-effort termination of ``proc`` and every child it spawned."""
-    if os.name == "nt":
-        # Windows has no os.killpg(). taskkill /T is the built-in process-tree
-        # primitive and is available on supported desktop/server releases.
-        try:
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/PID",
-                str(proc.pid),
-                "/T",
-                "/F",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            try:
-                await asyncio.wait_for(killer.communicate(), timeout=5)
-            except asyncio.TimeoutError:
-                # A stalled taskkill must not extend run_command past its own
-                # timeout — reap it and fall through to the immediate kill.
-                with contextlib.suppress(ProcessLookupError):
-                    killer.kill()
-                await killer.wait()
-        except (FileNotFoundError, OSError):
-            # Fall through to killing the immediate process if taskkill is
-            # unavailable in a constrained Windows environment.
-            pass
-    else:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            return
-        except (ProcessLookupError, PermissionError):
-            pass
-
-    try:
-        proc.kill()
-    except (ProcessLookupError, PermissionError):
-        pass
 
 
 async def run_command(
@@ -104,9 +64,9 @@ async def run_command(
             stderr=asyncio.subprocess.PIPE,
             env=merged_env,
             cwd=cwd,
-            # Own process group so a timeout can kill the whole tree — the launched
-            # command may create children of its own.
-            start_new_session=True,
+            # Anchor the child as its own tree root so a timeout can kill the
+            # whole tree — the launched command may create children of its own.
+            **group_kwargs(),
         )
     except FileNotFoundError:
         binary = argv[0] if argv else "?"
@@ -120,9 +80,9 @@ async def run_command(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        # Kill the whole process group, not just the immediate child: a shell command can
+        # Kill the whole process tree, not just the immediate child: a shell command can
         # spawn children (pipes, &, $(…)) that would otherwise be orphaned on timeout.
-        await _kill_process_tree(proc)
+        await akill_tree(proc)
         try:
             await proc.communicate()
         except Exception:  # noqa: BLE001 — process already killed; draining is best-effort

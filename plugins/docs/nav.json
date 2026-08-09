@@ -782,6 +782,10 @@
           "title": "0096 — The self-building loop: plugin-devkit closes design → build → test → hot-swap"
         },
         {
+          "path": "adr/0098-process-tree-lifecycle.md",
+          "title": "0098 — One process-tree lifecycle: `infra/proc` anchors and kills every child tree"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
