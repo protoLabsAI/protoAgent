@@ -14,6 +14,14 @@ on:
 permissions:
   contents: read
 
+# Cost control: a new push to a PR supersedes the old one, so cancel the in-flight run
+# instead of letting both finish (the Windows leg bills 2× and runs ~14 min — five rapid
+# pushes were five full matrices). Keyed per PR; `main` pushes get a unique per-commit group
+# and are never cancelled, so every landed commit is still fully tested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   workspace-config:
     name: Verify workspace config
@@ -153,6 +161,12 @@ jobs:
     # until this job the only native PR feedback was a contributor's own
     # machine. Runs the suite minus the tracked POSIX-only backlog (below);
     # anything not excluded failing on Windows gates the PR.
+    #
+    # Cost: the Windows runner bills 2× and takes ~14 min, so skip it while a PR is a
+    # DRAFT (work-in-progress) — it runs the moment the PR is marked ready for review, and
+    # always on push-to-main. Combined with the workflow `concurrency` above, a WIP branch
+    # no longer spends a Windows matrix on every intermediate push.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 35
     env:
