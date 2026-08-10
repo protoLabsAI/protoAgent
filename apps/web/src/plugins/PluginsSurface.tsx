@@ -417,7 +417,17 @@ function LocalTab() {
 
   return (
     <>
-      <PanelHeader title="Installed" kicker={`${counts.All} installed · ${counts.Loaded} loaded`} />
+      <PanelHeader
+        title="Installed"
+        kicker={`${counts.All} installed · ${counts.Loaded} loaded`}
+        // Install-from-URL lives in the header (Josh, 2026-08-10): at the tail of the
+        // search/filter toolbar it read as a filter and was routinely missed.
+        actions={
+          <Button type="button" onClick={() => setInstallOpen(true)} title="Install a plugin from a git URL">
+            <Download size={14} /> Install from URL
+          </Button>
+        }
+      />
       <div className="stage-body">
         {missing.length ? (
           <Alert
@@ -456,9 +466,6 @@ function LocalTab() {
                 active={status}
                 onSelect={(id) => setStatus(id as InstalledStatus)}
               />
-              <Button type="button" variant="ghost" onClick={() => setInstallOpen(true)} title="Install a plugin from a git URL">
-                <Download size={14} /> Install from URL
-              </Button>
             </div>
             <div className="plugin-table-wrap">
               <Table className="plugin-table">
