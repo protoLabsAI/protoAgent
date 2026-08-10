@@ -8,6 +8,8 @@ checkpoints / skills are FILES directly under it while the rest are dirs.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import infra.paths as paths
@@ -29,7 +31,9 @@ def test_memory_default_and_override(box, monkeypatch):
 
     assert memory_path() == str(box / "memory")
     monkeypatch.setenv("MEMORY_PATH", "/custom/mem")
-    assert memory_path() == "/custom/mem"  # env override verbatim
+    # Compare as a path, not an exact string: memory_path() normalizes separators, so on
+    # Windows the override reads back as `\custom\mem` — the same path (#2412).
+    assert Path(memory_path()) == Path("/custom/mem")  # env override honored
 
 
 def test_tasks_default_and_override(box, monkeypatch):
