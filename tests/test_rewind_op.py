@@ -211,3 +211,46 @@ def test_rewind_rewrites_real_sqlite_checkpoint(tmp_path):
     assert final[-1].content == "answer1"
     assert all("answer2" not in (m.content or "") for m in final)
     assert _open_tool_calls(final) == set()  # tool pairing preserved
+
+
+def test_rewind_by_content_matches_list_block_messages():
+    """#2480: Responses-API / reasoning models carry list-of-block content —
+    str(content) is a Python repr that never equals the bubble text, so every
+    content-targeted rewind on such models returned not_found and removed
+    nothing (while the confirm dialog claimed the discard happened)."""
+    msgs = [
+        HumanMessage(content="Return exactly PA-WINDOWS-FORK-A.", id="h1"),
+        AIMessage(content=[{"type": "text", "text": "PA-WINDOWS-FORK-A."}], id="a1"),
+        HumanMessage(content="Return exactly PA-WINDOWS-FORK-B.", id="h2"),
+        AIMessage(content=[{"type": "text", "text": "PA-WINDOWS-FORK-B."}], id="a2"),
+    ]
+    fake = _FakeGraph(msgs)
+    result = asyncio.run(
+        rewind_thread(fake, object(), "a2a:s1", target_id="client-id-never-matches", target_content="PA-WINDOWS-FORK-A.")
+    )
+    assert result["found"] is True
+    assert result["kept"] == 2 and result["removed"] == 2
+    (_, update), = fake.updates
+    kept_ids = [m.id for m in update["messages"] if not isinstance(m, RemoveMessage)]
+    assert kept_ids == ["h1", "a1"]
+
+
+def test_rewind_by_content_handles_reasoning_and_string_blocks():
+    """Mixed block shapes: reasoning/thinking blocks are ignored for matching;
+    bare-string blocks and multiple text blocks concatenate like the stream."""
+    msgs = [
+        HumanMessage(content="q", id="h1"),
+        AIMessage(
+            content=[
+                {"type": "reasoning", "reasoning": "let me think"},
+                {"type": "text", "text": "two "},
+                "part answer",
+            ],
+            id="a1",
+        ),
+        HumanMessage(content="q2", id="h2"),
+    ]
+    fake = _FakeGraph(msgs)
+    result = asyncio.run(rewind_thread(fake, object(), "a2a:s1", target_content="two part answer"))
+    assert result["found"] is True
+    assert result["removed"] == 1

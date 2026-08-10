@@ -87,6 +87,23 @@ def _safe_cut_end(messages: list, end: int) -> int:
     return end
 
 
+def _content_text(message) -> str:
+    """Message content as comparable TEXT. Responses-API / reasoning / vision
+    models carry list-of-block content — ``str(content)`` of those is a Python
+    repr that can never equal the console bubble's text, which made rewind
+    return ``not_found`` for every content-targeted call on such models (#2480).
+    Text blocks concatenate (mirroring how the client accumulates the stream);
+    non-text blocks are ignored for matching."""
+    content = getattr(message, "content", "") or ""
+    if isinstance(content, list):
+        return "".join(
+            b if isinstance(b, str) else str(b.get("text", "") or "")
+            for b in content
+            if isinstance(b, str) or (isinstance(b, dict) and b.get("type") in (None, "text"))
+        ).strip()
+    return str(content).strip()
+
+
 def _resolve_end(messages: list, *, target_index, target_id, target_content, occurrence=None) -> int | None:
     """Index of the message JUST PAST the target (the naive, pre-safe-cut prefix
     length), or ``None`` if the target can't be located.
@@ -112,7 +129,7 @@ def _resolve_end(messages: list, *, target_index, target_id, target_content, occ
     if target_content is not None:
         want = str(target_content).strip()
         if want:
-            matches = [i for i in range(n) if str(getattr(messages[i], "content", "") or "").strip() == want]
+            matches = [i for i in range(n) if _content_text(messages[i]) == want]
             if matches:
                 # The client sends WHICH occurrence of this content it clicked — identical
                 # replies can repeat, and picking the last match would silently keep a LATER
