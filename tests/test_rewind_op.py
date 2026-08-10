@@ -254,3 +254,31 @@ def test_rewind_by_content_handles_reasoning_and_string_blocks():
     result = asyncio.run(rewind_thread(fake, object(), "a2a:s1", target_content="two part answer"))
     assert result["found"] is True
     assert result["removed"] == 1
+
+
+def test_rewind_before_excludes_the_target_pair():
+    """#2491 (Regenerate): before=True makes the cut exclusive — the targeted user
+    message AND everything after it go, so the resend replaces the turn."""
+    msgs = [
+        HumanMessage(content="q1", id="h1"),
+        AIMessage(content="a1", id="a1"),
+        HumanMessage(content="q2", id="h2"),
+        AIMessage(content="a2", id="a2"),
+    ]
+    fake = _FakeGraph(msgs)
+    result = asyncio.run(rewind_thread(fake, object(), "a2a:s1", target_content="q2", before=True))
+    assert result["found"] is True
+    assert result["kept"] == 2 and result["removed"] == 2
+    (_, update), = fake.updates
+    kept_ids = [m.id for m in update["messages"] if not isinstance(m, RemoveMessage)]
+    assert kept_ids == ["h1", "a1"]
+
+
+def test_rewind_before_first_message_empties_the_thread():
+    """Regenerating the very first turn: the exclusive cut lands at 0 — every
+    message is discarded and the resend rebuilds the thread from scratch."""
+    msgs = [HumanMessage(content="q1", id="h1"), AIMessage(content="a1", id="a1")]
+    fake = _FakeGraph(msgs)
+    result = asyncio.run(rewind_thread(fake, object(), "a2a:s1", target_content="q1", before=True))
+    assert result["found"] is True
+    assert result["kept"] == 0 and result["removed"] == 2

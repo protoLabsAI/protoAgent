@@ -1133,14 +1133,36 @@ function ChatSessionSlot({
     if (status === "error") chatStore.setSessionStatus(session.id, "idle");
   }
 
-  function regenerate(assistantId?: string) {
+  async function regenerate(assistantId?: string) {
     if (!assistantId || !session || status === "streaming") return;
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
     if (!snap) return;
     const i = snap.messages.findIndex((m) => m.id === assistantId);
     if (i < 0) return;
-    const user = [...snap.messages.slice(0, i)].reverse().find((m) => m.role === "user");
-    if (!user) return;
+    const userIndex = [...snap.messages.slice(0, i)].reverse().findIndex((m) => m.role === "user");
+    if (userIndex < 0) return;
+    const absUserIndex = i - 1 - userIndex;
+    const user = snap.messages[absUserIndex];
+    // Server-side rewind FIRST (#2491): discard the old user+assistant pair from
+    // the checkpoint so the resend below REPLACES the turn. Without this the
+    // server appended a second identical pair while the UI hid it — history,
+    // session summary, and /export silently diverged from what the chat showed.
+    // Same content-occurrence disambiguation confirmRewind uses; `before` makes
+    // the cut exclusive (the user message goes too — runTurn re-sends it).
+    const want = (user.content || "").trim();
+    const occurrence = snap.messages
+      .slice(0, absUserIndex)
+      .filter((m) => (m.content || "").trim() === want).length;
+    try {
+      const r = await api.rewindChatSession(session.id, "", user.content, occurrence, true);
+      if (!r.found) {
+        onError("Couldn't regenerate — the turn is no longer in the agent's live context.");
+        return;
+      }
+    } catch (e) {
+      onError(`Couldn't regenerate: ${errMsg(e)}`);
+      return;
+    }
     chatStore.updateMessages(session.id, snap.messages.slice(0, i));
     void runTurn(user.content, { hidden: true });
   }

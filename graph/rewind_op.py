@@ -104,7 +104,7 @@ def _content_text(message) -> str:
     return str(content).strip()
 
 
-def _resolve_end(messages: list, *, target_index, target_id, target_content, occurrence=None) -> int | None:
+def _resolve_end(messages: list, *, target_index, target_id, target_content, occurrence=None, before=False) -> int | None:
     """Index of the message JUST PAST the target (the naive, pre-safe-cut prefix
     length), or ``None`` if the target can't be located.
 
@@ -112,19 +112,24 @@ def _resolve_end(messages: list, *, target_index, target_id, target_content, occ
     then the LAST message whose ``content`` equals ``target_content`` (the console
     path — the visible assistant bubble's text matches its final ``AIMessage``).
     Last-occurrence is the conservative pick when identical replies repeat.
+
+    ``before=True`` EXCLUDES the target: the prefix ends just before it (the
+    Regenerate path, #2491 — discard the last user+assistant pair so the resend
+    replaces the turn). ``end == 0`` (target is the first message) is valid there.
     """
     n = len(messages)
+    off = 0 if before else 1
     if target_index is not None:
         idx = int(target_index)
         if idx < 0:
             idx += n  # allow -1 = last
         if 0 <= idx < n:
-            return idx + 1
+            return idx + off
         return None
     if target_id is not None:
         for i, m in enumerate(messages):
             if getattr(m, "id", None) == target_id:
-                return i + 1
+                return i + off
         # fall through to content matching if an id was given but not found
     if target_content is not None:
         want = str(target_content).strip()
@@ -137,8 +142,8 @@ def _resolve_end(messages: list, *, target_index, target_id, target_content, occ
                 # Pick that same occurrence from the start; fall back to the last match
                 # (conservative — discards less, never corrupts) only when unaligned.
                 if occurrence is not None and 0 <= int(occurrence) < len(matches):
-                    return matches[int(occurrence)] + 1
-                return matches[-1] + 1
+                    return matches[int(occurrence)] + off
+                return matches[-1] + off
     return None
 
 
@@ -151,6 +156,7 @@ async def rewind_thread(
     target_id: str | None = None,
     target_content: str | None = None,
     occurrence: int | None = None,
+    before: bool = False,
 ) -> dict:
     """Rewind ``thread_id``'s live context to the target message: keep the prefix
     through it and discard everything after, rewriting the checkpoint in place.
@@ -173,6 +179,7 @@ async def rewind_thread(
         target_id=target_id,
         target_content=target_content,
         occurrence=occurrence,
+        before=before,
     )
     if raw_end is None:
         return {"found": False, "kept": len(messages), "removed": 0, "reason": "not_found"}

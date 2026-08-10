@@ -1766,6 +1766,7 @@ async def rewind_session(
     index: int | None = None,
     content: str | None = None,
     occurrence: int | None = None,
+    before: bool = False,
     request_metadata: dict | None = None,
 ) -> dict:
     """Rewind a chat session's live context to a target message (the "Rewind to
@@ -1796,6 +1797,7 @@ async def rewind_session(
             target_id=message_id,
             target_content=content,
             occurrence=occurrence,
+            before=before,
         )
     return {**result, "message": _rewind_message(result)}
 

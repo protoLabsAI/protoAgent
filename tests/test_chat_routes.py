@@ -367,7 +367,7 @@ def test_rewind_session_route(monkeypatch):
 
     seen: list[dict] = []
 
-    async def _fake_rewind(session_id, *, message_id=None, index=None, content=None, occurrence=None):
+    async def _fake_rewind(session_id, *, message_id=None, index=None, content=None, occurrence=None, before=False):
         seen.append(
             {
                 "session_id": session_id,
@@ -375,6 +375,7 @@ def test_rewind_session_route(monkeypatch):
                 "index": index,
                 "content": content,
                 "occurrence": occurrence,
+                "before": before,
             }
         )
         return {"found": True, "kept": 4, "removed": 2, "reason": "", "message": "Rewound"}
@@ -385,8 +386,11 @@ def test_rewind_session_route(monkeypatch):
         "/api/chat/sessions/s1/rewind", json={"message_id": "m9", "content": "the answer"}
     ).json()
     assert seen == [
-        {"session_id": "s1", "message_id": "m9", "index": None, "content": "the answer", "occurrence": None}
+        {"session_id": "s1", "message_id": "m9", "index": None, "content": "the answer", "occurrence": None, "before": False}
     ]
+    # The Regenerate path (#2491) requests the exclusive cut.
+    c.post("/api/chat/sessions/s1/rewind", json={"content": "q", "before": True})
+    assert seen[-1]["before"] is True
     assert body["removed"] == 2 and body["kept"] == 4 and body["found"] is True
     assert body["message"] == "Rewound"
 

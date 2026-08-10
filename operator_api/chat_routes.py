@@ -356,6 +356,9 @@ def register_chat_routes(app, ui: str) -> None:
             index=int(idx) if idx is not None else None,
             content=body.get("content"),
             occurrence=int(occ) if occ is not None else None,
+            # Exclusive cut (#2491): Regenerate discards the last user+assistant
+            # pair so its resend REPLACES the turn instead of appending a duplicate.
+            before=bool(body.get("before", False)),
         )
 
     @app.post("/api/chat/sessions/{session_id}/steer")

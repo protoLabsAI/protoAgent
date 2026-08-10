@@ -1799,7 +1799,10 @@ export const api = {
   // intact. Intentionally DESTRUCTIVE (no archive) but never corrupting. `content`
   // is the visible bubble's text: the console's client-side message ids never appear
   // in the checkpoint, so the server locates the message by its rendered content.
-  rewindChatSession(sessionId: string, messageId: string, content?: string, occurrence?: number) {
+  // `before: true` = exclusive cut (#2491): the target itself is discarded too —
+  // Regenerate rewinds to just before the last user message so its resend REPLACES
+  // the turn instead of appending a duplicate pair.
+  rewindChatSession(sessionId: string, messageId: string, content?: string, occurrence?: number, before?: boolean) {
     return request<{
       found: boolean;
       kept: number;
@@ -1808,7 +1811,7 @@ export const api = {
       message: string;
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/rewind`, {
       method: "POST",
-      body: { message_id: messageId, content, occurrence },
+      body: { message_id: messageId, content, occurrence, before },
     });
   },
 
