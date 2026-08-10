@@ -1,31 +1,21 @@
 # Windows-native test exclusions — the #2412 burndown list.
 #
-# Every file here failed natively on windows-latest in the 2026-08-08 baseline
-# (run 31279874742 → 180 failures across these 41 files; 4654 tests pass and
-# GATE the PR). The `Windows tests (native)` job in checks.yml skips exactly
-# these files. Same contract as pyproject's `ignore_imports` burndown:
-# SHRINK this list — fix the test (or the runtime) and delete the line —
-# never grow it. A new POSIX-only test fails the Windows job; make it
-# portable or add it here WITH a reason in your PR.
+# THIS LIST IS NOW EMPTY. Every test that failed natively on windows-latest at the
+# 2026-08-08 baseline (run 31279874742 → 180 failures across 41 files) has been made
+# portable and now GATES on the `Windows tests (native)` job in checks.yml — that job
+# runs the whole suite with no --ignore entries.
 #
-# Section placement is provisional (from failure signatures, not full
-# diagnosis); the authoritative fact per line is "failed natively at the
-# baseline". Reclassify freely as files get diagnosed.
-
-# ── coding_agent: acp_client agent-death reporting is wrong on Windows (#2452) ──
-# The ACP runtime is otherwise portable (infra/proc.py) and this file's other tests pass
-# on Windows — but two tests that drive a fake agent to DEATH expose two Windows bugs in
-# acp_client's death path: proc.returncode races to None when stdout EOF is seen (→ "still
-# running" instead of "exit code N"), and a dead child's pipe raises ConnectionResetError
-# on the Proactor loop instead of a clean EOF. Fixed + un-excluded together in #2452.
-tests/test_coding_agent_plugin.py
-
-# History — the earlier sections burned down (#2412), diagnosed and fixed portably; the
-# files now gate on the Windows job like the rest of the suite:
-#   • Path semantics (tilde / separators / symlinks / `:`-in-filename) — 10 files.
-#   • Process lifecycle (the runtime was already portable via infra/proc.py + ADR 0098;
-#     the failures were test-side sh/sleep/workdir/PATH assumptions) — 4 files.
-#   • execute_code — the fd-RPC tool bridge was genuinely POSIX-only (os.pipe + pass_fds
-#     + connect_read/write_pipe); ported to a loopback-socket transport (#2449) so it now
-#     runs natively — 1 file.
-# Add new POSIX-only files here WITH a reason; never re-add a fixed one.
+# The file is kept as the one place to park a *genuinely* POSIX-only test: add its path
+# below WITH a reason in your PR (a new POSIX-only test otherwise fails the Windows job),
+# and delete the line once you make it portable. Same contract as pyproject's
+# `ignore_imports` burndown — SHRINK, never grow.
+#
+# History — the burndown, diagnosed and fixed portably (the runtime was already
+# cross-platform in most cases; the failures were POSIX-only *test* assumptions):
+#   • Path semantics — tilde/`~`, separators, symlinks, `:`-in-filename (NTFS ADS) — 10 files.
+#   • Process lifecycle — runtime already portable via infra/proc.py + ADR 0098; the
+#     failures were test-side sh/sleep/workdir/PATH assumptions — 4 files.
+#   • execute_code — its fd-RPC tool bridge (os.pipe + pass_fds + connect_read/write_pipe)
+#     was genuinely POSIX-only; ported to a loopback-socket transport (#2449) — 1 file.
+#   • coding_agent — acp_client's agent-death reporting had two Windows bugs (proc.returncode
+#     race → "still running", and ConnectionResetError instead of a clean EOF); fixed (#2452) — 1 file.
