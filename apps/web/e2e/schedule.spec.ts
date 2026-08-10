@@ -135,6 +135,19 @@ test("editing a UTC job keeps it UTC and preserves an untouched schedule string 
   expect(body.timezone).toBeUndefined();
 });
 
+test("a job whose stored schedule can't validate still takes a prompt-only edit (#2439 review)", async ({ page }) => {
+  await gotoSchedule(page);
+  // job-3 is a one-off already in the past — the builder flags it, but since an untouched
+  // schedule saves the STORED string, builder validity must not lock the prompt.
+  await page.getByTestId("schedule-row-job-3").click();
+  await page.getByTestId("schedule-detail-edit").click();
+  await expect(page.getByTestId("schedule-error")).toContainText("in the past");
+  await page.getByTestId("schedule-detail-prompt").fill("Compile it anyway.");
+  const put = page.waitForRequest((r) => r.method() === "PUT" && r.url().includes("/api/scheduler/jobs/job-3"));
+  await page.getByTestId("schedule-detail-save").click();
+  expect((await put).postDataJSON().schedule).toBe("2026-05-01T09:00:00Z");
+});
+
 test("the row delete button confirms first — Cancel keeps the job", async ({ page }) => {
   await gotoSchedule(page);
   // The row's trash no longer deletes on one click; it summons a ConfirmDialog.

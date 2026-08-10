@@ -220,6 +220,16 @@ export const SCHEDULER_JOBS = {
       enabled: true,
       next_fire: "2026-05-31T09:00:00Z",
     },
+    {
+      // A one-off already in the past — the builder can't validate it, but prompt/timezone
+      // edits must still be possible: an untouched schedule saves the stored string, so
+      // builder validity must not lock the whole job (#2439 review round 3).
+      id: "job-3",
+      prompt: "One-off: compile the launch retrospective.",
+      schedule: "2026-05-01T09:00:00Z",
+      agent_name: "protoAgent",
+      enabled: true,
+    },
   ],
 };
 

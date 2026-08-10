@@ -128,7 +128,10 @@ function ScheduleDetailDialog({
   const scheduleChanged = out.schedule.trim() !== canonicalSchedule(job.schedule);
   const timezoneChanged = (out.timezone ?? "") !== (job.timezone ?? "");
   const dirty = prompt.trim() !== job.prompt || scheduleChanged || timezoneChanged;
-  const canSave = !!prompt.trim() && out.valid && dirty && !busy;
+  // Builder validity only gates a save that CHANGES the schedule — an untouched one saves
+  // the stored string verbatim, so a job whose stored schedule our validator would reject
+  // (a past one-off, a legacy cron) can still take prompt/timezone edits.
+  const canSave = !!prompt.trim() && (out.valid || !scheduleChanged) && dirty && !busy;
 
   return (
     <Dialog
