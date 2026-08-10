@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.131.1",
+    "date": "2026-08-10",
+    "changes": [
+      "Config-route hardening: no more event-loop stalls or ambiguous responses (#2486)."
+    ]
+  },
+  {
     "version": "v0.131.0",
     "date": "2026-08-10",
     "changes": [

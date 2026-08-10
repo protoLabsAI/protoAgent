@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.131.1] - 2026-08-10
+
+### Fixed
+- **Config-route hardening: no more event-loop stalls or ambiguous responses (#2486).**
+  The gateway model probe and setup reset ran blocking work inline in async
+  handlers (every Settings model-list fetch stalled the whole server for the
+  probe's duration); both now run off the event loop. An unknown SOUL preset
+  returns 404 instead of an empty-string 200 indistinguishable from a blank
+  preset. Coverage added for finish-setup, config-explain, and the pre-setup
+  projects route (which was verified None-safe, contrary to the review claim
+  that spawned this issue).
+
 ## [0.131.0] - 2026-08-10
 
 ### Added
