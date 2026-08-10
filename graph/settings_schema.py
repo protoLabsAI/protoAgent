@@ -14,6 +14,8 @@ writer expects.
 
 from __future__ import annotations
 
+import sys
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -363,9 +365,10 @@ FIELDS: list[Field] = [
         "Auto-inject namespaces",
         "string_list",
         "Knowledge",
-        "Restrict per-turn auto-injected knowledge (RAG) to chunks in these namespaces — one "
-        "per line; an empty line matches un-namespaced chunks. Empty = no filter (everything "
-        "is eligible, today's behavior). Tool-driven recall (memory_recall) is not affected.",
+        "Restrict per-turn auto-injected knowledge (RAG) to chunks in these namespaces — "
+        'comma- or newline-separated; enter `""` (quoted) to match un-namespaced chunks '
+        "(a bare blank line is dropped as noise). Empty = no filter (everything is "
+        "eligible, today's behavior). Tool-driven recall (memory_recall) is not affected.",
     ),
     # Trust floor for the auto-inject RAG hits (ADR 0069 D8).
     Field(
@@ -865,7 +868,15 @@ FIELDS: list[Field] = [
         "Autostart on boot",
         "bool",
         "Runtime",
-        "Install/remove the boot LaunchAgent.",
+        # Platform-aware (#2470): the mechanism is macOS-only today (infra/autostart);
+        # naming a LaunchAgent on Windows/Linux gave the wrong mental model for a
+        # toggle that reports unsupported there.
+        (
+            "Launch the server on login (installs/removes the login LaunchAgent)."
+            if sys.platform == "darwin"
+            else "Launch the server on login. Not yet supported on this platform — "
+            "the toggle reports unsupported instead of silently failing."
+        ),
         restart=True,
     ),
     # ── Host box-runtime knobs (Host layer, ADR 0047 D8) ─────────────────────

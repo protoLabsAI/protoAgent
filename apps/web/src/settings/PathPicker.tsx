@@ -26,6 +26,14 @@ import type { BrowseEntry } from "../lib/types";
 // the server lists (GET /api/fs/browse) and this walks it. The text input stays
 // editable — pasting a known path is still the fastest route for someone who knows it.
 
+// Native-looking path examples (#2470): a POSIX ~/Documents placeholder on a
+// Windows host reads as untested/unsupported. navigator.platform ≈ the host in
+// the desktop app (the dominant case); a cross-platform remote console only
+// sees a placeholder example, never a wrong behavior.
+const IS_WIN = typeof navigator !== "undefined" && /win/i.test(navigator.platform || "");
+const DIR_EXAMPLE = IS_WIN ? "C:\\Users\\you\\Documents" : "~/Documents";
+const FILE_EXAMPLE = IS_WIN ? "C:\\path\\to\\file" : "/path/to/file";
+
 export function PathPicker({
   value,
   onChange,
@@ -70,7 +78,7 @@ export function PathPicker({
           id={id}
           className="setting-input path-picker-input"
           value={value}
-          placeholder={placeholder ?? (kind === "file" ? "/path/to/file" : "~/Documents")}
+          placeholder={placeholder ?? (kind === "file" ? FILE_EXAMPLE : DIR_EXAMPLE)}
           aria-label={ariaLabel}
           aria-invalid={invalid}
           onChange={(e) => onChange(e.target.value)}
