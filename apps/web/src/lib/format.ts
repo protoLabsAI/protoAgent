@@ -24,6 +24,49 @@ export function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * Compact LOCAL wall-clock stamp for an ISO instant — "08-10 11:45:45" in the
+ * viewer's timezone. The old string-slice display preserved the source UTC
+ * clock value while discarding its offset, so every stamp read four-plus hours
+ * off for a non-UTC operator (#2468). An offsetless value is treated as UTC
+ * (the telemetry store stamps UTC), never as local. Unparseable → "—".
+ */
+export function localStamp(iso: string | null | undefined): string {
+  const tMs = parseInstant(iso);
+  if (tMs === null) return "—";
+  const d = new Date(tMs);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/**
+ * Full local timestamp naming the timezone — for the tooltip/accessible text
+ * behind `localStamp`, e.g. "2026-08-10, 11:45:45 EDT". Unparseable → the raw
+ * input, so the title never loses information the cell had.
+ */
+export function localStampFull(iso: string | null | undefined): string {
+  const tMs = parseInstant(iso);
+  if (tMs === null) return iso || "—";
+  return new Date(tMs).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  });
+}
+
+/** Epoch ms for an ISO string, treating an offsetless value as UTC. null = unparseable. */
+function parseInstant(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const hasOffset = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
+  const tMs = Date.parse(hasOffset ? iso : `${iso}Z`);
+  return Number.isNaN(tMs) ? null : tMs;
+}
+
 /** Money — "$0", "$0.0042" under a cent, else two decimals. */
 export function usd(n: number): string {
   if (!n) return "$0";

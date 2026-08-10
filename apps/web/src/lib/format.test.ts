@@ -1,6 +1,44 @@
 import { describe, expect, it } from "vitest";
 
-import { bytes } from "./format";
+import { bytes, localStamp, localStampFull } from "./format";
+
+// #2468 — telemetry stamps must render as local wall-clock instants, not a
+// sliced copy of the source UTC string. Assertions compare against the same
+// Date the formatter should produce, so they hold in any CI timezone.
+const p = (n: number) => String(n).padStart(2, "0");
+const expectedStamp = (d: Date) =>
+  `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+
+describe("localStamp", () => {
+  it("renders an offset-carrying ISO instant in the local timezone", () => {
+    const iso = "2026-08-10T15:45:45.123456+00:00";
+    expect(localStamp(iso)).toBe(expectedStamp(new Date(Date.parse(iso))));
+  });
+
+  it("treats an offsetless value as UTC (legacy rows), never as local", () => {
+    expect(localStamp("2026-08-10T15:45:45")).toBe(localStamp("2026-08-10T15:45:45Z"));
+  });
+
+  it("degrades to a dash on garbage/empty", () => {
+    expect(localStamp("")).toBe("—");
+    expect(localStamp(undefined)).toBe("—");
+    expect(localStamp("not-a-date")).toBe("—");
+  });
+});
+
+describe("localStampFull", () => {
+  it("names the timezone so the tooltip carries the offset context", () => {
+    // timeZoneName:"short" appends a zone label ("EDT", "GMT+2", "UTC") —
+    // assert one exists rather than pinning the CI zone.
+    const full = localStampFull("2026-08-10T15:45:45+00:00");
+    expect(full).toMatch(/\d{2}:\d{2}:\d{2}/);
+    expect(full).toMatch(/[A-Za-z]/);
+  });
+
+  it("falls back to the raw input when unparseable", () => {
+    expect(localStampFull("not-a-date")).toBe("not-a-date");
+  });
+});
 
 describe("bytes", () => {
   it("renders sub-KB counts raw", () => {
