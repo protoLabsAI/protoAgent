@@ -1220,6 +1220,22 @@ export const api = {
       { method: "POST", body: { flow_id: flowId, code } },
     );
   },
+  /** Abandon an in-progress sign-in server-side (#2440) — so wizard Cancel truly cancels
+   *  the flow, not just the browser timer. */
+  oauthCancel(flowId: string) {
+    return request<{ ok: boolean; cancelled: boolean }>(
+      "/api/config/oauth/cancel",
+      { method: "POST", body: { flow_id: flowId } },
+    );
+  },
+  /** Disconnect a native OAuth provider (#2440): best-effort remote revoke + delete
+   *  protoAgent's own credential + suppress auto-reconnect until the next sign-in. */
+  oauthDisconnect(provider: string) {
+    return request<{ provider: string; removed: boolean; revoked: boolean; note: string }>(
+      "/api/config/oauth/disconnect",
+      { method: "POST", body: { provider } },
+    );
+  },
 
   // ── Agent snapshot (ADR 0091 Slice 1) ──
   /** Review WITHOUT building the download: what would be stripped, what the target must

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
+import types
 
 import pytest
 
@@ -185,12 +187,12 @@ def test_codex_bootstrap_from_cli_and_own_copy(monkeypatch, tmp_path):
     store = tmp_path / "codex-oauth.json"
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
 
-    creds = resolve_codex_oauth(paths=object())
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
     assert creds.account_id == "acct-1"
     assert creds.source == "codex_cli_bootstrap"
     assert store.exists()  # our own copy was written
     # Second call reads our store, not the CLI file.
-    creds2 = resolve_codex_oauth(paths=object())
+    creds2 = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
     assert creds2.source == "instance_store"
 
 
@@ -215,7 +217,7 @@ def test_codex_refresh_on_expiry(monkeypatch, tmp_path):
         return _Resp()
 
     monkeypatch.setattr(oauth_mod.httpx, "post", _fake_post)
-    creds = resolve_codex_oauth(paths=object())
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
     assert creds.access_token == fresh
     assert calls["data"]["grant_type"] == "refresh_token"
     # Rotated refresh token is persisted.
@@ -226,7 +228,7 @@ def test_codex_missing_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "nope.json")
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "store-nope.json")
     with pytest.raises(OAuthCredentialError) as ei:
-        resolve_codex_oauth(paths=object())
+        resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
     assert ei.value.provider == "openai-codex"
 
 
@@ -538,3 +540,164 @@ def test_anthropic_store_refreshes_when_expiring(monkeypatch, tmp_path):
     assert creds.access_token == "cc-FRESH"
     # refresh_token preserved (response omitted it)
     assert json.loads(store.read_text())["refresh_token"] == "cc-R"
+
+
+# ── Credential lifecycle: serialized refresh (#2441) + disconnect (#2440) ────────
+
+
+
+def _codex_store(tmp_path, tokens: dict) -> "types.SimpleNamespace":
+    """A SimpleNamespace paths object + a codex store seeded with `tokens`."""
+    (tmp_path / "codex-oauth.json").write_text(json.dumps({"tokens": tokens}))
+    return types.SimpleNamespace(config_dir=tmp_path)
+
+
+def _patch_codex(monkeypatch, paths, cli_file):
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda p=None: paths.config_dir / "codex-oauth.json")
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli_file)
+    monkeypatch.setattr(oauth_mod, "instance_paths", lambda: paths)
+
+
+def test_codex_concurrent_refresh_spends_the_token_once(monkeypatch, tmp_path):
+    """#2441: two simultaneous resolutions must make ONE refresh request and both return
+    the rotated token — never race the single-use refresh token to a 400."""
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "single-use", "account_id": "a"})
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+    fresh = _jwt({"exp": time.time() + 3600})
+    calls = {"n": 0}
+    guard = threading.Lock()
+
+    def fake_post(url, **kw):
+        with guard:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        time.sleep(0.05)  # widen the window a real race would exploit
+        return types.SimpleNamespace(
+            status_code=200 if first else 400,
+            json=lambda: {"access_token": fresh, "refresh_token": "rot"} if first else {"error": "invalid_grant"},
+        )
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", fake_post)
+    out: dict[int, str] = {}
+    threads = [threading.Thread(target=lambda i=i: out.__setitem__(i, resolve_codex_oauth(paths).access_token)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert calls["n"] == 1  # the refresh happened once
+    assert out == {0: fresh, 1: fresh}  # both callers got the rotated token
+
+
+def test_codex_warm_read_neither_refreshes_nor_writes(monkeypatch, tmp_path):
+    """A warm, unexpired store read is lock-free and touches no network/disk (#2441)."""
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+
+    def boom(*a, **k):
+        raise AssertionError("warm read must not hit the network")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", boom)
+    before = (paths.config_dir / "codex-oauth.json").stat().st_mtime_ns
+    creds = resolve_codex_oauth(paths)
+    assert creds.source == "instance_store"
+    assert (paths.config_dir / "codex-oauth.json").stat().st_mtime_ns == before  # no rewrite
+
+
+def test_cancel_login_drops_the_pending_flow(monkeypatch):
+    from graph.providers import oauth_login as login
+
+    started = login.anthropic_login_start()
+    assert login.cancel_login(started["flow_id"]) == {"ok": True, "cancelled": True}
+    # the flow is gone — completing it now fails as an expired session (the route maps
+    # this OAuthLoginError to an error response)
+    with pytest.raises(login.OAuthLoginError):
+        login.anthropic_login_complete(started["flow_id"], "code#state")
+    # cancelling an unknown flow is a no-op, not an error
+    assert login.cancel_login("nope")["cancelled"] is False
+
+
+def test_disconnect_codex_revokes_removes_and_leaves_cli_untouched(monkeypatch, tmp_path):
+    """#2440: revoke best-effort, delete OUR store, never touch ~/.codex/auth.json."""
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    cli = tmp_path / "codex_cli.json"
+    cli_body = json.dumps({"tokens": {"access_token": "cli", "refresh_token": "clir"}})
+    cli.write_text(cli_body)
+    _patch_codex(monkeypatch, paths, cli)
+    monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
+
+    result = oauth_mod.disconnect("openai-codex", paths)
+    assert result.removed and result.revoked
+    assert not (paths.config_dir / "codex-oauth.json").exists()  # our copy gone
+    assert cli.read_text() == cli_body  # the Codex CLI's own file is byte-identical
+
+
+def test_disconnect_removes_local_even_when_revoke_fails(monkeypatch, tmp_path):
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+
+    def failing_post(url, **kw):
+        raise oauth_mod.httpx.HTTPError("network down")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", failing_post)
+    result = oauth_mod.disconnect("openai-codex", paths)
+    assert result.removed is True and result.revoked is False  # local removal still guaranteed
+    assert not (paths.config_dir / "codex-oauth.json").exists()
+
+
+def test_disconnect_is_idempotent(monkeypatch, tmp_path):
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+    monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
+    first = oauth_mod.disconnect("openai-codex", paths)
+    second = oauth_mod.disconnect("openai-codex", paths)
+    assert first.removed is True
+    assert second.removed is False  # nothing left to remove; still succeeds
+
+
+def test_disconnect_suppresses_cli_reimport_until_reconnect(monkeypatch, tmp_path):
+    """#2440 core: after an explicit disconnect, resolve must NOT silently re-bootstrap
+    from the Codex CLI until an in-console sign-in reconnects."""
+    paths = types.SimpleNamespace(config_dir=tmp_path)
+    cli = tmp_path / "codex_cli.json"
+    cli.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}}))
+    _patch_codex(monkeypatch, paths, cli)
+
+    assert resolve_codex_oauth(paths).source == "codex_cli_bootstrap"  # imports once
+    monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
+    oauth_mod.disconnect("openai-codex", paths)
+
+    with pytest.raises(OAuthCredentialError, match="disconnected"):
+        resolve_codex_oauth(paths)  # would previously re-import from the CLI — now suppressed
+
+    oauth_mod.clear_disconnected("openai-codex", paths)  # an explicit sign-in clears the intent
+    assert resolve_codex_oauth(paths).source == "codex_cli_bootstrap"  # reconnect works
+
+
+def test_disconnect_marker_is_owner_only_on_posix(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits; Windows uses the icacls ACL contract (atomic_write funnel)")
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+    monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
+    oauth_mod.disconnect("openai-codex", paths)
+    marker = tmp_path / "oauth-disconnected.json"
+    assert marker.exists()
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600  # credential-adjacent state is owner-only
+
+
+def test_disconnect_anthropic_removes_store_and_suppresses(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    paths = types.SimpleNamespace(config_dir=tmp_path)
+    (tmp_path / "anthropic-oauth.json").write_text(json.dumps({"access_token": "cc-X", "refresh_token": "cc-R", "expires_at": time.time() + 3600}))
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda p=None: tmp_path / "anthropic-oauth.json")
+    monkeypatch.setattr(oauth_mod, "instance_paths", lambda: paths)
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "no-claude.json")
+
+    result = oauth_mod.disconnect("anthropic-oauth", paths)
+    assert result.removed is True and result.revoked is False
+    assert not (tmp_path / "anthropic-oauth.json").exists()
+    with pytest.raises(OAuthCredentialError, match="disconnected"):
+        resolve_anthropic_oauth()  # suppressed until reconnect

@@ -28,6 +28,7 @@ import binascii
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,66 @@ import httpx
 from infra.paths import InstancePaths, atomic_write, instance_paths
 
 log = logging.getLogger("protoagent.providers.oauth")
+
+
+# ── Credential lifecycle: per-store lock + explicit-disconnect marker ─────────
+#
+# ``create_llm`` resolves credentials per turn AND for aux/subagent slots, so two
+# consumers in the SAME process can race the read→refresh→write on a single-use refresh
+# token (#2441). A per-store ``threading.Lock`` serializes the slow (refresh/bootstrap)
+# path; warm reads stay lock-free. Disconnect (#2440) takes the same lock so it can't race
+# a refresh. Locks are keyed by the resolved store path so dev/prod instances are independent.
+_STORE_LOCKS: dict[str, threading.Lock] = {}
+_STORE_LOCKS_GUARD = threading.Lock()
+
+# Explicit disconnect (#2440): a provider listed here must NOT auto-resolve (no Codex-CLI
+# re-bootstrap, no stored/CLI Claude token) until an in-console sign-in reconnects it. The
+# marker is a tiny owner-only file next to the credential stores.
+_DISCONNECT_MARKER = "oauth-disconnected.json"
+
+
+def _store_lock(path: Path) -> threading.Lock:
+    key = str(path)
+    with _STORE_LOCKS_GUARD:
+        lock = _STORE_LOCKS.get(key)
+        if lock is None:
+            lock = _STORE_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def _disconnect_marker_path(paths: InstancePaths) -> Path:
+    return paths.config_dir / _DISCONNECT_MARKER
+
+
+def _disconnected_providers(paths: InstancePaths) -> set[str]:
+    try:
+        doc = json.loads(_disconnect_marker_path(paths).read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return set()
+    return set(doc) if isinstance(doc, list) else set()
+
+
+def is_disconnected(provider: str, paths: InstancePaths | None = None) -> bool:
+    return provider in _disconnected_providers(paths or instance_paths())
+
+
+def _write_disconnected(paths: InstancePaths, providers: set[str]) -> None:
+    path = _disconnect_marker_path(paths)
+    if not providers:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, json.dumps(sorted(providers)), mode=0o600)
+
+
+def _mark_disconnected(paths: InstancePaths, provider: str) -> None:
+    _write_disconnected(paths, _disconnected_providers(paths) | {provider})
+
+
+def clear_disconnected(provider: str, paths: InstancePaths | None = None) -> None:
+    """An explicit in-console sign-in clears the disconnect intent for ``provider``."""
+    paths = paths or instance_paths()
+    _write_disconnected(paths, _disconnected_providers(paths) - {provider})
 
 
 class OAuthCredentialError(RuntimeError):
@@ -156,6 +217,15 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
     env_token = os.environ.get(_CLAUDE_ENV_VAR, "").strip()
     if env_token:
         return AnthropicOAuthCreds(access_token=env_token, source="env")
+
+    # Explicit disconnect (#2440): once disconnected in the console, don't auto-resolve from
+    # our store or Claude Code's credentials until an in-console sign-in reconnects. (An
+    # explicit CLAUDE_CODE_OAUTH_TOKEN env above still wins — it's deliberate config.)
+    if is_disconnected("anthropic-oauth"):
+        raise OAuthCredentialError(
+            "Claude is disconnected in protoAgent. Sign in again to reconnect.",
+            provider="anthropic-oauth",
+        )
 
     store = _read_anthropic_store()
     if store:
@@ -351,42 +421,133 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
        Codex CLI's ``~/.codex/auth.json``.
     2. If the access token is expiring, refresh against OpenAI and persist our copy
        (never the Codex CLI's file — we don't rotate its single-use token).
+
+    Serialized per store (#2441): concurrent resolutions can't both spend the same
+    single-use refresh token — a warm read is lock-free, but the refresh/bootstrap path
+    takes the store lock and re-reads, so a waiter reuses the token the first caller minted.
     """
     paths = paths or instance_paths()
     store = _codex_store_path(paths)
 
+    def _creds(tokens: dict[str, Any], access: str, source: str) -> CodexOAuthCreds:
+        base_url = os.environ.get("PROTOAGENT_CODEX_BASE_URL", "").strip().rstrip("/") or _CODEX_DEFAULT_BASE_URL
+        return CodexOAuthCreds(access_token=access, account_id=_codex_account_id(tokens), base_url=base_url, source=source)
+
+    # Fast path: a warm, unexpired store read needs neither the lock nor a write.
     tokens = _read_codex_tokens(store)
-    source = "instance_store"
-    if tokens is None:
-        tokens = _read_codex_tokens(_CODEX_CLI_AUTH_FILE)
-        source = "codex_cli_bootstrap"
-        if tokens is None:
-            raise OAuthCredentialError(
-                "No Codex OAuth credential found. Sign in with the Codex CLI "
-                "(`codex`), then retry — protoAgent imports it once and keeps its "
-                "own refreshed copy.",
-                provider="openai-codex",
-            )
+    if tokens:
+        access = str(tokens.get("access_token", "") or "").strip()
+        if access and not _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
+            return _creds(tokens, access, "instance_store")
 
-    access_token = str(tokens.get("access_token", "") or "").strip()
-    refreshed = False
-    if not access_token or _jwt_is_expiring(access_token, _CODEX_REFRESH_SKEW_S):
-        tokens = _refresh_codex_tokens(tokens)
-        access_token = str(tokens["access_token"]).strip()
-        refreshed = True
-
-    # Persist only when we bootstrapped from the CLI file or minted a new token —
-    # not on every turn (create_llm runs per turn + aux slots). A warm, unexpired
-    # store read touches no disk.
-    if source == "codex_cli_bootstrap" or refreshed:
-        _write_codex_store(store, tokens)
-    if refreshed:
+    # Slow path: refresh or first bootstrap — serialized so single-use refresh is spent once.
+    with _store_lock(store):
+        tokens = _read_codex_tokens(store)  # re-read: a peer may have refreshed while we waited
         source = "instance_store"
+        if tokens is None:
+            # Respect an explicit disconnect: do NOT silently re-import the Codex CLI's
+            # credential until an in-console sign-in reconnects (#2440).
+            if is_disconnected("openai-codex", paths):
+                raise OAuthCredentialError(
+                    "Codex is disconnected in protoAgent. Sign in again to reconnect.",
+                    provider="openai-codex",
+                )
+            tokens = _read_codex_tokens(_CODEX_CLI_AUTH_FILE)
+            source = "codex_cli_bootstrap"
+            if tokens is None:
+                raise OAuthCredentialError(
+                    "No Codex OAuth credential found. Sign in with the Codex CLI "
+                    "(`codex`), then retry — protoAgent imports it once and keeps its "
+                    "own refreshed copy.",
+                    provider="openai-codex",
+                )
 
-    base_url = os.environ.get("PROTOAGENT_CODEX_BASE_URL", "").strip().rstrip("/") or _CODEX_DEFAULT_BASE_URL
-    return CodexOAuthCreds(
-        access_token=access_token,
-        account_id=_codex_account_id(tokens),
-        base_url=base_url,
-        source=source,
-    )
+        access = str(tokens.get("access_token", "") or "").strip()
+        refreshed = False
+        if not access or _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
+            tokens = _refresh_codex_tokens(tokens)
+            access = str(tokens["access_token"]).strip()
+            refreshed = True
+
+        if source == "codex_cli_bootstrap" or refreshed:
+            _write_codex_store(store, tokens)
+        return _creds(tokens, access, "instance_store" if refreshed else source)
+
+
+# ── Disconnect / revoke lifecycle (#2440) ─────────────────────────────────────
+
+_CODEX_REVOKE_URL = "https://auth.openai.com/oauth/revoke"  # noqa: S105 — public OAuth endpoint
+
+
+@dataclass(frozen=True)
+class DisconnectResult:
+    provider: str
+    removed: bool  # protoAgent's own credential store was deleted
+    revoked: bool  # remote revocation succeeded (best-effort; OpenAI only)
+    note: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"provider": self.provider, "removed": self.removed, "revoked": self.revoked, "note": self.note}
+
+
+def _revoke_codex_token(tokens: dict[str, Any], *, timeout_s: float = 8.0) -> bool:
+    """Best-effort revoke of protoAgent's OpenAI token (refresh first, then access). Never
+    raises — a failed/unreachable revoke must not block local deletion."""
+    for hint in ("refresh_token", "access_token"):
+        tok = str(tokens.get(hint, "") or "").strip()
+        if not tok:
+            continue
+        try:
+            resp = httpx.post(
+                _CODEX_REVOKE_URL,
+                data={"client_id": _CODEX_CLIENT_ID, "token": tok, "token_type_hint": hint},
+                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": _CODEX_USER_AGENT},
+                timeout=httpx.Timeout(max(3.0, float(timeout_s))),
+            )
+            if resp.status_code in (200, 204):
+                return True
+        except httpx.HTTPError:
+            continue
+    return False
+
+
+def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectResult:
+    """Idempotent disconnect for a native OAuth provider (#2440).
+
+    Attempts best-effort remote revocation for protoAgent-owned tokens, ALWAYS deletes
+    protoAgent's own instance-scoped credential store (even when revocation fails), and
+    marks the provider disconnected so it won't auto-resolve until an in-console sign-in
+    reconnects it. The vendor CLI's own auth file (``~/.codex/auth.json`` /
+    ``~/.claude/.credentials.json``) is never modified. Takes the same per-store lock as
+    resolution, so it can't race a refresh that would rewrite the store after deletion.
+    """
+    provider = (provider or "").strip().lower()
+    paths = paths or instance_paths()
+    if provider == "openai-codex":
+        store = _codex_store_path(paths)
+        with _store_lock(store):
+            tokens = _read_codex_tokens(store)  # our copy only — never ~/.codex/auth.json
+            revoked = _revoke_codex_token(tokens) if tokens else False
+            existed = store.exists()
+            store.unlink(missing_ok=True)
+            _mark_disconnected(paths, provider)
+        if not existed:
+            note = "already disconnected"
+        elif revoked:
+            note = "revoked at OpenAI and removed protoAgent's local copy"
+        else:
+            note = "removed protoAgent's local copy (remote revoke did not confirm)"
+        return DisconnectResult(provider, removed=existed, revoked=revoked, note=note)
+    if provider == "anthropic-oauth":
+        store = _anthropic_store_path(paths)
+        with _store_lock(store):
+            existed = store.exists()
+            store.unlink(missing_ok=True)
+            _mark_disconnected(paths, provider)
+        # Anthropic has no token-revoke endpoint for these tokens; local removal +
+        # suppression is the contract. Claude Code's own credentials are untouched.
+        return DisconnectResult(
+            provider, removed=existed, revoked=False,
+            note="removed protoAgent's Claude token; sign in again to reconnect",
+        )
+    raise OAuthCredentialError(f"not a native OAuth provider: {provider!r}", provider=provider)

@@ -89,11 +89,13 @@ def _codex_status() -> OAuthStatus:
 def oauth_status(provider: str) -> OAuthStatus:
     """Read-only sign-in status for a native OAuth provider."""
     provider = (provider or "").strip().lower()
-    if provider == "anthropic-oauth":
-        return _anthropic_status()
-    if provider == "openai-codex":
-        return _codex_status()
-    raise ValueError(f"not a native OAuth provider: {provider!r}")
+    if provider not in ("anthropic-oauth", "openai-codex"):
+        raise ValueError(f"not a native OAuth provider: {provider!r}")
+    # An explicit disconnect (#2440) reads as signed-out even if a vendor CLI credential
+    # is still on disk — otherwise status would say "signed in" while resolution refuses.
+    if _oauth.is_disconnected(provider):
+        return OAuthStatus(provider, False, "", "disconnected", _SIGN_IN_HINTS[provider])
+    return _anthropic_status() if provider == "anthropic-oauth" else _codex_status()
 
 
 def all_oauth_status() -> list[dict]:

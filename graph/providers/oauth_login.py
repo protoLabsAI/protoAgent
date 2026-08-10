@@ -148,7 +148,9 @@ def codex_login_poll(flow_id: str) -> dict[str, str]:
         tokens = _exchange_codex_code(authorization_code, code_verifier)
     except OAuthLoginError as exc:
         return {"status": "error", "error": str(exc)}
-    _oauth._write_codex_store(_oauth._codex_store_path(_oauth.instance_paths()), tokens)
+    paths = _oauth.instance_paths()
+    _oauth._write_codex_store(_oauth._codex_store_path(paths), tokens)
+    _oauth.clear_disconnected("openai-codex", paths)  # explicit reconnect clears a prior disconnect (#2440)
     _FLOWS.pop(flow_id, None)
     return {"status": "complete"}
 
@@ -248,8 +250,16 @@ def anthropic_login_complete(flow_id: str, code: str) -> dict[str, str]:
     if not str(tokens.get("access_token", "") or ""):
         return {"status": "error", "error": "Token exchange returned no access_token."}
     _oauth._write_anthropic_store(tokens)
+    _oauth.clear_disconnected("anthropic-oauth")  # explicit reconnect clears a prior disconnect (#2440)
     _FLOWS.pop(flow_id, None)
     return {"status": "complete"}
+
+
+def cancel_login(flow_id: str) -> dict[str, bool]:
+    """Abandon an in-progress sign-in (#2440): drop the server-side pending flow so its
+    device/PKCE state can't be completed later. Idempotent — an unknown flow is a no-op."""
+    existed = _FLOWS.pop(flow_id, None) is not None
+    return {"ok": True, "cancelled": existed}
 
 
 def login_start(provider: str) -> dict[str, Any]:

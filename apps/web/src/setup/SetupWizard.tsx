@@ -331,6 +331,31 @@ export function SetupWizard({
     void refreshOauthStatus();
   };
 
+  // Cancel an in-progress sign-in — cancel the SERVER flow too, not just the local timer
+  // (#2440), so the pending device/PKCE flow can't be completed later.
+  const cancelSignIn = () => {
+    const flowId = login?.flowId;
+    clearLogin();
+    if (flowId) void api.oauthCancel(flowId).catch(() => {});
+  };
+
+  // Disconnect a signed-in provider (#2440): revoke + delete protoAgent's credential, then
+  // refresh status (which now reads "disconnected") and clear the stale model list.
+  async function disconnectProvider(provider: string) {
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      await api.oauthDisconnect(provider);
+      setModels([]);
+      autoProbedBase.current = "";
+      await refreshOauthStatus();
+    } catch (exc) {
+      setLoginError(errMsg(exc));
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
   const pollDevice = (flowId: string, intervalMs: number) => {
     pollRef.current = setTimeout(async () => {
       try {
@@ -846,6 +871,14 @@ export function SetupWizard({
                       <ShieldCheck size={15} /> Signed in — {oauthState.detail || "credentials found"}.{" "}
                       <Button type="button" onClick={() => void refreshOauthStatus()}>
                         Re-check
+                      </Button>{" "}
+                      <Button
+                        type="button"
+                        onClick={() => void disconnectProvider(state.provider)}
+                        disabled={loginBusy}
+                        title="Revoke and remove protoAgent's stored credential (your CLI login is untouched)"
+                      >
+                        {loginBusy ? <Spinner size={15} /> : null} Disconnect
                       </Button>
                     </Callout>
                   ) : login && login.provider === state.provider ? (
@@ -858,7 +891,7 @@ export function SetupWizard({
                             {login.verifyUri}
                           </a>
                           . <Spinner size={13} /> Waiting for approval…{" "}
-                          <Button type="button" onClick={clearLogin}>
+                          <Button type="button" onClick={cancelSignIn}>
                             Cancel
                           </Button>
                         </>
@@ -879,7 +912,7 @@ export function SetupWizard({
                             {loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
                             Complete sign-in
                           </Button>
-                          <Button type="button" onClick={clearLogin}>
+                          <Button type="button" onClick={cancelSignIn}>
                             Cancel
                           </Button>
                         </div>

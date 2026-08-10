@@ -222,6 +222,27 @@ def register_config_routes(app) -> None:
         except OAuthLoginError as exc:
             return {"status": "error", "error": str(exc)}
 
+    @app.post("/api/config/oauth/cancel")
+    async def _api_oauth_cancel(req: OAuthLoginRequest):
+        """Abandon an in-progress sign-in (#2440) — drops the server-side pending flow so a
+        Cancel in the wizard actually cancels the flow, not just the browser timer."""
+        from graph.providers.oauth_login import cancel_login
+
+        return await asyncio.to_thread(cancel_login, req.flow_id)
+
+    @app.post("/api/config/oauth/disconnect")
+    async def _api_oauth_disconnect(req: OAuthLoginRequest):
+        """Disconnect a native OAuth provider (#2440): best-effort remote revoke + delete
+        protoAgent's own stored credential + suppress auto-reconnect until an in-console
+        sign-in. Never touches the vendor CLI's auth file. Idempotent."""
+        from graph.providers.oauth import OAuthCredentialError, disconnect
+
+        try:
+            result = await asyncio.to_thread(disconnect, req.provider)
+            return result.as_dict()
+        except OAuthCredentialError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/config/test-model")
     async def _api_test_model(req: ModelsProbeRequest | None = None):
         """Verify the model can actually complete (the true auth check).

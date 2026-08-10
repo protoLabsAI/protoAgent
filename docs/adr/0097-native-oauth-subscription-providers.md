@@ -119,6 +119,23 @@ Claude Code, a step beyond reading the CLI's existing credentials. Opt-in; the o
 accepted it for this build. The Codex device flow uses OpenAI's published Codex client, the
 same mechanism the Codex CLI uses.
 
+## Credential lifecycle (2026-08-10, #2440 / #2441)
+
+The first cut had sign-in but no exit and no concurrency safety. Both are now closed:
+
+- **Disconnect / cancel / revoke (#2440).** `disconnect(provider)` best-effort revokes
+  protoAgent's own token (OpenAI `/oauth/revoke`), **always** deletes protoAgent's
+  instance-scoped store even if revocation fails, and writes a disconnect marker so the
+  provider does not auto-resolve (no Codex-CLI re-bootstrap, no stored/CLI Claude token)
+  until an in-console sign-in reconnects. The vendor CLI's own auth file is never touched.
+  Wizard **Cancel** now aborts the server-side pending flow. New routes:
+  `/api/config/oauth/{cancel,disconnect}`. Marker + stores keep the owner-only ACL via the
+  `atomic_write` funnel.
+- **Serialized refresh (#2441).** Codex read→refresh→write is serialized by a per-store
+  `threading.Lock` with a double-checked re-read, so two in-process consumers can't both
+  spend the single-use refresh token; warm reads stay lock-free. Disconnect takes the same
+  lock so it can't race a refresh that would rewrite the store after deletion.
+
 ## Open items
 
 - **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +
