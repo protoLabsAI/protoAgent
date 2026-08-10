@@ -274,6 +274,8 @@ def register_config_routes(app) -> None:
         """
         from graph.providers.oauth import OAuthCredentialError, disconnect
 
+        if not (req.provider or "").strip():
+            raise HTTPException(status_code=400, detail="provider is required")
         try:
             result = await asyncio.to_thread(disconnect, req.provider)
         except OAuthCredentialError as exc:

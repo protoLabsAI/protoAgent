@@ -183,6 +183,11 @@ def test_disconnect_unloads_live_graph(state_guard, monkeypatch):
     assert err and err["provider"] == "openai-codex" and err["relogin"] is True
 
 
+def test_disconnect_rejects_empty_provider(state_guard, monkeypatch):
+    client = _disconnect_client(monkeypatch)
+    assert client.post("/api/config/oauth/disconnect", json={}).status_code == 400
+
+
 def test_disconnect_race_with_completed_signin_keeps_graph(state_guard, monkeypatch):
     """TOCTOU (QA review on #2476): a sign-in that completes during disconnect's
     await clears the marker and rebuilds the graph — the route's post-await
