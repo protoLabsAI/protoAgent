@@ -142,6 +142,19 @@ def test_synthesizer_delimits_the_brief_for_the_publisher():
     assert "becomes NO brief" in p
 
 
+def test_output_discipline_supersedes_the_finders_prose_latitude():
+    # Raised by the panel on #2447. FINDINGS_CONTRACT is interpolated into this SAME
+    # prompt and tells finders that "prose around the fence is fine (your reasoning)"
+    # and that "the fenced array is the deliverable". Left unreconciled, that reads as
+    # licence for exactly the narration this section exists to keep out of a published
+    # comment — and the reconciliation was in an earlier draft and got lost in a
+    # rewrite, so it is pinned rather than trusted to survive the next one.
+    p = SUBAGENT_REGISTRY["review-synthesizer"].system_prompt
+    assert "Prose around the fence is fine" in p  # the contract really is in this prompt
+    assert "this supersedes it" in p
+    assert "a FINDER's latitude" in p
+
+
 def test_synthesizer_orders_the_brief_before_the_findings_json():
     # The recipe's report step asks for brief-then-JSON-last; the role prompt used to
     # say the opposite ("after the fenced block"), and the model followed the role.

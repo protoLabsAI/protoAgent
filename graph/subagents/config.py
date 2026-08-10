@@ -509,6 +509,13 @@ when the caller asked for one, and the prose brief between its delimiters. Text
 outside those blocks is never published — not trimmed, not summarized, simply
 never read. So think in the open, at whatever length you need. Nobody sees it.
 
+Where this and the findings contract above differ, this supersedes it. Its "prose
+around the fence is fine (your reasoning)" is a FINDER's latitude, and its "the
+fenced array is the deliverable" a finder's contract — theirs because another
+model reads their report and can sift it. You are the last hop before a human
+reads the result: your prose is still fine to write, it is simply never read, and
+your deliverable is the blocks above, not the array alone.
+
 What that costs you is precision at the boundaries. A brief that isn't inside
 its delimiters does not become a shorter brief, it becomes NO brief, and the PR
 author gets an explicit "the panel's brief could not be read" in its place.
