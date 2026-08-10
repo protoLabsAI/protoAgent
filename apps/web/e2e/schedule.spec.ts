@@ -62,6 +62,17 @@ test("submit is gated until prompt + schedule are set", async ({ page }) => {
   await expect(page.getByTestId("schedule-submit")).toBeEnabled();
 });
 
+test("a one-off in the past is flagged and blocks submit (#2159)", async ({ page }) => {
+  await openScheduleModal(page);
+  await page.getByTestId("schedule-once-date").fill("2020-01-01");
+  await page.getByTestId("schedule-once-time").fill("09:00");
+  await page.getByTestId("schedule-prompt").fill("this would never fire");
+  // The preview banner shows a red error and submit stays disabled — the one-off that
+  // silently never fires is caught before it's created.
+  await expect(page.getByTestId("schedule-error")).toContainText("in the past");
+  await expect(page.getByTestId("schedule-submit")).toBeDisabled();
+});
+
 test("clicking a job opens a detail dialog with the FULL (un-truncated) prompt", async ({ page }) => {
   await gotoSchedule(page);
   // The row only shows a truncated prompt + delete; clicking it pops the full detail.
@@ -79,16 +90,23 @@ test("clicking a job opens a detail dialog with the FULL (un-truncated) prompt",
   await expect(detail).toContainText("job-1");
 });
 
-test("the detail dialog edits prompt + schedule, gated until something changes", async ({ page }) => {
+test("the detail dialog edits via the same Once/Repeat/Cron builder, gated until changed", async ({ page }) => {
   await gotoSchedule(page);
   await page.getByTestId("schedule-row-job-1").click();
   await page.getByTestId("schedule-detail-edit").click();
-  // Edit fields are pre-filled with the current values.
-  await expect(page.getByTestId("schedule-detail-schedule")).toHaveValue("0 9 * * *");
+  const detail = page.getByTestId("schedule-detail");
+  // #2159 part 4: edit opens the SAME builder, pre-filled by parsing the stored schedule
+  // ("0 9 * * *" → Repeat / daily). The live preview reflects it.
+  const preview = detail.getByTestId("schedule-preview");
+  await expect(preview).toContainText("every day at");
+  await expect(preview.locator("code")).toContainText("0 9 * * *");
   await expect(page.getByTestId("schedule-detail-prompt")).toHaveValue(/Summarize overnight activity/);
   // Save is gated until a real change.
   await expect(page.getByTestId("schedule-detail-save")).toBeDisabled();
-  await page.getByTestId("schedule-detail-schedule").fill("0 8 * * 1-5");
+  // Change the frequency through the builder → the schedule changes → Save enables.
+  await detail.locator("#schedule-freq").click();
+  await page.getByRole("menuitemradio", { name: "Every weekday" }).click();
+  await expect(preview.locator("code")).toContainText("* * 1-5");
   await expect(page.getByTestId("schedule-detail-save")).toBeEnabled();
 });
 

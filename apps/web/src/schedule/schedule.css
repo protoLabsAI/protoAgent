@@ -143,6 +143,47 @@
 .cal-sel { background: var(--brand-violet-light, #6d5efc); color: #fff; border-color: transparent; }
 .cal-sel:hover { background: var(--brand-violet-light, #6d5efc); }
 
+/* #2159 — the extracted when-to-run builder (shared by New + Edit) and its sticky,
+   highlighted live-preview banner with an inline error line. */
+.schedule-builder { display: flex; flex-direction: column; gap: 12px; }
+
+.schedule-preview-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 10px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 8px;
+  background: var(--pl-color-bg-raised, #131316);
+  font-size: 13px;
+  color: var(--pl-color-fg);
+}
+.schedule-preview-banner.has-error {
+  border-color: var(--pl-color-status-error, #e5484d);
+}
+.schedule-preview-banner .preview-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.schedule-preview-banner .preview-cron {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--pl-color-bg, #0b0b0d);
+  border: 1px solid var(--pl-color-border);
+  font-size: 12px;
+}
+.schedule-preview-banner .muted { color: var(--pl-color-fg-subtle, #71717a); }
+.schedule-preview-banner .preview-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--pl-color-status-error, #e5484d);
+}
+
 .field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hour-toggle {
   font-size: 11px; padding: 1px 7px; border-radius: 999px;

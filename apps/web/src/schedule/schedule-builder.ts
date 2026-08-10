@@ -67,3 +67,63 @@ function clockTime(hr: string, mn: string): string | null {
   d.setHours(h, m, 0, 0);
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
+
+// ── Parsing back the other way (#2159 edit-mode builder) ─────────────────────
+
+export type ParsedSchedule =
+  | { mode: "once"; onceDate: string; onceTime: string }
+  | { mode: "repeat"; freq: RepeatFreq; time: string; dow: number }
+  | { mode: "cron"; cronRaw: string };
+
+/** Inverse of {@link buildOnce}/{@link buildRepeat}: detect which builder mode a stored
+ * schedule string came from so the edit dialog can pre-fill the right tab. A cron that
+ * doesn't match a friendly preset falls back to raw `cron` mode (never lossy). */
+export function parseSchedule(schedule: string): ParsedSchedule {
+  const s = (schedule || "").trim();
+  // One-shot ISO (UTC) → local date + time halves for the pickers.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return {
+        mode: "once",
+        onceDate: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+        onceTime: `${p(d.getHours())}:${p(d.getMinutes())}`,
+      };
+    }
+  }
+  const parts = s.split(/\s+/);
+  if (parts.length === 5) {
+    const [mn, hr, dom, mon, dow] = parts;
+    // Only treat a cron as a friendly preset when the numeric fields are plain integers —
+    // an expression like `*/5` or a specific day-of-month is a custom cron, not a preset.
+    const time = `${(hr === "*" ? "0" : hr).padStart(2, "0")}:${mn.padStart(2, "0")}`;
+    if (/^\d{1,2}$/.test(mn) && dom === "*" && mon === "*") {
+      if (hr === "*" && dow === "*") return { mode: "repeat", freq: "hourly", time, dow: 1 };
+      if (/^\d{1,2}$/.test(hr)) {
+        if (dow === "*") return { mode: "repeat", freq: "daily", time, dow: 1 };
+        if (dow === "1-5") return { mode: "repeat", freq: "weekdays", time, dow: 1 };
+        if (/^[0-6]$/.test(dow)) return { mode: "repeat", freq: "weekly", time, dow: Number(dow) };
+      }
+    }
+  }
+  return { mode: "cron", cronRaw: s };
+}
+
+/** True when `schedule` is a one-shot ISO datetime that has already passed — the case
+ * that silently never fires. Recurring cron is never "past". */
+export function isPastOnce(schedule: string, now: Date = new Date()): boolean {
+  const s = (schedule || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(s)) return false;
+  const d = new Date(s);
+  return !Number.isNaN(d.getTime()) && d.getTime() < now.getTime();
+}
+
+/** The operator's IANA zone (e.g. "America/Los_Angeles"), or "" if the browser won't say. */
+export function localZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}

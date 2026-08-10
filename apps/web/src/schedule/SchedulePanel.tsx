@@ -1,6 +1,6 @@
 import "./schedule.css";
 
-import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
+import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import {
@@ -9,32 +9,25 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { from12h, joinLocal, nowTime, to12h } from "./dateParts";
-import { MonthCalendar } from "./MonthCalendar";
+import { ScheduleBuilder, type BuilderOut } from "./ScheduleBuilder";
 
 import { StagePanel } from "../app/ErrorBoundary";
 import { RefreshButton } from "../app/ui-kit";
-import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import type { ScheduledJob } from "../lib/types";
-import {
-  buildOnce,
-  buildRepeat,
-  describeSchedule,
-  WEEKDAYS,
-  type RepeatFreq,
-} from "./schedule-builder";
+import { describeSchedule, parseSchedule } from "./schedule-builder";
 
 // Scheduled jobs (Activity → Schedule). The list is a useSuspenseQuery; add/cancel
 // are useMutations that invalidate it. Adding is a friendly modal that builds the
 // `schedule` string for you (a calendar for one-off, presets for recurring, raw cron
 // as the escape hatch) — no hand-written cron required.
 
-type Mode = "once" | "repeat" | "cron";
+const NEW_INITIAL = { parsed: { mode: "once" as const, onceDate: "", onceTime: "" }, timezone: "" };
 
 // Exported so the Work overview's Schedule-card quick-add reuses it (that host owns its
 // own open-state + add mutation) — one form, two hosts.
@@ -49,34 +42,20 @@ export function ScheduleModal({
   onAdd: (body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) => void;
   busy: boolean;
 }) {
-  const [mode, setMode] = useState<Mode>("once");
-  const [onceDate, setOnceDate] = useState(""); // "YYYY-MM-DD"
-  const [onceTime, setOnceTime] = useState(""); // "HH:mm"
-  const [freq, setFreq] = useState<RepeatFreq>("daily");
-  const [time, setTime] = useState("09:00");
-  const [hour12, setHour12] = useState(false); // repeat-time display: 24h (default) | 12h AM/PM
-  const [dow, setDow] = useState(1);
-  const [cronRaw, setCronRaw] = useState("");
   const [prompt, setPrompt] = useState("");
   const [jobId, setJobId] = useState("");
-  const [tz, setTz] = useState("");  // "" = UTC; only meaningful for recurring (cron)
-  // Offer the operator's own zone + a few common ones; de-duped, browser zone first.
-  const tzOptions = useMemo(() => {
-    let local = "";
-    try { local = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { /* ignore */ }
-    const common = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "Asia/Tokyo"];
-    return Array.from(new Set([local, ...common].filter(Boolean)));
-  }, []);
+  const [out, setOut] = useState<BuilderOut>({ schedule: "", valid: false, error: "" });
+  const onBuilderChange = useCallback((o: BuilderOut) => setOut(o), []);
+  // Reset to a clean slate each time the modal opens (the builder remounts via `key`).
+  useEffect(() => {
+    if (open) {
+      setPrompt("");
+      setJobId("");
+      setOut({ schedule: "", valid: false, error: "" });
+    }
+  }, [open]);
 
-  const schedule = useMemo(() => {
-    if (mode === "once") return buildOnce(joinLocal(onceDate, onceTime));
-    if (mode === "repeat") return buildRepeat(freq, time, dow);
-    return cronRaw.trim();
-  }, [mode, onceDate, onceTime, freq, time, dow, cronRaw]);
-
-  const preview = describeSchedule(schedule);
-
-  const canSubmit = !!prompt.trim() && !!schedule && !busy;
+  const canSubmit = !!prompt.trim() && out.valid && !busy;
 
   return (
     <Dialog
@@ -89,143 +68,14 @@ export function ScheduleModal({
         <>
           <Button type="button" onClick={onClose}>Cancel</Button>
           <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
-                  onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined, timezone: mode !== "once" && tz ? tz : undefined })}>
+                  onClick={() => onAdd({ prompt: prompt.trim(), schedule: out.schedule, job_id: jobId.trim() || undefined, timezone: out.timezone })}>
             <Plus size={16} /> Schedule
           </Button>
         </>
       }
     >
       <div className="schedule-form" data-testid="schedule-modal">
-        <Tabs
-          ariaLabel="Schedule mode"
-          active={mode}
-          onSelect={(m) => setMode(m as Mode)}
-          items={[
-            { id: "once", label: "Once" },
-            { id: "repeat", label: "Repeat" },
-            { id: "cron", label: "Cron" },
-          ]}
-        />
-
-        {mode === "once" && (
-          <div className="schedule-once">
-            <div className="schedule-once-fields">
-              {/* Typed fallback (acceptance: "user can still type a date manually"). */}
-              <label className="field">
-                <span>Date</span>
-                <Input type="date" value={onceDate} onChange={(e) => setOnceDate(e.target.value)}
-                       data-testid="schedule-once-date" />
-              </label>
-              <label className="field">
-                <span>Time</span>
-                <Input type="time" value={onceTime} onChange={(e) => setOnceTime(e.target.value)}
-                       data-testid="schedule-once-time" />
-              </label>
-            </div>
-            {/* Inline month grid — click a day to pick it; seeds a sensible time if none set yet. */}
-            <MonthCalendar
-              selected={onceDate}
-              onSelect={(iso) => {
-                setOnceDate(iso);
-                if (!onceTime) setOnceTime(nowTime(new Date()));
-              }}
-            />
-          </div>
-        )}
-
-        {mode === "repeat" && (
-          <div className="schedule-repeat">
-            <label className="field">
-              <span>Frequency</span>
-              <DropdownSelect
-                id="schedule-freq"
-                value={freq}
-                onValueChange={(v) => setFreq(v as RepeatFreq)}
-                options={[
-                  { value: "hourly", label: "Every hour" },
-                  { value: "daily", label: "Every day" },
-                  { value: "weekdays", label: "Every weekday (Mon–Fri)" },
-                  { value: "weekly", label: "Every week" },
-                ]}
-              />
-            </label>
-            {freq === "weekly" && (
-              <label className="field">
-                <span>Day</span>
-                <DropdownSelect
-                  value={String(dow)}
-                  onValueChange={(v) => setDow(Number(v))}
-                  options={WEEKDAYS.map((d, i) => ({ value: String(i), label: d }))}
-                />
-              </label>
-            )}
-            <label className="field">
-              <span className="field-label-row">
-                {freq === "hourly" ? "Minute" : "Time"}
-                {freq !== "hourly" && (
-                  <button
-                    type="button"
-                    className="hour-toggle"
-                    onClick={() => setHour12((v) => !v)}
-                    title="Switch between 24-hour and 12-hour input"
-                  >
-                    {hour12 ? "12h" : "24h"}
-                  </button>
-                )}
-              </span>
-              {hour12 && freq !== "hourly" ? (
-                (() => {
-                  const { h12, minute, ampm } = to12h(time);
-                  return (
-                    <div className="time-12h" data-testid="schedule-time-12h">
-                      <DropdownSelect
-                        value={String(h12)}
-                        onValueChange={(v) => setTime(from12h(Number(v), minute, ampm))}
-                        options={Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))}
-                      />
-                      <DropdownSelect
-                        value={minute}
-                        onValueChange={(v) => setTime(from12h(h12, v, ampm))}
-                        options={["00", "15", "30", "45"].map((mm) => ({ value: mm, label: mm }))}
-                      />
-                      <DropdownSelect
-                        value={ampm}
-                        onValueChange={(v) => setTime(from12h(h12, minute, v as "AM" | "PM"))}
-                        options={[{ value: "AM", label: "AM" }, { value: "PM", label: "PM" }]}
-                      />
-                    </div>
-                  );
-                })()
-              ) : (
-                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
-              )}
-            </label>
-          </div>
-        )}
-
-        {mode === "cron" && (
-          <label className="field">
-            <span>Cron expression (5 fields)</span>
-            <Input value={cronRaw} onChange={(e) => setCronRaw(e.target.value)}
-                   placeholder='e.g. "0 9 * * 1-5"' data-testid="schedule-cron" />
-          </label>
-        )}
-
-        {mode !== "once" && (
-          <label className="field">
-            <span>Timezone</span>
-            <DropdownSelect
-              id="schedule-tz"
-              value={tz}
-              onValueChange={(v) => setTz(v)}
-              options={[{ value: "", label: "UTC (default)" }, ...tzOptions.map((z) => ({ value: z, label: z }))]}
-            />
-          </label>
-        )}
-
-        <p className="schedule-preview" data-testid="schedule-preview">
-          {preview ? <>Runs <strong>{preview}</strong> <code>{schedule}</code>{mode !== "once" && tz ? <span className="muted"> · {tz}</span> : null}</> : <span className="muted">Pick when it should run</span>}
-        </p>
+        <ScheduleBuilder key={open ? "open" : "closed"} initial={NEW_INITIAL} onChange={onBuilderChange} />
 
         <label className="field">
           <span>Prompt (delivered to the agent when it fires)</span>
@@ -260,18 +110,18 @@ function ScheduleDetailDialog({
 }) {
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [schedule, setSchedule] = useState("");
-  // Re-seed the editable fields whenever a different job is opened; always start in view mode.
+  const [out, setOut] = useState<BuilderOut>({ schedule: "", valid: false, error: "" });
+  const onBuilderChange = useCallback((o: BuilderOut) => setOut(o), []);
+  // Re-seed whenever a different job is opened; always start in view mode.
   useEffect(() => {
     setPrompt(job?.prompt ?? "");
-    setSchedule(job?.schedule ?? "");
     setEditing(false);
   }, [job]);
 
   if (!job) return null;
-  const preview = describeSchedule(schedule);
-  const dirty = prompt.trim() !== job.prompt || schedule.trim() !== job.schedule;
-  const canSave = !!prompt.trim() && !!schedule.trim() && dirty && !busy;
+  // The edit builder is seeded by parsing the stored schedule into its mode (#2159 part 4).
+  const dirty = prompt.trim() !== job.prompt || out.schedule.trim() !== job.schedule.trim();
+  const canSave = !!prompt.trim() && out.valid && dirty && !busy;
 
   return (
     <Dialog
@@ -289,7 +139,7 @@ function ScheduleDetailDialog({
               variant="primary"
               disabled={!canSave}
               data-testid="schedule-detail-save"
-              onClick={() => onSave(job.id, { prompt: prompt.trim(), schedule: schedule.trim(), timezone: job.timezone || undefined })}
+              onClick={() => onSave(job.id, { prompt: prompt.trim(), schedule: out.schedule, timezone: out.timezone })}
             >
               Save changes
             </Button>
@@ -312,16 +162,11 @@ function ScheduleDetailDialog({
       <div className="schedule-form" data-testid="schedule-detail">
         {editing ? (
           <>
-            <label className="field">
-              <span>When it runs (cron expression, or an ISO date for one-off)</span>
-              <Input value={schedule} onChange={(e) => setSchedule(e.target.value)}
-                     data-testid="schedule-detail-schedule" />
-            </label>
-            <p className="schedule-preview">
-              {preview
-                ? <>Runs <strong>{preview}</strong> <code>{schedule}</code>{job.timezone ? <span className="muted"> · {job.timezone}</span> : null}</>
-                : <span className="muted">Enter a cron expression or an ISO date</span>}
-            </p>
+            <ScheduleBuilder
+              key={job.id}
+              initial={{ parsed: parseSchedule(job.schedule), timezone: job.timezone ?? "" }}
+              onChange={onBuilderChange}
+            />
             <label className="field">
               <span>Prompt (delivered to the agent when it fires)</span>
               <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={6}
