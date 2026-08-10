@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { joinLocal } from "./dateParts";
-import { buildOnce, buildRepeat, canonicalSchedule, isPastOnce, parseSchedule } from "./schedule-builder";
+import { buildOnce, buildRepeat, canonicalSchedule, cronFieldError, isPastOnce, parseSchedule } from "./schedule-builder";
 
 describe("parseSchedule — detect which builder mode a stored schedule came from (#2159)", () => {
   it("recovers the friendly recurring presets", () => {
@@ -19,6 +19,11 @@ describe("parseSchedule — detect which builder mode a stored schedule came fro
     expect(parseSchedule("not a schedule")).toEqual({ mode: "cron", cronRaw: "not a schedule" });
   });
 
+  it("keeps an out-of-range 'preset-shaped' cron raw (never silently clamps it)", () => {
+    expect(parseSchedule("60 9 * * *")).toEqual({ mode: "cron", cronRaw: "60 9 * * *" });
+    expect(parseSchedule("0 24 * * *")).toEqual({ mode: "cron", cronRaw: "0 24 * * *" });
+  });
+
   it("round-trips a one-off ISO stably (parse → rebuild yields the same UTC instant)", () => {
     const iso = buildOnce("2026-07-24T16:30"); // a local wall-clock time → UTC ISO
     const p = parseSchedule(iso);
@@ -26,6 +31,29 @@ describe("parseSchedule — detect which builder mode a stored schedule came fro
     if (p.mode === "once") {
       expect(buildOnce(joinLocal(p.onceDate, p.onceTime))).toBe(iso);
     }
+  });
+});
+
+describe("cronFieldError — range validation beyond the field count (#2439 review)", () => {
+  it("accepts real-world expressions", () => {
+    for (const s of ["0 9 * * *", "*/5 * * * *", "0 9 * * 1-5", "15,45 8-18 * * *", "0 0 1 1 *", "0 9 * * 7"]) {
+      expect(cronFieldError(s)).toBe("");
+    }
+  });
+
+  it("rejects out-of-range field values", () => {
+    expect(cronFieldError("60 9 * * *")).toMatch(/minute/);
+    expect(cronFieldError("0 24 * * *")).toMatch(/hour/);
+    expect(cronFieldError("0 9 32 * *")).toMatch(/day-of-month/);
+    expect(cronFieldError("0 9 * 13 *")).toMatch(/month/);
+    expect(cronFieldError("0 9 * * 8")).toMatch(/day-of-week/);
+    expect(cronFieldError("9-5 * * * *")).toMatch(/minute/); // inverted range
+    expect(cronFieldError("*/0 * * * *")).toMatch(/never fires/);
+  });
+
+  it("still enforces the field count and rejects junk atoms", () => {
+    expect(cronFieldError("0 9 * *")).toMatch(/exactly 5 fields/);
+    expect(cronFieldError("a b c d e")).toMatch(/Unrecognized/);
   });
 });
 

@@ -165,7 +165,10 @@ function ScheduleDetailDialog({
               <Trash2 size={16} /> Delete
             </Button>
             <Button type="button" variant="primary" data-testid="schedule-detail-edit"
-                    onClick={() => setEditing(true)} disabled={busy}>
+                    // Re-seed on ENTRY so a previously canceled edit can't leak back in:
+                    // the prompt state survives Cancel (the job didn't change), and the
+                    // builder remounts fresh from the job anyway.
+                    onClick={() => { setPrompt(job.prompt); setEditing(true); }} disabled={busy}>
               <Pencil size={16} /> Edit
             </Button>
           </>

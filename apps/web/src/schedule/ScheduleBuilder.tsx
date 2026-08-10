@@ -8,6 +8,7 @@ import { MonthCalendar } from "./MonthCalendar";
 import {
   buildOnce,
   buildRepeat,
+  cronFieldError,
   describeSchedule,
   isPastOnce,
   localZone,
@@ -73,7 +74,8 @@ export function ScheduleBuilder({
     }
     if (mode === "cron") {
       if (!schedule) return "Enter a cron expression.";
-      if (schedule.split(/\s+/).length !== 5) return "Cron needs exactly 5 fields (min hour dom mon dow).";
+      // Field count AND numeric ranges — "60 9 * * *" is five fields but never valid.
+      return cronFieldError(schedule);
     }
     return "";
   }, [mode, onceDate, schedule]);

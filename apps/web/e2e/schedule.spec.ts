@@ -51,6 +51,11 @@ test("cron mode describes a raw expression", async ({ page }) => {
   await page.getByRole("tab", { name: "Cron" }).click();
   await page.getByTestId("schedule-cron").fill("0 9 * * 1-5");
   await expect(page.getByTestId("schedule-preview")).toContainText("every weekday at");
+  // Range validation, not just a field count: minute 60 is five fields but never valid.
+  await page.getByTestId("schedule-cron").fill("60 9 * * *");
+  await expect(page.getByTestId("schedule-error")).toContainText("out of range");
+  await page.getByTestId("schedule-prompt").fill("Run it");
+  await expect(page.getByTestId("schedule-submit")).toBeDisabled();
 });
 
 test("submit is gated until prompt + schedule are set", async ({ page }) => {

@@ -38,6 +38,42 @@ function clamp(n: number, lo: number, hi: number, fallback: number): number {
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 }
 
+// Numeric bounds per cron field. Day-of-week allows 7 (croniter's Sunday alias).
+const CRON_FIELDS: [label: string, lo: number, hi: number][] = [
+  ["minute", 0, 59],
+  ["hour", 0, 23],
+  ["day-of-month", 1, 31],
+  ["month", 1, 12],
+  ["day-of-week", 0, 7],
+];
+
+/** Validation message for a raw 5-field cron expression, or "" when it's acceptable.
+ * Checks the field count AND each field's numeric ranges — `60 9 * * *` must not pass
+ * as "five fields present". Fields are `*` or comma lists of `N` / `N-M`, each with an
+ * optional `/step`; that covers what the local scheduler evaluates. Named months/days
+ * and @macros aren't accepted here — the backend expects numeric cron. */
+export function cronFieldError(schedule: string): string {
+  const parts = (schedule || "").trim().split(/\s+/);
+  if (parts.length !== 5) return "Cron needs exactly 5 fields (min hour dom mon dow).";
+  for (let i = 0; i < 5; i++) {
+    const [label, lo, hi] = CRON_FIELDS[i];
+    for (const atom of parts[i].split(",")) {
+      const m = atom.match(/^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/);
+      if (!m) return `Unrecognized ${label} field "${parts[i]}".`;
+      if (m[1] !== "*") {
+        const [a, b] = m[1].split("-").map(Number);
+        if (a < lo || a > hi || (b !== undefined && (b < lo || b > hi || b < a))) {
+          return `${label} "${atom}" is out of range (${lo}–${hi}).`;
+        }
+      }
+      if (m[2] !== undefined && Number(m[2]) === 0) {
+        return `${label} step "/0" never fires.`;
+      }
+    }
+  }
+  return "";
+}
+
 /** Plain-English description of a schedule string (cron or ISO). Falls back to the raw string. */
 export function describeSchedule(schedule: string): string {
   const s = (schedule || "").trim();
@@ -97,12 +133,14 @@ export function parseSchedule(schedule: string): ParsedSchedule {
   const parts = s.split(/\s+/);
   if (parts.length === 5) {
     const [mn, hr, dom, mon, dow] = parts;
-    // Only treat a cron as a friendly preset when the numeric fields are plain integers —
-    // an expression like `*/5` or a specific day-of-month is a custom cron, not a preset.
+    // Only treat a cron as a friendly preset when the numeric fields are plain IN-RANGE
+    // integers — an expression like `*/5` or a specific day-of-month is a custom cron,
+    // and an out-of-range value ("60 9 * * *") must stay raw too, or the preset
+    // round-trip would silently clamp it into a different schedule.
     const time = `${(hr === "*" ? "0" : hr).padStart(2, "0")}:${mn.padStart(2, "0")}`;
-    if (/^\d{1,2}$/.test(mn) && dom === "*" && mon === "*") {
+    if (/^\d{1,2}$/.test(mn) && Number(mn) <= 59 && dom === "*" && mon === "*") {
       if (hr === "*" && dow === "*") return { mode: "repeat", freq: "hourly", time, dow: 1 };
-      if (/^\d{1,2}$/.test(hr)) {
+      if (/^\d{1,2}$/.test(hr) && Number(hr) <= 23) {
         if (dow === "*") return { mode: "repeat", freq: "daily", time, dow: 1 };
         if (dow === "1-5") return { mode: "repeat", freq: "weekdays", time, dow: 1 };
         if (/^[0-6]$/.test(dow)) return { mode: "repeat", freq: "weekly", time, dow: Number(dow) };
