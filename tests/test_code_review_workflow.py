@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from graph.review.findings import FINDINGS_CONTRACT
+from graph.review.findings import BRIEF_CLOSE, BRIEF_OPEN, FINDINGS_CONTRACT
 from graph.subagents.config import SUBAGENT_REGISTRY
 from plugins.workflows.engine import validate_recipe
 
@@ -129,6 +129,26 @@ def test_finder_claims_name_the_concrete_failure_mode():
     p = SUBAGENT_REGISTRY["review-finder"].system_prompt
     assert "CONCRETE" in p and "failure mode" in p
     assert "runtime consequence, not how bad the code looks" in p
+
+
+def test_synthesizer_delimits_the_brief_for_the_publisher():
+    # The published comment is BUILT from parsed blocks, so the brief — the only free
+    # text that reaches a reader — has to be bounded rather than inferred (#2439).
+    p = SUBAGENT_REGISTRY["review-synthesizer"].system_prompt
+    assert BRIEF_OPEN in p and BRIEF_CLOSE in p
+    assert "outside those blocks is never published" in p
+    # It must also say what happens when the delimiters are missed: no brief, and the
+    # reader is told. A prompt that only says "do it" gives the model no failure model.
+    assert "becomes NO brief" in p
+
+
+def test_synthesizer_orders_the_brief_before_the_findings_json():
+    # The recipe's report step asks for brief-then-JSON-last; the role prompt used to
+    # say the opposite ("after the fenced block"), and the model followed the role.
+    p = SUBAGENT_REGISTRY["review-synthesizer"].system_prompt
+    assert "ahead of the findings JSON" in p
+    assert "FINAL block of your reply" in p
+    assert "After the fenced block, add a 3-6 line prose brief" not in p
 
 
 def test_synthesizer_runs_coverage_cross_checks_prose_only():

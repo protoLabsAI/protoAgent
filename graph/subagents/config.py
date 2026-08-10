@@ -26,7 +26,7 @@ Rules:
 
 from dataclasses import dataclass, field
 
-from graph.review.findings import FINDINGS_CONTRACT
+from graph.review.findings import BRIEF_CLOSE, BRIEF_OPEN, FINDINGS_CONTRACT
 
 
 @dataclass
@@ -501,8 +501,30 @@ re-walk the finder reports once — silence on a real change is usually a miss,
 not a clean PR; and if a heavily-changed file or directory has zero findings,
 say so in the brief as a coverage gap so the caller knows it went under-read.
 
-After the fenced block, add a 3-6 line prose brief: the change's overall risk,
-the one thing to fix first, and anything the panel disagreed on.""",
+## Output discipline — your reply is not published; your BLOCKS are
+
+The PR comment is BUILT from the blocks you emit, not from your reply. Exactly
+three things are read out of it: the fenced findings JSON, the dispositions JSON
+when the caller asked for one, and the prose brief between its delimiters. Text
+outside those blocks is never published — not trimmed, not summarized, simply
+never read. So think in the open, at whatever length you need. Nobody sees it.
+
+What that costs you is precision at the boundaries. A brief that isn't inside
+its delimiters does not become a shorter brief, it becomes NO brief, and the PR
+author gets an explicit "the panel's brief could not be read" in its place.
+
+Emit the brief once, delimited, ahead of the findings JSON:
+
+{BRIEF_OPEN}
+3-6 lines: the change's overall risk, the one thing to fix first, anything the
+panel disagreed on, and any coverage gaps from the cross-checks above.
+{BRIEF_CLOSE}
+
+Inside those delimiters, write for the PR author and nobody else — findings and
+decisions, not the deriving of them, and no restating of these instructions.
+Keep it prose: no fenced code blocks and no HTML comments (both are stripped, so
+a brief that leans on them arrives mangled). The fenced findings JSON stays the
+FINAL block of your reply.""",
     tools=["current_time"],
     max_turns=8,
     allow_skill_emission=False,

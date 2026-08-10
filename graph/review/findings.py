@@ -37,6 +37,21 @@ _VERDICT_ALIASES = {
     "plausible": "uncertain",
 }
 
+# The prose brief's delimiters. A published review is BUILT from parsed structure —
+# the findings array, the dispositions array, and this one free-text field — never by
+# echoing the model's reply. That distinction is the whole guarantee: #2439 posted a
+# full chain-of-thought to a public PR because the publisher echoed raw text, and no
+# prompt can prevent that when the serving lane puts deliberation in `content` instead
+# of on the native `reasoning` channel (the lane fix is homelab-iac#219). A cut — "find
+# where the answer starts and drop the rest" — fails open the moment the model doesn't
+# cooperate. Extracting bounded fields fails closed: text outside a recognized block is
+# not published, whatever it is, because there is no code path that would publish it.
+#
+# So the brief is delimited rather than inferred. HTML comments on purpose: invisible
+# in rendered markdown, and cheap for the model to emit exactly.
+BRIEF_OPEN = "<!-- brief -->"
+BRIEF_CLOSE = "<!-- /brief -->"
+
 # The canonical prompt snippet. Role prompts and recipe steps interpolate this so
 # the schema is written down exactly once.
 FINDINGS_CONTRACT = """\
