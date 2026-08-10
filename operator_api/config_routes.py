@@ -283,21 +283,31 @@ def register_config_routes(app) -> None:
         live_provider = (getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
         if STATE.graph is None or provider != live_provider:
             return result.as_dict()
+        # TOCTOU guard (QA review): a sign-in completing during the disconnect
+        # thread's await rebuilds the graph AND clears the disconnect marker —
+        # its work must win. The marker is the storage truth for who finished
+        # last, so re-check it after the await; the mutations below then run
+        # synchronously (no awaits) so nothing on the loop can interleave.
+        from graph.providers.oauth import is_disconnected
 
-        # The cache warmer pings this provider on a heartbeat — stop it before
-        # unloading the graph so no request rides the revoked token.
+        if not is_disconnected(provider):
+            return {**result.as_dict(), "graph_unloaded": False}
+
         warmer, STATE.cache_warmer = STATE.cache_warmer, None
-        if warmer is not None:
-            try:
-                await warmer.stop()
-            except Exception:  # noqa: BLE001 — a warmer that won't stop must not block disconnect
-                log.warning("[oauth] cache warmer stop failed during disconnect", exc_info=True)
         STATE.graph = None
         STATE.graph_auth_error = {
             "provider": provider,
             "message": f"{provider} is disconnected in protoAgent. Sign in again to reconnect.",
             "relogin": True,
         }
+        # The cache warmer pings this provider on a heartbeat — stopped AFTER the
+        # unload commit (its await is the yield point the guard above protects),
+        # detached from the just-committed signed-out state.
+        if warmer is not None:
+            try:
+                await warmer.stop()
+            except Exception:  # noqa: BLE001 — a warmer that won't stop must not block disconnect
+                log.warning("[oauth] cache warmer stop failed during disconnect", exc_info=True)
         return {**result.as_dict(), "graph_unloaded": True}
 
     @app.post("/api/config/test-model")

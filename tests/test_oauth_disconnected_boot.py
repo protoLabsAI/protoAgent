@@ -130,8 +130,12 @@ def test_runtime_status_carries_graph_auth_error():
     assert out["graph_auth_error"] is None
 
 
-def _disconnect_client(monkeypatch):
-    """TestClient + a fake ``disconnect()`` that reports success without network."""
+def _disconnect_client(monkeypatch, *, marker_present: bool = True):
+    """TestClient + a fake ``disconnect()`` that reports success without network.
+
+    ``marker_present`` fakes the post-await storage truth the route re-checks:
+    True = the disconnect marker survived (normal case); False = a concurrent
+    sign-in completed during the await and cleared it (the TOCTOU race)."""
     import types
 
     from fastapi import FastAPI
@@ -143,6 +147,9 @@ def _disconnect_client(monkeypatch):
         lambda provider: types.SimpleNamespace(
             as_dict=lambda: {"provider": provider, "removed": True, "revoked": True, "note": "test"}
         ),
+    )
+    monkeypatch.setattr(
+        "graph.providers.oauth.is_disconnected", lambda provider, paths=None: marker_present
     )
     app = FastAPI()
     register_config_routes(app)
@@ -174,6 +181,27 @@ def test_disconnect_unloads_live_graph(state_guard, monkeypatch):
     assert stops == [1]
     err = STATE.graph_auth_error
     assert err and err["provider"] == "openai-codex" and err["relogin"] is True
+
+
+def test_disconnect_race_with_completed_signin_keeps_graph(state_guard, monkeypatch):
+    """TOCTOU (QA review on #2476): a sign-in that completes during disconnect's
+    await clears the marker and rebuilds the graph — the route's post-await
+    re-check must let that work stand instead of clobbering it."""
+    import types
+
+    client = _disconnect_client(monkeypatch, marker_present=False)
+    rebuilt_graph = object()
+    STATE.graph = rebuilt_graph
+    STATE.graph_config = types.SimpleNamespace(model_provider="openai-codex")
+    STATE.graph_auth_error = None
+    warmer = object()
+    STATE.cache_warmer = warmer
+
+    res = client.post("/api/config/oauth/disconnect", json={"provider": "openai-codex"}).json()
+    assert res["graph_unloaded"] is False
+    assert STATE.graph is rebuilt_graph
+    assert STATE.cache_warmer is warmer
+    assert STATE.graph_auth_error is None
 
 
 def test_disconnect_of_other_provider_keeps_graph(state_guard, monkeypatch):
