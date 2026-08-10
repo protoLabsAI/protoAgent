@@ -16,12 +16,14 @@ The script executes in a **child Python process** (``python -u <tmpfile>`` — t
 venv's own interpreter from source; the managed CPython runtime on the packaged
 desktop app, ADR 0094) with:
 
-- a **scrubbed environment** — only ``PATH`` + the bridge fds are passed, so
-  gateway keys / auth tokens in the parent env are never visible to the script;
-- a **hard timeout** (the plugin's ``timeout`` setting) after which it's killed;
+- a **scrubbed environment** — only ``PATH`` (plus the bridge's loopback port +
+  per-run token) is passed, so gateway keys / auth tokens in the parent env are
+  never visible to the script;
+- a **hard timeout** (the plugin's ``timeout`` setting) after which its whole
+  process tree is killed (``infra.proc``, ADR 0098);
 - a **tool-RPC bridge**: the script gets a ``tools`` object whose attributes are
   proxies for the exposed tools. Calling ``tools.web_search(query=...)``
-  serialises the call over a dedicated pipe back to the **parent**, which runs
+  serialises the call over a loopback socket back to the **parent**, which runs
   the real (async) tool and returns the result. Tools therefore execute with the
   parent's credentials and audit/trace context — the child only orchestrates.
 
@@ -40,22 +42,32 @@ can't recurse into more code execution.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import secrets as _secrets
 import sys
 import tempfile
+
+from infra.proc import akill_tree, group_kwargs
 
 log = logging.getLogger(__name__)
 
 # Prelude prepended to the user's script in the child process. Sets up the
-# `tools` proxy object that bridges calls back to the parent over fds named in
-# the environment. Kept dependency-free (stdlib only).
+# `tools` proxy object that bridges calls back to the parent over a loopback TCP
+# socket whose port + per-run token are named in the environment. A socket
+# (not anonymous pipes + fd inheritance) is what makes the bridge portable to
+# Windows, where fd numbers don't survive spawn and anon pipes aren't
+# Proactor-drivable (ADR 0098 / #2449). Kept dependency-free (stdlib only).
 _RUNNER_PRELUDE = r'''
-import os as _os, sys as _sys, json as _json
+import os as _os, sys as _sys, json as _json, socket as _socket
 
-_REQ = _os.fdopen(int(_os.environ["EC_REQ_FD"]), "w")   # child -> parent
-_RESP = _os.fdopen(int(_os.environ["EC_RESP_FD"]), "r") # parent -> child
+_sock = _socket.create_connection(("127.0.0.1", int(_os.environ["EC_PORT"])))
+_REQ = _sock.makefile("w")   # child -> parent
+_RESP = _sock.makefile("r")  # parent -> child
+_REQ.write(_os.environ["EC_TOKEN"] + "\n")  # authenticate this run's connection
+_REQ.flush()
 _SEQ = 0
 
 def _ec_call(_name, **kwargs):
@@ -126,20 +138,6 @@ async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: 
             return  # child gone
 
 
-async def _connect_read(fd: int):
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(fd, "rb", 0))
-    return reader, transport
-
-
-async def _connect_write(fd: int):
-    loop = asyncio.get_event_loop()
-    transport, protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, os.fdopen(fd, "wb", 0))
-    writer = asyncio.StreamWriter(transport, protocol, None, loop)
-    return writer, transport
-
-
 def _resolve_child_interpreter() -> str | None:
     """The interpreter that runs the child script.
 
@@ -169,12 +167,45 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
             "hash-verified download) or run `protoagent runtime install-python`, then retry."
         )
     path = _build_runner_file(code)
-    # Pipes: child writes requests on req_w; parent writes responses on resp_w.
-    req_r, req_w = os.pipe()
-    resp_r, resp_w = os.pipe()
+    # A loopback TCP server the child connects back to for tool-RPC. TCP (not
+    # anonymous pipes + fd inheritance) is what makes the bridge portable to Windows.
+    # The per-run token gates the ephemeral port so no other local process can drive
+    # our tool loop — the child must present it as its first line.
+    token = _secrets.token_hex(16)
+    loop = asyncio.get_event_loop()
+    authed: asyncio.Future = loop.create_future()
+
+    async def _on_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            first = await reader.readline()
+        except Exception:  # noqa: BLE001 — a failed handshake just drops the socket
+            first = b""
+        # Wrong token, or a second connection after we're already serving one → refuse.
+        if authed.done() or first.decode(errors="replace").strip() != token:
+            with contextlib.suppress(Exception):
+                writer.close()
+            return
+        authed.set_result((reader, writer))
+
+    server = await asyncio.start_server(_on_client, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    # Scrubbed env — no gateway keys / auth tokens reach the script. On Windows a
+    # freshly spawned python.exe still needs a few OS-essential vars to start
+    # (SystemRoot above all); the loop is a no-op on POSIX.
+    child_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONUNBUFFERED": "1",
+        "EC_PORT": str(port),
+        "EC_TOKEN": token,
+    }
+    if os.name == "nt":
+        for _k in ("SystemRoot", "TEMP", "TMP", "COMSPEC", "PATHEXT"):
+            if _k in os.environ:
+                child_env[_k] = os.environ[_k]
 
     proc = None
-    req_transport = resp_transport = None
+    service = None
     try:
         proc = await asyncio.create_subprocess_exec(
             interpreter,
@@ -183,41 +214,31 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={
-                "PATH": os.environ.get("PATH", ""),
-                "PYTHONUNBUFFERED": "1",
-                "EC_REQ_FD": str(req_w),
-                "EC_RESP_FD": str(resp_r),
-            },
-            pass_fds=(req_w, resp_r),
+            env=child_env,
+            **group_kwargs(),  # ADR 0098: anchor the tree so a timeout kills grandchildren too
         )
-        # Parent doesn't use the child ends; closing req_w lets the parent's
-        # reader see EOF when the child exits.
-        os.close(req_w)
-        req_w = -1
-        os.close(resp_r)
-        resp_r = -1
 
-        req_reader, req_transport = await _connect_read(req_r)
-        req_r = -1
-        resp_writer, resp_transport = await _connect_write(resp_w)
-        resp_w = -1
+        async def _serve() -> None:
+            reader, writer = await authed
+            try:
+                await _service_rpc(reader, writer, tool_map)
+            finally:
+                with contextlib.suppress(Exception):
+                    writer.close()
 
-        service = asyncio.ensure_future(_service_rpc(req_reader, resp_writer, tool_map))
+        service = asyncio.ensure_future(_serve())
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await akill_tree(proc)  # ADR 0098: the whole tree, not just the direct child
+            with contextlib.suppress(Exception):
+                await proc.wait()
             return f"Error: execute_code timed out after {timeout}s (process killed)."
         finally:
-            service.cancel()
-            try:
-                await service
-            except asyncio.CancelledError:
-                pass  # expected — we just cancelled the service task
-            except Exception:  # noqa: BLE001 — teardown failure must not mask the result
-                pass
+            if service is not None:
+                service.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await service
 
         out = (stdout or b"").decode(errors="replace").strip()
         err = (stderr or b"").decode(errors="replace").strip()
@@ -234,19 +255,11 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
             out = out[:truncate] + f"\n\n…[truncated to {truncate} chars]"
         return out
     finally:
-        for t in (req_transport, resp_transport):
-            if t is not None:
-                t.close()
-        for fd in (req_w, resp_r, req_r, resp_w):
-            if fd is not None and fd >= 0:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-        try:
+        server.close()
+        with contextlib.suppress(Exception):
+            await server.wait_closed()
+        with contextlib.suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
 
 
 def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000):
