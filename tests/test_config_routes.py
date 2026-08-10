@@ -631,3 +631,43 @@ def test_projects_get_matches_a_tilde_row_against_its_expanded_fence_entry(monke
     body = _client().get("/api/projects").json()
     assert body["fence_source"] == "registry"
     assert body["projects"][0]["fenced"] is True
+
+
+def test_settings_schema_lists_native_oauth_models(monkeypatch, tmp_path):
+    """#2473: with a native OAuth provider configured, the schema's model.name
+    options must come from subscription discovery (list_provider_models), not the
+    gateway probe — /model and the composer read the schema, so a gateway-only
+    probe collapsed their pickers to one card while Settings ▸ Get models saw nine."""
+    import types as _t
+
+    import runtime.state as rs
+
+    monkeypatch.setattr(
+        rs.STATE,
+        "graph_config",
+        _t.SimpleNamespace(model_provider="openai-codex", api_base="", api_key=""),
+        raising=False,
+    )
+    discovered = [f"gpt-5.6-sol-{i}" for i in range(9)]
+    monkeypatch.setattr(
+        "graph.providers.discovery.list_provider_models",
+        lambda provider, cfg: (discovered, ""),
+    )
+
+    def _gateway_probe_must_not_run(base, key):  # the pre-#2473 path
+        raise AssertionError("gateway probe called for a native OAuth provider")
+
+    monkeypatch.setattr("graph.config_io.list_gateway_models", _gateway_probe_must_not_run)
+    monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: tmp_path / "absent.yaml")
+    monkeypatch.setattr("graph.config._load_host_layer", lambda: {})
+    captured = {}
+
+    def _capture_schema(cfg, model_options=None, agent_doc=None, host_doc=None):
+        captured["model_options"] = model_options
+        return []
+
+    monkeypatch.setattr("graph.settings_schema.build_schema", _capture_schema)
+
+    resp = _client().get("/api/settings/schema").json()
+    assert resp == {"groups": []}
+    assert captured["model_options"] == discovered

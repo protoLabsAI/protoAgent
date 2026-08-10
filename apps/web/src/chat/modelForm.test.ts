@@ -122,3 +122,42 @@ describe("resolveModelArg — the typed /model <alias> path", () => {
     expect(resolveModelArg(empty, "anything/goes")).toBe("anything/goes");
   });
 });
+
+// #2473 — native OAuth subscription models are not "gateway models": the cards,
+// the source hint, and the no-favorites description must all say subscription.
+describe("native OAuth provider labeling (#2473)", () => {
+  const codexGroups = (models: string[]): SettingsGroup[] =>
+    [
+      {
+        section: "Model",
+        category: "Model",
+        fields: [
+          field("model.name", "gpt-5.6-sol", models),
+          field("model.provider", "openai-codex"),
+        ],
+      },
+    ] as SettingsGroup[];
+
+  it("extracts the provider and lists every discovered subscription model", () => {
+    const data = modelPickerData(codexGroups(["gpt-5.6-sol", "gpt-5-codex", "o4-mini"]));
+    expect(data.provider).toBe("openai-codex");
+    expect(modelChoices(data).choices).toEqual(["gpt-5.6-sol", "gpt-5-codex", "o4-mini"]);
+  });
+
+  it("labels subscription cards as the subscription, never 'gateway model'", () => {
+    expect(modelCardHint("gpt-5.6-sol", "gpt-5.6-sol", "openai-codex")).toBe(
+      "ChatGPT subscription · configured default",
+    );
+    expect(modelCardHint("claude-sonnet-4-5", "", "anthropic-oauth")).toBe("Claude subscription");
+    // Gateway aliases keep their prefix; unknown providers keep the old wording.
+    expect(modelCardHint("openai/gpt-5.2", "", "openai-codex")).toBe("openai");
+    expect(modelCardHint("bare-model", "", "")).toBe("gateway model");
+  });
+
+  it("the no-favorites description names the subscription, not the gateway", () => {
+    const data = modelPickerData(codexGroups(["gpt-5.6-sol", "gpt-5-codex"]));
+    const payload = modelFormPayload(data, "gpt-5.6-sol");
+    expect(payload.description).toContain("ChatGPT subscription");
+    expect(payload.description).not.toContain("gateway");
+  });
+});

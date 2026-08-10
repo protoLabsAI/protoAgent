@@ -540,7 +540,22 @@ def register_config_routes(app) -> None:
 
         models: list[str] = []
         if STATE.graph_config is not None:
-            models, _ = list_gateway_models(STATE.graph_config.api_base, STATE.graph_config.api_key)
+            # Native OAuth providers (ADR 0097) list the subscription's models, not the
+            # gateway's — same branch as POST /api/config/models. Without it the schema's
+            # model.name options collapsed to the configured model, so /model and the
+            # composer picker offered exactly one card while Settings ▸ Get models saw
+            # nine (#2473). Offloaded: both listers are blocking network probes.
+            provider = (getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
+            from graph.providers import is_native_oauth_provider
+
+            if is_native_oauth_provider(provider):
+                from graph.providers.discovery import list_provider_models
+
+                models, _ = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
+            else:
+                models, _ = await asyncio.to_thread(
+                    list_gateway_models, STATE.graph_config.api_base, STATE.graph_config.api_key
+                )
         # Per-layer provenance (ADR 0047): the raw agent leaf doc + the filtered Host
         # layer let build_schema report each field's `source` (agent/host/default) so
         # the UI can badge inherited-vs-overridden.

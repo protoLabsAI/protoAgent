@@ -11,10 +11,20 @@ import type { HitlPayload, SettingsGroup } from "../lib/types";
 export type ModelPickerData = {
   /** Pinned favorites (model.favorites), in the operator's order, deduped. */
   favorites: string[];
-  /** The gateway's full model list (model.name options). */
+  /** The provider's full model list (model.name options). */
   models: string[];
   /** The configured default model (model.name value) — picking it clears the tab override. */
   globalModel: string;
+  /** The configured model.provider — native OAuth providers relabel the cards (#2473). */
+  provider: string;
+};
+
+/** Native OAuth subscription providers (ADR 0097) → the card/source label their models
+ *  carry. A subscription model is NOT a "gateway model" — that wording made the picker
+ *  look wrong the moment discovery worked (#2473). */
+const SUBSCRIPTION_LABELS: Record<string, string> = {
+  "openai-codex": "ChatGPT subscription",
+  "anthropic-oauth": "Claude subscription",
 };
 
 const strings = (v: unknown): string[] =>
@@ -26,12 +36,14 @@ export function modelPickerData(groups: SettingsGroup[]): ModelPickerData {
   const fields = groups.flatMap((g) => g.fields);
   const name = fields.find((f) => f.key === "model.name");
   const favs = fields.find((f) => f.key === "model.favorites");
+  const prov = fields.find((f) => f.key === "model.provider");
   const globalModel = typeof name?.value === "string" ? name.value : "";
   const models = strings(name?.options);
   return {
     favorites: [...new Set(strings(favs?.value))],
     models: models.length ? models : globalModel ? [globalModel] : [],
     globalModel,
+    provider: typeof prov?.value === "string" ? prov.value.trim().toLowerCase() : "",
   };
 }
 
@@ -49,9 +61,10 @@ export function modelChoices(data: ModelPickerData): { choices: string[]; fromFa
     : { choices: data.models, fromFavorites: false };
 }
 
-/** One-line card hint: the alias's provider plus a "configured default" marker. */
-export function modelCardHint(alias: string, globalModel: string): string {
-  const parts = [providerOf(alias) || "gateway model"];
+/** One-line card hint: the model's source (alias prefix, subscription label, or
+ *  "gateway model") plus a "configured default" marker. */
+export function modelCardHint(alias: string, globalModel: string, provider = ""): string {
+  const parts = [providerOf(alias) || SUBSCRIPTION_LABELS[provider] || "gateway model"];
   if (alias === globalModel) parts.push("configured default");
   return parts.join(" · ");
 }
@@ -60,12 +73,15 @@ export function modelCardHint(alias: string, globalModel: string): string {
  *  effective model — preselects its card when it's among the choices. */
 export function modelFormPayload(data: ModelPickerData, current: string): HitlPayload {
   const { choices, fromFavorites } = modelChoices(data);
+  const sourceLabel = SUBSCRIPTION_LABELS[data.provider]
+    ? `every model your ${SUBSCRIPTION_LABELS[data.provider]} offers`
+    : "every gateway model";
   return {
     kind: "form",
     title: "Switch model",
     description: fromFavorites
       ? "Applies to this tab's next message. Manage favorites in Settings ▸ Model."
-      : "No favorites pinned yet — showing every gateway model. Pin favorites in Settings ▸ Model ▸ Favorite models to shorten this list.",
+      : `No favorites pinned yet — showing ${sourceLabel}. Pin favorites in Settings ▸ Model ▸ Favorite models to shorten this list.`,
     steps: [
       {
         schema: {
@@ -76,7 +92,7 @@ export function modelFormPayload(data: ModelPickerData, current: string): HitlPa
               type: "string",
               title: "Model",
               ...(choices.includes(current) ? { default: current } : {}),
-              oneOf: choices.map((m) => ({ const: m, title: m, description: modelCardHint(m, data.globalModel) })),
+              oneOf: choices.map((m) => ({ const: m, title: m, description: modelCardHint(m, data.globalModel, data.provider) })),
             },
           },
         },
