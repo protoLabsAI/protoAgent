@@ -274,6 +274,15 @@ def register_chat_routes(app, ui: str) -> None:
             await asyncio.to_thread(prompt_snapshots().purge_session, session_id)
         except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
             log.warning("[chat] prompt-snapshot cleanup failed for %s: %s", session_id, exc)
+        # The session-summary memory (#2482) — without this, a digest of the
+        # deleted conversation kept riding <prior_sessions> into future prompts,
+        # violating the delete dialog's "its history will be removed".
+        try:
+            from graph.middleware.memory import delete_session_summary
+
+            await asyncio.to_thread(delete_session_summary, session_id)
+        except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
+            log.warning("[chat] session-summary cleanup failed for %s: %s", session_id, exc)
         return {"deleted": True, "harvested": chunk_id is not None}
 
     @app.post("/api/chat/sessions/{session_id}/compact")

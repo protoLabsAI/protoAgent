@@ -105,6 +105,25 @@ def session_file_candidates(session_id: str, base: str | None = None) -> list[st
     return safe
 
 
+def delete_session_summary(session_id: str, base: str | None = None) -> bool:
+    """Remove every file *session_id*'s summary may live under (encoded +
+    legacy). True when something was removed.
+
+    The single deletion seam for a session's ``<prior_sessions>`` footprint —
+    shared by the memory-inspector DELETE and the chat-delete flow (#2482):
+    deleting a chat while leaving its summary behind kept injecting a digest of
+    a conversation the user was told "will be removed". Raises ``OSError`` only
+    for real filesystem failures; missing files and escaping ids are False."""
+    removed = False
+    for fpath in session_file_candidates(session_id, base):
+        try:
+            os.remove(fpath)
+            removed = True
+        except FileNotFoundError:
+            continue
+    return removed
+
+
 # ---------------------------------------------------------------------------
 # Session persistence
 # ---------------------------------------------------------------------------

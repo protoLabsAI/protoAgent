@@ -152,20 +152,12 @@ def register_memory_routes(app) -> None:
         if paths is None:
             return JSONResponse({"detail": "invalid session_id"}, status_code=400)
 
-        def _remove() -> bool:
-            removed = False
-            # Remove EVERY name the summary may live under (encoded + legacy) —
-            # a delete must not leave a legacy copy resurfacing in the digest.
-            for fpath in paths:
-                try:
-                    os.remove(fpath)
-                    removed = True
-                except FileNotFoundError:
-                    continue
-            return removed
+        # Shared with the chat-delete flow (#2482): one deletion seam removes
+        # every name the summary may live under (encoded + legacy).
+        from graph.middleware.memory import delete_session_summary
 
         try:
-            removed = await asyncio.to_thread(_remove)
+            removed = await asyncio.to_thread(delete_session_summary, session_id)
         except OSError as exc:
             log.warning("[memory] delete of summary %s failed: %s", session_id, exc)
             return JSONResponse({"detail": f"delete failed: {exc}"}, status_code=500)
