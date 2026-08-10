@@ -12,17 +12,18 @@
 # diagnosis); the authoritative fact per line is "failed natively at the
 # baseline". Reclassify freely as files get diagnosed.
 
-# ── POSIX process lifecycle: process groups, signals, sh/sleep children ──
-# The #2412 phase-2 target (shared cross-platform process-tree abstraction,
-# ADR 0098). test_acp_reaping.py came off with the acp_client migration.
-tests/test_coder_plugin.py
-tests/test_coding_agent_plugin.py
-tests/test_delegates_api.py
-tests/test_delegates_plugin.py
+# ── execute_code: POSIX-only fd-RPC tool bridge (a real runtime limit, #2449) ──
+# The execute_code plugin bridges its sandboxed child to the host tool loop over
+# anonymous os.pipe() + pass_fds + fd-number handoff + loop.connect_read/write_pipe —
+# POSIX fd-inheritance semantics with no Windows equivalent. That's a genuine runtime
+# gap (tracked in #2449: port to a loopback-socket / named-pipe transport), not a test
+# artifact: 10 spawn tests can't run natively until the port. The file's 7 pure tests
+# are cross-platform but stay file-excluded until the whole file can gate.
 tests/test_execute_code.py
-tests/test_workflow_run_state.py
 
-# The "Path semantics" section (tilde/separators/symlinks/`:`-in-filename) was
-# burned down in full — 10 files, diagnosed and fixed portably (#2412). What
-# remains above is the process-lifecycle group (ADR 0098). Add new POSIX-only
-# files here WITH a reason; never re-add a fixed one.
+# History — both earlier sections burned down in full (#2412), diagnosed and fixed
+# portably; the files now gate on the Windows job like the rest of the suite:
+#   • Path semantics (tilde / separators / symlinks / `:`-in-filename) — 10 files.
+#   • Process lifecycle (the runtime was already portable via infra/proc.py + ADR 0098;
+#     the failures were test-side sh/sleep/workdir/PATH assumptions) — 5 files.
+# Add new POSIX-only files here WITH a reason; never re-add a fixed one.

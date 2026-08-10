@@ -123,7 +123,7 @@ async def test_acp_probe_bare_claude_hints_the_adapter():
     assert res["ok"] is False and "claude-agent-acp" in res["error"]
 
 
-async def test_acp_probe_fails_when_handshake_fails(monkeypatch):
+async def test_acp_probe_fails_when_handshake_fails(monkeypatch, tmp_path):
     # A command on PATH + valid workdir that does NOT speak ACP must FAIL the probe —
     # the core fix for #1116 (PATH+workdir alone gave false confidence).
     import sys
@@ -138,12 +138,12 @@ async def test_acp_probe_fails_when_handshake_fails(monkeypatch):
 
     monkeypatch.setattr(AcpClient, "handshake", _boom)
     monkeypatch.setattr(AcpClient, "close", _noop)
-    d = ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
+    d = ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)})
     res = await ADAPTERS["acp"].probe(d)
     assert res["ok"] is False and "handshake failed" in res["error"]
 
 
-async def test_acp_probe_ok_on_successful_handshake(monkeypatch):
+async def test_acp_probe_ok_on_successful_handshake(monkeypatch, tmp_path):
     import sys
 
     from plugins.coding_agent.acp_client import AcpClient
@@ -156,7 +156,7 @@ async def test_acp_probe_ok_on_successful_handshake(monkeypatch):
 
     monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
-    d = ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
+    d = ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)})
     res = await ADAPTERS["acp"].probe(d)
     assert res["ok"] is True and "handshake OK" in res["detail"]
 

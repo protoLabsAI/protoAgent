@@ -173,4 +173,4 @@ def test_writable_dir_expands_tilde(monkeypatch):
     monkeypatch.setattr(wf.sdk, "config", lambda: SimpleNamespace(workflow_dir="~/wf-store"))
     out = wf._writable_dir()
     assert "~" not in str(out)
-    assert str(out).startswith("/")
+    assert out.is_absolute()  # expanded to a real absolute dir (drive-anchored on Windows)

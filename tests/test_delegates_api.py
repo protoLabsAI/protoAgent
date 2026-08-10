@@ -123,7 +123,7 @@ def test_create_invalid_returns_400(client):
     )  # no model
 
 
-def test_test_endpoint_acp_probe(client, monkeypatch):
+def test_test_endpoint_acp_probe(client, monkeypatch, tmp_path):
     import sys
 
     from plugins.coding_agent.acp_client import AcpClient
@@ -139,7 +139,8 @@ def test_test_endpoint_acp_probe(client, monkeypatch):
     monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
     r = client.post(
-        "/api/delegates/test", json={"name": "t", "type": "acp", "command": sys.executable, "workdir": "/tmp"}
+        "/api/delegates/test",
+        json={"name": "t", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)},
     )
     assert r.status_code == 200 and r.json()["ok"] is True
 
@@ -157,7 +158,7 @@ def test_list_includes_health_snapshot(client, monkeypatch):
     assert body["health"]["ok"] is True and body["health"]["latency_ms"] == 12
 
 
-def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch):
+def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch, tmp_path):
     # The per-row Test button sends only {name, type}; the endpoint must probe the
     # STORED config (command/workdir), not fail on the missing fields.
     import sys
@@ -172,7 +173,10 @@ def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch):
 
     monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
-    client.post("/api/delegates", json={"name": "proto", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
+    client.post(
+        "/api/delegates",
+        json={"name": "proto", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)},
+    )
     r = client.post("/api/delegates/test", json={"name": "proto", "type": "acp"})
     assert r.status_code == 200 and r.json()["ok"] is True
 

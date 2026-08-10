@@ -76,6 +76,15 @@ async def run_tests(
             f.write(code)
         with open(os.path.join(d, f"test_{solution_name}.py"), "w") as f:
             f.write(tests)
+        # Scrubbed env (no host secrets leak into the test subprocess), but a freshly
+        # spawned python.exe needs a handful of OS-essential vars to even start on Windows
+        # — SystemRoot above all, plus TEMP/TMP/COMSPEC/PATHEXT. Dropping them was why the
+        # child pytest couldn't initialize on Windows (#2412). The loop is a no-op on POSIX.
+        child_env = {"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"}
+        if os.name == "nt":
+            for _k in ("SystemRoot", "TEMP", "TMP", "COMSPEC", "PATHEXT"):
+                if _k in os.environ:
+                    child_env[_k] = os.environ[_k]
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
@@ -88,7 +97,7 @@ async def run_tests(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 stdin=asyncio.subprocess.DEVNULL,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"},
+                env=child_env,
             )
         except FileNotFoundError as exc:  # pragma: no cover - env-dependent
             return Verdict(passed=False, output=f"could not launch pytest: {exc}")
