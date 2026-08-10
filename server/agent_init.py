@@ -189,6 +189,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             return
 
     from graph.agent import create_agent_graph
+    from graph.providers.oauth import OAuthCredentialError
     from tools.lg_tools import get_all_tools
 
     # Construct the default KnowledgeStore so memory tools (memory_ingest,
@@ -286,35 +287,64 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # the `task` tool's run_in_background path can reach it.
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
 
-    STATE.graph = create_agent_graph(
-        STATE.graph_config,
-        knowledge_store=STATE.knowledge_store,
-        scheduler=STATE.scheduler,
-        skills_index=STATE.skills_index,
-        extra_tools=STATE.mcp_tools + STATE.plugin_tools,
-        extra_middleware=STATE.plugin_middleware,
-        late_tool_factories=STATE.plugin_late_tool_factories,
-        checkpointer=STATE.checkpointer,
-        inbox_store=STATE.inbox_store,
-        tasks_store=STATE.tasks_store,
-        background_mgr=STATE.background_mgr,
-        # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a persona
-        # self-edit is live on the next turn — injected, so tools/ never imports server/.
-        reload_callback=_reload_langgraph_agent,
-    )
-    # Untooled-action audit (#2276) — now that the persona AND the bound tool set both
-    # exist, warn about commitments no tool backs (the model narrates those as done).
-    _audit_persona_tools(STATE.graph, trigger="boot")
+    try:
+        STATE.graph = create_agent_graph(
+            STATE.graph_config,
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+            skills_index=STATE.skills_index,
+            extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+            extra_middleware=STATE.plugin_middleware,
+            late_tool_factories=STATE.plugin_late_tool_factories,
+            checkpointer=STATE.checkpointer,
+            inbox_store=STATE.inbox_store,
+            tasks_store=STATE.tasks_store,
+            background_mgr=STATE.background_mgr,
+            # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a persona
+            # self-edit is live on the next turn — injected, so tools/ never imports server/.
+            reload_callback=_reload_langgraph_agent,
+        )
+    except OAuthCredentialError as exc:
+        # Signed-out is an intentional state, not a boot failure (#2458): the user
+        # disconnected a native OAuth provider and the marker survived a restart.
+        # Crashing here is a recovery dead end — the reconnect routes live on THIS
+        # server. Boot graphless instead (routes/surfaces above are already wired,
+        # chat degrades on ``STATE.graph is None``) and record why, so status APIs
+        # can offer reconnect instead of a dead port. The graph-independent
+        # machinery below (goal/watch controllers) still builds: the reconnect
+        # reload rebuilds only the graph, so anything skipped here would stay
+        # dead until a full restart.
+        STATE.graph = None
+        STATE.graph_auth_error = {
+            "provider": exc.provider,
+            "message": str(exc),
+            "relogin": exc.relogin,
+        }
+        log.warning(
+            "[oauth] %s — starting without a compiled graph; reconnect %s from the "
+            "console to restore chat.",
+            exc,
+            exc.provider,
+        )
+    else:
+        STATE.graph_auth_error = None
+        # Untooled-action audit (#2276) — now that the persona AND the bound tool set
+        # both exist, warn about commitments no tool backs (the model narrates those
+        # as done).
+        _audit_persona_tools(STATE.graph, trigger="boot")
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
-    # for an Anthropic-family model (see graph/cache_warmer.py).
-    from graph.cache_warmer import CacheWarmer
+    # for an Anthropic-family model (see graph/cache_warmer.py). Not built while
+    # signed out (#2458): its pings are provider requests, exactly what a
+    # disconnected instance must not send.
+    if STATE.graph is not None:
+        from graph.cache_warmer import CacheWarmer
 
-    STATE.cache_warmer = CacheWarmer(
-        STATE.graph_config,
-        knowledge_store=STATE.knowledge_store,
-        scheduler=STATE.scheduler,
-    )
+        STATE.cache_warmer = CacheWarmer(
+            STATE.graph_config,
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+        )
 
     # Goal mode — parses /goal control messages and runs the goal-completion
     # loop around graph invocations. Machinery only; no goal is active until set.
@@ -2094,6 +2124,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # _main wires routes) — harmless.
         pass
     STATE.graph = new_graph
+    if new_graph is not None:
+        # A committed graph proves the credential resolved — clear the signed-out
+        # marker state (#2458) so status APIs stop offering reconnect.
+        STATE.graph_auth_error = None
     # Untooled-action audit (#2276) — a reload is exactly when the persona/tool set
     # changes (SOUL edit, plugin enable/disable, tools.disabled), so re-check here.
     _audit_persona_tools(new_graph, trigger="reload")

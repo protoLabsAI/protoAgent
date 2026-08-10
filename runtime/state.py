@@ -18,6 +18,11 @@ class AppState:
     # Compiled graph + its config.
     graph: Any = None
     graph_config: Any = None
+    # Why the graph is absent when a native-OAuth credential is the reason (#2458):
+    # ``{"provider", "message", "relogin"}`` after boot/reload hit OAuthCredentialError
+    # (signed-out is an intentional state — the server stays up, graphless, so the
+    # reconnect routes remain reachable). None whenever a graph is live.
+    graph_auth_error: Any = None
     # Conversation checkpointer + prune bookkeeping.
     checkpointer: Any = None
     checkpoint_path: Any = None

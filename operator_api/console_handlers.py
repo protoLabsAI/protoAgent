@@ -136,6 +136,9 @@ async def _operator_runtime_status():
         # App version (pyproject [project].version) — the hub↔remote version
         # handshake (ADR 0042 §I) needs skew between consoles + agents visible.
         version=package_version(),
+        # Signed-out native OAuth provider (#2458): why graph_loaded can be false
+        # with setup complete — the console offers reconnect instead of an error.
+        graph_auth_error=getattr(STATE, "graph_auth_error", None),
     )
 
 

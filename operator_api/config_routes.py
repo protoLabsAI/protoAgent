@@ -83,6 +83,30 @@ def _reset_live_embed_breaker() -> None:
             pass
 
 
+async def _rebuild_graph_after_reconnect(result: dict) -> dict:
+    """After a completed in-console sign-in, restore the live graph (#2458).
+
+    A server that booted signed-out (disconnect marker present) is serving
+    routes with ``STATE.graph = None`` — the reconnect that just succeeded is
+    the moment to rebuild, or the user stays chatless until a manual restart.
+    No-op unless the sign-in actually completed and a rebuild can help
+    (setup complete, no live graph). Reload failure is reported, not raised —
+    the sign-in itself DID succeed and the tokens are stored.
+    """
+    if result.get("status") != "complete":
+        return result
+    from graph.config_io import is_setup_complete
+
+    if STATE.graph is not None or not is_setup_complete():
+        return result
+    from server.agent_init import _reload_langgraph_agent
+
+    ok, message = await asyncio.to_thread(_reload_langgraph_agent)
+    if not ok:
+        return {**result, "graph_reloaded": False, "graph_reload_error": message}
+    return {**result, "graph_reloaded": True}
+
+
 def register_config_routes(app) -> None:
     """Register the ``/api/config*`` + ``/api/settings*`` routes on ``app``."""
 
@@ -208,9 +232,10 @@ def register_config_routes(app) -> None:
         from graph.providers.oauth_login import OAuthLoginError, codex_login_poll
 
         try:
-            return await asyncio.to_thread(codex_login_poll, req.flow_id)
+            result = await asyncio.to_thread(codex_login_poll, req.flow_id)
         except OAuthLoginError as exc:
             return {"status": "error", "error": str(exc)}
+        return await _rebuild_graph_after_reconnect(result)
 
     @app.post("/api/config/oauth/complete")
     async def _api_oauth_complete(req: OAuthLoginRequest):
@@ -218,9 +243,10 @@ def register_config_routes(app) -> None:
         from graph.providers.oauth_login import OAuthLoginError, anthropic_login_complete
 
         try:
-            return await asyncio.to_thread(anthropic_login_complete, req.flow_id, req.code)
+            result = await asyncio.to_thread(anthropic_login_complete, req.flow_id, req.code)
         except OAuthLoginError as exc:
             return {"status": "error", "error": str(exc)}
+        return await _rebuild_graph_after_reconnect(result)
 
     @app.post("/api/config/oauth/cancel")
     async def _api_oauth_cancel(req: OAuthLoginRequest):

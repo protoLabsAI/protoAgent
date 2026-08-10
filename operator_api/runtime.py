@@ -23,6 +23,7 @@ def build_runtime_status(
     warnings: list[str] | None = None,
     instance_uid: str = "",
     version: str = "",
+    graph_auth_error: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -39,6 +40,11 @@ def build_runtime_status(
     the console↔server ``/api/*`` surface has no other versioning, and with remote
     fleet members (ADR 0042 §I) a hub console can drive a DIFFERENT release by
     proxy, so skew must at least be visible.
+
+    ``graph_auth_error`` (#2458) explains a ``graph_loaded: false`` under
+    ``setup_complete: true``: a native OAuth provider is signed out
+    (``{"provider", "message", "relogin"}``) and the console should offer
+    reconnect instead of reading the agent as broken.
     """
     warnings_block = [w for w in (warnings or []) if w]
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
@@ -57,6 +63,7 @@ def build_runtime_status(
         return {
             "setup_complete": bool(setup_complete),
             "graph_loaded": False,
+            "graph_auth_error": graph_auth_error,
             "project": project,
             "agent_runtime": "native",
             "model": None,
@@ -83,6 +90,7 @@ def build_runtime_status(
     return {
         "setup_complete": bool(setup_complete),
         "graph_loaded": bool(graph_loaded),
+        "graph_auth_error": graph_auth_error,
         "project": project,
         # Which brain drives a turn (ADR 0033): "native" = the LangGraph loop, or
         # "acp:<agent>" = an external coding agent. The console reads this to stop

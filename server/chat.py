@@ -346,13 +346,27 @@ async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, A
 
 
 def _setup_required_message() -> list[dict[str, Any]]:
-    """Returned by chat endpoints when the wizard hasn't been run.
+    """Returned by chat endpoints when there is no compiled graph.
 
     The console hides the chat pane until setup completes, but the
     HTTP /api/chat, OpenAI-compat, and A2A endpoints don't know the
-    UI state — so they emit a plain-text "finish setup first"
-    message instead of 500ing on ``STATE.graph is None``.
+    UI state — so they emit a plain-text message instead of 500ing on
+    ``STATE.graph is None``. Two graphless states, two messages: the
+    wizard hasn't run, or a native OAuth provider is signed out
+    (#2458) and needs an in-console reconnect — telling that user to
+    "finish setup" points them at a wizard that IS complete.
     """
+    auth_err = getattr(STATE, "graph_auth_error", None)
+    if auth_err:
+        return [
+            {
+                "role": "assistant",
+                "content": (
+                    f"**Signed out.** {auth_err.get('message') or 'The model provider is disconnected.'} "
+                    "Chat is disabled until the provider is reconnected from the console."
+                ),
+            }
+        ]
     return [
         {
             "role": "assistant",
@@ -1355,7 +1369,13 @@ async def _chat_langgraph_stream_impl(
             trace_meta["caller_span_id"] = caller_trace["spanId"]
 
     if STATE.graph is None:
-        yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
+        auth_err = getattr(STATE, "graph_auth_error", None)
+        if auth_err:
+            # Signed-out (#2458), not setup-pending — say so instead of pointing at a
+            # wizard the user already finished.
+            yield ("error", auth_err.get("message") or "provider disconnected — reconnect from the console")
+        else:
+            yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
     async with (
