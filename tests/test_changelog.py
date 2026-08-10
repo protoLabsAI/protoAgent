@@ -164,3 +164,114 @@ def test_no_released_version_is_missing_from_marketing_changelog():
         pytest.skip("no marketing site (a fork dropped it) — staleness guard N/A")
     missing = changelog.missing_versions()
     assert not missing, f"changelog.json missing: {missing} — run `changelog.py scaffold <v>` then curate"
+
+
+# ── Monthly archives (#2437) ─────────────────────────────────────────────────
+
+_MULTI_MONTH = """# Changelog
+
+intro text
+
+## [Unreleased]
+
+### Added
+- pending thing
+
+## [0.6.0] - 2026-08-01
+### Added
+- **August-first stays.** boundary is exclusive
+
+## [0.5.0] - 2026-08-02
+### Added
+- **August feature.** detail
+
+## [0.4.0] - 2026-07-31
+### Fixed
+- **July fix.** detail
+
+## [0.3.0] - 2026-06-15
+### Added
+- **June thing.** oldest
+"""
+
+
+def _load_multi(tmp_path, monkeypatch):
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(_MULTI_MONTH, encoding="utf-8")
+    monkeypatch.setattr(changelog, "CHANGELOG", cl)
+    return cl
+
+
+def test_archive_splits_on_an_exclusive_date_boundary(tmp_path, monkeypatch):
+    cl = _load_multi(tmp_path, monkeypatch)
+    n, out = changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    assert n == 2  # July + June move; both August sections (incl. the 2026-08-01 one) stay
+    root, arch = cl.read_text(), out.read_text()
+    assert changelog.dated_versions(root) == ["0.6.0", "0.5.0"]  # boundary is exclusive
+    assert changelog.dated_versions(arch) == ["0.4.0", "0.3.0"]  # order preserved (newest first)
+    # [Unreleased] + header stay in root; nothing rewritten
+    assert "## [Unreleased]" in root and "- pending thing" in root
+    assert "August feature." in root and "July fix." in arch and "June thing." in arch
+
+
+def test_archive_partition_is_complete_and_unique(tmp_path, monkeypatch):
+    """No release is dropped, duplicated, or reordered — the union equals the original."""
+    cl = _load_multi(tmp_path, monkeypatch)
+    original = changelog.dated_versions(cl.read_text())
+    _n, out = changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    union = changelog.dated_versions(cl.read_text()) + changelog.dated_versions(out.read_text())
+    assert sorted(union) == sorted(original)
+    assert len(union) == len(set(union))  # no duplicates
+
+
+def test_archive_writes_cross_links(tmp_path, monkeypatch):
+    cl = _load_multi(tmp_path, monkeypatch)
+    _n, out = changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    root, arch = cl.read_text(), out.read_text()
+    assert changelog._ARCHIVE_INDEX_START in root  # root indexes the archive
+    assert "[through 2026-07](CHANGELOG-THROUGH-2026-07.md)" in root
+    assert "[CHANGELOG.md](CHANGELOG.md)" in arch  # archive links back
+
+
+def test_archive_is_idempotent(tmp_path, monkeypatch):
+    cl = _load_multi(tmp_path, monkeypatch)
+    n1, out = changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    root_after, arch_after = cl.read_text(), out.read_text()
+    n2, _ = changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    assert (n1, n2) == (2, 0)  # second run moves nothing
+    assert cl.read_text() == root_after and out.read_text() == arch_after  # byte-identical
+
+
+def test_notes_finds_an_archived_version(tmp_path, monkeypatch):
+    """The desktop updater rebuild path: an OLD version's notes come from the archive
+    after its section has rolled off the root file."""
+    cl = _load_multi(tmp_path, monkeypatch)
+    changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    assert "0.4.0" not in changelog.dated_versions(cl.read_text())  # gone from root
+    body = changelog.notes("0.4.0")  # still resolvable from the archive
+    assert "July fix." in body
+    assert changelog.notes("0.6.0")  # a current (root) version still resolves too
+    assert changelog.notes("9.9.9") == ""  # absent everywhere → empty (fallback signal)
+
+
+def test_missing_versions_is_a_current_only_contract(tmp_path, monkeypatch):
+    """`missing_versions`/`check` guard against a forgotten NEW release, so they read only
+    the current root file — an archived (already-curated) version is intentionally not
+    re-flagged even though it's no longer in the root."""
+    import json
+
+    _load_multi(tmp_path, monkeypatch)  # monkeypatches CHANGELOG to the fixture
+    mj = tmp_path / "changelog.json"
+    # marketing has the two current versions but NOT the archived ones — must stay clean.
+    mj.write_text(
+        json.dumps(
+            [
+                {"version": "v0.6.0", "date": "2026-08-01", "changes": ["x"]},
+                {"version": "v0.5.0", "date": "2026-08-02", "changes": ["y"]},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(changelog, "MARKETING_JSON", mj)
+    changelog.archive("2026-08-01", "CHANGELOG-THROUGH-2026-07.md")
+    assert changelog.missing_versions() == []  # archived versions are not re-demanded

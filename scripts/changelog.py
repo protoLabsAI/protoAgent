@@ -155,14 +155,141 @@ def scaffold(version: str) -> bool:
 
 
 def notes(version: str) -> str:
-    """Return the CHANGELOG.md section body for *version* (markdown), or '' if absent/empty.
+    """Return the changelog section body for *version* (markdown), or '' if absent/empty.
 
     Fed to the desktop updater-manifest job so the in-app UpdateNotice shows the curated
     CHANGELOG section instead of raw commit subjects. Empty output is the caller's signal
     to fall back (GitHub release body → placeholder) — e.g. a patch with no bullets.
+
+    Searches the current ``CHANGELOG.md`` first, then the monthly archives (#2437), so
+    rebuilding an *older* desktop release still finds that version's notes after its
+    section has rolled off the root file.
     """
-    _date, body = _section(CHANGELOG.read_text(encoding="utf-8"), version)
-    return body.strip()
+    for path in [CHANGELOG, *_archive_files()]:
+        if not path.exists():
+            continue
+        date, body = _section(path.read_text(encoding="utf-8"), version)
+        if date is not None:  # the section lives here (body may be empty → '' → fallback)
+            return body.strip()
+    return ""
+
+
+# ── Monthly archives (#2437) ─────────────────────────────────────────────────
+#
+# CHANGELOG.md grows without bound (600 KB+ before this landed), so most reads only
+# want ``[Unreleased]`` + the current month. ``archive`` moves older dated sections —
+# VERBATIM, no regeneration from git — into ``CHANGELOG-YYYY-MM.md`` (or a one-time
+# ``CHANGELOG-THROUGH-YYYY-MM.md`` bulk) next to the root file, and maintains
+# cross-links. ``collate``/``roll`` still write ONLY the root file; ``notes`` reads
+# the archives too. Rollover is a documented manual chore, not a scheduled workflow.
+
+_ARCHIVE_INDEX_START = "<!-- archive-index -->"
+_ARCHIVE_INDEX_END = "<!-- /archive-index -->"
+
+
+def _archive_files() -> list[Path]:
+    """Every archive file next to CHANGELOG.md (``CHANGELOG-*.md``), sorted by name."""
+    return sorted(CHANGELOG.parent.glob("CHANGELOG-*.md"))
+
+
+def _archive_label(name: str) -> str:
+    """A human label for an archive filename, for links/headers.
+
+    ``CHANGELOG-THROUGH-2026-07.md`` → ``through 2026-07``; ``CHANGELOG-2026-08.md`` → ``2026-08``.
+    """
+    stem = name
+    if stem.startswith("CHANGELOG-"):
+        stem = stem[len("CHANGELOG-") :]
+    if stem.endswith(".md"):
+        stem = stem[: -len(".md")]
+    return f"through {stem[len('THROUGH-'):]}" if stem.startswith("THROUGH-") else stem
+
+
+def _split_sections(text: str) -> list[tuple[str, str | None, str | None, str]]:
+    """``[(kind, version, date, chunk), …]`` for the header + every ``## [...]`` section.
+
+    ``kind`` ∈ {``header``, ``unreleased``, ``version``}. Each ``chunk`` is the exact
+    substring from its heading to the next (the header chunk is everything before the
+    first heading), so ``"".join(chunks) == text`` — the split is lossless.
+    """
+    heads = list(re.finditer(r"^## \[([^\]]+)\](?: - (\S+))?[ \t]*$", text, re.MULTILINE))
+    if not heads:
+        return [("header", None, None, text)]
+    out: list[tuple[str, str | None, str | None, str]] = [("header", None, None, text[: heads[0].start()])]
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        chunk = text[m.start() : end]
+        if m.group(1) == "Unreleased":
+            out.append(("unreleased", None, None, chunk))
+        else:
+            out.append(("version", m.group(1), m.group(2), chunk))
+    return out
+
+
+def _archive_index_block() -> str:
+    """The marker-delimited "Older releases" index, regenerated from the archive files
+    on disk — deterministic, so re-running never drifts."""
+    files = _archive_files()
+    if not files:
+        return ""
+    links = ", ".join(f"[{_archive_label(p.name)}]({p.name})" for p in files)
+    return f"{_ARCHIVE_INDEX_START}\n> \U0001f4da **Older releases** are archived: {links}.\n{_ARCHIVE_INDEX_END}\n"
+
+
+def _set_archive_index(text: str) -> str:
+    """Insert/replace the archive-index block immediately above ``## [Unreleased]``."""
+    text = re.sub(
+        re.escape(_ARCHIVE_INDEX_START) + r".*?" + re.escape(_ARCHIVE_INDEX_END) + r"\n?",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    block = _archive_index_block()
+    if block:
+        m = re.search(r"^## \[Unreleased\]", text, re.MULTILINE)
+        if m:
+            text = text[: m.start()] + block + "\n" + text[m.start() :]
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def archive(before: str, out_name: str, title: str | None = None) -> tuple[int, Path]:
+    """Move release sections dated < ``before`` (``YYYY-MM-DD``) out of CHANGELOG.md into
+    ``out_name``. Returns ``(moved_count, out_path)``.
+
+    Sections are moved VERBATIM and in order (no regeneration). Idempotent: re-running
+    moves nothing because the sections are no longer in the root. If ``out_name`` already
+    exists its sections are preserved and de-duped. The root archive index is regenerated.
+    """
+    out_path = CHANGELOG.parent / out_name
+    sections = _split_sections(CHANGELOG.read_text(encoding="utf-8"))
+    kept: list[str] = []
+    moved: list[tuple[str, str]] = []
+    for kind, version, date, chunk in sections:
+        if kind == "version" and date is not None and date < before:
+            moved.append((version, chunk))  # type: ignore[arg-type]
+        else:
+            kept.append(chunk)
+    if not moved:
+        return 0, out_path
+
+    moved_versions = {v for v, _ in moved}
+    existing = ""
+    if out_path.exists():
+        for kind, version, _date, chunk in _split_sections(out_path.read_text(encoding="utf-8")):
+            if kind == "version" and version not in moved_versions:
+                existing += chunk
+    header = (
+        f"# Changelog — archived releases ({title or _archive_label(out_name)})\n\n"
+        "Historical release notes moved out of [CHANGELOG.md](CHANGELOG.md) to keep the current "
+        "file small (#2437). See **[CHANGELOG.md](CHANGELOG.md)** for `[Unreleased]` and the "
+        "current releases.\n\n"
+    )
+    archive_text = re.sub(r"\n{3,}", "\n\n", header + "".join(c for _, c in moved) + existing).rstrip("\n") + "\n"
+    out_path.write_text(archive_text, encoding="utf-8")
+
+    new_root = re.sub(r"\n{3,}", "\n\n", _set_archive_index("".join(kept))).rstrip("\n") + "\n"
+    CHANGELOG.write_text(new_root, encoding="utf-8")
+    return len(moved), out_path
 
 
 def read_fragments(directory: Path | None = None) -> tuple[dict[str, list[str]], list[Path]]:
@@ -290,6 +417,13 @@ def main() -> None:
     p_col.add_argument(
         "--keep", action="store_true", help="leave the fragment files in place (dry-run-ish)"
     )
+    p_arc = sub.add_parser(
+        "archive",
+        help="move release sections dated before --before into a dated archive file (#2437)",
+    )
+    p_arc.add_argument("--before", required=True, help="move sections dated before this YYYY-MM-DD")
+    p_arc.add_argument("--out", required=True, help="archive filename, e.g. CHANGELOG-THROUGH-2026-07.md")
+    p_arc.add_argument("--title", default=None, help="human label for the archive header + index link")
     args = parser.parse_args()
 
     if args.cmd == "collate":
@@ -318,6 +452,13 @@ def main() -> None:
         body = notes(args.version)
         if body:  # empty → print nothing so the caller's fallback chain kicks in
             print(body)
+    elif args.cmd == "archive":
+        n, path = archive(args.before, args.out, args.title)
+        print(
+            f"changelog: archived {n} release section(s) into {path.name}"
+            if n
+            else f"changelog: nothing dated before {args.before} to archive"
+        )
     elif args.cmd == "check":
         missing = missing_versions()
         if missing:

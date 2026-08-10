@@ -150,6 +150,31 @@ We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
   **omitted** from the marketing changelog rather than shown as a bare
   version+date line — add a bullet in your PR for the release to appear.
 
+### Monthly archives (#2437)
+
+`CHANGELOG.md` is kept small: it holds the header, `[Unreleased]`, and **the current
+month's** releases. Older releases live in dated archive files next to it —
+[`CHANGELOG-THROUGH-2026-07.md`](https://github.com/protoLabsAI/protoAgent/blob/main/CHANGELOG-THROUGH-2026-07.md)
+for everything through July 2026, then one `CHANGELOG-YYYY-MM.md` per completed month.
+The root file links to them under **Older releases**; each archive links back.
+
+- **Nothing changes for contributors or the release run** — you still add a
+  `changelog.d/` fragment, and `collate`/`roll` still write **only** `CHANGELOG.md`.
+- `scripts/changelog.py notes <version>` reads the archives too, so rebuilding an old
+  desktop release still finds that version's updater notes.
+- **Rollover is a manual pre-release chore, once per month boundary** (like rotating
+  shipped roadmap items). At the first release of a new month, move the just-completed
+  month out of the root:
+
+  ```sh
+  # e.g. cutting the first September release → archive August:
+  python scripts/changelog.py archive --before 2026-09-01 --out CHANGELOG-2026-08.md
+  ```
+
+  `archive` moves sections dated **before** `--before` verbatim (no regeneration from
+  git), is idempotent, and rewrites the root's archive index. Commit the moved root +
+  the new archive file in the release PR. `roll` on the current month is unaffected.
+
 ## Branch protection
 
 `main` is protected by a repository **ruleset**: every change needs a PR, and

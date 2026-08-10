@@ -34,3 +34,8 @@ why it mattered, what changed. Same bar as before — only the destination moved
 one heading per kind, then deletes the fragments. `roll` promotes that section to a dated
 version. Both run in `prepare-release.yml`, so `CHANGELOG.md` is only ever edited by the
 release process.
+
+`CHANGELOG.md` keeps only `[Unreleased]` + the current month; older releases are moved to
+dated `CHANGELOG-YYYY-MM.md` archives (see **Older releases** at the top of `CHANGELOG.md`).
+That's a monthly maintenance step (`changelog.py archive`) — it doesn't affect how you add
+a fragment. See [`docs/guides/releasing.md`](../docs/guides/releasing.md#monthly-archives-2437).
