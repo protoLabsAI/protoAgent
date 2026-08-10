@@ -12,15 +12,6 @@
 # diagnosis); the authoritative fact per line is "failed natively at the
 # baseline". Reclassify freely as files get diagnosed.
 
-# ── execute_code: POSIX-only fd-RPC tool bridge (a real runtime limit, #2449) ──
-# The execute_code plugin bridges its sandboxed child to the host tool loop over
-# anonymous os.pipe() + pass_fds + fd-number handoff + loop.connect_read/write_pipe —
-# POSIX fd-inheritance semantics with no Windows equivalent. That's a genuine runtime
-# gap (tracked in #2449: port to a loopback-socket / named-pipe transport), not a test
-# artifact: 10 spawn tests can't run natively until the port. The file's 7 pure tests
-# are cross-platform but stay file-excluded until the whole file can gate.
-tests/test_execute_code.py
-
 # ── coding_agent: acp_client agent-death reporting is wrong on Windows (#2452) ──
 # The ACP runtime is otherwise portable (infra/proc.py) and this file's other tests pass
 # on Windows — but two tests that drive a fake agent to DEATH expose two Windows bugs in
@@ -34,4 +25,7 @@ tests/test_coding_agent_plugin.py
 #   • Path semantics (tilde / separators / symlinks / `:`-in-filename) — 10 files.
 #   • Process lifecycle (the runtime was already portable via infra/proc.py + ADR 0098;
 #     the failures were test-side sh/sleep/workdir/PATH assumptions) — 4 files.
+#   • execute_code — the fd-RPC tool bridge was genuinely POSIX-only (os.pipe + pass_fds
+#     + connect_read/write_pipe); ported to a loopback-socket transport (#2449) so it now
+#     runs natively — 1 file.
 # Add new POSIX-only files here WITH a reason; never re-add a fixed one.
