@@ -125,6 +125,7 @@ import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { WorkPanel } from "./WorkPanel";
+import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
@@ -1297,15 +1298,7 @@ export function App() {
         open={runtime?.setup_complete === false}
         projectPath={projectPath}
         onProjectPathChange={setProjectPath}
-        onFinished={() => {
-          // Finish rewired the whole backend — config, model/provider, plugins,
-          // tools, graph. Refetching only runtime status left the composer chip
-          // and Settings ▸ Model on pre-setup values until a desktop restart
-          // (#2462). Invalidate EVERYTHING: active queries (runtime, settings,
-          // models, config) refetch now; the rest refetch on next mount — and a
-          // blanket invalidation can't go stale when a new query is added.
-          void queryClient.invalidateQueries();
-        }}
+        onFinished={() => invalidateAllAfterSetup(queryClient)}
       />
 
       <ConfirmDialog
