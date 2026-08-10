@@ -165,7 +165,10 @@ export function KeybindingsPanel() {
     >
       <div className="kb-panel">
         <p className="muted kb-panel__hint">
-          Click a shortcut to rebind it. Note: <Kbd>⌘T</Kbd>, <Kbd>⌘1–9</Kbd> and <Kbd>⌃Tab</Kbd> are
+          {/* Derived via formatCombo so the hint matches the platform labels the rows
+              below render (#2467) — hard-coded ⌘/⌃ glyphs read as noise on Windows. */}
+          Click a shortcut to rebind it. Note: <Kbd>{formatCombo("mod+t")}</Kbd>,{" "}
+          <Kbd>{`${formatCombo("mod+1")}–9`}</Kbd> and <Kbd>{formatCombo("ctrl+tab")}</Kbd> are
           reserved by the browser — they work in the desktop app; in a browser, rebind to a free combo.
         </p>
 
