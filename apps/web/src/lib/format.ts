@@ -59,6 +59,18 @@ export function localStampFull(iso: string | null | undefined): string {
   });
 }
 
+/**
+ * Tooltip/accessible text behind `localStamp`: the full local timestamp AND the
+ * raw source value — the raw ISO keeps microsecond precision and the original
+ * offset, which the locale rendering drops (QA review on #2468). Falls back to
+ * the raw input alone when unparseable.
+ */
+export function localStampTitle(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const full = localStampFull(iso);
+  return full === iso ? iso : `${full} · ${iso}`;
+}
+
 /** Epoch ms for an ISO string, treating an offsetless value as UTC. null = unparseable. */
 function parseInstant(iso: string | null | undefined): number | null {
   if (!iso) return null;

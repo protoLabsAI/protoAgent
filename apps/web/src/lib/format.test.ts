@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { bytes, localStamp, localStampFull } from "./format";
+import { bytes, localStamp, localStampFull, localStampTitle } from "./format";
 
 // #2468 — telemetry stamps must render as local wall-clock instants, not a
 // sliced copy of the source UTC string. Assertions compare against the same
@@ -37,6 +37,20 @@ describe("localStampFull", () => {
 
   it("falls back to the raw input when unparseable", () => {
     expect(localStampFull("not-a-date")).toBe("not-a-date");
+  });
+});
+
+describe("localStampTitle", () => {
+  it("keeps the raw ISO (microseconds + original offset) next to the local rendering", () => {
+    const iso = "2026-08-10T15:45:45.123456+00:00";
+    const title = localStampTitle(iso);
+    expect(title).toContain(iso);
+    expect(title).toContain(localStampFull(iso));
+  });
+
+  it("degrades to the raw input alone when unparseable, and a dash when empty", () => {
+    expect(localStampTitle("not-a-date")).toBe("not-a-date");
+    expect(localStampTitle("")).toBe("—");
   });
 });
 

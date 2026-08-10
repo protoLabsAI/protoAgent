@@ -25,7 +25,7 @@ import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
-import { localStamp, localStampFull, ms, pct, tokens, usd } from "../lib/format";
+import { localStamp, localStampTitle, ms, pct, tokens, usd } from "../lib/format";
 import { telemetryQuery } from "../lib/queries";
 import { langfuseTraceUrl } from "./traceUrl";
 
@@ -94,7 +94,7 @@ function TelemetryBody() {
                   <ul className="insight-flags">
                     {insights.flagged.slice(0, 5).map((f) => (
                       <li key={f.task_id}>
-                        <span className="flag-when" title={localStampFull(f.ended_at)}>{localStamp(f.ended_at)}</span>
+                        <span className="flag-when" title={localStampTitle(f.ended_at)}>{localStamp(f.ended_at)}</span>
                         <span className="flag-model">{f.model || "—"}</span>
                         <span className="flag-reason">{f.reasons.join(" · ")}</span>
                       </li>
@@ -153,7 +153,7 @@ function TelemetryBody() {
                 <TBody>
                   {turns.map((t) => (
                     <Tr key={t.task_id} className={t.success ? "" : "turn-failed"}>
-                      <Td title={localStampFull(t.ended_at)}>{localStamp(t.ended_at)}</Td>
+                      <Td title={localStampTitle(t.ended_at)}>{localStamp(t.ended_at)}</Td>
                       <Td title={t.models || t.model}>
                         {t.model || "—"}
                         {t.models && t.models.split(",").filter(Boolean).length > 1
