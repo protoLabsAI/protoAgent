@@ -743,6 +743,10 @@ export type ChatMessage = {
    *  Posted via `noteToThread(text, { tone })`; system notes never carry the answer
    *  action row (copy/fork/regenerate) — those are answer-only. */
   noteTone?: SystemNoteTone;
+  /** Display-only overlay that must NOT outlive the page (#2483): the chat store
+   *  strips ephemeral messages at persist time, so a "/btw … saved nowhere" aside
+   *  can't reappear from localStorage after a reload and make the promise a lie. */
+  ephemeral?: boolean;
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required

@@ -420,6 +420,24 @@ describe("cross-tab persistence", () => {
     expect(ids).toContain(mine);
   });
 
+  it("ephemeral messages (/btw asides, #2483) never reach the persisted blob", async () => {
+    const { chatStore } = await import("./chat-store");
+    const sid = chatStore.getSnapshot().currentSessionId!;
+    chatStore.updateMessages(sid, [
+      { id: "m1", role: "user", content: "real turn" },
+      { id: "a1", role: "system", content: "↪ Aside: saved nowhere", noteTone: "info", ephemeral: true },
+      { id: "a2", role: "system", content: "↩ Aside answer", noteTone: "info", ephemeral: true },
+    ]);
+    chatStore.createSession(); // structural change → immediate flush
+
+    const blob = JSON.parse(window.localStorage.getItem("protoagent.chat.sessions")!);
+    const stored = blob.sessions.find((s: { id: string }) => s.id === sid);
+    expect(stored.messages.map((m: { id: string }) => m.id)).toEqual(["m1"]);
+    // Live state keeps the overlay on screen — only persistence forgets it.
+    const live = chatStore.getSnapshot().sessions.find((s) => s.id === sid)!;
+    expect(live.messages).toHaveLength(3);
+  });
+
   it("a sibling tab's storage event merges its new chat in live, preserving our view", async () => {
     const { chatStore } = await import("./chat-store");
     const mine = chatStore.getSnapshot().currentSessionId!;

@@ -1755,6 +1755,9 @@ function ChatSessionSlot({
                 onDismiss: dismissErroredMessage,
                 lastAssistantId,
                 regenDisabled: status === "streaming",
+                // No prompt snapshots exist for incognito turns (by design) —
+                // hide View prompt instead of offering a 404 (#2484).
+                incognito: session?.incognito,
               }}
             />
           ))

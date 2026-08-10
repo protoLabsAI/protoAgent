@@ -272,7 +272,14 @@ function persist(state: ChatState) {
     }
     const payload: PersistedChatState = {
       version: state.version,
-      sessions: sessions.slice(0, MAX_SESSIONS),
+      // Ephemeral overlays (/btw asides, #2483) are display-only: stripping them
+      // HERE — not from live state — keeps them on screen for the session while
+      // guaranteeing a reload forgets them, which is what "saved nowhere" means.
+      sessions: sessions.slice(0, MAX_SESSIONS).map((s) =>
+        s.messages.some((m) => m.ephemeral)
+          ? { ...s, messages: s.messages.filter((m) => !m.ephemeral) }
+          : s,
+      ),
       currentSessionId: state.currentSessionId,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));

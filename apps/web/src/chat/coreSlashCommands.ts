@@ -75,6 +75,9 @@ registerSlashCommand({
       noteTone: tone,
       createdAt: Date.now(),
       status: "done",
+      // "/btw" promises "saved nowhere" — ephemeral keeps the aside out of the
+      // persisted browser store, so a reload really does forget it (#2483).
+      ephemeral: true,
     });
 
     if (!question) {
