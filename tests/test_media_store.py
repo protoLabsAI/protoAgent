@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from infra import media
+from tests.privacy_asserts import assert_owner_only
 
 
 @pytest.fixture(autouse=True)
@@ -91,10 +92,9 @@ def test_signing_key_is_persistent_and_private(tmp_path):
     sig1 = media.sign_name("x.png")
     keyfile = tmp_path / "instance" / "media" / ".signing-key"
     assert keyfile.is_file()
-    # POSIX mode bits only: infra/media._signing_key uses a bare os.chmod (not the
-    # ACL-hardening funnel), so on Windows st_mode stays 0o666 and this is unenforceable.
-    if os.name != "nt":
-        assert oct(keyfile.stat().st_mode & 0o777) == "0o600"
+    # Owner-only, portably: 0o600 on POSIX / an owner-only ACL on Windows now that
+    # _signing_key routes through the ACL-hardening funnel (#2448).
+    assert_owner_only(keyfile)
     assert media.sign_name("x.png") == sig1  # stable across calls (same key)
 
 

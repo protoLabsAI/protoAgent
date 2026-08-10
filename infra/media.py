@@ -50,7 +50,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from infra.paths import instance_paths
+from infra.paths import atomic_write, instance_paths
 
 log = logging.getLogger("protoagent.media")
 
@@ -122,9 +122,9 @@ def media_public() -> bool:
 
 
 def _signing_key() -> str:
-    """The per-instance URL-signing key (``media/.signing-key``, 0600) — created
-    on first use. Independent of the bearer token, so saved URLs survive a token
-    rotation; never leaves the server."""
+    """The per-instance URL-signing key (``media/.signing-key``, owner-only) —
+    created on first use. Independent of the bearer token, so saved URLs survive a
+    token rotation; never leaves the server."""
     f = media_dir(create=True) / ".signing-key"
     try:
         existing = f.read_text().strip()
@@ -133,18 +133,10 @@ def _signing_key() -> str:
     except OSError:
         pass
     fresh = _secrets.token_hex(32)
-    fd, tmp = tempfile.mkstemp(dir=str(f.parent), prefix=".signing-key.")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(fresh)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, f)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    # Through the ACL-hardening funnel: 0600 on POSIX, an owner-only ACL on Windows.
+    # A bare os.chmod there only flips the read-only bit, so the key would inherit the
+    # parent dir's ACL — unlike every other credential file in the tree (#2448).
+    atomic_write(f, fresh, mode=0o600)
     return fresh
 
 
