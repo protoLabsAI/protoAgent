@@ -15,8 +15,8 @@ sweep below is scoped to ``operator_api/``, where those catalogs are read.
 
 from __future__ import annotations
 
+import ast
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -27,13 +27,14 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def windows_locale_read_text(monkeypatch):
     """Simulate a Windows cp1252 locale: bare ``read_text()`` decodes with the
-    locale codepage instead of UTF-8, exactly like the frozen Windows build."""
+    locale codepage instead of UTF-8, exactly like the frozen Windows build.
+    (``newline`` is deliberately not forwarded — it only exists on 3.13+.)"""
     real_read_text = Path.read_text
 
-    def locale_read_text(self, encoding=None, errors=None, newline=None):
+    def locale_read_text(self, encoding=None, errors=None):
         if encoding is None:
             return self.read_bytes().decode("cp1252", errors=errors or "strict")
-        return real_read_text(self, encoding=encoding, errors=errors, newline=newline)
+        return real_read_text(self, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", locale_read_text)
 
@@ -74,14 +75,23 @@ def test_shipped_catalogs_actually_exercise_the_regression():
 
 
 def test_no_bare_read_text_in_operator_api():
-    """Sweep: every ``read_text`` in operator_api/ names an encoding, so the next
-    catalog reader added can't silently reintroduce the locale dependency."""
+    """Sweep: every ``read_text`` call in operator_api/ names an ``encoding``, so
+    the next catalog reader added can't silently reintroduce the locale
+    dependency. AST-based (not a regex) so ``read_text(errors="ignore")`` —
+    which still decodes with the locale — is caught too."""
     offenders = []
     for py in (ROOT / "operator_api").rglob("*.py"):
-        for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
-            if re.search(r"\.read_text\(\s*\)", line):
-                offenders.append(f"{py.relative_to(ROOT)}:{lineno}")
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "read_text"
+                and not any(kw.arg == "encoding" for kw in node.keywords)
+                and not node.args  # a positional first arg IS the encoding
+            ):
+                offenders.append(f"{py.relative_to(ROOT)}:{node.lineno}")
     assert not offenders, (
-        "bare read_text() decodes with the Windows locale codepage — pass "
-        f"encoding='utf-8' explicitly: {offenders}"
+        "read_text without encoding= decodes with the Windows locale codepage — "
+        f"pass encoding='utf-8' explicitly: {offenders}"
     )
