@@ -947,6 +947,12 @@ function ChatSessionSlot({
     histIndexRef.current = null;
     histStashRef.current = "";
     setDraft("");
+    // The slash popover tracks the TEXTAREA's live token via keyup/click/focus
+    // refreshes — a mouse click on Send fires none of those, so the stale menu
+    // stayed mounted OVER the HITL form a bare command (e.g. /effort) opens and
+    // intercepted its pointer events (#2492). Clear it with the draft.
+    setSlashCtx(null);
+    setSlashIndex(0);
     // Deterministic client-side slash commands (ADR 0057) — handled locally, not sent.
     if (text.startsWith("/") && runClientSlash(text.slice(1).trim())) return;
     // Native-vision images ride the turn as multimodal parts; pipeline attachments

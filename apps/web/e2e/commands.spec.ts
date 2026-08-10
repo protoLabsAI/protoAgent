@@ -65,3 +65,23 @@ test("filtering narrows the menu and selecting completes the command", async ({ 
   // Completing closes the menu (a space follows the command).
   await expect(menu).toBeHidden();
 });
+
+test("clicking Send on a bare command closes the slash menu so the picker is mouse-usable (#2492)", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.fill("/effort");
+  await expect(page.locator(".slash-menu")).toBeVisible();
+
+  // The MOUSE path: clicking Send fires none of the textarea events the slash
+  // popover refreshes on, so the stale menu used to stay mounted OVER the form
+  // and intercept its clicks (".slash-title … intercepts pointer events").
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator(".slash-menu")).toBeHidden();
+
+  const form = page.locator(".hitl-card", { hasText: "Reasoning effort" });
+  await expect(form).toBeVisible();
+  // Playwright fails a click whose hit target is covered — these clicks ARE the
+  // regression assertion, not just setup.
+  await form.locator(".hitl-card-option", { hasText: "low" }).click();
+  await form.getByRole("button", { name: /submit/i }).click();
+  await expect(form).toBeHidden();
+});
