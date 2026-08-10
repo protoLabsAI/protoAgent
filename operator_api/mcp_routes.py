@@ -98,7 +98,7 @@ def register_mcp_routes(app) -> None:
             f = base / "mcp-catalog.json"
             if f.exists():
                 try:
-                    entries = (json.loads(f.read_text()) or {}).get("servers") or []
+                    entries = (json.loads(f.read_text(encoding="utf-8")) or {}).get("servers") or []
                 except (json.JSONDecodeError, OSError):
                     log.warning("[mcp] mcp-catalog.json unreadable at %s", f)
                 break

@@ -356,7 +356,7 @@ def _load_archetype_catalog() -> list[dict]:
         f = base / "archetype-catalog.json"
         if f.exists():
             try:
-                entries = (json.loads(f.read_text()) or {}).get("archetypes")
+                entries = (json.loads(f.read_text(encoding="utf-8")) or {}).get("archetypes")
                 if isinstance(entries, list) and entries:
                     return entries
             except (json.JSONDecodeError, OSError):
