@@ -546,9 +546,14 @@ def test_anthropic_store_refreshes_when_expiring(monkeypatch, tmp_path):
 
 
 
-def _codex_store(tmp_path, tokens: dict) -> "types.SimpleNamespace":
-    """A SimpleNamespace paths object + a codex store seeded with `tokens`."""
-    (tmp_path / "codex-oauth.json").write_text(json.dumps({"tokens": tokens}))
+def _codex_store(tmp_path, tokens: dict, provenance: str | None = None) -> "types.SimpleNamespace":
+    """A SimpleNamespace paths object + a codex store seeded with `tokens`.
+    ``provenance`` (#2461): "device_login" = protoAgent-minted (revocable),
+    "cli_bootstrap" = borrowed from the CLI, None = a legacy pre-provenance store."""
+    doc = {"tokens": tokens}
+    if provenance:
+        doc["provenance"] = provenance
+    (tmp_path / "codex-oauth.json").write_text(json.dumps(doc))
     return types.SimpleNamespace(config_dir=tmp_path)
 
 
@@ -617,8 +622,9 @@ def test_cancel_login_drops_the_pending_flow(monkeypatch):
 
 
 def test_disconnect_codex_revokes_removes_and_leaves_cli_untouched(monkeypatch, tmp_path):
-    """#2440: revoke best-effort, delete OUR store, never touch ~/.codex/auth.json."""
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    """#2440: revoke best-effort, delete OUR store, never touch ~/.codex/auth.json.
+    The store is protoAgent-minted (#2461) — the case where remote revoke is correct."""
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}, provenance="device_login")
     cli = tmp_path / "codex_cli.json"
     cli_body = json.dumps({"tokens": {"access_token": "cli", "refresh_token": "clir"}})
     cli.write_text(cli_body)
@@ -632,7 +638,7 @@ def test_disconnect_codex_revokes_removes_and_leaves_cli_untouched(monkeypatch, 
 
 
 def test_disconnect_removes_local_even_when_revoke_fails(monkeypatch, tmp_path):
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}, provenance="device_login")
     _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
 
     def failing_post(url, **kw):
@@ -701,3 +707,87 @@ def test_disconnect_anthropic_removes_store_and_suppresses(monkeypatch, tmp_path
     assert not (tmp_path / "anthropic-oauth.json").exists()
     with pytest.raises(OAuthCredentialError, match="disconnected"):
         resolve_anthropic_oauth()  # suppressed until reconnect
+
+
+def test_disconnect_never_revokes_a_bootstrap_borrowed_credential(monkeypatch, tmp_path):
+    """#2461: a CLI-bootstrap token set is the Codex CLI's login, borrowed —
+    disconnect deletes protoAgent's copy and must NOT hit the revoke endpoint."""
+    paths = _codex_store(
+        tmp_path,
+        {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"},
+        provenance="cli_bootstrap",
+    )
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+
+    def _no_network(url, **kw):
+        raise AssertionError(f"remote revoke attempted for a borrowed credential: {url}")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _no_network)
+    result = oauth_mod.disconnect("openai-codex", paths)
+    assert result.removed is True and result.revoked is False
+    assert "borrowed" in result.note
+    assert not (paths.config_dir / "codex-oauth.json").exists()
+
+
+def test_disconnect_treats_legacy_no_provenance_store_as_borrowed(monkeypatch, tmp_path):
+    """A store written before provenance existed proves nothing about ownership —
+    the safe scope is local-delete-only."""
+    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r"})
+    _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
+    monkeypatch.setattr(
+        oauth_mod.httpx, "post", lambda url, **kw: (_ for _ in ()).throw(AssertionError("revoke attempted"))
+    )
+    result = oauth_mod.disconnect("openai-codex", paths)
+    assert result.removed is True and result.revoked is False
+
+
+def test_bootstrap_stamps_cli_provenance_and_refresh_preserves_it(monkeypatch, tmp_path):
+    """Resolution's bootstrap write records cli_bootstrap; a later refresh
+    rewrite keeps it (a refresh rotates tokens, not ownership)."""
+    cli = tmp_path / "codex_auth.json"
+    fresh = _jwt({"exp": time.time() + 3600})
+    cli.write_text(json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r", "account_id": "acct-1"}}))
+    store = tmp_path / "codex-oauth.json"
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+
+    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert json.loads(store.read_text())["provenance"] == "cli_bootstrap"
+
+    # Force a refresh rewrite; provenance must survive.
+    stale = _jwt({"exp": time.time() - 10})
+    doc = json.loads(store.read_text())
+    doc["tokens"]["access_token"] = stale
+    store.write_text(json.dumps(doc))
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r2"}
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: _Resp())
+    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert json.loads(store.read_text())["provenance"] == "cli_bootstrap"
+
+
+def test_device_login_stamps_owned_provenance(monkeypatch, tmp_path):
+    """The in-console device sign-in mints the login itself — its store write
+    records device_login, the one provenance disconnect may revoke."""
+    from graph.providers import oauth_login as login
+
+    store = tmp_path / "codex-oauth.json"
+    monkeypatch.setattr(oauth_mod, "instance_paths", lambda: types.SimpleNamespace(config_dir=tmp_path))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(login, "_exchange_codex_code", lambda code, verifier: {"access_token": "at", "refresh_token": "rt", "id_token": ""})
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"authorization_code": "ac", "code_verifier": "cv"}
+
+    monkeypatch.setattr(login.httpx, "post", lambda url, **kw: _Resp())
+    flow_id = login._new_flow("openai-codex", {"device_auth_id": "d", "user_code": "u"})
+    assert login.codex_login_poll(flow_id) == {"status": "complete"}
+    assert json.loads(store.read_text())["provenance"] == "device_login"

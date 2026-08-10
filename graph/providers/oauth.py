@@ -409,9 +409,35 @@ def _refresh_codex_tokens(tokens: dict[str, Any], *, timeout_s: float = 20.0) ->
     return updated
 
 
-def _write_codex_store(path: Path, tokens: dict[str, Any]) -> None:
+# Credential provenance (#2461): who minted the token set this store holds.
+# "cli_bootstrap" — copied from the Codex CLI's auth.json; the login is SHARED
+# with another application, so protoAgent must never remotely revoke it.
+# "device_login" — minted by protoAgent's own in-console device sign-in; ours to
+# revoke. Stores written before this field exist ("" on read) and are treated as
+# borrowed: with ownership unproven, deleting our copy is the only safe scope.
+PROVENANCE_CLI_BOOTSTRAP = "cli_bootstrap"
+PROVENANCE_DEVICE_LOGIN = "device_login"
+
+
+def _read_codex_provenance(path: Path) -> str:
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ""
+    return str(doc.get("provenance", "") or "") if isinstance(doc, dict) else ""
+
+
+def _write_codex_store(path: Path, tokens: dict[str, Any], provenance: str | None = None) -> None:
+    """Persist the token set. ``provenance=None`` (the refresh path) preserves
+    whatever the store already recorded — a refresh rotates tokens, it does not
+    change who minted the login."""
+    if provenance is None:
+        provenance = _read_codex_provenance(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, json.dumps({"tokens": tokens, "last_refresh": time.time()}), mode=0o600)
+    doc: dict[str, Any] = {"tokens": tokens, "last_refresh": time.time()}
+    if provenance:
+        doc["provenance"] = provenance
+    atomic_write(path, json.dumps(doc), mode=0o600)
 
 
 def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
@@ -469,7 +495,11 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
             access = str(tokens["access_token"]).strip()
             refreshed = True
 
-        if source == "codex_cli_bootstrap" or refreshed:
+        if source == "codex_cli_bootstrap":
+            # Stamp the borrowed origin (#2461) — disconnect uses it to scope
+            # itself to our copy instead of revoking a login the CLI still holds.
+            _write_codex_store(store, tokens, provenance=PROVENANCE_CLI_BOOTSTRAP)
+        elif refreshed:
             _write_codex_store(store, tokens)
         return _creds(tokens, access, "instance_store" if refreshed else source)
 
@@ -527,7 +557,13 @@ def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectR
         store = _codex_store_path(paths)
         with _store_lock(store):
             tokens = _read_codex_tokens(store)  # our copy only — never ~/.codex/auth.json
-            revoked = _revoke_codex_token(tokens) if tokens else False
+            # Ownership gate (#2461): a bootstrap-derived token set is the Codex
+            # CLI's login, borrowed — remote revocation would sign the CLI out
+            # too, well outside protoAgent's mandate. Only a credential our own
+            # device sign-in minted is ours to revoke; a legacy store with no
+            # provenance is treated as borrowed (ownership unproven).
+            owned = _read_codex_provenance(store) == PROVENANCE_DEVICE_LOGIN
+            revoked = _revoke_codex_token(tokens) if (tokens and owned) else False
             existed = store.exists()
             store.unlink(missing_ok=True)
             _mark_disconnected(paths, provider)
@@ -535,6 +571,11 @@ def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectR
             note = "already disconnected"
         elif revoked:
             note = "revoked at OpenAI and removed protoAgent's local copy"
+        elif not owned:
+            note = (
+                "removed protoAgent's borrowed copy — the login is shared with the "
+                "Codex CLI, so it was not revoked remotely"
+            )
         else:
             note = "removed protoAgent's local copy (remote revoke did not confirm)"
         return DisconnectResult(provider, removed=existed, revoked=revoked, note=note)

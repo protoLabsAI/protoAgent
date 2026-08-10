@@ -156,7 +156,8 @@ def codex_login_poll(flow_id: str) -> dict[str, str]:
     # at once. Serialized, either order leaves storage self-consistent, so the
     # disconnect route's marker re-check decides correctly.
     with _oauth._store_lock(store):
-        _oauth._write_codex_store(store, tokens)
+        # protoAgent minted this login itself (#2461) — disconnect may revoke it.
+        _oauth._write_codex_store(store, tokens, provenance=_oauth.PROVENANCE_DEVICE_LOGIN)
         _oauth.clear_disconnected("openai-codex", paths)  # explicit reconnect clears a prior disconnect (#2440)
     _FLOWS.pop(flow_id, None)
     return {"status": "complete"}
