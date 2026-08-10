@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.131.2",
+    "date": "2026-08-10",
+    "changes": [
+      "Install from URL moved to the Plugins panel header (#2506).",
+      "\"Rewind to here\" no longer appears on the latest message (#2505)."
+    ]
+  },
+  {
     "version": "v0.131.1",
     "date": "2026-08-10",
     "changes": [

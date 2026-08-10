@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.131.2] - 2026-08-10
+
+### Changed
+- **Install from URL moved to the Plugins panel header (#2506).**
+  The button sat at the end of the search/filter toolbar where it read as
+  another filter; it's now a header action on the Installed tab, where primary
+  panel actions live.
+
+### Fixed
+- **"Rewind to here" no longer appears on the latest message (#2505).**
+  The action offered to "discard everything below" the conversational tail —
+  an empty set — so its irreversible-sounding confirmation did nothing. It now
+  hides on the last user/assistant message; an assistant message followed by a
+  stranded (errored) user bubble keeps it, since discarding that trailing
+  message is exactly what Rewind is for.
+
 ## [0.131.1] - 2026-08-10
 
 ### Fixed
