@@ -206,7 +206,10 @@ def register_config_routes(app) -> None:
             return {"models": models, "error": error}
         base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
         key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
-        models, error = list_gateway_models(base, key)
+        # Offloaded (#2486): the gateway probe is a blocking network call — running it
+        # inline stalled the event loop for the probe duration (the native-OAuth branch
+        # above already offloads).
+        models, error = await asyncio.to_thread(list_gateway_models, base, key)
         return {"models": models, "error": error}
 
     @app.get("/api/config/oauth-status")
@@ -382,14 +385,22 @@ def register_config_routes(app) -> None:
     async def _api_reset_setup():
         from graph.config_io import reset_setup
 
-        reset_setup()
+        # Offloaded (#2486) — filesystem work stays off the event loop like its siblings.
+        await asyncio.to_thread(reset_setup)
         return {"ok": True, "message": "setup marker removed"}
 
     @app.get("/api/config/presets/{name}")
     async def _api_read_preset(name: str):
-        from graph.config_io import read_soul_preset
+        from graph.config_io import list_soul_presets, read_soul_preset
 
-        return {"name": name, "content": read_soul_preset(name)}
+        # An UNKNOWN name is a 404 (#2486) — the old empty-string 200 was
+        # indistinguishable from a real-but-blank preset. Membership decides, not
+        # content: read_soul_preset's ""-for-unknown contract stays for the wizard's
+        # internal blank-canvas path, and a listed preset that happens to be empty
+        # still 200s.
+        if name not in await asyncio.to_thread(list_soul_presets):
+            raise HTTPException(status_code=404, detail=f"no soul preset {name!r}")
+        return {"name": name, "content": await asyncio.to_thread(read_soul_preset, name)}
 
     @app.get("/api/projects")
     async def _api_projects():
