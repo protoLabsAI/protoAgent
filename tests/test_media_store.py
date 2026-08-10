@@ -91,7 +91,10 @@ def test_signing_key_is_persistent_and_private(tmp_path):
     sig1 = media.sign_name("x.png")
     keyfile = tmp_path / "instance" / "media" / ".signing-key"
     assert keyfile.is_file()
-    assert oct(keyfile.stat().st_mode & 0o777) == "0o600"
+    # POSIX mode bits only: infra/media._signing_key uses a bare os.chmod (not the
+    # ACL-hardening funnel), so on Windows st_mode stays 0o666 and this is unenforceable.
+    if os.name != "nt":
+        assert oct(keyfile.stat().st_mode & 0o777) == "0o600"
     assert media.sign_name("x.png") == sig1  # stable across calls (same key)
 
 

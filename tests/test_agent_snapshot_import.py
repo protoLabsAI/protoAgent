@@ -26,6 +26,7 @@ from graph.snapshot_import import (
     stage_snapshot,
 )
 from graph.snapshot_op import build_snapshot
+from tests.privacy_asserts import assert_owner_only
 
 SECRET_KEYS = (("model", "api_key"), ("discord", "bot_token"))
 
@@ -335,7 +336,8 @@ class TestMissingSecrets:
 
         (tmp_path / "config").mkdir()
         _write_secrets(tmp_path, self._plan(), {"model.api_key": "sk-live"})
-        assert oct((tmp_path / "config" / "secrets.yaml").stat().st_mode)[-3:] == "600"
+        # Owner-only, portably (0o600 on POSIX / owner-only ACL on Windows).
+        assert_owner_only(tmp_path / "config" / "secrets.yaml")
 
     def test_a_blank_value_is_not_written(self, tmp_path):
         from graph.snapshot_import import _write_secrets

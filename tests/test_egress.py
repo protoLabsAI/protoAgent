@@ -148,8 +148,11 @@ def test_policy_reflects_projects_and_egress(tmp_path):
     # filesystem_policy: the write:true project lands under read_write, write:false
     # under read_only — verify by section ORDER, not just presence.
     rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
-    assert rw_idx < policy.index("/work/pixelgen") < ro_idx  # write:true → read_write
-    assert ro_idx < policy.index("/work/ORBIS")  # write:false → read_only
+    # The generator emits each root .resolve()'d — on Windows that anchors "/work/x" to
+    # the CWD drive (C:\work\x); resolve the expected values the same way (no-op on POSIX).
+    pixelgen, orbis = str(Path("/work/pixelgen").resolve()), str(Path("/work/ORBIS").resolve())
+    assert rw_idx < policy.index(pixelgen) < ro_idx  # write:true → read_write
+    assert ro_idx < policy.index(orbis)  # write:false → read_only
     assert "project: pixelgen" in policy and "project: orbis" in policy
     assert "/sandbox" in policy  # data root, read-write
     # network_policies: deny-by-default egress allowlist (only listed endpoints
@@ -206,8 +209,10 @@ def test_policy_includes_the_projects_registry(tmp_path):
     policy = _gen().build_policy(LangGraphConfig.from_yaml(p))
 
     rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
-    assert rw_idx < policy.index("/work/rw") < ro_idx
-    assert ro_idx < policy.index("/work/ro")
+    # Compare against the generator's .resolve()'d form (no-op on POSIX; drive-anchored on Windows).
+    rw, ro = str(Path("/work/rw").resolve()), str(Path("/work/ro").resolve())
+    assert rw_idx < policy.index(rw) < ro_idx
+    assert ro_idx < policy.index(ro)
     assert "/work/nofence" not in policy  # fs:false grants no filesystem reach
 
 
@@ -246,6 +251,7 @@ def test_policy_expands_tilde_to_match_the_enforced_fence(tmp_path, monkeypatch)
     from graph.config import LangGraphConfig
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows expands ~ via USERPROFILE, not HOME
     home_dir = tmp_path / "dev" / "proj"
     home_dir.mkdir(parents=True)
 

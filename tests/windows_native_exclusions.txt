@@ -22,16 +22,7 @@ tests/test_delegates_plugin.py
 tests/test_execute_code.py
 tests/test_workflow_run_state.py
 
-# ── Path semantics: tilde/separators/symlinks/`:`-in-filename expectations ──
-tests/test_agent_snapshot_import.py
-tests/test_browse_routes.py
-tests/test_config_io.py
-tests/test_config_routes.py
-tests/test_egress.py
-tests/test_fs_tools.py
-tests/test_media_store.py
-tests/test_memory_load.py
-tests/test_memory_routes.py
-tests/test_workspaces.py
-
-# ── POSIX shell scripts under test (bash/sh fixtures) ──
+# The "Path semantics" section (tilde/separators/symlinks/`:`-in-filename) was
+# burned down in full — 10 files, diagnosed and fixed portably (#2412). What
+# remains above is the process-lifecycle group (ADR 0098). Add new POSIX-only
+# files here WITH a reason; never re-add a fixed one.

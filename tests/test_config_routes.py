@@ -382,6 +382,7 @@ def test_fs_projects_set_normalizes_and_enables(monkeypatch, tmp_path):
     docs.mkdir()
     inbox.mkdir()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows expands ~ via USERPROFILE, not HOME
     monkeypatch.setitem(sys.modules, "server.agent_init", _fake_module("server.agent_init", _apply_settings_changes=_apply))
     body = _client().post(
         "/api/settings/filesystem-projects",
@@ -624,6 +625,7 @@ def test_projects_get_matches_a_tilde_row_against_its_expanded_fence_entry(monke
     """fenced_projects() expands `~`, so a row written as `~/x` has to be compared
     against the EXPANDED path or it would never match its own fence entry."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows expands ~ via USERPROFILE, not HOME
     (tmp_path / "proj").mkdir()
     _projects_state(monkeypatch, projects=[{"name": "p", "path": "~/proj"}])
     body = _client().get("/api/projects").json()

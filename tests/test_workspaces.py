@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from graph.workspaces import manager
+from tests.privacy_asserts import assert_owner_only
 
 
 @pytest.fixture
@@ -526,9 +527,6 @@ def _secrets_lock():
 def test_apply_bundle_secrets_writes_declared_under_bundle_section(root):
     """Operator values for the bundle's DECLARED secrets land in the member's secrets.yaml
     nested under the bundle's section (its id), 0600, merged with a pre-existing sibling."""
-    import os
-    import stat
-
     ws = root / "agent"
     cfg = _seed_config(ws)
     (ws / "secrets.yaml").write_text("model:\n  api_key: keep-me\n")  # pre-existing sibling secret
@@ -546,7 +544,7 @@ def test_apply_bundle_secrets_writes_declared_under_bundle_section(root):
     doc = yaml.safe_load((ws / "secrets.yaml").read_text())
     assert doc["devkit"] == {"openai_api_key": "sk-live"}  # nested under the bundle section
     assert doc["model"] == {"api_key": "keep-me"}  # merge-not-clobber
-    assert stat.S_IMODE(os.stat(ws / "secrets.yaml").st_mode) == 0o600  # owner-only
+    assert_owner_only(ws / "secrets.yaml")  # owner-only (0o600 POSIX / ACL Windows)
 
 
 def test_apply_bundle_secrets_never_reads_host_environ(root, monkeypatch):

@@ -20,6 +20,8 @@ import json
 import os
 from unittest.mock import MagicMock
 
+import pytest
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,8 +38,17 @@ def _make_middleware(knowledge_store=None):
 
 
 def _write_session(directory: str, session_id: str, content: dict) -> str:
-    """Write a session summary JSON file and return its path."""
-    fpath = os.path.join(directory, f"{session_id}.json")
+    """Write a session summary JSON file and return its path.
+
+    Routes the filename through the runtime's ``session_filename`` mapper so a
+    ``:``-bearing id (``system:activity``, ``a2a:…``) lands under its ``%3A``-encoded
+    name. A raw ``:`` is an invalid NTFS filename (silently an Alternate Data Stream
+    that ``os.listdir`` never yields), which is why these tests failed natively on
+    Windows (#2412). The stored ``session_id`` stays raw — loaders read it from content.
+    """
+    from graph.middleware.memory import session_filename
+
+    fpath = os.path.join(directory, session_filename(session_id))
     with open(fpath, "w", encoding="utf-8") as fh:
         json.dump(content, fh)
     return fpath
@@ -491,10 +502,14 @@ async def test_recall_session_reads_encoded_filename(monkeypatch, tmp_path):
     assert "Hello" in out
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="raw ':' filenames are invalid on NTFS — the legacy-name fallback is POSIX-only"
+)
 async def test_recall_session_legacy_raw_name_fallback(monkeypatch, tmp_path):
     # Pre-encoding builds wrote the raw ':' filename on POSIX — reads fall back
-    # to it when the encoded name is absent.
-    _write_session(str(tmp_path), "a2a:legacy", _sample_session("a2a:legacy"))
+    # to it when the encoded name is absent. Write it raw (bypassing the now-encoding
+    # helper) so the fallback path is actually exercised.
+    (tmp_path / "a2a:legacy.json").write_text(json.dumps(_sample_session("a2a:legacy")), encoding="utf-8")
     out = await _recall_tool(monkeypatch, tmp_path).ainvoke({"session_id": "a2a:legacy"})
     assert 'id="a2a:legacy"' in out
 

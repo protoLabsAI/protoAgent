@@ -86,6 +86,7 @@ def test_missing_and_non_directory_paths_are_refused(tmp_path):
 
 def test_blank_path_starts_at_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows Path.home() reads USERPROFILE, not HOME
     _tree(tmp_path)
     body = _client().get("/api/fs/browse").json()
     assert body["path"] == str(tmp_path.resolve())

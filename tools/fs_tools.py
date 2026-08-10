@@ -241,7 +241,10 @@ def build_fs_tools(config) -> list:
             matches = [p for p in root.glob(pattern) if p.is_file()]
         except (ValueError, OSError) as exc:
             return f"Error: bad pattern: {exc}"
-        rels = [str(p.relative_to(root)) for p in matches[:_MAX_MATCHES]]
+        # .as_posix() (not str()) so the model gets a stable forward-slash contract on
+        # Windows too — read_file/edit_file accept forward slashes there. On POSIX it's
+        # identical to str(). (#2412)
+        rels = [p.relative_to(root).as_posix() for p in matches[:_MAX_MATCHES]]
         more = f"\n… (+{len(matches) - _MAX_MATCHES} more)" if len(matches) > _MAX_MATCHES else ""
         return "\n".join(rels) + more if rels else "(no matches)"
 
@@ -259,7 +262,7 @@ def build_fs_tools(config) -> list:
             try:
                 for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                     if query in line:
-                        hits.append(f"{f.relative_to(root)}:{i}: {line.strip()[:200]}")
+                        hits.append(f"{f.relative_to(root).as_posix()}:{i}: {line.strip()[:200]}")
                         if len(hits) >= _MAX_MATCHES:
                             return "\n".join(hits) + "\n… (more matches; narrow the search)"
             except OSError:

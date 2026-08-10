@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from graph.settings_schema import FIELDS
+from tests.privacy_asserts import assert_owner_only
 
 import httpx
 import pytest
@@ -442,15 +443,14 @@ def test_apply_seed_merge_writes_snapshot_on_noop(monkeypatch, tmp_path: Path) -
 
 def test_apply_seed_merge_snapshot_is_0600(monkeypatch, tmp_path: Path) -> None:
     """The snapshot copies whatever the image baked — keep it as tight as secrets.yaml."""
-    import stat
-
     from graph import config_io
 
     _seed_env(monkeypatch, tmp_path, "model:\n  name: gpt\n", "model:\n  name: gpt\n")
     config_io.apply_seed_merge()
 
-    mode = stat.S_IMODE(config_io.seed_snapshot_path().stat().st_mode)
-    assert mode == 0o600, f"snapshot mode {oct(mode)}"
+    # Owner-only, portably: 0o600 on POSIX; an owner-only ACL on Windows (st_mode
+    # can't express it there — see tests/privacy_asserts, #2412 phase 4).
+    assert_owner_only(config_io.seed_snapshot_path())
 
 
 def test_apply_seed_merge_retracts_untouched_dropped_key(monkeypatch, tmp_path: Path) -> None:

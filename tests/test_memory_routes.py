@@ -22,7 +22,13 @@ def _client(monkeypatch, tmp_path, *, knowledge=None):
 
 
 def _write(d, sid, messages, **extra):
-    (d / f"{sid}.json").write_text(
+    # Filename via session_filename so a ':'-bearing id lands under its '%3A'-encoded
+    # name — a raw ':' is an invalid NTFS filename (a silent Alternate Data Stream that
+    # os.listdir never yields as *.json), the cause of the native-Windows failures (#2412).
+    # The stored session_id stays raw; the route reads the id from file content.
+    from graph.middleware.memory import session_filename
+
+    (d / session_filename(sid)).write_text(
         json.dumps({"session_id": sid, "timestamp": "2026-07-01T00:00:00Z", "messages": messages, **extra})
     )
 
@@ -126,6 +132,8 @@ def test_session_routes_read_encoded_and_legacy_names(tmp_path, monkeypatch):
     # Windows-safe mapping: the writer encodes ':' as '%3A'; reads try the
     # encoded name first, then fall back to the legacy raw-':' name (files a
     # pre-encoding build wrote on POSIX). Deletes remove whichever exists.
+    import os
+
     (tmp_path / "system%3Aactivity.json").write_text(
         json.dumps(
             {
@@ -135,20 +143,33 @@ def test_session_routes_read_encoded_and_legacy_names(tmp_path, monkeypatch):
             }
         )
     )
-    _write(tmp_path, "a2a:legacy", [{"role": "user", "content": "legacy-name-body"}])
     c = _client(monkeypatch, tmp_path)
     assert "encoded-name-body" in c.get("/api/memory/sessions/system:activity").json()["session"]["rendered"]
-    assert "legacy-name-body" in c.get("/api/memory/sessions/a2a:legacy").json()["session"]["rendered"]
     assert c.delete("/api/memory/sessions/system:activity").json()["deleted"] is True
     assert not (tmp_path / "system%3Aactivity.json").exists()
-    assert c.delete("/api/memory/sessions/a2a:legacy").json()["deleted"] is True
-    assert not (tmp_path / "a2a:legacy.json").exists()
+
+    # The legacy raw-':' fallback is POSIX-only — a raw ':' filename can't exist on NTFS.
+    if os.name != "nt":
+        (tmp_path / "a2a:legacy.json").write_text(
+            json.dumps(
+                {
+                    "session_id": "a2a:legacy",
+                    "timestamp": "2026-07-01T00:00:00Z",
+                    "messages": [{"role": "user", "content": "legacy-name-body"}],
+                }
+            )
+        )
+        assert "legacy-name-body" in c.get("/api/memory/sessions/a2a:legacy").json()["session"]["rendered"]
+        assert c.delete("/api/memory/sessions/a2a:legacy").json()["deleted"] is True
+        assert not (tmp_path / "a2a:legacy.json").exists()
 
 
 def test_session_get_prefers_encoded_over_legacy(tmp_path, monkeypatch):
     # Both names on disk (the writer's legacy cleanup is best-effort): the
     # encoded file is the source of truth — the read surfaces it, and a CORRUPT
     # encoded file is a 422, never a fall-through to the stale legacy body.
+    import os
+
     (tmp_path / "sys%3Aboth.json").write_text(
         json.dumps(
             {
@@ -158,7 +179,18 @@ def test_session_get_prefers_encoded_over_legacy(tmp_path, monkeypatch):
             }
         )
     )
-    _write(tmp_path, "sys:both", [{"role": "user", "content": "stale-legacy-body"}])
+    # The stale legacy raw-':' file is POSIX-only (invalid on NTFS); on Windows only the
+    # encoded file exists, so "encoded wins" holds trivially.
+    if os.name != "nt":
+        (tmp_path / "sys:both.json").write_text(
+            json.dumps(
+                {
+                    "session_id": "sys:both",
+                    "timestamp": "2026-07-02T00:00:00Z",
+                    "messages": [{"role": "user", "content": "stale-legacy-body"}],
+                }
+            )
+        )
     c = _client(monkeypatch, tmp_path)
     rendered = c.get("/api/memory/sessions/sys:both").json()["session"]["rendered"]
     assert "current-encoded-body" in rendered
