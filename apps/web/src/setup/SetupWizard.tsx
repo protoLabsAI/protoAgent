@@ -26,6 +26,7 @@ import { lucideIcon } from "../lib/lucideIcon";
 import { acpAgentsQuery, archetypesQuery } from "../lib/queries";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
+import { useOauthLifecycle } from "../oauth/OAuthAccount";
 import { personaSoul } from "./persona";
 
 // One row of the post-install dependency report (finish step): a just-enabled
@@ -226,26 +227,32 @@ export function SetupWizard({
   // Result of the last "Test connection" probe (a real completion). null = not
   // yet tested; invalidated whenever the key/base/model changes.
   const [tested, setTested] = useState<null | { ok: boolean; error: string }>(null);
-  // Sign-in status for the native OAuth providers (ADR 0097), keyed by provider id —
-  // drives the "✓ signed in" / sign-in-hint line in the brain step. Refetched when the
-  // step is entered and via a manual "Re-check" (the user may sign in out-of-band).
-  const [oauthStatus, setOauthStatus] = useState<
-    Record<string, { signed_in: boolean; detail: string; hint: string }>
-  >({});
-  // Active in-console OAuth sign-in (ADR 0097): the running device/redirect flow, the
-  // pasted code (Claude), and its busy/error state. null = no sign-in in progress.
-  const [login, setLogin] = useState<null | {
-    provider: string;
-    mode: "device" | "redirect";
-    flowId: string;
-    userCode?: string;
-    verifyUri?: string;
-    authorizeUrl?: string;
-  }>(null);
-  const [loginCode, setLoginCode] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
-  const [loginError, setLoginError] = useState("");
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Native OAuth lifecycle (ADR 0097 / #2460) — the SHARED hook Settings ▸ Model
+  // also consumes, so wizard and Settings behavior can never drift. Wizard-specific
+  // side effects (clear the stale model list so the new account's models fetch
+  // fresh) ride the callbacks.
+  const {
+    status: oauthStatus,
+    refreshStatus: refreshOauthStatus,
+    login,
+    loginCode,
+    setLoginCode,
+    loginBusy,
+    loginError,
+    startSignIn,
+    completeSignIn,
+    cancelSignIn,
+    disconnect: disconnectProvider,
+  } = useOauthLifecycle({
+    onSignedIn: () => {
+      setModels([]);
+      autoProbedBase.current = "";
+    },
+    onDisconnected: () => {
+      setModels([]);
+      autoProbedBase.current = "";
+    },
+  });
   // Post-install dependency report: set when the archetype bundle installed fine
   // but some members declare pip deps the runtime lacks. Non-null = the finish
   // step stays up showing one-click installs instead of unmounting to a toast.
@@ -289,128 +296,16 @@ export function SetupWizard({
   useEffect(() => {
     setModels([]);
     autoProbedBase.current = "";
-    clearLogin();
-    setLoginError("");
+    cancelSignIn();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.provider, state.runtimeKind]);
 
   // Refresh OAuth sign-in status when the brain step is entered (the user may have
   // signed into Claude Code / Codex out-of-band since the wizard opened).
-  const refreshOauthStatus = async () => {
-    try {
-      const r = await api.oauthStatus();
-      const map: Record<string, { signed_in: boolean; detail: string; hint: string }> = {};
-      for (const p of r.providers) map[p.provider] = { signed_in: p.signed_in, detail: p.detail, hint: p.hint };
-      setOauthStatus(map);
-    } catch {
-      /* status is advisory — a failed probe just leaves the line blank */
-    }
-  };
   useEffect(() => {
     if (step === "brain") void refreshOauthStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
-
-  // ── in-console OAuth sign-in (ADR 0097) ──
-  const clearLogin = () => {
-    if (pollRef.current) {
-      clearTimeout(pollRef.current);
-      pollRef.current = null;
-    }
-    setLogin(null);
-    setLoginCode("");
-  };
-  // Stop any poll when leaving the wizard / unmounting.
-  useEffect(() => () => clearLogin(), []);
-
-  const onSignedIn = () => {
-    clearLogin();
-    setLoginError("");
-    setModels([]);
-    autoProbedBase.current = "";
-    void refreshOauthStatus();
-  };
-
-  // Cancel an in-progress sign-in — cancel the SERVER flow too, not just the local timer
-  // (#2440), so the pending device/PKCE flow can't be completed later.
-  const cancelSignIn = () => {
-    const flowId = login?.flowId;
-    clearLogin();
-    if (flowId) void api.oauthCancel(flowId).catch(() => {});
-  };
-
-  // Disconnect a signed-in provider (#2440): revoke + delete protoAgent's credential, then
-  // refresh status (which now reads "disconnected") and clear the stale model list.
-  async function disconnectProvider(provider: string) {
-    setLoginBusy(true);
-    setLoginError("");
-    try {
-      await api.oauthDisconnect(provider);
-      setModels([]);
-      autoProbedBase.current = "";
-      await refreshOauthStatus();
-    } catch (exc) {
-      setLoginError(errMsg(exc));
-    } finally {
-      setLoginBusy(false);
-    }
-  }
-
-  const pollDevice = (flowId: string, intervalMs: number) => {
-    pollRef.current = setTimeout(async () => {
-      try {
-        const r = await api.oauthPoll(flowId);
-        if (r.status === "complete") onSignedIn();
-        else if (r.status === "error") {
-          setLoginError(r.error || "Sign-in failed.");
-          clearLogin();
-        } else pollDevice(flowId, intervalMs);
-      } catch (exc) {
-        setLoginError(errMsg(exc));
-        clearLogin();
-      }
-    }, intervalMs);
-  };
-
-  async function startSignIn(provider: string) {
-    setLoginBusy(true);
-    setLoginError("");
-    clearLogin();
-    try {
-      const r = await api.oauthStart(provider);
-      setLogin({
-        provider,
-        mode: r.mode,
-        flowId: r.flow_id,
-        userCode: r.user_code,
-        verifyUri: r.verification_uri,
-        authorizeUrl: r.authorize_url,
-      });
-      // Open the provider's page for the user (device: enter the code; redirect: approve).
-      const url = r.mode === "device" ? r.verification_uri : r.authorize_url;
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
-      if (r.mode === "device") pollDevice(r.flow_id, (r.interval ?? 5) * 1000);
-    } catch (exc) {
-      setLoginError(errMsg(exc));
-    } finally {
-      setLoginBusy(false);
-    }
-  }
-
-  async function completeSignIn() {
-    if (!login) return;
-    setLoginBusy(true);
-    setLoginError("");
-    try {
-      const r = await api.oauthComplete(login.flowId, loginCode.trim());
-      if (r.status === "complete") onSignedIn();
-      else setLoginError(r.error || "Sign-in failed.");
-    } catch (exc) {
-      setLoginError(errMsg(exc));
-    } finally {
-      setLoginBusy(false);
-    }
-  }
 
   const canGoNext = useMemo(() => {
     // Brain step: ACP needs neither gateway nor model (the coding agent is the brain);

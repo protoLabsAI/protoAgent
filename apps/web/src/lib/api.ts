@@ -1206,16 +1206,17 @@ export const api = {
       authorize_url?: string;
     }>("/api/config/oauth/start", { method: "POST", body: { provider } });
   },
-  /** Poll a Codex device sign-in until the user approves. */
+  /** Poll a Codex device sign-in until the user approves. `graph_reloaded` (#2458):
+   *  a completed sign-in on a graphless server rebuilt the graph inline. */
   oauthPoll(flowId: string) {
-    return request<{ status: "pending" | "complete" | "error"; error?: string }>(
+    return request<{ status: "pending" | "complete" | "error"; error?: string; graph_reloaded?: boolean; graph_reload_error?: string }>(
       "/api/config/oauth/poll",
       { method: "POST", body: { flow_id: flowId } },
     );
   },
   /** Complete a Claude sign-in with the pasted `code#state`. */
   oauthComplete(flowId: string, code: string) {
-    return request<{ status: "complete" | "error"; error?: string }>(
+    return request<{ status: "complete" | "error"; error?: string; graph_reloaded?: boolean; graph_reload_error?: string }>(
       "/api/config/oauth/complete",
       { method: "POST", body: { flow_id: flowId, code } },
     );
@@ -1231,7 +1232,7 @@ export const api = {
   /** Disconnect a native OAuth provider (#2440): best-effort remote revoke + delete
    *  protoAgent's own credential + suppress auto-reconnect until the next sign-in. */
   oauthDisconnect(provider: string) {
-    return request<{ provider: string; removed: boolean; revoked: boolean; note: string }>(
+    return request<{ provider: string; removed: boolean; revoked: boolean; note: string; graph_unloaded?: boolean }>(
       "/api/config/oauth/disconnect",
       { method: "POST", body: { provider } },
     );
