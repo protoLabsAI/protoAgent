@@ -359,7 +359,7 @@ def _load_archetype_catalog() -> list[dict]:
                 entries = (json.loads(f.read_text(encoding="utf-8")) or {}).get("archetypes")
                 if isinstance(entries, list) and entries:
                     return entries
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 log.warning("[fleet] archetype-catalog.json unreadable at %s", f)
             break  # live dir wins even if broken — don't silently fall through to the seed
     return _FALLBACK_ARCHETYPES

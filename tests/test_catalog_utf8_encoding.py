@@ -63,6 +63,26 @@ def test_archetype_catalog_survives_non_utf8_locale(
     assert entries[0]["title"] == "Coach — em dash intact"
 
 
+def test_legacy_non_utf8_override_falls_back_instead_of_crashing(tmp_path, monkeypatch):
+    """A legacy LOCAL override catalog written in a Windows codepage is invalid
+    UTF-8 — with the reads now explicitly UTF-8, the decode error must degrade
+    to the safe fallback like any other unreadable catalog, not 500 the route
+    (UnicodeDecodeError is a ValueError, NOT caught by the JSONDecodeError/OSError
+    pair). From @RomeoRaven's #2465."""
+    import types
+
+    from operator_api import fleet_routes
+
+    # cp1252 en-dash (0x96) — an invalid UTF-8 byte sequence.
+    (tmp_path / "archetype-catalog.json").write_bytes(b'{"archetypes":[{"blurb":"Plan \x96 ship."}]}')
+    monkeypatch.setattr(
+        "infra.paths.instance_paths",
+        lambda: types.SimpleNamespace(config_dir=tmp_path, bundle_dir=tmp_path / "bundle"),
+    )
+
+    assert fleet_routes._load_archetype_catalog() == fleet_routes._FALLBACK_ARCHETYPES
+
+
 def test_shipped_catalogs_actually_exercise_the_regression():
     """The behavioral test above is only meaningful while the shipped catalogs
     carry non-ASCII text. If this ever fails, the catalogs went ASCII-only and

@@ -183,7 +183,7 @@ def register_plugin_routes(app) -> None:
             if f.exists():
                 try:
                     entries = (json.loads(f.read_text(encoding="utf-8")) or {}).get("plugins") or []
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                     log.warning("[plugins] plugin-catalog.json unreadable at %s", f)
                 break
 
