@@ -55,7 +55,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ComponentType, LazyExoticComponent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
@@ -286,6 +286,7 @@ export function App() {
   // until the graph is compiled (`graph_loaded`) so the BootGate observes the
   // engine coming up — the post-setup compile runs inline on the server loop and
   // briefly freezes it, so we want to notice the moment it's live again.
+  const queryClient = useQueryClient();
   const runtimeQ = useQuery({
     ...runtimeStatusQuery(),
     // 30 boot-probe retries, but a 401 stops immediately: retrying can't fix a
@@ -1297,7 +1298,13 @@ export function App() {
         projectPath={projectPath}
         onProjectPathChange={setProjectPath}
         onFinished={() => {
-          void runtimeQ.refetch();
+          // Finish rewired the whole backend — config, model/provider, plugins,
+          // tools, graph. Refetching only runtime status left the composer chip
+          // and Settings ▸ Model on pre-setup values until a desktop restart
+          // (#2462). Invalidate EVERYTHING: active queries (runtime, settings,
+          // models, config) refetch now; the rest refetch on next mount — and a
+          // blanket invalidation can't go stale when a new query is added.
+          void queryClient.invalidateQueries();
         }}
       />
 
