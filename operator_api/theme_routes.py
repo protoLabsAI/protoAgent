@@ -36,7 +36,7 @@ def register_theme_routes(app) -> None:
             return {"theme": None}
         try:
             return {"theme": json.loads(f.read_text(encoding="utf-8"))}
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             log.warning("[theme] unreadable theme.json at %s", f)
             return {"theme": None}
 
