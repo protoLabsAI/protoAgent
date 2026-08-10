@@ -21,9 +21,17 @@
 # are cross-platform but stay file-excluded until the whole file can gate.
 tests/test_execute_code.py
 
-# History — both earlier sections burned down in full (#2412), diagnosed and fixed
-# portably; the files now gate on the Windows job like the rest of the suite:
+# ── coding_agent: acp_client agent-death reporting is wrong on Windows (#2452) ──
+# The ACP runtime is otherwise portable (infra/proc.py) and this file's other tests pass
+# on Windows — but two tests that drive a fake agent to DEATH expose two Windows bugs in
+# acp_client's death path: proc.returncode races to None when stdout EOF is seen (→ "still
+# running" instead of "exit code N"), and a dead child's pipe raises ConnectionResetError
+# on the Proactor loop instead of a clean EOF. Fixed + un-excluded together in #2452.
+tests/test_coding_agent_plugin.py
+
+# History — the earlier sections burned down (#2412), diagnosed and fixed portably; the
+# files now gate on the Windows job like the rest of the suite:
 #   • Path semantics (tilde / separators / symlinks / `:`-in-filename) — 10 files.
 #   • Process lifecycle (the runtime was already portable via infra/proc.py + ADR 0098;
-#     the failures were test-side sh/sleep/workdir/PATH assumptions) — 5 files.
+#     the failures were test-side sh/sleep/workdir/PATH assumptions) — 4 files.
 # Add new POSIX-only files here WITH a reason; never re-add a fixed one.
