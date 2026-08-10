@@ -15,6 +15,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.130.0] - 2026-08-10
+
+### Added
+- **A persona that commands an action no tool backs now warns instead of failing silently (#2443).** A SOUL.md commitment with no registered tool behind it (e.g. "file issues" with `github.write` off) used to produce narrated success — the model reports the action as done because it never calls the missing tool. The host now audits the persona against the bound tool set at boot and on every reload, logs each untooled commitment, and publishes `persona.untooled_action_detected` on the event bus. Warn-only: a persona is never blocked from loading. Closes #2276.
+
+### Changed
+- **The New/Edit schedule dialog is a real builder, with validation (#2159).** The live
+  "when it runs" preview is now a sticky banner at the top of the form showing the plain-
+  English description, the raw cron, and the timezone — with a red error line when the input
+  is invalid. A one-off scheduled in the past is flagged and **blocks submit** (it would have
+  silently never fired). One-off runs show your detected local timezone; recurring schedules
+  default to your local zone instead of UTC. And editing an existing job now opens the same
+  Once/Repeat/Cron builder (pre-filled by parsing the stored schedule) instead of a raw cron
+  text box.
+
+- **More of the test suite runs natively on Windows CI (#2412).** Two files
+  (`test_instance_paths`, `test_store_tier_resolvers`) came off the Windows-native
+  exclusion burndown — one needed a forward-slash path assertion made separator-agnostic,
+  the other was already portable after the ADR 0098 process-tree migration. The Windows PR
+  job now gates them too (exclusion ledger 18 → 16).
+
+- **`CHANGELOG.md` is now split into dated monthly archives (#2437).** The root file kept
+  growing without bound (600 KB+), so it now holds only `[Unreleased]` and the current
+  month; older releases move verbatim into dated `CHANGELOG-YYYY-MM.md` files (starting with
+  `CHANGELOG-THROUGH-2026-07.md`), cross-linked from the root. Release collation still writes
+  only `CHANGELOG.md`, and `changelog.py notes <version>` reads the archives so old desktop
+  rebuilds still resolve their notes. A new `changelog.py archive` command handles the
+  once-a-month rollover (see the releasing guide).
+
+- **`find_files` and `search_files` return forward-slash paths on Windows (#2446).** The
+  managed-filesystem search tools emitted OS-native separators (`src\main.py`) on Windows;
+  they now return a stable forward-slash form (`src/main.py`) on every platform, matching
+  what `read_file`/`edit_file` already accept. Part of the ongoing #2412 work: ten more test
+  files (config, agent-snapshot, fs-tools, workspaces, egress, media, and memory path
+  handling) now run under the native-Windows CI gate instead of being skipped.
+
+### Fixed
+- **Native OAuth sign-in now has cancel, disconnect, and revocation (#2440).** The wizard's
+  Cancel now aborts the *server-side* sign-in flow (not just the browser timer), and a signed-in
+  provider has a **Disconnect** action: it best-effort revokes protoAgent's token at the provider,
+  always deletes protoAgent's own stored credential even if revocation fails, and stays
+  disconnected until you sign in again — it never re-imports from (or touches) the Codex/Claude
+  CLI's own auth file. Credential and disconnect-state files keep the Windows owner-only ACL.
+
+- **Concurrent Codex credential resolution no longer races the single-use refresh token (#2441).**
+  `create_llm` resolves credentials per turn and for subagent slots; two in-process consumers could
+  both refresh the same expiring token, and one would fail with an HTTP 400. Refresh/bootstrap is now
+  serialized per instance store — the first caller refreshes, the rest re-read and reuse the rotated
+  token — while warm reads stay lock-free.
+
+- **The review panel can no longer publish its own reasoning to a pull request (#2447).** The
+  synthesizer's reply was posted verbatim as a PR comment, so when a serving lane left
+  deliberation in `content` instead of on the native reasoning channel, the entire
+  chain-of-thought shipped to the author under the bot's identity — some 2,000 words of
+  "Actually, let me reconsider…", including a draft dispositions block the model had already
+  revised away. The model wasn't misbehaving, so no prompt could have prevented it. The comment
+  is now **built** from parsed blocks instead of echoed: the synthesizer delimits its prose brief
+  (`<!-- brief -->` … `<!-- /brief -->`), and anything outside a recognized block is unpublishable
+  because no code path publishes it. A brief that misses its delimiters is reported as unreadable
+  rather than quietly falling back to raw text. Also corrects a contradiction that had been making
+  review bodies inconsistent: the role prompt asked for the brief *after* the findings JSON while
+  both recipes asked for it first. The publisher half ships in pr-reviewer-plugin v0.25.0.
+
+- **The coder plugin's test verifier now runs on Windows (#2450).** `run_tests` spawned
+  `python -m pytest` with a scrubbed environment that dropped `SystemRoot` (and
+  `TEMP`/`TMP`/`COMSPEC`/`PATHEXT`) — vars a freshly spawned `python.exe` needs to
+  initialize — so verification silently failed on Windows. Those OS-essential vars are now
+  preserved (the secret-scrub is otherwise unchanged). Part of the ongoing #2412 work: four
+  more test files (delegates ×2, coder, workflow-run-state) now gate on the native-Windows
+  CI. (coding-agent needs an acp_client runtime fix first — #2452; execute_code — #2449.)
+
+- **The media URL-signing key is now owner-only on Windows (#2451).** `infra/media` created
+  `media/.signing-key` — the HMAC secret that authenticates media URLs — with a bare
+  `os.chmod(0o600)`, which on Windows only flips the read-only bit, so unlike every other
+  credential file the key inherited its parent directory's ACL. It now goes through the
+  ACL-hardening funnel (`atomic_write` → `harden_private_file`), giving it an owner-only ACL
+  on Windows and `0o600` on POSIX.
+
+- **`execute_code` runs on Windows (#2453).** The plugin's tool-RPC bridge — which lets a
+  sandboxed script call host tools — was built on POSIX fd-inheritance (anonymous
+  `os.pipe()` + `pass_fds` + fd-number handoff), so it couldn't run on Windows at all. It now
+  bridges over a **loopback socket** authenticated with a per-run token, works identically on
+  both platforms, and kills the child's **whole process tree** on timeout (ADR 0098) instead
+  of orphaning grandchildren.
+
+- **Coding-agent death errors are accurate on Windows (#2454).** When an ACP coder
+  subprocess died mid-turn, Windows reported *"process still running or never started"*
+  instead of the real exit code, and a dead child's stderr pipe could raise an unhandled
+  `ConnectionResetError`. The exit status is now reaped before the error is built, and a lost
+  pipe is treated as end-of-stream. This also **completes the Windows-native test burndown**
+  (#2412): the exclusion ledger is now empty, so the whole test suite gates on Windows.
+
 ## [0.129.0] - 2026-08-09
 
 ### Added

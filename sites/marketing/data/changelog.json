@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.130.0",
+    "date": "2026-08-10",
+    "changes": [
+      "A persona that commands an action no tool backs now warns instead of failing silently (#2443).",
+      "The New/Edit schedule dialog is a real builder, with validation (#2159).",
+      "More of the test suite runs natively on Windows CI (#2412).",
+      "CHANGELOG.md is now split into dated monthly archives (#2437).",
+      "find_files and search_files return forward-slash paths on Windows (#2446).",
+      "Native OAuth sign-in now has cancel, disconnect, and revocation (#2440).",
+      "Concurrent Codex credential resolution no longer races the single-use refresh token (#2441).",
+      "The review panel can no longer publish its own reasoning to a pull request (#2447).",
+      "The coder plugin's test verifier now runs on Windows (#2450).",
+      "The media URL-signing key is now owner-only on Windows (#2451).",
+      "execute_code runs on Windows (#2453).",
+      "Coding-agent death errors are accurate on Windows (#2454)."
+    ]
+  },
+  {
     "version": "v0.129.0",
     "date": "2026-08-09",
     "changes": [
