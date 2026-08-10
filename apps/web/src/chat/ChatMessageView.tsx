@@ -42,6 +42,10 @@ export type ChatMessageActions = {
   onDismiss?: (id: string) => void;
   lastAssistantId?: string;
   regenDisabled?: boolean;
+  // The conversational tail (chat/parts.rewindableTailId): "Rewind to here" hides on
+  // it — discarding "everything below" the tail is a no-op behind a destructive
+  // confirm, which reads as either scary or broken (Josh, 2026-08-10).
+  rewindTailId?: string;
   // Incognito sessions retain no prompt snapshots BY DESIGN — offering "View prompt"
   // there 404s and reads as data loss instead of privacy working (#2484).
   incognito?: boolean;
@@ -200,7 +204,7 @@ export function ChatMessageView({
           {actions.onFork ? (
             <MessageAction label="Fork from here" icon={<GitBranch size={14} />} onClick={() => actions.onFork!(message)} />
           ) : null}
-          {actions.onRewind ? (
+          {actions.onRewind && message.id !== actions.rewindTailId ? (
             <MessageAction label="Rewind to here" icon={<History size={14} />} onClick={() => actions.onRewind!(message)} />
           ) : null}
           {message.taskId && !actions.incognito ? (

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, toolsForGroup } from "./parts";
+import { rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -278,5 +278,26 @@ describe("toolsForGroup", () => {
 
   it("is empty-safe", () => {
     expect(toolsForGroup(["x"], undefined)).toEqual([]);
+  });
+});
+
+describe("rewindableTailId", () => {
+  const m = (role: string, id?: string) => ({ role, id });
+
+  it("is the last assistant message after a completed turn (Rewind hides there)", () => {
+    expect(rewindableTailId([m("user", "u1"), m("assistant", "a1"), m("user", "u2"), m("assistant", "a2")])).toBe("a2");
+  });
+
+  it("a trailing errored USER bubble is the tail — the assistant before it keeps Rewind", () => {
+    expect(rewindableTailId([m("user", "u1"), m("assistant", "a1"), m("user", "u2")])).toBe("u2");
+  });
+
+  it("trailing local system notes don't count — they're never in the checkpoint", () => {
+    expect(rewindableTailId([m("user", "u1"), m("assistant", "a1"), m("system", "n1")])).toBe("a1");
+  });
+
+  it("empty / id-less transcripts yield undefined (gate fails open)", () => {
+    expect(rewindableTailId([])).toBeUndefined();
+    expect(rewindableTailId([m("assistant")])).toBeUndefined();
   });
 });

@@ -124,3 +124,17 @@ export function toolsForGroup(ids: string[], calls: ToolCall[] | undefined): Too
   const set = new Set(ids);
   return (calls ?? []).filter((c) => set.has(c.id) || (c.parentId != null && set.has(c.parentId)));
 }
+
+/** The id of the LAST user/assistant message — the conversational tail. "Rewind to
+ *  here" discards everything BELOW a message, so on the tail it is a guaranteed
+ *  no-op behind a destructive confirmation; the action row hides it there. Local
+ *  system notes don't count (display-only, never in the checkpoint) — a trailing
+ *  errored USER bubble does, which keeps Rewind on the assistant message before it
+ *  (discarding the stranded user message is exactly what Rewind is for). */
+export function rewindableTailId(messages: { id?: string; role: string }[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if ((m.role === "user" || m.role === "assistant") && m.id) return m.id;
+  }
+  return undefined;
+}

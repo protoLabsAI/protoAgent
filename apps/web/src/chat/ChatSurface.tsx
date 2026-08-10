@@ -38,7 +38,7 @@ import { useServerTurn, useServerTurnSessions } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
-import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
+import { rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { sessionsToClose } from "./bulkClose";
@@ -920,6 +920,8 @@ function ChatSessionSlot({
     () => [...messages].reverse().find((m) => m.role === "assistant")?.id,
     [messages],
   );
+  // The conversational tail — "Rewind to here" hides on it (nothing below to discard).
+  const rewindTailId = useMemo(() => rewindableTailId(messages), [messages]);
 
   // Sendable with text OR at least one ready attachment (file-only send, e.g.
   // "describe this image" with no caption). Matches the DS PromptInput gate,
@@ -1786,6 +1788,7 @@ function ChatSessionSlot({
                 // No prompt snapshots exist for incognito turns (by design) —
                 // hide View prompt instead of offering a 404 (#2484).
                 incognito: session?.incognito,
+                rewindTailId,
               }}
             />
           ))
