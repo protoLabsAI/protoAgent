@@ -52,7 +52,13 @@ registerKeybinding({
   label: "Focus chat composer",
   group: "General",
   defaultKeys: "/", // plain key → only fires when NOT already typing in a field
-  run: () => useKbIntents.getState().focusComposer(),
+  // Navigate first (#2474): the composer only exists on the chat surface, so from
+  // Knowledge/Settings/etc. the focus nonce used to fire into a hidden panel — the
+  // shortcut silently did nothing exactly where it's most useful.
+  run: () => {
+    useUI.getState().setSurface("chat");
+    useKbIntents.getState().focusComposer();
+  },
 });
 
 // ── Chat panel (scope: "chat") ──────────────────────────────────────────────────────
@@ -183,7 +189,11 @@ registerKeybinding({
   group: "Focus",
   defaultKeys: "ctrl+1",
   allowInInput: true,
-  run: () => useKbIntents.getState().focusComposer(),
+  // Navigate first (#2474) — same as composer.focus above.
+  run: () => {
+    useUI.getState().setSurface("chat");
+    useKbIntents.getState().focusComposer();
+  },
 });
 registerKeybinding({
   id: "focus.left",
