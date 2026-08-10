@@ -540,11 +540,16 @@ class AcpClient:
 
     async def _drain_stderr(self) -> None:
         assert self._proc and self._proc.stderr
-        async for raw in self._proc.stderr:
-            line = raw.decode(errors="replace").rstrip()
-            if line:
-                self._stderr_tail.append(line)
-                logger.debug("[acp/%s/stderr] %s", self.name, line)
+        try:
+            async for raw in self._proc.stderr:
+                line = raw.decode(errors="replace").rstrip()
+                if line:
+                    self._stderr_tail.append(line)
+                    logger.debug("[acp/%s/stderr] %s", self.name, line)
+        except (ConnectionResetError, BrokenPipeError):
+            # A dead child's pipe raises this on the Windows Proactor loop instead of a
+            # clean EOF — treat it as end-of-stream, not an unhandled task failure.
+            pass
 
     def stderr_tail(self, limit: int = 20) -> str:
         """The agent's last stderr lines, newest-last, as one block ("" if silent).
@@ -574,6 +579,7 @@ class AcpClient:
 
     async def _read_loop(self) -> None:
         assert self._proc and self._proc.stdout
+        cancelled = False
         try:
             async for raw in self._proc.stdout:
                 line = raw.decode(errors="replace").strip()
@@ -598,10 +604,20 @@ class AcpClient:
                         line,
                     )
         except asyncio.CancelledError:
+            cancelled = True
             raise
         except Exception:  # noqa: BLE001 — surface WHY the loop ended (was silent → undiagnosable)
             logger.exception("[acp/%s] read loop ended on error", self.name)
         finally:
+            # Reap the process before reading its exit code. On Windows the exit status
+            # isn't collected by the time stdout ends — whether via a clean EOF or a
+            # Proactor ConnectionResetError — so returncode would still be None and
+            # _exit_detail would report "still running" for a child that's already dead.
+            # Skipped when cancelled: close() is already tearing the process down, and
+            # waiting here would only add latency to shutdown.
+            if not cancelled and self._proc is not None and self._proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._proc.wait(), timeout=2.0)
             # Fail any in-flight requests if the process dies mid-turn — WITH how it
             # died and what it said on the way out. A bare "agent exited" is the least
             # actionable message in this file: it is emitted for a crash, an OOM kill, a

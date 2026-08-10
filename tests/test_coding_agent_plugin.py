@@ -244,9 +244,13 @@ def _fake_node_dir(tmp_path) -> str:
     """A dir that looks like a node bin dir (has an executable `node`)."""
     d = tmp_path / "nodebin"
     d.mkdir()
-    node = d / "node"
+    # On Windows shutil.which("node") only resolves PATHEXT names (node.exe/.cmd), so a
+    # bare `node` reads as "not on PATH" — name it node.exe there. chmod/X_OK is a POSIX
+    # concept (no-op on Windows); the content is irrelevant to shutil.which. (#2452)
+    node = d / ("node.exe" if os.name == "nt" else "node")
     node.write_text("#!/bin/sh\n")
-    node.chmod(0o755)
+    if os.name != "nt":
+        node.chmod(0o755)
     return str(d)
 
 
