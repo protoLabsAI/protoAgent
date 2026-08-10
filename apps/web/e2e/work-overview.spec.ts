@@ -36,7 +36,8 @@ test("all four cards render with live counts and pulse lines", async ({ page }) 
   await expect(tasks.getByText("Wire the telemetry rollup")).toBeVisible();
 
   const schedule = page.getByTestId("work-card-schedule");
-  await expect(schedule.locator(".work-card-head .pl-badge")).toHaveText("1");
+  await expect(schedule.locator(".work-card-head .pl-badge")).toHaveText("2"); // job-1 + the UTC job-2
+
   await expect(schedule.locator(".work-card-pulse")).toContainText("next");
   await expect(schedule.getByText("Summarize overnight activity")).toBeVisible();
 });
