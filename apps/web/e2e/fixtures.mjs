@@ -209,6 +209,17 @@ export const SCHEDULER_JOBS = {
       next_fire: "2026-05-30T09:00:00Z",
       timezone: "America/Chicago",
     },
+    {
+      // A UTC job (no timezone) stored with a leading-zero cron hour — the two edit-dialog
+      // regressions from the #2439 review: editing must not adopt the local zone, and the
+      // builder's cosmetic re-format of "0 09" must not count as an edit.
+      id: "job-2",
+      prompt: "Rotate the weekly digest cache.",
+      schedule: "0 09 * * *",
+      agent_name: "protoAgent",
+      enabled: true,
+      next_fire: "2026-05-31T09:00:00Z",
+    },
   ],
 };
 

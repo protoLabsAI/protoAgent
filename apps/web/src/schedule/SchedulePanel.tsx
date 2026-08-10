@@ -20,14 +20,16 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import type { ScheduledJob } from "../lib/types";
-import { describeSchedule, parseSchedule } from "./schedule-builder";
+import { canonicalSchedule, describeSchedule, localZone, parseSchedule } from "./schedule-builder";
 
 // Scheduled jobs (Activity → Schedule). The list is a useSuspenseQuery; add/cancel
 // are useMutations that invalidate it. Adding is a friendly modal that builds the
 // `schedule` string for you (a calendar for one-off, presets for recurring, raw cron
 // as the escape hatch) — no hand-written cron required.
 
-const NEW_INITIAL = { parsed: { mode: "once" as const, onceDate: "", onceTime: "" }, timezone: "" };
+// New schedules default to the operator's local zone (#2159 part 5); the edit dialog
+// instead seeds the job's STORED zone so editing never silently retimes it.
+const NEW_INITIAL = { parsed: { mode: "once" as const, onceDate: "", onceTime: "" }, timezone: localZone() };
 
 // Exported so the Work overview's Schedule-card quick-add reuses it (that host owns its
 // own open-state + add mutation) — one form, two hosts.
@@ -120,7 +122,12 @@ function ScheduleDetailDialog({
 
   if (!job) return null;
   // The edit builder is seeded by parsing the stored schedule into its mode (#2159 part 4).
-  const dirty = prompt.trim() !== job.prompt || out.schedule.trim() !== job.schedule.trim();
+  // Dirty compares against the builder's CANONICAL form of the stored string, so a job the
+  // builder merely re-formats (a leading-zero cron hour) doesn't open dirty — and the
+  // timezone counts too ("" / undefined both mean UTC), so a zone-only change is savable.
+  const scheduleChanged = out.schedule.trim() !== canonicalSchedule(job.schedule);
+  const timezoneChanged = (out.timezone ?? "") !== (job.timezone ?? "");
+  const dirty = prompt.trim() !== job.prompt || scheduleChanged || timezoneChanged;
   const canSave = !!prompt.trim() && out.valid && dirty && !busy;
 
   return (
@@ -139,7 +146,13 @@ function ScheduleDetailDialog({
               variant="primary"
               disabled={!canSave}
               data-testid="schedule-detail-save"
-              onClick={() => onSave(job.id, { prompt: prompt.trim(), schedule: out.schedule, timezone: out.timezone })}
+              // An untouched schedule keeps the STORED string (not the canonicalized
+              // rebuild), so a prompt- or zone-only save never rewrites it.
+              onClick={() => onSave(job.id, {
+                prompt: prompt.trim(),
+                schedule: scheduleChanged ? out.schedule : job.schedule,
+                timezone: out.timezone,
+              })}
             >
               Save changes
             </Button>
@@ -220,7 +233,14 @@ function ScheduleBody() {
     onError: (e) => toast({ tone: "error", title: "Couldn't schedule", message: errMsg(e) }),
     onSettled: invalidate,
   });
-  const cancel = useMutation({ mutationFn: (id: string) => api.cancelSchedule(id), onSettled: invalidate });
+  // Delete gets the same toast feedback as add/edit — without onError a failed delete
+  // looks successful, because the confirm dialog closes without waiting on the mutation.
+  const cancel = useMutation({
+    mutationFn: (id: string) => api.cancelSchedule(id),
+    onSuccess: () => toast({ tone: "success", title: "Job deleted", message: "It won't fire again." }),
+    onError: (e) => toast({ tone: "error", title: "Couldn't delete the job", message: errMsg(e) }),
+    onSettled: invalidate,
+  });
   // Atomic in-place edit (PUT) — id / created_at / last_fire preserved, next_fire
   // recomputed server-side; a bad schedule 400s without touching the job.
   const edit = useMutation({

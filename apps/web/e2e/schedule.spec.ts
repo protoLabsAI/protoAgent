@@ -110,10 +110,30 @@ test("the detail dialog edits via the same Once/Repeat/Cron builder, gated until
   await expect(page.getByTestId("schedule-detail-save")).toBeEnabled();
 });
 
+test("editing a UTC job keeps it UTC and preserves an untouched schedule string (#2439 review)", async ({ page }) => {
+  await gotoSchedule(page);
+  // job-2 is stored WITHOUT a timezone (= UTC) and with a leading-zero cron hour.
+  await page.getByTestId("schedule-row-job-2").click();
+  await page.getByTestId("schedule-detail-edit").click();
+  const detail = page.getByTestId("schedule-detail");
+  // "0 09 * * *" parses to the daily preset; the builder shows its normalized cron, but
+  // a cosmetic re-format is not an edit — Save must open disabled.
+  await expect(detail.getByTestId("schedule-preview").locator("code")).toContainText("0 9 * * *");
+  await expect(page.getByTestId("schedule-detail-save")).toBeDisabled();
+  // A prompt-only save sends the STORED schedule string verbatim and no timezone — the
+  // job was UTC and must not silently adopt the operator's local zone.
+  await page.getByTestId("schedule-detail-prompt").fill("Rotate the cache, quietly.");
+  const put = page.waitForRequest((r) => r.method() === "PUT" && r.url().includes("/api/scheduler/jobs/job-2"));
+  await page.getByTestId("schedule-detail-save").click();
+  const body = (await put).postDataJSON();
+  expect(body.schedule).toBe("0 09 * * *");
+  expect(body.timezone).toBeUndefined();
+});
+
 test("the row delete button confirms first — Cancel keeps the job", async ({ page }) => {
   await gotoSchedule(page);
   // The row's trash no longer deletes on one click; it summons a ConfirmDialog.
-  await page.getByRole("button", { name: "Delete job" }).click();
+  await page.getByRole("button", { name: "Delete job" }).first().click();
   const confirm = page.getByRole("dialog", { name: "Delete scheduled job?" });
   await expect(confirm).toBeVisible();
   // The confirm names what's being deleted (human schedule + prompt).
@@ -127,7 +147,7 @@ test("the row delete button confirms first — Cancel keeps the job", async ({ p
 
 test("Escape aborts the delete confirm; confirming fires it", async ({ page }) => {
   await gotoSchedule(page);
-  await page.getByRole("button", { name: "Delete job" }).click();
+  await page.getByRole("button", { name: "Delete job" }).first().click();
   const confirm = page.getByRole("dialog", { name: "Delete scheduled job?" });
   await expect(confirm).toBeVisible();
   await page.keyboard.press("Escape"); // click-outside / Esc cancels (no delete)
@@ -135,7 +155,7 @@ test("Escape aborts the delete confirm; confirming fires it", async ({ page }) =
   await expect(page.getByTestId("schedule-row-job-1")).toBeVisible();
 
   // Re-open and actually confirm → the dialog closes (the cancel mutation fires).
-  await page.getByRole("button", { name: "Delete job" }).click();
+  await page.getByRole("button", { name: "Delete job" }).first().click();
   await confirm.getByRole("button", { name: "Delete" }).click();
   await expect(confirm).toBeHidden();
 });

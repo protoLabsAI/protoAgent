@@ -46,13 +46,17 @@ export function ScheduleBuilder({
   const [hour12, setHour12] = useState(false);
   const [dow, setDow] = useState(p.mode === "repeat" ? p.dow : 1);
   const [cronRaw, setCronRaw] = useState(p.mode === "cron" ? p.cronRaw : "");
-  // Recurring schedules default to the operator's local zone, not UTC (#2159 part 5).
-  const [tz, setTz] = useState(initial.timezone || localZone());
+  // Seeded VERBATIM from the host — "" renders as UTC. The New dialog seeds the
+  // operator's local zone (#2159 part 5); the edit dialog seeds the job's stored zone,
+  // so opening an existing UTC job never silently retimes it to the local zone.
+  const [tz, setTz] = useState(initial.timezone);
 
   const tzOptions = useMemo(() => {
     const local = localZone();
-    return Array.from(new Set([local, ...COMMON_ZONES].filter(Boolean)));
-  }, []);
+    // The stored zone joins the list even when it's not a common one, so the dropdown
+    // can actually display the job's current value.
+    return Array.from(new Set([initial.timezone, local, ...COMMON_ZONES].filter(Boolean)));
+  }, [initial.timezone]);
 
   const schedule = useMemo(() => {
     if (mode === "once") return buildOnce(joinLocal(onceDate, onceTime));

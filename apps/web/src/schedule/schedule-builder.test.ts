@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { joinLocal } from "./dateParts";
-import { buildOnce, buildRepeat, isPastOnce, parseSchedule } from "./schedule-builder";
+import { buildOnce, buildRepeat, canonicalSchedule, isPastOnce, parseSchedule } from "./schedule-builder";
 
 describe("parseSchedule — detect which builder mode a stored schedule came from (#2159)", () => {
   it("recovers the friendly recurring presets", () => {
@@ -26,6 +26,27 @@ describe("parseSchedule — detect which builder mode a stored schedule came fro
     if (p.mode === "once") {
       expect(buildOnce(joinLocal(p.onceDate, p.onceTime))).toBe(iso);
     }
+  });
+});
+
+describe("canonicalSchedule — the builder's normalized form (#2439 review)", () => {
+  it("absorbs cosmetic cron differences a preset re-format would make", () => {
+    expect(canonicalSchedule("0 09 * * *")).toBe("0 9 * * *"); // leading-zero hour
+    expect(canonicalSchedule("05 * * * *")).toBe("5 * * * *"); // leading-zero minute
+  });
+
+  it("passes custom cron and unparseable strings through untouched", () => {
+    expect(canonicalSchedule("*/5 * * * *")).toBe("*/5 * * * *");
+    expect(canonicalSchedule("0 9 1 * *")).toBe("0 9 1 * *");
+    expect(canonicalSchedule("not a schedule")).toBe("not a schedule");
+  });
+
+  it("is a fixed point for anything the builder itself emitted", () => {
+    for (const s of [buildRepeat("daily", "09:00", 1), buildRepeat("hourly", "00:20", 1), buildRepeat("weekly", "18:15", 3)]) {
+      expect(canonicalSchedule(s)).toBe(s);
+    }
+    const iso = buildOnce("2026-07-24T16:30");
+    expect(canonicalSchedule(iso)).toBe(iso);
   });
 });
 

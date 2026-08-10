@@ -3,6 +3,8 @@
 // (recurring) or an ISO-8601 datetime (one-shot) and auto-detects — so the modal
 // never makes the operator hand-write cron.
 
+import { joinLocal } from "./dateParts";
+
 export type RepeatFreq = "hourly" | "daily" | "weekdays" | "weekly";
 
 export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -108,6 +110,18 @@ export function parseSchedule(schedule: string): ParsedSchedule {
     }
   }
   return { mode: "cron", cronRaw: s };
+}
+
+/** The builder's normalized form of a stored schedule string: parse → rebuild. A friendly
+ * preset with cosmetic differences (a leading-zero hour like "0 09 * * *") canonicalizes
+ * to what the builder emits ("0 9 * * *"); a custom cron or unparseable string passes
+ * through untouched. The edit dialog compares its builder output against THIS, so opening
+ * a job the builder merely re-formats doesn't read as an edit. */
+export function canonicalSchedule(schedule: string): string {
+  const p = parseSchedule(schedule);
+  if (p.mode === "once") return buildOnce(joinLocal(p.onceDate, p.onceTime)) || (schedule || "").trim();
+  if (p.mode === "repeat") return buildRepeat(p.freq, p.time, p.dow);
+  return p.cronRaw;
 }
 
 /** True when `schedule` is a one-shot ISO datetime that has already passed — the case
