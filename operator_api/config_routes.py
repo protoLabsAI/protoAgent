@@ -14,6 +14,7 @@ HTTP layer over it.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import HTTPException
@@ -25,6 +26,8 @@ from server.agent_init import (
     _build_settings_callbacks,
     _reset_settings_keys,
 )
+
+log = logging.getLogger(__name__)
 
 
 class ConfigReloadRequest(BaseModel):
@@ -260,14 +263,42 @@ def register_config_routes(app) -> None:
     async def _api_oauth_disconnect(req: OAuthLoginRequest):
         """Disconnect a native OAuth provider (#2440): best-effort remote revoke + delete
         protoAgent's own stored credential + suppress auto-reconnect until an in-console
-        sign-in. Never touches the vendor CLI's auth file. Idempotent."""
+        sign-in. Never touches the vendor CLI's auth file. Idempotent.
+
+        Disconnect is an application-level auth transition, not just a storage
+        mutation (#2459): when the live graph runs on this provider, its in-memory
+        client still holds the just-revoked token — leaving it loaded lets the next
+        prompt reach the provider and surface a raw 401. Unload it into the same
+        signed-out state a disconnected boot produces (#2458); the completed
+        sign-in reload restores it.
+        """
         from graph.providers.oauth import OAuthCredentialError, disconnect
 
         try:
             result = await asyncio.to_thread(disconnect, req.provider)
-            return result.as_dict()
         except OAuthCredentialError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        provider = (req.provider or "").strip().lower()
+        live_provider = (getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
+        if STATE.graph is None or provider != live_provider:
+            return result.as_dict()
+
+        # The cache warmer pings this provider on a heartbeat — stop it before
+        # unloading the graph so no request rides the revoked token.
+        warmer, STATE.cache_warmer = STATE.cache_warmer, None
+        if warmer is not None:
+            try:
+                await warmer.stop()
+            except Exception:  # noqa: BLE001 — a warmer that won't stop must not block disconnect
+                log.warning("[oauth] cache warmer stop failed during disconnect", exc_info=True)
+        STATE.graph = None
+        STATE.graph_auth_error = {
+            "provider": provider,
+            "message": f"{provider} is disconnected in protoAgent. Sign in again to reconnect.",
+            "relogin": True,
+        }
+        return {**result.as_dict(), "graph_unloaded": True}
 
     @app.post("/api/config/test-model")
     async def _api_test_model(req: ModelsProbeRequest | None = None):

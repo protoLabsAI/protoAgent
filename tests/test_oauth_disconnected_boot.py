@@ -130,6 +130,68 @@ def test_runtime_status_carries_graph_auth_error():
     assert out["graph_auth_error"] is None
 
 
+def _disconnect_client(monkeypatch):
+    """TestClient + a fake ``disconnect()`` that reports success without network."""
+    import types
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.config_routes import register_config_routes
+
+    monkeypatch.setattr(
+        "graph.providers.oauth.disconnect",
+        lambda provider: types.SimpleNamespace(
+            as_dict=lambda: {"provider": provider, "removed": True, "revoked": True, "note": "test"}
+        ),
+    )
+    app = FastAPI()
+    register_config_routes(app)
+    return TestClient(app)
+
+
+def test_disconnect_unloads_live_graph(state_guard, monkeypatch):
+    """#2459: disconnecting the provider the live graph runs on must unload the
+    graph (the in-memory client holds the just-revoked token) and land in the
+    same signed-out state a disconnected boot produces."""
+    import types
+
+    client = _disconnect_client(monkeypatch)
+    STATE.graph = object()
+    STATE.graph_config = types.SimpleNamespace(model_provider="openai-codex")
+
+    stops = []
+
+    class _Warmer:
+        async def stop(self):
+            stops.append(1)
+
+    STATE.cache_warmer = _Warmer()
+
+    res = client.post("/api/config/oauth/disconnect", json={"provider": "openai-codex"}).json()
+    assert res["graph_unloaded"] is True
+    assert STATE.graph is None
+    assert STATE.cache_warmer is None
+    assert stops == [1]
+    err = STATE.graph_auth_error
+    assert err and err["provider"] == "openai-codex" and err["relogin"] is True
+
+
+def test_disconnect_of_other_provider_keeps_graph(state_guard, monkeypatch):
+    """Disconnecting a provider the live graph does NOT run on is storage-only."""
+    import types
+
+    client = _disconnect_client(monkeypatch)
+    live_graph = object()
+    STATE.graph = live_graph
+    STATE.graph_config = types.SimpleNamespace(model_provider="openai-codex")
+    STATE.graph_auth_error = None
+
+    res = client.post("/api/config/oauth/disconnect", json={"provider": "anthropic-oauth"}).json()
+    assert "graph_unloaded" not in res
+    assert STATE.graph is live_graph
+    assert STATE.graph_auth_error is None
+
+
 def test_oauth_complete_route_triggers_graph_rebuild(state_guard, monkeypatch):
     """A completed sign-in on a graphless, setup-complete server reloads the
     graph inline — the route response says whether chat is back."""
