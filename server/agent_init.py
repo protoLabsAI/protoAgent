@@ -302,6 +302,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
         # self-edit is live on the next turn — injected, so tools/ never imports server/.
         reload_callback=_reload_langgraph_agent,
     )
+    # Untooled-action audit (#2276) — now that the persona AND the bound tool set both
+    # exist, warn about commitments no tool backs (the model narrates those as done).
+    _audit_persona_tools(STATE.graph, trigger="boot")
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
     # for an Anthropic-family model (see graph/cache_warmer.py).
@@ -1068,6 +1071,52 @@ def _maybe_run_soul_drift_pass(cfg) -> dict | None:
         return None
     _last_soul_drift_check = now
     return _run_soul_drift_pass(cfg)
+
+
+def _audit_persona_tools(graph, *, trigger: str) -> None:
+    """Untooled-action audit (#2276) — warn when the live persona commits to actions no
+    bound tool backs, because the model fills an untooled instruction with narration and
+    reports it done (no error is ever raised; the breakage is invisible in-band).
+
+    Runs at the two moments the persona/tool pairing changes — boot and reload — over the
+    graph's stamped ``bound_tools``. Warn-only by design: one log line per finding plus a
+    single ``persona.untooled_action_detected`` bus event carrying them all (sibling of
+    ``persona.drift_detected``). Never raises — an audit must not cost a boot or reload —
+    and never blocks the persona from loading: wanting a tool before configuring it is a
+    legitimate state, so detection stays passive until a guarded tier is a real ask."""
+    if graph is None:  # setup pending — no tools bound, nothing to diff against
+        return
+    try:
+        from graph.config_io import read_soul, soul_revision
+        from graph.soul_audit import audit_untooled_actions
+
+        soul = read_soul()
+        names = [getattr(t, "name", str(t)) for t in getattr(graph, "bound_tools", None) or ()]
+        if not soul or not names:
+            return
+        findings = audit_untooled_actions(soul, names)
+        if not findings:
+            return
+        for f in findings:
+            log.warning(
+                '[soul-audit] persona commits to an action no bound tool backs — %s %r ("%s"). '
+                "The model will narrate this as done rather than fail; register/enable the tool "
+                "or edit SOUL.md.",
+                f["kind"],
+                f["action"],
+                f["evidence"],
+            )
+        _event_bus.publish(
+            "persona.untooled_action_detected",
+            {
+                "trigger": trigger,
+                "soul_revision": soul_revision(),
+                "count": len(findings),
+                "findings": findings,
+            },
+        )
+    except Exception:
+        log.exception("[soul-audit] untooled-action audit failed")
 
 
 # ── Opt-in plugin auto-update (#1720) ────────────────────────────────────────
@@ -2045,6 +2094,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # _main wires routes) — harmless.
         pass
     STATE.graph = new_graph
+    # Untooled-action audit (#2276) — a reload is exactly when the persona/tool set
+    # changes (SOUL edit, plugin enable/disable, tools.disabled), so re-check here.
+    _audit_persona_tools(new_graph, trigger="reload")
     STATE.plugin_middleware = new_middleware  # ADR 0032
     STATE.plugin_late_tool_factories = new_late_tool_factories  # late-tools seam
     STATE.plugin_chat_commands = new_plugin_chat_commands  # user-only /<name> control commands
