@@ -29,11 +29,9 @@ tests/test_config_io.py
 tests/test_config_routes.py
 tests/test_egress.py
 tests/test_fs_tools.py
-tests/test_instance_paths.py
 tests/test_media_store.py
 tests/test_memory_load.py
 tests/test_memory_routes.py
-tests/test_store_tier_resolvers.py
 tests/test_workspaces.py
 
 # ── POSIX shell scripts under test (bash/sh fixtures) ──

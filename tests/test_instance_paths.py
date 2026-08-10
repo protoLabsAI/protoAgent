@@ -7,6 +7,8 @@ box-vs-instance split, the env overrides, and the cached-singleton hygiene that
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import infra.paths as paths
@@ -180,4 +182,5 @@ def test_explain_shape(_isolate):
     ex = p.explain()
     assert ex["instance_id"] == "default"
     assert set(ex) == {"instance_id", "box_root", "instance_root", "app_root", "paths"}
-    assert ex["paths"]["config_yaml"].endswith("default/config/langgraph-config.yaml")
+    # Compare path segments, not a forward-slash string — Windows uses `\` (#2412).
+    assert Path(ex["paths"]["config_yaml"]).parts[-3:] == ("default", "config", "langgraph-config.yaml")
