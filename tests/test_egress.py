@@ -209,11 +209,14 @@ def test_policy_includes_the_projects_registry(tmp_path):
     policy = _gen().build_policy(LangGraphConfig.from_yaml(p))
 
     rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
-    # Compare against the generator's .resolve()'d form (no-op on POSIX; drive-anchored on Windows).
-    rw, ro = str(Path("/work/rw").resolve()), str(Path("/work/ro").resolve())
-    assert rw_idx < policy.index(rw) < ro_idx
-    assert ro_idx < policy.index(ro)
-    assert "/work/nofence" not in policy  # fs:false grants no filesystem reach
+    # Order by the platform-independent "project: <name>" marker the generator always emits
+    # (`f"project: {name}"`), not the resolved path: the registry reaches the policy through
+    # the effective-fence accessor, whose resolved string form is drive-anchored on Windows
+    # and doesn't match a naive Path("/work/rw").resolve() here. The marker tests the actual
+    # intent — which fence section each project lands in — and is identical on every platform.
+    assert rw_idx < policy.index("project: rw") < ro_idx  # registry default = read-write
+    assert ro_idx < policy.index("project: ro")  # write:false → read_only
+    assert "project: nofence" not in policy  # fs:false grants no filesystem reach
 
 
 # ── #871: allow_private mode (fleet remotes) ────────────────────────────────────
