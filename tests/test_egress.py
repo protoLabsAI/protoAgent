@@ -199,21 +199,26 @@ def test_policy_includes_the_projects_registry(tmp_path):
     through the same effective-fence accessor, including its fs:false opt-out."""
     from graph.config import LangGraphConfig
 
+    # Real absolute paths (tmp_path subdirs), NOT "/work/rw": fenced_projects() refuses a
+    # non-absolute path, and a POSIX "/work/rw" has a root but no DRIVE on Windows, so
+    # WindowsPath("/work/rw").is_absolute() is False — the whole registry would be dropped
+    # and the policy would carry no project at all. .as_posix() keeps the YAML drive-colon
+    # safe under double quotes on both platforms.
+    rw_dir, ro_dir, nf_dir = tmp_path / "rw", tmp_path / "ro", tmp_path / "nofence"
     p = tmp_path / "c.yaml"
     p.write_text(
         "projects:\n"
-        "  - {name: rw, path: /work/rw}\n"  # registry default = read-write (D3)
-        "  - {name: ro, path: /work/ro, write: false}\n"
-        "  - {name: nofence, path: /work/nofence, fs: false}\n"
+        f'  - {{name: rw, path: "{rw_dir.as_posix()}"}}\n'  # registry default = read-write (D3)
+        f'  - {{name: ro, path: "{ro_dir.as_posix()}", write: false}}\n'
+        f'  - {{name: nofence, path: "{nf_dir.as_posix()}", fs: false}}\n'
     )
     policy = _gen().build_policy(LangGraphConfig.from_yaml(p))
 
     rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
     # Order by the platform-independent "project: <name>" marker the generator always emits
-    # (`f"project: {name}"`), not the resolved path: the registry reaches the policy through
-    # the effective-fence accessor, whose resolved string form is drive-anchored on Windows
-    # and doesn't match a naive Path("/work/rw").resolve() here. The marker tests the actual
-    # intent — which fence section each project lands in — and is identical on every platform.
+    # (`f"project: {name}"`) — its resolved path form is drive-anchored on Windows, but the
+    # marker is identical on every platform and tests the actual intent (which fence section
+    # each project lands in).
     assert rw_idx < policy.index("project: rw") < ro_idx  # registry default = read-write
     assert ro_idx < policy.index("project: ro")  # write:false → read_only
     assert "project: nofence" not in policy  # fs:false grants no filesystem reach
