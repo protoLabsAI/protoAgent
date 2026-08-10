@@ -53,7 +53,9 @@ def _script_blocks() -> list[tuple[str, str, str]]:
                 if script_type not in ("", "module", "text/javascript", "application/javascript"):
                     continue
                 if body.strip():
-                    rel = py.relative_to(ROOT)
+                    # as_posix(): block ids must be separator-stable so the
+                    # docs-view sanity probe below matches on Windows too.
+                    rel = py.relative_to(ROOT).as_posix()
                     blocks.append((f"{rel}:{node.lineno}#{i}", attrs, body))
     return blocks
 
