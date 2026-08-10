@@ -1,5 +1,32 @@
 [
   {
+    "version": "v0.131.0",
+    "date": "2026-08-10",
+    "changes": [
+      "OAuth account lifecycle controls now live in Settings ▸ Model (#2460).",
+      "An OAuth disconnect no longer makes the server unbootable (#2458).",
+      "OAuth disconnect now signs the live graph out too (#2459).",
+      "Setup Finish no longer leaves stale model/provider UI until a restart (#2462).",
+      "Subscription-provider dollars are now labeled as estimates, not charges (#2463).",
+      "Catalog and theme reads no longer depend on the Windows locale codepage (#2464).",
+      "A legacy non-UTF-8 catalog override degrades safely instead of 500ing (#2465).",
+      "Escape in a Settings dropdown no longer closes all of Settings (#2466).",
+      "The Keyboard settings hint now speaks the viewer's platform (#2467).",
+      "Telemetry timestamps now render in the operator's local timezone (#2468).",
+      "Windows Settings no longer speak macOS (#2470, #2469).",
+      "The bundled Docs view parses again (#2471).",
+      "/model and the composer picker now list native-OAuth subscription models (#2473).",
+      "The chat-focus shortcuts work from any surface (#2474).",
+      "Rewind works on Responses-API / reasoning models (#2480).",
+      "Deleting a chat now deletes its session-summary memory too (#2482).",
+      "/btw asides are truly saved nowhere now (#2483).",
+      "Incognito turns no longer offer a View prompt that 404s (#2484).",
+      "Regenerate replaces the turn everywhere, not just on screen (#2491).",
+      "The bare /effort (and /model) picker is mouse-usable again (#2492).",
+      "Disconnect no longer remotely revokes a credential borrowed from the Codex CLI (#2461)."
+    ]
+  },
+  {
     "version": "v0.130.0",
     "date": "2026-08-10",
     "changes": [

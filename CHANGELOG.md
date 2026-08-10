@@ -15,6 +15,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.131.0] - 2026-08-10
+
+### Added
+- **OAuth account lifecycle controls now live in Settings ▸ Model (#2460).**
+  Connect status, Disconnect, and the native device-code/paste-code Reconnect
+  flows were wizard-only — after setup there was no supported way to inspect or
+  repair the connection, which turned any signed-out state into a dead end.
+  Settings and the Setup Wizard now share one lifecycle implementation
+  (`useOauthLifecycle`); a Settings reconnect rebuilds the agent graph inline
+  and a disconnect signs the agent out cleanly, both converging every visible
+  model/provider surface without a restart. The section renders only for
+  subscription providers.
+
+### Fixed
+- **An OAuth disconnect no longer makes the server unbootable (#2458).**
+  Disconnecting Codex/Claude and restarting hit a recovery dead end: the
+  disconnect marker made startup graph construction raise `OAuthCredentialError`,
+  the backend exited before binding its port, and the reconnect routes the user
+  now needed were unreachable — recovery meant hand-deleting the marker. Signed-out
+  is now a first-class state: the server boots graphless (same pattern as
+  pre-setup), `/api/runtime/status` carries a `graph_auth_error` block naming the
+  provider and fix, chat answers "Signed out — reconnect" instead of "finish
+  setup", and a completed in-console sign-in rebuilds the graph inline — no
+  restart, no manual file surgery. The cache warmer is not built while signed
+  out, so a disconnected instance sends no provider requests.
+
+- **OAuth disconnect now signs the live graph out too (#2459).**
+  Disconnecting Codex/Claude revoked and deleted the stored credential but left
+  the running graph's in-memory client holding the just-revoked token — the
+  composer stayed usable and the next prompt reached the provider and surfaced a
+  raw `401 token_revoked`. Disconnect is now an application-level auth
+  transition: when the live graph runs on the disconnected provider, the cache
+  warmer is stopped and the graph is unloaded into the same signed-out state a
+  disconnected boot produces, so no further provider request is possible and
+  chat reports "Signed out — reconnect" until the in-console sign-in rebuilds
+  the graph.
+
+- **Setup Finish no longer leaves stale model/provider UI until a restart (#2462).**
+  Finishing the wizard refetched only runtime status, so the composer model chip
+  and Settings ▸ Model could keep showing pre-setup values (while requests
+  correctly used the new provider) until the desktop app restarted. Finish now
+  invalidates the entire query cache — config, settings, model, and runtime
+  state converge immediately.
+
+- **Subscription-provider dollars are now labeled as estimates, not charges (#2463).**
+  ChatGPT/Codex and Claude subscription turns showed a plain `$0.03` under the
+  message — a pricing-table estimate that a normal user reasonably read as an
+  extra bill. Subscription-backed turns now render `~$0.03` with the tooltip row
+  relabeled "Est. cost · API-equivalent — not an additional charge" and an
+  explanatory note; API-key/gateway turns keep the plain cost wording. Tokens
+  and elapsed time are unchanged.
+
+- **Catalog and theme reads no longer depend on the Windows locale codepage (#2464).**
+  `/api/archetypes` served `â€”` where the archetype catalog says `—`: the frozen
+  Windows build decoded the repo's UTF-8 catalogs with the active locale (cp1252).
+  All operator-API catalog/theme reads (`archetype-catalog.json`, `mcp-catalog.json`,
+  `plugin-catalog.json`, `theme.json`) now pass `encoding="utf-8"` explicitly, and a
+  sweep test keeps bare `read_text()` out of `operator_api/`. On multibyte locales
+  (cp932) the old path could even raise an uncaught `UnicodeDecodeError` — that
+  failure class is gone too.
+
+- **A legacy non-UTF-8 catalog override degrades safely instead of 500ing (#2465).**
+  With catalog reads now explicitly UTF-8, a local override file written in a
+  Windows codepage raised an uncaught `UnicodeDecodeError`. All four operator-API
+  catalog/theme readers now treat a decode failure like any other unreadable
+  catalog — log and fall back. Thanks to @RomeoRaven, whose #2465 caught this
+  gap (the UTF-8-read half of that PR landed via #2472).
+
+- **Escape in a Settings dropdown no longer closes all of Settings (#2466).**
+  One Escape press dismissed both the open model picker and the entire Settings
+  dialog — the dialog's document-level Escape listener fired alongside the
+  dropdown's own dismiss. Settings now yields to the topmost layer: the first
+  Escape closes only the dropdown (form state and section intact), the next one
+  closes Settings. Tooltips never hold the dialog open. Consumer-side
+  arbitration until the design-system Dialog owns it.
+
+- **The Keyboard settings hint now speaks the viewer's platform (#2467).**
+  The browser-reserved-shortcut note hard-coded macOS glyphs (`⌘T`, `⌘1–9`,
+  `⌃Tab`) while the Windows bindings below it correctly said `Ctrl+…` — a
+  Windows user had to translate Mac symbols to know what conflicts. The hint is
+  now derived from the same platform-aware `formatCombo` the binding rows use,
+  so the copy can't drift from the displayed controls on any OS.
+
+- **Telemetry timestamps now render in the operator's local timezone (#2468).**
+  Recent-turn and flagged-insight stamps sliced the raw UTC string, so a
+  non-UTC operator read every time hours off with no timezone label. Both
+  surfaces now parse the ISO instant and render local wall-clock time, with the
+  full timestamp + timezone name in the tooltip/accessible text; offsetless
+  legacy rows are treated as UTC, never as local.
+
+- **Windows Settings no longer speak macOS (#2470, #2469).**
+  The Project-directory picker showed a POSIX `~/Documents` example and
+  Autostart promised to "install/remove the boot LaunchAgent" — a macOS-only
+  mechanism — on Windows hosts. Path examples are now platform-native, and the
+  autostart description tells the truth per platform (macOS: LaunchAgent;
+  elsewhere: not yet supported). Also (#2469) the Auto-inject-namespaces help
+  now matches its parser: comma- or newline-separated, quoted `""` for the
+  un-namespaced sentinel — the old "empty line" instruction described behavior
+  the parser drops.
+
+- **The bundled Docs view parses again (#2471).**
+  v0.130.0 shipped the Docs plugin view dead — empty list, dead search — because
+  a `\\'` escape written for cooked-string semantics sat inside the view's RAW
+  Python string and reached the browser verbatim, terminating a JS string
+  literal (`SyntaxError: Unexpected identifier 't'`). The copy no longer needs
+  an escape, and a new sweep test extracts every bundled plugin view's inline
+  `<script>` (via `ast`, so raw/cooked strings yield exactly what the browser
+  receives) and runs it through `node --check` — this class of dead-view
+  regression can't ship silently again.
+
+- **`/model` and the composer picker now list native-OAuth subscription models (#2473).**
+  With ChatGPT/Codex or Claude OAuth configured, Settings ▸ Get models discovered
+  the full model list but `/model` offered exactly one card labeled "gateway
+  model": the settings schema — the source `/model` and the composer read —
+  always probed the gateway. The schema now branches to subscription discovery
+  for native OAuth providers (offloaded off the event loop, both paths), and the
+  picker labels those cards "ChatGPT subscription" / "Claude subscription".
+
+- **The chat-focus shortcuts work from any surface (#2474).**
+  `/` and `Ctrl+1` — both labeled "Focus chat composer" — silently did nothing
+  outside the Chat surface: they bumped a focus signal only the (hidden) chat
+  panel observes. Both bindings now navigate to Chat first, then focus the
+  composer, so the documented fastest path back to chat works from Knowledge,
+  Settings, or anywhere else.
+
+- **Rewind works on Responses-API / reasoning models (#2480).**
+  "Rewind to here" accepted its destructive confirmation and then removed
+  nothing: on models whose messages carry list-of-block content (ChatGPT/Codex
+  Responses API, reasoning models), the checkpoint matcher compared the bubble
+  text against `str(content)` — a Python repr that can never match — so every
+  content-targeted rewind returned not-found. The matcher now normalizes block
+  content to its text (concatenated like the stream; reasoning/non-text blocks
+  ignored), so the clicked message resolves and the discard actually happens.
+
+- **Deleting a chat now deletes its session-summary memory too (#2482).**
+  The delete dialog promises the chat "and its history will be removed", and the
+  flow purged checkpoints, attachments, and prompt snapshots — but the per-session
+  summary survived and kept riding `<prior_sessions>` into future model prompts:
+  a deleted conversation's id, topic, and message count were still being sent to
+  models. Chat deletion and the memory inspector now share one deletion seam
+  that removes every file the summary may live under (encoded + legacy names).
+
+- **`/btw` asides are truly saved nowhere now (#2483).**
+  The aside question and answer — labeled "not saved to the conversation" — were
+  written into the persisted browser chat store and came back after a reload.
+  Aside overlays are now marked ephemeral and stripped at persist time: they stay
+  on screen for the session, and a reload forgets them, which is what the label
+  promises.
+
+- **Incognito turns no longer offer a View prompt that 404s (#2484).**
+  Incognito retains no prompt snapshots by design, but the turn toolbar still
+  offered View prompt — clicking produced a 404 and copy blaming retention
+  trimming, making active privacy look like data loss. The action is hidden on
+  incognito sessions.
+
+- **Regenerate replaces the turn everywhere, not just on screen (#2491).**
+  Regenerate visually swapped the answer while the server appended a second
+  identical user/assistant pair — history, session-summary memory, `/export`,
+  and future model context silently carried duplicates the chat never showed.
+  Regenerate now rewinds the server checkpoint past the old pair (an exclusive
+  `before` cut on the rewind op) before resending, so every copy of the
+  conversation agrees with the screen.
+
+- **The bare `/effort` (and `/model`) picker is mouse-usable again (#2492).**
+  Clicking Send on a bare slash command left the autocomplete menu mounted over
+  the picker form it opened, intercepting every click — Submit couldn't be
+  pressed. The slash popover tracks the textarea's live token via keyboard/focus
+  events, and a mouse click on Send fires none of them; Send now clears the
+  popover along with the draft. Regression-tested end-to-end on the exact
+  reported path.
+
+### Security
+- **Disconnect no longer remotely revokes a credential borrowed from the Codex CLI (#2461).**
+  When protoAgent bootstraps from the CLI's `auth.json`, that token set is a
+  *shared* login — remotely revoking it on disconnect could sign the Codex CLI
+  out too. Token stores now record provenance (`cli_bootstrap` vs
+  `device_login`); disconnect revokes at OpenAI only for logins protoAgent's own
+  in-console sign-in minted, and scopes borrowed (or legacy, provenance-unknown)
+  credentials to local-delete-plus-marker. Refreshes preserve provenance.
+
 ## [0.130.0] - 2026-08-10
 
 ### Added
