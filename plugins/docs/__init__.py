@@ -211,7 +211,9 @@ async function api(p){
   if(!r.ok) throw new Error("HTTP "+r.status+(r.status===401?" — bearer missing or rejected":""));
   return r.json();
 }
-const showErr=(el,e)=>{ el.innerHTML='<div class="empty">Couldn\\'t load docs — '+esc(String((e&&e.message)||e))+'</div>'; };
+// NOTE: _VIEW_HTML is a RAW Python string — \\' here reaches the browser verbatim and
+// terminates the JS string ("Unexpected identifier 't'", #2471). No escapes in copy.
+const showErr=(el,e)=>{ el.innerHTML='<div class="empty">Could not load docs — '+esc(String((e&&e.message)||e))+'</div>'; };
 const LIVE_DOCS="https://agent.protolabs.studio/docs/";  // Cloudflare build folds the docs in here (config.mts)
 const slugify=s=>String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").toLowerCase();
 let currentPath=null;
