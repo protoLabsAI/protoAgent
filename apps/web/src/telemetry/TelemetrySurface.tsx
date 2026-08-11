@@ -26,7 +26,8 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
 import { localStamp, localStampTitle, ms, pct, tokens, usd } from "../lib/format";
-import { telemetryQuery } from "../lib/queries";
+import { fleetTelemetryQuery, telemetryQuery } from "../lib/queries";
+import { FleetTelemetrySection } from "./FleetTelemetrySection";
 import { langfuseTraceUrl } from "./traceUrl";
 
 import type { TelemetryTurn } from "../lib/types";
@@ -48,6 +49,7 @@ async function downloadTelemetryCsv() {
 
 function TelemetryBody() {
   const { data, isFetching, refetch } = useSuspenseQuery(telemetryQuery());
+  const { data: fleet } = useSuspenseQuery(fleetTelemetryQuery());
   const { enabled, summary, turns, insights, traceUrlTemplate } = data;
   const toast = useToast();
 
@@ -71,6 +73,12 @@ function TelemetryBody() {
       />
 
       <div className="stage-body">
+        {/* Fleet rollup across members (ADR 0006 fleet extension). Rendered ABOVE the
+            per-instance view and outside its empty-state gates: a fleet's peers may
+            have turns even when THIS box has none. A single-box install renders
+            nothing here, leaving the per-instance view below unchanged. */}
+        <FleetTelemetrySection fleet={fleet} />
+
         {!enabled ? (
           <Empty>Telemetry store is disabled (set <code>telemetry.enabled: true</code>).</Empty>
         ) : !summary || summary.turns === 0 ? (

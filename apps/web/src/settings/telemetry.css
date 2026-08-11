@@ -99,3 +99,42 @@
   color: var(--pl-color-fg-subtle);
   margin: 2px 0 0;
 }
+
+/* Fleet telemetry section (ADR 0006 fleet extension) — read-only rollup across
+   members + their flagged problems. Reuses the .telemetry-table + .insight-flags
+   chrome; only the member-name cell, the unreachable state, and the flag-member
+   column are new. */
+.fleet-telemetry .fleet-members td {
+  white-space: nowrap;
+}
+.fleet-telemetry .member-name {
+  font-weight: 500;
+  color: var(--pl-color-fg);
+  margin-right: 8px;
+}
+.fleet-telemetry tr.member-unreachable td {
+  color: var(--pl-color-fg-subtle);
+}
+.fleet-telemetry .member-note {
+  font-style: italic;
+  color: var(--pl-color-fg-subtle);
+}
+.fleet-flags {
+  margin-top: 14px;
+}
+.fleet-flags > .panel-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--pl-color-status-warning);
+}
+.fleet-flags .flag-member {
+  min-width: 120px;
+  font-weight: 500;
+  color: var(--pl-color-fg);
+}
+.fleet-flags .flag-turn {
+  min-width: 120px;
+  color: var(--pl-color-fg-subtle);
+}

@@ -42,6 +42,8 @@ import {
   PROMPT_CALL,
   SECRETS_STATUS,
   SUBAGENTS,
+  FLEET_TELEMETRY,
+  FLEET_TELEMETRY_SINGLE,
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
@@ -687,6 +689,16 @@ const server = createServer(async (req, res) => {
           const id = decodeURIComponent(m[1]);
           return sendJson(res, ARCHETYPE_PREVIEWS[id] ?? { id, bundle: null });
         }
+      }
+      if (pathname === "/api/telemetry/fleet") {
+        // Fleet telemetry rollup (ADR 0006 fleet extension). Multi-box only when a
+        // spec opts in via the header; otherwise a single-box read (fleet:false) so
+        // the Fleet section stays hidden and the per-instance telemetry.spec is
+        // untouched.
+        return sendJson(
+          res,
+          req.headers["x-e2e-fleet-telemetry"] === "multi" ? FLEET_TELEMETRY : FLEET_TELEMETRY_SINGLE,
+        );
       }
       const payload = handleApiGet(pathname, fleetFor(req), url.searchParams, mcpFor(req));
       if (payload !== null) return sendJson(res, payload);

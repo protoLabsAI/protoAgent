@@ -1014,6 +1014,129 @@ export const TELEMETRY_INSIGHTS = {
   unproven_levers: [],
 };
 
+// Fleet telemetry (ADR 0006 fleet extension, Slice 2) — the MULTI-BOX shape of
+// GET /api/telemetry/fleet the console's Fleet section renders. Served only when a
+// spec opts in via the `x-e2e-fleet-telemetry: multi` header; the default read
+// (mock-server.mjs) is single-box (`fleet: false`) so the section stays hidden for
+// every other spec and the existing per-instance telemetry.spec is untouched.
+//
+// The `members` map is keyed by ROUTING SLUG (a member's immutable id, ADR 0042),
+// while each entry carries a DISPLAY `label`. The two DELIBERATELY differ for the
+// host (slug "host" / label "main") AND a peer (slug "protoEngineer-ba4c" / label
+// "protoEngineer") — the live shape — so the surface's flag rows are proven to
+// render the label, never the slug. `ava` (slug == label) is the control case: it
+// alone can't distinguish label-rendering from slug-rendering (identical strings).
+const FLEET_TRACE_TEMPLATE = "https://langfuse.example.com/project/p1/traces/{trace_id}";
+const fleetTrace = (id) => FLEET_TRACE_TEMPLATE.replace("{trace_id}", id);
+// One flagged problem: `reasons` lives on the flag, the per-turn `row` (minus
+// reasons) is the evidence — the exact split operator_api/telemetry_routes.py emits.
+const fleetFlag = (slug, reasons, row) => ({
+  member: slug,
+  reasons,
+  evidence: {
+    member: slug,
+    turn: row,
+    trace_id: row.trace_id,
+    trace_url: row.trace_id ? fleetTrace(row.trace_id) : null,
+    timestamp: row.ended_at,
+  },
+});
+
+export const FLEET_TELEMETRY = {
+  enabled: true,
+  summary: TELEMETRY_SUMMARY,
+  insights: TELEMETRY_INSIGHTS,
+  fleet: true,
+  langfuse_trace_url_template: FLEET_TRACE_TEMPLATE,
+  members: {
+    // The host reads locally under the proxy's reserved "host" slug; its DISPLAY
+    // label is "main". The host's advise-only outlier (same turn TELEMETRY_INSIGHTS
+    // flags) — the slug != label case this regression guard exists for.
+    host: {
+      name: "main", label: "main", host: true, remote: false, running: true,
+      reachable: true, telemetry_enabled: true,
+      rollup: { turns: 3, cost_usd: 0.2154, success_rate: 0.6667, cache_hit_ratio: 0.6 },
+      flags: [
+        fleetFlag(
+          "host",
+          ["cost 0.12 ≥ 5× median 0.012", "latency 8100ms ≥ 5× median 700ms"],
+          {
+            task_id: "task-3", session_id: "s1", state: "completed", success: 1,
+            model: "claude-opus-4-8", cost_usd: 0.12, duration_ms: 8100,
+            input_tokens: 6000, output_tokens: 900, total_tokens: 6900,
+            ended_at: "2026-06-01T05:00:08+00:00",
+            trace_id: "0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",
+          },
+        ),
+      ],
+    },
+    // A reachable peer whose slug (immutable id) differs from its label — live
+    // members are keyed like "protoEngineer-ba4c" while displaying "protoEngineer".
+    "protoEngineer-ba4c": {
+      name: "protoEngineer", label: "protoEngineer", host: false, remote: false, running: true,
+      reachable: true, telemetry_enabled: true,
+      rollup: { turns: 12, cost_usd: 0.88, success_rate: 0.9167, cache_hit_ratio: 0.71 },
+      flags: [
+        fleetFlag(
+          "protoEngineer-ba4c",
+          ["latency 15200ms ≥ 5× median 900ms"],
+          {
+            task_id: "pe-turn-9", session_id: "s9", state: "completed", success: 1,
+            model: "claude-sonnet-4-6", cost_usd: 0.31, duration_ms: 15200,
+            input_tokens: 20000, output_tokens: 2400, total_tokens: 22400,
+            ended_at: "2026-06-01T06:12:00+00:00",
+            trace_id: "aa11bb22cc33dd44ee55ff6607182930",
+          },
+        ),
+      ],
+    },
+    // The slug == label control case (both "ava"): fine as a SECOND case, but on its
+    // own it can't tell a label-rendering component from a slug-rendering one.
+    ava: {
+      name: "ava", label: "ava", host: false, remote: false, running: true,
+      reachable: true, telemetry_enabled: true,
+      rollup: { turns: 5, cost_usd: 0.04, success_rate: 1.0, cache_hit_ratio: 0.5 },
+      flags: [
+        fleetFlag(
+          "ava",
+          ["cost 0.09 ≥ 5× median 0.008"],
+          {
+            task_id: "ava-turn-2", session_id: "sa", state: "completed", success: 1,
+            model: "claude-haiku-4-5", cost_usd: 0.09, duration_ms: 2100,
+            input_tokens: 4000, output_tokens: 500, total_tokens: 4500,
+            ended_at: "2026-06-01T04:30:00+00:00",
+            trace_id: "beefcafe0011223344556677889900aa",
+          },
+        ),
+      ],
+    },
+    // An unreachable member — reported informationally, never restarted. No rollup,
+    // no flags; the surface shows a "did not respond" state with NO action controls.
+    roxy: {
+      name: "roxy", label: "roxy", host: false, remote: false, running: false,
+      reachable: false, telemetry_enabled: false, rollup: null, flags: [],
+    },
+  },
+};
+
+// The single-box degradation (no peers): `fleet: false` + just the host member, so
+// the Fleet section renders nothing and the per-instance view is unchanged.
+export const FLEET_TELEMETRY_SINGLE = {
+  enabled: true,
+  summary: TELEMETRY_SUMMARY,
+  insights: TELEMETRY_INSIGHTS,
+  fleet: false,
+  langfuse_trace_url_template: FLEET_TRACE_TEMPLATE,
+  members: {
+    host: {
+      name: "main", label: "main", host: true, remote: false, running: true,
+      reachable: true, telemetry_enabled: true,
+      rollup: { turns: 3, cost_usd: 0.2154, success_rate: 0.6667, cache_hit_ratio: 0.6 },
+      flags: [],
+    },
+  },
+};
+
 // Playbooks fixtures (ADR 0009) — shape mirrors /api/playbooks (skills.db).
 export const PLAYBOOKS = [
   {

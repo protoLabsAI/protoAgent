@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { api } from "./api";
+import type { FleetTelemetry } from "./types";
 
 // Centralized query keys + option factories (ADR 0013). Surfaces read these via
 // `useSuspenseQuery(...)`; mutations invalidate the matching key. Keep keys
@@ -20,6 +21,8 @@ export const queryKeys = {
   subagents: ["subagents"] as const,
   tools: ["tools"] as const,
   telemetry: ["telemetry"] as const,
+  // Hub-side fleet rollup — a subkey of telemetry so a telemetry invalidation refreshes it too.
+  fleetTelemetry: ["telemetry", "fleet"] as const,
   settings: ["settings", "schema"] as const,
   inbox: ["inbox"] as const,
   schedules: ["schedules"] as const,
@@ -172,6 +175,29 @@ export const telemetryQuery = () =>
         traceUrlTemplate: r.langfuse_trace_url_template ?? null,
         insights: i.insights,
       };
+    },
+  });
+
+// The hub-side fleet rollup (ADR 0006 fleet extension) feeding the Telemetry
+// surface's Fleet section. Read defensively: a backend without the fleet route (an
+// older single-box install) degrades to `fleet: false` so the section stays hidden
+// and never fails the per-instance view.
+export const fleetTelemetryQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.fleetTelemetry,
+    queryFn: async () => {
+      try {
+        return await api.telemetryFleet();
+      } catch {
+        return {
+          enabled: false,
+          summary: null,
+          insights: null,
+          fleet: false,
+          langfuse_trace_url_template: null,
+          members: {},
+        } satisfies FleetTelemetry;
+      }
     },
   });
 

@@ -914,6 +914,63 @@ export type TelemetryInsights = {
   unproven_levers: string[];
 };
 
+// Fleet telemetry (ADR 0006 fleet extension, Slice 1) — mirrors GET /api/telemetry/fleet,
+// the hub-side read-only rollup fanned out across fleet members. Rendered in the core
+// Telemetry surface's Fleet section (Slice 2). Read-only: there is no write path here.
+export type FleetRollup = {
+  turns: number;
+  cost_usd: number;
+  success_rate: number;
+  cache_hit_ratio: number;
+};
+
+// One flagged problem's evidence: the member, the full per-turn row that tripped the
+// signal, its trace_id, the resolved Langfuse link, and the turn's timestamp.
+export type FleetFlagEvidence = {
+  member: string;
+  turn: Partial<TelemetryTurn>;
+  trace_id: string | null;
+  trace_url: string | null;
+  timestamp: string | null;
+};
+
+export type FleetFlag = {
+  // The member's routing SLUG (its immutable id) — for display, resolve the label
+  // from the members map instead (see fleetRollup.fleetFlagRows).
+  member: string;
+  reasons: string[];
+  evidence: FleetFlagEvidence;
+};
+
+export type FleetMemberTelemetry = {
+  name: string;
+  // Display label. Distinct from the members-map key (the routing slug): a live
+  // member is keyed by its immutable id (e.g. "protoEngineer-ba4c") while displaying
+  // "protoEngineer"; the host is keyed "host" while displaying "main".
+  label: string;
+  host: boolean;
+  remote: boolean;
+  running: boolean;
+  // The member answered the rollup fan-out. `false` → an informational unreachable
+  // row: reported, never restarted, never a failure of the rollup.
+  reachable: boolean;
+  telemetry_enabled: boolean;
+  rollup: FleetRollup | null;
+  flags: FleetFlag[];
+};
+
+export type FleetTelemetry = {
+  enabled: boolean;
+  summary: TelemetrySummary | null;
+  insights: TelemetryInsights | null;
+  // `false` for a single-box install (no peers) — the surface then shows today's
+  // per-instance view unchanged, with no Fleet section.
+  fleet: boolean;
+  langfuse_trace_url_template: string | null;
+  // Keyed by routing slug; the host is under the reserved "host" key.
+  members: Record<string, FleetMemberTelemetry>;
+};
+
 // Playbooks (skills surface, ADR 0009) — mirrors /api/playbooks (skills.db).
 export type Playbook = {
   id: number;

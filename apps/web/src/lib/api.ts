@@ -51,6 +51,7 @@ import type {
   Playbook,
   Subagent,
   ToolInfo,
+  FleetTelemetry,
   TelemetryInsights,
   TelemetrySummary,
   TelemetryTurn,
@@ -893,6 +894,12 @@ export const api = {
     return request<{ enabled: boolean; insights: TelemetryInsights | null }>(
       "/api/telemetry/insights",
     );
+  },
+
+  // Hub-side fleet telemetry rollup (ADR 0006 fleet extension). Read-only; a
+  // single-box install answers with `fleet: false` and just the host member.
+  telemetryFleet() {
+    return request<FleetTelemetry>("/api/telemetry/fleet");
   },
 
   playbooks() {
