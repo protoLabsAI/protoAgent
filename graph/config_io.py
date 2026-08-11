@@ -1054,6 +1054,12 @@ def sync_host_model_layer(config) -> bool:
     import yaml as _y
 
     hp = host_config_path()
+    if not hp.parent.exists():
+        # Never conjure a directory tree just to mirror a config: a host-config
+        # override pointing into a non-existent location (read-only sidecar
+        # setups, test sentinels) means "no host layer here" — same contract as
+        # the read side, which treats the file as absent.
+        return False
     doc: dict = {}
     if hp.exists():
         try:

@@ -691,3 +691,18 @@ def test_member_reset_inherits_the_mirrored_host_model(tmp_path, monkeypatch):
     cfg = LangGraphConfig.from_yaml(str(member))
     assert cfg.model_name == "gpt-5.6-sol"
     assert cfg.model_provider == "openai-codex"
+
+
+def test_host_model_mirror_never_conjures_directories(tmp_path, monkeypatch):
+    """A host-config path whose parent doesn't exist means "no host layer here"
+    (read-only sidecars, test sentinels) — the mirror must not mkdir its way
+    there. On Windows the old test sentinel WAS creatable, and the resulting
+    write poisoned every later cascade read (the v0.132.0 release-PR failure)."""
+    from graph.config import LangGraphConfig
+    from graph.config_io import sync_host_model_layer
+
+    target = tmp_path / "not-yet" / "host-config.yaml"
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(target))
+    monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: False)
+    assert sync_host_model_layer(LangGraphConfig(model_name="x")) is False
+    assert not target.parent.exists()

@@ -63,6 +63,20 @@ def _isolate_prompt_snapshots(tmp_path, monkeypatch):
     reset_prompt_snapshots()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_host_config(tmp_path, monkeypatch):
+    """Point the ADR-0047 Host layer at a per-test ABSENT tmp file.
+
+    The session-level setdefault in pytest_configure was enough while nothing ever
+    WROTE host-config.yaml — but #2533's host model-layer mirror writes it at the
+    reload commit, and the old '/nonexistent/…' sentinel is only unwritable on
+    POSIX: on Windows it resolves to a creatable path under the drive root, so one
+    test's mirror write polluted every later cascade read (the v0.132.0 release-PR
+    Windows failure). Per-test tmp keeps mirror writes real AND isolated; a test
+    that wants its own layer still wins with monkeypatch.setenv."""
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(tmp_path / "host-config.yaml"))
+
+
 def pytest_configure(config):  # noqa: ARG001
     """Prepend site-packages to sys.path before any test imports occur."""
     site_dirs = site.getsitepackages()
@@ -78,9 +92,8 @@ def pytest_configure(config):  # noqa: ARG001
     # `setdefault` never overrides a real key, and no test asserts key-absence.
     os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
-    # Isolate the ADR-0047 Host layer: default PROTOAGENT_HOST_CONFIG to an absent
-    # path so from_yaml sees no host-config.yaml unless a test opts in (the cascade
-    # then collapses to App defaults + the agent leaf — today's behavior).
-    # Deterministic regardless of any host-config.yaml on the dev/CI machine.
-    # `setdefault` lets cascade tests override via monkeypatch.setenv.
+    # Isolate the ADR-0047 Host layer for IMPORT-TIME reads only — the autouse
+    # `_isolate_host_config` fixture owns per-test isolation (a per-test tmp path,
+    # writable so the #2533 mirror works but never shared between tests). This
+    # setdefault just keeps any pre-fixture read off the dev/CI machine's real file.
     os.environ.setdefault("PROTOAGENT_HOST_CONFIG", "/nonexistent/protoagent-host-config.test.yaml")
