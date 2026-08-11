@@ -41,7 +41,11 @@ def test_build_middleware_appends_extra_before_message_capture():
     mw = _build_middleware(_no_llm_config(), extra_middleware=[FakeMW()])
     names = [type(m).__name__ for m in mw]
     assert names[-1] == "MessageCaptureMiddleware", names
-    assert names[-2] == "FakeMW", names  # plugin middleware sits just before capture
+    # The wire observer (#2527) is deliberately INNERMOST of everything that can
+    # touch the system prompt — provider transforms AND plugin middleware alike —
+    # so plugin middleware sits just before IT now, not directly before capture.
+    assert names[-2] == "WirePromptCaptureMiddleware", names
+    assert names[-3] == "FakeMW", names
 
 
 def test_resolve_plugin_middleware_is_best_effort():
