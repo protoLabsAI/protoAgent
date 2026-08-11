@@ -26,6 +26,19 @@ test("full markdown surface renders (structure + chrome)", async ({ page }, test
   // NB: two code blocks render (the ts block + the mermaid block, which falls back to a code
   // block because mermaid isn't wired — see the audit annotations), so target by text.
   await expect(md.locator("pre code").filter({ hasText: "export const add" })).toBeVisible();
+
+  // ── Multi-line code fence keeps its line structure ───────────────────────────
+  // Regression guard for the [data-streamdown] schema drift that dropped white-space:pre and
+  // collapsed a whole 4-line fenced block onto ONE forever-scrolling line. The newlines live in
+  // the DOM either way, so the collapse is purely a CSS-render fact — assert the block body's
+  // <pre> COMPUTES to a whitespace-preserving mode (a future drift that loses the selector's grip
+  // reverts it to `normal` and trips this), and that streamdown still emits one span per source
+  // line (the 4-line ts fixture → 4 line spans).
+  const tsPre = md.locator("pre").filter({ hasText: "export const add" });
+  await expect(tsPre).toBeVisible();
+  const tsWhiteSpace = await tsPre.evaluate((el) => getComputedStyle(el).whiteSpace);
+  expect(tsWhiteSpace).toMatch(/^pre/);
+  await expect(tsPre.locator("code > span")).toHaveCount(4);
   await expect(md.locator("table")).toBeVisible();
   await expect(md.locator("table td").first()).toContainText("alpha");
   await expect(md.locator('[data-streamdown="horizontal-rule"]')).toBeVisible();

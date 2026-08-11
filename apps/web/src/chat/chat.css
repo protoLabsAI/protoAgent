@@ -56,12 +56,21 @@
 
 /* ── Assistant markdown code blocks ─────────────────────────────────────────────
    Polish for the DS streamdown code block inside chat:
-   1. Overflow — hard-cap the block (and the markdown root) to the message width so a
-      long unwrapped line SCROLLS inside the block (the DS gives the body overflow-x:auto)
-      instead of stretching the whole chat panel past its column.
-   2. Empty header — a fenced block with no language renders an empty ~32px header band
-      (an ugly gap). Hide it and float the copy action over the code's top-right instead
-      of reserving a header row (the block is position:relative, so the action anchors to it).
+   0. Whitespace (the load-bearing one) — streamdown puts `white-space: pre` + `overflow-x:
+      auto` on the code well via Tailwind utilities that are INERT in this build (preflight is
+      off and the streamdown dist scan is gone — see tailwind.config.cjs), and with preflight
+      off there's no `pre { white-space: pre }` reset to catch it either. The DS's
+      [data-streamdown] schema also drifted: the code well is now `code-block-body` (the `<pre>`
+      lives there), not the `code-block`/`code-block-header` our old polish targeted — so nothing
+      re-asserted whitespace and multi-line fences collapsed onto one forever-scrolling line
+      (per-line spans separated by newlines that render as inline breaks). Re-assert
+      `white-space: pre` on the body's pre/code below — this is the core fix.
+   1. Overflow — hard-cap the block (and the markdown root) to the message width, and re-assert
+      overflow-x:auto on the body (also inert Tailwind), so a long unwrapped line SCROLLS inside
+      the block instead of stretching the whole chat panel past its column.
+   2. Empty header — a fenced block with no language renders an empty ~32px header band (an ugly
+      gap). Hide it and float the copy action over the code's top-right instead of reserving a
+      header row (the container is made position:relative here, so the action anchors to it).
    3. Colour — the DS default well is --pl-color-bg-inset (the DARKEST token, shared with
       system-message/report cards and select inputs). Lift code blocks onto the lighter
       --pl-color-bg-raised so they read as a distinct "code well". */
@@ -79,16 +88,40 @@
 .chat-session-slot .pl-convo-wrap,
 .chat-session-slot .pl-convo-scroll,
 .chat-session-slot .pl-message { min-width: 0; }
+/* The outer container (streamdown's flex-col wrapper) — cap it to the column, lift it onto the
+   raised well, and make it the positioning context for the floated copy action (streamdown's own
+   sticky/-mt float rides inert Tailwind, so we anchor the cluster ourselves). */
 .chat-session-slot .pl-markdown [data-streamdown="code-block"] {
+  position: relative;
+  min-width: 0;
   max-width: 100%;
   background: var(--pl-color-bg-raised);
 }
+/* The code well itself — the `<pre>`/`<code>` live here. Re-assert what streamdown expresses in
+   inert Tailwind: overflow-x:auto so a genuinely long unwrapped LINE scrolls INSIDE the block,
+   and white-space:pre so the per-line newlines render as line breaks instead of collapsing the
+   whole block onto one line (the reported bug). min-width:0 keeps the scroll inside the well
+   rather than leaking its min-content up the column. */
+.chat-session-slot .pl-markdown [data-streamdown="code-block-body"] {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.chat-session-slot .pl-markdown [data-streamdown="code-block-body"] pre,
+.chat-session-slot .pl-markdown [data-streamdown="code-block-body"] code {
+  white-space: pre;
+}
+/* A no-language fence still renders an empty ~32px header band — hide it. The copy action lives
+   in its own cluster (sibling to the header, not inside it on the current schema); float that
+   cluster over the code's top-right instead of reserving a row. `:has()` pins the float to the
+   direct child that actually holds the copy button, so it can never grab the header or body. */
 .chat-session-slot .pl-markdown [data-streamdown="code-block-header"][data-language=""] { display: none; }
-.chat-session-slot .pl-markdown [data-streamdown="code-block-header"][data-language=""] + div {
+.chat-session-slot .pl-markdown [data-streamdown="code-block"] > div:has([data-streamdown="code-block-copy-button"]) {
   margin-top: 0;
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
 }
 
 /* The tab-bar wrapper exists only to scope the right-click context menu (ADR 0036) to the

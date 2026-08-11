@@ -519,8 +519,14 @@ const MARKDOWN_SMOKE_ANSWER = [
   "",
   "$$a^2 + b^2 = c^2$$",
   "",
+  // A MULTI-LINE fence — its rendered <pre> must keep each line on its own row (guards the
+  // white-space:pre re-assertion in chat.css; a [data-streamdown] schema drift that drops it
+  // collapses all four lines onto one forever-scrolling line — see markdown-smoke.spec.ts).
   "```ts",
   "export const add = (a: number, b: number): number => a + b;",
+  "export const sub = (a: number, b: number): number => a - b;",
+  "export const mul = (a: number, b: number): number => a * b;",
+  "export const div = (a: number, b: number): number => a / b;",
   "```",
   "",
   "```mermaid",
