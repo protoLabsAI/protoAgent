@@ -132,15 +132,36 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # too). discord/google are NOT here — they're plugin sections, present only
     # when their plugin is enabled (surfaced via plugin_config), and a default
     # LangGraphConfig() carries no plugin_config.
-    # config_to_dict is FIELDS-driven, so the top-level sections it emits are exactly the
-    # schema's top-level keys, plus two legacy sections config_io §B emits that have no
-    # FIELDS entry (subagents.researcher and the plugins.* knobs). Deriving from FIELDS
-    # means a new field doesn't require re-typing the section list here.
-    # lifecycle_hooks (ADR 0074) and projects (ADR 0095) are top-level LISTS emitted by
-    # config_io §B (like the subagents/plugins knobs), not FIELDS-typed fields — a list of
-    # dicts can't ride the string_list FIELDS, so both join the legacy set.
-    _LEGACY_SECTIONS = {"subagents", "plugins", "lifecycle_hooks", "projects"}
-    assert set(d.keys()) == {f.key.split(".", 1)[0] for f in FIELDS} | _LEGACY_SECTIONS
+    # config_to_dict is FIELDS-driven, so the sections it emits are the schema's top-level
+    # keys plus the granted exemptions in SETTINGS_EXEMPT_SECTIONS (#2598). Checked as three
+    # separate assertions rather than one set equality: a set diff reads as "make the sets
+    # match", which invited exactly the wrong fix — appending the new section to the
+    # exemption list, turning a red golden green with the feature unreachable from Settings.
+    from graph.settings_schema import SETTINGS_EXEMPT_SECTIONS, sections_without_settings_fields
+
+    field_sections = {f.key.split(".", 1)[0] for f in FIELDS}
+    emitted = set(d.keys())
+
+    unreachable = sections_without_settings_fields(emitted)
+    assert not unreachable, (
+        f"config section(s) {unreachable} have no FIELDS entries, so they render NOWHERE in "
+        "Settings — the feature ships and no operator can find or enable it without editing "
+        "YAML by hand. Add a Field per knob in graph/settings_schema.py. Only if the shape "
+        "genuinely cannot be a Field (a nested dict or a list of dicts) grant an exemption in "
+        "SETTINGS_EXEMPT_SECTIONS, with a comment saying why."
+    )
+
+    unemitted = sorted(field_sections - emitted)
+    assert not unemitted, (
+        f"FIELDS declares section(s) {unemitted} that config_to_dict never emits — Settings "
+        "would render controls that don't round-trip to YAML."
+    )
+
+    stale = sorted(set(SETTINGS_EXEMPT_SECTIONS) - emitted)
+    assert not stale, (
+        f"SETTINGS_EXEMPT_SECTIONS still exempts {stale}, which the config no longer emits — "
+        "drop them, so the exemption list stays a live statement rather than history."
+    )
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
     # Secrets are redacted out of the UI-facing dict.
@@ -1029,3 +1050,61 @@ def test_instance_resolves_installed_plugin_config(tmp_path, monkeypatch):
     data = {"plugins": {"enabled": ["demo"]}, "demo": {"db_path": "/sandbox/x.db"}}
     out = _resolve_plugin_config(data, {}, config_dir=home / "config")
     assert out.get("demo", {}).get("db_path") == "/sandbox/x.db"
+
+
+# ── #2598: a shipped-but-unreachable config section must fail loudly ─────────
+
+
+def test_a_section_with_no_fields_is_reported_as_unreachable():
+    """The 2026-08-11 scenario, replayed: a new config section lands with no FIELDS
+    entries. It must be named as unreachable, not quietly tolerated.
+
+    (That case was `onboarding`, which now carries real FIELDS — review caught it before it
+    merged. Hence an invented name here: pinning the guard to a section that has since been
+    fixed would leave the test passing for the wrong reason.)"""
+    from graph.settings_schema import sections_without_settings_fields
+
+    emitted = {"model", "auth", "brand_new_feature"}
+
+    assert sections_without_settings_fields(emitted) == ["brand_new_feature"]
+
+
+def test_granted_exemptions_are_not_reported():
+    from graph.settings_schema import SETTINGS_EXEMPT_SECTIONS, sections_without_settings_fields
+
+    assert sections_without_settings_fields(set(SETTINGS_EXEMPT_SECTIONS)) == []
+
+
+def test_the_exemption_list_lives_outside_the_test_so_widening_is_deliberate():
+    """The point of the fix. The exemption used to be a set literal INSIDE the golden, so
+    widening it was an incidental edit in the file you were already making green. It now
+    lives next to FIELDS, where adding a member is a reviewable change to a named allowlist
+    that asks you to justify it."""
+    import inspect
+
+    from graph import settings_schema
+
+    assert isinstance(settings_schema.SETTINGS_EXEMPT_SECTIONS, tuple)
+    src = inspect.getsource(settings_schema)
+    i = src.index("SETTINGS_EXEMPT_SECTIONS: tuple")
+    preamble = src[max(0, i - 1400) : i]
+    # The comment has to carry the BAR, or the allowlist is just a set literal in a new home.
+    assert "render" in preamble and "NOWHERE" in preamble
+    assert "genuinely cannot be a Field" in preamble
+
+
+def test_the_failure_message_names_the_consequence_not_a_set_diff():
+    """A set-equality diff reads as 'make the sets match', which is what invited appending
+    to the exemption. The message must say what the failure MEANS."""
+    from graph.config import LangGraphConfig
+    from graph.config_io import config_to_dict
+    from graph.settings_schema import sections_without_settings_fields
+
+    d = config_to_dict(LangGraphConfig())
+    unreachable = sections_without_settings_fields(set(d) | {"invented_section"})
+    assert unreachable == ["invented_section"]
+    # …and the golden's own message (asserted here so it can't be reworded into a diff).
+    import pathlib
+
+    body = pathlib.Path(__file__).read_text(encoding="utf-8")
+    assert "render NOWHERE in" in body and "Add a Field per knob" in body

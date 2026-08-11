@@ -1248,6 +1248,42 @@ def is_secret_key(key: str) -> bool:
     return key in _SECRET_KEYS
 
 
+# Top-level config sections that deliberately have NO FIELDS entries, and so render
+# NOWHERE in the console Settings surface (#2598).
+#
+# FIELDS drives Settings. A section that exists in LangGraphConfig and round-trips through
+# YAML but has no Field is invisible: the feature ships and no operator can find or enable
+# it without hand-editing YAML. That is almost never what anyone intends — it has happened
+# twice, once caught by an operator noticing an empty panel (ADR 0080) and once by review.
+#
+# The exemption is real for these four: each is a nested dict or a LIST of dicts, which the
+# Field shapes (including string_list) cannot express. But it has to be GRANTED here rather
+# than self-served in a test body, which is how the last one slipped through — the golden
+# went red, a section name was appended to a set literal inside the test, and the suite went
+# green with the feature unreachable.
+#
+# Before adding to this tuple: the bar is "this shape genuinely cannot be a Field", NOT
+# "the golden test went red". Add a Field per knob instead; that is the fix in nearly every
+# case. If you do add one, say here why the shape defeats Field.
+SETTINGS_EXEMPT_SECTIONS: tuple[str, ...] = (
+    "subagents",  # subagents.researcher — nested per-subagent dicts, emitted by config_io §B
+    "plugins",  # plugins.* install/enable knobs, emitted by config_io §B
+    "lifecycle_hooks",  # ADR 0074 — a LIST of hook dicts
+    "projects",  # ADR 0095 — a LIST of managed-project dicts
+)
+
+
+def sections_without_settings_fields(emitted_sections) -> list[str]:
+    """Emitted config sections that would render nowhere in Settings (#2598).
+
+    ``emitted_sections`` is the top-level key set ``config_to_dict`` produces. Returns the
+    ones that have neither a FIELDS entry nor a granted exemption — i.e. shipped, but
+    unreachable from the console.
+    """
+    field_sections = {f.key.split(".", 1)[0] for f in FIELDS}
+    return sorted(set(emitted_sections) - field_sections - set(SETTINGS_EXEMPT_SECTIONS))
+
+
 # Reset-to-inherited treats the model contract as ONE decision (#2528): name,
 # provider, and api_base only validate as a coherent set, so popping one key
 # alone pins the inherited value against a still-overridden sibling and the
