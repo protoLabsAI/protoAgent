@@ -194,3 +194,77 @@ def test_subagent_identity_nests_rows_under_parent():
     assert (row["task_id"], row["parent_task_id"], row["subagent_type"]) == ("", "call-xyz", "researcher")
     assert row["stable_text"] == "SUB PROMPT"
     assert row["stable_sections"] == [{"label": "researcher system prompt", "chars": 10}]
+
+
+# ── wire-vs-composed capture (#2527) ──────────────────────────────────────────
+
+
+def _run_wire_chain(req, response, *inner_mws):
+    """Production order: capture OUTER, provider transforms inner, wire observer
+    INNERMOST — the arrangement whose divergence #2527 makes visible."""
+    from graph.middleware.wire_capture import WirePromptCaptureMiddleware
+
+    capture = PromptCaptureMiddleware()
+
+    def call(r, mws):
+        if not mws:
+            return WirePromptCaptureMiddleware().wrap_model_call(r, lambda _r: response)
+        return mws[0].wrap_model_call(r, lambda r2: call(r2, mws[1:]))
+
+    return capture.wrap_model_call(req, lambda r: call(r, list(inner_mws)))
+
+
+def _row(task_id):
+    rows = prompt_snapshots().calls_for_task(task_id)
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_wire_faithful_delivery_records_null():
+    """Gateway path, no transforms: wire == composed → wire_text NULL."""
+    req = _Req("gpt-x", SystemMessage(content="STABLE"))
+    with request_metadata_scope({"a2a.task_id": "wire-1"}):
+        _run_wire_chain(req, _response())
+    assert _row("wire-1")["wire_text"] is None
+
+
+def test_wire_codex_instructions_move_is_faithful():
+    """The (fixed, #2526) Codex transform moves the prompt verbatim into
+    model_settings.instructions — content-faithful, so wire_text stays NULL."""
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    req = _Req("gpt-5-codex", SystemMessage(content="STABLE"))
+    req.model_settings = {}
+    with request_metadata_scope({"a2a.task_id": "wire-2"}):
+        _run_wire_chain(req, _response(), CodexResponsesInputMiddleware())
+    assert _row("wire-2")["wire_text"] is None
+
+
+def test_wire_claude_prepend_is_recorded():
+    """The Claude identity prepend changes what the wire carries — the divergence
+    is recorded so View prompt can show what was actually delivered."""
+    from graph.middleware.claude_code_identity import ClaudeCodeIdentityMiddleware
+    from graph.providers.anthropic_oauth import CLAUDE_CODE_SYSTEM_PREFIX
+
+    req = _Req("claude-opus-4-7", SystemMessage(content="You are Aria."))
+    with request_metadata_scope({"a2a.task_id": "wire-3"}):
+        _run_wire_chain(req, _response(), ClaudeCodeIdentityMiddleware())
+    wire = _row("wire-3")["wire_text"]
+    assert wire is not None and wire.startswith(CLAUDE_CODE_SYSTEM_PREFIX)
+    assert "You are Aria." in wire
+
+
+def test_wire_stranded_prompt_records_empty_string():
+    """THE #2519 ALARM CLASS: a transform that clears the system message without
+    moving it anywhere observable → wire_text '' (distinct from NULL), so the
+    viewer can scream "nothing reached the wire" instead of showing the composed
+    prompt as if it were delivered. This exact shape shipped for a full release."""
+
+    class _StrandingTransform:
+        def wrap_model_call(self, request, handler):
+            return handler(request.override(system_message=None))
+
+    req = _Req("gpt-5-codex", SystemMessage(content="STABLE"))
+    with request_metadata_scope({"a2a.task_id": "wire-4"}):
+        _run_wire_chain(req, _response(), _StrandingTransform())
+    assert _row("wire-4")["wire_text"] == ""

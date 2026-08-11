@@ -1,9 +1,12 @@
 """PromptCaptureMiddleware — snapshot the EXACT system prompt per model call (#2243).
 
-Sits directly after ``PromptCacheMiddleware`` in ``_build_middleware`` — the one
-seam where the final ``request.system_message`` exists (TraceContext only
-touches ``extra_body``; ToolDeferral only trims ``tools``; nothing downstream
-mutates the prompt). The cache boundary already marks the stable/dynamic split:
+Sits directly after ``PromptCacheMiddleware`` in ``_build_middleware`` — the
+seam where the final COMPOSED ``request.system_message`` exists. Provider-shape
+transforms (ADR 0097: the Claude identity prepend, the Codex instructions move)
+run INSIDE this wrap, so what the wire carries can differ from what composes
+here — ``WirePromptCaptureMiddleware`` (innermost, #2527) stashes the effective
+wire text and ``_capture`` records it beside the composed prompt whenever the
+two diverge. A row's ``wire_text`` is NULL when delivery was faithful. The cache boundary already marks the stable/dynamic split:
 ``blocks[0]`` is the stable ``build_system_prompt`` blob (hash-deduped by the
 store), ``blocks[1]`` the volatile ``state["context"]`` tail. On the
 non-Anthropic path PromptCache appends that tail as plain text instead — this
@@ -122,6 +125,16 @@ class PromptCaptureMiddleware(AgentMiddleware):
                 return
             stable, context_tail = split
 
+            # Wire-vs-composed honesty (#2527): the innermost observer stashed what
+            # the call actually carried (post provider transforms). Record it only
+            # on divergence — NULL = faithful; "" = NOTHING reached the wire (the
+            # #2519 alarm case); text = a transform changed it (e.g. the Claude
+            # identity prepend). None = no observer under this call (subagents).
+            from graph.middleware.wire_capture import pop_wire_system
+
+            wire = pop_wire_system()
+            wire_text = wire if (wire is not None and wire != stable + context_tail) else None
+
             from graph.middleware.request_context import current_request_metadata
             from observability import tracing
 
@@ -145,6 +158,7 @@ class PromptCaptureMiddleware(AgentMiddleware):
                 model=_model_name(request),
                 stable_sections=self._stable_sections,
                 context_sections=context_sections,
+                wire_text=wire_text,
                 **_usage_from(response),
             )
         except Exception:  # noqa: BLE001 — capture must never touch the turn

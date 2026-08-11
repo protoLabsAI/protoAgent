@@ -26,11 +26,15 @@ test("View prompt opens the captured system prompt for the turn", async ({ page 
 
   await assistant.getByRole("button", { name: "View prompt" }).click();
 
-  // The DocumentViewer host opens with the raw captured text — stable prefix
-  // AND the volatile tail, i.e. byte-for-byte what the model received.
+  // The DocumentViewer host opens RENDERED (markdown) by default — stable prefix
+  // AND the volatile tail. The Raw toggle then shows the byte-exact capture.
   const viewer = page.locator(".doc-viewer");
   await expect(viewer).toBeVisible();
   await expect(viewer.getByText("System prompt")).toBeVisible();
+  const rendered = viewer.locator(".prompt-viewer__md");
+  await expect(rendered).toContainText("SOUL: mock stable prefix");
+  await expect(rendered).toContainText("The operator prefers dark mode.");
+  await viewer.getByRole("button", { name: "Raw" }).click();
   const text = viewer.locator(".prompt-viewer__text");
   await expect(text).toContainText("SOUL: mock stable prefix");
   await expect(text).toContainText("The operator prefers dark mode.");

@@ -48,10 +48,14 @@ def _sections(row: dict) -> list[dict]:
 
 
 def _shape(row: dict) -> dict:
-    """One store row → the wire shape the dialog renders: the prompt split as
-    ``system.stable`` / ``system.context`` (their concatenation is byte-for-byte
-    what the model received), the per-section budget rows, and the call's real
-    token usage."""
+    """One store row → the shape the dialog renders: the COMPOSED prompt split as
+    ``system.stable`` / ``system.context``, the per-section budget rows, and the
+    call's real token usage. ``system.wire_differs``/``system.wire`` (#2527)
+    report what the wire ACTUALLY carried when a provider transform changed it —
+    the composed concatenation is only byte-for-byte what the model received
+    when ``wire_differs`` is false (that claim used to be unconditional, and
+    #2519 proved it wrong)."""
+    wire = row.get("wire_text")
     return {
         "call_index": int(row.get("call_index") or 0),
         "ts": row.get("ts") or "",
@@ -59,6 +63,8 @@ def _shape(row: dict) -> dict:
         "system": {
             "stable": row.get("stable_text") or "",
             "context": row.get("context_text") or "",
+            "wire_differs": wire is not None,
+            "wire": wire or "",
         },
         "sections": _sections(row),
         "subagent_type": row.get("subagent_type") or "",
@@ -144,6 +150,16 @@ def register_prompt_routes(app) -> None:
         }
         shaped = _shape(row)
         shaped["preview"] = True
+        # Delivery note (#2527): the preview is a composed reconstruction — say how
+        # the native-OAuth providers actually ship it so the surface doesn't imply
+        # a system-role message that never exists on that wire.
+        provider = (getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
+        if provider == "openai-codex":
+            shaped["delivery"] = "Delivered via the Responses `instructions` field (openai-codex)."
+        elif provider == "anthropic-oauth":
+            shaped["delivery"] = (
+                "Delivered as the system message with the Claude Code identity line prepended (anthropic-oauth)."
+            )
         return {"enabled": True, "call": shaped, "reason": ""}
 
     @app.get("/api/prompts/{task_id}")

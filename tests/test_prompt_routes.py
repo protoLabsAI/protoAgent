@@ -43,7 +43,7 @@ def test_task_detail_shape_and_call_order(monkeypatch):
     assert body["enabled"] is True
     assert [call["call_index"] for call in body["calls"]] == [0, 1]
     first = body["calls"][0]
-    assert first["system"] == {"stable": "STABLE", "context": "tail-0"}
+    assert first["system"] == {"stable": "STABLE", "context": "tail-0", "wire_differs": False, "wire": ""}
     assert first["model"] == "claude-opus-4-7"
     assert first["usage"] == {
         "input_tokens": 10,

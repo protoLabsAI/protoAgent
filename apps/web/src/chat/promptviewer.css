@@ -98,3 +98,38 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+/* Wire-vs-composed honesty (#2527): a warning strip when a provider transform
+   changed what the wire carried — with the alarm variant for the #2519 class
+   (nothing delivered at all). */
+.prompt-viewer__wire {
+  border: 1px solid var(--pl-color-status-warning);
+  border-radius: var(--pl-radius);
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.prompt-viewer__wire-head--alarm {
+  color: var(--pl-color-status-error);
+  font-weight: 600;
+}
+.prompt-viewer__wire-details summary {
+  cursor: pointer;
+  margin-top: 6px;
+  color: var(--pl-color-fg-muted);
+}
+.prompt-viewer__delivery {
+  color: var(--pl-color-fg-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Rendered (markdown) prompt view — same pipeline as chat messages; the raw
+   monospace dump stays behind the Raw toggle for byte-exact reading. */
+.prompt-viewer__md {
+  font-size: 13px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.prompt-viewer__md pre {
+  overflow-x: auto;
+}

@@ -109,6 +109,10 @@ class PromptSnapshotStore:
                 # own; it nests under the delegating tool-call id + its subagent type.
                 ("calls", "parent_task_id"),
                 ("calls", "subagent_type"),
+                # #2527: the wire text when it DIFFERED from the composed prompt.
+                # NULL = faithful delivery (or pre-observer row); '' = the call
+                # carried NO system text (the #2519 failure class, made visible).
+                ("calls", "wire_text"),
             ):
                 try:
                     db.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} TEXT")
@@ -138,6 +142,7 @@ class PromptSnapshotStore:
         context_sections: list | None = None,
         parent_task_id: str = "",
         subagent_type: str = "",
+        wire_text: str | None = None,
     ) -> None:
         """Append one snapshot row and trim to the retention caps in the same
         transaction. Best-effort — never raises (a capture write must not break
@@ -188,8 +193,8 @@ class PromptSnapshotStore:
             db.execute(
                 "INSERT INTO calls (task_id, session_id, trace_id, call_index, ts, stable_hash,"
                 " context_text, model, input_tokens, output_tokens, cache_read_tokens,"
-                " cache_creation_tokens, context_sections, parent_task_id, subagent_type)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " cache_creation_tokens, context_sections, parent_task_id, subagent_type, wire_text)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id or "",
                     session_id or "",
@@ -206,6 +211,7 @@ class PromptSnapshotStore:
                     json.dumps(context_sections) if context_sections else None,
                     parent_task_id or "",
                     subagent_type or "",
+                    wire_text,  # None = faithful; '' = nothing delivered (#2527)
                 ),
             )
             trimmed = 0
@@ -235,7 +241,7 @@ class PromptSnapshotStore:
     # ------------------------------------------------------------------- read
 
     _CALL_SELECT = (
-        "SELECT c.task_id, c.session_id, c.trace_id, c.call_index, c.ts, c.model,"
+        "SELECT c.task_id, c.session_id, c.trace_id, c.call_index, c.ts, c.model, c.wire_text,"
         " c.context_text, c.input_tokens, c.output_tokens, c.cache_read_tokens,"
         " c.cache_creation_tokens, c.context_sections, c.parent_task_id, c.subagent_type,"
         " b.text AS stable_text, b.sections AS stable_sections"

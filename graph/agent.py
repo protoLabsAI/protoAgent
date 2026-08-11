@@ -226,6 +226,15 @@ def _build_middleware(
 
         middleware.append(CodexResponsesInputMiddleware())
 
+    # Innermost observer (#2527): stash what each call ACTUALLY carries — after
+    # every system-touching transform above — so PromptCapture records wire-vs-
+    # composed divergence instead of showing a prompt the wire never carried
+    # (#2519's invisibility). Same gate as PromptCapture: no capture, no observer.
+    if config.prompt_capture_enabled:
+        from graph.middleware.wire_capture import WirePromptCaptureMiddleware
+
+        middleware.append(WirePromptCaptureMiddleware())
+
     middleware.append(MessageCaptureMiddleware())
 
     return middleware

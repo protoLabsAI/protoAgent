@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { openDocument } from "../docviewer";
 import { api, ApiError } from "../lib/api";
 import type { PromptCall } from "../lib/types";
+import { Markdown } from "./LazyMarkdown";
 import { budgetRows, callTabs, diffLine, fmtTok, promptText, sectionDiff, splitLine, usageLine } from "./promptView";
 
 export function openPromptViewer(taskId: string): void {
@@ -30,6 +31,10 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
   const [error, setError] = useState("");
   const [active, setActive] = useState("0");
   const [copied, setCopied] = useState(false);
+  // Rendered (markdown) by default — the raw monospace dump was rough to read;
+  // Raw stays one click away (and Copy always copies the exact bytes) because
+  // this dialog's whole identity is "the exact prompt".
+  const [raw, setRaw] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -138,6 +143,9 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
         <span>{splitLine(call)}</span>
         {usage ? <span>{usage}</span> : null}
         <span className="prompt-viewer__spacer" />
+        <Button size="sm" variant="ghost" onClick={() => setRaw((r) => !r)}>
+          {raw ? "Rendered" : "Raw"}
+        </Button>
         <Button size="sm" variant="ghost" onClick={copy}>
           {copied ? "Copied" : "Copy"}
         </Button>
@@ -163,7 +171,35 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
           ))}
         </div>
       ) : null}
-      <pre className="prompt-viewer__text">{promptText(call)}</pre>
+      {call.system.wire_differs ? (
+        <div className="prompt-viewer__wire" role="alert">
+          {call.system.wire ? (
+            <>
+              <div className="prompt-viewer__wire-head">
+                The wire carried a transformed version of this prompt (provider shape) — the
+                composed text below is what the agent assembled; what was delivered:
+              </div>
+              <details className="prompt-viewer__wire-details">
+                <summary>Show delivered text</summary>
+                <pre className="prompt-viewer__text">{call.system.wire}</pre>
+              </details>
+            </>
+          ) : (
+            <div className="prompt-viewer__wire-head prompt-viewer__wire-head--alarm">
+              ⚠ No system text reached the wire on this call — the composed prompt below was
+              NOT delivered to the model.
+            </div>
+          )}
+        </div>
+      ) : null}
+      {call.delivery ? <div className="prompt-viewer__delivery">{call.delivery}</div> : null}
+      {raw ? (
+        <pre className="prompt-viewer__text">{promptText(call)}</pre>
+      ) : (
+        <div className="prompt-viewer__md">
+          <Markdown>{promptText(call)}</Markdown>
+        </div>
+      )}
     </div>
   );
 }
