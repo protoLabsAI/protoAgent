@@ -118,7 +118,21 @@ def test_hermes_model_imported_into_unconfigured_instance(monkeypatch, tmp_path)
     model = yaml.safe_load(cfg.read_text())["model"]
     assert model["api_base"] == "http://h:1/v1"
     assert model["name"] == "hermes/model"
-    assert model["api_key"] == "hk"
+    # The imported Hermes credential is a real secret: it belongs in the 0600 overlay,
+    # not inline in the tracked config YAML (#2575).
+    assert "api_key" not in model
+    assert yaml.safe_load((tmp_path / "secrets.yaml").read_text())["model"]["api_key"] == "hk"
+
+
+def test_hermes_import_of_a_keyless_endpoint_keeps_the_placeholder(monkeypatch, tmp_path):
+    cfg = _patch_instance(monkeypatch, tmp_path)
+    keyless = {"model": {**_HERMES_MODEL["model"], "api_key": ""}}
+    _patch_hermes_home(monkeypatch, tmp_path, config=keyless)
+    _no_install(monkeypatch)
+    assert run_hermes_cli([]) == 0
+    # No credential to relocate ⇒ the non-empty placeholder the OpenAI client needs.
+    assert yaml.safe_load(cfg.read_text())["model"]["api_key"] == "local"
+    assert not (tmp_path / "secrets.yaml").exists()
 
 
 def test_hermes_import_falls_back_to_custom_providers(monkeypatch, tmp_path):
@@ -156,14 +170,17 @@ def test_secrets_key_counts_as_configured(monkeypatch, tmp_path):
 
 
 def test_fresh_hermes_seeded_from_configured_instance(monkeypatch, tmp_path):
-    _patch_instance(
-        monkeypatch, tmp_path, "model:\n  api_base: http://gw:4000/v1\n  name: gw/model\n  api_key: gk\n"
-    )
+    _patch_instance(monkeypatch, tmp_path, "model:\n  api_base: http://gw:4000/v1\n  name: gw/model\n  api_key: gk\n")
     home = _patch_hermes_home(monkeypatch, tmp_path)
     _no_install(monkeypatch)
     run_hermes_cli([])
     doc = yaml.safe_load((home / "config.yaml").read_text())
-    assert doc["model"] == {"default": "gw/model", "provider": "custom", "base_url": "http://gw:4000/v1", "api_key": "gk"}
+    assert doc["model"] == {
+        "default": "gw/model",
+        "provider": "custom",
+        "base_url": "http://gw:4000/v1",
+        "api_key": "gk",
+    }
     assert doc["custom_providers"][0]["base_url"] == "http://gw:4000/v1"
 
 

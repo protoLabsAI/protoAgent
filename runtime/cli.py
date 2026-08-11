@@ -111,7 +111,7 @@ def _instance_model_configured() -> bool:
 def _import_hermes_model_into_instance(hm: dict) -> None:
     """Hermes → protoAgent: write Hermes's endpoint as this instance's model config
     (same doc keys ``protoagent model use`` writes)."""
-    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.config_io import load_yaml_doc, save_secrets, save_yaml_doc
 
     doc = load_yaml_doc()
     model = doc.get("model")
@@ -121,7 +121,13 @@ def _import_hermes_model_into_instance(hm: dict) -> None:
     model["provider"] = "openai"
     model["api_base"] = hm["base_url"]
     model["name"] = hm["model"]
-    model["api_key"] = hm["api_key"] or _KEY_PLACEHOLDER
+    key = str(hm["api_key"] or "").strip()
+    if key and key != _KEY_PLACEHOLDER:
+        # A real Hermes credential goes to the 0600 overlay, not the tracked YAML (#2575).
+        save_secrets({"model": {"api_key": key}})
+        model.pop("api_key", None)
+    else:
+        model["api_key"] = _KEY_PLACEHOLDER
     save_yaml_doc(doc)
     print(f"model: imported from Hermes — {hm['model']} @ {hm['base_url']}")
 
@@ -351,7 +357,11 @@ def _cmd_list(_args) -> int:
     print("  native        (built-in LangGraph loop)")
     for a in acp_agent_catalog(getattr(cfg, "acp_agents", None)):
         command = a["command"]
-        status = ("installed" if shutil.which(command) else f"command {command!r} not found") if command else "no command configured"
+        status = (
+            ("installed" if shutil.which(command) else f"command {command!r} not found")
+            if command
+            else "no command configured"
+        )
         print(f"  acp:{a['id']:<10}{a['label']}  [{status}]")
     return 0
 
@@ -422,7 +432,9 @@ def _cmd_install_python(args) -> int:
     def _phase(name: str) -> None:
         if name == "deps":
             print(file=sys.stderr)
-            print("  installing the document baseline (python-docx, openpyxl, python-pptx, reportlab)…", file=sys.stderr)
+            print(
+                "  installing the document baseline (python-docx, openpyxl, python-pptx, reportlab)…", file=sys.stderr
+            )
 
     try:
         st = install_managed_python(force=args.force, on_progress=_progress, on_phase=_phase)

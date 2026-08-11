@@ -24,10 +24,46 @@ _LOCAL_ENDPOINTS: list[tuple[str, str]] = [
     ("llama.cpp / vLLM", "http://127.0.0.1:8080/v1"),
 ]
 
-# A non-empty placeholder key. A local endpoint ignores it, but the OpenAI client
-# constructor requires *some* key (empty → "Missing credentials"). Not a secret, so
-# it's fine inline; a real keyed gateway should use secrets.yaml / an env var instead.
+# A non-empty placeholder key. A LOOPBACK endpoint ignores it, but the OpenAI client
+# constructor requires *some* key (empty → "Missing credentials"). Not a secret, so it's
+# fine inline. It is only ever written for a loopback base URL: writing it for a remote
+# gateway invented a credential that endpoint never accepts, and because the value is
+# non-blank, `protoagent setup` then read it as "a key is configured" and declared setup
+# complete — the agent only failed at the first turn, with a 401 (#2579).
 _LOCAL_KEY_PLACEHOLDER = "local"
+
+# Hosts that can only be this machine, where the placeholder is honest.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0", "[::1]"})
+
+
+def _is_loopback_endpoint(base_url: str) -> bool:
+    """True when ``base_url`` points at this machine — the case a placeholder key fits.
+    Anything else (a LAN host, a remote gateway) needs a real credential."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(base_url).hostname or "").strip().lower()
+    except ValueError:  # malformed URL ⇒ don't claim it's local
+        return False
+    return host in _LOOPBACK_HOSTS
+
+
+def _resolvable_key(doc_model: dict) -> str:
+    """Any credential this instance can already resolve for the model: the inline doc
+    value, the secrets.yaml overlay, or OPENAI_API_KEY — the same three sources
+    ``validate_for_headless`` consults. The placeholder does not count as one."""
+    import os
+
+    from graph.config_io import load_secrets
+
+    inline = str(doc_model.get("api_key") or "").strip()
+    if inline and inline != _LOCAL_KEY_PLACEHOLDER:
+        return inline
+    overlay = str((load_secrets().get("model") or {}).get("api_key") or "").strip()
+    if overlay and overlay != _LOCAL_KEY_PLACEHOLDER:
+        return overlay
+    return os.environ.get("OPENAI_API_KEY", "").strip()
+
 
 # HuggingFace passes this literal in the snippet when no specific GGUF file is chosen;
 # the local server picks its own default quant, so we just strip it.
@@ -61,7 +97,7 @@ def _normalize_model_id(model: str) -> str:
 
 
 def _cmd_use(args) -> int:
-    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.config_io import load_yaml_doc, save_secrets, save_yaml_doc
 
     model_id = _normalize_model_id(args.model)
     base_url = (args.base_url or "").strip()
@@ -74,18 +110,41 @@ def _cmd_use(args) -> int:
     if not isinstance(model, dict):
         model = {}
         doc["model"] = model
+
+    is_local = _is_loopback_endpoint(base_url)
+    have_key = _resolvable_key(model)
+    warning = ""
+
+    if args.key:
+        # A real credential — it belongs in the 0600 overlay, never in the tracked YAML.
+        save_secrets({"model": {"api_key": args.key}})
+        model.pop("api_key", None)
+    elif is_local:
+        # Keyless local server: a non-empty placeholder is what the client needs.
+        if not str(model.get("api_key") or "").strip() and not have_key:
+            model["api_key"] = _LOCAL_KEY_PLACEHOLDER
+    elif not have_key:
+        # Remote endpoint, no credential anywhere. Do NOT invent one — a placeholder here
+        # reads as "configured" to `protoagent setup` and turns a missing key into a 401
+        # at the first turn instead of an error at the point of the mistake.
+        model.pop("api_key", None)
+        warning = (
+            f"model use: no API key configured for {base_url} — it is not a local endpoint, so it will\n"
+            "  almost certainly reject every request with a 401. Set one with:\n"
+            "    protoagent model use --base-url … --model … --key sk-…\n"
+            "  (or `protoagent config set model.api_key=sk-…`, or export OPENAI_API_KEY)"
+        )
+
     model["provider"] = args.provider
     model["api_base"] = base_url
     model["name"] = model_id
-    # Local endpoints ignore the key, but the OpenAI client needs a non-empty one. Only
-    # set a placeholder if there isn't a real key already (don't clobber a gateway key).
-    if args.key:
-        model["api_key"] = args.key
-    elif not str(model.get("api_key") or "").strip():
-        model["api_key"] = _LOCAL_KEY_PLACEHOLDER
     save_yaml_doc(doc)
 
     print(f"model: now {model_id} @ {base_url} (provider={args.provider})")
+    if args.key:
+        print("key:   stored in config/secrets.yaml (owner-only)")
+    if warning:
+        print(warning, file=sys.stderr)
     print("Start it with:  protoagent up")
     return 0
 
@@ -135,7 +194,12 @@ def run_model_cli(argv: list[str]) -> int:
     p_use.add_argument("--base-url", required=True, help="OpenAI-compatible base URL, e.g. http://127.0.0.1:8080/v1")
     p_use.add_argument("--model", required=True, help="the model id the endpoint serves")
     p_use.add_argument("--provider", default="openai", help="config provider label (default: openai)")
-    p_use.add_argument("--key", default="", help="API key value (local endpoints don't need one; prefer secrets.yaml for a real key)")
+    p_use.add_argument(
+        "--key",
+        default="",
+        help="API key for the endpoint — stored in config/secrets.yaml, never the tracked config "
+        "YAML. Optional only for a keyless server on this machine.",
+    )
     p_use.set_defaults(fn=_cmd_use)
 
     sub.add_parser("discover", help="Probe local endpoints (Ollama / LM Studio / llama.cpp / vLLM)").set_defaults(
