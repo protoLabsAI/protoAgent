@@ -759,6 +759,40 @@ def test_projects_get_matches_a_tilde_row_against_its_expanded_fence_entry(monke
     assert body["projects"][0]["fenced"] is True
 
 
+def test_available_models_route_reports_every_lane(monkeypatch):
+    """The picker's endpoint: one call, every lane, each option carrying the qualified
+    name that selects it — so the console never composes that string itself."""
+    import types as _t
+
+    import runtime.state as rs
+    from graph.providers import discovery
+
+    monkeypatch.setattr(
+        rs.STATE, "graph_config", _t.SimpleNamespace(api_base="https://gw/v1", api_key="k"), raising=False
+    )
+    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key: (["protolabs/coder"], ""))
+    monkeypatch.setattr(
+        discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, p == "anthropic-oauth", "s", "", "hint")
+    )
+    monkeypatch.setattr(discovery, "list_provider_models", lambda provider, cfg: (["claude-sonnet-5"], ""))
+
+    body = _client().get("/api/config/models/available").json()
+
+    assert body["options"] == ["gateway:protolabs/coder", "anthropic-oauth:claude-sonnet-5"]
+    lanes = {lane["provider"]: lane for lane in body["lanes"]}
+    assert lanes["openai-codex"]["configured"] is False  # reported, not omitted
+    assert lanes["openai-codex"]["error"]
+
+
+def test_available_models_route_is_safe_before_setup(monkeypatch):
+    """No config yet (fresh install, wizard not finished) → an empty answer, not a 500."""
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+
+    assert _client().get("/api/config/models/available").json() == {"lanes": [], "options": []}
+
+
 def test_settings_schema_lists_native_oauth_models(monkeypatch, tmp_path):
     """#2473: with a native OAuth provider configured, the schema's model.name
     options must come from subscription discovery (list_provider_models), not the
@@ -788,8 +822,9 @@ def test_settings_schema_lists_native_oauth_models(monkeypatch, tmp_path):
     monkeypatch.setattr("graph.config._load_host_layer", lambda: {})
     captured = {}
 
-    def _capture_schema(cfg, model_options=None, agent_doc=None, host_doc=None):
+    def _capture_schema(cfg, model_options=None, slot_model_options=None, agent_doc=None, host_doc=None):
         captured["model_options"] = model_options
+        captured["slot_model_options"] = slot_model_options
         return []
 
     monkeypatch.setattr("graph.settings_schema.build_schema", _capture_schema)

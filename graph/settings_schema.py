@@ -199,7 +199,7 @@ FIELDS: list[Field] = [
         "these, in this order, instead of the gateway's full list. Add, remove, and reorder "
         "here; empty = /model shows every gateway model. Prefix a provider to pin a model from "
         "another lane — e.g. anthropic-oauth:claude-sonnet-5.",
-        options_source="models",
+        options_source="slot_models",
     ),
     # ── Routing ──────────────────────────────────────────────────────────────
     Field(
@@ -211,7 +211,7 @@ FIELDS: list[Field] = [
         "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the "
         "main model. Prefix another provider to send these calls there instead — "
         "e.g. gateway:protolabs/fast, openai-codex:gpt-5.6-sol.",
-        options_source="models",
+        options_source="slot_models",
         scope="host",
     ),
     Field(
@@ -222,7 +222,7 @@ FIELDS: list[Field] = [
         "Routing",
         "Retried in order when the primary model errors. Prefix a provider to degrade "
         "ACROSS lanes — e.g. gateway:protolabs/coder as the fallback for a subscription model.",
-        options_source="models",
+        options_source="slot_models",
         scope="host",
     ),
     # ── Context compaction ───────────────────────────────────────────────────
@@ -257,7 +257,7 @@ FIELDS: list[Field] = [
         "string",
         "Compaction",
         "Blank = routing.aux_model, then the main model.",
-        options_source="models",
+        options_source="slot_models",
     ),
     # ── Goal mode ────────────────────────────────────────────────────────────
     # Goal mode is always on (config default True). The on/off toggle is hidden from
@@ -272,7 +272,7 @@ FIELDS: list[Field] = [
         "string",
         "Goal mode",
         "Blank = routing.aux_model, then the main model.",
-        options_source="models",
+        options_source="slot_models",
     ),
     # ── Watches ──────────────────────────────────────────────────────────────
     # ADR 0067. Separate from Goal mode above: a goal is a bounded loop the agent DRIVES,
@@ -1365,6 +1365,10 @@ def build_schema(
     config,
     *,
     model_options: list[str] | None = None,
+    # Cross-provider, `<provider>:<model>`-qualified options for the SLOT fields.
+    # `model.name` keeps the bare list: the main model belongs to `model.provider`,
+    # and a qualified value there is a misconfiguration, not a choice.
+    slot_model_options: list[str] | None = None,
     agent_doc: dict | None = None,
     host_doc: dict | None = None,
 ) -> list[dict[str, Any]]:
@@ -1402,7 +1406,9 @@ def build_schema(
             "description": f.description,
             "restart": f.restart,
             "options": (
-                (model_options or [])
+                (slot_model_options or model_options or [])
+                if f.options_source == "slot_models"
+                else (model_options or [])
                 if f.options_source == "models"
                 else (model_options or []) + acp_opts
                 if f.options_source == "models+acp"

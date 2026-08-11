@@ -292,3 +292,90 @@ def validate_oauth_connection(provider: str, model: str, config: "LangGraphConfi
         return False, str(exc)
     except Exception as exc:  # noqa: BLE001 — surface the provider's own error text
         return False, str(exc)
+
+
+# ── every lane at once (cross-provider model selection) ──────────────────────
+# One list spanning the gateway and each signed-in subscription, with each entry
+# carrying the qualified slot name that selects it (`graph.llm.split_slot_target`).
+# Without this the console could only ever offer ONE provider's models — the
+# configured one — so an operator holding a gateway key plus both subscriptions saw
+# no way to put Claude on review and Codex on code, even though the runtime routes
+# it fine.
+_PROVIDER_LABELS = {
+    "gateway": "Gateway",
+    "anthropic-oauth": "Claude subscription",
+    "openai-codex": "ChatGPT subscription",
+}
+
+
+def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
+    """Per-lane model lists: ``[{provider, label, configured, models, error}]``.
+
+    Order is gateway first, then subscriptions alphabetically — stable, so the picker
+    doesn't reshuffle between polls. A lane the operator can't use is still returned,
+    with ``configured: False``, so the UI can say "sign in to use Claude" rather than
+    silently omitting it (the difference between "not available" and "not offered").
+
+    Every probe is network I/O and every one is contained: a lane that fails reports its
+    own ``error`` and the others still list. One expired credential must not blank the
+    whole picker.
+    """
+    from graph.config_io import list_gateway_models
+
+    lanes: list[dict] = []
+
+    api_base = (getattr(config, "api_base", "") or "").strip()
+    api_key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    gw: dict = {
+        "provider": "gateway",
+        "label": _PROVIDER_LABELS["gateway"],
+        "configured": bool(api_base and api_key),
+        "models": [],
+        "error": "",
+    }
+    if gw["configured"]:
+        try:
+            gw["models"], gw["error"] = list_gateway_models(api_base, api_key)
+        except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
+            gw["error"] = str(exc)
+    else:
+        gw["error"] = "No gateway key configured."
+    lanes.append(gw)
+
+    for provider in sorted(NATIVE_OAUTH_PROVIDERS):
+        status = oauth_status(provider)
+        lane: dict = {
+            "provider": provider,
+            "label": _PROVIDER_LABELS.get(provider, provider),
+            "configured": bool(status.signed_in),
+            "models": [],
+            "error": "" if status.signed_in else (status.hint or "Not signed in."),
+        }
+        if status.signed_in:
+            try:
+                lane["models"], lane["error"] = list_provider_models(provider, config)
+            except Exception as exc:  # noqa: BLE001
+                lane["error"] = str(exc)
+        lanes.append(lane)
+    return lanes
+
+
+def qualified_model_options(config: "LangGraphConfig") -> list[str]:
+    """Flat, deduped ``<provider>:<model>`` options for every usable lane — what a
+    per-slot dropdown offers.
+
+    Qualified even when only one lane is configured: an unqualified name silently means
+    "whatever model.provider is", so a saved slot value would change meaning the day the
+    operator switches providers. Naming the lane makes the choice durable.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for lane in available_model_lanes(config):
+        if not lane["configured"]:
+            continue
+        for model in lane["models"]:
+            qualified = f"{lane['provider']}:{model}"
+            if qualified not in seen:
+                seen.add(qualified)
+                out.append(qualified)
+    return out

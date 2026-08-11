@@ -231,6 +231,28 @@ def register_config_routes(app) -> None:
         models, error = await asyncio.to_thread(list_gateway_models, base, key)
         return {"models": models, "error": error}
 
+    @app.get("/api/config/models/available")
+    async def _api_available_models():
+        """Every model the operator can actually reach, per lane — the gateway plus each
+        signed-in subscription (ADR 0097).
+
+        `POST /api/config/models` answers "what does THIS provider offer", which is the
+        wizard's question. The picker's question is different: "what can I choose from at
+        all", across lanes, so a slot can run Claude while the main brain runs on the
+        gateway. Each entry carries the qualified `<provider>:<model>` name that selects
+        it, so the console never has to compose that string itself.
+
+        Unusable lanes are returned with `configured: false` and a reason rather than
+        omitted — "sign in to use Claude" is a better answer than silence. Read-only, and
+        one lane's outage never blanks the rest."""
+        from graph.providers.discovery import available_model_lanes
+
+        if STATE.graph_config is None:
+            return {"lanes": [], "options": []}
+        lanes = await asyncio.to_thread(available_model_lanes, STATE.graph_config)
+        options = [f"{lane['provider']}:{m}" for lane in lanes if lane["configured"] for m in lane["models"]]
+        return {"lanes": lanes, "options": options}
+
     @app.get("/api/config/oauth-status")
     async def _api_oauth_status():
         """Sign-in status for the native OAuth providers (ADR 0097) — the wizard +
@@ -701,6 +723,19 @@ def register_config_routes(app) -> None:
                 models, _ = await asyncio.to_thread(
                     list_gateway_models, STATE.graph_config.api_base, STATE.graph_config.api_key
                 )
+        # The SLOT fields (aux/fallbacks/favorites/compaction/goal-eval) offer every lane
+        # the operator can reach, qualified — `model.name` keeps the bare single-provider
+        # list above, since the main model belongs to `model.provider`. Best-effort: a
+        # lane probe that fails leaves the slot dropdowns on the single-provider list
+        # rather than emptying them.
+        slot_models: list[str] = []
+        if STATE.graph_config is not None:
+            try:
+                from graph.providers.discovery import qualified_model_options
+
+                slot_models = await asyncio.to_thread(qualified_model_options, STATE.graph_config)
+            except Exception:  # noqa: BLE001 — the settings surface must still render
+                log.debug("[settings] cross-provider model options unavailable", exc_info=True)
         # Per-layer provenance (ADR 0047): the raw agent leaf doc + the filtered Host
         # layer let build_schema report each field's `source` (agent/host/default) so
         # the UI can badge inherited-vs-overridden.
@@ -711,6 +746,7 @@ def register_config_routes(app) -> None:
             "groups": build_schema(
                 STATE.graph_config,
                 model_options=models,
+                slot_model_options=slot_models,
                 agent_doc=agent_doc if isinstance(agent_doc, dict) else {},
                 host_doc=host_doc,
             )
