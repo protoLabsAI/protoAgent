@@ -330,6 +330,7 @@ class _FakeCodexReq:
     def __init__(self, sysmsg, model):
         self.system_message = sysmsg
         self.model = model
+        self.model_settings = {}
 
     def override(self, **kw):
         for k, v in kw.items():
@@ -339,25 +340,49 @@ class _FakeCodexReq:
 
 def test_codex_moves_system_to_instructions():
     """The Codex backend forbids system-role items; the middleware moves the system
-    prompt to a bound `instructions` kwarg and clears the system message."""
+    prompt into `model_settings["instructions"]` and clears the system message. It
+    must NOT ride a model binding: the agent factory re-binds tools from the raw
+    model, which silently dropped bound kwargs — the #2519 no-persona bug."""
     from langchain_core.messages import SystemMessage
 
     from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
 
-    class _Model:
-        def __init__(self):
-            self.bound = None
-
-        def bind(self, **kw):
-            self.bound = kw
-            return self
-
-    model = _Model()
+    model = object()  # the model must pass through untouched — no bind()
     # block-structured system (post-PromptCache) flattens to text
     sysmsg = SystemMessage(content=[{"type": "text", "text": "You are Aria."}, {"type": "text", "text": "Be terse."}])
     req = CodexResponsesInputMiddleware()._transform(_FakeCodexReq(sysmsg, model))
     assert req.system_message is None
-    assert model.bound == {"instructions": "You are Aria.\n\nBe terse."}
+    assert req.model is model
+    assert req.model_settings["instructions"] == "You are Aria.\n\nBe terse."
+
+
+def test_codex_instructions_survive_factory_tool_rebind():
+    """Regression for #2519: the factory executes
+    `request.model.bind_tools(tools, tool_choice=..., **request.model_settings)`.
+    With instructions delivered as a model BINDING, that re-bind resolved
+    bind_tools on the raw model (RunnableBinding.__getattr__) and produced a fresh
+    binding WITHOUT the kwarg — every tool-bearing Codex turn shipped with no
+    system prompt of any kind, while View prompt (captured upstream) looked right.
+    This test drives the REAL ChatOpenAI + the factory's exact bind call down to
+    the Responses payload, so the drop can never come back green."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    model = ChatOpenAI(model="gpt-5-codex", api_key="x", use_responses_api=True, output_version="v0")
+    req = CodexResponsesInputMiddleware()._transform(
+        _FakeCodexReq(SystemMessage(content="You are Aria."), model)
+    )
+    tools = [{"type": "function", "function": {"name": "t", "description": "d", "parameters": {"type": "object", "properties": {}}}}]
+    # The factory's standard-binding branch, verbatim shape.
+    bound = req.model.bind_tools(tools, tool_choice=None, **req.model_settings)
+    payload = model._get_request_payload([HumanMessage("hi")], **bound.kwargs)
+    assert payload.get("instructions") == "You are Aria."
+    # And the input carries no system-role item (the Codex backend rejects those).
+    assert all(
+        item.get("role") != "system" for item in payload.get("input", []) if isinstance(item, dict)
+    )
 
 
 def test_codex_middleware_noop_without_system():
