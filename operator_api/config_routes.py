@@ -704,15 +704,27 @@ def register_config_routes(app) -> None:
         agent leaf YAML + reload, so each falls back to the Host/App layer. Only
         known settings keys are accepted (existence-gated against the registry —
         a reset carries no value, so the per-type validate_flat checks don't apply)."""
-        from graph.settings_schema import is_hidden_setting, is_known_key
+        from graph.settings_schema import expand_reset_keys, is_hidden_setting, is_known_key
 
+        # Coupled-key expansion BEFORE validation (#2528): resetting model.name alone
+        # left the inherited value validated against a still-overridden provider, so
+        # the rebuild refused it and every reset rolled back. The group resets as one —
+        # and the hidden/known checks below then cover the expanded set too.
+        keys = expand_reset_keys(list(req.keys))
+        pulled = [k for k in keys if k not in req.keys]
         hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
-        for k in req.keys:
+        for k in keys:
             if not is_known_key(k):
                 return {"ok": False, "messages": [f"validation: unknown setting: {k}"]}
             # settings.hidden (#2172): a reset writes too (pops the leaf → the value
             # falls back to Host/App), so a hidden key is just as locked here.
             if is_hidden_setting(k, hidden):
                 return {"ok": False, "messages": [f"validation: {k} is locked by settings.hidden"]}
-        ok, messages = await asyncio.to_thread(_reset_settings_keys, req.keys)
+        ok, messages = await asyncio.to_thread(_reset_settings_keys, keys)
+        if ok and pulled:
+            messages = [
+                f"model keys reset as one group (also reset: {', '.join(pulled)}) — "
+                "name, provider and API base only validate together",
+                *messages,
+            ]
         return {"ok": ok, "messages": messages}

@@ -154,7 +154,12 @@ def test_reset_settings_pops_known_keys(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: k == "model.name", is_hidden_setting=lambda k, hidden=None: False),
+        _fake_module(
+            "graph.settings_schema",
+            is_known_key=lambda k: k == "model.name",
+            is_hidden_setting=lambda k, hidden=None: False,
+            expand_reset_keys=lambda keys: list(keys),  # no coupling in this fake
+        ),
     )
     captured = {}
 
@@ -168,12 +173,45 @@ def test_reset_settings_pops_known_keys(monkeypatch):
     assert captured["keys"] == ["model.name"]
 
 
+def test_reset_settings_expands_the_model_group(monkeypatch):
+    """Resetting any coupled model key resets the whole group (#2528): name alone
+    validated the inherited value against a still-overridden provider, so the
+    rebuild refused it and the reset rolled back forever. The expansion happens
+    BEFORE validation so hidden/known checks cover the pulled keys too, and the
+    response says which siblings came along."""
+    import operator_api.config_routes as cr
+    from graph.settings_schema import MODEL_RESET_GROUP, expand_reset_keys, is_hidden_setting, is_known_key
+
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module(
+            "graph.settings_schema",
+            is_known_key=is_known_key,
+            is_hidden_setting=is_hidden_setting,
+            expand_reset_keys=expand_reset_keys,
+        ),
+    )
+    captured = {}
+
+    def _reset(keys):
+        captured["keys"] = keys
+        return True, ["reset 3 key(s) to inherited", "reloaded"]
+
+    monkeypatch.setattr(cr, "_reset_settings_keys", _reset)
+    resp = _client().post("/api/settings/reset", json={"keys": ["model.name"]}).json()
+    assert resp["ok"] is True
+    assert captured["keys"] == list(MODEL_RESET_GROUP)
+    assert any("reset as one group" in m for m in resp["messages"])
+    assert any("model.provider" in m and "model.api_base" in m for m in resp["messages"])
+
+
 def test_reset_settings_rejects_unknown_key(monkeypatch):
     """An unknown key is rejected before any disk touch."""
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: False, is_hidden_setting=lambda k, hidden=None: False),
+        _fake_module("graph.settings_schema", is_known_key=lambda k: False, is_hidden_setting=lambda k, hidden=None: False, expand_reset_keys=lambda keys: list(keys)),
     )
     resp = _client().post("/api/settings/reset", json={"keys": ["bogus.key"]}).json()
     assert resp["ok"] is False
@@ -186,7 +224,7 @@ def test_reset_settings_rejects_hidden_key(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "graph.settings_schema",
-        _fake_module("graph.settings_schema", is_known_key=lambda k: True, is_hidden_setting=lambda k, hidden=None: True),
+        _fake_module("graph.settings_schema", is_known_key=lambda k: True, is_hidden_setting=lambda k, hidden=None: True, expand_reset_keys=lambda keys: list(keys)),
     )
     resp = _client().post("/api/settings/reset", json={"keys": ["goal.eval_model"]}).json()
     assert resp["ok"] is False

@@ -2089,6 +2089,16 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             fleet_label_note = f" • {note}"
     except Exception:  # noqa: BLE001 — a fleet label must never fail a reload
         log.exception("[fleet] workspace display-name sync failed")
+    # HOST-side mirror (#2528), same choke-point rationale as the fleet-label sync
+    # above: the host's model group IS what members inherit, so keep the Host layer
+    # (host-config.yaml) in step on every successful (re)build — boot included. A
+    # member's reload no-ops here (it must never write box state).
+    try:
+        from graph.config_io import sync_host_model_layer
+
+        sync_host_model_layer(new_config)
+    except Exception:  # noqa: BLE001 — the mirror must never fail a reload
+        log.exception("[config] host model-layer sync failed")
     STATE.knowledge_store = new_store
     STATE.skills_index = new_skills
     # Swap in the new MCP clients, then release the old ones — persistent session

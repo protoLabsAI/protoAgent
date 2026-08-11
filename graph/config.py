@@ -292,8 +292,9 @@ def _load_host_layer() -> dict:
     if not hp.exists():
         return {}
     try:
-        with open(hp) as f:
-            raw = yaml.safe_load(f) or {}
+        from infra.paths import read_text_utf8
+
+        raw = yaml.safe_load(read_text_utf8(hp)) or {}
     except (OSError, yaml.YAMLError) as exc:
         log.warning("host-config.yaml at %s is unreadable (%s); ignoring the Host layer", hp, exc)
         return {}

@@ -591,3 +591,103 @@ def test_allow_run_explicit_false_wins_on_interactive_tier(monkeypatch):
     _ui_env_clear(monkeypatch)
     cfg = LangGraphConfig.from_dict({"filesystem": {"allow_run": False}})
     assert cfg.filesystem_allow_run is False
+
+
+# ── reset grouping + the host model-layer mirror (#2528) ──────────────────────
+
+
+def test_expand_reset_keys_pulls_the_model_group():
+    from graph.settings_schema import MODEL_RESET_GROUP, expand_reset_keys
+
+    assert expand_reset_keys(["model.name"]) == list(MODEL_RESET_GROUP)
+    # order-stable: requested keys first, then the pulled siblings; no dupes
+    assert expand_reset_keys(["model.provider", "goal.enabled"]) == [
+        "model.provider",
+        "goal.enabled",
+        "model.name",
+        "model.api_base",
+    ]
+    assert expand_reset_keys(["goal.enabled"]) == ["goal.enabled"]  # unrelated → untouched
+    assert expand_reset_keys(list(MODEL_RESET_GROUP)) == list(MODEL_RESET_GROUP)
+
+
+def _mirror_env(tmp_path, monkeypatch):
+    hp = tmp_path / "host-config.yaml"
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(hp))
+    monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: False)
+    return hp
+
+
+def test_host_model_mirror_writes_and_noops(tmp_path, monkeypatch):
+    """The host mirrors its model group into the Host layer at the reload commit —
+    without it a member's reset-to-inherited fell through to App defaults nothing
+    on the box backs, and the rebuild rolled every reset back (#2528)."""
+    import yaml
+
+    from graph.config import LangGraphConfig
+    from graph.config_io import sync_host_model_layer
+
+    hp = _mirror_env(tmp_path, monkeypatch)
+    cfg = LangGraphConfig(model_name="gpt-5.6-sol", model_provider="openai-codex", api_base="")
+    assert sync_host_model_layer(cfg) is True
+    doc = yaml.safe_load(hp.read_text(encoding="utf-8"))
+    assert doc["model"] == {"name": "gpt-5.6-sol", "provider": "openai-codex", "api_base": ""}
+    assert sync_host_model_layer(cfg) is False  # already in step → no write
+
+
+def test_host_model_mirror_preserves_other_host_keys(tmp_path, monkeypatch):
+    import yaml
+
+    from graph.config import LangGraphConfig
+    from graph.config_io import sync_host_model_layer
+
+    hp = _mirror_env(tmp_path, monkeypatch)
+    hp.write_text("telemetry:\n  enabled: true\nmodel:\n  name: old\n", encoding="utf-8")
+    assert sync_host_model_layer(LangGraphConfig(model_name="new-model")) is True
+    doc = yaml.safe_load(hp.read_text(encoding="utf-8"))
+    assert doc["telemetry"] == {"enabled": True}  # operator content survives
+    assert doc["model"]["name"] == "new-model"
+
+
+def test_host_model_mirror_member_never_writes(tmp_path, monkeypatch):
+    """A member's reload must never clobber the hub's box-level layer."""
+    from graph.config import LangGraphConfig
+    from graph.config_io import sync_host_model_layer
+
+    hp = _mirror_env(tmp_path, monkeypatch)
+    monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: True)
+    assert sync_host_model_layer(LangGraphConfig(model_name="x")) is False
+    assert not hp.exists()
+
+
+def test_host_model_mirror_leaves_corrupt_file_alone(tmp_path, monkeypatch):
+    from graph.config import LangGraphConfig
+    from graph.config_io import sync_host_model_layer
+
+    hp = _mirror_env(tmp_path, monkeypatch)
+    hp.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+    assert sync_host_model_layer(LangGraphConfig(model_name="x")) is False
+    assert yaml_is_list(hp)
+
+
+def yaml_is_list(p):
+    import yaml
+
+    return isinstance(yaml.safe_load(p.read_text(encoding="utf-8")), list)
+
+
+def test_member_reset_inherits_the_mirrored_host_model(tmp_path, monkeypatch):
+    """The #2528 end-to-end: host mirrors its (native-OAuth) model group; a member
+    whose model overrides are popped — the grouped reset — then inherits exactly
+    what the box runs, instead of an App-default gateway model with no credential."""
+    from graph.config import LangGraphConfig
+    from graph.config_io import sync_host_model_layer
+
+    _mirror_env(tmp_path, monkeypatch)
+    sync_host_model_layer(LangGraphConfig(model_name="gpt-5.6-sol", model_provider="openai-codex", api_base=""))
+
+    member = tmp_path / "member.yaml"
+    member.write_text("goal:\n  enabled: false\n", encoding="utf-8")  # model keys popped by the grouped reset
+    cfg = LangGraphConfig.from_yaml(str(member))
+    assert cfg.model_name == "gpt-5.6-sol"
+    assert cfg.model_provider == "openai-codex"

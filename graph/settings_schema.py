@@ -1205,6 +1205,22 @@ def is_secret_key(key: str) -> bool:
     return key in _SECRET_KEYS
 
 
+# Reset-to-inherited treats the model contract as ONE decision (#2528): name,
+# provider, and api_base only validate as a coherent set, so popping one key
+# alone pins the inherited value against a still-overridden sibling and the
+# graph rebuild refuses the combination — the reset then rolls back forever.
+MODEL_RESET_GROUP: tuple[str, str, str] = ("model.name", "model.provider", "model.api_base")
+
+
+def expand_reset_keys(keys: list[str]) -> list[str]:
+    """Expand coupled keys for a reset: any model-group member pulls in the whole
+    group (order-stable, deduped); unrelated keys pass through untouched."""
+    out = list(dict.fromkeys(keys))
+    if any(k in MODEL_RESET_GROUP for k in out):
+        out.extend(g for g in MODEL_RESET_GROUP if g not in out)
+    return out
+
+
 def is_known_key(key: str) -> bool:
     """True iff ``key`` is a known core or plugin-declared settings key. The
     reset path uses this as an existence-only gate (a reset has no value, so the
