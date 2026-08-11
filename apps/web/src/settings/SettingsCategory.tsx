@@ -22,7 +22,7 @@ import { fieldVisible } from "./visibility";
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
 // embed a category's settings as a standalone panel — Agent, Knowledge, central Settings.
-export function SettingsCategoryPanel(props: { category: string; title?: string; emptyHint?: string; footer?: ReactNode }) {
+export function SettingsCategoryPanel(props: { category: string; title?: string; emptyHint?: string; footer?: ReactNode; lead?: ReactNode }) {
   return (
     <StagePanel label="settings" className="settings-panel">
       <SettingsCategory {...props} />
@@ -45,6 +45,10 @@ export function SettingsCategory({
   title = "Settings",
   emptyHint,
   footer,
+  // Rendered ABOVE the field groups — for the section that must be seen before
+  // the knobs (the OAuth account card: it's what the signed-out banner deep-links
+  // to, and it lived at the bottom where nobody found it).
+  lead,
   // ADR 0059 — when set, render ONLY this plugin's group (its config folded into the
   // plugin's row in the Plugins surface). Pairs with category="Plugins".
   pluginId,
@@ -54,6 +58,7 @@ export function SettingsCategory({
   title?: string;
   emptyHint?: string;
   footer?: ReactNode;
+  lead?: ReactNode;
   pluginId?: string;
 }) {
   const queryClient = useQueryClient();
@@ -322,7 +327,8 @@ export function SettingsCategory({
         {/* While a background refetch is in flight (the #1643 fresh-install hydration
             re-pulls the schema), an empty group set is "still loading", not "nothing
             here" — don't flash the misleading empty hint. */}
-        {!groups.length && !footer ? (
+        {lead}
+        {!groups.length && !footer && !lead ? (
           <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
         ) : null}
 

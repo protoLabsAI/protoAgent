@@ -27,12 +27,14 @@ export function OAuthAccountSection() {
   const pendingSwitch = provider === saved && saved !== live && Boolean(live);
 
   return (
-    <div className="settings-subsection" data-testid="oauth-account-section">
+    <div className="settings-subsection settings-subsection--lead" data-testid="oauth-account-section">
       <h2 className="panel-kicker">Connected account</h2>
       <p className="muted">
         {pendingSwitch
-          ? `Switching to your ${OAUTH_PROVIDER_LABEL[provider]} — not active yet. Sign in below and the switch completes automatically.`
-          : `This agent runs on your ${OAUTH_PROVIDER_LABEL[provider]}. Disconnecting signs the agent out and disables chat until you reconnect — protoAgent removes its own stored credential; a login shared with your CLI is never revoked remotely.`}
+          ? `Switching to your ${OAUTH_PROVIDER_LABEL[provider]} — the saved provider isn't live yet. Already signed in? Re-check completes the switch; otherwise sign in and it completes automatically.`
+          : // Terse on purpose: the disconnect caveat lives on the Disconnect
+            // button's tooltip — repeating it here doubled the section's height.
+            `This agent runs on your ${OAUTH_PROVIDER_LABEL[provider]}.`}
       </p>
       <OAuthAccountCard provider={provider} />
     </div>

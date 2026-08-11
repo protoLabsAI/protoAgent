@@ -293,3 +293,19 @@
   border-radius: 6px;
   color: var(--pl-color-fg-muted);
 }
+
+/* Connected-account section as the Model panel's LEAD (was the footer — the
+   signed-out banner deep-links here, so it must be seen before the knobs).
+   Tight: kicker + one line + the card, separated from the field groups below. */
+.settings-subsection--lead {
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--pl-color-border);
+}
+.settings-subsection--lead .panel-kicker {
+  margin: 0 0 4px;
+}
+.settings-subsection--lead .muted {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+}
