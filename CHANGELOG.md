@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.131.3] - 2026-08-11
+
+### Fixed
+- **Switching a running instance to Claude or ChatGPT works from the console (#2508).**
+  On macOS the Claude Code login lives in the Keychain, not the credentials
+  file, so a live switch to `anthropic-oauth` failed "no credential found" with
+  Claude Code signed in right there — the resolver now reads the Keychain too.
+  And because a failed switch left the saved provider dangling with no sign-in
+  UI, the Settings account card now keys on the saved provider and a completed
+  sign-in finishes the pending switch automatically — no re-save, no restart.
+
 ## [0.131.2] - 2026-08-10
 
 ### Changed

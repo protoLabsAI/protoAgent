@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.131.3",
+    "date": "2026-08-11",
+    "changes": [
+      "Switching a running instance to Claude or ChatGPT works from the console (#2508)."
+    ]
+  },
+  {
     "version": "v0.131.2",
     "date": "2026-08-10",
     "changes": [
