@@ -198,3 +198,89 @@ def test_load_yaml_doc_reads_utf8_independent_of_locale(tmp_path):
     p.write_bytes('identity:\n  name: "Café — Agent"\n'.encode())
     doc = load_yaml_doc(p)
     assert doc["identity"]["name"] == "Café — Agent"
+
+
+# ── #2596: identical input must produce identical bytes on every platform ────
+
+
+def test_atomic_write_does_not_translate_newlines(tmp_path):
+    """Text mode's default `newline=None` rewrites every "\\n" to os.linesep, so on Windows
+    every config, registry and YAML this function wrote came out CRLF regardless of what
+    the caller composed. Nothing broke — YAML and JSON parse either way — but identical
+    input produced different bytes per platform: whole-file diffs on a shared checkout,
+    churn in snapshots moving between machines, and a spurious difference to anything
+    hashing a config to decide whether it changed."""
+    from infra.paths import atomic_write
+
+    p = tmp_path / "reg.json"
+    atomic_write(p, '{\n  "a": 1\n}\n')
+
+    raw = p.read_bytes()
+    assert b"\r\n" not in raw
+    assert raw == b'{\n  "a": 1\n}\n'  # byte-identical to what was passed in
+
+
+def test_atomic_write_preserves_crlf_the_caller_asked_for(tmp_path):
+    """Verbatim cuts both ways — a caller that composes CRLF still gets CRLF."""
+    from infra.paths import atomic_write
+
+    p = tmp_path / "crlf.txt"
+    atomic_write(p, "one\r\ntwo\r\n")
+
+    assert p.read_bytes() == b"one\r\ntwo\r\n"
+
+
+def test_the_translation_that_bit_windows_is_disabled(tmp_path):
+    """The defect is invisible on this platform (os.linesep is already "\\n"), so reproduce
+    the mechanism rather than trusting a green run on macOS/Linux: opening with
+    newline="\\r\\n" performs the same translation Windows' default does, anywhere."""
+    import os
+
+    from infra.paths import atomic_write
+
+    sim = tmp_path / "sim.txt"
+    fd = os.open(sim, os.O_WRONLY | os.O_CREAT, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\r\n") as f:  # what Windows does
+        f.write("a\nb\n")
+    assert sim.read_bytes() == b"a\r\nb\r\n"  # ← the bug
+
+    fixed = tmp_path / "fixed.txt"
+    atomic_write(fixed, "a\nb\n")
+    assert fixed.read_bytes() == b"a\nb\n"  # ← the fix, same platform
+
+
+def test_utf8_and_newline_contract_hold_together(tmp_path):
+    """#2521 fixed the encoding, #2596 the newlines — pin both so neither regresses when
+    someone next touches this line."""
+    from infra.paths import atomic_write
+
+    p = tmp_path / "both.yaml"
+    atomic_write(p, "note: café — em dash\nsecond: line\n")
+
+    assert p.read_bytes() == "note: café — em dash\nsecond: line\n".encode()
+
+
+def test_atomic_write_opens_with_newline_translation_off(monkeypatch, tmp_path):
+    """A cross-platform guard on the actual property.
+
+    The byte-level assertions above pass on macOS/Linux with or without the fix, because
+    os.linesep is already "\\n" there — only the Windows job exercises the real thing. So
+    also pin the call itself: if someone drops `newline=""` while tidying this line, THIS
+    fails on every platform instead of silently regressing until a Windows user notices
+    CRLF in their config again."""
+    import os as _os
+
+    from infra import paths as paths_mod
+
+    seen: dict = {}
+    real_fdopen = _os.fdopen
+
+    def _spy(fd, mode, **kwargs):
+        seen.update(kwargs)
+        return real_fdopen(fd, mode, **kwargs)
+
+    monkeypatch.setattr(paths_mod.os, "fdopen", _spy)
+    paths_mod.atomic_write(tmp_path / "x.json", "{}\n")
+
+    assert seen.get("encoding") == "utf-8"  # #2521
+    assert seen.get("newline") == ""  # #2596

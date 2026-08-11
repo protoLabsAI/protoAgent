@@ -82,7 +82,15 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
         # Explicit UTF-8: the default is the locale code page on Windows (CP1252),
         # which poisoned every config/registry this function wrote there (#2521) —
         # a strict UTF-8 consumer (snapshot export) then crashed on the em dashes.
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        #
+        # newline="" for the same reason one level down (#2596): the default translates
+        # every "\n" to os.linesep, so on Windows every config, registry and YAML this
+        # function writes came out CRLF regardless of what the caller composed. Nothing
+        # broke — YAML and JSON parse either way — but identical input produced different
+        # bytes per platform, which shows up as whole-file diffs on a shared checkout, as
+        # churn in ADR 0091 snapshots moving between machines, and as a spurious
+        # difference to anything hashing a config to decide whether it changed.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         if mode is not None:
             os.chmod(tmp, mode)
