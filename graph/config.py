@@ -1022,6 +1022,13 @@ class LangGraphConfig:
     # ``filesystem_projects``), not the string_list-typed FIELDS.
     projects: list[dict] = field(default_factory=list)
 
+    # Project onboarding — bounded clone + register within operator-consented space (#2555).
+    # Off by default; the operator opts in by setting enabled: true and declaring a root + allow globs.
+    onboarding_enabled: bool = False
+    onboarding_root: str = ""            # e.g. ~/dev — clones land here; registrations must resolve UNDER it
+    onboarding_allow: list[str] = field(default_factory=list)  # e.g. [github.com/protoLabsAI/*]
+    onboarding_write_default: bool = False  # registered read-only unless overridden per-call
+
     # Core media output store (#1929) — tool-generated binary artifacts
     # (images/audio/video) persisted via ``registry.save_media()`` and served on
     # ``/media/<file>``. Gated by default: each saved URL carries a per-file HMAC
@@ -1487,6 +1494,10 @@ class LangGraphConfig:
             lifecycle_hooks=list(data.get("lifecycle_hooks", []) or []),
             # Managed projects registry (ADR 0095) — top-level ``projects:`` list.
             projects=list(data.get("projects", []) or []),
+            onboarding_enabled=bool((data.get("onboarding") or {}).get("enabled", False)),
+            onboarding_root=str((data.get("onboarding") or {}).get("root", "") or ""),
+            onboarding_allow=list((data.get("onboarding") or {}).get("allow") or []),
+            onboarding_write_default=bool((data.get("onboarding") or {}).get("write_default", False)),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),

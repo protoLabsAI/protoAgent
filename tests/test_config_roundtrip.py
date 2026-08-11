@@ -208,6 +208,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "prompt_cache_force": False,
     "prompt_cache_ttl": "5m",
     "projects": [],  # managed projects registry (ADR 0095) — top-level list of dicts
+    "onboarding_enabled": False,
+    "onboarding_root": "",
+    "onboarding_allow": [],
+    "onboarding_write_default": False,
     "reasoning_effort": None,
     "repetition_penalty": None,
     "request_timeout": 120,

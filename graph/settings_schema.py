@@ -1149,6 +1149,46 @@ FIELDS: list[Field] = [
         "wheels into a writable per-instance dir (ADR 0093), instead of refusing them. Off by "
         "default — installing packages runs code on import. No effect outside the frozen app.",
     ),
+    # ── Project onboarding (#2555) ───────────────────────────────────────────
+    Field(
+        "onboarding.enabled",
+        "onboarding_enabled",
+        "Enable project onboarding",
+        "bool",
+        "Project onboarding",
+        "Let the agent clone and register managed projects within the pre-consented "
+        "space (root + allow globs). Off by default — the operator opts in.",
+    ),
+    Field(
+        "onboarding.root",
+        "onboarding_root",
+        "Onboarding root",
+        "path",
+        "Project onboarding",
+        "Clones land here; registrations must resolve under this directory.",
+        depends_on={"key": "onboarding.enabled"},
+    ),
+    Field(
+        "onboarding.allow",
+        "onboarding_allow",
+        "Allowed sources",
+        "string_list",
+        "Project onboarding",
+        "Clone source globs — same semantics as plugins.sources.allow "
+        "(e.g. github.com/protoLabsAI/*). Only repos matching at least one "
+        "pattern can be onboarded.",
+        depends_on={"key": "onboarding.enabled"},
+    ),
+    Field(
+        "onboarding.write_default",
+        "onboarding_write_default",
+        "Register writable by default",
+        "bool",
+        "Project onboarding",
+        "When on, onboarded projects are registered read-write; when off (default), "
+        "read-only unless the agent explicitly requests write access.",
+        depends_on={"key": "onboarding.enabled"},
+    ),
 ]
 
 # Knowledge domain sub-sections (console grouping). The Knowledge fields are declared with
@@ -1297,6 +1337,8 @@ _SECTION_CATEGORY = {
     "MCP": "Capabilities",
     "Filesystem": "Capabilities",
     "Tools": "Capabilities",
+    # Project onboarding (#2555) — operator-consented clone+register space.
+    "Project onboarding": "Capabilities",
     # Knowledge — recall / RAG config, split into sub-sections (see _KNOWLEDGE_SUBSECTION).
     "Recall": "Knowledge",
     "Ingestion": "Knowledge",
