@@ -82,47 +82,67 @@ def test_distinct_keys_stay_distinct_after_sanitizing():
 
 
 # ── disconnect semantics ──────────────────────────────────────────────────────
+# These tests script a three-way race — the turn starts, the caller disconnects, the
+# turn then finishes — so every step waits on the *event that step is about to observe*
+# rather than on a wall-clock guess. Fixed sleeps made this file flaky on the Windows
+# runner (#2551): the drain logged ~1ms after a 50ms budget expired, on a diff that
+# touched only CSS. Timing-flaky tests here block unrelated PRs once the Windows job
+# becomes a required check (#2455).
+async def _until(predicate, *, timeout: float = 2.0) -> None:
+    """Wait for an observable effect, bounded by the effect — not by the clock."""
+
+    async def _poll() -> None:
+        while not predicate():
+            await asyncio.sleep(0.005)
+
+    await asyncio.wait_for(_poll(), timeout=timeout)
+
+
 @pytest.mark.asyncio
 async def test_turn_runs_to_completion_when_the_caller_goes_away(monkeypatch):
     """The reported failure: a client-side timeout left a 15-minute turn's work
     unreachable. The turn must survive the caller and land in its session."""
-    finished = asyncio.Event()
+    started, keep_going, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def _slow_chat(prompt, session_id, **kw):
-        await asyncio.sleep(0.05)
+        started.set()
+        await keep_going.wait()  # still in flight while the caller disconnects
         finished.set()
         return [{"role": "assistant", "content": "done"}]
 
     monkeypatch.setattr("operator_api.chat_routes.chat", _slow_chat)
 
     waiter = asyncio.ensure_future(_run_v1_turn("go", "openai-compat-s1"))
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(started.wait(), timeout=2.0)
     waiter.cancel()  # the client disconnects mid-turn
     with pytest.raises(asyncio.CancelledError):
         await waiter
 
-    await asyncio.wait_for(finished.wait(), timeout=1.0)  # turn completed anyway
+    keep_going.set()  # the turn only now runs to its end — with nobody awaiting it
+    await asyncio.wait_for(finished.wait(), timeout=2.0)  # turn completed anyway
 
 
 @pytest.mark.asyncio
 async def test_a_failure_after_the_caller_left_is_retrieved_not_dangling(monkeypatch, caplog):
     """Without draining, an orphaned turn's exception surfaces at GC time as a bare
     'never retrieved' with no session attached."""
+    started, keep_going = asyncio.Event(), asyncio.Event()
 
     async def _boom(prompt, session_id, **kw):
-        await asyncio.sleep(0.02)
+        started.set()
+        await keep_going.wait()
         raise RuntimeError("gateway died")
 
     monkeypatch.setattr("operator_api.chat_routes.chat", _boom)
 
     waiter = asyncio.ensure_future(_run_v1_turn("go", "openai-compat-s2"))
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(started.wait(), timeout=2.0)
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
-    await asyncio.sleep(0.05)
 
-    assert "openai-compat-s2" in caplog.text and "gateway died" in caplog.text
+    keep_going.set()  # the turn fails with the caller already gone
+    await _until(lambda: "openai-compat-s2" in caplog.text and "gateway died" in caplog.text)
 
 
 @pytest.mark.asyncio
