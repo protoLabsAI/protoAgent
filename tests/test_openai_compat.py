@@ -290,3 +290,106 @@ def test_v1_streaming_unchanged(monkeypatch):
     frames = [json.loads(ln[len("data: ") :]) for ln in r.text.splitlines() if ln.startswith("data: ") and "[DONE]" not in ln]
     assert frames[0]["choices"][0]["delta"]["content"] == "narration\n\nfinal"
     assert frames[1]["choices"][0]["finish_reason"] == "stop"
+
+
+# ---------------------------------------------------------------------------
+# A failed turn is an HTTP error, not a 200 with the exception as the answer (#2578)
+# ---------------------------------------------------------------------------
+
+
+def _raw(c, body=None):
+    return c.post("/v1/chat/completions", json=body or {"messages": [{"role": "user", "content": "go"}]})
+
+
+def _err_reply(exc, message=None):
+    """What `chat()` hands back for a turn that raised — the rendered bubble plus
+    the structured companion the /v1 seam reads."""
+    from server.chat import turn_error
+
+    text = message or str(exc)
+    return [{"role": "assistant", "content": f"**Error:** {text}", "error": turn_error(exc, message)}]
+
+
+class _UpstreamError(Exception):
+    """Stands in for openai.AuthenticationError / RateLimitError — the SDK exceptions
+    carry the provider's HTTP status on `status_code`, which is all the seam reads."""
+
+    def __init__(self, status, msg):
+        super().__init__(msg)
+        self.status_code = status
+
+
+def test_v1_upstream_auth_failure_is_not_a_successful_completion(monkeypatch):
+    """The reported bug: the gateway rejected the key, and /v1 answered HTTP 200 with
+    the traceback text as `content` and finish_reason "stop"."""
+    exc = _UpstreamError(
+        401,
+        "Error code: 401 - {'error': {'message': \"Authentication Error, LiteLLM Virtual Key expected.\"}}",
+    )
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="x")]), chat_reply=_err_reply(exc))
+
+    r = _raw(c)
+
+    assert r.status_code == 502  # NOT 200, and NOT 401 (that means "your protoAgent bearer is bad")
+    body = r.json()
+    assert body["error"]["type"] == "authentication_error"
+    assert body["error"]["upstream_status"] == 401
+    assert "Authentication Error" in body["error"]["message"]
+    assert "choices" not in body  # nothing that looks like an answer
+
+
+def test_v1_rate_limit_is_mirrored_so_client_backoff_works(monkeypatch):
+    exc = _UpstreamError(429, "Error code: 429 - rate limit exceeded")
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="x")]), chat_reply=_err_reply(exc))
+
+    r = _raw(c)
+
+    assert r.status_code == 429  # every OpenAI client's retry logic keys on this
+    assert r.json()["error"]["type"] == "rate_limit_error"
+
+
+def test_v1_internal_fault_is_500_not_502(monkeypatch):
+    """No upstream status ⇒ the fault is ours, not a proxy hop's."""
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="x")]), chat_reply=_err_reply(ValueError("boom")))
+
+    r = _raw(c)
+
+    assert r.status_code == 500
+    body = r.json()
+    assert body["error"]["type"] == "server_error"
+    assert body["error"]["upstream_status"] is None
+
+
+def test_v1_streaming_failure_is_an_http_error_not_an_sse_frame(monkeypatch):
+    """The turn completes before the stream opens, so a failure can still be a real
+    status instead of a delta the client reads as a successful answer."""
+    exc = _UpstreamError(401, "bad key")
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="x")]), chat_reply=_err_reply(exc))
+
+    r = _raw(c, {"messages": [{"role": "user", "content": "go"}], "stream": True})
+
+    assert r.status_code == 502
+    assert "text/event-stream" not in r.headers.get("content-type", "")
+    assert "data:" not in r.text
+
+
+def test_v1_successful_turn_is_untouched(monkeypatch):
+    """The guard must only fire on a structured error — a normal turn still 200s."""
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="fine")]))
+
+    r = _raw(c)
+
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == "echo:go"
+
+
+def test_v1_content_mentioning_error_is_not_hijacked(monkeypatch):
+    """A turn whose ANSWER happens to discuss an error is a success. The seam keys on
+    the structured field, never on the `**Error:**` prefix."""
+    reply = [{"role": "assistant", "content": "**Error:** is how that log line starts — here's why."}]
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="x")]), chat_reply=reply)
+
+    r = _raw(c)
+
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"].startswith("**Error:**")

@@ -1818,6 +1818,52 @@ def _sum_usage(per_model: dict[str, Any]) -> dict[str, int]:
     }
 
 
+# OpenAI-shaped `error.type` per upstream HTTP status. Anything unmapped — including
+# 5xx and "no status at all" (a bug in our own code) — is a server_error.
+_ERROR_TYPE_BY_STATUS = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "authentication_error",
+    404: "invalid_request_error",
+    422: "invalid_request_error",
+    429: "rate_limit_error",
+}
+
+
+def _upstream_status(exc: BaseException) -> int | None:
+    """The HTTP status an upstream provider returned, if the exception carries one.
+
+    Covers the openai SDK (``status_code``), older/alternate clients (``http_status``),
+    and anything wrapping an httpx/requests response.
+    """
+    for attr in ("status_code", "http_status"):
+        code = getattr(exc, attr, None)
+        if isinstance(code, int) and 400 <= code < 600:
+            return code
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    return code if isinstance(code, int) and 400 <= code < 600 else None
+
+
+def turn_error(exc: BaseException, message: str | None = None) -> dict[str, Any]:
+    """Machine-readable companion to the ``**Error:** …`` bubble a failed turn returns.
+
+    A turn that raises is reported as assistant *content*, which is right for a chat UI
+    and wrong for ``/v1/chat/completions``: that endpoint answered HTTP 200 with
+    ``finish_reason: "stop"`` and an upstream 401 as the assistant's "answer", so every
+    OpenAI SDK client read a hard auth failure as a successful completion (#2578).
+
+    Carrying the failure structurally lets each surface decide. The console keeps
+    rendering the bubble (it ignores the extra key, like ``usage``); ``/v1`` maps this to
+    a real HTTP error. The content string is unchanged, so nothing that reads it moves.
+    """
+    return {
+        "message": message or str(exc),
+        "type": _ERROR_TYPE_BY_STATUS.get(_upstream_status(exc), "server_error"),
+        "upstream_status": _upstream_status(exc),
+        "exception": type(exc).__name__,
+    }
+
+
 async def _chat_langgraph(
     message: str,
     session_id: str,
@@ -2115,10 +2161,12 @@ async def _chat_langgraph_impl(
                     type(e).__name__,
                     e,
                 )
+                retry_msg = "the model provider closed the stream (possibly rate-limited). Please retry."
                 return [
                     {
                         "role": "assistant",
-                        "content": "**Error:** the model provider closed the stream (possibly rate-limited). Please retry.",
+                        "content": f"**Error:** {retry_msg}",
+                        "error": turn_error(e, retry_msg),
                     }
                 ]
             log.exception(
@@ -2126,6 +2174,6 @@ async def _chat_langgraph_impl(
                 session_id,
                 e,
             )
-            return [{"role": "assistant", "content": f"**Error:** {e}"}]
+            return [{"role": "assistant", "content": f"**Error:** {e}", "error": turn_error(e)}]
         finally:
             tracing.flush()

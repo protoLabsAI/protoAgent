@@ -184,6 +184,43 @@ async def _run_v1_turn(prompt: str, session_id: str, **kw):
     return await asyncio.shield(turn)
 
 
+def _v1_error_response(err: dict) -> JSONResponse:
+    """Map a failed turn to an OpenAI-shaped HTTP error instead of a 200 (#2578).
+
+    Status choice, which is the whole point of the endpoint being honest:
+
+    - **429 is mirrored.** Every OpenAI client's backoff keys on it, and a 429 from us
+      means "rate limited" no matter which hop produced it.
+    - **Any other upstream HTTP failure becomes 502**, deliberately NOT the upstream
+      status. A 401 from this endpoint already means "your protoAgent bearer is bad"
+      (``a2a_impl.auth``); echoing an upstream 401 would send callers to re-check the
+      one credential that is fine. 502 says "the hop behind me failed" and the body
+      names it — ``upstream_status`` carries the original.
+    - **No HTTP status at all ⇒ 500** — that's a fault in our own turn, not a proxy hop.
+    """
+    upstream = err.get("upstream_status")
+    if upstream == 429:
+        status = 429
+    elif isinstance(upstream, int):
+        status = 502
+    else:
+        status = 500
+    return JSONResponse(
+        {
+            "error": {
+                "message": err.get("message") or "the turn failed",
+                "type": err.get("type") or "server_error",
+                "param": None,
+                "code": str(upstream) if isinstance(upstream, int) else None,
+                # Non-standard but additive: which hop actually failed, for operators
+                # staring at a 502 wondering whose credential expired.
+                "upstream_status": upstream,
+            }
+        },
+        status_code=status,
+    )
+
+
 async def _v1_finish_reason(session_id: str) -> str:
     """How a non-streaming /v1 turn terminated, as an OpenAI ``finish_reason`` (#2234).
 
@@ -483,7 +520,14 @@ def register_chat_routes(app, ui: str) -> None:
         (see ``_run_v1_turn``). So a caller whose read timeout fired reconnects
         with the SAME session key and finds the finished work already in
         context, instead of re-running it — which only works if the session was
-        pinned, the other half of why continuity matters here."""
+        pinned, the other half of why continuity matters here.
+
+        **Failure semantics (#2578).** A turn that raises returns an OpenAI-shaped
+        ``{"error": {...}}`` body with a non-2xx status — 429 mirrored, any other
+        upstream HTTP failure as 502, an internal fault as 500 (see
+        ``_v1_error_response``). It used to answer 200 with the exception text as the
+        assistant's content and ``finish_reason: "stop"``, so an SDK client counted a
+        hard auth failure as a successful completion."""
         messages = req.get("messages", [])
         user_msgs = [m for m in messages if m.get("role") == "user"]
         if not user_msgs:
@@ -507,6 +551,16 @@ def register_chat_routes(app, ui: str) -> None:
         incognito = bool(req.get("incognito", False))
 
         result = await _run_v1_turn(prompt, session_id, model=model, incognito=incognito, images=images or None)
+
+        # A turn that raised comes back as an assistant bubble carrying a structured
+        # `error` (server.chat.turn_error). Answering 200 with that text as the content
+        # made an upstream 401/429 indistinguishable from a real answer (#2578). Checked
+        # before the stream branch — nothing has been sent yet, so BOTH modes can still
+        # return a proper status rather than an SSE frame the client reads as success.
+        turn_err = next((m["error"] for m in result if isinstance(m.get("error"), dict)), None)
+        if turn_err:
+            return _v1_error_response(turn_err)
+
         # Joined parts feed the streaming path only (its historical shape); the
         # non-streaming body is rebuilt below from the LAST assistant message.
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
