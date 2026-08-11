@@ -47,6 +47,48 @@ python -m server --setup     # validate the live config + mark setup, then exit
 python -m server --ui none   # serve
 ```
 
+### Sign in to a Claude or ChatGPT subscription, headless
+
+A headless agent can hold a durable subscription credential (ADR 0097) — no console
+required. Both flows are headless-friendly by construction: Codex is a device code, and
+the Claude PKCE flow *displays* a code instead of needing a redirect listener on the box.
+You approve on any device and hand the result back.
+
+```bash
+# 1. start a flow (token-gated operator API, so pass your bearer token)
+curl -sX POST http://localhost:7870/api/config/oauth/start \
+  -H "Authorization: Bearer $PROTOAGENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"provider":"anthropic-oauth"}'
+# → {"flow_id":"…","mode":"redirect","authorize_url":"https://platform.claude.com/oauth/authorize?…"}
+#   openai-codex instead → {"mode":"device","user_code":"ABCD-…","verification_uri":"…"}
+
+# 2. approve in a browser anywhere, then hand the code back
+curl -sX POST http://localhost:7870/api/config/oauth/complete \
+  -H "Authorization: Bearer $PROTOAGENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"provider":"anthropic-oauth","flow_id":"…","code":"…"}'
+#   device flows poll /api/config/oauth/poll instead
+```
+
+The credential lands in protoAgent's **own** store, which is refreshed on use — so it
+survives without anyone tending it.
+
+Prefer this to `CLAUDE_CODE_OAUTH_TOKEN`. That variable is a bootstrap/override: it is
+never refreshed and cannot be inspected, so it reads healthy right up until it 401s.
+
+**Monitoring.** `GET /api/config/oauth-status` reports each provider's `expires_at`
+(epoch seconds), `refreshable`, and `durability` — alert on those rather than waiting
+for a failed job to be the first signal:
+
+| `durability` | Means |
+|---|---|
+| `managed` | our store, our refresh token — renews itself on use |
+| `borrowed` | a vendor CLI's login; alive only while that person keeps using the CLI |
+| `static` | an env token: never refreshed, never inspectable |
+
+Refresh happens *on use*, so an agent idle longer than the refresh token's lifetime can
+still wake up signed out. Give a low-traffic agent something to do — a scheduled
+heartbeat turn — more often than that TTL.
+
 ## Drive it via the OpenAI API
 
 A drop-in `POST /v1/chat/completions` (+ `GET /v1/models`). Point any OpenAI client at

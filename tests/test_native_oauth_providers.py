@@ -84,13 +84,9 @@ def test_headless_setup_exempts_native_oauth_from_api_key():
     ok, _ = validate_for_headless(LangGraphConfig(model_provider="openai", api_base="", api_key=""))
     assert not ok
     # native OAuth provider with no key/base → allowed
-    ok, reason = validate_for_headless(
-        LangGraphConfig(model_provider="openai-codex", api_base="", api_key="")
-    )
+    ok, reason = validate_for_headless(LangGraphConfig(model_provider="openai-codex", api_base="", api_key=""))
     assert ok, reason
-    ok, reason = validate_for_headless(
-        LangGraphConfig(model_provider="anthropic-oauth", api_base="", api_key="")
-    )
+    ok, reason = validate_for_headless(LangGraphConfig(model_provider="anthropic-oauth", api_base="", api_key=""))
     assert ok, reason
 
 
@@ -246,8 +242,10 @@ def test_create_llm_codex_responses_config(monkeypatch):
         ocx,
         "resolve_codex_oauth",
         lambda *a, **k: CodexOAuthCreds(
-            access_token="cdx-TOK", account_id="acct-7",
-            base_url="https://chatgpt.com/backend-api/codex", source="instance_store",
+            access_token="cdx-TOK",
+            account_id="acct-7",
+            base_url="https://chatgpt.com/backend-api/codex",
+            source="instance_store",
         ),
     )
     cfg = LangGraphConfig(model_provider="openai-codex", model_name="gpt-5-codex", reasoning_effort="high")
@@ -265,7 +263,8 @@ def test_codex_rejects_gateway_alias(monkeypatch):
     import graph.providers.openai_codex as ocx
 
     monkeypatch.setattr(
-        ocx, "resolve_codex_oauth",
+        ocx,
+        "resolve_codex_oauth",
         lambda *a, **k: CodexOAuthCreds(access_token="t", account_id="a", base_url="b", source="s"),
     )
     cfg = LangGraphConfig(model_provider="openai-codex", model_name="protolabs/reasoning")
@@ -371,18 +370,19 @@ def test_codex_instructions_survive_factory_tool_rebind():
     from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
 
     model = ChatOpenAI(model="gpt-5-codex", api_key="x", use_responses_api=True, output_version="v0")
-    req = CodexResponsesInputMiddleware()._transform(
-        _FakeCodexReq(SystemMessage(content="You are Aria."), model)
-    )
-    tools = [{"type": "function", "function": {"name": "t", "description": "d", "parameters": {"type": "object", "properties": {}}}}]
+    req = CodexResponsesInputMiddleware()._transform(_FakeCodexReq(SystemMessage(content="You are Aria."), model))
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "t", "description": "d", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
     # The factory's standard-binding branch, verbatim shape.
     bound = req.model.bind_tools(tools, tool_choice=None, **req.model_settings)
     payload = model._get_request_payload([HumanMessage("hi")], **bound.kwargs)
     assert payload.get("instructions") == "You are Aria."
     # And the input carries no system-role item (the Codex backend rejects those).
-    assert all(
-        item.get("role") != "system" for item in payload.get("input", []) if isinstance(item, dict)
-    )
+    assert all(item.get("role") != "system" for item in payload.get("input", []) if isinstance(item, dict))
 
 
 def test_codex_middleware_noop_without_system():
@@ -423,7 +423,113 @@ def test_all_oauth_status_covers_every_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "store.json")
     rows = discovery.all_oauth_status()
     assert {r["provider"] for r in rows} == {"anthropic-oauth", "openai-codex"}
-    assert all(set(r) == {"provider", "signed_in", "source", "detail", "hint"} for r in rows)
+    assert all(
+        set(r) == {"provider", "signed_in", "source", "detail", "hint", "expires_at", "refreshable", "durability"}
+        for r in rows
+    )
+
+
+# ── credential liveness is machine-readable (#2549) ───────────────────────────
+def test_status_publishes_expiry_and_durability_for_our_own_store(monkeypatch, tmp_path):
+    """A fleet operator's only question is "how long until this agent stops working,
+    and will it fix itself?" — `expires_at` was read and then folded into prose."""
+    from graph.providers import discovery
+
+    store = tmp_path / "anthropic-oauth.json"
+    exp = time.time() + 3600
+    store.write_text(json.dumps({"access_token": "at", "refresh_token": "rt", "expires_at": exp}))
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: store)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    s = discovery.oauth_status("anthropic-oauth")
+
+    assert s.signed_in is True and s.source == "instance_store"
+    assert s.expires_at == pytest.approx(exp)
+    assert s.refreshable is True
+    assert s.durability == discovery.DURABILITY_MANAGED
+
+
+def test_status_marks_a_borrowed_cli_login_and_converts_its_millis(monkeypatch, tmp_path):
+    """The CLI's document is OURS to read, not to refresh — that is what makes it
+    borrowed, and it stores expiry in milliseconds."""
+    from graph.providers import discovery
+
+    exp_ms = (time.time() + 1800) * 1000
+    creds = tmp_path / ".credentials.json"
+    creds.write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "at", "subscriptionType": "max", "expiresAt": exp_ms}})
+    )
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", creds)
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "absent.json")
+    monkeypatch.setattr(oauth_mod, "_read_claude_keychain", lambda: None)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    s = discovery.oauth_status("anthropic-oauth")
+
+    assert s.durability == discovery.DURABILITY_BORROWED
+    assert s.refreshable is False
+    assert s.expires_at == pytest.approx(exp_ms / 1000.0)
+
+
+def test_status_calls_an_env_token_static_with_no_expiry(monkeypatch):
+    """The one path protoAgent never refreshes and cannot inspect. `None` must mean
+    UNKNOWN — reporting it as fine is how it reads green until it 401s."""
+    from graph.providers import discovery
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-opaque")
+
+    s = discovery.oauth_status("anthropic-oauth")
+
+    assert s.signed_in is True and s.durability == discovery.DURABILITY_STATIC
+    assert s.expires_at is None and s.refreshable is False
+
+
+def test_codex_status_publishes_the_jwt_expiry(monkeypatch, tmp_path):
+    from graph.providers import discovery
+
+    exp = time.time() + 900
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": exp}), "refresh_token": "rt"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "none.json")
+
+    s = discovery.oauth_status("openai-codex")
+
+    assert s.expires_at == pytest.approx(exp, abs=1)
+    assert s.refreshable is True and s.durability == discovery.DURABILITY_MANAGED
+
+
+def test_codex_status_survives_an_unreadable_token(monkeypatch, tmp_path):
+    """A status poll must never be the thing that breaks — unknown, not an exception."""
+    from graph.providers import discovery
+
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(json.dumps({"tokens": {"access_token": "not-a-jwt", "refresh_token": "rt"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "none.json")
+
+    assert discovery.oauth_status("openai-codex").expires_at is None
+
+
+def test_sign_in_hints_lead_with_the_headless_route(monkeypatch, tmp_path):
+    """Both hints used to lead with a vendor CLI, and the Claude one offered the env
+    var as a co-equal — the one path that never refreshes. Neither mentioned the
+    operator-API flow that gives a headless agent an owned, refreshing credential."""
+    from graph.providers import discovery
+
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "none.json")
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "none.json")
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "none.json")
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "none.json")
+    monkeypatch.setattr(oauth_mod, "_read_claude_keychain", lambda: None)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    for provider in ("anthropic-oauth", "openai-codex"):
+        hint = discovery.oauth_status(provider).hint
+        assert "/api/config/oauth/start" in hint, provider
+    claude = discovery.oauth_status("anthropic-oauth").hint
+    assert claude.index("/api/config/oauth/start") < claude.index("CLAUDE_CODE_OAUTH_TOKEN")
+    assert "never refreshed" in claude
 
 
 def test_list_provider_models_rejects_unknown():
@@ -454,9 +560,7 @@ def test_provider_field_is_a_dropdown():
     assert field.options_source == "providers"
     # build_schema fills the provider options for the console.
     schema = build_schema(LangGraphConfig())
-    entry = next(
-        f for group in schema for f in group["fields"] if f["key"] == "model.provider"
-    )
+    entry = next(f for group in schema for f in group["fields"] if f["key"] == "model.provider")
     assert "anthropic-oauth" in entry["options"]
     assert "openai-codex" in entry["options"]
 
@@ -577,7 +681,6 @@ def test_anthropic_store_refreshes_when_expiring(monkeypatch, tmp_path):
 # ── Credential lifecycle: serialized refresh (#2441) + disconnect (#2440) ────────
 
 
-
 def _codex_store(tmp_path, tokens: dict, provenance: str | None = None) -> "types.SimpleNamespace":
     """A SimpleNamespace paths object + a codex store seeded with `tokens`.
     ``provenance`` (#2461): "device_login" = protoAgent-minted (revocable),
@@ -598,7 +701,9 @@ def _patch_codex(monkeypatch, paths, cli_file):
 def test_codex_concurrent_refresh_spends_the_token_once(monkeypatch, tmp_path):
     """#2441: two simultaneous resolutions must make ONE refresh request and both return
     the rotated token — never race the single-use refresh token to a 400."""
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "single-use", "account_id": "a"})
+    paths = _codex_store(
+        tmp_path, {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "single-use", "account_id": "a"}
+    )
     _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
     fresh = _jwt({"exp": time.time() + 3600})
     calls = {"n": 0}
@@ -616,7 +721,10 @@ def test_codex_concurrent_refresh_spends_the_token_once(monkeypatch, tmp_path):
 
     monkeypatch.setattr(oauth_mod.httpx, "post", fake_post)
     out: dict[int, str] = {}
-    threads = [threading.Thread(target=lambda i=i: out.__setitem__(i, resolve_codex_oauth(paths).access_token)) for i in range(2)]
+    threads = [
+        threading.Thread(target=lambda i=i: out.__setitem__(i, resolve_codex_oauth(paths).access_token))
+        for i in range(2)
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -627,7 +735,9 @@ def test_codex_concurrent_refresh_spends_the_token_once(monkeypatch, tmp_path):
 
 def test_codex_warm_read_neither_refreshes_nor_writes(monkeypatch, tmp_path):
     """A warm, unexpired store read is lock-free and touches no network/disk (#2441)."""
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    paths = _codex_store(
+        tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}
+    )
     _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
 
     def boom(*a, **k):
@@ -656,7 +766,11 @@ def test_cancel_login_drops_the_pending_flow(monkeypatch):
 def test_disconnect_codex_revokes_removes_and_leaves_cli_untouched(monkeypatch, tmp_path):
     """#2440: revoke best-effort, delete OUR store, never touch ~/.codex/auth.json.
     The store is protoAgent-minted (#2461) — the case where remote revoke is correct."""
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}, provenance="device_login")
+    paths = _codex_store(
+        tmp_path,
+        {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"},
+        provenance="device_login",
+    )
     cli = tmp_path / "codex_cli.json"
     cli_body = json.dumps({"tokens": {"access_token": "cli", "refresh_token": "clir"}})
     cli.write_text(cli_body)
@@ -670,7 +784,11 @@ def test_disconnect_codex_revokes_removes_and_leaves_cli_untouched(monkeypatch, 
 
 
 def test_disconnect_removes_local_even_when_revoke_fails(monkeypatch, tmp_path):
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}, provenance="device_login")
+    paths = _codex_store(
+        tmp_path,
+        {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"},
+        provenance="device_login",
+    )
     _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
 
     def failing_post(url, **kw):
@@ -683,7 +801,9 @@ def test_disconnect_removes_local_even_when_revoke_fails(monkeypatch, tmp_path):
 
 
 def test_disconnect_is_idempotent(monkeypatch, tmp_path):
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    paths = _codex_store(
+        tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}
+    )
     _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
     monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
     first = oauth_mod.disconnect("openai-codex", paths)
@@ -697,7 +817,11 @@ def test_disconnect_suppresses_cli_reimport_until_reconnect(monkeypatch, tmp_pat
     from the Codex CLI until an in-console sign-in reconnects."""
     paths = types.SimpleNamespace(config_dir=tmp_path)
     cli = tmp_path / "codex_cli.json"
-    cli.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}}))
+    cli.write_text(
+        json.dumps(
+            {"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}}
+        )
+    )
     _patch_codex(monkeypatch, paths, cli)
 
     assert resolve_codex_oauth(paths).source == "codex_cli_bootstrap"  # imports once
@@ -717,7 +841,9 @@ def test_disconnect_marker_is_owner_only_on_posix(monkeypatch, tmp_path):
 
     if os.name == "nt":
         pytest.skip("POSIX mode bits; Windows uses the icacls ACL contract (atomic_write funnel)")
-    paths = _codex_store(tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"})
+    paths = _codex_store(
+        tmp_path, {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}
+    )
     _patch_codex(monkeypatch, paths, tmp_path / "no-cli.json")
     monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
     oauth_mod.disconnect("openai-codex", paths)
@@ -729,7 +855,9 @@ def test_disconnect_marker_is_owner_only_on_posix(monkeypatch, tmp_path):
 def test_disconnect_anthropic_removes_store_and_suppresses(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     paths = types.SimpleNamespace(config_dir=tmp_path)
-    (tmp_path / "anthropic-oauth.json").write_text(json.dumps({"access_token": "cc-X", "refresh_token": "cc-R", "expires_at": time.time() + 3600}))
+    (tmp_path / "anthropic-oauth.json").write_text(
+        json.dumps({"access_token": "cc-X", "refresh_token": "cc-R", "expires_at": time.time() + 3600})
+    )
     monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda p=None: tmp_path / "anthropic-oauth.json")
     monkeypatch.setattr(oauth_mod, "instance_paths", lambda: paths)
     monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "no-claude.json")
@@ -811,7 +939,11 @@ def test_device_login_stamps_owned_provenance(monkeypatch, tmp_path):
     store = tmp_path / "codex-oauth.json"
     monkeypatch.setattr(oauth_mod, "instance_paths", lambda: types.SimpleNamespace(config_dir=tmp_path))
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
-    monkeypatch.setattr(login, "_exchange_codex_code", lambda code, verifier: {"access_token": "at", "refresh_token": "rt", "id_token": ""})
+    monkeypatch.setattr(
+        login,
+        "_exchange_codex_code",
+        lambda code, verifier: {"access_token": "at", "refresh_token": "rt", "id_token": ""},
+    )
 
     class _Resp:
         status_code = 200
@@ -859,13 +991,15 @@ def test_keychain_reader_parses_security_output(monkeypatch):
     assert oauth_mod._read_claude_keychain() == {"claudeAiOauth": {"accessToken": "t"}}
 
     monkeypatch.setattr(
-        oauth_mod.subprocess, "run",
+        oauth_mod.subprocess,
+        "run",
         lambda cmd, **kw: types.SimpleNamespace(returncode=44, stdout=""),
     )
     assert oauth_mod._read_claude_keychain() is None  # absent item
 
     monkeypatch.setattr(
-        oauth_mod.subprocess, "run",
+        oauth_mod.subprocess,
+        "run",
         lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="not json"),
     )
     assert oauth_mod._read_claude_keychain() is None  # garbage payload
@@ -883,7 +1017,8 @@ def test_disconnect_suppresses_keychain_too(monkeypatch, tmp_path):
     paths = types.SimpleNamespace(config_dir=tmp_path)
     monkeypatch.setattr(oauth_mod, "instance_paths", lambda: paths)
     monkeypatch.setattr(
-        oauth_mod, "_read_claude_keychain",
+        oauth_mod,
+        "_read_claude_keychain",
         lambda: {"claudeAiOauth": {"accessToken": "sk-ant-oat-kc"}},
     )
     oauth_mod._mark_disconnected(paths, "anthropic-oauth")
