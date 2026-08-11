@@ -1983,6 +1983,13 @@ def get_all_tools(
         from tools.config_tools import build_config_tools
 
         tools.extend(build_config_tools(graph_config))
+        # Project onboarding (#2555) — bounded clone + register within the
+        # operator-consented `onboarding` space. Absent unless `onboarding.enabled`;
+        # the factory returns [] when off, so a non-opted-in instance gets no
+        # onboarding surface at all rather than a tool that only refuses.
+        from tools.onboard_tools import build_onboard_tools
+
+        tools.extend(build_onboard_tools(graph_config))
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
     if scheduler is not None:
