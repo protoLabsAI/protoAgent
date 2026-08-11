@@ -11,6 +11,9 @@ agent is actually running.
 
 Streaming-safe: responses (incl. SSE) are piped through unbuffered, and the upstream
 client is closed when the stream ends.
+
+Bounded: a member that accepts a connection and then stalls gets a 504 rather than parking
+the socket forever — see the read-timeout lanes below (#2590).
 """
 
 from __future__ import annotations
@@ -40,16 +43,58 @@ _HOP = {
 }
 
 
+# Read-timeout lanes for proxied traffic (#2590).
+#
+# The failure this bounds: a member ACCEPTS the connection and then never answers (its event
+# loop is busy — a board agent running the repo's whole gate, say). The client used to be built
+# with ``Timeout(None, connect=5.0)`` and a comment claiming the finite connect timeout stopped
+# "a peer that accepts then stalls" from hanging things. It does not, and could not: a connect
+# timeout bounds the handshake, and "accepts then stalls" IS the read phase. So the hub waited
+# forever. The console's board view re-fetches on a ~3s poll, each poll parked another
+# connection, and once six were parked the browser's per-origin cap meant it could issue no
+# request to the console origin at all — a transient member stall froze the whole app, with
+# force-quit the only recovery.
+#
+# One global value can't serve every shape of proxied request, because httpx applies the read
+# timeout to EVERY socket read — including the wait for the next SSE event. So it's chosen per
+# request:
+_STREAM_TIMEOUT = httpx.Timeout(None, connect=5.0)  # SSE: idle between events is normal
+_TURN_TIMEOUT = httpx.Timeout(600.0, connect=5.0)  # a whole agent turn, non-streaming
+_READ_TIMEOUT = httpx.Timeout(20.0, connect=5.0)  # views, API reads — the polls that wedged it
+
+# Paths that are long-lived BY DESIGN and must not be bounded like a view read. Matched on the
+# proxied sub-path (``/agents/<slug>/<path>`` ⇒ ``a2a``, ``api/events``, ``api/chat``).
+#
+# Why paths and not just the Accept header: the console streams A2A turns through `fetch`, and
+# that request does NOT send ``Accept: text/event-stream`` (only EventSource does). Keying the
+# unbounded lane on the header alone would have bounded live member chat at 20s. The header is
+# still honored as an ADDITIONAL signal, so a plugin's own well-behaved SSE endpoint streams
+# even though it isn't on this list.
+_STREAM_PATHS = frozenset({"a2a", "api/events"})
+_TURN_PATHS = frozenset({"api/chat"})
+
+
+def _timeout_for(request, path: str) -> httpx.Timeout:
+    """Which read-timeout lane this proxied request belongs to (#2590)."""
+    norm = path.strip("/")
+    if norm in _STREAM_PATHS or "text/event-stream" in (request.headers.get("accept") or "").lower():
+        return _STREAM_TIMEOUT
+    if norm in _TURN_PATHS:
+        return _TURN_TIMEOUT
+    return _READ_TIMEOUT
+
+
 # Shared client (#8) — one pooled AsyncClient instead of a fresh one (TCP setup + FD churn) per
-# request. Unlimited read/write (SSE streams forever) but a finite connect timeout so a peer
-# that accepts then stalls doesn't hang non-streaming requests indefinitely.
+# request. Its default is the permissive lane, for the few callers that reuse the client
+# directly (they pass their own bounded ``timeout=``); every proxied request overrides it with
+# ``_timeout_for``.
 _client: httpx.AsyncClient | None = None
 
 
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0))
+        _client = httpx.AsyncClient(timeout=_STREAM_TIMEOUT)
     return _client
 
 
@@ -101,17 +146,32 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
 
     client = _get_client()
     upstream_req = client.build_request(
-        request.method, url, headers=headers, content=body, params=dict(request.query_params)
+        request.method,
+        url,
+        headers=headers,
+        content=body,
+        params=dict(request.query_params),
+        timeout=_timeout_for(request, path),
     )
     try:
         upstream = await client.send(upstream_req, stream=True)
     except (httpx.ConnectError, httpx.ConnectTimeout):
         return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
+    except httpx.ReadTimeout:
+        # Accepted the connection, then went silent. Answer instead of parking the socket —
+        # a parked one is what let a busy member exhaust the browser's per-origin connection
+        # cap and freeze the console (#2590). 504 so the panel can render a real error.
+        log.warning("[fleet] proxied %s %s timed out waiting for the agent to respond", request.method, url)
+        return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
 
     async def _pipe():
         try:
             async for chunk in upstream.aiter_raw():
                 yield chunk
+        except httpx.ReadTimeout:
+            # Stalled mid-body. The status line is already sent, so the only honest signal
+            # left is to end the response rather than hold the connection open forever.
+            log.warning("[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, url)
         finally:
             await upstream.aclose()  # close the response, not the shared client
 

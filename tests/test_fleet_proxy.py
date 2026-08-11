@@ -56,8 +56,15 @@ class FakeClient:
         self._raise = raise_exc
         self.built = None
 
-    def build_request(self, method, url, headers=None, content=None, params=None):
-        self.built = {"method": method, "url": url, "headers": headers, "content": content, "params": params}
+    def build_request(self, method, url, headers=None, content=None, params=None, timeout=None):
+        self.built = {
+            "method": method,
+            "url": url,
+            "headers": headers,
+            "content": content,
+            "params": params,
+            "timeout": timeout,  # the #2590 read-timeout lane this request was placed in
+        }
         return object()  # opaque request handle
 
     async def send(self, req, stream=True):
@@ -339,3 +346,77 @@ async def test_forward_base_swapped_auth_replaces_callers(monkeypatch):
     auth_keys = [k for k in sent if k.lower() == "authorization"]
     assert len(auth_keys) == 1 and sent[auth_keys[0]] == "Bearer fleet"
     assert sent.get("X-Keep") == "1"
+
+
+# --- #2590: a stalled member must not park the connection -------------------
+
+
+def test_stream_paths_stay_unbounded():
+    """A2A + the SSE event feed idle between frames by design. Bounding them would cut
+    live member chat mid-turn — and the console streams A2A over `fetch`, which sends NO
+    `Accept: text/event-stream`, so the path list (not the header) is what saves it."""
+    req = FakeRequest(headers={})
+    assert proxy._timeout_for(req, "a2a").read is None
+    assert proxy._timeout_for(req, "api/events").read is None
+    assert proxy._timeout_for(req, "/a2a/").read is None  # normalized
+
+
+def test_accept_header_also_selects_the_stream_lane():
+    """A plugin's own well-behaved SSE endpoint isn't on the path list, so the header is
+    honored as a second signal."""
+    req = FakeRequest(headers={"accept": "text/event-stream"})
+    assert proxy._timeout_for(req, "plugins/thing/feed").read is None
+
+
+def test_turn_path_gets_the_long_lane_not_the_view_lane():
+    """The desktop fallback POSTs a whole agent turn to /api/chat — minutes, not seconds."""
+    t = proxy._timeout_for(FakeRequest(method="POST"), "api/chat")
+    assert t.read == proxy._TURN_TIMEOUT.read and t.read >= 300
+
+
+def test_plugin_view_reads_are_bounded():
+    """The traffic that actually wedged the console: board view fetches + its ~3s progress
+    poll. These must be bounded or six of them exhaust the browser's per-origin cap."""
+    t = proxy._timeout_for(FakeRequest(), "plugins/project_board/api/features")
+    assert t.read == proxy._READ_TIMEOUT.read and 0 < t.read <= 60
+
+
+async def test_forward_passes_the_lane_to_the_request(monkeypatch):
+    client = FakeClient(upstream=FakeUpstream())
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "plugins/x/api/y")
+    assert client.built["timeout"] is proxy._READ_TIMEOUT  # not the unbounded default
+
+
+async def test_read_timeout_returns_504_instead_of_hanging(monkeypatch):
+    client = FakeClient(raise_exc=httpx.ReadTimeout("stalled"))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "plugins/x/api/y")
+    assert resp.status_code == 504
+
+
+async def test_a_stalled_member_returns_rather_than_parking_the_socket(monkeypatch):
+    """The acceptance criterion, against a REAL socket: a stub that accepts the connection
+    and never writes a byte. Before the fix this awaited forever."""
+    import asyncio
+
+    stop = asyncio.Event()
+
+    async def _never_responds(reader, writer):
+        await reader.read(65536)  # consume the request, then go silent — never write
+        await stop.wait()  # held open until the test releases it, NOT a fixed sleep
+        writer.close()  # without this, wait_closed() below blocks on the live connection
+
+    server = await asyncio.start_server(_never_responds, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(proxy, "_READ_TIMEOUT", httpx.Timeout(0.5, connect=5.0))
+    try:
+        resp = await asyncio.wait_for(
+            proxy._forward_to_base(f"http://127.0.0.1:{port}", FakeRequest(), "plugins/x/api/y"),
+            timeout=10,  # the test itself must not hang if the fix regresses
+        )
+        assert resp.status_code == 504  # answered, connection released
+    finally:
+        stop.set()  # release the handler BEFORE closing, or wait_closed() blocks on it
+        server.close()
+        await server.wait_closed()
