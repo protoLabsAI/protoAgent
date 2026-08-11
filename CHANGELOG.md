@@ -15,6 +15,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.132.0] - 2026-08-11
+
+### Fixed
+- **The download page now links the newest desktop release, not the newest version number (#2514).**
+  Source-only releases (PyPI/Docker) no longer produce broken installer links: the
+  page resolves the newest GitHub release that actually carries the macOS DMG and
+  Windows setup.exe and links those assets directly. If no desktop-complete release
+  can be verified, the site build fails rather than publishing a dead link.
+
+- **Deleting a chat from the mobile session sheet now confirms and cleans up properly (#2512).**
+  The responsive sheet's ✕ used to remove the chat instantly — no "Delete this
+  chat?" dialog, no Harvest choice, and no server-side purge, which left the
+  session-summary memory behind. It now runs the same deletion lifecycle as the
+  desktop tab strip, including the Stop-vs-Detach choice for goal-driving chats.
+
+- **Switching to a Claude/ChatGPT subscription in Settings no longer dead-ends on gateway models (#2522).**
+  Settings ▸ Model's "Get models" now probes the provider selected on the form —
+  a native OAuth provider lists your subscription's models instead of the old
+  gateway's — a provider flip clears the stale list, and a Primary model the new
+  provider doesn't offer is swapped for one it does before you save. Previously
+  every save failed validation ("not a Claude model id") and rolled back.
+
+- **Windows `run_command` no longer runs approved PowerShell through a hidden
+  cmd.exe (#2518).** The tool now takes an explicit `shell` grammar — `default`
+  (cmd.exe on Windows, `/bin/sh` elsewhere), `powershell`, `cmd`, `sh` — and
+  PowerShell executes via a Unicode-safe `-EncodedCommand` contract, so paths
+  and content with spaces, brackets, accents, or Japanese text survive on the
+  first approved attempt (no more `[char]` reconstruction). The approval dialog
+  also names the real runner ("runs via: …") instead of showing only the inner
+  command, so what the operator approves is what actually executes.
+
+- **An OAuth disconnect no longer looks like a broken startup (#2513).** The
+  console now treats signed-out as a first-class state: no more ~45s
+  "Starting protoAgent… / Continue anyway" gate after disconnecting (or
+  relaunching while signed out) — the app opens immediately with a visible
+  signed-out banner, the composer swaps for a reconnect strip instead of
+  accepting sends that could only fail, and both surfaces deep-link to
+  Settings → Model where the reconnect control lives. Everything self-clears
+  the moment reconnect rebuilds the agent.
+
+- **On ChatGPT/Codex accounts, the agent's system prompt now actually reaches
+  the model (#2519).** Every tool-bearing turn on the `openai-codex` provider
+  was silently sent with no system prompt at all — persona, operating doctrine,
+  and knowledge context were dropped by a langchain re-bind after the middleware
+  moved them into the Responses `instructions` field, while "View prompt"
+  (captured upstream) still displayed the full prompt. Instructions now ride the
+  factory's supported `model_settings` channel, verified all the way down to the
+  wire payload by a new regression test. If your Codex-backed agent felt like it
+  ignored its SOUL.md — this was why.
+
+- **HITL cards format their text now.** When the agent pauses to ask you
+  something, the question renders as proper markdown — bold, code, numbered
+  lists — instead of raw `**sigils**`, and a long question scrolls inside the
+  card rather than growing it unbounded. Shell-command approval details stay
+  verbatim on purpose.
+
+- **Windows: fresh agents can export snapshots again (#2521).** Newly created
+  fleet members wrote their config in the Windows locale encoding (CP1252),
+  which crashed the strict-UTF-8 snapshot exporter with `UnicodeDecodeError`
+  before the review even built. All config and registry writes are now pinned
+  to UTF-8, and reads tolerate the legacy encoding — an agent created on an
+  affected build exports cleanly after upgrading, with a log line naming any
+  legacy-encoded file it healed around.
+
+- **Agent names show exactly as you typed them (#2520).** Renaming an agent to
+  something like `PA Windows Lifecycle Café` no longer silently renders as
+  `PA_Windows_Lifecycle_Caf` in the header, agent switcher, and Fleet page —
+  those surfaces now display the verbatim name, while the charset-restricted
+  addressing handle (and the immutable agent id/URL) keep doing their job
+  underneath.
+
+- **"Reset to inherited" actually works on fleet members now (#2528).** The
+  model name, provider, and API base reset as one group (they only validate
+  together), and the host now mirrors its own model setup into the box-level
+  inherited layer — so resetting a member's model overrides lands on what the
+  box actually runs, instead of an unusable app default that rolled every
+  reset back and left overrides looking permanent.
+
+### Docs
+- **The build-with-a-coding-agent guide is now a task-first walkthrough (#2510).**
+  It opens with prerequisites, walks standing up the PM and wiring a coder, and
+  adds the previously missing core: shipping your first feature end to end, with
+  the board state you should see at each step. Doctrine moved into callouts and
+  a closing "Grow it" section; every command and config key re-verified against
+  what ships.
+
 ## [0.131.3] - 2026-08-11
 
 ### Fixed
