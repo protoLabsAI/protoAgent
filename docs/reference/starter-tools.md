@@ -11,6 +11,7 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
 - **Goal + watch tools** — `set_goal` / `update_goal_plan` / `abandon_goal` drive a standing, plugin-verified goal (`goal.enabled`, on by default); `create_watch` / `list_watches` / `update_watch` / `clear_watch` supervise many external conditions at once (`watches.enabled`, on by default — a separate flag, since a watch is moved by an external process rather than driven by the agent). Both plugin-verified. ([ADR 0028](/adr/0028-plugin-goal-verifiers) / [ADR 0067](/adr/0067-standalone-watch-primitive).) See [Goal mode](/guides/goal-mode) + [Watches](/guides/watches).
 - Three **curation tools** — `recent_activity`, `list_skills`, `save_skill` — let the agent review what it's recently done and manage its own skill library; they also back the scheduled `/dream` (memory consolidation) and `/distill` (workflow→skill) passes ([ADR 0054](/adr/0054-dream-distill-curation-subagents)).
+- One **introspection tool** — `show_config(section?)` — lets the agent read its own effective, merged configuration (including plugin sections), with secrets masked. Bound whenever a config is available. See [`show_config`](#show_config) below.
 - The **`search_tools`** meta-tool — added only when deferred-tool disclosure is on ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)); the agent calls it to load tools that aren't in the per-call base set.
 - One **persona tool** — `edit_soul` — lets the lead agent rewrite a section of its own `SOUL.md` ([ADR 0081](/adr/0081-self-authored-persona-edit-soul)). **Off by default, guarded**: bound only when an operator sets `soul.self_edit_enabled: true`, and never on a subagent. See [`edit_soul`](#edit_soul) below.
 
@@ -355,6 +356,41 @@ ever drove one. This is the transparency guardrail from ADR 0081's due-diligence
 (Hermes keeps SOUL.md operator-only; OpenClaw invites unguarded self-edit and treats the soul as a
 prompt-injection surface; Letta added a read-only persona guard after unconstrained self-edits
 degraded identity).
+
+## `show_config`
+
+```python
+@tool
+def show_config(section: str = "") -> str
+```
+
+Returns the agent's own **effective, merged configuration** — the same view
+`GET /api/config` serves — as JSON. Pass a top-level `section` (`"model"`, `"mcp"`,
+`"filesystem"`, or any plugin section such as `"project_board"`) to keep the output
+small; omit it for the whole document, which falls back to a section index when it's
+too large to render at once. An unknown section returns the available names, plus a
+near-match suggestion.
+
+**Read-only.** It never writes, and it is bound whenever a config is available. Drop it
+per-instance with `tools.disabled: [show_config]` like any other core tool.
+
+**Why it exists.** An agent's own `config/langgraph-config.yaml` lives outside every
+filesystem fence, so the file that says how the agent is wired was the one file it
+couldn't open — making a misconfiguration indistinguishable from a bug. In the incident
+that prompted it ([#2540](https://github.com/protoLabsAI/protoagent/issues/2540)), an
+agent spent two sessions diagnosing a board bound to the wrong repo, checking paths on
+disk and on GitHub and reading the plugin's *defaults* from source, before its operator
+found the answer in one grep. Reading a plugin's source tells you what it does
+unconfigured; this tells you what your instance actually set.
+
+**Secrets are masked, not inherited as safe.** `config_to_dict` blanks secret-typed
+schema fields and plugin-declared secrets, which is the right bar for the token-gated
+operator API — but this output lands in the model's context and the chat transcript, so
+the tool applies its own pass on top. `mcp.servers[].env` and `[].headers` are free-form
+string maps that routinely hold tokens; every value in them is masked, along with any
+key that names a credential, at any depth. Masked values read as `«redacted»`, so the
+agent still learns that a credential *is* set — a blank stays blank, because masking one
+would say a token is present when none is.
 
 ## Adding your own
 

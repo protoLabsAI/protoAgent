@@ -708,7 +708,10 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         source = IngestSource.from_url(src) if is_url else IngestSource.from_path(src)
         try:
             result = await ingest(
-                source, domain=dom, title=title, ctx=OpContext(knowledge_store=knowledge_store, graph_config=graph_config)
+                source,
+                domain=dom,
+                title=title,
+                ctx=OpContext(knowledge_store=knowledge_store, graph_config=graph_config),
             )
         except IngestError as exc:
             raise _KnowledgeIngestError(_tool_ingest_message(exc)) from exc
@@ -804,9 +807,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # search embeds the query over HTTP on hybrid stores — keep it off the loop.
         import asyncio
 
-        results = await asyncio.to_thread(
-            knowledge_store.search, query, k=clamped_k, domain=(domain or None)
-        )
+        results = await asyncio.to_thread(knowledge_store.search, query, k=clamped_k, domain=(domain or None))
         if not results:
             return "No matches."
         lines = [
@@ -1973,6 +1974,15 @@ def get_all_tools(
     # Outbound chat-channel tools (e.g. Discord) come from their plugins (ADR
     # 0018/0019) — an installed comms plugin registers its tools when a token is set;
     # nothing to wire here.
+    if graph_config is not None:
+        # Read-only self-config introspection (#2540). An agent could see neither its
+        # own YAML (outside every fs fence) nor any merged view of it, so a
+        # misconfiguration was indistinguishable from a bug — protoEngineer burned two
+        # sessions on a board bound to the wrong repo. Enabled wherever a config is
+        # available; `tools.disabled` turns it off for an instance that doesn't want it.
+        from tools.config_tools import build_config_tools
+
+        tools.extend(build_config_tools(graph_config))
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
     if scheduler is not None:
