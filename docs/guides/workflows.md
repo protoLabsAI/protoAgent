@@ -14,6 +14,17 @@ console surface only load when the plugin is enabled. Turn it on by adding `work
 consumption SDK (`graph.sdk.run_subagent`).
 :::
 
+## Run one (the short path)
+
+1. Enable the plugin — `plugins: { enabled: [workflows] }` (it ships off by default).
+2. Drop a `*.yaml` recipe in the workflows folder ([Anatomy](#anatomy) has the shape,
+   [Where recipes live](#where-recipes-live) the path).
+3. [Run it](#running-one) — ask the agent to, or call `run_workflow` with your inputs.
+4. Watch the steps stream as tool cards; the final `output` comes back as the result.
+
+The rest of this page is the recipe format, the step types, and how workflows differ
+from skills.
+
 ## Skills vs Workflows
 
 These get conflated — the console lists the skill index ("Skills") next to

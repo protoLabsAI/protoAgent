@@ -16,6 +16,28 @@ which injected full skill bodies on every model call.)
 > deterministic, run-the-same-steps orchestration across subagents, that's a
 > [Workflow](/guides/workflows#skills-vs-workflows) — different tool, different altitude.
 
+::: warning Two different things are called a "skill"
+This page is about **`SKILL.md` procedures** — guidance the agent loads mid-turn.
+An **[A2A card skill](/guides/add-a-skill)** is something else entirely: an entry on
+the agent card that advertises a capability *other agents* can dispatch to. Same
+word, different subsystem — if you're here to make your agent callable by another
+agent, you want that page.
+:::
+
+## Write one (the short path)
+
+1. Create `skills/<name>/SKILL.md` (or drop it in the skills folder shown in
+   **Agent → Skills**).
+2. Give it frontmatter — `name` + a one-line `description`. That description is the
+   *only* thing the agent sees until it loads the skill, so write it as "when to use
+   this", not as a title.
+3. Write the procedure in the body: the steps, the tools to use, what "done" looks like.
+4. Reload (**Agent → Skills → Reload**, or restart). The skill appears in the index.
+5. Ask the agent to do the task. Watch for the `load_skill` tool card — that's the
+   confirmation it picked your skill up.
+
+The rest of this page is the detail behind those five steps.
+
 ## Anatomy of a skill
 
 A skill is a **folder containing a `SKILL.md`** file: YAML frontmatter followed
