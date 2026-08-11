@@ -33,6 +33,31 @@ def reexec_command(executable: str, argv: list[str], frozen: bool) -> list[str]:
     return [executable, "-m", "server", *rest]
 
 
+def request_server_exit() -> bool:
+    """Ask the live uvicorn Server to wind down. True if a server was asked.
+
+    The portable half of the restart (#2585). The old path signalled this process —
+    ``os.kill(os.getpid(), signal.SIGINT)`` — which works on POSIX and is *fatal* on
+    Windows: ``os.kill`` there delivers only ``CTRL_C_EVENT``/``CTRL_BREAK_EVENT`` as
+    signals and turns every other value, ``SIGINT`` included, into ``TerminateProcess``.
+    So the frozen Windows server was killed outright at exactly the point it was supposed
+    to drain: the endpoint answered 202, the process vanished, ``uvicorn.run()`` never
+    returned, and the re-exec in ``server._main`` never ran. Nothing restarted, and the
+    operator's only recovery was launching the binary by hand.
+
+    Setting ``should_exit`` is what uvicorn's own signal handler does, minus the signal —
+    so the drain, the graceful timeout and the re-exec all behave identically everywhere,
+    and the path is exercisable off Windows.
+    """
+    from runtime.state import STATE
+
+    server = getattr(STATE, "uvicorn_server", None)
+    if server is None:
+        return False
+    server.should_exit = True
+    return True
+
+
 def register_runtime_control_routes(app) -> None:
     from fastapi import APIRouter
     from fastapi.responses import JSONResponse
@@ -48,9 +73,14 @@ def register_runtime_control_routes(app) -> None:
         STATE.restart_requested = True
 
         async def _drain_then_signal():
-            # Let the 202 flush to the client, then trigger the graceful Ctrl-C path;
-            # _main re-execs once uvicorn.run() returns.
+            # Let the 202 flush to the client, then ask the server to wind down; _main
+            # re-execs once its run() returns.
             await asyncio.sleep(0.3)
+            if request_server_exit():
+                return
+            # No live Server reference (an embedding host that runs the app itself).
+            # Fall back to the signal — which is what this used to do unconditionally,
+            # and why Windows never restarted (see request_server_exit).
             try:
                 os.kill(os.getpid(), signal.SIGINT)
             except Exception:  # noqa: BLE001 — last resort if signalling fails

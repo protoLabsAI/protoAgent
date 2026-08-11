@@ -75,6 +75,11 @@ class AppState:
     plugin_router_routes: dict = field(default_factory=dict)
     # Set by POST /api/restart: after uvicorn drains, _main re-execs a fresh process.
     restart_requested: bool = False
+    # The live ``uvicorn.Server``, so a graceful self-shutdown can ask it to exit instead
+    # of signalling the process. Self-signalling is not portable: on Windows ``os.kill``
+    # delivers only CTRL_C_EVENT / CTRL_BREAK_EVENT and turns every other value into
+    # TerminateProcess, which killed the server outright — no drain, no re-exec (#2585).
+    uvicorn_server: object = None
     plugin_surfaces: list = field(default_factory=list)
     plugin_surface_handles: list = field(default_factory=list)
     # True once the startup hook has run its surface-start loop. A config reload uses

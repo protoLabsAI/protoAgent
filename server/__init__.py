@@ -524,8 +524,8 @@ def _main():
     # --- Scheduler lifecycle ------------------------------------------------
     # The local scheduler needs an asyncio polling task. on_event is preferred
     # over a lifespan context manager here — the rest of the boot is sync
-    # (uvicorn.run is the only blocking call) and FastAPI fires startup/shutdown
-    # around it.
+    # (the uvicorn serve call is the only blocking one) and FastAPI fires
+    # startup/shutdown around it.
     @fastapi_app.on_event("startup")
     async def _scheduler_startup() -> None:
         # Capture the server's event loop so an offloaded reload (#497) can
@@ -1205,7 +1205,15 @@ def _main():
     # second Ctrl-C whose KeyboardInterrupt fires mid-request and dumps noisy
     # CancelledError tracebacks. A bounded timeout lets in-flight work finish,
     # then force-closes the streams cleanly on a single Ctrl-C.
-    uvicorn.run(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
+    # Construct the Server explicitly rather than calling uvicorn.run(), so the restart
+    # route can ask it to exit (`should_exit`) instead of signalling this process. That
+    # self-signal was fatal on Windows — os.kill turns anything but CTRL_C_EVENT into
+    # TerminateProcess, so the server died where it should have drained and the re-exec
+    # below never ran (#2585). Same drain semantics on every platform now.
+    uvicorn_config = uvicorn.Config(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
+    uvicorn_server = uvicorn.Server(uvicorn_config)
+    STATE.uvicorn_server = uvicorn_server
+    uvicorn_server.run()
 
     # uvicorn.run() returns once the server has fully drained and released the port —
     # either a real shutdown (Ctrl-C) or an operator restart (POST /api/restart set the
