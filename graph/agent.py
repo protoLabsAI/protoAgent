@@ -209,35 +209,47 @@ def _build_middleware(
         if mw is not None:
             middleware.append(mw)
 
-    # Claude Code OAuth (ADR 0097) requires its identity line to LEAD the system
-    # prompt or Anthropic's OAuth infra refuses the traffic. Added innermost among
-    # system-touching middleware (last word on system_message, after PromptCache /
-    # context injection) and only for anthropic-oauth — a hard no-op elsewhere.
-    _provider = (getattr(config, "model_provider", "") or "").strip().lower()
-    if _provider == "anthropic-oauth":
-        from graph.middleware.claude_code_identity import ClaudeCodeIdentityMiddleware
-
-        middleware.append(ClaudeCodeIdentityMiddleware())
-    elif _provider == "openai-codex":
-        # The Codex backend forbids system-role input items (ADR 0097) — move the
-        # system prompt into the Responses `instructions` field. Innermost, so it
-        # sees the final assembled system prompt.
-        from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
-
-        middleware.append(CodexResponsesInputMiddleware())
-
-    # Innermost observer (#2527): stash what each call ACTUALLY carries — after
-    # every system-touching transform above — so PromptCapture records wire-vs-
-    # composed divergence instead of showing a prompt the wire never carried
-    # (#2519's invisibility). Same gate as PromptCapture: no capture, no observer.
-    if config.prompt_capture_enabled:
-        from graph.middleware.wire_capture import WirePromptCaptureMiddleware
-
-        middleware.append(WirePromptCaptureMiddleware())
-
+    middleware.extend(provider_shape_middleware(config))
     middleware.append(MessageCaptureMiddleware())
 
     return middleware
+
+
+def provider_shape_middleware(config) -> list:
+    """The native-OAuth wire-shape transforms, innermost-last (ADR 0097).
+
+    EVERY stack that sends a system prompt on a native-OAuth provider needs
+    these, not just the lead agent: Anthropic's OAuth infra refuses traffic
+    whose system prompt doesn't LEAD with the Claude Code identity line, and the
+    Codex Responses backend rejects a system-role input item outright. The
+    subagent stack built its own middleware list without them, so every
+    delegation (task/task_batch, dream, distill, the QA tier) failed on both
+    providers while the lead agent worked — the #2519 lesson at a different
+    seam, which is why this now lives in ONE function both callers use.
+
+    Appended AFTER every prompt-composing middleware so the transform sees the
+    final system message, and trailed by the wire observer (#2527) so what the
+    call actually carries is recorded rather than assumed.
+    """
+    out: list = []
+    provider = (getattr(config, "model_provider", "") or "").strip().lower()
+    if provider == "anthropic-oauth":
+        from graph.middleware.claude_code_identity import ClaudeCodeIdentityMiddleware
+
+        out.append(ClaudeCodeIdentityMiddleware())
+    elif provider == "openai-codex":
+        from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+        out.append(CodexResponsesInputMiddleware())
+    # Innermost observer (#2527): stash what each call ACTUALLY carries — after
+    # the transforms above — so PromptCapture records wire-vs-composed divergence
+    # instead of showing a prompt the wire never carried (#2519's invisibility).
+    # Same gate as PromptCapture: no capture, no observer.
+    if getattr(config, "prompt_capture_enabled", False):
+        from graph.middleware.wire_capture import WirePromptCaptureMiddleware
+
+        out.append(WirePromptCaptureMiddleware())
+    return out
 
 
 def _resolve_aux_model(config, specific: str = "") -> str | None:
@@ -420,6 +432,12 @@ async def _run_subagent(
                 rate_limits=config.enforcement_rate_limits,
             ),
         )
+    # Native-OAuth wire shape — LAST, so the transform sees the final system
+    # message (and sits inside PromptCapture above). Without these, a Claude/
+    # ChatGPT-subscription instance could chat but every delegation failed:
+    # anthropic-oauth refuses a prompt with no identity line, and the Codex
+    # backend rejects the system-role item this stack emits.
+    sub_middleware.extend(provider_shape_middleware(config))
 
     subagent = create_agent(
         model=sub_llm,
