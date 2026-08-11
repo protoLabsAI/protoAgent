@@ -2,6 +2,19 @@
 
 The template ships an autonomous release pipeline. Wire it up once and every merge to `main` produces a fresh container image Watchtower can pick up.
 
+## Wire it up (once)
+
+1. Fork the template and enable GitHub Actions on your fork.
+2. Merge something to `main` — `docker-publish.yml` needs no opt-in, so this alone
+   builds and pushes an image to your GHCR.
+3. Point your host at that image (Docker / Compose below), and optionally add
+   **Watchtower** so it pulls new tags on its own.
+4. Want **versioned releases** (tags, changelog, release notes) on top of the
+   rolling image? Set `RELEASE_ENABLED=true` — the release workflows gate on it.
+
+The rest of this page is what each workflow does, the image tags you get, and the
+host-side setup.
+
 ## What the pipeline does
 
 | Trigger | Workflow | Result |

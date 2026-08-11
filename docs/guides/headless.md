@@ -5,6 +5,17 @@ headless and drive it entirely over HTTP: the **OpenAI-compatible** chat API, th
 **A2A** protocol, or both at once. Same agent, same tools/skills/memory/goals — just
 no browser.
 
+## Run it
+
+```bash
+python -m server --ui none --host 0.0.0.0 --port 7870
+```
+
+That's the whole thing: `--ui none` serves the API, A2A, and `/metrics` and skips the
+console. Everything below is what you get and how to drive it — the tier table, the
+two APIs, and auth (**set a token before binding to `0.0.0.0`** — see
+[Auth](#auth)).
+
 ## UI tiers (ADR 0010)
 
 One flag picks how much UI is served; the **API + A2A always run**.

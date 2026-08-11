@@ -9,6 +9,21 @@ internet a code-execution box**.
 The one-sentence version: **expose only the A2A surface, gate it with a bearer token,
 and 404 everything else.** The rest is detail.
 
+## The shape of the job
+
+Four moves, in this order — the threat model first, because the mistakes here are
+the expensive kind:
+
+1. **Know what you're exposing** — the surfaces below are not equally safe to publish.
+2. **Publish only the consumer surfaces** (`/a2a`, the agent card), never the operator
+   API or console — [The pattern](#the-pattern).
+3. **Put a real edge in front** — a tunnel or reverse proxy that terminates TLS and
+   forwards only those paths ([Cloudflare Tunnel](#worked-example-cloudflare-tunnel) or
+   [nginx / Caddy](#generic-reverse-proxy-nginx--caddy)).
+4. **Harden what's left** — tokens, rate limits, egress
+   ([Defense in depth](#defense-in-depth-optional-recommended)), then walk the
+   [Checklist](#checklist) before you announce the URL.
+
 ## The threat model — know what each surface is
 
 A protoAgent serves several HTTP surfaces at the root, and they are **not** equally safe
@@ -128,7 +143,7 @@ $ curl -s -X POST https://agent.example.com/a2a \
 Run these four checks every time you expose an agent — the 404s on `/app` and `/api` are
 the ones that matter.
 
-## Generic reverse proxy (nginx / Caddy)
+## Generic reverse proxy (nginx / Caddy) {#generic-reverse-proxy-nginx--caddy}
 
 Same shape without a tunnel — allowlist the safe paths, default-deny the rest. Caddy:
 

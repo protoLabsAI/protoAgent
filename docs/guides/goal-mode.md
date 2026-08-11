@@ -19,6 +19,18 @@ It's modelled on protocli's goal system but deliberately more rigorous for a lon
 | Give-up path | user sets "stop after N" in the text | **iteration budget + no-progress streak + the `abandon_goal` tool** |
 | State | in-memory, per session | **disk-persisted** per session (survives restart/reload) |
 
+## Set one (the short path)
+
+Tell the agent in chat — *"goal: make the tests pass, verify with `pytest -q`"* — or
+call `set_goal` with a condition and a verifier. The agent then keeps taking turns
+until the verifier passes, the iteration budget runs out, or it reports the goal
+unachievable. Watch progress in the console's goal panel
+([Manage from the console](#manage-from-the-console)).
+
+The two things worth getting right are the **condition** (testable, not vague) and
+the **verifier** (a real check — see [Verifier types](#verifier-types); an LLM judge
+is the fallback, not the default). The rest of this page is the mechanism behind that.
+
 ## How it works
 
 1. You set a goal for a session (`/goal …`). Nothing else changes — the next message runs normally.
