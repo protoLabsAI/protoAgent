@@ -326,6 +326,49 @@ def read_fragments(directory: Path | None = None) -> tuple[dict[str, list[str]],
     return buckets, used
 
 
+def lint_fragments(paths: list[Path]) -> list[str]:
+    """Problems with each fragment, one human-readable line each. Empty ⇒ all usable.
+
+    The PR gate used to check only that a fragment **exists**, which is a weaker property
+    than the one that matters: that it will still be there in the release notes (#2600).
+    A fragment whose text isn't a top-level ``- `` bullet passes that check, collates into
+    ``[Unreleased]`` fine, and then contributes nothing to the marketing changelog —
+    ``scaffold`` derives its entry from :func:`_titles`, which only sees top-level bullets.
+    If no fragment in the release parses, ``scaffold`` treats the version as empty and
+    omits it from ``/changelog`` altogether. That failure surfaces days later to whoever
+    cuts the release, nowhere near the PR that caused it.
+
+    Checks the same three things the collator does — name shape, known kind, non-empty —
+    plus the one it doesn't: that the body yields at least one title.
+    """
+    problems: list[str] = []
+    for path in paths:
+        if path.name in ("README.md", ".gitkeep"):
+            continue
+        m = _FRAGMENT_RE.match(path.name)
+        if not m:
+            problems.append(f"{path.name}: expected <issue-or-pr>.<kind>.md")
+            continue
+        kind = m.group("kind").lower()
+        if kind not in _KINDS:
+            problems.append(f"{path.name}: unknown kind {kind!r} — expected one of {', '.join(_KINDS)}")
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            problems.append(f"{path.name}: unreadable ({exc})")
+            continue
+        if not body.strip():
+            problems.append(f"{path.name}: empty")
+            continue
+        if not _titles(body):
+            problems.append(
+                f"{path.name}: no top-level '- ' bullet, so this text would be dropped from the "
+                f"release notes. Start each entry with '- ' (see changelog.d/README.md)."
+            )
+    return problems
+
+
 def collate(text: str, buckets: dict[str, list[str]]) -> str:
     """Fold fragment ``buckets`` into ``text``'s ``[Unreleased]`` section.
 
@@ -411,6 +454,15 @@ def main() -> None:
     )
     p_notes.add_argument("version", help="version released, e.g. 0.60.0")
     sub.add_parser("check", help="fail if any released version is missing from changelog.json")
+    p_lint = sub.add_parser(
+        "lint-fragments",
+        help="fail if a changelog.d fragment wouldn't survive collation (the PR gate's check)",
+    )
+    p_lint.add_argument(
+        "paths",
+        nargs="*",
+        help="fragment paths to check; default: every fragment in changelog.d/",
+    )
     p_col = sub.add_parser(
         "collate", help="fold changelog.d/ fragments into [Unreleased], then delete them"
     )
@@ -459,6 +511,21 @@ def main() -> None:
             if n
             else f"changelog: nothing dated before {args.before} to archive"
         )
+    elif args.cmd == "lint-fragments":
+        if args.paths:
+            paths = [Path(p) for p in args.paths]
+        elif FRAGMENTS_DIR.is_dir():
+            paths = [
+                p
+                for p in sorted(FRAGMENTS_DIR.iterdir())
+                if p.is_file() and p.name not in ("README.md", ".gitkeep")
+            ]
+        else:
+            paths = []
+        problems = lint_fragments(paths)
+        if problems:
+            raise SystemExit("unusable changelog fragment(s):\n  " + "\n  ".join(problems))
+        print(f"changelog: {len(paths)} fragment(s) parse")
     elif args.cmd == "check":
         missing = missing_versions()
         if missing:

@@ -64,9 +64,27 @@ fi
 # At least one changelog.d/*.md that ISN'T the README — a PR may legitimately touch the
 # README *and* add a fragment, so this filters the README out rather than disqualifying
 # the whole PR when it appears (which is what an earlier version of this check did).
-if git diff --name-only "${base}...HEAD" \
+# --diff-filter=d excludes DELETIONS: removing someone else's fragment is not "this PR
+# documented itself", and a deleted path can't be linted below either.
+fragments=$(git diff --name-only --diff-filter=d "${base}...HEAD" \
    | grep -E '^changelog\.d/.+\.md$' \
-   | grep -qvx 'changelog.d/README.md'; then
+   | grep -vx 'changelog.d/README.md' || true)
+
+if [ -n "${fragments}" ]; then
+  # Existing is not the property that matters — SURVIVING COLLATION is (#2600). A fragment
+  # whose text isn't a top-level `- ` bullet passes an existence check, then contributes
+  # nothing to the release notes, and a release with no parsable bullets drops off
+  # /changelog entirely. That only shows up days later to whoever cuts the release, so
+  # check it here with the collator's OWN parser rather than a second guess at the rules.
+  #
+  # Resolved from this script's directory, not $PWD: the tests drive the gate against
+  # throwaway repos. python3 + stdlib only, so the gate still installs nothing.
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck disable=SC2086 # word-splitting is intended: one arg per fragment path
+  if ! python3 "${here}/changelog.py" lint-fragments ${fragments}; then
+    echo "::error::A changelog fragment in this PR would be dropped from the release notes. Fix it as printed above (changelog.d/README.md has the format), or apply the skip-changelog label."
+    exit 1
+  fi
   echo "ok: changelog.d/ fragment added in this PR"
   exit 0
 fi
