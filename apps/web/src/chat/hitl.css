@@ -70,6 +70,22 @@
 .hitl-prompt {
   color: var(--pl-color-fg-muted);
   font-size: 13px;
+  /* A model-authored question can run long — scroll it inside the card instead of
+     growing the card unbounded (the float variant additionally caps the whole card). */
+  max-height: min(40dvh, 420px);
+  overflow-y: auto;
+}
+
+/* Markdown-rendered prose: the card's flex gap owns vertical rhythm, so strip the
+   outer paragraph margins; wide code blocks scroll horizontally inside the card. */
+.hitl-prompt-md p:first-child {
+  margin-top: 0;
+}
+.hitl-prompt-md p:last-child {
+  margin-bottom: 0;
+}
+.hitl-prompt-md pre {
+  overflow-x: auto;
 }
 
 .hitl-step {

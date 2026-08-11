@@ -1,4 +1,5 @@
 import "./hitl.css";
+import { Markdown } from "./LazyMarkdown";
 import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useEffect, useRef, useState } from "react";
@@ -220,6 +221,20 @@ function Field({
   );
 }
 
+
+/** Model-authored prose (question / description) renders as markdown: agents write
+ *  **bold** / `code` / numbered lists expecting formatting, and the raw sigils read
+ *  as noise (operator report, 2026-08-10). Reuses the chat's lazy DS pipeline. The
+ *  approval `detail` block deliberately stays a literal <pre> — a shell command
+ *  must never be markdown-mangled. */
+function HitlProse({ text }: { text: string }) {
+  return (
+    <div className="hitl-prompt hitl-prompt-md">
+      <Markdown>{text}</Markdown>
+    </div>
+  );
+}
+
 export function HitlForm({
   payload,
   busy,
@@ -297,7 +312,7 @@ export function HitlForm({
         onKeyDown={onRootKeyDown}
       >
         <div className="hitl-title">{payload.title || "Approve this action?"}</div>
-        {payload.description && <div className="hitl-prompt">{payload.description}</div>}
+        {payload.description && <HitlProse text={payload.description} />}
         {payload.detail && <pre className="hitl-detail">{payload.detail}</pre>}
         <div className="hitl-actions">
           <Button type="button" variant="ghost" onClick={() => onSubmit("denied")} disabled={busy}>
@@ -329,7 +344,7 @@ export function HitlForm({
     return (
       <div className="hitl-card" role="dialog" aria-label="Input requested" ref={rootRef} onKeyDown={onRootKeyDown}>
         <div className="hitl-title">{payload.title || "Input requested"}</div>
-        <div className="hitl-prompt">{prompt}</div>
+        <HitlProse text={prompt} />
         {/* No autoFocus: it fires at COMMIT (before effects), which would make the
             restore-focus capture above see this textarea instead of the composer.
             The focus-grab effect owns landing here instead. */}
@@ -401,11 +416,11 @@ export function HitlForm({
           </div>
         )}
       </div>
-      {payload.description && <div className="hitl-prompt">{payload.description}</div>}
+      {payload.description && <HitlProse text={payload.description} />}
 
       <div className="hitl-step" key={stepIdx}>
         {step.title && <div className="hitl-step-title">{step.title}</div>}
-        {step.description && <div className="hitl-prompt">{step.description}</div>}
+        {step.description && <HitlProse text={step.description} />}
         {visibleFieldsOf(step, values).map(([key, schema, req]) => (
           <Field
             key={key}
