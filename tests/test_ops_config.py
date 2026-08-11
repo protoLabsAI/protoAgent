@@ -44,6 +44,101 @@ async def test_set_disk_only_writes_yaml(monkeypatch):
     assert captured["doc"] == {"a": 1, "b": 2}
 
 
+# ── #2575: the disk-only path must route secrets exactly like a live server ──
+
+
+def _isolate_config_files(monkeypatch, tmp_path):
+    """Point BOTH config files at temp paths — `strip_secrets_from_doc` relocates
+    inline secrets, so an unisolated run would write the developer's real overlay."""
+    from graph import config_io
+
+    cfg, secrets = tmp_path / "langgraph-config.yaml", tmp_path / "secrets.yaml"
+    cfg.write_text("model:\n  name: m\n", encoding="utf-8")
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: cfg)
+    monkeypatch.setattr(config_io, "secrets_yaml_path", lambda: secrets)
+    return cfg, secrets
+
+
+async def test_set_disk_only_routes_secrets_to_the_overlay(monkeypatch, tmp_path):
+    """The bug: `protoagent config set auth.token=…` on a stopped instance wrote the
+    credential in plaintext into the tracked-shape YAML and never made secrets.yaml."""
+    from tests.privacy_asserts import assert_owner_only
+
+    cfg, secrets = _isolate_config_files(monkeypatch, tmp_path)
+
+    res = await set_config({"auth": {"token": "sk-super-secret"}}, apply_settings=None)
+
+    assert res.ok is True and res.reloaded is False
+    assert "sk-super-secret" not in cfg.read_text(encoding="utf-8")  # never in the tracked file
+    assert "sk-super-secret" in secrets.read_text(encoding="utf-8")
+    assert_owner_only(secrets)
+    assert any("secrets.yaml" in m for m in res.messages)  # and it says where it went
+
+
+async def test_set_disk_only_still_writes_non_secret_keys(monkeypatch, tmp_path):
+    import yaml
+
+    cfg, secrets = _isolate_config_files(monkeypatch, tmp_path)
+
+    res = await set_config({"model": {"temperature": 0.3}}, apply_settings=None)
+
+    doc = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert doc["model"]["temperature"] == 0.3
+    assert doc["model"]["name"] == "m"  # untouched sibling preserved
+    assert not secrets.exists()  # no overlay conjured for a plain setting
+    assert any("config.yaml" in m for m in res.messages)
+
+
+async def test_set_disk_only_splits_a_mixed_update(monkeypatch, tmp_path):
+    import yaml
+
+    cfg, secrets = _isolate_config_files(monkeypatch, tmp_path)
+
+    res = await set_config(
+        {"model": {"api_key": "sk-live", "api_base": "http://gw:4000/v1"}},
+        apply_settings=None,
+    )
+
+    doc = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert doc["model"]["api_base"] == "http://gw:4000/v1"
+    assert "api_key" not in doc["model"]
+    assert yaml.safe_load(secrets.read_text(encoding="utf-8"))["model"]["api_key"] == "sk-live"
+    assert len(res.messages) == 2  # one line per destination
+
+
+async def test_set_disk_only_strips_a_secret_an_older_yaml_carries(monkeypatch, tmp_path):
+    """The documented belt: 'every config save also strips any secret keys the main
+    YAML might still carry', so a checkout converges to secret-free. It never fired
+    on this path — a plain `config set` left a hand-seeded key inline forever."""
+    import yaml
+
+    cfg, secrets = _isolate_config_files(monkeypatch, tmp_path)
+    cfg.write_text("model:\n  name: m\n  api_key: sk-hand-seeded\n", encoding="utf-8")
+
+    await set_config({"model": {"temperature": 0.3}}, apply_settings=None)
+
+    doc = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert "api_key" not in doc["model"]  # relocated, not left inline
+    assert yaml.safe_load(secrets.read_text(encoding="utf-8"))["model"]["api_key"] == "sk-hand-seeded"
+
+
+async def test_set_disk_only_blank_secret_leaves_the_stored_one(monkeypatch, tmp_path):
+    """Blank means 'leave the stored secret alone' (the settings UI sends blank for an
+    unchanged key). It must not clobber, and must not claim it wrote something."""
+    import yaml
+
+    from graph import config_io
+
+    cfg, secrets = _isolate_config_files(monkeypatch, tmp_path)
+    config_io.save_secrets({"auth": {"token": "keep-me"}})
+
+    res = await set_config({"auth": {"token": ""}}, apply_settings=None)
+
+    assert yaml.safe_load(secrets.read_text(encoding="utf-8"))["auth"]["token"] == "keep-me"
+    assert "no changes" in res.messages[0]
+    assert "auth" not in (yaml.safe_load(cfg.read_text(encoding="utf-8")) or {})
+
+
 async def test_get_live_config(monkeypatch):
     import graph.config_io as cio
 
