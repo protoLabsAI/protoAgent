@@ -11,6 +11,11 @@ as an **`acp` delegate**: `delegate_to(target, query)`. protoAgent is the ACP
 over the [Agent Client Protocol](https://agentclientprotocol.com) — JSON-RPC 2.0
 over the child's stdin/stdout.
 
+**This is the supported way to use a coding agent.** The other direction — letting a
+coding agent *be* the runtime for every turn — is [deprecated](/guides/acp-runtime):
+as a delegate, the coding agent does the coding work while protoAgent's own loop keeps
+the turn, so memory, goals, skills, and tool policy all still apply.
+
 ::: tip History
 This used to be a standalone `coding_agent` plugin contributing a `code_with` tool
 ([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp)). That tool was **retired** in

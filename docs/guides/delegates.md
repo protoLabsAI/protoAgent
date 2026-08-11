@@ -8,7 +8,7 @@ unified roster of delegates it can hand work to:
 |---|---|---|
 | **a2a** | A fleet **agent** over the A2A protocol | JSON-RPC `message/send` (+ poll) |
 | **openai** | An OpenAI-compatible **model endpoint** — ask another model | `POST /v1/chat/completions` |
-| **acp** | A CLI **coding agent** (protoCLI, Claude Code, …) over ACP | the ADR 0024 `AcpClient` |
+| **acp** | A CLI **coding agent** (protoCLI, Claude Code, …) over ACP — the [supported way](/guides/coding-agents) to use one | the ADR 0024 `AcpClient` |
 
 This unifies what used to be three separate things — `peer_consult` (a2a),
 `code_with` (acp), and "no way to ask another model" — into one hot-swappable

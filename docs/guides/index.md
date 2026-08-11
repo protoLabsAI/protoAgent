@@ -22,7 +22,7 @@ Shape how the agent's loop behaves — standing goals, timers, middleware hooks,
 | [Schedule future work](/guides/scheduler) | You want the agent to defer tasks to itself ("remind me tomorrow", recurring sweeps) — bundled local sqlite |
 | [Middleware](/guides/middleware) | You want pre/post hooks on the agent turn (plugin-contributed) |
 | [System lifecycle events](/guides/lifecycle-events) | You want plugins/skills to react to boot, idle-wake, or the desktop shell coming to the foreground (event-bus broadcasts) |
-| [Run on a coding agent (ACP runtime)](/guides/acp-runtime) | You want an external coding agent (proto/Codex/Claude/Copilot/OpenCode) to *be* the runtime brain, with protoAgent as the shell |
+| [Run on a coding agent (ACP runtime)](/guides/acp-runtime) | **Deprecated** — you already run an `acp:*` runtime and need its reference. For new work, hand coding jobs to an [`acp` delegate](/guides/delegates) instead |
 | [Run on Hermes (preset)](/guides/hermes) | You already run Hermes Agent and want protoAgent's console/A2A/scheduler wrapped around it — one command |
 
 ## Skills, subagents & workflows

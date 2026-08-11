@@ -1,25 +1,38 @@
-# Run on a coding agent (ACP runtime)
+# Run on a coding agent (ACP runtime) — deprecated
 
-protoAgent normally runs its turns on the built-in **LangGraph** loop. It can instead hand
-the whole turn to an **external coding agent** — **proto, Codex, Claude, Copilot, OpenCode**
-— over the [Agent Client Protocol (ACP)](https://agentclientprotocol.com). The coding agent
+::: warning Deprecated — use a coding-agent delegate instead
+Running the **whole turn** on an external coding agent is **no longer offered**. The option is
+gone from the setup wizard and Settings; new instances can't select it.
+
+- **Existing configs keep working.** An `agent_runtime: acp:<agent>` already in your YAML still
+  drives turns, and the console labels it deprecated. Nothing breaks on upgrade.
+- **The supported way to use a coding agent is a delegate** — [`delegate_to`](/guides/delegates)
+  with an `acp` delegate. Your agent hands a coding job to protoCLI / Claude Code / Codex and
+  gets the result back, keeping protoAgent's own loop (and its memory, goals, and tool
+  policy) in charge of the turn.
+- **To switch off it**, pick any brain in Settings ▸ Model (a gateway model, or your Claude /
+  ChatGPT subscription) — the save rewrites `agent_runtime` to `native`.
+
+The rest of this page documents the mode as it still behaves, for instances that run it.
+:::
+
+## What it does
+
+protoAgent normally runs its turns on the built-in **LangGraph** loop. In this mode it hands
+the whole turn to an **external coding agent** — **proto, Codex, Claude, Copilot, OpenCode** —
+over the [Agent Client Protocol (ACP)](https://agentclientprotocol.com). The coding agent
 becomes the *brain* (it reasons and uses its own tools); protoAgent stays the *shell* — A2A
 endpoint, scheduling, goals, console, memory — wrapped around it.
 
-> This is the **inverse** of [Spawn CLI coding agents](/guides/coding-agents): there the agent
-> *calls out* to a coding agent as a tool; here a coding agent *drives the runtime*.
+> This is the **inverse** of a [coding-agent delegate](/guides/coding-agents): there your agent
+> *calls out* to a coding agent as one step of its own turn — which is why the delegate is the
+> pattern that survived. Here the coding agent *replaces* the runtime.
 
-It's **opt-in** — the default runtime is `native`, so nothing changes until you set it.
-See [ADR 0033](/adr/0033-pluggable-agent-runtime-acp) for the design.
+See [ADR 0033](/adr/0033-pluggable-agent-runtime-acp) for the original design.
 
-## Why
+## Configure it (existing instances)
 
-- Run the agent on the model + subscription you already use (e.g. your Claude or Codex login).
-- Get the coding agent's full native toolset (file edit, shell) *inside* protoAgent's operable,
-  schedulable, goal-driven A2A runtime.
-- Swap brains by config — the runtime is a separate axis from the model reference.
-
-## Enable it
+There is no UI for these keys any more — edit the YAML directly.
 
 ```yaml
 agent_runtime: acp:proto         # native (default) | acp:<agent>
@@ -105,6 +118,9 @@ defaults to all. The agent runs with its own permissions on the host (its CLI's 
 ## Limits
 
 - The native and ACP runtimes don't run in the same turn — `agent_runtime` picks one.
+- **Deprecated**: no new selection path exists (wizard + Settings dropped it), so this mode
+  only persists where it was already configured. A [coding-agent delegate](/guides/delegates)
+  is the supported replacement and composes with everything else the native loop does.
 - The agent's answer **streams** as it emits text chunks (and tool calls render as cards in
   order). Granularity is the agent's — proto sends a few coarse chunks rather than per-token;
   agents that stream token-by-token render finer.

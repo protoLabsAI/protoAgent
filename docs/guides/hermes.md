@@ -18,6 +18,11 @@ This is the Hermes-flavored case of the [ACP runtime](/guides/acp-runtime) (ADR 
 Hermes ships an in-tree ACP adapter (`hermes-acp`), so it slots into the same seam as the
 coding agents, but as a *general* personal agent rather than a coding specialist.
 
+> **Note:** the ACP runtime this preset configures is **deprecated** — it's no longer offered
+> in the setup wizard or Settings, and the preset is now the only path that sets it. The CLI
+> command still works and existing installs are unaffected, but it's not the direction of
+> travel; for handing *coding jobs* to an agent, use an [`acp` delegate](/guides/delegates).
+
 ## What the preset does
 
 `protoagent hermes` (= `protoagent runtime use hermes`) is idempotent and never clobbers

@@ -295,7 +295,11 @@ are mounted by the client directly. Empty `tools` ⇒ nothing exposed (don't han
 etc. to an outside brain unless you mean to). The sidecar boots **stores only** — it never starts
 the agent's background loops — so it's safe to run against a live instance's data.
 
-## Run on a coding agent (ACP runtime)
+## Run on a coding agent (ACP runtime) — deprecated
+
+> **Deprecated**: this runtime mode is no longer offered in the wizard or Settings. Existing
+> configs keep working; use a [coding-agent delegate](/guides/delegates) instead. Kept here
+> because the operator MCP bus below is what such an instance still uses.
 
 protoAgent can hand the *whole turn* to an external coding agent — **proto, Codex, Claude,
 Copilot, OpenCode** — over ACP (ADR 0033). The coding agent is the brain (with its own
@@ -315,7 +319,9 @@ With this set, each turn is driven by the coding agent: protoAgent assembles the
 (a cacheable persona prefix sent once, then per-turn deltas — ADR 0033 D5), the agent reasons
 + uses its own tools, and reaches back into protoAgent's notes/tasks/memory/workflows through
 the mounted operator MCP server. Defaults are `native` (the built-in LangGraph loop), so this
-is inert until you opt in. Each agent needs its CLI installed + authenticated on the host.
+is inert until you opt in — and since the selection UI is gone, that means hand-editing the
+YAML on an instance that already runs this way. Each agent needs its CLI installed +
+authenticated on the host.
 
 ## Notes & limits
 
