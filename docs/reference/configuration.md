@@ -370,8 +370,25 @@ routing:
 
 | Key | Default | What |
 |---|---|---|
-| `fallback_models` | `[]` | Models to retry on a primary-model error, in order (same gateway). Empty = no fallback. |
+| `fallback_models` | `[]` | Models to retry on a primary-model error, in order. Empty = no fallback. |
 | `aux_model` | `""` | Single cheap/fast alias for non-reasoning calls (compaction summarizer, goal verifier, subagent delegation). Blank = everything runs on the main model; each path's own override still wins. |
+
+### Mixing a subscription with the gateway
+
+A native OAuth provider (`model.provider: anthropic-oauth` / `openai-codex`, [ADR 0097](/adr/0097-native-oauth-subscription-providers)) bypasses the gateway entirely — so LiteLLM's own `fallbacks:` chain can't see those calls, and a subscription hiccup or an expired credential is otherwise a hard stop.
+
+Any slot that takes a model name — `routing.fallback_models`, `routing.aux_model`, `compaction.model`, `goal.eval_model`, a subagent's `model` — accepts a **gateway alias** to opt that call out of the subscription. The discriminator is the `/`: namespaced names (`protolabs/coder`) route through the gateway, bare ids (`claude-sonnet-5`) stay on the subscription. Same convention as the `acp:` prefix.
+
+```yaml
+model:
+  provider: anthropic-oauth      # main brain on your Claude subscription
+  name: claude-sonnet-5
+routing:
+  fallback_models: [protolabs/coder]   # degrade to the gateway if the subscription can't serve
+  aux_model: protolabs/fast            # cheap calls never touch the subscription
+```
+
+Requires a gateway key (`model.api_key` or `OPENAI_API_KEY`); without one the alias is ignored with a warning, since there'd be nothing to route to. A gateway alias as the **main** `model.name` under a native provider is still an error — that's a misconfiguration, not a fallback.
 
 ## `goal`
 

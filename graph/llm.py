@@ -72,6 +72,8 @@ def _chunk_has_content(item: object) -> bool:
         if content == "" or content == []:
             return False  # a shape we understand, and it's empty
     return True  # unknown shape — assume it was seen
+
+
 _STREAM_RETRY_BACKOFF_S = 0.5
 
 
@@ -120,8 +122,7 @@ async def _stream_with_reconnect(
                 else "provider closed stream; possible rate limit"
             )
             log.warning(
-                "model stream dropped before any content (%s: %s) — reconnecting, "
-                "attempt %d/%d in %.1fs (%s)",
+                "model stream dropped before any content (%s: %s) — reconnecting, attempt %d/%d in %.1fs (%s)",
                 type(exc).__name__,
                 str(exc)[:200],
                 attempt + 1,
@@ -164,6 +165,16 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             max_retries=self.max_retries or 0,
         ):
             yield chunk
+
+
+def _gateway_configured(config: LangGraphConfig) -> bool:
+    """Is there a usable OpenAI-compatible gateway key (config or env)?
+
+    Defined here rather than borrowed from ``runtime.acp_runtime`` — the question is
+    "can the gateway path build?", which belongs to this module, and the ACP runtime is
+    deprecated (#2548)."""
+    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    return bool(key)
 
 
 def _build_llm_kwargs(config: LangGraphConfig) -> dict:
@@ -280,14 +291,44 @@ def create_llm(
     # coding-agent OAuth token straight through the native pipeline — no gateway, no
     # ACP. Gated on model.provider so the default gateway path below is unchanged. The
     # branch that isn't taken imports nothing (builders are lazy). A per-slot `acp:`
-    # override above still wins; an explicit gateway `model_name` here means the aux
-    # slot inherits the native provider (must be a real Claude/OpenAI model id).
+    # override above still wins.
     from graph.providers import build_native_oauth_llm, is_native_oauth_provider
 
     if is_native_oauth_provider(getattr(config, "model_provider", "")):
-        return build_native_oauth_llm(
-            config.model_provider, config, model_name=model_name, reasoning_effort=reasoning_effort
-        )
+        # ...and so does a per-slot GATEWAY alias (#2550). Selecting a subscription
+        # provider used to apply it to every slot that inherits — aux_model,
+        # compaction.model, goal.eval_model, each subagent — and a gateway alias in one
+        # of those RAISED rather than routing (the native builders reject any name
+        # containing "/"). So a subscription-backed agent had exactly one lane and no
+        # degrade path: LiteLLM's fallback chain can't see a request that bypasses the
+        # gateway, and protoAgent has no app-side failover by design.
+        #
+        # A "/" is the discriminator because it already is one: gateway aliases are
+        # namespaced (`protolabs/coder`), native model ids are not (`claude-opus-4-6`).
+        # Same shape as the `acp:` prefix above — a namespaced slot name routes
+        # elsewhere. This is the mixed native-main / gateway-aux case ADR 0097 listed as
+        # a follow-up; declarative failover for the MAIN slot is still open (#2550).
+        if model_name and "/" in model_name and _gateway_configured(config):
+            log.info(
+                "[llm] slot model %r is a gateway alias — routing it through the gateway "
+                "rather than the native %s provider",
+                model_name,
+                config.model_provider,
+            )
+        else:
+            if model_name and "/" in model_name:
+                # Falling through would build a client against an empty gateway. Let the
+                # native builder raise its own clear error instead, but say why here —
+                # "alias ignored" is otherwise invisible.
+                log.warning(
+                    "[llm] slot model %r looks like a gateway alias but no gateway key is "
+                    "configured; it cannot override the native %s provider",
+                    model_name,
+                    config.model_provider,
+                )
+            return build_native_oauth_llm(
+                config.model_provider, config, model_name=model_name, reasoning_effort=reasoning_effort
+            )
 
     kwargs = _build_llm_kwargs(config)
     if model_name:
