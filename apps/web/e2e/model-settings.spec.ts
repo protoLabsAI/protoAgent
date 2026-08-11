@@ -61,3 +61,31 @@ test("Get models follows the form's provider — anthropic-oauth lists the subsc
   await model.click();
   await expect(page.getByRole("menuitemradio", { name: "claude-sonnet-4-5" })).toBeVisible();
 });
+
+// #2466 — one Escape closed BOTH the open dropdown and the whole Settings dialog, losing the
+// operator's section and any unsaved edits. The unit test pins the arbitration predicate
+// (settingsEscape.test.ts); this pins the behaviour the issue actually reported, end to end.
+test("Escape closes the dropdown first, Settings second — never both at once (#2466)", async ({ page }) => {
+  await openModelSettings(page);
+  const overlay = page.locator(".settings-overlay");
+  const model = page.locator("#set-model\\.name");
+
+  // Reproduce the report exactly: "Get models" turns Primary model into a live dropdown.
+  await page.getByRole("button", { name: "Get models" }).click();
+  await expect(page.locator(".pl-toast", { hasText: /found 3 models/i })).toBeVisible();
+  await model.click();
+  await expect(page.getByRole("menuitemradio", { name: "protolabs/smart" })).toBeVisible();
+
+  // FIRST Escape: only the topmost layer goes.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menuitemradio", { name: "protolabs/smart" })).toBeHidden();
+  await expect(overlay).toBeVisible();
+  // ...still on Model, with the section's controls intact — the context the bug destroyed.
+  await expect(page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Model", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(model).toBeVisible();
+
+  // SECOND Escape, no nested layer open: now Settings closes.
+  await page.keyboard.press("Escape");
+  await expect(overlay).toBeHidden();
+});
