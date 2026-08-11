@@ -43,6 +43,11 @@ jobs:
           npm install
           npm run build
         working-directory: sites/marketing
+        env:
+          # The download page resolves the newest desktop release from the GitHub
+          # API at build time (src/lib/desktop-release.ts, #2514) — authenticated,
+          # so it never rides the runners' shared unauthenticated rate pool.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # --- Docs (VitePress) served at /docs ---
       - name: Build docs (base /docs/)

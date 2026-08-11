@@ -1,6 +1,6 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-import changelog from '../../data/changelog.json';
+import { fetchLatestDesktopRelease } from '../lib/desktop-release';
 
 const repo = 'https://github.com/protoLabsAI/protoAgent';
 
@@ -9,17 +9,14 @@ const repo = 'https://github.com/protoLabsAI/protoAgent';
 // account's Buttondown username.
 const BUTTONDOWN_USER = 'protoLabsAI';
 
-// The release pipeline regenerates this changelog.json on every release
-// (scripts/changelog.py via prepare-release.yml), so changelog[0] is always the
-// latest shipped version and the derived dmg asset is guaranteed to exist.
-const latest = changelog[0];
-const version = latest.version.replace(/^v/, ''); // 0.62.0
-const tag = latest.version.startsWith('v') ? latest.version : `v${latest.version}`;
-// Stable mac asset name: protoAgent-<bare-version>-aarch64-apple-darwin.dmg
-const dmgUrl = `${repo}/releases/download/${tag}/protoAgent-${version}-aarch64-apple-darwin.dmg`;
-// Stable Windows asset name: protoAgent-<bare-version>-x86_64-pc-windows-msvc-setup.exe
-// (ungated 2026-08-10 after the v0.130.0→v0.131.x Windows acceptance burndown).
-const setupExeUrl = `${repo}/releases/download/${tag}/protoAgent-${version}-x86_64-pc-windows-msvc-setup.exe`;
+// Desktop and source/server releases share one tag sequence but ship on separate
+// cadences, so "newest changelog entry" is NOT "newest desktop build" (#2514).
+// This resolves the newest release that actually carries both installers and
+// links the assets' own URLs; it throws — failing the build — rather than let a
+// dead download link go out. Needs network (and GITHUB_TOKEN in CI, see
+// marketing-deploy.yml); other pages still render in `astro dev` if it fails.
+const desktop = await fetchLatestDesktopRelease();
+const { dmgUrl, setupExeUrl } = desktop;
 
 const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
 const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
@@ -65,7 +62,7 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
           class="px-2 py-0.5 rounded text-sm font-mono border border-[var(--color-edge)] bg-[var(--color-surface-1)]"
           style="color: var(--pl-color-brand-lavender);"
         >
-          {latest.version}
+          {desktop.tag}
         </span>
         <span
           class="px-2 py-0.5 rounded text-xs font-mono uppercase tracking-wider"
@@ -73,7 +70,7 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
         >
           Beta
         </span>
-        <span class="text-zinc-500 text-sm">{latest.date}</span>
+        <span class="text-zinc-500 text-sm">{desktop.date}</span>
       </div>
     </div>
 
@@ -88,7 +85,7 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
           <polyline points="7 10 12 15 17 10" />
           <line x1="12" y1="15" x2="12" y2="3" />
         </svg>
-        Download protoAgent {latest.version} (.dmg)
+        Download protoAgent {desktop.tag} (.dmg)
       </a>
 
       <!-- System requirements -->
@@ -147,7 +144,7 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
           <polyline points="7 10 12 15 17 10" />
           <line x1="12" y1="15" x2="12" y2="3" />
         </svg>
-        Download protoAgent {latest.version} (setup.exe)
+        Download protoAgent {desktop.tag} (setup.exe)
       </a>
 
       <!-- System requirements -->
