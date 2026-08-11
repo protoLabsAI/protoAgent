@@ -39,6 +39,63 @@ _MAX_READ_CHARS = 50_000
 _MAX_LIST = 400
 _MAX_MATCHES = 200
 
+# What `search_files` walks past by default (#2541). Two different harms, one list:
+# a compiled artifact dumped into the transcript is several KB of marshalled bytecode
+# the model has to read around, and — worse, because it is silent — a `.pyc` can
+# OUTLIVE the source it was built from, so a match there can cite code that no longer
+# exists. Vendored/generated trees also duplicate every source hit.
+#
+# Deliberately the generated-tree set rather than a .gitignore reader: an ignore file
+# hides deliberately-untracked *source* (local configs, scratch dirs) that an agent
+# often does want to find. Kept tight for the same reason — `build/` and `target/` are
+# out because they are real source directories in some repos.
+_SKIP_DIRS = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "dist",
+        ".next",
+        "coverage",
+    }
+)
+# `grep -I` sniffs a fixed prefix rather than the whole file; a NUL byte in it means
+# "not text". Same heuristic, same failure mode (a NUL past the prefix reads as text).
+_BINARY_SNIFF_BYTES = 8192
+
+
+def _is_probably_binary(path: Path) -> bool:
+    """`grep -I` semantics — a NUL byte in the first chunk means 'not text'."""
+    try:
+        with path.open("rb") as fh:
+            return b"\x00" in fh.read(_BINARY_SNIFF_BYTES)
+    except OSError:
+        return True  # unreadable is not searchable either
+
+
+def _walk_searchable(base: Path) -> tuple[list[Path], bool]:
+    """Files under `base` worth grepping, plus whether anything was skipped.
+
+    Prunes with ``os.walk``'s in-place ``dirnames`` rather than filtering ``rglob``
+    output, so a `node_modules` is never DESCENDED into — the cost of the old version
+    was paid walking the tree, not just printing it. Sorted for a stable result order,
+    which ``rglob`` never promised.
+    """
+    files: list[Path] = []
+    skipped = False
+    for dirpath, dirnames, filenames in os.walk(base):
+        keep = [d for d in dirnames if d not in _SKIP_DIRS]
+        skipped = skipped or len(keep) != len(dirnames)
+        dirnames[:] = sorted(keep)
+        files.extend(Path(dirpath) / name for name in sorted(filenames))
+    return files, skipped
+
 
 _SHELLS = ("default", "cmd", "powershell", "sh")
 
@@ -52,15 +109,12 @@ def _encoded_powershell(command: str) -> str:
     the pipe instead of arriving in the OEM code page.
     """
     script = (
-        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
-        "$OutputEncoding=[System.Text.Encoding]::UTF8;" + command
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;" + command
     )
     return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
 
 
-def _platform_shell_argv(
-    command: str, shell: str = "default", *, windows: bool | None = None
-) -> tuple[list[str], str]:
+def _platform_shell_argv(command: str, shell: str = "default", *, windows: bool | None = None) -> tuple[list[str], str]:
     """Resolve ``(argv, runner)`` for ``command`` under an explicit shell grammar.
 
     ``runner`` is the human-readable executable+wrapper chain. It goes into the
@@ -295,16 +349,34 @@ def build_fs_tools(config) -> list:
         return "\n".join(rels) + more if rels else "(no matches)"
 
     @tool
-    def search_files(project: str, query: str, path: str = ".") -> str:
-        """Substring-search files under a managed project path; returns file:line matches."""
+    def search_files(project: str, query: str, path: str = ".", include_generated: bool = False) -> str:
+        """Substring-search text files under a managed project path; returns file:line matches.
+
+        Binary files and generated/vendored directories are skipped by default —
+        __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .tox, .git, .venv, venv,
+        node_modules, dist, .next, coverage. Set include_generated=true to search them
+        too (e.g. to grep a vendored dependency).
+        """
         try:
             base = registry.resolve(project, path)
         except ValueError as exc:
             return f"Error: {exc}"
         root = registry.resolve(project, ".")
-        files = [base] if base.is_file() else [p for p in base.rglob("*") if p.is_file()]
+
+        skipped_dirs = False
+        if base.is_file():
+            files = [base]
+        elif include_generated:
+            files = sorted(p for p in base.rglob("*") if p.is_file())
+        else:
+            files, skipped_dirs = _walk_searchable(base)
+
         hits: list[str] = []
+        skipped_binary = False
         for f in files:
+            if not include_generated and _is_probably_binary(f):
+                skipped_binary = True
+                continue
             try:
                 for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                     if query in line:
@@ -313,7 +385,13 @@ def build_fs_tools(config) -> list:
                             return "\n".join(hits) + "\n… (more matches; narrow the search)"
             except OSError:
                 continue
-        return "\n".join(hits) if hits else "(no matches)"
+        if hits:
+            return "\n".join(hits)
+        # Say what was NOT searched, so "(no matches)" can't be read as "not in this
+        # repo" when the answer is sitting in a pruned tree.
+        if skipped_dirs or skipped_binary:
+            return "(no matches; binary files and generated dirs were skipped — retry with include_generated=true to search those too)"
+        return "(no matches)"
 
     @tool
     def write_file(project: str, path: str, content: str) -> str:
@@ -403,9 +481,7 @@ def build_fs_tools(config) -> list:
     if allow_run:
 
         @tool
-        async def run_command(
-            project: str, command: str, timeout: float = 60.0, shell: str = "default"
-        ) -> str:
+        async def run_command(project: str, command: str, timeout: float = 60.0, shell: str = "default") -> str:
             """Run a shell command inside a managed project's directory (fenced cwd).
 
             Powerful + dual-use (like execute_code) — use it for read-only

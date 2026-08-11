@@ -94,6 +94,69 @@ def test_read_list_find_search(workspace):
     assert "main.py" in hit and "TODO" in hit
 
 
+# ── search hygiene: binary + generated trees (#2541) ──────────────────────────
+@pytest.fixture
+def noisy_workspace(tmp_path):
+    """A project whose answer is in source, surrounded by the artifacts that used to
+    drown it: real marshalled bytecode, a pytest cache, and a vendored tree."""
+    root = tmp_path / "noisy"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "store.py").write_text("SESSION_KEY = 'needle'\n")
+
+    # A .pyc holds NUL bytes and a copy of every string literal in its source — which
+    # is why it matched, and why the match was unreadable.
+    (root / "src" / "__pycache__").mkdir()
+    (root / "src" / "__pycache__" / "store.cpython-311.pyc").write_bytes(
+        b"\xcb\r\r\n\x00\x00\x00\x00" + b"needle" + b"\x00\xe3\x00\x00"
+    )
+    (root / ".pytest_cache" / "v" / "cache").mkdir(parents=True)
+    (root / ".pytest_cache" / "v" / "cache" / "nodeids").write_text('["test_needle"]')
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    (root / "node_modules" / "pkg" / "index.js").write_text("// needle\n")
+    return root
+
+
+def test_search_skips_bytecode_and_generated_dirs(noisy_workspace):
+    """The #2541 report: one search dumped several KB of bytecode into the model's
+    context, and the cache hits duplicated (or stale-quoted) the source hit."""
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(noisy_workspace)}]))
+
+    hit = t["search_files"].invoke({"project": "n", "query": "needle"})
+
+    assert "src/store.py" in hit
+    assert ".pyc" not in hit
+    assert "__pycache__" not in hit
+    assert ".pytest_cache" not in hit
+    assert "node_modules" not in hit
+
+
+def test_search_can_opt_back_into_generated_trees(noisy_workspace):
+    """The escape hatch — grepping a vendored dependency is a real need."""
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(noisy_workspace)}]))
+
+    hit = t["search_files"].invoke({"project": "n", "query": "needle", "include_generated": True})
+
+    assert "node_modules/pkg/index.js" in hit
+
+
+def test_no_match_says_what_was_not_searched(noisy_workspace):
+    """'(no matches)' must not read as 'not in this repo' when the tool pruned trees."""
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(noisy_workspace)}]))
+
+    out = t["search_files"].invoke({"project": "n", "query": "zzz-absent"})
+
+    assert "no matches" in out and "include_generated" in out
+
+
+def test_search_lists_its_exclusions_in_the_tool_description(workspace):
+    """Acceptance criterion: the model has to be told what it is not being shown."""
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    desc = t["search_files"].description
+    assert "__pycache__" in desc and "node_modules" in desc and "include_generated" in desc
+
+
 def test_read_file_escape_is_refused(workspace):
     _, a, _ = workspace
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
@@ -520,13 +583,8 @@ def test_run_command_powershell_unicode_roundtrip(workspace):
         )
     )
     name = "PA Windows Tool [café] 日本語.txt"
-    cmd = (
-        f"Set-Content -LiteralPath '{name}' "
-        "-Value @('PA-WINDOWS-TOOL-OK','café','日本語 ✓ Ω') -Encoding utf8"
-    )
-    out = asyncio.run(
-        t["run_command"].ainvoke({"project": "a", "command": cmd, "shell": "powershell"})
-    )
+    cmd = f"Set-Content -LiteralPath '{name}' -Value @('PA-WINDOWS-TOOL-OK','café','日本語 ✓ Ω') -Encoding utf8"
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": cmd, "shell": "powershell"}))
     assert not out.startswith("Error:"), out
     target = a / name
     assert target.exists()
@@ -548,8 +606,6 @@ def test_run_command_powershell_stdout_unicode(workspace):
         )
     )
     out = asyncio.run(
-        t["run_command"].ainvoke(
-            {"project": "a", "command": "Write-Output 'café ✓ 日本語'", "shell": "powershell"}
-        )
+        t["run_command"].ainvoke({"project": "a", "command": "Write-Output 'café ✓ 日本語'", "shell": "powershell"})
     )
     assert "café ✓ 日本語" in out
