@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SettingsGroup } from "../lib/types";
 import {
   bareModel,
+  groupByLane,
   laneOf,
   modelCardHint,
   modelChoices,
@@ -259,5 +260,43 @@ describe("typed /model <alias>", () => {
     expect(resolveModelArg(data, "claude-sonnet-5")).toBe("anthropic-oauth:claude-sonnet-5");
     expect(resolveModelArg(data, "anthropic-oauth:claude-sonnet-5")).toBe("anthropic-oauth:claude-sonnet-5");
     expect(resolveModelArg(data, "nope")).toBeNull();
+  });
+});
+
+describe("groupByLane — the menu's sections", () => {
+  it("groups by account in arrival order, labelling each", () => {
+    const groups = groupByLane([
+      "gateway:protolabs/coder",
+      "gateway:protolabs/fast",
+      "anthropic-oauth:claude-sonnet-5",
+      "openai-codex:gpt-5.6-sol",
+    ]);
+
+    expect(groups.map((g) => [g.label, g.items.length])).toEqual([
+      ["Gateway", 2],
+      ["Claude subscription", 1],
+      ["ChatGPT subscription", 1],
+    ]);
+  });
+
+  it("keeps a model in its own lane's group even when it arrives late", () => {
+    // Favorites are operator-ordered, so lanes can interleave; a later gateway pick must
+    // join the gateway section rather than opening a second one.
+    const groups = groupByLane([
+      "gateway:protolabs/coder",
+      "anthropic-oauth:claude-sonnet-5",
+      "gateway:protolabs/fast",
+    ]);
+
+    expect(groups.length).toBe(2);
+    expect(groups[0].items).toEqual(["gateway:protolabs/coder", "gateway:protolabs/fast"]);
+  });
+
+  it("puts unqualified names in one unlabelled group — a flat menu, as before", () => {
+    const groups = groupByLane(["protolabs/reasoning", "protolabs/fast"]);
+
+    expect(groups).toEqual([
+      { lane: "", label: "", items: ["protolabs/reasoning", "protolabs/fast"] },
+    ]);
   });
 });

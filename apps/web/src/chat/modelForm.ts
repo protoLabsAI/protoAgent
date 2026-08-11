@@ -92,6 +92,24 @@ export function providerOf(alias: string): string {
   return i > 0 ? alias.slice(0, i) : "";
 }
 
+export type ModelLaneGroup = { lane: string; label: string; items: string[] };
+
+/** Group picker choices by lane, preserving the order they arrived in.
+ *
+ * Unqualified names lead in one unlabelled group — a single-lane operator (or an older
+ * backend) sees a flat list, exactly as before, because a lone "Gateway" heading over
+ * every row is chrome, not information. */
+export function groupByLane(choices: string[]): ModelLaneGroup[] {
+  const groups: ModelLaneGroup[] = [];
+  for (const choice of choices) {
+    const lane = laneOf(choice);
+    const last = groups.find((g) => g.lane === lane);
+    if (last) last.items.push(choice);
+    else groups.push({ lane, label: laneLabel(lane), items: [choice] });
+  }
+  return groups;
+}
+
 /** The cards /model offers: the favorites when any are pinned, else every lane's models
  *  (falling back to the configured lane's list when the cross-provider one is empty —
  *  an older backend, or a probe that failed). */

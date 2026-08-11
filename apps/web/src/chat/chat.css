@@ -622,3 +622,18 @@
   color: var(--pl-color-fg-muted);
   font-size: 13px;
 }
+
+/* Provider heading inside the composer's model menu. Rows under it are bare model
+   names, so the account they belong to has to live somewhere — a heading beats a badge
+   on every row when the rows are the thing you're comparing.
+   DS gap: @protolabsai/ui/menu exports MenuItem + MenuSeparator but no section label.
+   Worth contributing back rather than each surface re-styling this (house rule). */
+.composer-model-lane {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--pl-color-text-muted, #8b8b93);
+  pointer-events: none;
+}
