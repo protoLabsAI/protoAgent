@@ -8,8 +8,9 @@
 # writes to the same three lines under [Unreleased], so two in flight conflict by
 # construction (a 13-PR stack cost ~10 extra CI cycles to that one anchor). CHANGELOG.md
 # is written by the release process — `changelog.py collate` — not by feature PRs. Invoked by the `changelog` job in
-# .github/workflows/checks.yml; kept as a script so tests/test_changelog_gate.py
-# can exercise it against throwaway git repos.
+# .github/workflows/changelog.yml — its OWN workflow since #2293, not checks.yml, so that
+# labeling can re-trigger it without re-running the whole suite; kept as a script so
+# tests/test_changelog_gate.py can exercise it against throwaway git repos.
 #
 #   changelog_gate.sh <base-ref>     # e.g. origin/main
 #
@@ -18,15 +19,18 @@
 # touch the file.
 #
 # Escape hatches (any one skips the gate, exit 0):
-#   - the PR carries the `skip-changelog` label — read from $GITHUB_EVENT_PATH,
-#     the event SNAPSHOT, and this workflow doesn't trigger on `labeled`. Two
-#     consequences, both verified the hard way:
-#       * `gh pr create --label skip-changelog` does NOT work. GitHub's create-PR
-#         API takes no labels, so gh applies them in a second call — after the
-#         `opened` event already fired with an empty label set.
-#       * A re-run does NOT work either: `gh run rerun` replays that same payload.
-#     Only a NEW pull_request event carries the label: a synchronize push (an
-#     empty commit is enough) or close+reopen. Label first, then push.
+#   - the PR carries the `skip-changelog` label. Just apply it — since #2293 the
+#     changelog workflow triggers on `labeled`/`unlabeled`, so labeling fires a fresh
+#     pull_request event whose payload carries the label and the gate re-runs itself.
+#     No empty commit, no close/reopen.
+#     The mechanism is worth knowing, because it constrains the fix: the label is read
+#     from $GITHUB_EVENT_PATH, the event SNAPSHOT, so it has to be on the PR when the
+#     run STARTS. Two shortcuts therefore still don't work, and never will —
+#       * `gh pr create --label skip-changelog` doesn't get you a labeled `opened`
+#         event: GitHub's create-PR API takes no labels, so gh applies them in a
+#         second call, after `opened` already fired with an empty label set.
+#       * `gh run rerun` replays that same payload by definition.
+#     Neither matters now: both leave a red run that the `labeled` event supersedes.
 #   - PR_HEAD_REF matches release/* (release PRs roll [Unreleased] themselves)
 #   - PR_ACTOR is dependabot[bot] (bot PRs never need entries)
 #

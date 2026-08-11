@@ -178,17 +178,26 @@ The root file links to them under **Older releases**; each archive links back.
 ## Branch protection
 
 `main` is protected by a repository **ruleset**: every change needs a PR, and
-the `checks.yml` CI jobs must pass to merge —
+these checks must pass to merge —
 
-| Check | What it runs |
+| Required check | What it runs |
 |---|---|
 | Verify workspace config | `release-tools`' `verify-workspace-config` |
-| Changelog entry | `scripts/changelog_gate.sh` — the PR's merge-base diff must touch `CHANGELOG.md` (#2174; escape hatches: the `skip-changelog` label, `release/*` branches, dependabot) |
-| Lint (ruff + import contracts) | `ruff` + the import-layering contract |
+| Lint (ruff + import contracts) | `ruff` + the import-layering contract, plus attribution and lockfile sync |
 | Python tests | `pytest` |
-| Fleet integration (multi-instance) | the multi-instance fleet suite |
 | A2A live smoke (lean tier) | live A2A smoke against the lean tier |
 | Web E2E smoke | Playwright vs. mock backend |
+| build | the desktop/app build |
+| gitleaks (tree) | secret scan over the tree |
+
+Some jobs run on every PR but are **not** required to merge — treat a failure as
+real, just not blocking:
+
+| Advisory check | What it runs | Why it isn't required |
+|---|---|---|
+| Changelog entry | `scripts/changelog_gate.sh` — the merge-base diff must add a `changelog.d/<issue>.<kind>.md` fragment (#2322). Editing `CHANGELOG.md` directly does *not* satisfy it. Escape hatches: the `skip-changelog` label (apply it and the gate re-runs itself), `release/*` branches, dependabot | Lives in its own `changelog.yml` so labeling can re-trigger it (#2293); the split deliberately carried no protection migration |
+| Fleet integration (multi-instance) | the multi-instance fleet suite | Boots a real hub + members; too slow and too environment-sensitive to block every PR |
+| Windows tests (native) | the suite minus the tracked POSIX-only backlog | Promotion to required is tracked in #2455 |
 
 Direct pushes, force-pushes, and branch deletion are blocked. Approvals are set
 to **0** so the solo/automated flow (you + the release bot) is never blocked on
