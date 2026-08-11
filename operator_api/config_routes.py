@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from fastapi import HTTPException
@@ -220,9 +221,7 @@ def register_config_routes(app) -> None:
         if is_native_oauth_provider(provider):
             from graph.providers.discovery import list_provider_models
 
-            models, error = await asyncio.to_thread(
-                list_provider_models, provider, STATE.graph_config
-            )
+            models, error = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
             return {"models": models, "error": error}
         base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
         key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
@@ -357,9 +356,7 @@ def register_config_routes(app) -> None:
         if is_native_oauth_provider(provider):
             from graph.providers.discovery import validate_oauth_connection
 
-            ok, error = await asyncio.to_thread(
-                validate_oauth_connection, provider, model, STATE.graph_config
-            )
+            ok, error = await asyncio.to_thread(validate_oauth_connection, provider, model, STATE.graph_config)
             return {"ok": ok, "error": error}
         base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
         key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
@@ -559,11 +556,29 @@ def register_config_routes(app) -> None:
 
     @app.post("/api/settings/filesystem-projects")
     async def _api_fs_projects_set(body: dict | None = None):
-        """Replace ``filesystem.projects`` (same replace-list pattern as
-        POST /api/mcp/servers): each entry ``{name?, path, write?}`` — name defaults
-        from the folder basename, paths are ~-expanded, blanks and duplicate names
-        are rejected. An empty list clears explicit roots (fs falls back to the
-        workspace default when enabled).
+        """Replace ``filesystem.projects`` wholesale: each entry ``{name?, path,
+        write?}`` — name defaults from the folder basename, paths are ~-expanded,
+        blanks and duplicate names are rejected. An empty list clears explicit roots
+        (fs falls back to the workspace default when enabled).
+
+        REPLACE, not upsert — and a caller that omits a root removes it. That is what
+        the work-folder editor wants (it posts the whole form), and it is a footgun
+        for everyone else: a script meaning "add one folder" posts a one-entry list
+        and strips every other root, which is capability loss, because
+        ``filesystem.projects`` IS the ADR 0007 fence. Drop enough and the registry
+        empties and the whole fs toolset unbinds (the #2251 failure mode).
+
+        So a removal must be ASKED for: if the incoming list drops any currently
+        configured root, the caller must also send ``replace: true``, and without it
+        this 409s naming exactly what it would have removed. Acknowledged removals
+        are logged and echoed back in ``removed``, so even the intended path is
+        observable rather than silent.
+
+        This docstring used to cite POST /api/mcp/servers as the precedent for the
+        pattern (#2556). It isn't one — that route takes a SINGLE entry, reads the
+        existing list, appends, and has its own DELETE. Two sibling config endpoints
+        documented as matching while behaving in opposite ways, with the destructive
+        one described by pointing at the one that isn't.
 
         Every path must be an ABSOLUTE, EXISTING directory. ``build_fs_tools`` drops
         roots that don't resolve to a directory, and once every configured root is
@@ -606,6 +621,36 @@ def register_config_routes(app) -> None:
             seen.add(name)
             projects.append({"name": name, "path": str(expanded), "write": bool(entry.get("write", False))})
 
+        # What this POST would take away. Compared on PATH, not name: the harm is a
+        # root the agent can no longer reach, and renaming a root you kept isn't that.
+        # normcase so a Windows caller's drive-letter/separator casing doesn't read as
+        # a different folder (and therefore as a removal).
+        def _key(raw: object) -> str:
+            return os.path.normcase(str(Path(str(raw or "")).expanduser()))
+
+        incoming = {_key(p["path"]) for p in projects}
+        current = list(getattr(STATE.graph_config, "filesystem_projects", []) or [])
+        removed = [
+            dict(e) for e in current if isinstance(e, dict) and e.get("path") and _key(e.get("path")) not in incoming
+        ]
+        if removed and not (body or {}).get("replace"):
+            names = ", ".join(f"{e.get('name') or Path(str(e['path'])).name} ({e['path']})" for e in removed)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"this would remove {len(removed)} configured folder(s): {names}. "
+                    "POST replaces the whole list, so any root you omit is dropped — "
+                    "re-send with those entries included to keep them, or add "
+                    '"replace": true to confirm the removal.'
+                ),
+            )
+        if removed:
+            log.warning(
+                "[fs] replacing filesystem.projects removes %d root(s): %s",
+                len(removed),
+                ", ".join(str(e.get("path")) for e in removed),
+            )
+
         from server.agent_init import _apply_settings_changes
 
         updates: dict = {"filesystem": {"projects": projects}}
@@ -616,7 +661,7 @@ def register_config_routes(app) -> None:
         ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
-        return {"ok": True, "projects": projects}
+        return {"ok": True, "projects": projects, "removed": removed}
 
     @app.get("/api/acp-agents")
     async def _api_acp_agents():

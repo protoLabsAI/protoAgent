@@ -2285,11 +2285,18 @@ export const api = {
   managedProjects() {
     return request<ManagedProjects>("/api/projects");
   },
+  // `replace: true` because this editor genuinely IS a replace-list editor — the form
+  // holds every root and removing a row is how you delete one. The server refuses an
+  // unacknowledged removal (409) precisely so that callers which DIDN'T mean to replace
+  // — a script posting one folder to "add" it — can't strip the fence silently (#2556).
   setFsProjects(projects: FsProject[]) {
-    return request<{ ok: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects", {
-      method: "POST",
-      body: { projects },
-    });
+    return request<{ ok: boolean; projects: FsProject[]; removed?: FsProject[] }>(
+      "/api/settings/filesystem-projects",
+      {
+        method: "POST",
+        body: { projects, replace: true },
+      },
+    );
   },
   // Per-plugin freshness (ADR 0027). The backend TTL-caches the ls-remote probe,
   // so polling is cheap; each row carries behind/pinned/error.
