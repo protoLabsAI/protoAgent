@@ -334,3 +334,68 @@ def test_empty_and_missing_state_are_safe():
     assert this_turn_messages(None) == []
     assert this_turn_messages({}) == []
     assert this_turn_messages({"messages": []}) == []
+
+
+# ── #2593: a failed turn must leave a trace in the thread ────────────────────
+
+
+async def _raise_401(*a, **k):
+    raise RuntimeError("Error code: 401 - authentication_error")
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_is_recorded_in_the_thread(monkeypatch):
+    """The bug: the failure went back to the caller and nothing wrote it to the thread, so
+    `/export` read `message_count: 1` and the NEXT turn had no idea the instruction never
+    ran — an operator's request could evaporate and only resurface hours later when the
+    session was reused.
+
+    (The user's own message is checkpointed by the graph before the model is reached; this
+    mock raises earlier than that, so it asserts only the half this change owns. The full
+    two-message transcript is verified end-to-end against a live 401 gateway.)"""
+    from server.chat import chat
+
+    g = _install_graph(monkeypatch, [AIMessage(content="unused")])
+    monkeypatch.setattr(g, "ainvoke", _raise_401)
+
+    out = await chat("remember: ship the release", "sessFail")
+
+    assert out[0]["content"].startswith("**Error:**")  # caller still gets the failure
+    state = await g.aget_state({"configurable": {"thread_id": "a2a:sessFail"}})
+    contents = [getattr(m, "content", "") for m in state.values.get("messages", [])]
+    assert any("**Error:**" in c and "401" in c for c in contents), "the failure must be in the transcript"
+
+
+@pytest.mark.asyncio
+async def test_recorded_failure_is_tagged_so_a_surface_can_render_it_as_an_error(monkeypatch):
+    """It rides as a normal AIMessage so history, /export and the model all see it — but
+    tagged, so a UI can style it as a failure rather than as the agent's answer."""
+    from server.chat import chat
+
+    g = _install_graph(monkeypatch, [AIMessage(content="unused")])
+    monkeypatch.setattr(g, "ainvoke", _raise_401)
+
+    await chat("do the thing", "sessTag")
+
+    state = await g.aget_state({"configurable": {"thread_id": "a2a:sessTag"}})
+    failed = [m for m in state.values["messages"] if getattr(m, "additional_kwargs", {}).get("protoagent_turn_failed")]
+    assert len(failed) == 1 and "**Error:**" in failed[0].content
+
+
+@pytest.mark.asyncio
+async def test_recording_never_masks_the_original_failure(monkeypatch):
+    """This runs ON the failure path, so a problem here must not replace the error it is
+    describing — the caller still gets the 401, not a bookkeeping traceback."""
+    from server.chat import chat
+
+    g = _install_graph(monkeypatch, [AIMessage(content="unused")])
+    monkeypatch.setattr(g, "ainvoke", _raise_401)
+
+    async def _broken_update(*a, **k):
+        raise RuntimeError("checkpointer is down")
+
+    monkeypatch.setattr(g, "aupdate_state", _broken_update)
+
+    out = await chat("do the thing", "sessGuard")
+
+    assert "401" in out[0]["content"]  # the REAL error, not the recorder's

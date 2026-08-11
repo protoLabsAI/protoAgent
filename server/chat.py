@@ -1588,13 +1588,18 @@ async def _chat_langgraph_stream_impl(
                     type(e).__name__,
                     e,
                 )
-                yield ("error", "The model provider closed the stream (possibly rate-limited). Please retry.")
+                retry_msg = "The model provider closed the stream (possibly rate-limited). Please retry."
+                await record_failed_turn(session_id, f"**Error:** {retry_msg}")
+                yield ("error", retry_msg)
             else:
                 log.exception(
                     "[a2a-stream] unhandled exception for session=%s: %s",
                     session_id,
                     e,
                 )
+                # Same record as the non-streaming path: the two surfaces must leave the
+                # SAME transcript, or an exported thread depends on which one ran (#2593).
+                await record_failed_turn(session_id, f"**Error:** {e}")
                 yield ("error", str(e))
         finally:
             tracing.flush()
@@ -1842,6 +1847,40 @@ def _upstream_status(exc: BaseException) -> int | None:
             return code
     code = getattr(getattr(exc, "response", None), "status_code", None)
     return code if isinstance(code, int) and 400 <= code < 600 else None
+
+
+async def record_failed_turn(session_id: str, text: str) -> bool:
+    """Append a failed turn's error to its checkpointed thread. Returns True if recorded.
+
+    A turn that raises used to leave the checkpoint holding only the user's message: the
+    graph saved the human turn, the failure was returned to the caller, and nothing wrote
+    it back. An export of that session read ``message_count: 1`` — the operator's
+    instruction present, no answer, no record that one was even attempted — and the NEXT
+    turn on the same thread had no idea the earlier one never ran, so an instruction could
+    evaporate silently and only resurface hours later when the session was reused (#2593).
+
+    Recording it makes the transcript honest and gives the following turn the context. The
+    message is a normal ``AIMessage`` so history, ``/export`` and the model all see it,
+    tagged in ``additional_kwargs`` so a surface that wants to render it as an error entry
+    rather than an answer can tell the difference.
+
+    Best-effort by construction: this runs ON the failure path, so it must never raise and
+    mask the error it exists to describe.
+    """
+    graph = STATE.graph
+    if graph is None or not text.strip():
+        return False
+    try:
+        from langchain_core.messages import AIMessage  # lazy, like every other use here
+
+        await graph.aupdate_state(
+            {"configurable": {"thread_id": _resolve_thread_id(None, session_id)}},
+            {"messages": [AIMessage(content=text, additional_kwargs={"protoagent_turn_failed": True})]},
+        )
+        return True
+    except Exception:  # noqa: BLE001 — never let bookkeeping bury the real failure
+        log.warning("[chat] could not record the failed turn for session=%s", session_id, exc_info=True)
+        return False
 
 
 def turn_error(exc: BaseException, message: str | None = None) -> dict[str, Any]:
@@ -2162,6 +2201,7 @@ async def _chat_langgraph_impl(
                     e,
                 )
                 retry_msg = "the model provider closed the stream (possibly rate-limited). Please retry."
+                await record_failed_turn(session_id, f"**Error:** {retry_msg}")
                 return [
                     {
                         "role": "assistant",
@@ -2174,6 +2214,7 @@ async def _chat_langgraph_impl(
                 session_id,
                 e,
             )
+            await record_failed_turn(session_id, f"**Error:** {e}")
             return [{"role": "assistant", "content": f"**Error:** {e}", "error": turn_error(e)}]
         finally:
             tracing.flush()
