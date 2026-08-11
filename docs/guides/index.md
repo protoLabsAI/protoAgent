@@ -53,9 +53,10 @@ Connect your agent to other agents and endpoints, and run many of them.
 | Guide | When to read |
 |---|---|
 | [Delegates (agents & endpoints)](/guides/delegates) | You want to manage the agents + endpoints your agent talks to via `delegate_to` (a2a / openai / acp), hot-swappable from the console |
-| [Spawn CLI coding agents (ACP)](/guides/coding-agents) | You want the agent to drive a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol |
+| [CLI coding agents over ACP](/guides/coding-agents) | You want the agent to hand a coding job to protoCLI / Claude Code / Codex and get the result back — **the supported way** to use a coding agent |
 | [Run a fleet (workspaces, archetypes, supervisor)](/guides/fleet) | You want many named agents on one host — created from archetypes, run in the background, sharing a skills commons |
 | [Portfolio (one PM, many team boards)](/guides/portfolio) | You want one PM agent to dispatch work to, and track, several team-agents' project boards across repos — over A2A |
+| [Agent snapshots (export, share, duplicate)](/guides/agent-snapshots) | You want to hand someone your agent's *recipe* — persona, config, plugin pins, skills — as a small zip, or stand up a duplicate from one |
 | [Build out your agent with a coding agent](/guides/build-with-a-coding-agent) | You've forked the template and want to grow it through a project-manager agent, a board, and coder delegates instead of typing every change |
 
 ## Tools, MCP & plugins
