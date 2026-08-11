@@ -23,6 +23,7 @@ Security (ADR 0007 §4):
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from dataclasses import dataclass
@@ -39,11 +40,56 @@ _MAX_LIST = 400
 _MAX_MATCHES = 200
 
 
-def _platform_shell_argv(command: str) -> list[str]:
-    """Return the native non-interactive shell invocation for ``command``."""
-    if os.name == "nt":
-        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
-    return ["/bin/sh", "-c", command]
+_SHELLS = ("default", "cmd", "powershell", "sh")
+
+
+def _encoded_powershell(command: str) -> str:
+    """Base64(UTF-16LE) payload for PowerShell's ``-EncodedCommand``.
+
+    The encoded form carries the command byte-exact through the process
+    boundary — no cmd-style re-quoting, and non-ASCII (café / 日本語) survives
+    (#2518). The preamble forces UTF-8 output so stdout decodes cleanly off
+    the pipe instead of arriving in the OEM code page.
+    """
+    script = (
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+        "$OutputEncoding=[System.Text.Encoding]::UTF8;" + command
+    )
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+def _platform_shell_argv(
+    command: str, shell: str = "default", *, windows: bool | None = None
+) -> tuple[list[str], str]:
+    """Resolve ``(argv, runner)`` for ``command`` under an explicit shell grammar.
+
+    ``runner`` is the human-readable executable+wrapper chain. It goes into the
+    approval dialog so the operator sees what will actually execute (#2518) —
+    showing only the inner command hid that Windows always meant ``cmd.exe``,
+    letting an approved PowerShell command fail in a shell the operator never saw.
+    Raises ``ValueError`` for an unknown or platform-impossible selection.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if shell not in _SHELLS:
+        raise ValueError(f"unknown shell {shell!r} — use one of: {', '.join(_SHELLS)}")
+    if shell == "default":
+        shell = "cmd" if windows else "sh"
+    if shell == "cmd":
+        if not windows:
+            raise ValueError("shell='cmd' is Windows-only — use 'sh' or 'powershell'.")
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        return [comspec, "/d", "/s", "/c", command], f"{comspec} /d /s /c"
+    if shell == "sh":
+        if windows:
+            raise ValueError("shell='sh' is not available on Windows — use 'cmd' or 'powershell'.")
+        return ["/bin/sh", "-c", command], "/bin/sh -c"
+    # powershell: Windows PowerShell on Windows, pwsh (PowerShell 7+) elsewhere.
+    exe = "powershell.exe" if windows else "pwsh"
+    return (
+        [exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", _encoded_powershell(command)],
+        f"{exe} -NoProfile -NonInteractive -EncodedCommand <the command above, UTF-16LE Base64>",
+    )
 
 
 @dataclass
@@ -357,13 +403,19 @@ def build_fs_tools(config) -> list:
     if allow_run:
 
         @tool
-        async def run_command(project: str, command: str, timeout: float = 60.0) -> str:
+        async def run_command(
+            project: str, command: str, timeout: float = 60.0, shell: str = "default"
+        ) -> str:
             """Run a shell command inside a managed project's directory (fenced cwd).
 
             Powerful + dual-use (like execute_code) — use it for read-only
             inspection (`git status`, `gh pr list`, `br list`) and only mutate in
-            read-write projects. Runs via the platform shell (``cmd.exe`` on
-            Windows, ``/bin/sh`` elsewhere), so native shell operators work.
+            read-write projects. ``shell`` picks the grammar explicitly:
+            "default" = ``cmd.exe`` on Windows / ``/bin/sh`` elsewhere;
+            "powershell" = Windows PowerShell (``pwsh`` off-Windows), Unicode-safe;
+            "cmd" / "sh" name the platform defaults. PowerShell syntax
+            (``Set-Content``, cmdlets, ``$vars``) REQUIRES shell="powershell" —
+            on Windows the default grammar is cmd.exe and will not run it.
             """
             try:
                 root = registry.resolve(project, ".")
@@ -371,6 +423,10 @@ def build_fs_tools(config) -> list:
                 return f"Error: {exc}"
             if not command.strip():
                 return "Error: empty command."
+            try:
+                argv, runner = _platform_shell_argv(command, shell)
+            except ValueError as exc:
+                return f"Error: {exc}"
             # HITL approval gate (Sprint A): pause for the operator to approve
             # the command before it runs. interrupt() re-runs this fn from the
             # top on resume (the validation above is idempotent) and returns the
@@ -382,7 +438,10 @@ def build_fs_tools(config) -> list:
                     {
                         "kind": "approval",
                         "title": "Approve shell command?",
-                        "detail": command,
+                        # The runner line shows the real executable chain, not just the
+                        # inner command — approving PowerShell text that secretly ran
+                        # under cmd.exe is exactly the #2518 failure.
+                        "detail": f"{command}\n\nruns via: {runner}",
                         "project": project,
                     }
                 )
@@ -400,8 +459,12 @@ def build_fs_tools(config) -> list:
             elif run_requires_approval:
                 # Bypass-permissions mode (the operator's explicit per-turn /bypass toggle): the
                 # approval gate is skipped. AUDIT every command that runs without confirmation.
-                log.warning("[fs] run_command ran under bypass-permissions (no approval): %s", command)
-            res = await _shell_run(_platform_shell_argv(command), cwd=str(root), timeout=timeout)
+                log.warning(
+                    "[fs] run_command ran under bypass-permissions (no approval): %s (via %s)",
+                    command,
+                    runner,
+                )
+            res = await _shell_run(argv, cwd=str(root), timeout=timeout)
             if res.error:
                 raise ToolException(res.error)
             body = res.stdout or "(no output)"

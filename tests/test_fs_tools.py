@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 
 import pytest
@@ -414,3 +415,141 @@ def test_effective_projects_explicit_wins_and_disabled_is_empty(tmp_path):
     assert cfg.effective_filesystem_projects() == explicit  # explicit registry wins
     off = LangGraphConfig(filesystem_enabled=False)
     assert off.effective_filesystem_projects() == []  # disabled → no projects
+
+
+# ── run_command shell grammars (#2518) ─────────────────────────────────────────
+
+
+def test_shell_argv_default_grammars():
+    from tools.fs_tools import _platform_shell_argv
+
+    argv, runner = _platform_shell_argv("echo hi", windows=False)
+    assert argv == ["/bin/sh", "-c", "echo hi"]
+    assert runner == "/bin/sh -c"
+    argv, runner = _platform_shell_argv("dir", windows=True)
+    assert argv[0].lower().endswith("cmd.exe")
+    assert argv[1:] == ["/d", "/s", "/c", "dir"]
+    assert "cmd.exe" in runner.lower()
+
+
+def test_shell_argv_powershell_is_encoded_and_unicode_safe():
+    """PowerShell rides -EncodedCommand (Base64 UTF-16LE): the exact approved text
+    crosses the process boundary with no re-quoting, and non-ASCII survives."""
+    import base64
+
+    from tools.fs_tools import _platform_shell_argv
+
+    cmd = "Set-Content -LiteralPath 'PA Windows Tool [café] 日本語.txt' -Value 'café'"
+    argv, runner = _platform_shell_argv(cmd, "powershell", windows=True)
+    assert argv[0] == "powershell.exe"
+    assert argv[1:4] == ["-NoProfile", "-NonInteractive", "-EncodedCommand"]
+    decoded = base64.b64decode(argv[4]).decode("utf-16-le")
+    assert decoded.endswith(cmd)  # byte-exact inner command, no escaping layer
+    assert "OutputEncoding" in decoded  # UTF-8 stdout preamble
+    assert "powershell.exe" in runner and "EncodedCommand" in runner
+    argv, _ = _platform_shell_argv(cmd, "powershell", windows=False)
+    assert argv[0] == "pwsh"
+
+
+def test_shell_argv_rejects_unknown_and_cross_platform():
+    from tools.fs_tools import _platform_shell_argv
+
+    with pytest.raises(ValueError, match="unknown shell"):
+        _platform_shell_argv("x", "fish")
+    with pytest.raises(ValueError, match="Windows-only"):
+        _platform_shell_argv("x", "cmd", windows=False)
+    with pytest.raises(ValueError, match="not available on Windows"):
+        _platform_shell_argv("x", "sh", windows=True)
+
+
+def test_run_command_unknown_shell_returns_error(workspace):
+    _, a, _ = workspace
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+        )
+    )
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls", "shell": "fish"}))
+    assert out.startswith("Error:") and "unknown shell" in out
+
+
+def test_run_command_approval_detail_names_runner(workspace, monkeypatch):
+    """The approval payload names the real executable chain, not just the inner
+    command — approving PowerShell text that secretly ran under cmd.exe is the
+    #2518 failure, so the operator must see the runner before approving."""
+    import langgraph.types
+
+    _, a, _ = workspace
+    seen: dict = {}
+
+    def fake_interrupt(payload):
+        seen.update(payload)
+        return "approve"
+
+    monkeypatch.setattr(langgraph.types, "interrupt", fake_interrupt)
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=True,
+        )
+    )
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _LIST_COMMAND}))
+    assert "README.md" in out
+    assert _LIST_COMMAND in seen["detail"]
+    assert "runs via:" in seen["detail"]
+    assert ("cmd.exe" in seen["detail"].lower()) or ("/bin/sh -c" in seen["detail"])
+
+
+_PWSH = "powershell.exe" if os.name == "nt" else "pwsh"
+
+
+@pytest.mark.skipif(shutil.which(_PWSH) is None, reason="PowerShell not installed")
+def test_run_command_powershell_unicode_roundtrip(workspace):
+    """#2518 acceptance: an ordinary Set-Content whose path and content carry
+    spaces, brackets, accents, Japanese, a check mark, and a Greek letter works
+    on the FIRST attempt — no [char] reconstruction, no cmd.exe reinterpretation."""
+    _, a, _ = workspace
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a), "write": True}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+        )
+    )
+    name = "PA Windows Tool [café] 日本語.txt"
+    cmd = (
+        f"Set-Content -LiteralPath '{name}' "
+        "-Value @('PA-WINDOWS-TOOL-OK','café','日本語 ✓ Ω') -Encoding utf8"
+    )
+    out = asyncio.run(
+        t["run_command"].ainvoke({"project": "a", "command": cmd, "shell": "powershell"})
+    )
+    assert not out.startswith("Error:"), out
+    target = a / name
+    assert target.exists()
+    # utf-8-sig: Windows PowerShell 5.1 writes -Encoding utf8 WITH a BOM, pwsh without.
+    text = target.read_bytes().decode("utf-8-sig")
+    assert text.splitlines() == ["PA-WINDOWS-TOOL-OK", "café", "日本語 ✓ Ω"]
+
+
+@pytest.mark.skipif(shutil.which(_PWSH) is None, reason="PowerShell not installed")
+def test_run_command_powershell_stdout_unicode(workspace):
+    """The UTF-8 output preamble holds: non-ASCII stdout decodes intact instead of
+    arriving in the OEM code page as mojibake."""
+    _, a, _ = workspace
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+        )
+    )
+    out = asyncio.run(
+        t["run_command"].ainvoke(
+            {"project": "a", "command": "Write-Output 'café ✓ 日本語'", "shell": "powershell"}
+        )
+    )
+    assert "café ✓ 日本語" in out
