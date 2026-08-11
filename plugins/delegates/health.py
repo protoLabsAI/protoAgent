@@ -6,10 +6,13 @@ only on-demand Test. Reads ``merged_delegates()`` each tick, so it tracks
 add/edit/remove without a restart; entries for removed delegates are pruned.
 
 Ported in spirit from ORBIS's ``health_loop``, now with PER-DELEGATE exponential
-backoff: the loop still ticks on a fixed base interval, but a delegate that keeps
-failing is re-probed less often (its next-due time backs off) so a flaky peer degrades
-gracefully instead of getting hammered every tick. A success resets it to the base
-cadence.
+backoff in BOTH directions: the loop still ticks on a fixed base interval, but each
+delegate carries its own next-due time. A delegate that keeps failing is re-probed less
+often, so a flaky peer degrades gracefully instead of getting hammered every tick; a
+delegate that keeps SUCCEEDING while nobody is watching the panel also relaxes, because
+each ACP probe is a whole subprocess and the healthy path used to pay full price forever
+(#2542). Either streak resets the other, and reading the health snapshot — which is what
+rendering the badge does — pulls healthy delegates back to the base cadence.
 """
 
 from __future__ import annotations
@@ -36,30 +39,70 @@ _BACKOFF_BASE_S = 120.0
 _BACKOFF_MAX_S = 960.0
 _task: asyncio.Task | None = None
 
+# The healthy path used to pay full price forever: the existing backoff only slows
+# FAILING delegates, so every configured delegate was re-probed every 120s, and an ACP
+# probe is a fresh subprocess each time (spawn → `initialize` → teardown). Seven ACP
+# delegates — a realistic PM/engineer setup — is ~5,000 process launches a day to keep a
+# status badge warm (#2542).
+#
+# So consecutive successes stretch the cadence too, symmetrically with failures, up to a
+# steady state. A binary "was reachable recently" badge does not need 2-minute freshness
+# — especially since the probe stops at the handshake, so a delegate can look green and
+# still fail on dispatch (the known probe-depth limit).
+_SUCCESSES: dict[str, int] = {}
+_HEALTHY_MAX_S = 900.0
+# ...unless someone is actually looking. Reading the snapshot is what the console panel
+# does to render the badge, so it doubles as "a human is watching this right now" —
+# while that's true a healthy delegate stays on the base cadence and the panel behaves
+# exactly as before. Nobody watching, nothing changing: 30 sweeps/hour becomes 4.
+_OBSERVED_WINDOW_S = 180.0
+_last_observed = 0.0
+
 
 def health_snapshot() -> dict[str, dict]:
-    """Current cached health per delegate name (copy)."""
+    """Current cached health per delegate name (copy).
+
+    Also the "someone is looking" signal — see ``_OBSERVED_WINDOW_S``. Both callers
+    qualify: the console panel renders this to draw the badge, and the agent's
+    ``list_agents`` tool reads it when it's about to pick a delegate."""
+    global _last_observed
+    _last_observed = time.time()
     return {k: dict(v) for k, v in _HEALTH.items()}
 
 
-def _backoff_delay(failures: int) -> float:
-    """Seconds until a delegate's next probe given its consecutive-failure count:
-    ``base`` when healthy (failures<=0), ``base * 2**failures`` capped at ``max`` after
-    that — so the cadence grows monotonically with failures then pins at the ceiling."""
-    if failures <= 0:
+def _observed() -> bool:
+    """Has anything read the health snapshot recently?
+
+    Deliberately on the wall clock rather than ``_probe_all``'s ``now``: that argument
+    exists so tests can drive the cadence with synthetic timestamps, and "is a human
+    looking at the panel right now" is a real-time question either way."""
+    return (time.time() - _last_observed) <= _OBSERVED_WINDOW_S
+
+
+def _backoff_delay(failures: int, successes: int = 0, *, observed: bool = True) -> float:
+    """Seconds until a delegate's next probe.
+
+    Failing: ``base * 2**failures`` capped at ``_BACKOFF_MAX_S``, so a flaky peer isn't
+    hammered. Healthy: ``base`` while observed, otherwise ``base * 2**(successes-1)``
+    capped at ``_HEALTHY_MAX_S`` — the cadence relaxes as a delegate proves itself and
+    snaps back the moment it fails or someone opens the panel."""
+    if failures > 0:
+        return min(_BACKOFF_BASE_S * (2**failures), _BACKOFF_MAX_S)
+    if observed or successes <= 1:
         return _BACKOFF_BASE_S
-    return min(_BACKOFF_BASE_S * (2**failures), _BACKOFF_MAX_S)
+    return min(_BACKOFF_BASE_S * (2 ** (successes - 1)), _HEALTHY_MAX_S)
 
 
 def _record_result(name: str, ok: bool, now: float) -> None:
-    """Update a delegate's backoff state after a probe: reset to the base cadence on
-    success, otherwise count the failure and push the next-due time out per
-    ``_backoff_delay``."""
+    """Update a delegate's cadence state after a probe. Success and failure are
+    mirror images: each resets the other's streak and re-derives the next-due time."""
     if ok:
         _FAILURES.pop(name, None)
+        _SUCCESSES[name] = _SUCCESSES.get(name, 0) + 1
     else:
+        _SUCCESSES.pop(name, None)
         _FAILURES[name] = _FAILURES.get(name, 0) + 1
-    _NEXT_DUE[name] = now + _backoff_delay(_FAILURES.get(name, 0))
+    _NEXT_DUE[name] = now + _backoff_delay(_FAILURES.get(name, 0), _SUCCESSES.get(name, 0), observed=_observed())
 
 
 async def _probe_all(now: float | None = None) -> None:
@@ -91,6 +134,7 @@ async def _probe_all(now: float | None = None) -> None:
     for stale in [n for n in _HEALTH if n not in seen]:
         _HEALTH.pop(stale, None)
         _FAILURES.pop(stale, None)
+        _SUCCESSES.pop(stale, None)
         _NEXT_DUE.pop(stale, None)
     # This sweep already walks the live roster to prune its own caches; the
     # last-dispatch cache needs the same treatment and has no loop of its own.
@@ -114,7 +158,13 @@ async def start() -> None:
     if _task and not _task.done():
         return
     _task = asyncio.create_task(_loop())
-    log.info("[delegates/health] prober started (every %ss)", int(_INTERVAL_S))
+    log.info(
+        "[delegates/health] prober started (tick %ss; per-delegate %s–%ss healthy, up to %ss when failing)",
+        int(_INTERVAL_S),
+        int(_BACKOFF_BASE_S),
+        int(_HEALTHY_MAX_S),
+        int(_BACKOFF_MAX_S),
+    )
 
 
 async def stop() -> None:

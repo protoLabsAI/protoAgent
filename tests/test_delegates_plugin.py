@@ -696,6 +696,107 @@ async def test_health_backoff_skips_until_due_then_resets_on_success(monkeypatch
     assert H._NEXT_DUE["p"] == due2 + H._BACKOFF_BASE_S
 
 
+def test_healthy_cadence_relaxes_only_when_nobody_is_watching():
+    """The existing backoff only slowed FAILING delegates; healthy ones paid the base
+    cadence forever, which on 7 ACP delegates is ~5,000 subprocess launches a day for a
+    status badge (#2542)."""
+    # Someone is looking → unchanged, no matter how long it's been healthy.
+    assert H._backoff_delay(0, 1, observed=True) == H._BACKOFF_BASE_S
+    assert H._backoff_delay(0, 50, observed=True) == H._BACKOFF_BASE_S
+
+    # Nobody looking → the cadence relaxes as the delegate proves itself, then pins.
+    relaxed = [H._backoff_delay(0, n, observed=False) for n in range(1, 12)]
+    assert relaxed == sorted(relaxed)
+    assert relaxed[0] == H._BACKOFF_BASE_S  # first success is still base
+    assert max(relaxed) == H._HEALTHY_MAX_S
+    # The acceptance criterion: ≥5× fewer probes per hour on an idle instance.
+    assert H._HEALTHY_MAX_S / H._BACKOFF_BASE_S >= 5
+
+    # A failure outranks any success streak — it snaps straight back to the fail curve.
+    assert H._backoff_delay(1, 50, observed=False) == H._BACKOFF_BASE_S * 2
+
+
+def test_reading_the_snapshot_counts_as_being_watched(monkeypatch):
+    """`health_snapshot` IS the panel rendering the badge, so it doubles as the
+    "a human is here" signal — the surface knows, without extra plumbing."""
+    H._last_observed = 0.0
+    assert H._observed() is False
+
+    H.health_snapshot()
+
+    assert H._observed() is True
+
+
+async def test_a_steady_delegate_is_probed_less_often_when_unobserved(monkeypatch):
+    H._HEALTH.clear()
+    H._FAILURES.clear()
+    H._SUCCESSES.clear()
+    H._NEXT_DUE.clear()
+    H._last_observed = 0.0  # nobody has opened the panel
+    import plugins.delegates.store as store
+
+    monkeypatch.setattr(
+        store, "merged_delegates", lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}]
+    )
+    calls = {"n": 0}
+
+    async def probe(d):
+        calls["n"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", probe)
+
+    # Walk the delegate forward through repeated successes; each gap is its own cadence.
+    now = 0.0
+    gaps = []
+    for _ in range(6):
+        await H._probe_all(now=now)
+        gaps.append(H._NEXT_DUE["p"] - now)
+        now = H._NEXT_DUE["p"]
+
+    assert calls["n"] == 6
+    assert gaps[0] == H._BACKOFF_BASE_S  # unchanged at first
+    assert gaps[-1] == H._HEALTHY_MAX_S  # settled at the relaxed steady state
+    assert gaps == sorted(gaps)
+
+    # It is still SKIPPED before it's due — the relaxed window is real, not cosmetic.
+    await H._probe_all(now=now - 1.0)
+    assert calls["n"] == 6
+
+
+async def test_a_failure_snaps_a_relaxed_delegate_back(monkeypatch):
+    """Relaxing must not cost responsiveness where it matters: the moment a steady
+    delegate fails, it returns to the tight failure cadence."""
+    H._HEALTH.clear()
+    H._FAILURES.clear()
+    H._SUCCESSES.clear()
+    H._NEXT_DUE.clear()
+    H._last_observed = 0.0
+    import plugins.delegates.store as store
+
+    monkeypatch.setattr(
+        store, "merged_delegates", lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}]
+    )
+    outcome = {"ok": True}
+
+    async def probe(d):
+        return {"ok": outcome["ok"]}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", probe)
+
+    now = 0.0
+    for _ in range(6):
+        await H._probe_all(now=now)
+        now = H._NEXT_DUE["p"]
+    assert H._SUCCESSES["p"] == 6
+
+    outcome["ok"] = False
+    await H._probe_all(now=now)
+
+    assert "p" not in H._SUCCESSES and H._FAILURES["p"] == 1
+    assert H._NEXT_DUE["p"] - now == H._BACKOFF_BASE_S * 2
+
+
 async def test_health_backoff_state_pruned_with_delegate(monkeypatch):
     H._HEALTH.clear()
     H._FAILURES.clear()
@@ -898,9 +999,7 @@ class _StopReasonClient:
 def _acp_delegate():
     from plugins.delegates.adapters import AcpAdapter
 
-    return AcpAdapter().parse(
-        {"name": "andrew", "type": "acp", "command": "claude-code", "workdir": "/tmp"}
-    )
+    return AcpAdapter().parse({"name": "andrew", "type": "acp", "command": "claude-code", "workdir": "/tmp"})
 
 
 async def _dispatch_with(monkeypatch, reply: str, stop_reason: str | None) -> str:
