@@ -309,9 +309,10 @@ export function SettingsCategory({
       <div className="stage-body">
         {acpAgent ? (
           <Alert status="info" className="settings-banner">
-            Running on <strong>{acpAgent}</strong> (ACP) — it drives each turn with its own tools.
-            The model settings below power protoAgent's own calls (compaction, goal checks); with no
-            gateway key configured, those run on {acpAgent} too.
+            Running on <strong>{acpAgent}</strong> (ACP) — a <strong>deprecated</strong> runtime
+            mode: ACP is supported for delegates only now. This legacy config keeps working, but
+            new selection is gone — switch to a native brain (gateway or a Claude/ChatGPT
+            subscription) below. The model settings power protoAgent's own calls either way.
           </Alert>
         ) : null}
         {pendingRestart.length ? (

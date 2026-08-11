@@ -23,7 +23,7 @@ import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { lucideIcon } from "../lib/lucideIcon";
-import { acpAgentsQuery, archetypesQuery } from "../lib/queries";
+import { archetypesQuery } from "../lib/queries";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
@@ -216,7 +216,6 @@ export function SetupWizard({
   // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
   // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
   const archetypes = useQuery(archetypesQuery());
-  const acpAgentList = useQuery(acpAgentsQuery()).data?.agents ?? [];
   const [models, setModels] = useState<string[]>([]);
   // Flips true once the initial config load finishes. The persona seed waits on it
   // so the async load() (which replaces the whole state) can't clobber the seed.
@@ -435,9 +434,6 @@ export function SetupWizard({
   const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
   const personaLabel = pickedArchetype?.label ?? state.archetype;
   const pickedBundle = pickedArchetype?.bundle ?? null;
-  const acpAgent = acpAgentList.find((a) => a.id === state.acpAgent);
-  const acpAgentLabel = acpAgent?.label ?? state.acpAgent;
-  const acpLaunchHint = acpAgent ? `${acpAgent.command} ${acpAgent.args.join(" ")}`.trim() : state.acpAgent;
   // Brain step derived view (ADR 0097): the selected card + whether it's an OAuth provider.
   const brainKind = brainKindOf(state);
   const oauthProvider = isOAuthProvider(state.provider) ? state.provider : "";
@@ -707,7 +703,7 @@ export function SetupWizard({
               title="Brain"
               kicker={
                 brainKind === "acp"
-                  ? "coding agent over ACP"
+                  ? "coding agent over ACP (deprecated)"
                   : brainKind === "gateway"
                     ? "OpenAI-compatible gateway"
                     : `${OAUTH_LABEL[state.provider]} — your own plan`
@@ -738,26 +734,14 @@ export function SetupWizard({
                     title="ChatGPT subscription"
                     blurb="Run ChatGPT/Codex on your plan — no API key, uses your Codex CLI login."
                   />
-                  <RadioCard value="acp" title="Coding agent (ACP)" blurb="Hand each turn to a CLI coding agent — it's the brain, no gateway key needed." />
+                  {/* The ACP brain card is deliberately GONE (deprecated 2026-08-11):
+                      ACP survives for delegates only. A legacy acp:* config parses,
+                      shows the deprecated kicker, and escapes by picking a brain here
+                      (the wizard writes agent_runtime explicitly, so the old value is
+                      overwritten, not merged around). */}
                 </RadioCardGroup>
               </div>
-              {brainKind === "acp" ? (
-                <FormField
-                  label="Coding agent"
-                  hint={
-                    <>
-                      Launches <code>{acpLaunchHint}</code> — runtime set to{" "}
-                      <code>acp:{state.acpAgent}</code>. No gateway key needed; a fallback model for native delegates can be set later in Settings.
-                    </>
-                  }
-                >
-                  <DropdownSelect
-                    value={state.acpAgent}
-                    onValueChange={(v) => update({ acpAgent: v })}
-                    options={acpAgentList.map((a) => ({ value: a.id, label: a.label }))}
-                  />
-                </FormField>
-              ) : oauthProvider ? (
+              {oauthProvider ? (
                 <>
                   {/* Native OAuth (ADR 0097): no gateway base/key — sign in from here,
                       pick a model from the subscription account, run a real test turn. */}
@@ -911,7 +895,7 @@ export function SetupWizard({
               <div className="finish-list">
                 <StatusLine icon={<Bot size={15} />} label={`Agent · ${state.agentName || "protoagent"}`} />
                 {brainKind === "acp" ? (
-                  <StatusLine icon={<KeyRound size={15} />} label={`Runtime · ${acpAgentLabel} (acp:${state.acpAgent})`} />
+                  <StatusLine icon={<KeyRound size={15} />} label={`Runtime · acp:${state.acpAgent} (deprecated)`} />
                 ) : oauthProvider ? (
                   <StatusLine
                     icon={<ShieldCheck size={15} />}

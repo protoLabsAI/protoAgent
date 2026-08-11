@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from graph.config import LangGraphConfig
 from graph.settings_schema import (
-    ACP_MODEL_OPTIONS,
     FIELDS,
     build_schema,
     nest_updates,
@@ -20,9 +19,11 @@ def test_schema_groups_and_values():
     # "Model & runtime" (agent_runtime folded in from Behavior, ADR 0033 D1 amended) /
     # Favorite models / Routing / Caching.
     assert [g["section"] for g in groups][:4] == ["Identity", "Model & runtime", "Favorite models", "Routing"]
-    # The runtime selector now leads the model section, not a separate Behavior group.
+    # The ACP runtime selector is DEPRECATED (2026-08-11) — ui_hidden, so the model
+    # section leads with the model itself; agent_runtime stays in FIELDS for legacy
+    # config round-trip only (delegates keep ACP; the brain doesn't).
     model_runtime = next(g for g in groups if g["section"] == "Model & runtime")
-    assert [f["key"] for f in model_runtime["fields"]][:3] == ["agent_runtime", "operator_mcp.tools", "model.name"]
+    assert [f["key"] for f in model_runtime["fields"]][:1] == ["model.name"]
     assert model_runtime["category"] == "Model"
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present — EXCEPT ui_hidden ones, which stay in FIELDS for
@@ -43,11 +44,11 @@ def test_schema_groups_and_values():
     # suggestions) — they stay `string` (blank/any alias allowed), not `select`.
     transcribe = next(f for f in fields if f["key"] == "knowledge.transcribe_model")
     assert transcribe["type"] == "string" and transcribe["options"] == ["a", "b"]
-    # The auxiliary-slot models additionally offer the ACP coding agents (acp:<agent>) so a
-    # coding agent can back aux/eval/compaction — still `string`, so any value validates.
+    # The auxiliary-slot dropdowns offer gateway models ONLY since the ACP-runtime
+    # deprecation (2026-08-11) — still `string`, so a typed legacy acp:<agent> validates.
     for key in ("routing.aux_model", "compaction.model", "goal.eval_model"):
         f = next(f for f in fields if f["key"] == key)
-        assert f["type"] == "string" and f["options"] == ["a", "b"] + ACP_MODEL_OPTIONS
+        assert f["type"] == "string" and f["options"] == ["a", "b"]
     # The fallback list carries the gateway options too (rendered as combobox rows).
     fallback = next(f for f in fields if f["key"] == "routing.fallback_models")
     assert fallback["type"] == "string_list" and fallback["options"] == ["a", "b"]
@@ -59,29 +60,34 @@ def test_schema_groups_and_values():
     # refresh from a freshly-probed gateway ("Get models"). Model-backed → "models"/"models+acp".
     assert all("options_source" in f for f in fields if f["key"] in core_keys)
     assert model["options_source"] == "models"
-    assert next(f for f in fields if f["key"] == "routing.aux_model")["options_source"] == "models+acp"
-    # The main-brain runtime select offers native + every ACP agent (incl. gemini).
-    runtime = next(f for f in fields if f["key"] == "agent_runtime")
-    assert runtime["type"] == "select" and runtime["options"] == ["native", *ACP_MODEL_OPTIONS]
-    assert runtime["options_source"] == "runtime"  # config-aware, not a static enum
+    # ACP aliases are no longer OFFERED in the aux/compaction/eval dropdowns
+    # (deprecated with the runtime) — typed legacy values still validate (string).
+    assert next(f for f in fields if f["key"] == "routing.aux_model")["options_source"] == "models"
+    # The runtime select is deprecated: never rendered, but still a known key so a
+    # legacy `agent_runtime: acp:*` round-trips and the wizard's explicit
+    # `agent_runtime: "native"` write (the escape hatch) still validates.
+    assert all(f["key"] != "agent_runtime" for f in fields)
+    from graph.settings_schema import is_known_key
+
+    assert is_known_key("agent_runtime")
+    assert next(f for f in FIELDS if f.key == "agent_runtime").ui_hidden is True
 
 
-def test_registered_acp_agent_surfaces_in_runtime_and_aux_selects():
-    """ADR 0033 — a config with a user-registered custom ACP agent surfaces it in the
-    agent_runtime select AND the aux-model dropdowns, and validate_flat accepts it (the
-    runtime select is dynamically sourced, so it carries no rejecting enum — like model.name)."""
+def test_acp_runtime_deprecated_hidden_from_selects_but_still_validates():
+    """ACP-as-runtime is DEPRECATED (2026-08-11; delegates keep ACP): custom ACP
+    agents no longer surface in ANY selection UI — no runtime select is rendered,
+    and the aux dropdown offers gateway models only. Legacy values still VALIDATE
+    (round-trip + the wizard's explicit native write must keep working)."""
     cfg = LangGraphConfig()
     cfg.acp_agents = {"myagent": {"command": "my-acp", "args": ["--acp"], "label": "My Agent"}}
     fields = {f["key"]: f for g in build_schema(cfg, model_options=["a"]) for f in g["fields"]}
 
-    assert fields["agent_runtime"]["options"] == ["native", *ACP_MODEL_OPTIONS, "acp:myagent"]
-    assert fields["routing.aux_model"]["options"] == ["a", *ACP_MODEL_OPTIONS, "acp:myagent"]
+    assert "agent_runtime" not in fields  # deprecated: never rendered, even with custom agents
+    assert fields["routing.aux_model"]["options"] == ["a"]  # acp aliases no longer offered
 
-    # A custom acp:<id> validates (parity with model.name); before this it was a rejecting enum.
+    # Legacy values still validate — deprecation must not strand an existing config.
     assert validate_flat({"agent_runtime": "acp:myagent"})[0] is True
-    # An empty-config schema is unchanged — built-ins only, no drift.
-    base = {f["key"]: f for g in build_schema(LangGraphConfig(), model_options=["a"]) for f in g["fields"]}
-    assert base["agent_runtime"]["options"] == ["native", *ACP_MODEL_OPTIONS]
+    assert validate_flat({"agent_runtime": "native"})[0] is True
 
 
 def test_groups_carry_category_in_taxonomy_order():

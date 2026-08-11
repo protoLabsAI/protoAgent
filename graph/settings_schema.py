@@ -81,18 +81,22 @@ FIELDS: list[Field] = [
     # while `native` needs a real key. Keeping the two in one section puts the runtime selector
     # and the api_key it may require on the same screen. The axes stay separate in config +
     # resolution; this is grouping only.
+    # DEPRECATED as a selectable runtime (2026-08-11, Josh's call): ACP survives for
+    # the delegate_to pattern only (ADR 0025 delegates); ACP-as-the-brain is no longer
+    # offered. ui_hidden (the goal.enabled precedent): the field stays in FIELDS so a
+    # legacy `agent_runtime: acp:<agent>` config round-trips, keeps running, and the
+    # wizard's explicit `agent_runtime: "native"` write (the escape hatch back) still
+    # validates — the UI just never offers the choice again.
     Field(
         "agent_runtime",
         "agent_runtime",
         "Agent runtime",
         "select",
         "Model & runtime",
-        "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
-        "coding agent over ACP (needs its CLI installed + authenticated on the host).",
-        # "runtime" = native + every ACP agent, resolved per-request from config.acp_agents so
-        # user-registered custom agents show up too (build_schema). Dynamic source ⇒ no static
-        # enum, so validate_flat accepts a custom acp:<id> — same as the model.name select.
+        "Deprecated — ACP as the main runtime is no longer offered (delegates keep ACP). "
+        "Legacy acp:<agent> values keep working; native is the supported brain.",
         options_source="runtime",
+        ui_hidden=True,
     ),
     Field(
         "operator_mcp.tools",
@@ -100,9 +104,9 @@ FIELDS: list[Field] = [
         "Restrict tools for the ACP brain",
         "string_list",
         "Model & runtime",
-        "Optional restriction on which operator tools an external (ACP) brain may call via "
-        "MCP — one per line, or `*` for all. Empty = the full toolset (parity with the native "
-        "runtime, minus execute_code the coding agent already has). Ignored by native.",
+        "Deprecated with the ACP runtime — only meaningful for a legacy acp:<agent> brain; "
+        "ignored by native.",
+        ui_hidden=True,  # rides the agent_runtime deprecation above; YAML still honored
     ),
     Field(
         "model.name",
@@ -203,9 +207,8 @@ FIELDS: list[Field] = [
         "string",
         "Routing",
         "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the "
-        "main model. Or pick an `acp:<agent>` to route these aux calls through a coding agent "
-        "(e.g. Opus via acp:claude) — needs that agent's CLI on the host.",
-        options_source="models+acp",
+        "main model.",
+        options_source="models",
         scope="host",
     ),
     Field(
@@ -249,9 +252,8 @@ FIELDS: list[Field] = [
         "Summarizer model",
         "string",
         "Compaction",
-        "Blank = routing.aux_model, then the main model. Accepts an `acp:<agent>` to summarize "
-        "with a coding agent.",
-        options_source="models+acp",
+        "Blank = routing.aux_model, then the main model.",
+        options_source="models",
     ),
     # ── Goal mode ────────────────────────────────────────────────────────────
     # Goal mode is always on (config default True). The on/off toggle is hidden from
@@ -265,9 +267,8 @@ FIELDS: list[Field] = [
         "Verifier model",
         "string",
         "Goal mode",
-        "Blank = routing.aux_model, then the main model. Accepts an `acp:<agent>` to verify goals "
-        "with a coding agent.",
-        options_source="models+acp",
+        "Blank = routing.aux_model, then the main model.",
+        options_source="models",
     ),
     # ── Watches ──────────────────────────────────────────────────────────────
     # ADR 0067. Separate from Goal mode above: a goal is a bounded loop the agent DRIVES,
