@@ -70,6 +70,42 @@ _SKIP_DIRS = frozenset(
 _BINARY_SNIFF_BYTES = 8192
 
 
+def _read_text_verbatim(path: Path) -> str:
+    """Read a file's text WITHOUT universal-newline translation (#2586).
+
+    Python's text mode rewrites ``\\r\\n`` → ``\\n`` on read and ``\\n`` → ``os.linesep`` on
+    write. On Windows those two cancelled out for a CRLF file and silently corrupted an LF
+    one: ``write_file`` turned every requested ``\\n`` into ``\\r\\n`` on disk, and
+    ``read_file`` normalized it straight back — so an agent asked to write LF content and
+    verify it read its own request back verbatim and reported PASS while the bytes on disk
+    differed. Reading verbatim is what makes that verification mean something.
+    """
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        return f.read()
+
+
+def _write_text_verbatim(path: Path, text: str) -> None:
+    """Write text exactly as given — no newline translation (see :func:`_read_text_verbatim`).
+
+    ``newline=""`` is what keeps a requested ``\\n`` a ``0A`` byte on Windows instead of
+    ``0D0A``. Content that genuinely wants CRLF still gets it: the string's own line endings
+    are written through untouched.
+    """
+    with path.open("w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def _to_crlf(text: str) -> str:
+    """``text`` with every line ending as CRLF, for matching inside a CRLF file.
+
+    Now that reads are verbatim, a CRLF file's text contains ``\\r\\n`` while a model's ``old``
+    almost always uses bare ``\\n``. Without this the edit would simply not match; and
+    normalizing the whole FILE to make it match would rewrite every line ending in it as a side
+    effect of a one-line edit. So the needle moves to the file's convention instead.
+    """
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 def _is_probably_binary(path: Path) -> bool:
     """`grep -I` semantics — a NUL byte in the first chunk means 'not text'."""
     try:
@@ -323,7 +359,7 @@ def build_fs_tools(config) -> list:
         if not target.is_file():
             return f"Error: no such file: {path}"
         try:
-            text = target.read_text(encoding="utf-8", errors="replace")
+            text = _read_text_verbatim(target)
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
         if len(text) > _MAX_READ_CHARS:
@@ -406,7 +442,7 @@ def build_fs_tools(config) -> list:
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             existed = target.exists()
-            target.write_text(content, encoding="utf-8")
+            _write_text_verbatim(target, content)
         except OSError as exc:
             return f"Error: cannot write {path}: {exc}"
         return f"{'Overwrote' if existed else 'Created'} {path} ({len(content)} chars)."
@@ -423,13 +459,19 @@ def build_fs_tools(config) -> list:
             return f"Error: project {project!r} is read-only (write:false)."
         if not target.is_file():
             return f"Error: no such file: {path}"
-        text = target.read_text(encoding="utf-8", errors="replace")
-        if old not in text:
+        text = _read_text_verbatim(target)
+        needle, replacement = old, new
+        if needle not in text and "\r\n" in text:
+            # A CRLF file and an LF needle (what a model almost always sends). Match in the
+            # file's own convention rather than normalizing the file, so a one-line edit
+            # doesn't rewrite every line ending in it.
+            needle, replacement = _to_crlf(old), _to_crlf(new)
+        if needle not in text:
             return f"Error: `old` not found in {path}."
-        if text.count(old) > 1:
-            return f"Error: `old` is not unique in {path} ({text.count(old)} matches) — add context."
+        if text.count(needle) > 1:
+            return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
         try:
-            target.write_text(text.replace(old, new, 1), encoding="utf-8")
+            _write_text_verbatim(target, text.replace(needle, replacement, 1))
         except OSError as exc:
             return f"Error: cannot write {path}: {exc}"
         return f"Edited {path}."

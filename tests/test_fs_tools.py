@@ -609,3 +609,110 @@ def test_run_command_powershell_stdout_unicode(workspace):
         t["run_command"].ainvoke({"project": "a", "command": "Write-Output 'café ✓ 日本語'", "shell": "powershell"})
     )
     assert "café ✓ 日本語" in out
+
+
+# ── #2586: line endings survive the round trip, on every platform ─────────────
+
+
+_UTF8_SAMPLE = "ASCII=PA-GEMMA-UTF8-OK\nLatin=café\nJapanese=日本語\nSymbols=✓ Ω\nFinal=line-5"
+
+
+def test_write_file_keeps_lf_as_lf_on_disk(workspace):
+    """The reported bug: on Windows, text mode rewrote every requested \\n as \\r\\n, so the
+    file the agent asked for is not the file on disk. Asserted on BYTES — reading it back
+    through Python's text mode is exactly the check that masked it."""
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    t["write_file"].invoke({"project": "a", "path": "lf.txt", "content": _UTF8_SAMPLE})
+
+    raw = (a / "lf.txt").read_bytes()
+    assert b"\r\n" not in raw
+    assert raw.count(b"\n") == 4
+    assert raw == _UTF8_SAMPLE.encode("utf-8")  # byte-exact, non-ASCII included
+    assert not raw.endswith(b"\n")  # no trailing newline was added either
+
+
+def test_write_file_preserves_crlf_when_that_is_what_was_asked_for(workspace):
+    """Verbatim cuts both ways — content that wants CRLF still gets CRLF."""
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    t["write_file"].invoke({"project": "a", "path": "crlf.txt", "content": "one\r\ntwo\r\n"})
+
+    assert (a / "crlf.txt").read_bytes() == b"one\r\ntwo\r\n"
+
+
+def test_read_file_does_not_mask_crlf(workspace):
+    """The second half of the defect: read_file normalized \\r\\n back to \\n, so an agent
+    comparing what it wrote to what it read got a false PASS."""
+    _, a, _ = workspace
+    (a / "win.txt").write_bytes(b"one\r\ntwo\r\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    assert t["read_file"].invoke({"project": "a", "path": "win.txt"}) == "one\r\ntwo\r\n"
+
+
+def test_write_then_read_round_trips_exactly(workspace):
+    """What the agent's own verification actually depends on."""
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    t["write_file"].invoke({"project": "a", "path": "rt.txt", "content": _UTF8_SAMPLE})
+
+    assert t["read_file"].invoke({"project": "a", "path": "rt.txt"}) == _UTF8_SAMPLE
+
+
+def test_edit_file_does_not_convert_a_crlf_file_to_lf(workspace):
+    """An LF needle against a CRLF file must still match — and must not rewrite the file's
+    other line endings as a side effect of a one-line edit."""
+    _, a, _ = workspace
+    (a / "win.txt").write_bytes(b"alpha\r\nbravo\r\ncharlie\r\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    out = t["edit_file"].invoke({"project": "a", "path": "win.txt", "old": "bravo\ncharlie", "new": "bravo\ndelta"})
+
+    assert "Edited" in out
+    assert (a / "win.txt").read_bytes() == b"alpha\r\nbravo\r\ndelta\r\n"  # CRLF throughout
+
+
+def test_edit_file_keeps_lf_file_as_lf(workspace):
+    _, a, _ = workspace
+    (a / "unix.txt").write_bytes(b"alpha\nbravo\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    t["edit_file"].invoke({"project": "a", "path": "unix.txt", "old": "bravo", "new": "charlie"})
+
+    assert (a / "unix.txt").read_bytes() == b"alpha\ncharlie\n"
+
+
+def test_edit_file_still_rejects_an_ambiguous_needle_in_a_crlf_file(workspace):
+    """The uniqueness guard must count matches in the CONVERTED needle, not the original —
+    otherwise a CRLF file silently loses the ambiguity check."""
+    _, a, _ = workspace
+    (a / "dup.txt").write_bytes(b"x\r\ny\r\nx\r\ny\r\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    out = t["edit_file"].invoke({"project": "a", "path": "dup.txt", "old": "x\ny", "new": "z"})
+
+    assert out.startswith("Error:") and "not unique" in out
+
+
+def test_the_newline_translation_that_bit_windows_is_disabled(tmp_path):
+    """The write-side defect is invisible on this platform, so reproduce the mechanism
+    explicitly rather than trusting a green test on macOS/Linux.
+
+    Text mode with the default ``newline=None`` writes ``os.linesep`` for every ``\\n`` — which
+    IS ``\\r\\n`` on Windows and ``\\n`` here. Opening with ``newline="\\r\\n"`` performs that
+    same translation on any platform, so the first half below is the reported corruption,
+    reproduced locally; the second half is the fix.
+    """
+    from tools.fs_tools import _write_text_verbatim
+
+    p = tmp_path / "sim.txt"
+    with p.open("w", encoding="utf-8", newline="\r\n") as f:  # what Windows' default does
+        f.write("a\nb\n")
+    assert p.read_bytes() == b"a\r\nb\r\n"  # ← the bug
+
+    _write_text_verbatim(p, "a\nb\n")
+    assert p.read_bytes() == b"a\nb\n"  # ← the fix, same platform, same call shape
