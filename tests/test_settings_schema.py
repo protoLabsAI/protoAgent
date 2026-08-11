@@ -62,7 +62,10 @@ def test_schema_groups_and_values():
     assert model["options_source"] == "models"
     # ACP aliases are no longer OFFERED in the aux/compaction/eval dropdowns
     # (deprecated with the runtime) — typed legacy values still validate (string).
-    assert next(f for f in fields if f["key"] == "routing.aux_model")["options_source"] == "models"
+    # Slot fields moved to "slot_models": they offer CROSS-PROVIDER `<provider>:<model>`
+    # options, while model.name keeps the single-provider bare list (the main model
+    # belongs to model.provider, so a qualified value there is a misconfiguration).
+    assert next(f for f in fields if f["key"] == "routing.aux_model")["options_source"] == "slot_models"
     # The runtime select is deprecated: never rendered, but still a known key so a
     # legacy `agent_runtime: acp:*` round-trips and the wizard's explicit
     # `agent_runtime: "native"` write (the escape hatch) still validates.

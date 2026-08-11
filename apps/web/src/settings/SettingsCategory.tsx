@@ -215,10 +215,21 @@ export function SettingsCategory({
   });
   // Merge the freshly-probed models into a model-backed field's options (new gateway's models
   // first, then whatever was saved), so the dropdown isn't stuck on the old provider's list.
-  const withGatewayModels = (field: SettingsField): SettingsField =>
-    gatewayModels && (field.options_source === "models" || field.options_source === "models+acp")
-      ? { ...field, options: [...new Set([...gatewayModels, ...field.options])] }
-      : field;
+  const withGatewayModels = (field: SettingsField): SettingsField => {
+    if (!gatewayModels) return field;
+    if (field.options_source === "models" || field.options_source === "models+acp")
+      return { ...field, options: [...new Set([...gatewayModels, ...field.options])] };
+    // A per-slot dropdown speaks QUALIFIED names (`<provider>:<model>`) so a saved slot
+    // keeps meaning the same lane after a provider switch. This probe hits the form's
+    // gateway, so its results are gateway models — qualify them rather than mixing the
+    // two grammars in one list.
+    if (field.options_source === "slot_models")
+      return {
+        ...field,
+        options: [...new Set([...gatewayModels.map((m) => `gateway:${m}`), ...field.options])],
+      };
+    return field;
+  };
 
   // Generic per-group "Test connection" (ADR 0029).
   const [testingSection, setTestingSection] = useState<string | null>(null);
