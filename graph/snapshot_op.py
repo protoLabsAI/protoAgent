@@ -342,10 +342,15 @@ def _safe_domain(domain: str) -> str:
 def _read_yaml(path: Path) -> dict:
     import yaml
 
+    from infra.paths import read_text_utf8
+
     if not path.exists():
         return {}
     try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Legacy-locale tolerant (#2521): pre-fix Windows builds wrote workspace
+        # configs in CP1252; a strict UTF-8 read raised UnicodeDecodeError — which
+        # the except below never caught, so the whole snapshot review crashed.
+        doc = yaml.safe_load(read_text_utf8(path)) or {}
     except (OSError, yaml.YAMLError):
         log.warning("[snapshot] could not read %s — treating as empty", path)
         return {}
@@ -355,8 +360,10 @@ def _read_yaml(path: Path) -> dict:
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
+    from infra.paths import read_text_utf8
+
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc = json.loads(read_text_utf8(path))
     except (OSError, ValueError):
         log.warning("[snapshot] could not read %s — treating as empty", path)
         return {}
@@ -554,7 +561,9 @@ def build_snapshot(
     soul_text = ""
     if soul_path.exists():
         try:
-            soul_text = soul_path.read_text(encoding="utf-8")
+            from infra.paths import read_text_utf8
+
+            soul_text = read_text_utf8(soul_path)
         except OSError:
             notes.append(f"could not read {soul_path.name}")
     else:

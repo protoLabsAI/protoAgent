@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
-from infra.paths import atomic_write
+from infra.paths import atomic_write, read_text_utf8
 
 PORT_BASE = 7870  # workspaces get PORT_BASE+1, +2, … unless an explicit port is given
 
@@ -108,7 +108,7 @@ def _read_record(ws: Path) -> dict | None:
     if not f.exists():
         return None
     try:
-        d = yaml.safe_load(f.read_text()) or {}
+        d = yaml.safe_load(read_text_utf8(f)) or {}
         return d if isinstance(d, dict) else None
     except yaml.YAMLError:
         return None
@@ -401,7 +401,7 @@ def create(
         # ALWAYS a blank overlay — never copied, never inherited. A snapshot carries no
         # credentials by construction (ADR 0091 D2), so anything here would be a leak from
         # somewhere else.
-        (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
+        (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n", encoding="utf-8")
         _stamp_identity(cfg, name, shared_skills, instance_id=wid)
     elif from_config:
         src = Path(from_config).expanduser()
@@ -415,8 +415,10 @@ def create(
             shutil.copyfile(src_sec, cfg_dir / "secrets.yaml")
         _stamp_identity(cfg, name, shared_skills, instance_id=wid)
     else:
-        cfg.write_text(_CONFIG_TEMPLATE.format(name=name, id=wid))
-        (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
+        # UTF-8 explicitly: the template carries em dashes, and the locale default
+        # (CP1252 on Windows) wrote a config a strict UTF-8 reader crashes on (#2521).
+        cfg.write_text(_CONFIG_TEMPLATE.format(name=name, id=wid), encoding="utf-8")
+        (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n", encoding="utf-8")
         if inherit_model:
             _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
         if shared_skills:
@@ -488,7 +490,7 @@ def _enable_installed_in_config(cfg: Path, lock: Path) -> list[str]:
     from graph.config_io import load_yaml_doc, save_yaml_doc
 
     try:
-        data = json.loads(lock.read_text()) if lock.exists() else {}
+        data = json.loads(lock.read_text(encoding="utf-8")) if lock.exists() else {}
     except (json.JSONDecodeError, OSError):
         return []
     bundles = data.get("bundles") or []
@@ -525,7 +527,7 @@ def _apply_bundle_config_defaults(cfg: Path, lock: Path) -> dict:
     from graph.plugins.installer import bundle_config_overlay
 
     try:
-        data = json.loads(lock.read_text()) if lock.exists() else {}
+        data = json.loads(lock.read_text(encoding="utf-8")) if lock.exists() else {}
     except (json.JSONDecodeError, OSError):
         return {}
     # Merge every bundle's `config` into one {section: {...}} map. Last-write-wins per
@@ -578,7 +580,7 @@ def apply_bundle_mcp_servers(cfg: Path, lock: Path, inputs: Mapping[str, str] | 
     from graph.mcp_config import resolve_bundle_mcp_item
 
     try:
-        data = json.loads(lock.read_text()) if lock.exists() else {}
+        data = json.loads(lock.read_text(encoding="utf-8")) if lock.exists() else {}
     except (json.JSONDecodeError, OSError):
         return []
     items: list = []
@@ -638,7 +640,7 @@ def apply_bundle_secrets(cfg: Path, lock: Path, secrets_list: list[dict]) -> lis
     from graph.config_io import save_secrets
 
     try:
-        data = json.loads(lock.read_text()) if lock.exists() else {}
+        data = json.loads(lock.read_text(encoding="utf-8")) if lock.exists() else {}
     except (json.JSONDecodeError, OSError):
         return []
     # Map each DECLARED secret key → its bundle's section (the bundle id). Only keys a bundle
@@ -697,7 +699,7 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
 
     # Read the host's model as PLAIN data (not ruamel) — a ruamel node carries a parent ref and
     # can't be grafted into another document. The destination stays ruamel (comment-preserving).
-    host = yaml.safe_load(src_cfg.read_text()) or {}
+    host = yaml.safe_load(read_text_utf8(src_cfg)) or {}
     new = load_yaml_doc(cfg)
     if isinstance(host, dict) and isinstance(new, dict) and host.get("model"):
         new["model"] = host["model"]
@@ -753,7 +755,7 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
 
     lock = ws / "plugins.lock"
     try:
-        return [p["id"] for p in json.loads(lock.read_text()).get("plugins", [])] if lock.exists() else []
+        return [p["id"] for p in json.loads(lock.read_text(encoding="utf-8")).get("plugins", [])] if lock.exists() else []
     except (json.JSONDecodeError, OSError):
         return []
 

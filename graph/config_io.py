@@ -566,12 +566,14 @@ def load_yaml_doc(path: Path | None = None) -> Any:
     if not resolved.exists():
         return {} if not _HAS_RUAMEL else _ruamel.load("{}\n")
 
-    with open(resolved) as f:
-        if _HAS_RUAMEL:
-            return _ruamel.load(f) or _ruamel.load("{}\n")
-        import yaml
+    from infra.paths import read_text_utf8
 
-        return yaml.safe_load(f) or {}
+    text = read_text_utf8(resolved)
+    if _HAS_RUAMEL:
+        return _ruamel.load(text) or _ruamel.load("{}\n")
+    import yaml
+
+    return yaml.safe_load(text) or {}
 
 
 def save_yaml_doc(doc: Any, path: Path | None = None) -> None:
@@ -910,9 +912,10 @@ def load_secrets(path: Path | None = None) -> dict[str, Any]:
         return {}
     import yaml as _yaml
 
+    from infra.paths import read_text_utf8
+
     try:
-        with open(secrets_path) as f:
-            data = _yaml.safe_load(f) or {}
+        data = _yaml.safe_load(read_text_utf8(secrets_path)) or {}
         return data if isinstance(data, dict) else {}
     except (OSError, _yaml.YAMLError):
         return {}
@@ -945,7 +948,7 @@ def save_secrets(secret_updates: dict[str, Any], path: Path | None = None) -> No
 
     secrets_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = secrets_path.with_suffix(".yaml.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         _yaml.safe_dump(current, f, sort_keys=False, default_flow_style=False)
     os.chmod(tmp, 0o600)
     os.replace(tmp, secrets_path)

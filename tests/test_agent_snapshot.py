@@ -525,3 +525,20 @@ class TestKnowledgeSeed:
         from graph.snapshot_op import MEMORY_DOMAINS
 
         assert "hot" in MEMORY_DOMAINS and "session" in MEMORY_DOMAINS
+
+
+# ── legacy-encoding tolerance (#2521) ─────────────────────────────────────────
+
+
+def test_read_yaml_tolerates_legacy_cp1252_config(tmp_path):
+    """A pre-fix Windows build wrote the workspace config in CP1252 (the template's
+    own em dashes were enough). _read_yaml's except never caught the resulting
+    UnicodeDecodeError, so the whole snapshot review crashed (#2521). It must
+    parse via the legacy-locale fallback instead."""
+    from graph.snapshot_op import _read_yaml
+
+    p = tmp_path / "langgraph-config.yaml"
+    p.write_bytes(b"# scaffold \x97 generated\nidentity:\n  name: legacy\nmodel:\n  name: gpt-5\n")
+    doc = _read_yaml(p)
+    assert doc.get("identity", {}).get("name") == "legacy"
+    assert doc.get("model", {}).get("name") == "gpt-5"

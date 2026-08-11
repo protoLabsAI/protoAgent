@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import locale
+import logging
 import os
 import re
 import tempfile
@@ -77,7 +79,10 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     try:
-        with os.fdopen(fd, "w") as f:
+        # Explicit UTF-8: the default is the locale code page on Windows (CP1252),
+        # which poisoned every config/registry this function wrote there (#2521) —
+        # a strict UTF-8 consumer (snapshot export) then crashed on the em dashes.
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
         if mode is not None:
             os.chmod(tmp, mode)
@@ -93,6 +98,33 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
             os.unlink(tmp)
         raise
 
+
+
+_log = logging.getLogger("protoagent.paths")
+
+
+def read_text_utf8(path: Path | str) -> str:
+    """Read text as UTF-8, degrading to the legacy locale code page (#2521).
+
+    The write half of this contract is ``atomic_write`` (always UTF-8). Files
+    written by earlier Windows builds used ``locale.getpreferredencoding()``
+    (CP1252 on Western installs), and a strict UTF-8 read of those crashed
+    exactly where it mattered (snapshot export). UTF-8 first; on failure decode
+    with the locale code page (CP1252 when the locale is itself UTF-8, e.g. a
+    mac reading a Windows-written snapshot), ``errors="replace"`` so a
+    cross-machine read degrades to U+FFFD instead of an exception — with a
+    WARNING naming the file so the legacy artifact is visible.
+    """
+    p = Path(path)
+    data = p.read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        enc = locale.getpreferredencoding(False) or "cp1252"
+        if enc.replace("-", "").replace("_", "").lower() == "utf8":
+            enc = "cp1252"
+        _log.warning("[paths] %s is not UTF-8 — decoding as legacy %s (#2521)", p, enc)
+        return data.decode(enc, errors="replace")
 
 def _anchored_pyproject_version() -> str | None:
     """``[project].version`` from the ``pyproject.toml`` that governs *this* package,

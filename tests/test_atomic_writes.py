@@ -142,3 +142,59 @@ def test_reload_is_directly_lockable():
         acquired = agent_init._CONFIG_WRITE_LOCK.acquire(blocking=False)
         assert acquired
         agent_init._CONFIG_WRITE_LOCK.release()
+
+
+# ── UTF-8 contract (#2521) ────────────────────────────────────────────────────
+
+
+def test_atomic_write_is_utf8_regardless_of_locale(tmp_path):
+    """The write encoding is pinned to UTF-8, not locale.getpreferredencoding():
+    on Windows the locale default is CP1252, which poisoned every config/registry
+    written through here — a strict UTF-8 consumer (snapshot export) then crashed.
+    This assertion is only meaningful on the Windows CI leg (POSIX locales are
+    UTF-8 anyway); there it pins the fix."""
+    from infra.paths import atomic_write as aw
+
+    p = tmp_path / "cfg.yaml"
+    aw(p, "note: em — dash and café\n")
+    raw = p.read_bytes()
+    assert "em — dash and café".encode() in raw  # UTF-8 bytes, decodable strictly
+    assert raw.decode("utf-8")  # never raises
+
+
+def test_read_text_utf8_reads_utf8(tmp_path):
+    from infra.paths import read_text_utf8
+
+    p = tmp_path / "f.yaml"
+    p.write_bytes("name: Café — test\n".encode())
+    assert read_text_utf8(p) == "name: Café — test\n"
+
+
+def test_read_text_utf8_degrades_legacy_cp1252(tmp_path, caplog):
+    """A config written by a pre-fix Windows build (locale CP1252, 0x97 em dash)
+    reads instead of raising UnicodeDecodeError — the #2521 crash — and the
+    degrade is WARNED with the file named, never silent."""
+    import yaml
+
+    from infra.paths import read_text_utf8
+
+    p = tmp_path / "langgraph-config.yaml"
+    p.write_bytes(b"# generated \x97 legacy dash\nmodel:\n  name: caf\xe9\n")
+    with caplog.at_level(logging.WARNING, logger="protoagent.paths"):
+        text = read_text_utf8(p)
+    assert "—" in text or "\x97" in text  # decoded, not raised
+    doc = yaml.safe_load(text)
+    assert doc["model"]["name"]  # yaml survives the legacy bytes
+    assert any("not UTF-8" in r.getMessage() for r in caplog.records)
+
+
+def test_load_yaml_doc_reads_utf8_independent_of_locale(tmp_path):
+    """The config loader reads UTF-8 explicitly (via read_text_utf8), not the
+    locale default — on Windows the old bare open() decoded a UTF-8 config as
+    CP1252 and mojibake'd every non-ASCII identity/persona value (#2521)."""
+    from graph.config_io import load_yaml_doc
+
+    p = tmp_path / "langgraph-config.yaml"
+    p.write_bytes('identity:\n  name: "Café — Agent"\n'.encode())
+    doc = load_yaml_doc(p)
+    assert doc["identity"]["name"] == "Café — Agent"
