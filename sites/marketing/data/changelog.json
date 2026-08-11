@@ -1,5 +1,32 @@
 [
   {
+    "version": "v0.133.0",
+    "date": "2026-08-11",
+    "changes": [
+      "Fleet telemetry: hub-side read-only rollup across members (#2539).",
+      "Fleet section in the Telemetry console surface (Slice 2, #2539).",
+      "\"Operating a fleet\" core docs guide (Slice 3, #2539).",
+      "The agent can read its own configuration (#2540).",
+      "\"View prompt\" now tells the wire truth — and reads like a document (#2527).",
+      "A subscription credential's remaining life is now visible to monitoring (#2549).",
+      "An agent on a Claude or ChatGPT subscription can now fall back to the gateway (#2550).",
+      "The delegate health prober stops relaunching every delegate every two minutes (#2542).",
+      "A one-off schedule can no longer be quietly created for 09:00 (#2159).",
+      "Escape in Settings really does close only the dropdown now (#2466).",
+      "search_files no longer feeds compiled bytecode and cache dirs to the model (#2541).",
+      "Running the test suite from inside a live agent no longer pollutes that agent's chats (#2543).",
+      "Chat code blocks keep their line breaks again (#2546).",
+      "The Connected-account card now sits at the top of Settings → Model.",
+      "Subagents work on Claude and ChatGPT subscriptions (#2552).",
+      "Saving work folders can no longer silently strip the ones you didn't mention (#2556).",
+      "ACP as the agent's main runtime is deprecated (#2548).",
+      "Docs: the coding-agent guides now match the product.",
+      "Docs: the extensibility guides tell you what to do first.",
+      "Docs: run, deploy, and expose guides lead with the command.",
+      "Docs: agent snapshots are findable again."
+    ]
+  },
+  {
     "version": "v0.132.0",
     "date": "2026-08-11",
     "changes": [
