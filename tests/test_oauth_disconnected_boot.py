@@ -272,3 +272,45 @@ def test_oauth_complete_route_triggers_graph_rebuild(state_guard, monkeypatch):
     assert res["status"] == "complete"
     assert "graph_reloaded" not in res
     assert len(reloads) == 1
+
+
+def test_signin_completes_a_pending_provider_switch(state_guard, monkeypatch):
+    """A live provider switch persists YAML first, reloads second — with no
+    credential the reload fails and saved ≠ live. The sign-in that follows must
+    finish the switch inline (reload), not leave the user to re-save."""
+    import types
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.config_routes import register_config_routes
+
+    app = FastAPI()
+    register_config_routes(app)
+    client = TestClient(app)
+
+    STATE.graph = object()  # live graph on the OLD provider
+    STATE.graph_config = types.SimpleNamespace(model_provider="openai")
+    monkeypatch.setattr("graph.config_io.is_setup_complete", lambda: True)
+    monkeypatch.setattr(
+        "graph.config.LangGraphConfig.from_yaml",
+        classmethod(lambda cls, path: types.SimpleNamespace(model_provider="openai-codex")),
+    )
+    monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: "unused")
+    monkeypatch.setattr(
+        "graph.providers.oauth_login.codex_login_poll", lambda flow_id: {"status": "complete"}
+    )
+    reloads = []
+    monkeypatch.setattr(
+        "server.agent_init._reload_langgraph_agent", lambda: (reloads.append(1), (True, "ok"))[1]
+    )
+
+    res = client.post("/api/config/oauth/poll", json={"provider": "openai-codex", "flow_id": "f"}).json()
+    assert res["graph_reloaded"] is True and reloads == [1]
+
+    # Saved == live (no pending switch) → completed sign-in does NOT reload.
+    monkeypatch.setattr(
+        "graph.config.LangGraphConfig.from_yaml",
+        classmethod(lambda cls, path: types.SimpleNamespace(model_provider="openai")),
+    )
+    res = client.post("/api/config/oauth/poll", json={"provider": "openai-codex", "flow_id": "f"}).json()
+    assert "graph_reloaded" not in res and reloads == [1]

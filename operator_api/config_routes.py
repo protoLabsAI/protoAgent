@@ -86,21 +86,41 @@ def _reset_live_embed_breaker() -> None:
             pass
 
 
-async def _rebuild_graph_after_reconnect(result: dict) -> dict:
+async def _rebuild_graph_after_reconnect(result: dict, provider: str = "") -> dict:
     """After a completed in-console sign-in, restore the live graph (#2458).
 
-    A server that booted signed-out (disconnect marker present) is serving
-    routes with ``STATE.graph = None`` — the reconnect that just succeeded is
-    the moment to rebuild, or the user stays chatless until a manual restart.
-    No-op unless the sign-in actually completed and a rebuild can help
-    (setup complete, no live graph). Reload failure is reported, not raised —
-    the sign-in itself DID succeed and the tokens are stored.
+    Two cases warrant the inline reload:
+
+    * The server booted signed-out (``STATE.graph is None``) — the reconnect is
+      the moment to rebuild, or the user stays chatless until a manual restart.
+    * A live PROVIDER SWITCH failed pre-auth: settings-apply persists the YAML
+      first and reloads second, so a switch to a native provider with no
+      credential leaves the SAVED provider ≠ the live one and an error with no
+      path forward. When the sign-in that just completed is for that saved
+      provider, finish the switch now (Josh's live Claude/Codex switches,
+      2026-08-10).
+
+    No-op otherwise. Reload failure is reported, not raised — the sign-in
+    itself DID succeed and the tokens are stored.
     """
     if result.get("status") != "complete":
         return result
     from graph.config_io import is_setup_complete
 
-    if STATE.graph is not None or not is_setup_complete():
+    if not is_setup_complete():
+        return result
+    needs = STATE.graph is None
+    if not needs and provider:
+        from graph.config import LangGraphConfig
+        from graph.config_io import config_yaml_path
+
+        try:
+            saved = (LangGraphConfig.from_yaml(config_yaml_path()).model_provider or "").strip().lower()
+        except Exception:  # noqa: BLE001 — an unreadable config just means "no pending switch"
+            saved = ""
+        live = (getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
+        needs = saved == provider and saved != live
+    if not needs:
         return result
     from server.agent_init import _reload_langgraph_agent
 
@@ -241,7 +261,7 @@ def register_config_routes(app) -> None:
             result = await asyncio.to_thread(codex_login_poll, req.flow_id)
         except OAuthLoginError as exc:
             return {"status": "error", "error": str(exc)}
-        return await _rebuild_graph_after_reconnect(result)
+        return await _rebuild_graph_after_reconnect(result, "openai-codex")
 
     @app.post("/api/config/oauth/complete")
     async def _api_oauth_complete(req: OAuthLoginRequest):
@@ -252,7 +272,7 @@ def register_config_routes(app) -> None:
             result = await asyncio.to_thread(anthropic_login_complete, req.flow_id, req.code)
         except OAuthLoginError as exc:
             return {"status": "error", "error": str(exc)}
-        return await _rebuild_graph_after_reconnect(result)
+        return await _rebuild_graph_after_reconnect(result, "anthropic-oauth")
 
     @app.post("/api/config/oauth/cancel")
     async def _api_oauth_cancel(req: OAuthLoginRequest):

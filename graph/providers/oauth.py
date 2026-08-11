@@ -28,6 +28,8 @@ import binascii
 import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -133,7 +135,7 @@ _ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 @dataclass(frozen=True)
 class AnthropicOAuthCreds:
     access_token: str
-    source: str  # "env" | "credentials_file" | "instance_store"
+    source: str  # "env" | "credentials_file" | "keychain" | "instance_store"
     expires_at: float | None = None  # epoch seconds, when known
 
 
@@ -148,6 +150,54 @@ def _read_claude_credentials_file() -> dict[str, Any] | None:
         log.debug("~/.claude/.credentials.json is not valid JSON")
         return None
     return doc if isinstance(doc, dict) else None
+
+
+def _read_claude_keychain() -> dict[str, Any] | None:
+    """Claude Code's macOS credential store. On macOS the CLI writes the login to
+    the Keychain (a "Claude Code-credentials" generic password), NOT
+    ``~/.claude/.credentials.json`` — so the file-only read made the borrow-the-CLI-login
+    story silently dead on the primary desktop platform (a live provider switch to
+    anthropic-oauth failed "No Claude OAuth credential found" with Claude Code signed
+    in right there). Same JSON document shape as the credentials file. Returns None
+    off-macOS, when the item is absent, or on any error — never raises, bounded wait."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:  # absent item exits 44; locked keychain errors similarly
+        return None
+    try:
+        doc = json.loads(proc.stdout.strip())
+    except json.JSONDecodeError:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _creds_from_claude_doc(doc: dict[str, Any], source: str) -> AnthropicOAuthCreds | None:
+    """The ``claudeAiOauth`` document (credentials file / Keychain item) → creds.
+    None when the shape/token is missing. Expiry is advisory only — Claude Code owns
+    refresh for its own login; a dead token surfaces as a clean 401 → relogin hint."""
+    oauth = doc.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return None
+    token = str(oauth.get("accessToken", "") or "").strip()
+    if not token:
+        return None
+    exp_ms = oauth.get("expiresAt")
+    expires_at = float(exp_ms) / 1000.0 if isinstance(exp_ms, (int, float)) else None
+    if expires_at is not None and expires_at <= time.time() - _ANTHROPIC_REFRESH_SKEW_S:
+        log.info(
+            "[anthropic-oauth] Claude Code token looks expired (run any `claude` "
+            "command to refresh); trying it anyway",
+        )
+    return AnthropicOAuthCreds(access_token=token, source=source, expires_at=expires_at)
 
 
 def _anthropic_store_path(paths: InstancePaths | None = None) -> Path:
@@ -210,7 +260,8 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
     """Return a live Claude OAuth access token, or raise OAuthCredentialError.
 
     Order (explicit intent first): ``$CLAUDE_CODE_OAUTH_TOKEN`` env → protoAgent's own
-    store from in-console sign-in (refreshed when expiring) → ``~/.claude/.credentials.json``.
+    store from in-console sign-in (refreshed when expiring) → ``~/.claude/.credentials.json``
+    → the macOS Keychain item Claude Code writes on darwin (same document shape).
     Only our own store is refreshed here; Claude Code owns refresh for its file, and a
     truly-dead CLI token surfaces as a clean 401 the caller maps to a relogin hint.
     """
@@ -246,20 +297,16 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
 
     doc = _read_claude_credentials_file()
     if doc:
-        oauth = doc.get("claudeAiOauth")
-        if isinstance(oauth, dict):
-            token = str(oauth.get("accessToken", "") or "").strip()
-            if token:
-                exp_ms = oauth.get("expiresAt")
-                expires_at = float(exp_ms) / 1000.0 if isinstance(exp_ms, (int, float)) else None
-                if expires_at is not None and expires_at <= time.time() - _ANTHROPIC_REFRESH_SKEW_S:
-                    log.info(
-                        "[anthropic-oauth] Claude Code token looks expired (run any `claude` "
-                        "command to refresh); trying it anyway",
-                    )
-                return AnthropicOAuthCreds(
-                    access_token=token, source="credentials_file", expires_at=expires_at
-                )
+        creds = _creds_from_claude_doc(doc, "credentials_file")
+        if creds:
+            return creds
+
+    # macOS: Claude Code's login lives in the Keychain, not the credentials file.
+    doc = _read_claude_keychain()
+    if doc:
+        creds = _creds_from_claude_doc(doc, "keychain")
+        if creds:
+            return creds
 
     raise OAuthCredentialError(
         "No Claude OAuth credential found. Sign in from the console, the Claude Code CLI "

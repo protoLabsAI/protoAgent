@@ -32,10 +32,17 @@ from graph.providers.oauth import (
 )
 
 
+_REAL_KEYCHAIN_READ = oauth_mod._read_claude_keychain
+
+
 @pytest.fixture(autouse=True)
 def _clear_provider_env(monkeypatch):
     for var in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "PROTOAGENT_CODEX_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
+    # The DEV MACHINE's real Keychain holds a live Claude Code login — without this
+    # stub, every "no credential anywhere" test passes/fails by which laptop runs it.
+    # Tests that want the keychain re-patch it explicitly.
+    monkeypatch.setattr(oauth_mod, "_read_claude_keychain", lambda: None)
 
 
 def _jwt(claims: dict) -> str:
@@ -791,3 +798,69 @@ def test_device_login_stamps_owned_provenance(monkeypatch, tmp_path):
     flow_id = login._new_flow("openai-codex", {"device_auth_id": "d", "user_code": "u"})
     assert login.codex_login_poll(flow_id) == {"status": "complete"}
     assert json.loads(store.read_text())["provenance"] == "device_login"
+
+
+def test_anthropic_oauth_reads_macos_keychain(monkeypatch, tmp_path):
+    """macOS: Claude Code stores its login in the Keychain, not
+    ~/.claude/.credentials.json — the file-only read left the borrow-the-CLI-login
+    story dead on the primary desktop platform (live provider switch failed with
+    Claude Code signed in right there)."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "absent.json")
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "no-store.json")
+    monkeypatch.setattr(oauth_mod, "instance_paths", lambda: types.SimpleNamespace(config_dir=tmp_path))
+    monkeypatch.setattr(
+        oauth_mod,
+        "_read_claude_keychain",
+        lambda: {"claudeAiOauth": {"accessToken": "sk-ant-oat-kc", "expiresAt": (time.time() + 3600) * 1000}},
+    )
+    creds = oauth_mod.resolve_anthropic_oauth()
+    assert creds.access_token == "sk-ant-oat-kc"
+    assert creds.source == "keychain"
+
+
+def test_keychain_reader_parses_security_output(monkeypatch):
+    """The helper itself: darwin-gated, tolerant of absence/garbage, parses the
+    security(1) -w JSON payload. (The autouse fixture stubs the module attr, so
+    exercise the real function through a restore.)"""
+    monkeypatch.setattr(oauth_mod, "_read_claude_keychain", _REAL_KEYCHAIN_READ)
+    monkeypatch.setattr(oauth_mod.sys, "platform", "darwin")
+
+    def _fake_run(cmd, **kw):
+        assert cmd[:2] == ["security", "find-generic-password"]
+        return types.SimpleNamespace(returncode=0, stdout='{"claudeAiOauth": {"accessToken": "t"}}')
+
+    monkeypatch.setattr(oauth_mod.subprocess, "run", _fake_run)
+    assert oauth_mod._read_claude_keychain() == {"claudeAiOauth": {"accessToken": "t"}}
+
+    monkeypatch.setattr(
+        oauth_mod.subprocess, "run",
+        lambda cmd, **kw: types.SimpleNamespace(returncode=44, stdout=""),
+    )
+    assert oauth_mod._read_claude_keychain() is None  # absent item
+
+    monkeypatch.setattr(
+        oauth_mod.subprocess, "run",
+        lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="not json"),
+    )
+    assert oauth_mod._read_claude_keychain() is None  # garbage payload
+
+    monkeypatch.setattr(oauth_mod.sys, "platform", "win32")
+    assert oauth_mod._read_claude_keychain() is None  # never shells out off-macOS
+
+
+def test_disconnect_suppresses_keychain_too(monkeypatch, tmp_path):
+    """#2440's contract extends to the new source: after an explicit disconnect,
+    the Keychain login must NOT silently re-resolve."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "absent.json")
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "no-store.json")
+    paths = types.SimpleNamespace(config_dir=tmp_path)
+    monkeypatch.setattr(oauth_mod, "instance_paths", lambda: paths)
+    monkeypatch.setattr(
+        oauth_mod, "_read_claude_keychain",
+        lambda: {"claudeAiOauth": {"accessToken": "sk-ant-oat-kc"}},
+    )
+    oauth_mod._mark_disconnected(paths, "anthropic-oauth")
+    with pytest.raises(oauth_mod.OAuthCredentialError):
+        oauth_mod.resolve_anthropic_oauth()

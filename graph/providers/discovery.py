@@ -54,12 +54,16 @@ def _anthropic_status() -> OAuthStatus:
         if isinstance(exp, (int, float)) and exp <= _oauth._now():
             detail += " (token will refresh on use)"
         return OAuthStatus("anthropic-oauth", True, "instance_store", detail, "")
-    doc = _oauth._read_claude_credentials_file()
-    oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
-    if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
-        plan = str(oauth.get("subscriptionType", "") or "").strip()
-        detail = f"{plan} plan" if plan else "Claude Code credentials"
-        return OAuthStatus("anthropic-oauth", True, "credentials_file", detail, "")
+    # File on Linux/WSL; the Keychain item on macOS — same document shape.
+    for source, doc in (
+        ("credentials_file", _oauth._read_claude_credentials_file()),
+        ("keychain", _oauth._read_claude_keychain()),
+    ):
+        oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
+        if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
+            plan = str(oauth.get("subscriptionType", "") or "").strip()
+            detail = f"{plan} plan" if plan else "Claude Code credentials"
+            return OAuthStatus("anthropic-oauth", True, source, detail, "")
     return OAuthStatus("anthropic-oauth", False, "", "", _SIGN_IN_HINTS["anthropic-oauth"])
 
 
