@@ -129,34 +129,30 @@ def is_workspace_member() -> bool:
 
 
 def sync_self_display_name(new_name: str) -> str | None:
-    """Restamp THIS member's own ``workspace.yaml`` display name to ``new_name``.
+    """Restamp THIS member's own ``workspace.yaml`` from an identity rename.
 
-    The console's agent switcher / header label reads the HUB's fleet list, whose display
-    name comes from each workspace's ``workspace.yaml`` record — *not* from the member's
-    own config. Settings ▸ Agent ▸ Identity is an agent-scoped path, so on a member console
-    it is proxied to the MEMBER: a rename there moved ``identity.name`` (tab title, A2A
-    card, chat placeholder) while the switcher kept the create-time name forever. This is
-    the missing second half — the mirror image of hub-side :func:`rename`, which already
-    stamps the record *and* the member's config.
+    The console's agent switcher / header / Fleet page read the HUB's fleet list,
+    which comes from each workspace's ``workspace.yaml`` — *not* from the member's
+    own config. Settings ▸ Agent ▸ Identity is an agent-scoped path, so on a member
+    console a rename moves ``identity.name`` (tab title, A2A card, chat placeholder)
+    while the record kept the create-time name. This is the mirror image of hub-side
+    :func:`rename`, called from the reload commit.
 
-    A name the record can't hold verbatim is **normalized, not refused** (:func:`_slugify_display`):
-    ``identity.name`` is free-form and has already been accepted, so "Merchant Bot" becomes the
-    label ``Merchant_Bot`` rather than leaving the switcher stuck on a stale name with only a
-    log line to explain it. The agent keeps the name the operator typed — only the derived
-    record is normalized.
+    Two fields, two jobs (#2520): ``label`` holds the operator's name **verbatim**
+    (free-form UTF-8 — what every user-facing surface renders), while ``name`` stays
+    the ``[A-Za-z0-9_-]`` addressing handle the control plane accepts alongside the
+    id (:func:`_slugify_display`; unchanged when nothing usable survives or the slug
+    is reserved). Before ``label`` existed the record held ONLY the slug, so
+    "PA Windows Lifecycle Café" silently rendered as ``PA_Windows_Lifecycle_Caf``.
 
-    Returns a note for the operator, or ``None`` when there is nothing to say: a
-    host/standalone instance (nothing owns a record there), or a record already in step. The
-    note says what happened — the label it saved when normalization changed the name, or why
-    it couldn't save one at all (the reserved ``host`` slug, or a name with no usable
-    characters). The caller surfaces it and carries on: the agent is already running under
+    Returns a note for the operator only when the *display* couldn't follow (a
+    reserved label — a member masquerading as "host" in the switcher is worse than a
+    stale name); ``None`` otherwise. Never raises: the agent is already running under
     the new identity, so a stale label must never fail the reload.
 
-    Uniqueness against SIBLING workspaces is deliberately not checked: ``workspaces_root()``
-    is hub-scoped, so a member's own is empty by construction and it cannot see its peers.
-    Display names are therefore no longer guaranteed unique, which is why the fleet's
-    control plane addresses agents by the immutable ``id`` (see :func:`_find`, which
-    resolves ids first, and the console's fleet call sites).
+    Uniqueness against SIBLING workspaces is deliberately not checked: a member
+    cannot see its peers (``workspaces_root()`` is hub-scoped). Display names are
+    not unique — the fleet control plane addresses agents by the immutable ``id``.
     """
     from infra.paths import instance_paths
 
@@ -164,21 +160,26 @@ def sync_self_display_name(new_name: str) -> str | None:
     rec = _read_record(root)
     if rec is None:  # host / standalone — no record to keep in step
         return None
-    name = _slugify_display(new_name)
-    if not name:
-        return f"fleet label unchanged: {new_name!r} has no characters a workspace name can hold"
-    if name == rec.get("name"):
+    label = (new_name or "").strip()
+    if not label:
         return None
-    if name.lower() in _RESERVED_NAMES:
-        return f"fleet label unchanged: {name!r} is reserved — it's how the fleet addresses the host"
+    if label.lower() in _RESERVED_NAMES:
+        return f"fleet label unchanged: {label!r} is reserved — it's how the fleet addresses the host"
+    slug = _slugify_display(label)
+    changed = False
+    if rec.get("label") != label:
+        rec["label"] = label
+        changed = True
+    if slug and slug.lower() not in _RESERVED_NAMES and slug != rec.get("name"):
+        rec["name"] = slug
+        changed = True
+    if not changed:
+        return None
 
     import yaml
 
-    rec["name"] = name
     atomic_write(root / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
-    # Silent on the common path; speaks up only when the label had to differ from the identity.
-    return None if name == (new_name or "").strip() else f"fleet label saved as {name!r}"
-
+    return None
 
 def capability_contract_warning(bound_tool_names) -> str | None:
     """Warn when THIS agent's persona commits to actions it has no tool for (#2277).
@@ -234,6 +235,7 @@ def list_workspaces() -> list[dict]:
             out.append(
                 {
                     "name": rec.get("name", d.name),
+                    "label": rec.get("label") or rec.get("name", d.name),
                     "id": rec.get("id", d.name),
                     "port": rec.get("port"),
                     "bundle": rec.get("bundle") or "",
@@ -434,6 +436,9 @@ def create(
     rec = {
         "id": wid,
         "name": name,
+        # The user-facing display label, verbatim (#2520). Same as `name` at create
+        # (creation names are charset-checked); an identity rename may diverge them.
+        "label": name,
         "port": assigned,
         "created": datetime.now(timezone.utc).isoformat(),
         "bundle": bundle or "",
@@ -852,6 +857,7 @@ def rename(ident: str, new_name: str) -> dict:
     ws = Path(found["path"])
     rec = _read_record(ws) or {}
     rec["name"] = new_name
+    rec["label"] = new_name  # display follows (#2520) — else a stale member label would win
     atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
     cfg = ws / "config" / "langgraph-config.yaml"
     if cfg.exists():  # keep the agent's self-identity in step with the display name

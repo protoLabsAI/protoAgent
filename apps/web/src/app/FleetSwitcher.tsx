@@ -47,7 +47,7 @@ export function FleetSwitcher({
     <Menu
       trigger={
         <button type="button" className="fleet-switcher-trigger" data-testid="fleet-switcher" aria-label="Switch agent">
-          <span>{current?.name ?? fallbackName}</span>
+          <span>{current ? (current.label ?? current.name) : fallbackName}</span>
           <ChevronDown size={14} />
         </button>
       }
@@ -56,14 +56,14 @@ export function FleetSwitcher({
         const isCurrent = slugOf(a) === slug;
         return (
           <MenuItem
-            key={a.name}
+            key={a.id}
             icon={<StatusDot status={a.running ? "success" : "neutral"} pulse={a.running} />}
             onSelect={() => {
               if (!isCurrent) window.location.href = agentHref(slugOf(a)); // navigate → this agent
             }}
           >
             <span className="fleet-switcher-name">
-              {a.name}
+              {a.label ?? a.name}
               {a.host ? <Badge status="neutral">this instance</Badge> : null}
               {isCurrent ? <Check size={14} className="fleet-switcher-check" /> : null}
             </span>

@@ -405,6 +405,7 @@ def _host_entry() -> dict:
     port = getattr(STATE, "active_port", None)
     entry = {
         "name": name,
+        "label": name,  # identity.name is already the verbatim display value
         "id": getattr(cfg, "instance_id", "") or name,
         "port": port,
         "pid": os.getpid(),
@@ -669,6 +670,7 @@ def status() -> list[dict]:
         out.append(
             {
                 "name": ws["name"],
+                "label": ws.get("label") or ws["name"],
                 "id": ws.get("id", ws["name"]),
                 "port": port,
                 "pid": rec.get("pid") if running else None,
@@ -692,6 +694,7 @@ def status() -> list[dict]:
         out.append(
             {
                 "name": rec["name"],
+                "label": rec.get("label") or rec["name"],
                 "id": rec["id"],
                 "port": None,
                 "pid": None,

@@ -70,7 +70,7 @@ export function AgentDownBanner() {
         )
       }
     >
-      {brandName(agent.name)} has stopped —{" "}
+      {brandName(agent.label ?? agent.name)} has stopped —{" "}
       {agent.remote
         ? "it’s unreachable from here; return to the host console."
         : "start it to reload this view."}

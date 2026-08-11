@@ -339,15 +339,15 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           onCommit={(next) => rename.mutate({ id: a.id, name: next })}
                         />
                       ) : isActive ? (
-                        a.name // you're already here — a link to this window would be a no-op reload
+                        (a.label ?? a.name) // you're already here — a link to this window would be a no-op reload
                       ) : (
                         // #2240 — the name is the click-through to that agent's own window. A real
                         // <a href>, not a click handler, so cmd/middle-click opens it in a NEW window
                         // — the point of slug routing (ADR 0042) being one window per agent. Same
                         // destination the topbar FleetSwitcher navigates to; a stopped agent resumes
                         // on arrival via `activateSlugAgent`, so "not currently open" is not a gate.
-                        <a className="fleet-name-link" href={agentHref(slugOf(a))} title={`Open ${a.name}`}>
-                          {a.name}
+                        <a className="fleet-name-link" href={agentHref(slugOf(a))} title={`Open ${a.label ?? a.name}`}>
+                          {a.label ?? a.name}
                         </a>
                       )}
                       {a.host ? <Badge status="neutral">this instance</Badge> : null}

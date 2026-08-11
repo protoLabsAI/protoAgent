@@ -1109,7 +1109,10 @@ export type DelegateView = {
 
 // Fleet (ADR 0042) — many workspace agents on one host, switchable in place.
 export type FleetAgent = {
-  name: string; // also the instance id; unique, [A-Za-z0-9-_]
+  name: string; // the [A-Za-z0-9-_] addressing handle (control plane accepts it beside `id`)
+  /** Verbatim display name (#2520) — free-form UTF-8; render `label ?? name` everywhere
+   *  user-facing. Absent from pre-upgrade records, so keep the fallback. */
+  label?: string;
   id: string;
   port: number;
   pid: number | null; // null when stopped

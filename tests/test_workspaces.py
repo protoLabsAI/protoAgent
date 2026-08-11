@@ -88,23 +88,30 @@ def test_member_self_rename_restamps_its_own_record(root, monkeypatch):
     monkeypatch.setattr("infra.paths.instance_paths", lambda: type("P", (), {"instance_root": ws})())
 
     assert manager.sync_self_display_name("ranger") is None
-    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "ranger"
-    assert manager._find(s["id"])["name"] == "ranger"  # what the hub lists → the switcher label
+    rec = yaml.safe_load((ws / "workspace.yaml").read_text())
+    assert rec["name"] == "ranger" and rec["label"] == "ranger"
+    assert manager._find(s["id"])["label"] == "ranger"  # what the hub lists → the switcher label
     assert manager.sync_self_display_name("ranger") is None  # already in step → no-op
 
-    # A free-form identity.name the record can't hold verbatim is NORMALIZED, not refused —
-    # the agent keeps what the operator typed, the label follows as close as it can. Refusing
-    # would leave the switcher on a stale name with only a log line to explain it.
-    note = manager.sync_self_display_name("Merchant Bot!")
-    assert note == "fleet label saved as 'Merchant_Bot'"
-    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "Merchant_Bot"
-    assert manager._find(s["id"])["name"] == "Merchant_Bot"  # and the hub lists the slugified one
+    # A free-form identity.name is kept VERBATIM in `label` (what every surface renders,
+    # #2520 — "PA Windows Lifecycle Café" used to silently show as PA_Windows_Lifecycle_Caf);
+    # `name` stays the [A-Za-z0-9_-] addressing handle, slugified. No note needed: the
+    # display follows exactly, so there is nothing to explain.
+    assert manager.sync_self_display_name("PA Windows Lifecycle Café") is None
+    rec = yaml.safe_load((ws / "workspace.yaml").read_text())
+    assert rec["label"] == "PA Windows Lifecycle Café"
+    assert rec["name"] == "PA_Windows_Lifecycle_Caf"
+    assert manager._find(s["id"])["label"] == "PA Windows Lifecycle Café"
 
-    # Only the genuinely unusable is reported and skipped — never raised: identity.name is
-    # already saved and the agent is running under it, so a stale label beats a failed reload.
+    # A display with NO addressable characters still saves as the label; the addressing
+    # name simply stays put. Only a reserved label is refused (a member masquerading as
+    # "host" in the switcher is worse than a stale name) — and never raised: the agent is
+    # already running under the new identity, so a stale label must never fail the reload.
+    assert manager.sync_self_display_name("!!!") is None
+    rec = yaml.safe_load((ws / "workspace.yaml").read_text())
+    assert rec["label"] == "!!!" and rec["name"] == "PA_Windows_Lifecycle_Caf"
     assert "reserved" in manager.sync_self_display_name("host")
-    assert "no characters" in manager.sync_self_display_name("!!!")
-    assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "Merchant_Bot"
+    assert yaml.safe_load((ws / "workspace.yaml").read_text())["label"] == "!!!"
     # The id (dir, URL slug, data scope) never moves.
     assert yaml.safe_load((ws / "workspace.yaml").read_text())["id"] == s["id"]
 
@@ -123,8 +130,9 @@ def test_member_self_rename_restamps_its_own_record(root, monkeypatch):
     ],
 )
 def test_slugify_display(raw, slug):
-    """`identity.name` is free-form; a workspace record's name is [A-Za-z0-9_-]. The coercion
-    has to be boring and predictable — this is what the fleet switcher ends up showing."""
+    """`identity.name` is free-form; a workspace record's `name` is the [A-Za-z0-9_-]
+    addressing handle (the switcher renders the verbatim `label` since #2520). The
+    coercion has to be boring and predictable — it's what CLI/control-plane calls accept."""
     assert manager._slugify_display(raw) == slug
 
 
