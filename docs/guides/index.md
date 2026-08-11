@@ -101,6 +101,7 @@ Ship it, isolate it, fence it in, and watch it.
 | [Sandboxing & egress](/guides/sandboxing) | You want to fence the filesystem + outbound network |
 | [Expose to the world](/guides/exposing-protoagent) | You want an agent reachable from the public internet — A2A only, token-gated, console hidden |
 | [Wire Langfuse + Prometheus](/guides/observability) | You need traces and metrics in production |
+| [Operating a fleet (health, rollout, triage, recovery)](/guides/operating-a-fleet) | You're running a multi-member fleet and need health-check, upgrade, incident-triage, and recovery procedures |
 
 ## Forks & evals
 

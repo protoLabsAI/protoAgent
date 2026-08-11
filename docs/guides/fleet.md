@@ -257,4 +257,5 @@ vA.B.C — features may misbehave"). Upgrade the lagging side to clear it.
   [0072 fleet seed / team-via-config](../adr/0072-fleet-seed-team-via-config.md)
 - Guides: [deploy with Docker](./deploy-docker.md) · [delegates](./delegates.md) ·
   [multi-instance scoping](./multi-instance.md) · [plugins](./plugins.md) ·
-  [install & publish plugins](./plugin-registry.md) · [skills](./skills.md)
+  [install & publish plugins](./plugin-registry.md) · [skills](./skills.md) ·
+  [operating a fleet (health, rollout, triage, recovery)](./operating-a-fleet.md)

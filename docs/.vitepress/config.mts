@@ -164,6 +164,7 @@ export default defineConfig({
             { text: "Sandboxing & egress", link: "/guides/sandboxing" },
             { text: "Expose to the world", link: "/guides/exposing-protoagent" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
+            { text: "Operating a fleet (health, rollout, triage, recovery)", link: "/guides/operating-a-fleet" },
           ],
         },
         {

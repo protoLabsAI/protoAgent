@@ -251,6 +251,10 @@
         {
           "path": "guides/observability.md",
           "title": "Wire Langfuse + Prometheus"
+        },
+        {
+          "path": "guides/operating-a-fleet.md",
+          "title": "Operating a fleet (health, rollout, triage, recovery)"
         }
       ]
     },
