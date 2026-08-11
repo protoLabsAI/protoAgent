@@ -20,6 +20,21 @@ default** and you opt in explicitly — only enable plugins you trust.
 > haven't reviewed. Untrusted third-party *tools* are better added via
 > [MCP](./mcp.md) (out-of-process).
 
+## Start here
+
+This page is the full reference. Pick the job you actually have:
+
+| I want to… | Go to |
+| --- | --- |
+| **Turn on a plugin that ships with protoAgent** | Settings ▸ Plugins ▸ Installed, or `plugins: { enabled: [telegram] }` — [Enable one](#enable-one) |
+| **Install someone else's plugin from a git URL** | [Install & publish plugins](/guides/plugin-registry) |
+| **Write my own** | [Anatomy](#anatomy) — the manifest, `register()`, and what you can contribute (tools, routes, a console view, …) |
+| **Add a console surface to one** | [Building a plugin view](/guides/building-react-plugin-views) |
+| **Turn my agent into a chat bot** | [Build a communication plugin](/guides/communication-plugins) |
+
+The rest of this page walks the plugin contract top to bottom — read it once when
+you write your first plugin, then use it as a lookup.
+
 ## Anatomy
 
 A plugin is a directory with a manifest and a module exposing `register(registry)`:
@@ -620,7 +635,7 @@ example demonstrates the contribution types. Plugin contributions show in
 `ChatAdapter`) and `plugins/github` first-party plugins are worked examples of the
 contribution types; the external `discord-plugin` is a fuller surface + route + tools.
 
-## Where plugins live & how they're enabled
+## Where plugins live & how they're enabled {#enable-one}
 
 Two roots (like skills): bundled `plugins/` (shipped, e.g. the `hello` example)
 and live `<config-dir>/plugins/` (your drop-ins; `<config-dir>` honors

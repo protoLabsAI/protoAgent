@@ -1,6 +1,14 @@
 # Add a custom skill
 
-A *skill* is a named capability A2A callers can dispatch to. Skills live on the agent card, not in your Python code. Adding one does not create a new handler — it advertises an existing capability so callers can target it.
+A *skill* here is a named capability **A2A callers can dispatch to**. It lives on the
+agent card, not in your Python code: adding one does not create a new handler — it
+advertises an existing capability so callers can target it.
+
+::: warning Not the same as a `SKILL.md` skill
+If you're trying to teach *your own* agent a procedure it loads mid-turn, that's a
+[`SKILL.md` skill](/guides/skills) — a different subsystem that happens to share the
+word. This page is only about what other agents can call over A2A.
+:::
 
 ## When you need a skill
 

@@ -11,6 +11,13 @@ intercept tool calls, ship summaries somewhere — this is the contract.
 This page is the deep dive; the quick version lives in
 [Plugins → Middleware](/guides/plugins#middleware-register-middleware-adr-0032).
 
+## What you'll do
+
+Writing middleware is three steps: subclass `AgentMiddleware`, implement the hook(s)
+you care about from the table below, and return it from your plugin's `register()` so
+it joins the chain. The rest of this page is what each hook sees, when it fires, and
+the ordering rules that decide who wins.
+
 ## The hooks
 
 A middleware subclasses `langchain.agents.middleware.AgentMiddleware` and overrides
