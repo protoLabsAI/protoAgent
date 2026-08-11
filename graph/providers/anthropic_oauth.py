@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +41,35 @@ _CLAUDE_CODE_VERSION_FALLBACK = "2.1.74"
 CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
 _version_cache: str | None = None
+
+# How long a resolved OAuth token is reused before the credential store is re-read.
+# Resolution can shell out to the macOS Keychain (`security find-generic-password`), so
+# re-resolving on every model call would add a subprocess spawn to each one — a single turn
+# makes tens. A short TTL keeps that off the hot path while bounding staleness to seconds
+# instead of the process lifetime it used to be (#2582).
+_TOKEN_TTL_S = 30.0
+_token_cache: tuple[str, float] | None = None
+
+
+def current_oauth_token(*, force: bool = False) -> str:
+    """The Claude OAuth access token, re-resolved at most every :data:`_TOKEN_TTL_S`.
+
+    ``force=True`` bypasses the cache — for the case where the cached value is precisely
+    the one that just failed.
+    """
+    global _token_cache
+    now = time.monotonic()
+    if not force and _token_cache is not None and now - _token_cache[1] < _TOKEN_TTL_S:
+        return _token_cache[0]
+    token = (resolve_anthropic_oauth().access_token or "").strip()
+    _token_cache = (token, now)
+    return token
+
+
+def _reset_token_cache() -> None:
+    """Drop the cached token (tests, and an explicit sign-in/disconnect)."""
+    global _token_cache
+    _token_cache = None
 
 
 def _claude_code_version() -> str:
@@ -90,6 +120,60 @@ try:
             params.pop("api_key", None)
             params["auth_token"] = self.oauth_token
             return params
+
+        def _refresh_oauth_token(self) -> None:
+            """Push the CURRENT credential into the live SDK clients, before each request.
+
+            The token used to be resolved once, at graph build, and frozen into the client
+            for the life of the process — ``_client_params`` is a ``cached_property``, so
+            even reassigning ``oauth_token`` wouldn't have moved it. Anything that rotates
+            the shared Claude credential then broke the agent permanently, and this setup
+            rotates it *by doing its job*: a board agent dispatching its own Claude Code
+            coders shares their keychain login, and each of their runs can refresh it,
+            invalidating the access token this process is still presenting. Every call then
+            401s as "revoked" while ``/api/config/oauth-status`` — which reads the store
+            live — kept reporting a healthy sign-in. The introspection surface and the
+            running graph disagreeing is what made it so hard to diagnose (#2582).
+
+            The SDK's ``auth_headers`` is a live property over ``client.auth_token``, so
+            updating that attribute is enough: no client rebuild, no reconnect, no dropped
+            connection pool.
+            """
+            try:
+                token = current_oauth_token()
+            except Exception:  # noqa: BLE001 — a transient store read must not kill a live turn
+                log.warning(
+                    "[anthropic-oauth] could not re-resolve the access token — keeping the current one",
+                    exc_info=True,
+                )
+                return
+            if not token or token == self.oauth_token:
+                return
+            self.oauth_token = token
+            for client in (getattr(self, "_client", None), getattr(self, "_async_client", None)):
+                if client is not None:
+                    client.auth_token = token
+            log.info("[anthropic-oauth] the access token rotated — refreshed the live client")
+
+        # The four request entry points. Overridden explicitly rather than hooked deeper so
+        # that a langchain-anthropic rename fails loudly in test_anthropic_oauth, the same
+        # contract `_client_params` above relies on.
+        def _generate(self, *args: Any, **kwargs: Any) -> Any:
+            self._refresh_oauth_token()
+            return super()._generate(*args, **kwargs)
+
+        def _stream(self, *args: Any, **kwargs: Any) -> Any:
+            self._refresh_oauth_token()
+            yield from super()._stream(*args, **kwargs)
+
+        async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+            self._refresh_oauth_token()
+            return await super()._agenerate(*args, **kwargs)
+
+        async def _astream(self, *args: Any, **kwargs: Any) -> Any:
+            self._refresh_oauth_token()
+            async for chunk in super()._astream(*args, **kwargs):
+                yield chunk
 
     _IMPORT_ERROR: Exception | None = None
 except Exception as exc:  # noqa: BLE001 — surfaced with an actionable message at build time

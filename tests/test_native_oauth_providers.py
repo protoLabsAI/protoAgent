@@ -1024,3 +1024,91 @@ def test_disconnect_suppresses_keychain_too(monkeypatch, tmp_path):
     oauth_mod._mark_disconnected(paths, "anthropic-oauth")
     with pytest.raises(oauth_mod.OAuthCredentialError):
         oauth_mod.resolve_anthropic_oauth()
+
+
+# ── #2582: the token must not be frozen at graph-build time ─────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_oauth_token_cache():
+    from graph.providers import anthropic_oauth as ao
+
+    ao._reset_token_cache()
+    yield
+    ao._reset_token_cache()
+
+
+def test_rotated_token_reaches_the_live_client(monkeypatch):
+    """The bug: the token was resolved ONCE at graph build and frozen into the client for
+    the process lifetime. This agent rotates the shared Claude credential by doing its job
+    — its own Claude Code coders refresh it, invalidating the previous access token — so
+    every call 401'd as "revoked" while oauth-status kept reporting a healthy sign-in."""
+    from graph.providers import anthropic_oauth as ao
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-OLD")
+    llm = create_llm(LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-sonnet-4-5"))
+    assert llm._client.auth_token == "cc-OLD"
+
+    # A coder run refreshes the shared credential out from under us.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-NEW")
+    ao._reset_token_cache()  # the TTL would otherwise hold the old value briefly
+    llm._refresh_oauth_token()
+
+    assert llm._client.auth_token == "cc-NEW"
+    assert llm._async_client.auth_token == "cc-NEW"  # both clients, or async turns still 401
+    assert llm.oauth_token == "cc-NEW"
+
+
+def test_every_request_entry_point_refreshes_first(monkeypatch):
+    """All four of _generate/_stream/_agenerate/_astream must refresh — a turn that only
+    ever streams would otherwise keep presenting the dead token."""
+    from graph.providers import anthropic_oauth as ao
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-OLD")
+    llm = create_llm(LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-sonnet-4-5"))
+
+    for name in ("_generate", "_stream", "_agenerate", "_astream"):
+        assert name in type(llm).__dict__, f"{name} must be overridden to refresh the token"
+
+    calls: list[str] = []
+    monkeypatch.setattr(type(llm), "_refresh_oauth_token", lambda self: calls.append("refreshed"))
+    monkeypatch.setattr(ao.ChatAnthropic, "_generate", lambda self, *a, **k: "ok")
+    assert llm._generate([]) == "ok"
+    assert calls == ["refreshed"]
+
+
+def test_token_resolution_is_ttl_cached(monkeypatch):
+    """Resolution can shell out to the macOS Keychain, so a per-call resolve would add a
+    subprocess spawn to every model call. The TTL keeps that off the hot path."""
+    from graph.providers import anthropic_oauth as ao
+
+    resolves = {"n": 0}
+
+    def _counted():
+        resolves["n"] += 1
+        return types.SimpleNamespace(access_token=f"tok-{resolves['n']}")
+
+    monkeypatch.setattr(ao, "resolve_anthropic_oauth", _counted)
+
+    assert ao.current_oauth_token() == "tok-1"
+    assert ao.current_oauth_token() == "tok-1"  # served from cache
+    assert resolves["n"] == 1
+    assert ao.current_oauth_token(force=True) == "tok-2"  # force bypasses it
+    assert resolves["n"] == 2
+
+
+def test_a_broken_store_read_keeps_the_working_token(monkeypatch):
+    """This runs before every request, so a transient keychain hiccup must not take down a
+    live turn — the existing token is still the best guess available."""
+    from graph.providers import anthropic_oauth as ao
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-GOOD")
+    llm = create_llm(LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-sonnet-4-5"))
+
+    def _boom(**kwargs):
+        raise OSError("keychain unavailable")
+
+    monkeypatch.setattr(ao, "current_oauth_token", _boom)
+    llm._refresh_oauth_token()  # must not raise
+
+    assert llm._client.auth_token == "cc-GOOD"
