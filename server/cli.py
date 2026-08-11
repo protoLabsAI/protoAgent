@@ -127,10 +127,29 @@ def _read_pidfile() -> dict | None:
 
 
 def _port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
-    """True if something is accepting connections on ``host:port``."""
+    """True if something is accepting connections on ``host:port``. Says nothing
+    about *whose* server that is — see :func:`_our_server`."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(timeout)
         return s.connect_ex((host, port)) == 0
+
+
+def _our_server() -> dict | None:
+    """The pidfile record for a server THIS instance started, or None.
+
+    "Ours" means the pidfile names a **living** pid — the same test ``down``
+    already applies before it signals anything. A bare port probe can't make
+    that distinction: any unrelated listener on the port (a container publishing
+    7870, a hand-started ``serve``) answers it, which used to make ``up`` print
+    "already running" and exit 0 without starting a server, and ``status`` report
+    ``running (pid ?, v?)`` with no pidfile on disk at all (#2576).
+    """
+    rec = _read_pidfile()
+    pid = (rec or {}).get("pid")
+    try:
+        return rec if pid and pid_alive(int(pid)) else None
+    except (TypeError, ValueError):  # corrupt pid in the record
+        return None
 
 
 def _server_base_argv() -> list[str]:
@@ -153,13 +172,23 @@ def _lifecycle_parser(cmd: str) -> argparse.ArgumentParser:
 
 def _cmd_status(rest: list[str]) -> int:
     args = _lifecycle_parser("status").parse_args(rest)
-    rec = _read_pidfile()
-    port = int((rec or {}).get("port") or args.port)
+    rec = _our_server()
+    if rec:
+        port = int(rec.get("port") or args.port)
+        if _port_open(port):
+            print(f"protoagent: running on http://127.0.0.1:{port} (pid {rec['pid']}, v{rec.get('version', '?')})")
+            return 0
+        # Live pid, dead port: booting, or wedged before it bound. Say which.
+        print(f"protoagent: starting or unresponsive — pid {rec['pid']} is alive but :{port} isn't accepting")
+        return 3
+
+    port = int((_read_pidfile() or {}).get("port") or args.port)
     if _port_open(port):
-        pid = (rec or {}).get("pid", "?")
-        ver = (rec or {}).get("version", "?")
-        print(f"protoagent: running on http://127.0.0.1:{port} (pid {pid}, v{ver})")
-        return 0
+        print(
+            f"protoagent: stopped — but something else is listening on :{port} (not started by `protoagent up`)",
+            file=sys.stderr,
+        )
+        return 3
     print("protoagent: stopped")
     return 3  # sysadmin convention: 3 = not running
 
@@ -168,9 +197,28 @@ def _cmd_up(rest: list[str]) -> int:
     from infra.paths import package_version
 
     args = _lifecycle_parser("up").parse_args(rest)
+    rec = _our_server()
+    if rec:
+        running_port = int(rec.get("port") or args.port)
+        if running_port == args.port:
+            print(f"protoagent: already running on http://127.0.0.1:{running_port} (pid {rec['pid']})")
+            return 0
+        # One pidfile per instance ⇒ one tracked server. Starting a second would
+        # clobber the record and orphan the first, so refuse instead.
+        print(
+            f"protoagent: already running on :{running_port} (pid {rec['pid']}) — this instance tracks "
+            f"one server; `protoagent down` first, or use a scoped instance for :{args.port}",
+            file=sys.stderr,
+        )
+        return 1
     if _port_open(args.port):
-        print(f"protoagent: already running on http://127.0.0.1:{args.port}")
-        return 0
+        # Somebody else's listener. Starting would fail to bind anyway; exiting 0
+        # here is what made the guide's happy path "succeed" having started nothing.
+        print(
+            f"protoagent: port {args.port} is held by a process `protoagent up` didn't start — free it, or pass --port",
+            file=sys.stderr,
+        )
+        return 1
 
     log_path = _pid_path().parent / "server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)

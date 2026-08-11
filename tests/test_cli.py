@@ -88,10 +88,71 @@ def test_status_running_returns_0(monkeypatch, tmp_path, capsys):
         srv.close()
 
 
-def test_up_noop_when_already_running(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: True)  # pretend it's up
+def test_up_noop_when_already_running(monkeypatch, tmp_path, capsys):
+    pidf = tmp_path / "server.pid"
+    pidf.write_text(json.dumps({"pid": os.getpid(), "port": 7870, "version": "9.9.9"}), encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_path", lambda: pidf)
+    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: True)
     assert cli._cmd_up(["--port", "7870"]) == 0
     assert "already running" in capsys.readouterr().out
+
+
+# ── #2576: "running" means OUR pidfile, not "the port answers" ───────────────
+
+
+def test_up_refuses_a_port_held_by_a_foreign_listener(monkeypatch, tmp_path, capsys):
+    """The bug: any unrelated listener on the port made `up` print "already
+    running" and exit 0 having started nothing at all."""
+    monkeypatch.setattr(cli, "_pid_path", lambda: tmp_path / "none.pid")  # no pidfile
+    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: True)  # somebody else's
+    started = []
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: started.append(a) or None)
+
+    assert cli._cmd_up(["--port", "7870"]) == 1  # not 0
+    assert not started  # and it must not claim success for a server it never launched
+    assert "held by a process" in capsys.readouterr().err
+
+
+def test_status_does_not_claim_a_foreign_listener_is_ours(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "_pid_path", lambda: tmp_path / "none.pid")
+    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: True)
+
+    assert cli._cmd_status(["--port", "7870"]) == 3  # not 0 / "running (pid ?, v?)"
+    err = capsys.readouterr().err
+    assert "stopped" in err and "something else is listening" in err
+
+
+def test_status_ignores_a_pidfile_whose_process_is_gone(monkeypatch, tmp_path, capsys):
+    """A stale record + a recycled port must not read as a healthy server."""
+    pidf = tmp_path / "server.pid"
+    pidf.write_text(json.dumps({"pid": 999_999_999, "port": 7870, "version": "1.2.3"}), encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_path", lambda: pidf)
+    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: True)
+
+    assert cli._cmd_status([]) == 3
+    assert "v1.2.3" not in capsys.readouterr().out  # never reports the dead record as live
+
+
+def test_status_reports_a_live_pid_that_has_not_bound_yet(monkeypatch, tmp_path, capsys):
+    pidf = tmp_path / "server.pid"
+    pidf.write_text(json.dumps({"pid": os.getpid(), "port": 7870, "version": "9.9.9"}), encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_path", lambda: pidf)
+    monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: False)
+
+    assert cli._cmd_status([]) == 3
+    assert "starting or unresponsive" in capsys.readouterr().out
+
+
+def test_up_refuses_to_orphan_a_server_running_on_another_port(monkeypatch, tmp_path, capsys):
+    pidf = tmp_path / "server.pid"
+    pidf.write_text(json.dumps({"pid": os.getpid(), "port": 7870, "version": "9.9.9"}), encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_path", lambda: pidf)
+    started = []
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: started.append(a) or None)
+
+    assert cli._cmd_up(["--port", "7999"]) == 1
+    assert not started  # starting would clobber the pidfile and orphan :7870
+    assert "one server" in capsys.readouterr().err
 
 
 def test_down_reports_when_nothing_to_stop(monkeypatch, tmp_path, capsys):
