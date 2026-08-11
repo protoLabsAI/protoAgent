@@ -70,6 +70,44 @@ test("mobile shell: the session sheet replaces the tab strip", async ({ page }) 
   await expect(page.locator(".session-sheet")).toHaveCount(0);
 });
 
+// Guards #2512: the sheet's Delete must run the SAME confirm lifecycle as the desktop
+// tab strip — never a silent local removal that skips the dialog and the server purge.
+test("mobile shell: deleting from the session sheet confirms first", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // Two sessions so a delete is offered (a lone session has no ✕ in the sheet).
+  await seedCurrentChat(page);
+  await page.locator(".mshell-title").click();
+  await page.locator(".session-sheet-new").click();
+  await expect(page.locator(".session-sheet")).toHaveCount(0);
+
+  // Tap a row's ✕ → the sheet yields to the confirm dialog; nothing deleted yet.
+  await page.locator(".mshell-title").click();
+  await expect(page.locator(".session-sheet-row")).toHaveCount(2);
+  await page.locator(".session-sheet-del").first().click();
+  await expect(page.locator(".session-sheet")).toHaveCount(0);
+  const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
+  await expect(dialog).toBeVisible();
+
+  // Cancel keeps both sessions.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await page.locator(".mshell-title").click();
+  await expect(page.locator(".session-sheet-row")).toHaveCount(2);
+
+  // Confirm deletes — and the server purge rides along (the request the desktop
+  // path also sends; its absence was the memory-retention leak in #2512).
+  const purge = page.waitForRequest(
+    (r) => r.url().includes("/api/chat/sessions/") && r.method() === "DELETE",
+  );
+  await page.locator(".session-sheet-del").first().click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "Delete chat" }).click();
+  await purge;
+  await page.locator(".mshell-title").click();
+  await expect(page.locator(".session-sheet-row")).toHaveCount(1);
+});
+
 // Guards the actual complaint: "+" was trivially spammable into a pile of blank chats.
 test("mobile shell: new-chat never piles up blanks", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });

@@ -148,6 +148,18 @@ export function ChatSurface({
     }
   }, [chat.currentSessionId, chat.sessions.length]);
 
+  // Deletes asked for outside the tab strip (the mobile SessionSheet, #2512) arrive as a
+  // store-level request and fold into the SAME pendingClose dialog — harvest opt-in, server
+  // purge, goal Stop-vs-Detach and all. Consumed only while no dialog is open, so a request
+  // landing mid-bulk-close waits its turn instead of clobbering the queue. A stale id (the
+  // session vanished, e.g. deleted from another tab) is dropped without a dialog.
+  useEffect(() => {
+    const requested = chat.pendingDeleteRequest;
+    if (!requested || pendingClose !== null) return;
+    chatStore.clearDeleteRequest();
+    if (chat.sessions.some((s) => s.id === requested)) setPendingClose(requested);
+  }, [chat.pendingDeleteRequest, pendingClose, chat.sessions]);
+
   function closeSession(id: string, harvest: boolean) {
     // Retire server-side (purge checkpoints; harvest into knowledge ONLY when
     // the dialog's checkbox opted in), best-effort, then drop the tab locally.

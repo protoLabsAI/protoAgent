@@ -100,13 +100,20 @@ export function SessionSheet({ open, onClose }: { open: boolean; onClose: () => 
                   {s.incognito ? <EyeOff size={13} aria-label="incognito" /> : null}
                 </button>
                 {/* Only offer delete while more than one session exists — deleting the last
-                    one leaves the chat surface with no session to fall back to. */}
+                    one leaves the chat surface with no session to fall back to. Deleting
+                    goes THROUGH the store request so ChatSurface's confirm dialog (harvest
+                    opt-in, server purge, goal Stop-vs-Detach) runs — never a direct local
+                    deleteSession, which skipped all of that (#2512). The sheet closes first
+                    so the dialog isn't buried under it. */}
                 {chat.sessions.length > 1 ? (
                   <button
                     type="button"
                     className="session-sheet-del"
                     aria-label={`Delete ${s.title}`}
-                    onClick={() => chatStore.deleteSession(s.id)}
+                    onClick={() => {
+                      chatStore.requestDeleteSession(s.id);
+                      onClose();
+                    }}
                   >
                     <X size={15} aria-hidden />
                   </button>

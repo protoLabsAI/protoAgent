@@ -52,6 +52,11 @@ export type PersistedChatState = {
 export type ChatState = PersistedChatState & {
   activeSessions: string[];
   sessionStatusMap: Record<string, SessionStatus>;
+  // A delete asked for from OUTSIDE the tab strip (the mobile SessionSheet). Ephemeral,
+  // never persisted. ChatSurface owns the one "Delete this chat?" ConfirmDialog — with
+  // its Harvest opt-in, server-side purge, and goal Stop-vs-Detach fork — so surfaces
+  // that can't render that dialog park the id here instead of deleting directly (#2512).
+  pendingDeleteRequest: string | null;
 };
 
 // Chat sessions are PER AGENT — namespace the persisted key by the URL slug (ADR 0042 slug
@@ -381,6 +386,7 @@ let state: ChatState = {
   ...initial,
   activeSessions: initial.currentSessionId ? [initial.currentSessionId] : [],
   sessionStatusMap: {},
+  pendingDeleteRequest: null,
 };
 
 const listeners = new Set<() => void>();
@@ -505,6 +511,23 @@ export const chatStore = {
         sessionStatusMap,
       };
     });
+  },
+
+  /** Ask for a session to be deleted THROUGH the confirm lifecycle rather than
+   *  deleting it here. ChatSurface consumes the request into its existing
+   *  pendingClose dialog (one consumer at a time — it waits out an open dialog). */
+  requestDeleteSession(sessionId: string) {
+    setState((current) =>
+      current.pendingDeleteRequest === sessionId
+        ? current
+        : { ...current, pendingDeleteRequest: sessionId },
+    );
+  },
+
+  clearDeleteRequest() {
+    setState((current) =>
+      current.pendingDeleteRequest === null ? current : { ...current, pendingDeleteRequest: null },
+    );
   },
 
   switchSession(sessionId: string) {
