@@ -78,6 +78,27 @@ test("a one-off in the past is flagged and blocks submit (#2159)", async ({ page
   await expect(page.getByTestId("schedule-submit")).toBeDisabled();
 });
 
+test("a one-off with no time is refused, not quietly scheduled for 09:00 (#2159)", async ({ page }) => {
+  await openScheduleModal(page);
+  await page.getByTestId("schedule-once-date").fill("2099-01-01");
+  await page.getByTestId("schedule-once-time").fill("23:59");
+  await page.getByTestId("schedule-prompt").fill("run late");
+  // A complete pair builds a schedule and arms submit. (The preview renders the time
+  // through the browser's locale formatter, so assert on the built ISO instant, not on
+  // "23:59" — 23:59 local is a different wall clock in UTC.)
+  await expect(page.getByTestId("schedule-preview").locator(".preview-cron")).not.toHaveText("");
+  await expect(page.getByTestId("schedule-submit")).toBeEnabled();
+
+  // Now lose the time, the way the Windows report describes the field doing on blur.
+  await page.getByTestId("schedule-once-time").fill("");
+
+  // It used to become 09:00 here, silently, and submit stayed enabled — the dialog
+  // reported success while scheduling the agent at a materially different time.
+  await expect(page.getByTestId("schedule-preview").locator(".preview-cron")).toHaveCount(0);
+  await expect(page.getByTestId("schedule-error")).toContainText("Pick a time");
+  await expect(page.getByTestId("schedule-submit")).toBeDisabled();
+});
+
 test("clicking a job opens a detail dialog with the FULL (un-truncated) prompt", async ({ page }) => {
   await gotoSchedule(page);
   // The row only shows a truncated prompt + delete; clicking it pops the full detail.

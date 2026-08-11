@@ -1,9 +1,9 @@
 import { DropdownSelect, Input } from "@protolabsai/ui/forms";
 import { Tabs } from "@protolabsai/ui/navigation";
 import { AlertTriangle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type FocusEvent, useEffect, useMemo, useState } from "react";
 
-import { from12h, joinLocal, nowTime, to12h } from "./dateParts";
+import { completeTime, from12h, joinLocal, nowTime, to12h } from "./dateParts";
 import { MonthCalendar } from "./MonthCalendar";
 import {
   buildOnce,
@@ -52,6 +52,16 @@ export function ScheduleBuilder({
   // so opening an existing UTC job never silently retimes it to the local zone.
   const [tz, setTz] = useState(initial.timezone);
 
+  // A `type="time"` control reports "" while its segments are half-entered, so a
+  // controlled field can end a burst of typing with state still empty if the settled
+  // change event doesn't land — the Windows symptom in #2159 (the field shows 23:59,
+  // the preview doesn't). Committing again on blur closes that gap from the other end,
+  // and `completeTime` means a partial value can never be what gets committed.
+  const commitOnBlur = (set: (v: string) => void) => (e: FocusEvent<HTMLInputElement>) => {
+    const settled = completeTime(e.currentTarget.value);
+    if (settled) set(settled);
+  };
+
   const tzOptions = useMemo(() => {
     const local = localZone();
     // The stored zone joins the list even when it's not a common one, so the dropdown
@@ -69,6 +79,10 @@ export function ScheduleBuilder({
   const error = useMemo(() => {
     if (mode === "once") {
       if (!onceDate) return "Pick a date for the one-off run.";
+      // Blank time used to be quietly filled in as 09:00 by joinLocal, so a Time field
+      // that lost its input still submitted — as a job at 9am, reported as a success
+      // (#2159). Say it instead, and let `valid` gate the host's submit button.
+      if (!onceTime) return "Pick a time for the one-off run.";
       if (isPastOnce(schedule)) return "That time is in the past — it won't fire.";
       return "";
     }
@@ -77,8 +91,13 @@ export function ScheduleBuilder({
       // Field count AND numeric ranges — "60 9 * * *" is five fields but never valid.
       return cronFieldError(schedule);
     }
+    // buildRepeat has the same 09:00 fallback. The field is seeded, so this only fires
+    // if the control loses its value — which is exactly the case that must not submit.
+    if (mode === "repeat" && !time) {
+      return freq === "hourly" ? "Pick a minute past the hour." : "Pick a time to repeat at.";
+    }
     return "";
-  }, [mode, onceDate, schedule]);
+  }, [mode, onceDate, onceTime, freq, time, schedule]);
 
   const valid = !!schedule && !error;
   const timezone = mode !== "once" && tz ? tz : undefined;
@@ -99,23 +118,24 @@ export function ScheduleBuilder({
         role="status"
       >
         {schedule ? (
-          <>
-            <div className="preview-line">
-              Runs <strong>{preview}</strong>
-              <code className="preview-cron">{schedule}</code>
-              {mode === "once"
-                ? <span className="muted"> · {localZone() || "local time"}</span>
-                : tz ? <span className="muted"> · {tz}</span> : null}
-            </div>
-            {error ? (
-              <div className="preview-error" data-testid="schedule-error">
-                <AlertTriangle size={13} /> {error}
-              </div>
-            ) : null}
-          </>
-        ) : (
+          <div className="preview-line">
+            Runs <strong>{preview}</strong>
+            <code className="preview-cron">{schedule}</code>
+            {mode === "once"
+              ? <span className="muted"> · {localZone() || "local time"}</span>
+              : tz ? <span className="muted"> · {tz}</span> : null}
+          </div>
+        ) : error ? null : (
           <span className="muted">Pick when it should run</span>
         )}
+        {/* Rendered whether or not a schedule built. An incomplete one produces no
+            schedule string at all, and "Pick a time for the one-off run" is a far more
+            actionable thing to show there than the generic placeholder (#2159). */}
+        {error ? (
+          <div className="preview-error" data-testid="schedule-error">
+            <AlertTriangle size={13} /> {error}
+          </div>
+        ) : null}
       </div>
 
       <Tabs
@@ -140,7 +160,7 @@ export function ScheduleBuilder({
             <label className="field">
               <span>Time</span>
               <Input type="time" value={onceTime} onChange={(e) => setOnceTime(e.target.value)}
-                     data-testid="schedule-once-time" />
+                     onBlur={commitOnBlur(setOnceTime)} data-testid="schedule-once-time" />
             </label>
           </div>
           <MonthCalendar
@@ -204,7 +224,8 @@ export function ScheduleBuilder({
                 );
               })()
             ) : (
-              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
+              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)}
+                     onBlur={commitOnBlur(setTime)} data-testid="schedule-time" />
             )}
           </label>
         </div>

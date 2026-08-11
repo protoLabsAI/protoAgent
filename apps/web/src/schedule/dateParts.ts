@@ -8,10 +8,34 @@ export function splitLocal(local: string): { date: string; time: string } {
   return { date, time };
 }
 
-/** Compose a datetime-local string from a "YYYY-MM-DD" date and "HH:mm" time. Empty date → "". */
+/**
+ * Compose a datetime-local string from a "YYYY-MM-DD" date and "HH:mm" time.
+ * Either half missing → "" (an incomplete schedule, which the builder reports as such).
+ *
+ * A blank time used to become 09:00 here. That default is why a Windows report of "the
+ * Time field didn't take my 23:59" ended with a job actually scheduled for 09:00 and a
+ * success message (#2159): whatever swallowed the keystrokes was a UI glitch, but the
+ * substitution downstream is what turned it into the wrong job, silently. Missing input
+ * is missing — it is never 9am.
+ */
 export function joinLocal(date: string, time: string): string {
-  if (!date) return "";
-  return `${date}T${time || "09:00"}`;
+  if (!date || !time) return "";
+  return `${date}T${time}`;
+}
+
+/**
+ * A complete "HH:mm" (24h), or "" for anything partial.
+ *
+ * `<input type="time">` reports an EMPTY value while its segments are half-filled, so a
+ * controlled field sees "" mid-typing. This is the guard for committing a value on blur:
+ * take it only when the control has settled on something real, so recovering a swallowed
+ * keystroke can never itself write junk into the schedule.
+ */
+export function completeTime(raw: string): string {
+  const m = /^(\d{2}):(\d{2})$/.exec((raw || "").trim());
+  if (!m) return "";
+  const [h, min] = [Number(m[1]), Number(m[2])];
+  return h <= 23 && min <= 59 ? `${m[1]}:${m[2]}` : "";
 }
 
 /** Today as "YYYY-MM-DD" in the browser's local zone (never UTC — the user picks local days). */
