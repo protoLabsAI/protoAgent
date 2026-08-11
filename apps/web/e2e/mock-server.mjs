@@ -29,6 +29,7 @@ import {
   SCHEDULER_JOBS,
   SETTINGS_SCHEMA,
   GATEWAY_MODELS,
+  CLAUDE_MODELS,
   settingsRestartRequired,
   SLASH_COMMANDS,
   PLAYBOOKS,
@@ -782,6 +783,9 @@ const server = createServer(async (req, res) => {
     if (pathname === "/api/config/models" && req.method === "POST") {
       // "Get models" (#1386): probe the (form) gateway for its model list. The mock returns a
       // DIFFERENT set than the saved dropdown, so the test can prove the dropdown refreshes.
+      // A native OAuth provider on the FORM routes to the subscription's list instead (#2518).
+      const body = await readBody(req);
+      if (body?.provider === "anthropic-oauth") return sendJson(res, { models: CLAUDE_MODELS, error: "" });
       return sendJson(res, { models: GATEWAY_MODELS, error: "" });
     }
     if (pathname === "/api/config/test-model" && req.method === "POST") {

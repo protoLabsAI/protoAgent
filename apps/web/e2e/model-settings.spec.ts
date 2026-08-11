@@ -35,3 +35,29 @@ test("Get models refreshes the Primary model dropdown with the gateway's models 
   await page.getByRole("menuitemradio", { name: "protolabs/smart" }).click();
   await expect(model).toContainText("protolabs/smart");
 });
+
+// #2518 — the probe must follow the provider named on the FORM. Switching to a native OAuth
+// provider (ADR 0097) and clicking "Get models" listed the GATEWAY's models: the provider was
+// never sent, so the dropdown only ever offered gateway ids the save validator then rejected
+// ("model.name='protolabs/smart' is not a Claude model id") — a dead-end with a rollback.
+test("Get models follows the form's provider — anthropic-oauth lists the subscription's models", async ({ page }) => {
+  await openModelSettings(page);
+
+  // Flip the provider ON THE FORM (unsaved) to anthropic-oauth.
+  const provider = page.locator("#set-model\\.provider");
+  await provider.click();
+  await page.getByRole("menuitemradio", { name: "anthropic-oauth" }).click();
+
+  // The probe carries the form's provider — the wire-level fact that was missing.
+  const probe = page.waitForRequest((r) => r.url().includes("/api/config/models") && r.method() === "POST");
+  await page.getByRole("button", { name: "Get models" }).click();
+  expect(JSON.parse((await probe).postData() || "{}").provider).toBe("anthropic-oauth");
+  await expect(page.locator(".pl-toast", { hasText: /found 2 models/i })).toBeVisible();
+
+  // The stale gateway model was auto-swapped for one the provider actually serves (wizard
+  // parity), so Save can't submit a model the rebuild validator would reject.
+  const model = page.locator("#set-model\\.name");
+  await expect(model).toContainText("claude-opus-4-5");
+  await model.click();
+  await expect(page.getByRole("menuitemradio", { name: "claude-sonnet-4-5" })).toBeVisible();
+});

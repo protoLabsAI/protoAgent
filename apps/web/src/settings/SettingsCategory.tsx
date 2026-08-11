@@ -167,17 +167,43 @@ export function SettingsCategory({
     () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.api_base"),
     [groups],
   );
+  const providerField = useMemo(
+    () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.provider"),
+    [groups],
+  );
+  const modelNameField = useMemo(
+    () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.name"),
+    [groups],
+  );
+  // The provider the FORM currently names — the probe must follow it (a native OAuth
+  // selection lists the subscription's models, ADR 0097; "openai"/blank = the gateway
+  // path), or switching to anthropic-oauth/openai-codex keeps offering gateway models
+  // the save validator then rejects (#2518). Same rule as the wizard's probeModels.
+  const formProvider = (asStr(dirty["model.provider"]) || asStr(providerField?.value)).trim().toLowerCase();
+  // A provider flip invalidates any previously probed list — the OTHER provider's
+  // models must not linger in the dropdown merge below.
+  useEffect(() => {
+    setGatewayModels(null);
+  }, [formProvider]);
   const getModels = useMutation({
     // api_base: the form edit, else the saved value. api_key: the form edit, else blank — the
     // server falls back to the saved (secret) key, which never leaves localStorage as plaintext.
-    mutationFn: () => api.models(asStr(dirty["model.api_base"]) || asStr(apiBaseField?.value), asStr(dirty["model.api_key"])),
+    mutationFn: () =>
+      api.models(asStr(dirty["model.api_base"]) || asStr(apiBaseField?.value), asStr(dirty["model.api_key"]), formProvider),
     onSuccess: (r) => {
       if (r.error) { toast({ tone: "error", title: "Couldn't fetch models", message: r.error }); return; }
       setGatewayModels(r.models);
+      // Wizard parity: a Primary model the probed provider doesn't offer guarantees a
+      // failed save (the rebuild validator rejects it and rolls back) — swap it for the
+      // first offered model, as an ordinary dirty edit the operator can change or discard.
+      const current = asStr(dirty["model.name"]) || asStr(modelNameField?.value);
+      if (r.models.length && !r.models.includes(current)) {
+        setDirty((d) => ({ ...d, "model.name": r.models[0] }));
+      }
       toast(
         r.models.length
           ? { tone: "success", title: `Found ${r.models.length} model${r.models.length === 1 ? "" : "s"}`, message: "Pick one in Primary model, then Test connection." }
-          : { tone: "info", title: "No models", message: "The gateway returned no models." },
+          : { tone: "info", title: "No models", message: "The provider returned no models." },
       );
     },
     onError: (e) => toast({ tone: "error", title: "Couldn't fetch models", message: errMsg(e) }),

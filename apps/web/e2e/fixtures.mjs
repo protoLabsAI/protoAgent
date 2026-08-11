@@ -351,6 +351,9 @@ export const SETTINGS_SCHEMA = [
       // model.name is host-scoped + inherited from the host layer (inheritance badge). Its
       // options are gateway-probed (options_source "models") — the "Get models" action (#1386)
       // refreshes them from the form's api_base/key.
+      // model.provider drives WHERE "Get models" probes (#2518): "openai" = the gateway,
+      // a native OAuth provider (ADR 0097) = the subscription account (mock: CLAUDE_MODELS).
+      { key: "model.provider", label: "Provider", type: "select", section: "Model", restart: false, description: "", options: ["openai", "anthropic-oauth", "openai-codex"], value: "openai", default: "openai", scope: "host", source: "host" },
       { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], options_source: "models", value: "protolabs/reasoning", default: "protolabs/reasoning", scope: "host", source: "host" },
       { key: "model.api_base", label: "Gateway base URL", type: "string", section: "Model", restart: false, description: "", options: [], value: "https://gw.example/v1", default: "", scope: "host", source: "host" },
       // host-scoped but overridden in this agent (overridden-here badge + reset link).
@@ -457,6 +460,10 @@ export const SECRETS_STATUS = {
  *  DIFFERENT set than model.name's saved options, so the e2e can prove "Get models" refreshes
  *  the dropdown with the new provider's models. */
 export const GATEWAY_MODELS = ["protolabs/smart", "protolabs/micro", "protolabs/nano"];
+
+/** What the same probe returns when the FORM's provider is anthropic-oauth (#2518) — the
+ *  subscription account's models, disjoint from every gateway id above. */
+export const CLAUDE_MODELS = ["claude-opus-4-5", "claude-sonnet-4-5"];
 
 /** restart_required for a flat updates payload, per the schema. */
 export function settingsRestartRequired(updates) {
