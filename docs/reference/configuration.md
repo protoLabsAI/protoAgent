@@ -377,7 +377,18 @@ routing:
 
 A native OAuth provider (`model.provider: anthropic-oauth` / `openai-codex`, [ADR 0097](/adr/0097-native-oauth-subscription-providers)) bypasses the gateway entirely — so LiteLLM's own `fallbacks:` chain can't see those calls, and a subscription hiccup or an expired credential is otherwise a hard stop.
 
-Any slot that takes a model name — `routing.fallback_models`, `routing.aux_model`, `compaction.model`, `goal.eval_model`, a subagent's `model` — accepts a **gateway alias** to opt that call out of the subscription. The discriminator is the `/`: namespaced names (`protolabs/coder`) route through the gateway, bare ids (`claude-sonnet-5`) stay on the subscription. Same convention as the `acp:` prefix.
+Any slot that takes a model name — `routing.fallback_models`, `routing.aux_model`, `compaction.model`, `goal.eval_model`, `model.favorites`, a subagent's `model` — can **name its own provider**, so slots don't all inherit `model.provider`:
+
+| Slot value | Routes to |
+|---|---|
+| `gateway:protolabs/coder` | the LiteLLM gateway |
+| `anthropic-oauth:claude-sonnet-5` | your Claude subscription |
+| `openai-codex:gpt-5.6-sol` | your ChatGPT subscription |
+| `acp:claude` | that CLI coding agent over ACP |
+| `protolabs/coder` | the gateway (shorthand — a `/` implies a gateway alias) |
+| `claude-sonnet-5` | whatever `model.provider` is |
+
+Hold a gateway key and both subscriptions and you can mix all of them at once — Claude for review, Codex for code, the gateway for cheap bulk work — whatever the main brain runs on. The qualified form is the one to reach for when two providers could plausibly serve the same model id.
 
 ```yaml
 model:

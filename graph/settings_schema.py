@@ -104,8 +104,7 @@ FIELDS: list[Field] = [
         "Restrict tools for the ACP brain",
         "string_list",
         "Model & runtime",
-        "Deprecated with the ACP runtime — only meaningful for a legacy acp:<agent> brain; "
-        "ignored by native.",
+        "Deprecated with the ACP runtime — only meaningful for a legacy acp:<agent> brain; ignored by native.",
         ui_hidden=True,  # rides the agent_runtime deprecation above; YAML still honored
     ),
     Field(
@@ -131,7 +130,9 @@ FIELDS: list[Field] = [
         options_source="providers",
     ),
     Field("model.api_base", "api_base", "API base URL", "string", "Model & runtime", scope="host"),
-    Field("model.api_key", "api_key", "API key", "secret", "Model & runtime", "Stored in secrets.yaml, never echoed back."),
+    Field(
+        "model.api_key", "api_key", "API key", "secret", "Model & runtime", "Stored in secrets.yaml, never echoed back."
+    ),
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model & runtime", minimum=1),
     Field(
@@ -196,7 +197,8 @@ FIELDS: list[Field] = [
         "Favorite models",
         "Pinned go-to models for the chat `/model` quick-switch — the inline picker offers "
         "these, in this order, instead of the gateway's full list. Add, remove, and reorder "
-        "here; empty = /model shows every gateway model.",
+        "here; empty = /model shows every gateway model. Prefix a provider to pin a model from "
+        "another lane — e.g. anthropic-oauth:claude-sonnet-5.",
         options_source="models",
     ),
     # ── Routing ──────────────────────────────────────────────────────────────
@@ -207,7 +209,8 @@ FIELDS: list[Field] = [
         "string",
         "Routing",
         "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the "
-        "main model.",
+        "main model. Prefix another provider to send these calls there instead — "
+        "e.g. gateway:protolabs/fast, openai-codex:gpt-5.6-sol.",
         options_source="models",
         scope="host",
     ),
@@ -217,7 +220,8 @@ FIELDS: list[Field] = [
         "Fallback models",
         "string_list",
         "Routing",
-        "Retried in order when the primary model errors.",
+        "Retried in order when the primary model errors. Prefix a provider to degrade "
+        "ACROSS lanes — e.g. gateway:protolabs/coder as the fallback for a subscription model.",
         options_source="models",
         scope="host",
     ),
@@ -394,7 +398,7 @@ FIELDS: list[Field] = [
         "bool",
         "Knowledge",
         "When on, the agent's memory_ingest tool refuses to write always-on hot memory "
-        "(domain \"hot\") and instructs the model to ask you instead — only operator "
+        '(domain "hot") and instructs the model to ask you instead — only operator '
         "surfaces (the knowledge browser / memory inspector) can put facts in front of the "
         "model every turn. Every hot write emits a memory.hot_written event either way.",
     ),
@@ -1036,8 +1040,7 @@ FIELDS: list[Field] = [
         "Server URL",
         "string",
         "Secrets manager",
-        "Infisical Cloud (https://us.infisical.com / https://eu.infisical.com) or your "
-        "self-hosted instance URL.",
+        "Infisical Cloud (https://us.infisical.com / https://eu.infisical.com) or your self-hosted instance URL.",
         depends_on={"key": "secrets_manager.enabled"},
     ),
     Field(
@@ -1102,8 +1105,7 @@ FIELDS: list[Field] = [
         "Refresh interval (seconds)",
         "number",
         "Secrets manager",
-        "Re-pull on this interval so rotation lands without a restart. 0 = fetch only at "
-        "boot and on config reload.",
+        "Re-pull on this interval so rotation lands without a restart. 0 = fetch only at boot and on config reload.",
         minimum=0,
         depends_on={"key": "secrets_manager.enabled"},
     ),
@@ -1478,7 +1480,9 @@ def build_schema(
             entry["depends_on"] = {**dep, "key": dk}
         # `plugin_id` tags the group with its owning plugin so the console can fold
         # the config into that plugin's row in the Plugins surface (ADR 0059, bd-23a.3).
-        groups.setdefault(group, {"section": group, "fields": [], "plugin_id": getattr(sch, "plugin_id", None)})["fields"].append(entry)
+        groups.setdefault(group, {"section": group, "fields": [], "plugin_id": getattr(sch, "plugin_id", None)})[
+            "fields"
+        ].append(entry)
         # A plugin that declares `test: true` (ADR 0029) gets a generic console
         # "Test connection" button posting the group's fields to its test route.
         if getattr(sch, "test", False):
@@ -1503,9 +1507,7 @@ def build_schema(
     return out
 
 
-def validate_flat(
-    updates: dict[str, Any], hidden: list[str] | None = None
-) -> tuple[bool, str | None]:
+def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> tuple[bool, str | None]:
     """Light per-field validation against the registry before persisting.
 
     ``hidden`` is the live ``settings.hidden`` list (#2172): a hidden key is refused

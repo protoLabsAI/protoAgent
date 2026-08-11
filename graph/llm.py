@@ -177,6 +177,56 @@ def _gateway_configured(config: LangGraphConfig) -> bool:
     return bool(key)
 
 
+def _build_gateway_llm(config: LangGraphConfig, model_name: str | None, reasoning_effort: str | None) -> BaseChatModel:
+    """The gateway client for ``model_name`` (or the config's model when blank).
+
+    Extracted so every path that means "route this through the gateway" shares one
+    builder: the default, a `/`-shorthand slot under a native provider, and an explicit
+    ``gateway:<alias>`` slot."""
+    kwargs = _build_llm_kwargs(config)
+    if model_name:
+        kwargs["model"] = model_name
+    # Per-turn reasoning-effort override (the /effort chat command). When the turn carries
+    # an explicit effort it wins over the config default for THIS build; the middleware
+    # caches per (model, effort) so the rebuild is paid once.
+    if reasoning_effort:
+        kwargs["reasoning_effort"] = reasoning_effort
+    # Context window (#1378): seed the model profile with the gateway's reported
+    # max_input_tokens so SummarizationMiddleware can resolve fraction:/tokens: compaction
+    # (instead of falling back to a message count) and the chat context meter (#1372) gets a
+    # real denominator. Best-effort + cached — an unknown window just omits the profile.
+    try:
+        from graph.model_window import context_window_for
+
+        win = context_window_for(config, kwargs.get("model"))
+        if win:
+            kwargs.setdefault("profile", {"max_input_tokens": win})
+    except Exception:  # noqa: BLE001 — model-info must never break model creation
+        log.debug("[llm] context-window resolution skipped", exc_info=True)
+    return _ReasoningChatOpenAI(**kwargs)
+
+
+# Slot names may name their own provider: `<provider>:<model>` routes THIS call there
+# regardless of the main `model.provider`. Extends the `acp:<agent>` convention that
+# already existed to the other three lanes, so an operator with a gateway key, a Claude
+# subscription and a ChatGPT subscription can mix all of them across slots.
+GATEWAY_SLOT = "gateway"
+_SLOT_PROVIDERS = (GATEWAY_SLOT, "anthropic-oauth", "openai-codex")
+
+
+def split_slot_target(model_name: str | None) -> tuple[str, str]:
+    """``"openai-codex:gpt-5.6-sol"`` → ``("openai-codex", "gpt-5.6-sol")``.
+
+    ``("", name)`` when unqualified, which keeps every existing slot value meaning
+    exactly what it meant before. Unambiguous by construction: no gateway alias or
+    native model id contains a colon (`acp:` is handled separately, upstream)."""
+    raw = (model_name or "").strip()
+    prefix, sep, rest = raw.partition(":")
+    if not sep or prefix.strip().lower() not in _SLOT_PROVIDERS:
+        return "", raw
+    return prefix.strip().lower(), rest.strip()
+
+
 def _build_llm_kwargs(config: LangGraphConfig) -> dict:
     """Assemble the ChatOpenAI kwargs from config (extracted for testing)."""
     api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -275,12 +325,36 @@ def create_llm(
             log.warning("[llm] ACP override %r unavailable; using the main model", model_name, exc_info=True)
             model_name = None
 
+    # Explicit per-slot PROVIDER override: `gateway:protolabs/coder`,
+    # `anthropic-oauth:claude-sonnet-5`, `openai-codex:gpt-5.6-sol`. Same shape as `acp:`
+    # above, extended to the other three lanes — so an operator holding a gateway key, a
+    # Claude subscription and a ChatGPT subscription can mix all of them across slots
+    # instead of every slot inheriting `model.provider`. The qualified form wins over
+    # every heuristic below, and says out loud which account pays for the call.
+    slot_provider, slot_model = split_slot_target(model_name)
+    if slot_provider:
+        if slot_provider == GATEWAY_SLOT:
+            if not _gateway_configured(config):
+                raise RuntimeError(
+                    f"slot model {model_name!r} asks for the gateway, but no gateway key is "
+                    "configured (model.api_key / OPENAI_API_KEY)."
+                )
+            return _build_gateway_llm(config, slot_model or None, reasoning_effort)
+        from graph.providers import build_native_oauth_llm
+
+        return build_native_oauth_llm(
+            slot_provider, config, model_name=slot_model or None, reasoning_effort=reasoning_effort
+        )
+
     # ACP-only fallback (ADR 0033): when the runtime is an ACP coding agent AND no gateway
     # key is configured, back protoAgent's auxiliary LLM calls (compaction, goal-eval, fact
     # extraction) with that same ACP agent — so an ACP-only setup needs no OpenAI-compatible
     # endpoint. Tightly guarded: native runtimes, and ACP-with-a-gateway-key, are unchanged.
     try:
-        from runtime.acp_runtime import _gateway_configured, is_acp_runtime, make_acp_aux_model
+        # Uses THIS module's `_gateway_configured`, not acp_runtime's identical private
+        # copy — importing that one bound it as a function-scoped local, which shadowed
+        # the module-level helper for the whole of create_llm (ruff F823).
+        from runtime.acp_runtime import is_acp_runtime, make_acp_aux_model
 
         if is_acp_runtime(config) and not _gateway_configured(config):
             return make_acp_aux_model(config)
@@ -330,27 +404,7 @@ def create_llm(
                 config.model_provider, config, model_name=model_name, reasoning_effort=reasoning_effort
             )
 
-    kwargs = _build_llm_kwargs(config)
-    if model_name:
-        kwargs["model"] = model_name
-    # Per-turn reasoning-effort override (the /effort chat command). When the turn carries
-    # an explicit effort it wins over the config default for THIS build; the middleware
-    # caches per (model, effort) so the rebuild is paid once.
-    if reasoning_effort:
-        kwargs["reasoning_effort"] = reasoning_effort
-    # Context window (#1378): seed the model profile with the gateway's reported
-    # max_input_tokens so SummarizationMiddleware can resolve fraction:/tokens: compaction
-    # (instead of falling back to a message count) and the chat context meter (#1372) gets a
-    # real denominator. Best-effort + cached — an unknown window just omits the profile.
-    try:
-        from graph.model_window import context_window_for
-
-        win = context_window_for(config, kwargs.get("model"))
-        if win:
-            kwargs.setdefault("profile", {"max_input_tokens": win})
-    except Exception:  # noqa: BLE001 — model-info must never break model creation
-        log.debug("[llm] context-window resolution skipped", exc_info=True)
-    return _ReasoningChatOpenAI(**kwargs)
+    return _build_gateway_llm(config, model_name, reasoning_effort)
 
 
 # Embedding calls run INSIDE the turn (recall precedes every model call), so they get
