@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { SettingsGroup } from "../lib/types";
 import {
+  bareModel,
+  laneOf,
   modelCardHint,
   modelChoices,
   modelFormPayload,
@@ -159,5 +161,103 @@ describe("native OAuth provider labeling (#2473)", () => {
     const payload = modelFormPayload(data, "gpt-5.6-sol");
     expect(payload.description).toContain("ChatGPT subscription");
     expect(payload.description).not.toContain("gateway");
+  });
+});
+
+// ── cross-provider picker (part C) ────────────────────────────────────────────
+// Part A made `<provider>:<model>` a routable slot value; part B made the settings
+// schema offer those names across every signed-in lane. The picker has to speak that
+// grammar without showing it to the operator: the VALUE stays qualified (it's what gets
+// applied and saved), the card reads as a plain model name, and the lane moves to the hint.
+function crossGroups(favorites: unknown, crossProvider: string[]): SettingsGroup[] {
+  return [
+    {
+      section: "Model",
+      category: "Model",
+      fields: [field("model.name", "protolabs/reasoning", ["protolabs/reasoning"])],
+    },
+    {
+      section: "Favorite models",
+      category: "Model",
+      fields: [field("model.favorites", favorites, crossProvider)],
+    },
+  ] as SettingsGroup[];
+}
+
+const LANES = [
+  "gateway:protolabs/coder",
+  "anthropic-oauth:claude-sonnet-5",
+  "openai-codex:gpt-5.6-sol",
+];
+
+describe("lane parsing mirrors the backend's split_slot_target", () => {
+  it("recognises the three lanes and strips the prefix", () => {
+    expect(laneOf("anthropic-oauth:claude-sonnet-5")).toBe("anthropic-oauth");
+    expect(bareModel("anthropic-oauth:claude-sonnet-5")).toBe("claude-sonnet-5");
+    expect(bareModel("gateway:protolabs/coder")).toBe("protolabs/coder");
+  });
+
+  it("leaves unqualified names alone — a gateway alias is NOT a lane", () => {
+    for (const plain of ["protolabs/coder", "claude-sonnet-5", "openai/gpt-5.2", ""]) {
+      expect(laneOf(plain)).toBe("");
+      expect(bareModel(plain)).toBe(plain);
+    }
+    // An unknown prefix is part of the model name, not a lane — same rule as the backend.
+    expect(laneOf("bedrock:anthropic.claude")).toBe("");
+  });
+});
+
+describe("the picker shows models, not slot syntax", () => {
+  it("titles the card with the bare id and keeps the qualified value", () => {
+    const data = modelPickerData(crossGroups(LANES, LANES));
+    const payload = modelFormPayload(data, "");
+    const cards = (
+      (payload.steps![0].schema as { properties: Record<string, unknown> }).properties.model as {
+        oneOf: { const: string; title: string; description: string }[];
+      }
+    ).oneOf;
+
+    expect(cards.map((c) => c.title)).toEqual(["protolabs/coder", "claude-sonnet-5", "gpt-5.6-sol"]);
+    expect(cards.map((c) => c.const)).toEqual(LANES); // what actually gets applied
+    expect(cards[1].description).toContain("Claude subscription");
+    expect(cards[2].description).toContain("ChatGPT subscription");
+  });
+
+  it("labels by the value's OWN lane, not the configured provider", () => {
+    // The agent runs on Claude; a Codex favorite must not read "Claude subscription".
+    expect(modelCardHint("openai-codex:gpt-5.6-sol", "", "anthropic-oauth")).toContain("ChatGPT subscription");
+    expect(modelCardHint("gateway:protolabs/coder", "", "anthropic-oauth")).toContain("Gateway");
+  });
+
+  it("still marks the configured default when the favorite is qualified", () => {
+    expect(modelCardHint("gateway:protolabs/fast", "protolabs/fast")).toContain("configured default");
+  });
+});
+
+describe("no favorites pinned", () => {
+  it("falls back to every lane rather than just the configured one", () => {
+    const data = modelPickerData(crossGroups([], LANES));
+    const { choices, fromFavorites } = modelChoices(data);
+
+    expect(fromFavorites).toBe(false);
+    expect(choices).toEqual(LANES);
+    expect(modelFormPayload(data, "").description).toContain("every model you're signed in to");
+  });
+
+  it("degrades to the configured lane's list when there is no cross-provider list", () => {
+    // Older backend, or every lane probe failed — the picker must still work.
+    const data = modelPickerData(groups([]));
+
+    expect(modelChoices(data).choices).toEqual(["protolabs/reasoning", "protolabs/fast"]);
+  });
+});
+
+describe("typed /model <alias>", () => {
+  it("resolves a bare id to its qualified value", () => {
+    const data = modelPickerData(crossGroups(LANES, LANES));
+
+    expect(resolveModelArg(data, "claude-sonnet-5")).toBe("anthropic-oauth:claude-sonnet-5");
+    expect(resolveModelArg(data, "anthropic-oauth:claude-sonnet-5")).toBe("anthropic-oauth:claude-sonnet-5");
+    expect(resolveModelArg(data, "nope")).toBeNull();
   });
 });
