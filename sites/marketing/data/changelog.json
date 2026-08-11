@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.132.0",
+    "date": "2026-08-11",
+    "changes": [
+      "The download page now links the newest desktop release, not the newest version number (#2514).",
+      "Deleting a chat from the mobile session sheet now confirms and cleans up properly (#2512).",
+      "Switching to a Claude/ChatGPT subscription in Settings no longer dead-ends on gateway models (#2522).",
+      "Windows run_command no longer runs approved PowerShell through a hidden cmd.exe (#2518).",
+      "An OAuth disconnect no longer looks like a broken startup (#2513).",
+      "On ChatGPT/Codex accounts, the agent's system prompt now actually reaches the model (#2519).",
+      "HITL cards format their text now.",
+      "Windows: fresh agents can export snapshots again (#2521).",
+      "Agent names show exactly as you typed them (#2520).",
+      "\"Reset to inherited\" actually works on fleet members now (#2528).",
+      "The build-with-a-coding-agent guide is now a task-first walkthrough (#2510)."
+    ]
+  },
+  {
     "version": "v0.131.3",
     "date": "2026-08-11",
     "changes": [
