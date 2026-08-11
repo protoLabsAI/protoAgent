@@ -709,3 +709,62 @@ class TestRemoveKeepsDataUnlessPurged:
     def test_remove_still_rejects_an_unknown_workspace(self, root):
         with pytest.raises(manager.WorkspaceError):
             manager.remove("never-existed")
+
+
+# ── #2583: a locked workspace is a retryable partial, not a 500 ───────────────
+
+
+def test_purge_retries_a_transiently_locked_workspace(root, monkeypatch):
+    """The Windows race: a member's handles can outlive its process by a moment, so the
+    delete right after the stop loses. It must retry rather than fail the whole purge."""
+    s = manager.create("alpha")
+    ws = root / s["id"]
+    calls = {"n": 0}
+    real_rmtree = manager.shutil.rmtree
+
+    def flaky(path, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(32, "The process cannot access the file because it is being used")
+        return real_rmtree(path, **kw)
+
+    monkeypatch.setattr(manager.shutil, "rmtree", flaky)
+
+    out = manager.remove("alpha", purge=True)
+
+    assert out["removed"] == ["workspace"] and not ws.exists()
+    assert calls["n"] == 2  # first attempt lost the race, second won
+
+
+def test_purge_reports_a_permanently_locked_workspace_as_busy(root, monkeypatch):
+    """When it really won't go, the caller must learn WHICH half happened — the old code let
+    the OSError escape and the endpoint answered a generic 500 after already stopping the
+    member and clearing its record."""
+    manager.create("alpha")
+
+    def always_locked(path, **kw):
+        raise OSError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(manager.shutil, "rmtree", always_locked)
+
+    with pytest.raises(manager.WorkspaceBusy) as excinfo:
+        manager.remove("alpha", purge=True)
+
+    msg = str(excinfo.value)
+    assert "IS stopped" in msg and "retry" in msg.lower()  # names the state + the way out
+    assert isinstance(excinfo.value, manager.WorkspaceError)  # stays catchable as before
+
+
+def test_purge_clears_a_read_only_file(root):
+    """A read-only file makes rmtree raise on Windows even with nothing holding it. Real
+    files, real chmod — no mocking, so this exercises the onexc handler itself."""
+    import stat
+
+    s = manager.create("alpha")
+    ws = root / s["id"]
+    locked = ws / "readonly.txt"
+    locked.write_text("x")
+    locked.chmod(stat.S_IREAD)
+
+    assert manager.remove("alpha", purge=True)["removed"] == ["workspace"]
+    assert not ws.exists()

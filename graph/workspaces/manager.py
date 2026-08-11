@@ -32,6 +32,17 @@ class WorkspaceError(Exception):
     """A workspace op was rejected (bad name, collision, missing workspace)."""
 
 
+class WorkspaceBusy(WorkspaceError):
+    """A purge stopped the member but could not delete its workspace — files were still
+    locked (#2583).
+
+    Distinct from ``WorkspaceError`` because the situations differ in kind: that one means
+    "the request was wrong", this one means "the request was right, it partially completed,
+    and retrying will finish it". The API maps them to different statuses so an operator
+    isn't told a destructive half-done operation simply failed.
+    """
+
+
 # Names that collide with the fleet's routing vocabulary (ADR 0042 slug routing). `host` is the
 # reserved slug that addresses THIS instance (`/app/agent/host/` / `/agents/host/*`); a workspace
 # named `host` would shadow it → the peer is permanently unreachable + two switcher entries both
@@ -792,6 +803,52 @@ def run_exec(ident: str, passthrough: list[str]) -> tuple[dict, list[str]]:
 _RETIRED_RECORD = "workspace.yaml.removed"
 
 
+def _rmtree_resilient(path: Path, *, what: str, attempts: int = 5, delay: float = 0.2) -> None:
+    """``shutil.rmtree`` that survives the brief post-exit file lock on Windows (#2583).
+
+    A member's own files (its SQLite stores, its log) can stay open for a moment after the
+    process is gone — the handles are released asynchronously, and an antivirus scanner can
+    hold them a little longer still. The purge route stops the member and deletes immediately,
+    so the delete lost that race often enough to be reported three times across separate test
+    rounds: the member was stopped, its port freed and its record cleared, and then rmtree
+    raised, so the endpoint answered 500 having already half-completed a destructive op. The
+    same request retried by hand always succeeded.
+
+    Retries with a short backoff, and clears the read-only bit on the way — a read-only file
+    makes rmtree raise on Windows even when nothing holds it open. Raises
+    :class:`WorkspaceBusy` if the tree still won't go, so the caller can report *which* half
+    happened instead of a generic failure.
+    """
+    import stat
+    import time as _time
+
+    def _clear_readonly(func, target, _exc):
+        # Windows refuses unlink on a read-only file; drop the bit and let rmtree retry it.
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            raise
+
+    last: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            # onexc replaced onerror in 3.12; keep working on both.
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=_clear_readonly)
+            else:  # pragma: no cover - the frozen desktop pins 3.12+
+                shutil.rmtree(path, onerror=lambda f, t, e: _clear_readonly(f, t, e))
+            return
+        except OSError as exc:
+            last = exc
+            if attempt < attempts - 1:
+                _time.sleep(delay * (attempt + 1))  # 0.2s, 0.4s, 0.6s, 0.8s — ~2s total
+    raise WorkspaceBusy(
+        f"stopped the agent, but its {what} is still in use and was not deleted ({last}). "
+        "The agent IS stopped; retry to remove the workspace."
+    )
+
+
 def remove(ident: str, *, purge: bool = False) -> dict:
     """Take a workspace out of the fleet (by id or display name).
 
@@ -825,7 +882,7 @@ def remove(ident: str, *, purge: bool = False) -> dict:
         (ws / "workspace.yaml").rename(ws / _RETIRED_RECORD)
         return {"name": name, "removed": [], "retired_at": str(ws)}
 
-    shutil.rmtree(ws)
+    _rmtree_resilient(ws, what=f"workspace for {name!r}")
     removed = ["workspace"]
     # Pre-ADR-0041 installs scoped a member's private data to a sibling of the box root
     # rather than into the workspace. Resolved (not hard-coded) so a non-default
@@ -834,7 +891,7 @@ def remove(ident: str, *, purge: bool = False) -> dict:
 
     legacy_data = instance_paths().box_root / _safe(str(iid))
     if legacy_data.exists() and legacy_data != ws:
-        shutil.rmtree(legacy_data)
+        _rmtree_resilient(legacy_data, what=f"legacy data scope for {name!r}")
         removed.append("data")
     return {"name": name, "removed": removed}
 

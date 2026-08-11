@@ -274,6 +274,13 @@ def register_fleet_routes(app) -> None:
                 pass
             # remove() rmtree's the workspace (purge) — also blocking.
             return {"ok": True, **await asyncio.to_thread(manager.remove, name, purge=purge)}
+        except manager.WorkspaceBusy as exc:
+            # Partial, retryable: the member IS stopped, only its workspace survived (#2583).
+            # 409, not the 500 an escaping OSError used to produce and not the 400 a rejected
+            # request gets — an operator needs to know a destructive op half-landed, and that
+            # repeating it is both safe and the fix. Must precede the WorkspaceError arm below,
+            # which is its base class.
+            raise HTTPException(409, str(exc))
         except manager.WorkspaceError as exc:
             raise HTTPException(400, str(exc))
 

@@ -541,3 +541,23 @@ def test_archetypes_carry_tier(client, monkeypatch):
     assert by_id["labsy"]["tier"] == "advanced"  # bundle block, case-normalized
     assert by_id["basic"]["tier"] == "standard"  # absent → standard
     assert by_id["plain"]["tier"] == "standard"  # unknown value → standard
+
+
+def test_purge_that_cannot_delete_the_workspace_is_409_not_500(client, monkeypatch):
+    """#2583: the endpoint used to let rmtree's OSError escape as a generic 500 *after* it
+    had already stopped the member and cleared its record — a terminal-looking failure on a
+    half-completed destructive op. It must say which half happened, and that retrying works."""
+    from graph.workspaces import manager
+
+    client.post("/api/fleet", json={"name": "alpha"})
+
+    def always_locked(path, **kw):
+        raise OSError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(manager.shutil, "rmtree", always_locked)
+
+    resp = client.delete("/api/fleet/alpha?purge=true")
+
+    assert resp.status_code == 409  # not 500, and not the 400 a rejected request gets
+    detail = resp.json()["detail"]
+    assert "IS stopped" in detail and "retry" in detail.lower()
