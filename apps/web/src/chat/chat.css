@@ -572,3 +572,20 @@
   cursor: pointer;
 }
 .chat-delete-harvest input { accent-color: var(--pl-color-accent); }
+
+/* Signed-out composer strip (#2513): replaces the PromptInput while the native
+   OAuth provider is disconnected, so the send path can't be invoked at all. The
+   copy is server-authored (graph_auth_error.message); Reconnect opens Settings →
+   Model, where the OAuth account section lives. The class doubles as the e2e hook. */
+.composer-signed-out {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px dashed var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg-muted);
+  font-size: 13px;
+}

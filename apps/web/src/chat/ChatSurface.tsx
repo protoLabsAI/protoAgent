@@ -15,6 +15,7 @@ import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
+import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
@@ -541,6 +542,10 @@ function ChatSessionSlot({
   // Native vision: when the active model accepts images, attached images go
   // straight to the model as multimodal parts; otherwise they take the pipeline.
   const { data: runtime } = useQuery(runtimeStatusQuery());
+  // Deliberately signed out of the native OAuth provider (#2513): the send path
+  // would only fail locally, so the composer swaps for a reconnect strip instead.
+  const signedOut = Boolean(runtime?.graph_auth_error) && !runtime?.graph_loaded;
+  const openGlobalSettings = useUI((st) => st.openGlobalSettings);
   const visionModel = Boolean(runtime?.model?.vision);
   // A configured vision model can DESCRIBE images for a text-only chat model (#1381), so an
   // image attaches via the pipeline instead of erroring.
@@ -941,8 +946,9 @@ function ChatSessionSlot({
   const canSend = useMemo(
     () =>
       (Boolean(draft.trim()) || attachments.some((a) => a.status === "ready")) &&
-      status !== "streaming",
-    [draft, attachments, status],
+      status !== "streaming" &&
+      !signedOut,
+    [draft, attachments, status, signedOut],
   );
 
   async function send() {
@@ -1895,6 +1901,20 @@ function ChatSessionSlot({
             )}
           </div>
         )}
+        {signedOut ? (
+          /* Deliberate OAuth signed-out state (#2513): the composer is out of
+             service — an enabled Send would only fail locally. Reconnect opens
+             Settings → Model (the OAuth account section, #2460). */
+          <div className="composer-signed-out">
+            <span className="composer-signed-out-copy">
+              {runtime?.graph_auth_error?.message ||
+                `Signed out of ${runtime?.graph_auth_error?.provider ?? "the model provider"} — reconnect to chat.`}
+            </span>
+            <Button size="sm" variant="primary" onClick={() => openGlobalSettings("model")}>
+              Reconnect
+            </Button>
+          </div>
+        ) : (
         <PromptInput
           value={draft}
           onChange={(v) => {
@@ -2022,6 +2042,7 @@ function ChatSessionSlot({
             </div>
           ) : null}
         />
+        )}
         <input
           ref={fileInputRef}
           type="file"

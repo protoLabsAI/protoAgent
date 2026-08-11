@@ -66,7 +66,7 @@ import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
-import { bootGatePhase } from "./bootGate";
+import { bootGatePhase, bootGateReady } from "./bootGate";
 import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
@@ -78,6 +78,7 @@ import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { InboxWidget } from "../inbox/InboxWidget";
 import { AgentDownBanner } from "./AgentDownBanner";
+import { SignedOutBanner } from "./SignedOutBanner";
 import { ChatSlot } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
@@ -400,7 +401,11 @@ export function App() {
   const [bootOverride, setBootOverride] = useState(false);
   const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
   const engineReady = Boolean(runtime?.graph_loaded);
-  const bootReady = bootOverride || setupPending || engineReady;
+  // Deliberately signed out of a native OAuth provider (#2513): the graph can't
+  // build until reconnect, and waiting out the 45s "stuck" gate for it read as a
+  // broken startup. The shell shows (SignedOutBanner + gated composer own the UX).
+  const signedOut = Boolean(runtime?.graph_auth_error) && !runtime?.graph_loaded;
+  const bootReady = bootGateReady({ bootOverride, setupPending, engineReady, signedOut });
   // The boot gate state the DS BootGate (a slot-only shell) doesn't own: whether
   // the runtime probe has given up (`bootFailed`), and the post-grace "stuck"
   // copy/escape-hatch swap. STUCK_AFTER_MS=45s — past it, offer "Continue anyway"
@@ -992,6 +997,7 @@ export function App() {
                 </Alert>
               ))}
               <AgentDownBanner />
+              <SignedOutBanner runtime={runtime} />
             </>
           }
         />
@@ -1035,6 +1041,10 @@ export function App() {
           down; a runtime stop otherwise surfaces only as plugin views 409-ing). Slim
           strip with a hub-routed Start; renders nothing on the host or a running agent. */}
       <AgentDownBanner />
+
+      {/* Deliberate OAuth signed-out state (#2513) — visible status + the reconnect
+          control in view, instead of reading as a failed boot. */}
+      <SignedOutBanner runtime={runtime} />
 
       {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +
           cross-rail via dnd-kit), resizable right column, mobile shell, and the utility bar — all

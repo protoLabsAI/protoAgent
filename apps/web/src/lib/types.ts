@@ -1,6 +1,15 @@
 export type RuntimeStatus = {
   setup_complete: boolean;
   graph_loaded: boolean;
+  /** Signed-out native OAuth provider (#2458 → #2513): setup is complete but the
+   *  graph can't build until the operator reconnects. The console treats this as a
+   *  first-class ready state — no boot gate, a reconnect banner, composer gated —
+   *  never as a broken startup. `message` is server-authored and user-facing. */
+  graph_auth_error?: null | {
+    provider: string;
+    message: string;
+    relogin?: string;
+  };
   /** App version (pyproject [project].version; the frozen desktop sidecar reports
    *  its bundled version — #894). Surfaced in Settings ▸ Global ▸ Overview. */
   version?: string;

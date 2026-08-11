@@ -12,6 +12,21 @@ export type BootGatePhase =
   | "stuck" // still loading past the grace period — offer "Continue anyway"
   | "loading"; // the normal cold-start wait
 
+/** Whether the app shows at all (the gate hides). Ready when the engine is up, the
+ *  setup wizard is due (no graph expected pre-setup), the operator escaped via
+ *  "Continue anyway" — or the instance is deliberately SIGNED OUT of its native
+ *  OAuth provider (#2513): `graph_auth_error` under `setup_complete` means the
+ *  graph can't build until reconnect, which is a first-class state the shell
+ *  banners, not a startup failure to wait out. */
+export function bootGateReady(s: {
+  bootOverride: boolean;
+  setupPending: boolean;
+  engineReady: boolean;
+  signedOut: boolean;
+}): boolean {
+  return s.bootOverride || s.setupPending || s.engineReady || s.signedOut;
+}
+
 export function bootGatePhase(s: {
   memberAuthFailed: boolean;
   agentDown: boolean;
