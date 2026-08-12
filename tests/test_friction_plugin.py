@@ -156,6 +156,25 @@ def test_groups_are_newest_first_and_carry_a_window(monkeypatch, tmp_path):
     assert groups[0]["first_seen"] and groups[0]["last_seen"]
 
 
+def test_grouped_ties_break_by_ledger_position_not_first_seen(ledger):
+    """Two groups whose last-seen entry lands on an IDENTICAL timestamp (Windows' coarse
+    clock resolution makes this the normal case for a fast burst, not an edge case, #2616)
+    must order by which was written later in the ledger. A stable sort on `last_seen` alone
+    falls back to dict-insertion order, which is first-seen order — the exact inverse of
+    "newest" for an append-only log. Written directly (not via `_log`) so the tie is exact,
+    not clock-dependent."""
+    same_ts = "2026-01-01T00:00:00+00:00"
+    lines = [
+        {"ts": same_ts, "kind": "harness", "summary": "older", "detail": "", "severity": "minor", "source": "auto"},
+        {"ts": same_ts, "kind": "model", "summary": "newer", "detail": "", "severity": "minor", "source": "auto"},
+    ]
+    ledger.write_text("\n".join(json.dumps(r) for r in lines) + "\n", encoding="utf-8")
+
+    from plugins import friction
+
+    assert [g["summary"] for g in friction.grouped_entries()] == ["newer", "older"]
+
+
 def test_kind_filter(monkeypatch, tmp_path):
     from plugins import friction
 

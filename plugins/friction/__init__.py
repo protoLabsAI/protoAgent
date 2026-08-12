@@ -123,7 +123,14 @@ def grouped_entries(kind: str = "") -> list[dict]:
     how often, and since when.
     """
     groups: dict[tuple[str, str], dict] = {}
-    for rec in read_entries(kind):
+    # Wall-clock ties are the normal case, not the edge case (a burst of identical entries
+    # in one turn), and Windows' coarse clock resolution makes two records land on the same
+    # ISO string far more often than macOS/Linux (#2616). A stable sort on `last_seen` alone
+    # then falls back to dict-insertion order — which is FIRST-seen order, the opposite of
+    # what "newest" means for an append-only log. `order` carries each group's ledger
+    # position at its last touch, so a tie breaks on which was actually written later.
+    order: dict[tuple[str, str], int] = {}
+    for i, rec in enumerate(read_entries(kind)):
         key = (str(rec.get("kind", "")), str(rec.get("summary", "")))
         ts = str(rec.get("ts", ""))
         g = groups.get(key)
@@ -139,6 +146,7 @@ def grouped_entries(kind: str = "") -> list[dict]:
                 "first_seen": ts,
                 "last_seen": ts,
             }
+            order[key] = i
             continue
         g["count"] += 1
         g["last_seen"] = max(g["last_seen"], ts)
@@ -149,7 +157,12 @@ def grouped_entries(kind: str = "") -> list[dict]:
             g["severity"] = rec.get("severity")
         if not g["detail"]:
             g["detail"] = rec.get("detail", "")
-    return sorted(groups.values(), key=lambda g: g["last_seen"], reverse=True)
+        order[key] = i
+    return sorted(
+        groups.values(),
+        key=lambda g: (g["last_seen"], order[(g["kind"], g["summary"])]),
+        reverse=True,
+    )
 
 
 @tool
