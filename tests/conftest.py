@@ -145,3 +145,28 @@ def pytest_configure(config):  # noqa: ARG001
     # writable so the #2533 mirror works but never shared between tests). This
     # setdefault just keeps any pre-fixture read off the dev/CI machine's real file.
     os.environ.setdefault("PROTOAGENT_HOST_CONFIG", "/nonexistent/protoagent-host-config.test.yaml")
+
+
+@pytest.fixture(autouse=True)
+def _reset_a2a_auth_guard():
+    """Reset the A2A auth guard between tests — it is process-global by design.
+
+    ``a2a_impl.auth`` holds the active credentials in module-level slots so a wizard/drawer
+    reload can rotate them live without re-registering routes. That makes them shared state
+    across a pytest session: a suite that configures a bearer and returns leaves it set for
+    everything after it.
+
+    It only started to bite once the self-invocation paths (scheduler, background manager)
+    began resolving credentials from the guard at call time instead of capturing them at
+    construction — which is what fixes the boot-order regression in #2620, and what makes
+    a leaked bearer show up as a mystery Authorization header in an unrelated test. Reset
+    after each test so the leak can't travel; tests that configure the guard are unaffected.
+    """
+    yield
+    from a2a_impl import auth
+
+    auth._BEARER[0] = None
+    auth._FEDERATION[0] = None
+    auth._FLEET[0] = None
+    auth._API_KEY[0] = ""
+    auth._API_KEY_DEPRECATION_LOGGED[0] = False

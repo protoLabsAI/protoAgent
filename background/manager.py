@@ -344,12 +344,36 @@ class BackgroundManager:
 
     # ── self-POST mechanics (shared by _fire and resume_origin — ADR 0050/0070) ─
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Credentials for a self-invocation, resolved AT CALL TIME.
+
+        Capturing them at construction is wrong twice over: this object is built during
+        agent init, before ``auth.install()`` seeds the guard (so a build-time read gets
+        nothing and every scheduled turn 401s), and the bearer can rotate at runtime via
+        ``set_bearer_token`` (so a captured copy goes stale — the #2582 failure mode, one
+        layer down). Resolving per request is immune to both.
+
+        Falls back to whatever was passed in at construction, so an embedding caller that
+        supplies credentials explicitly keeps working.
+        """
+        headers: dict[str, str] = {}
+        bearer, api_key = self._bearer, self._api_key
+        try:
+            from a2a_impl.auth import inbound_credentials
+
+            live_bearer, live_api_key = inbound_credentials()
+            bearer, api_key = live_bearer or bearer, live_api_key or api_key
+        except Exception:  # noqa: BLE001 — never let credential lookup break the invocation
+            pass
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        if api_key:
+            headers["X-API-Key"] = api_key
+        return headers
+
     def _a2a_headers(self) -> dict:
         headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-        if self._bearer:
-            headers["Authorization"] = f"Bearer {self._bearer}"
-        if self._api_key:
-            headers["X-API-Key"] = self._api_key
+        headers.update(self._auth_headers())
         return headers
 
     async def _send_a2a_message(self, *, context_id: str, text: str, metadata: dict) -> None:

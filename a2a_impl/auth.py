@@ -8,9 +8,14 @@ allowlist:
   - **Bearer** — ``Authorization: Bearer <token>`` validated against the
     configured token (``auth.token`` in YAML or ``A2A_AUTH_TOKEN`` env). No-op
     when unset (open mode, logged at WARNING).
-  - **X-API-Key** — legacy ``<AGENT>_API_KEY`` header, validated when set.
+  - **X-API-Key** — ``<AGENT>_API_KEY`` header. **DEPRECATED** (#2632): still validated
+    when set, warns once at configure time, and will be removed. Use the bearer.
   - **Origin** — ``A2A_ALLOWED_ORIGINS`` allowlist for browser callers. No-op
     when unset or ``*``.
+
+The two credentials are ALTERNATIVES: presenting either one authenticates (#2620). They
+were once checked in sequence, which silently made them a conjunction — enabling the
+legacy key broke every bearer client.
 
 Default-deny: anything NOT on the public allowlist requires auth. The SSE
 endpoint ``/api/events`` accepts a short-lived HMAC query-string token so
@@ -51,6 +56,8 @@ _FEDERATION: list[str | None] = [None]
 _FLEET: list[str | None] = [None]
 # X-API-Key (env-seeded at install; constant for the process).
 _API_KEY: list[str] = [""]
+# One-shot latch for the X-API-Key deprecation warning (see `configure`).
+_API_KEY_DEPRECATION_LOGGED: list[bool] = [False]
 # Allowed origins: None = verification disabled; list = allowlist.
 _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 
@@ -235,9 +242,24 @@ def bearer_tier(token: str) -> str | None:
     operator bearer, a configured federation token, the fleet service token (ADR 0089), or a
     paired device token ⇒ their tier, else ``None``.
     """
-    active, fed, fleet = _BEARER[0], _FEDERATION[0], _FLEET[0]
-    if active is None and not _API_KEY[0]:
+    if _BEARER[0] is None and not _API_KEY[0]:
         return "operator"  # open mode — the surface is unauthenticated
+    return _bearer_tier_for(token)
+
+
+def _bearer_tier_for(token: str) -> str | None:
+    """The tier a raw bearer earns, or None. Open mode is the CALLER's concern.
+
+    One ladder, two callers — this function and the middleware's ``_classify_request``.
+    Keeping a second copy in the dispatch path is the same "two derivations of one fact"
+    that produced #2620, and on a security classification it is the expensive kind: the
+    copies drift, and the one that drifts is the one nobody reads.
+
+    Order is load-bearing. The shared-bearer comparisons come first so the hot path is a
+    constant-time compare; ``_device_token_ok`` is last because it touches the device
+    registry on disk.
+    """
+    active, fed, fleet = _BEARER[0], _FEDERATION[0], _FLEET[0]
     if not token:
         return None
     if active is not None and hmac.compare_digest(token, active):
@@ -245,8 +267,12 @@ def bearer_tier(token: str) -> str | None:
     if fed is not None and hmac.compare_digest(token, fed):
         return "federation"
     if fleet is not None and hmac.compare_digest(token, fleet):
+        # Fleet service token (ADR 0089): the hub already authenticated the external caller
+        # and presents members with this internal, loopback-only credential.
         return "operator"
     if _device_token_ok(token):
+        # A paired device (ADR 0087 D1) is the OPERATOR — per-device tokens are identity +
+        # revocation, not a reduced tier.
         return "operator"
     return None
 
@@ -319,6 +345,22 @@ def configure(
     _FLEET[0] = (fleet_token or "").strip() or None
 
     _API_KEY[0] = api_key or ""
+    if _API_KEY[0] and not _API_KEY_DEPRECATION_LOGGED[0]:
+        # Deprecated, NOT removed: it keeps authenticating exactly as before, because
+        # silently dropping a credential someone deployed against would lock them out of
+        # their own agent. The warning is the migration path; removal is tracked in #2632.
+        # Once per process — this runs on every config reload, and a warning that repeats
+        # every few minutes is one operators learn to filter out.
+        _API_KEY_DEPRECATION_LOGGED[0] = True
+        logger.warning(
+            "[a2a] %s_API_KEY is DEPRECATED and will be removed in a future release. It still "
+            "works for now. Migrate to the bearer token (auth.token in langgraph-config.yaml, "
+            "or the A2A_AUTH_TOKEN env): it is settable from Settings and the wizard, rotatable "
+            "at runtime, routed through secrets.yaml, and it is what every protoAgent client "
+            "already sends. Tracking: "
+            "https://github.com/protoLabsAI/protoAgent/issues/2632",
+            os.environ.get("AGENT_NAME", "AGENT").upper(),
+        )
 
     raw = (allowed_origins_raw or "").strip()
     if not raw:
@@ -538,24 +580,9 @@ def _classify_request(request) -> str | None:
     # Classify by WHICH secret matched (ADR 0066): the operator token → full access; a
     # configured federation token → the /a2a + /v1 consumer surfaces only (the R1 ceiling
     # below denies it /api). Single-token mode resolves to operator (R3 back-compat).
-    fed, fleet = _FEDERATION[0], _FLEET[0]
-    if hmac.compare_digest(token, active):
-        return "operator"
-    if fed is not None and hmac.compare_digest(token, fed):
-        return "federation"
-    if fleet is not None and hmac.compare_digest(token, fleet):
-        # Fleet service token (ADR 0089): the hub already authenticated the external caller
-        # and presents members with this internal, loopback-only credential. Operator tier —
-        # a paired device reaches sister agents without the member ever seeing (or being
-        # able to verify) the device token. Before the device registry so the intra-fleet
-        # hot path stays a single constant-time compare and never touches disk.
-        return "operator"
-    if _device_token_ok(token):
-        # A paired device (ADR 0087 D1) is the OPERATOR — it runs the full console and needs
-        # the same surface the desktop does. Per-device tokens are identity + revocation,
-        # not a reduced tier. Last, so the shared-bearer path never touches disk.
-        return "operator"
-    return None
+    # Shared with `bearer_tier` — one ladder, so the WS proxy and the HTTP middleware can
+    # never disagree about what a token earns.
+    return _bearer_tier_for(token)
 
 
 def inbound_credentials() -> tuple[str, str]:
@@ -584,8 +611,8 @@ def enforced_schemes() -> tuple[bool, bool]:
     Reading it from the guard's own state is what keeps the card honest: whatever
     ``configure()`` was handed is exactly what the card claims.
 
-    NOTE the semantics the card must express: these are checked independently and BOTH
-    must pass when both are set — an AND, not the OR a naive two-alternative card implies.
+    Each returned credential is an ALTERNATIVE — presenting any one authenticates (see
+    ``_classify_request``), so the card lists one requirement per credential.
     """
     return bool(_BEARER[0]), bool(_API_KEY[0])
 

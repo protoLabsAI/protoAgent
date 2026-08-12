@@ -27,7 +27,9 @@ functional gain. Leave it.
 
 The few places that genuinely want your slug are **env-driven**, no file edit:
 
-- `AGENT_NAME` env var (Prometheus prefix, Langfuse tag, A2A `<NAME>_API_KEY`).
+- `AGENT_NAME` env var (Prometheus prefix, Langfuse tag). It also names the legacy A2A
+  `<NAME>_API_KEY` header, which is **deprecated** — authenticate with the bearer token
+  (`auth.token` / `A2A_AUTH_TOKEN`) instead.
 - Docker image label / GHCR path — set in *your* deploy, not the template.
 
 ## 1. Enable the release pipeline (no workflow edit)

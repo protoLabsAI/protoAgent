@@ -432,20 +432,28 @@ def _apply_real_security(card, pa) -> None:
 
     bearer, api_key = enforced_schemes()
     try:
-        schemes = {}
-        if api_key:
-            schemes[pa.API_KEY_SCHEME_NAME] = pa.api_key_scheme()
-        if bearer:
-            schemes[pa.BEARER_SCHEME_NAME] = pa.bearer_scheme()
+        # Build EVERYTHING first, mutate the card second. Clearing the fields up front
+        # and constructing as we went meant a failure midway left the card with its
+        # security block wiped — an agent advertising no auth at all, which is a worse
+        # lie than the one this function exists to fix.
+        schemes, requirements = {}, []
+        for name, scheme in (
+            (pa.API_KEY_SCHEME_NAME, pa.api_key_scheme() if api_key else None),
+            (pa.BEARER_SCHEME_NAME, pa.bearer_scheme() if bearer else None),
+        ):
+            if scheme is None:
+                continue
+            schemes[name] = scheme
+            # One requirement PER credential — the requirements list is a set of
+            # alternatives, and any one of these authenticates. (Naming several schemes
+            # inside a single requirement would mean "present all of them".)
+            requirements.append(SecurityRequirement(schemes={name: StringList(list=[])}))
 
         card.ClearField("security_schemes")
         card.ClearField("security_requirements")
         for name, scheme in schemes.items():
             card.security_schemes[name].CopyFrom(scheme)
-            # One requirement PER credential — the requirements list is a set of
-            # alternatives, and any one of these now authenticates. (Naming several
-            # schemes inside a single requirement would mean "present all of them".)
-            card.security_requirements.append(SecurityRequirement(schemes={name: StringList(list=[])}))
+        card.security_requirements.extend(requirements)
     except Exception:  # noqa: BLE001 — never let card polish break /.well-known
         log.warning("[a2a] could not rewrite the card security block; serving the builder's", exc_info=True)
 

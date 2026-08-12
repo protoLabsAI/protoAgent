@@ -43,7 +43,9 @@ env prefix, and the `protoagent.plugin.yaml` manifest name — renaming it rewri
 **user-facing** name is data, not code:
 
 - `identity.name` in `config/langgraph-config.yaml` (set by the wizard) — drives the console brand, window title, and agent card. A fork sets this once and the whole UI follows.
-- `AGENT_NAME` env — the short slug for the Prometheus metric prefix, Langfuse tag, and the `<AGENT_NAME>_API_KEY` auth header.
+- `AGENT_NAME` env — the short slug for the Prometheus metric prefix and the Langfuse tag.
+  (It also names a legacy `<AGENT_NAME>_API_KEY` auth header, which is **deprecated** —
+  use the bearer token below instead; see [#2632](https://github.com/protoLabsAI/protoAgent/issues/2632).)
 
 Leave the internal `protoagent` identifier alone. See [Fork the template](/guides/fork-the-template) for the full no-rename rationale.
 

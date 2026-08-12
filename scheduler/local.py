@@ -661,6 +661,33 @@ class LocalScheduler:
         except Exception:  # noqa: BLE001 — the event is best-effort
             log.exception("[scheduler] %s publish failed for %s", topic, trigger)
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Credentials for a self-invocation, resolved AT CALL TIME.
+
+        Capturing them at construction is wrong twice over: this object is built during
+        agent init, before ``auth.install()`` seeds the guard (so a build-time read gets
+        nothing and every scheduled turn 401s), and the bearer can rotate at runtime via
+        ``set_bearer_token`` (so a captured copy goes stale — the #2582 failure mode, one
+        layer down). Resolving per request is immune to both.
+
+        Falls back to whatever was passed in at construction, so an embedding caller that
+        supplies credentials explicitly keeps working.
+        """
+        headers: dict[str, str] = {}
+        bearer, api_key = self._bearer, self._api_key
+        try:
+            from a2a_impl.auth import inbound_credentials
+
+            live_bearer, live_api_key = inbound_credentials()
+            bearer, api_key = live_bearer or bearer, live_api_key or api_key
+        except Exception:  # noqa: BLE001 — never let credential lookup break the invocation
+            pass
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        if api_key:
+            headers["X-API-Key"] = api_key
+        return headers
+
     async def _fire(self, job: Job) -> bool:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
 
@@ -679,10 +706,7 @@ class LocalScheduler:
         #   - `role: ROLE_USER`, `parts: [{"text": …}]`, and contextId + metadata
         #     live ON the message (not at params level).
         headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-        if self._bearer:
-            headers["Authorization"] = f"Bearer {self._bearer}"
-        if self._api_key:
-            headers["X-API-Key"] = self._api_key
+        headers.update(self._auth_headers())
 
         # Realtime: announce the dispatch on the bus (ADR 0051) so a console shows the
         # scheduled job firing — before the POST, which blocks for the whole turn.
