@@ -38,6 +38,23 @@ _SEEDS: dict[str, str] = {
     "config/skills": "config/skills",
     "static": "static",
     "apps/web/dist": "apps/web/dist",
+    # The published docs corpus — the bundled `docs` plugin reads it (`plugins/docs/
+    # corpus.py::docs_root()` resolves `docs/` beside the installed `plugins/` tree) to
+    # power docs_search/docs_read + the Docs view (#2626, the docs/ half of #2624's
+    # "the comment promises it, the code doesn't deliver it" bug). Five specific
+    # subsections, NOT a whole-tree "docs": "docs" mapping — `docs/dev` is internal
+    # (mirrors the VitePress site's own `srcExclude: ["dev/**"]`) and `.vitepress/` is
+    # the site's build output, gitignored (`docs/.vitepress/{dist,cache}/`) but very
+    # much present on disk if a release is cut on a machine that's built the docs site
+    # locally; force-include has no exclude filtering, so a whole-tree mapping would
+    # silently sweep a built VitePress site into every wheel. Mirrors the desktop
+    # sidecar's identical five-entry list (build_sidecar.py `_ASSETS`) and
+    # plugins/docs/corpus.py's `SECTIONS` tuple — keep all three in step.
+    "docs/tutorials": "docs/tutorials",
+    "docs/guides": "docs/guides",
+    "docs/reference": "docs/reference",
+    "docs/explanation": "docs/explanation",
+    "docs/adr": "docs/adr",
 }
 
 
