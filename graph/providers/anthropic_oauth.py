@@ -205,8 +205,12 @@ def build_anthropic_oauth_llm(
         # A gateway alias like "protolabs/reasoning" is meaningless to Anthropic —
         # anthropic-oauth needs a real Claude model id.
         raise RuntimeError(
-            f"model.provider is 'anthropic-oauth' but model.name={name!r} is not a "
-            "Claude model id (e.g. 'claude-sonnet-4-5', 'claude-opus-4-1')."
+            f"model.provider is 'anthropic-oauth' but model.name={name!r} is not a Claude "
+            "model id (e.g. 'claude-sonnet-4-5', 'claude-opus-4-1').\n"
+            "A '/' in the name means a gateway alias, which usually means the two halves "
+            "came from different config layers: set model.provider and model.name TOGETHER "
+            "on this agent (they are one decision), or clear both so it inherits a "
+            "coherent pair from the host."
         )
 
     token = (creds.access_token or "").strip()

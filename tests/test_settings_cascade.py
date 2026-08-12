@@ -706,3 +706,72 @@ def test_host_model_mirror_never_conjures_directories(tmp_path, monkeypatch):
     monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: False)
     assert sync_host_model_layer(LangGraphConfig(model_name="x")) is False
     assert not target.parent.exists()
+
+
+# ── the model identity is ONE decision across layers (the ADR 0097 regression) ──
+
+
+_OAUTH_HOST = """
+model:
+  provider: anthropic-oauth
+  name: claude-opus-4-6
+  api_base: https://gw.example/v1
+"""
+
+
+def test_agent_naming_its_own_model_does_not_inherit_the_host_provider(tmp_path, monkeypatch):
+    """The live incident. A host moved to anthropic-oauth, the host mirror published that
+    provider, and every member that had overridden ONLY model.name with a gateway alias
+    inherited the OAuth provider on top of it. `anthropic-oauth` + `protolabs/smart` is
+    unbuildable, so those members crash-looped at boot — while members that overrode
+    neither key kept working, which is why it looked random."""
+    _host_yaml(tmp_path, _OAUTH_HOST, monkeypatch)
+    path = _agent_yaml(tmp_path, "model:\n  name: protolabs/smart\n")
+
+    cfg = LangGraphConfig.from_yaml(path)
+
+    assert cfg.model_name == "protolabs/smart"
+    assert cfg.model_provider == LangGraphConfig.model_provider  # App default, NOT the host's
+    assert cfg.model_provider != "anthropic-oauth"
+
+
+def test_agent_naming_its_own_provider_does_not_inherit_the_host_model(tmp_path, monkeypatch):
+    """The mirror image: taking the host's Claude model id under a gateway provider is
+    just as unbuildable as the reverse."""
+    _host_yaml(tmp_path, _OAUTH_HOST, monkeypatch)
+    path = _agent_yaml(tmp_path, "model:\n  provider: openai\n")
+
+    cfg = LangGraphConfig.from_yaml(path)
+
+    assert cfg.model_provider == "openai"
+    assert cfg.model_name != "claude-opus-4-6"
+
+
+def test_a_silent_agent_still_inherits_the_whole_host_identity(tmp_path, monkeypatch):
+    """The coupling must not break plain inheritance — an agent that chooses NEITHER key
+    gets the host's coherent pair, which is how most members run."""
+    _host_yaml(tmp_path, _OAUTH_HOST, monkeypatch)
+    path = _agent_yaml(tmp_path, "goal:\n  enabled: true\n")
+
+    cfg = LangGraphConfig.from_yaml(path)
+
+    assert (cfg.model_provider, cfg.model_name) == ("anthropic-oauth", "claude-opus-4-6")
+
+
+def test_an_agent_setting_both_keeps_both(tmp_path, monkeypatch):
+    _host_yaml(tmp_path, _OAUTH_HOST, monkeypatch)
+    path = _agent_yaml(tmp_path, "model:\n  provider: openai\n  name: protolabs/fast\n")
+
+    cfg = LangGraphConfig.from_yaml(path)
+
+    assert (cfg.model_provider, cfg.model_name) == ("openai", "protolabs/fast")
+
+
+def test_api_base_still_inherits_when_the_agent_names_a_model(tmp_path, monkeypatch):
+    """api_base is an endpoint, not an identity, and is deliberately NOT part of the
+    group: members legitimately override the model while inheriting the box's gateway.
+    Dropping it here would have sent them to the App default URL instead."""
+    _host_yaml(tmp_path, _OAUTH_HOST, monkeypatch)
+    path = _agent_yaml(tmp_path, "model:\n  name: protolabs/smart\n")
+
+    assert LangGraphConfig.from_yaml(path).api_base == "https://gw.example/v1"

@@ -46,6 +46,49 @@ def _load_secrets_doc(config_dir: Path) -> dict:
         return {}
 
 
+# ``model.name`` and ``model.provider`` are ONE decision, not two independent fields —
+# the same coupling ``settings_schema.MODEL_RESET_GROUP`` already encodes for reset. The
+# cascade merged them per-field, which was survivable while every provider spoke the same
+# OpenAI-compatible dialect: a mixed pair still built. Native OAuth (ADR 0097) ended that.
+#
+# What it cost: a host moved to `anthropic-oauth`, `sync_host_model_layer` mirrored
+# `provider: anthropic-oauth` into the Host layer, and every fleet member that had
+# overridden ONLY `model.name` with a gateway alias inherited the OAuth provider on top of
+# its own model id. `anthropic-oauth` + `protolabs/smart` is unbuildable, so those members
+# crash-looped at boot while members that overrode neither key (inheriting a coherent
+# host pair) stayed up — which is why it read as random.
+#
+# So the identity travels together: an agent that names EITHER key supplies both, and the
+# one it left out comes from App defaults rather than from a provider it never chose.
+# ``api_base`` deliberately keeps per-field inheritance — it's an endpoint, not an
+# identity, and members legitimately override the model while inheriting the box's gateway.
+_MODEL_IDENTITY_KEYS = ("name", "provider")
+
+
+def _drop_host_model_identity(host_layer: dict, agent_data: dict) -> list[str]:
+    """Strip the Host layer's model identity when the agent names its own.
+
+    Mutates ``host_layer`` (already a copy). Returns the keys dropped, for logging.
+    """
+    agent_model = agent_data.get("model") if isinstance(agent_data, dict) else None
+    host_model = host_layer.get("model") if isinstance(host_layer, dict) else None
+    if not isinstance(agent_model, dict) or not isinstance(host_model, dict):
+        return []
+    if not any(str(agent_model.get(k) or "").strip() for k in _MODEL_IDENTITY_KEYS):
+        return []  # agent chose neither — inherit the host's pair, which is coherent
+    dropped = [k for k in _MODEL_IDENTITY_KEYS if k in host_model and k not in agent_model]
+    for key in dropped:
+        host_model.pop(key, None)
+    if dropped:
+        log.info(
+            "[config] agent sets model.%s, so model.%s is NOT inherited from the host layer "
+            "— the model identity is one decision (App defaults fill the rest)",
+            "/".join(k for k in _MODEL_IDENTITY_KEYS if k in agent_model),
+            "/".join(dropped),
+        )
+    return dropped
+
+
 def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     """The file-reading half of ``from_yaml``: (host ⊕ agent) merged doc + secrets
     overlay. The third element is False when there is nothing to parse (no agent
@@ -64,7 +107,11 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     if host_layer:
         # Surface silent shadowing of a box default by the agent leaf (issue #1459).
         _warn_shadowed_host_keys(host_layer, agent_data)
-    merged = _deep_merge_dicts(copy.deepcopy(host_layer), agent_data) if host_layer else agent_data
+        host_base = copy.deepcopy(host_layer)
+        _drop_host_model_identity(host_base, agent_data)
+        merged = _deep_merge_dicts(host_base, agent_data)
+    else:
+        merged = agent_data
 
     return merged, _load_secrets_doc(p.parent), True
 
