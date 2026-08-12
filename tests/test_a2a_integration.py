@@ -11,7 +11,7 @@ serialized to the 1.0 wire JSON the SDK serves at
   (regression guard — a misplaced url makes clients POST to / and 405).
 - the four protoLabs custom extensions are declared so consumers extract them.
 - provider is the fleet provider block.
-- auth schemes (apiKey always; bearer when a token is configured).
+- auth schemes (only the credentials the guard actually enforces — #2620).
 
 Forks should extend this with tests for their own skills + extensions.
 """

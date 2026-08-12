@@ -662,31 +662,10 @@ class LocalScheduler:
             log.exception("[scheduler] %s publish failed for %s", topic, trigger)
 
     def _auth_headers(self) -> dict[str, str]:
-        """Credentials for a self-invocation, resolved AT CALL TIME.
+        """Credentials for a self-invocation — see ``auth.self_invocation_headers``."""
+        from a2a_impl.auth import self_invocation_headers
 
-        Capturing them at construction is wrong twice over: this object is built during
-        agent init, before ``auth.install()`` seeds the guard (so a build-time read gets
-        nothing and every scheduled turn 401s), and the bearer can rotate at runtime via
-        ``set_bearer_token`` (so a captured copy goes stale — the #2582 failure mode, one
-        layer down). Resolving per request is immune to both.
-
-        Falls back to whatever was passed in at construction, so an embedding caller that
-        supplies credentials explicitly keeps working.
-        """
-        headers: dict[str, str] = {}
-        bearer, api_key = self._bearer, self._api_key
-        try:
-            from a2a_impl.auth import inbound_credentials
-
-            live_bearer, live_api_key = inbound_credentials()
-            bearer, api_key = live_bearer or bearer, live_api_key or api_key
-        except Exception:  # noqa: BLE001 — never let credential lookup break the invocation
-            pass
-        if bearer:
-            headers["Authorization"] = f"Bearer {bearer}"
-        if api_key:
-            headers["X-API-Key"] = api_key
-        return headers
+        return self_invocation_headers(self._bearer, self._api_key)
 
     async def _fire(self, job: Job) -> bool:
         """Deliver a job by POSTing to the agent's own A2A endpoint.

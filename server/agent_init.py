@@ -8,8 +8,8 @@ loops, the plugin host wiring, ``_reload_langgraph_agent`` (the hot-reload path)
 and the settings-callbacks the operator console drives.
 
 The builders read and mutate the shared ``runtime.state.STATE`` container; the few
-``server/__init__`` symbols they need (``agent_name``, ``AGENT_NAME_ENV``,
-``_event_bus``, ``_bundle_root``) are imported from ``server`` — all defined
+``server/__init__`` symbols they need (``agent_name``, ``_event_bus``,
+``_bundle_root``) are imported from ``server`` — all defined
 before the re-export line in ``__init__`` that triggers this import, so it is not
 a cycle. ``server/__init__.py`` re-exports every public name so ``server.<symbol>``
 keeps resolving for ``_main``'s wiring and for the test suite.

@@ -598,6 +598,36 @@ def inbound_credentials() -> tuple[str, str]:
     return _BEARER[0] or "", _API_KEY[0] or ""
 
 
+def self_invocation_headers(fallback_bearer: str = "", fallback_api_key: str = "") -> dict[str, str]:
+    """Auth headers for an agent calling its OWN endpoint, resolved at call time.
+
+    The scheduler and background manager both self-invoke over HTTP, and both are built
+    during agent init — BEFORE ``auth.install()`` seeds the guard (server/__init__.py:423
+    vs :928). Reading credentials at construction therefore captures nothing and every
+    scheduled turn 401s; capturing them at all also misses a live ``set_bearer_token``
+    rotation, which is the #2582 failure mode one layer down. Resolving here, per request,
+    is immune to both.
+
+    ``fallback_*`` keep an embedding caller that passes credentials explicitly working —
+    the guard is a source, not a requirement. Live values win when present.
+
+    One function, two callers: the first cut of this fix put a byte-identical copy in each,
+    which is precisely the duplicated-security-derivation failure this PR exists to remove.
+    """
+    bearer, api_key = fallback_bearer or "", fallback_api_key or ""
+    try:
+        live_bearer, live_api_key = inbound_credentials()
+        bearer, api_key = live_bearer or bearer, live_api_key or api_key
+    except Exception:  # noqa: BLE001 — credential lookup must never break an invocation
+        pass
+    headers: dict[str, str] = {}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    if api_key:
+        headers["X-API-Key"] = api_key
+    return headers
+
+
 def enforced_schemes() -> tuple[bool, bool]:
     """``(bearer, api_key)`` — which credentials this guard ACTUALLY enforces (#2620).
 

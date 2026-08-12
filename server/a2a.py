@@ -497,7 +497,10 @@ def _build_agent_card_proto():
         version=_package_version(),
         skills=_agent_skills(),
         extension_uris=_emitted_extension_uris(pa),
-        bearer=_bearer_configured(),
+        # No `bearer=` — _apply_real_security below owns the whole security block and
+        # would discard whatever the builder produced. Passing it would be dead input in
+        # the very function this change gave a single owner. (Once protolabs-a2a#7 ships
+        # `api_key=`, both flags move here and the post-processing goes away.)
     )
     _apply_real_security(card, pa)
     # Card polish (ADR 0051 Slice 3) — build_agent_card doesn't set these, but the
