@@ -258,11 +258,15 @@ def test_launch_env_appends_node_dir_when_node_missing(tmp_path, monkeypatch):
     """A service PATH that can't see node gets the discovered node dirs appended, so an
     ACP agent that launches via `npx` can still find node — the systemd/nvm fix (#1)."""
     node_dir = _fake_node_dir(tmp_path)
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
     monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: (node_dir,))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # minimal, no node
+    # A real empty dir, not a plausible-looking system path — a distro/system node on
+    # e.g. /usr/bin makes this test host-dependent instead of hermetic (#2646).
+    monkeypatch.setenv("PATH", str(empty_path))
     env = _launch_env(None)
     assert env["PATH"].endswith(node_dir)  # appended, not prepended
-    assert env["PATH"].startswith("/usr/bin:/bin")  # original PATH preserved & wins
+    assert env["PATH"].startswith(str(empty_path))  # original PATH preserved & wins
 
 
 def test_launch_env_leaves_path_when_node_already_resolvable(tmp_path, monkeypatch):
