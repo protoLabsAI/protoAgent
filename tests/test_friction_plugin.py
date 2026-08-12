@@ -146,6 +146,28 @@ def test_a_group_keeps_the_worst_severity_seen(monkeypatch, tmp_path):
     assert friction.grouped_entries()[0]["severity"] == "major"
 
 
+def test_identical_timestamps_still_order_newest_written_first(monkeypatch, tmp_path):
+    """A burst shares one timestamp on a coarse clock (Windows), and a stable sort then
+    hands back READ order — oldest first, the inverse of the promise (#2616). Ties must
+    break on ledger position, so this pins the invariant on every platform instead of
+    leaving it to clock resolution."""
+    from plugins import friction
+
+    log = tmp_path / "friction.jsonl"
+    monkeypatch.setenv("FRICTION_LOG", str(log))
+    frozen = "2026-08-11T12:00:00+00:00"
+    log.write_text(
+        "\n".join(
+            json.dumps({"ts": frozen, "kind": "harness", "summary": s, "detail": "d", "severity": "minor"})
+            for s in ("older", "newer")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert [g["summary"] for g in friction.grouped_entries()] == ["newer", "older"]
+
+
 def test_groups_are_newest_first_and_carry_a_window(monkeypatch, tmp_path):
     from plugins import friction
 

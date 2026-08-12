@@ -123,7 +123,7 @@ def grouped_entries(kind: str = "") -> list[dict]:
     how often, and since when.
     """
     groups: dict[tuple[str, str], dict] = {}
-    for rec in read_entries(kind):
+    for idx, rec in enumerate(read_entries(kind)):
         key = (str(rec.get("kind", "")), str(rec.get("summary", "")))
         ts = str(rec.get("ts", ""))
         g = groups.get(key)
@@ -138,10 +138,19 @@ def grouped_entries(kind: str = "") -> list[dict]:
                 "count": 1,
                 "first_seen": ts,
                 "last_seen": ts,
+                # Ledger POSITION of the newest record in this group. `ts` alone cannot
+                # order a burst: Windows' wall clock is coarse enough that records appended
+                # in one turn share an identical isoformat string, and a stable sort then
+                # preserves read order — i.e. OLDEST first, the exact inverse of what this
+                # function promises (#2616). Bursts are the normal case here (five identical
+                # escape-hatch entries in one turn), so the tiebreak is load-bearing, not an
+                # edge case. The ledger is append-only, so a later position IS newer.
+                "_last_idx": idx,
             }
             continue
         g["count"] += 1
         g["last_seen"] = max(g["last_seen"], ts)
+        g["_last_idx"] = idx
         g["first_seen"] = min(g["first_seen"], ts) if g["first_seen"] else ts
         # Keep the worst severity seen for this summary — one major occurrence makes the
         # whole group worth looking at, however many minor ones surround it.
@@ -149,7 +158,10 @@ def grouped_entries(kind: str = "") -> list[dict]:
             g["severity"] = rec.get("severity")
         if not g["detail"]:
             g["detail"] = rec.get("detail", "")
-    return sorted(groups.values(), key=lambda g: g["last_seen"], reverse=True)
+    ordered = sorted(groups.values(), key=lambda g: (g["last_seen"], g["_last_idx"]), reverse=True)
+    for g in ordered:
+        g.pop("_last_idx", None)  # bookkeeping, not part of the surface's shape
+    return ordered
 
 
 @tool
