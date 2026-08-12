@@ -269,8 +269,42 @@ def _build_router():
     return router
 
 
+_VIEW_PAGE = Path(__file__).parent / "view.html"
+
+
+def _build_view_router():
+    """``GET /plugins/friction/view`` — the console surface (#2595 D2/D3).
+
+    The read path (#2607) turned the ledger into an API; nothing rendered it, so
+    entries still sat unread unless an operator called ``friction_review`` or
+    curled the route by hand. This is the "surfaces" half of #2595: a plugin
+    view (ADR 0026) — a rail icon opening this page, iframed by the console.
+
+    Served on the PUBLIC ``/plugins/friction`` prefix on purpose: an iframe
+    page-load can't carry a bearer, so only the page is public chrome. Its data
+    comes from ``GET /api/friction`` (unchanged, already bearer-gated by the
+    default-deny middleware since it doesn't live under a public prefix) — the
+    documented two-router split (docs/guides/plugin-views.md).
+    """
+    from fastapi import APIRouter
+    from fastapi.responses import HTMLResponse
+
+    router = APIRouter()
+
+    @router.get("/view")
+    async def _view():
+        # Read per request (like the hello/chat_example views) — cheap, and it
+        # means an operator iterating on the page never needs a restart.
+        return HTMLResponse(_VIEW_PAGE.read_text(encoding="utf-8"))
+
+    return router
+
+
 def register(registry):
     """protoAgent plugin entrypoint."""
     registry.register_tools([record_friction, friction_review])
     registry.register_middleware(lambda config: FrictionMiddleware())
     registry.register_router(_build_router(), prefix="")
+    # Default prefix (None) resolves to /plugins/friction — the canonical public
+    # view prefix (ADR 0026) — so the manifest's views[].path matches exactly.
+    registry.register_router(_build_view_router())
