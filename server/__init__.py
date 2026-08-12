@@ -115,6 +115,34 @@ def _ensure_ca_bundle_env() -> None:
         os.environ.setdefault(var, ca)
 
 
+def _ensure_os_trust_store() -> None:
+    """Let httpx (and anything else on the stdlib ``ssl`` module) trust what the
+    OS trusts, not just the bundled ``certifi`` root list.
+
+    httpx always verifies via ``ssl.create_default_context(cafile=certifi.where())``
+    — a private/enterprise CA an operator installed in the OS trust store (Windows
+    cert store, macOS Keychain, a Linux distro bundle) is invisible to it even
+    though the OS's own HTTP clients (Chrome, PowerShell) trust it fine. That broke
+    A2A delegate calls to a peer behind an internal CA or TLS-terminating proxy
+    (#2643) — hit hardest on the packaged Windows desktop, since Windows has no
+    OpenSSL-readable system bundle for Python to fall back on.
+
+    ``truststore.inject_into_ssl()`` replaces ``ssl.SSLContext`` process-wide with
+    one that verifies through the native OS trust APIs (SChannel / Security.framework
+    / OpenSSL's default paths) instead of whatever ``cafile`` was passed in — so
+    every existing httpx client (delegate probe, delegate dispatch, the fleet proxy,
+    push-notification delivery) picks this up identically with no per-call-site
+    change, and a chain the OS itself doesn't trust still fails closed. Not
+    frozen-gated: the certifi-only gap is in httpx itself, present in a source
+    checkout too. Must run before the first outbound TLS request."""
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001 — a missing/broken truststore must never block boot
+        log.warning("could not enable OS trust-store TLS verification", exc_info=True)
+
+
 def _resolve_operator_project_root() -> str:
     """The operator console's default project root (+ its always-allowed dir).
 
@@ -299,6 +327,10 @@ def _main():
     # bundled certifi CA bundle before any outbound request, else DuckDuckGo search
     # fails CERTIFICATE_VERIFY_FAILED in the desktop app. No-op in a source checkout.
     _ensure_ca_bundle_env()
+    # httpx TLS: verify through the OS trust store too, not just certifi — else an
+    # operator-trusted private CA (A2A delegate behind an internal PKI, #2643) fails
+    # closed even though the OS's own clients trust it.
+    _ensure_os_trust_store()
 
     # Management + lifecycle subcommands (ADR 0075 D1) — `plugin` / `workspace` /
     # `skills` / `fleet` / `config` (act on disk/DBs and exit) plus `up`/`down`/

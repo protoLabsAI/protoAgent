@@ -5,6 +5,8 @@
 # run in the `console` and `none` UI tiers (ADR 0010). `requirements.txt`
 # installs exactly this list (`-e .`).
 httpx>=0.27
+# OS-trust-store TLS verification for httpx and friends (#2643) — see pyproject.toml.
+truststore>=0.10
 # IANA timezone database for stdlib zoneinfo — Windows ships none (every
 # ZoneInfo(...) raised in the frozen sidecar, #1683) and slim containers often
 # lack /usr/share/zoneinfo. Inert wherever system data exists.
