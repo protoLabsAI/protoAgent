@@ -15,6 +15,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.134.1] - 2026-08-12
+
+### Added
+- **The friction ledger has a console surface — a rail icon, not just an API (#2595).**
+  `friction_review` and `GET /api/friction` (#2607) turned the write-only ledger into
+  something *readable*, but nothing rendered it — the entries a friction-enabled agent
+  records still sat unread unless an operator called the tool or curled the route by
+  hand. The `friction` plugin now declares a console view (`Settings`-adjacent rail icon,
+  ADR 0026): grouped, de-duplicated entries newest-first, a harness/model kind filter,
+  severity/source/tool badges, an expandable detail per entry, and a per-browser
+  dismiss/restore marker for lightweight triage. Opt-in, same as the plugin itself
+  (`plugins: { enabled: [friction] }`) — nothing changes for instances that don't enable
+  it. A fleet-wide rollup and "file as issue" are still deliberately deferred follow-ups.
+
+### Fixed
+- **Chat code blocks render their line breaks again (#2612).** A multi-line fence was
+  collapsing onto one line while keeping its indentation and its syntax highlighting.
+  Re-asserting `white-space: pre` (#2546) fixed only half of it: that preserves whitespace
+  which exists in the DOM, and streamdown emits one `<span>` per line with no newline text
+  nodes between them, so the lines flowed together regardless. Each line span is now a
+  block. The e2e fixture gained an indented block and the guard now asserts the rendered
+  text keeps its line breaks — the previous assertions (computed `white-space`, span count)
+  passed whether or not the bug was present.
+
+- **The HITL response textarea now sends on Enter, matching the chat composer (#2614).**
+  The free-text box shown for `ask_human` interrupts treated Enter as a plain newline
+  insert with no keyboard way to submit — the operator had to reach for the mouse and
+  click Send every time. It now follows the same convention as the main chat composer:
+  bare Enter submits the response, and ⌘/Ctrl+Enter inserts a newline instead.
+
+- **The friction list shows the newest signal first, even on a coarse clock (#2616).**
+  Entries recorded in one burst share an identical timestamp on Windows, and a stable
+  sort then handed back read order — oldest first, the inverse of what the grouped view
+  promises. Bursts are the normal case here (the same rough edge hit five times in a
+  turn), so ties now break on ledger position: the ledger is append-only, so a later
+  record is the newer one. This also unbreaks `Windows tests (native)`, which had been
+  red on `main` since the friction log landed.
+
+- **The published PyPI wheel now ships `plugins/`, so every ACP-backed turn works on a real install (#2624).** `runtime/acp_runtime.py` imports `AcpClient` from `plugins.coding_agent.acp_client`, but the wheel's asset list never actually included the `plugins/` tree — only source/editable installs worked, because the repo root stays on `sys.path` there, masking the omission. A clean `uv tool install protolabs-agent` could boot and serve, but the first Hermes/Codex/Claude-style ACP turn failed with `ModuleNotFoundError: No module named 'plugins'` before the configured agent even launched. Fixed by mirroring the desktop sidecar's already-correct `("plugins", "plugins")` bundling, plus a regression test pinning the invariant so this class of asset-list omission can't silently ship again.
+
+- **The published PyPI wheel now ships the docs corpus, so `docs_search`/`docs_read` and the Docs view work on a real install (#2626).** The `docs` plugin's corpus reader (`plugins/docs/corpus.py`) resolves `docs/` beside the installed `plugins/` tree, but the wheel's asset list never included it — only source/editable installs worked, same root cause as #2624's `plugins/` omission. The reader degrades silently (an empty corpus, not an error) rather than failing loudly, so this shipped invisibly. Fixed by bundling the five Diátaxis sections + ADRs the corpus actually reads (`docs/tutorials`, `docs/guides`, `docs/reference`, `docs/explanation`, `docs/adr`) — deliberately not the whole `docs/` tree, which would also sweep in the internal `docs/dev/` and the gitignored, potentially large built VitePress site (`docs/.vitepress/dist`) if a release happened to be cut on a machine that had built the docs site locally.
+
 ## [0.134.0] - 2026-08-12
 
 ### Added
