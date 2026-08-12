@@ -527,6 +527,25 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def enforced_schemes() -> tuple[bool, bool]:
+    """``(bearer, api_key)`` — which credentials this guard ACTUALLY enforces (#2620).
+
+    The public agent card has to describe the server, and it used to describe a guess:
+    ``server/a2a.py`` re-derived "is a bearer configured?" from env + config, and the card
+    builder hardcoded the ``apiKey`` scheme unconditionally. Two derivations of one fact
+    drift, and this one did — a bearer-only agent advertised ``X-API-Key`` as a valid
+    alternative, so a standards-following A2A client that picked the advertised apiKey
+    scheme got 401 from a healthy, correctly-configured agent.
+
+    Reading it from the guard's own state is what keeps the card honest: whatever
+    ``configure()`` was handed is exactly what the card claims.
+
+    NOTE the semantics the card must express: these are checked independently and BOTH
+    must pass when both are set — an AND, not the OR a naive two-alternative card implies.
+    """
+    return bool(_BEARER[0]), bool(_API_KEY[0])
+
+
 def install(
     app,
     *,

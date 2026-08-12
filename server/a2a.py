@@ -385,6 +385,55 @@ def _emitted_extension_uris(pa) -> list[str]:
     return [pa.COST_EXT_URI, pa.WORLDSTATE_DELTA_EXT_URI, pa.TOOL_CALL_EXT_URI]
 
 
+def _apply_real_security(card, pa) -> None:
+    """Rewrite the card's security block to describe what the guard actually enforces (#2620).
+
+    ``pa.build_agent_card`` always advertises the ``apiKey`` scheme and, when a bearer is
+    configured, appends ``bearer`` as a SECOND requirement — i.e. as an OR-alternative.
+    Both halves of that were wrong against this server:
+
+    * **apiKey was advertised even when no API key exists.** ``X-API-Key`` is enforced only
+      when ``<AGENT>_API_KEY`` is set. On a bearer-only agent — the normal deployment — a
+      standards-following client is entitled to pick the advertised apiKey scheme, and gets
+      401 from an agent that is healthy and correctly configured.
+    * **The two are an AND, not an OR.** ``A2AAuthMiddleware`` checks them independently and
+      sequentially, so with both configured NEITHER credential alone is accepted. The card
+      promised either would do.
+
+    A2A gives us both operators: the requirements list is OR, and multiple schemes inside
+    ONE requirement are AND. So the honest card is a single requirement naming exactly the
+    credentials this guard will check — and nothing when it checks none (open mode).
+
+    Best-effort: a card that fails to rewrite is worse than one that does, but not worse
+    than no card at all, so a proto shape change degrades to the builder's output rather
+    than taking down the well-known endpoint.
+    """
+    from a2a.types import SecurityRequirement, StringList
+
+    from a2a_impl.auth import enforced_schemes
+
+    bearer, api_key = enforced_schemes()
+    try:
+        schemes, required = {}, {}
+        if api_key:
+            schemes[pa.API_KEY_SCHEME_NAME] = pa.api_key_scheme()
+            required[pa.API_KEY_SCHEME_NAME] = StringList(list=[])
+        if bearer:
+            schemes[pa.BEARER_SCHEME_NAME] = pa.bearer_scheme()
+            required[pa.BEARER_SCHEME_NAME] = StringList(list=[])
+
+        card.ClearField("security_schemes")
+        card.ClearField("security_requirements")
+        for name, scheme in schemes.items():
+            card.security_schemes[name].CopyFrom(scheme)
+        if required:
+            # ONE requirement holding every configured scheme = "satisfy all of these",
+            # which is what the middleware does. Two requirements would mean "either".
+            card.security_requirements.append(SecurityRequirement(schemes=required))
+    except Exception:  # noqa: BLE001 — never let card polish break /.well-known
+        log.warning("[a2a] could not rewrite the card security block; serving the builder's", exc_info=True)
+
+
 def _build_agent_card_proto():
     """Build the A2A 1.0 ``AgentCard`` (proto) served at
     ``/.well-known/agent-card.json``, applying the protoLabs fleet conventions
@@ -426,6 +475,7 @@ def _build_agent_card_proto():
         extension_uris=_emitted_extension_uris(pa),
         bearer=_bearer_configured(),
     )
+    _apply_real_security(card, pa)
     # Card polish (ADR 0051 Slice 3) — build_agent_card doesn't set these, but the
     # 1.0 proto AgentCard has them: a docs link + an icon for consumers/registries.
     # Overridable via a2a.documentation_url / a2a.icon_url config; default to the

@@ -153,3 +153,99 @@ async def test_agent_card_route_serves_protocol_version(monkeypatch):
     body = json.loads(resp.body)
     assert body["protocolVersion"] == "1.0"
     assert body["supportedVersions"] == ["1.0"]
+
+
+# ── the card must describe the guard, not a parallel guess (#2620) ──────────
+
+
+def _card(bearer, api_key):
+    """Build a card under a given auth configuration and return (schemes, requirements)."""
+    import protolabs_a2a as pa
+
+    from a2a_impl import auth
+
+    auth.configure(bearer_token=bearer, api_key=api_key, allowed_origins_raw="")
+    card = pa.build_agent_card(
+        name="x", description="d", url="http://h/a2a", version="1", skills=[], bearer=bool(bearer)
+    )
+    a2a._apply_real_security(card, pa)
+    return sorted(card.security_schemes), [sorted(r.schemes) for r in card.security_requirements]
+
+
+def test_bearer_only_agent_does_not_advertise_the_api_key_scheme():
+    """The reported bug: a bearer-gated agent advertised X-API-Key as a valid
+    alternative. A standards-following A2A client is entitled to pick the advertised
+    apiKey scheme — and got 401 from a healthy, correctly configured agent."""
+    schemes, reqs = _card("tok", "")
+
+    assert schemes == ["bearer"]
+    assert reqs == [["bearer"]]
+
+
+def test_api_key_only_agent_advertises_only_the_api_key_scheme():
+    assert _card(None, "key") == (["apiKey"], [["apiKey"]])
+
+
+def test_both_configured_is_advertised_as_AND_not_two_alternatives():
+    """The second lie, which nobody had hit yet: the middleware checks the two
+    independently and sequentially, so with both configured NEITHER credential alone is
+    accepted. Two requirements would promise "either"; one requirement naming both is
+    "satisfy all of these", which is what the server does."""
+    schemes, reqs = _card("tok", "key")
+
+    assert schemes == ["apiKey", "bearer"]
+    assert reqs == [["apiKey", "bearer"]], "two entries here would advertise OR — the server means AND"
+
+
+def test_open_mode_advertises_no_credential_at_all():
+    """An open endpoint claiming to want a credential is its own small lie."""
+    assert _card(None, "") == ([], [])
+
+
+def test_enforced_schemes_reports_the_guard_s_RESOLVED_state(monkeypatch):
+    """The root cause was two derivations of one fact: the card re-derived "is a bearer
+    configured?" from config + env, while enforcement used whatever `configure()` resolved.
+
+    `enforced_schemes` reads the guard, so the card follows the SAME resolution — including
+    the documented env fallback (`bearer_token=None` means "unspecified, use
+    A2A_AUTH_TOKEN"). That is the property that stops the two drifting again."""
+    from a2a_impl.auth import configure, enforced_schemes
+
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "from-env")
+    configure(bearer_token=None, api_key="", allowed_origins_raw="")
+    assert enforced_schemes() == (True, False)  # env fallback resolved → bearer IS enforced
+
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    configure(bearer_token=None, api_key="key", allowed_origins_raw="")
+    assert enforced_schemes() == (False, True)  # nothing to fall back to → api key only
+
+
+def test_card_security_matches_what_the_middleware_accepts():
+    """End-to-end: for each configuration, every credential the card advertises is one
+    the middleware actually accepts — asserted against real requests, not a reading of
+    the code."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from a2a_impl import auth
+
+    for bearer, api_key in (("tok", ""), (None, "key"), ("tok", "key")):
+        schemes, reqs = _card(bearer, api_key)
+        app = FastAPI()
+
+        @app.get("/a2a/ping")
+        async def ping():
+            return {"ok": True}
+
+        auth.install(app, bearer_token=bearer, api_key=api_key, allowed_origins_raw="")
+        headers = {}
+        for name in reqs[0]:  # the single requirement = every credential that must be sent
+            if name == "bearer":
+                headers["Authorization"] = f"Bearer {bearer}"
+            else:
+                headers["x-api-key"] = api_key
+
+        assert TestClient(app).get("/a2a/ping", headers=headers).status_code == 200, (
+            f"card advertises {reqs[0]} for bearer={bool(bearer)}/api_key={bool(api_key)}, "
+            "but sending exactly that was rejected"
+        )
