@@ -100,3 +100,38 @@ def managed_runtime_distributions() -> set[str]:
             stem = meta.name.rsplit(".", 1)[0]
             dists.add(normalize_dist(stem.rsplit("-", 1)[0]))
     return dists
+
+
+def pytest_interpreter() -> tuple[str | None, str | None]:
+    """``(python, error)`` — the interpreter to spawn ``-m pytest`` with (ADR 0096 D3).
+
+    Source-run → ``sys.executable``. Frozen → the ADR 0094 managed runtime, and only
+    when pytest is actually installed *there*: the app bundle carries no pytest, and
+    the managed runtime's baseline is the ADR 0092 **document** stack (docx/xlsx/pptx/
+    pdf), so a provisioned runtime is not on its own enough. Never falls back to a
+    discovered system Python — see this module's docstring for why that discovery is
+    deliberately absent.
+
+    Both refusals name the remedy instead of letting the child fail with a bare
+    ``No module named pytest``: the caller is usually an agent deciding what to do
+    next, and "install X in Settings" is actionable where a traceback is not.
+
+    Shared by every in-tree pytest spawner (plugin-devkit's ``test_plugin``, the
+    ``coder`` verifier) so they cannot drift on what "no interpreter" means.
+    """
+    import sys
+
+    if not getattr(sys, "frozen", False):
+        return sys.executable, None
+    exe = managed_python_exe()
+    if exe is None:
+        return None, (
+            "no Python to run pytest in the packaged app — provision the managed runtime "
+            "(Settings ▸ Tools, ~35 MB), then try again"
+        )
+    if "pytest" not in managed_runtime_distributions():
+        return None, (
+            "the managed Python runtime has no pytest — open the Plugins panel and hit "
+            "\"Install deps\" on the plugin that needs it, then try again"
+        )
+    return str(exe), None

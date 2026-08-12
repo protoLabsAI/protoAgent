@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import sys
 import tarfile
 from pathlib import Path
 
@@ -263,6 +264,66 @@ def test_managed_runtime_distributions_reads_and_normalizes(box):
 
 def test_managed_runtime_distributions_empty_when_unprovisioned(box):
     assert pr.managed_runtime_distributions() == set()
+
+
+# ── pytest_interpreter: the self-building loop's frozen path (ADR 0096 D3) ────
+
+
+def _install_pytest_dist(version: str = "8.3.2") -> None:
+    """Make ``pytest`` visible to ``managed_runtime_distributions()``."""
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    (site / f"pytest-{version}.dist-info").mkdir()
+
+
+def test_pytest_interpreter_source_run_uses_sys_executable(box, monkeypatch):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    exe, err = pr.pytest_interpreter()
+    assert err is None
+    assert exe == sys.executable
+
+
+def test_pytest_interpreter_frozen_refuses_without_runtime(box, monkeypatch):
+    """No managed runtime at all — refuse, and name the provisioning step."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe, err = pr.pytest_interpreter()
+    assert exe is None
+    assert "Settings" in err and "runtime" in err
+
+
+def test_pytest_interpreter_frozen_refuses_when_runtime_lacks_pytest(box, monkeypatch):
+    """The regression this ADR 0096 D3 gap actually was: a runtime is provisioned
+    (so ``managed_python_exe()`` is happy) but its baseline is the ADR 0092 document
+    stack, which carries no pytest. Spawning would die on ``No module named pytest``;
+    the refusal has to name the fix instead."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    _make_python(pr.managed_python_install_dir())
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    (site / "python_docx-1.1.0.dist-info").mkdir()  # the document baseline, no pytest
+    exe, err = pr.pytest_interpreter()
+    assert exe is None
+    assert "pytest" in err and "Install deps" in err
+
+
+def test_pytest_interpreter_frozen_returns_managed_python_when_pytest_present(box, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    expected = _make_python(pr.managed_python_install_dir())
+    _install_pytest_dist()
+    exe, err = pr.pytest_interpreter()
+    assert err is None
+    assert exe == str(expected)
+
+
+def test_pytest_interpreter_never_falls_back_to_a_system_python(box, monkeypatch):
+    """The module's standing rule (see its docstring): a discovered system Python of
+    arbitrary version reproduces #2137's silently-missing-capability class. A frozen
+    build with no managed runtime must refuse, never hand back ``sys.executable`` —
+    which in a PyInstaller bundle is the server binary and would relaunch the app."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe, _ = pr.pytest_interpreter()
+    assert exe is None
+    assert exe != sys.executable
 
 
 def test_install_requirements_refuses_when_unprovisioned(box):

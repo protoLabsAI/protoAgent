@@ -406,22 +406,18 @@ def _build_file_tools(config: dict | None) -> list:
 
 
 def _test_interpreter() -> tuple[str | None, str | None]:
-    """``(python, error)`` — the interpreter to run pytest with. Source-run →
-    ``sys.executable``; frozen → the ADR 0094 managed runtime or an actionable
-    refusal (never a system-Python fallback)."""
-    if getattr(sys, "frozen", False):
-        try:
-            from infra.python_runtime import managed_python_exe
-        except Exception:  # noqa: BLE001 — ancient build without the runtime module
-            return None, "no Python available to run pytest in this packaged build"
-        exe = managed_python_exe()
-        if exe is None:
-            return None, (
-                "no Python to run pytest in the packaged app — install the managed runtime "
-                "(Settings ▸ Tools, ~35 MB), then try again"
-            )
-        return str(exe), None
-    return sys.executable, None
+    """``(python, error)`` — the interpreter to run pytest with (ADR 0096 D3).
+
+    Delegates to ``infra.python_runtime.pytest_interpreter`` so this and the
+    ``coder`` verifier share ONE definition of "no interpreter" — including the
+    frozen case where a runtime is provisioned but carries no pytest."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable, None
+    try:
+        from infra.python_runtime import pytest_interpreter
+    except Exception:  # noqa: BLE001 — ancient build without the runtime module
+        return None, "no Python available to run pytest in this packaged build"
+    return pytest_interpreter()
 
 
 def _run_pytest(pdir: Path) -> str:

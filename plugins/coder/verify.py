@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import sys
 import tempfile
 
 from .solve import Verdict
@@ -66,11 +65,16 @@ async def run_tests(
     """Write ``code`` to ``<solution_name>.py`` + ``tests`` to ``test_<solution_name>.py``
     in a temp dir and run pytest there. ``tests`` should import from
     ``solution_name`` (e.g. ``from solution import add``)."""
-    if getattr(sys, "frozen", False):
-        # In a PyInstaller build, ``sys.executable`` is the frozen server binary, not a
-        # Python interpreter — ``-m pytest`` would relaunch the server. No standalone
-        # Python to run the tests, so fail cleanly (same guard as execute_code).
-        return Verdict(passed=False, output="coder verifier unavailable in the packaged desktop app (no standalone Python to run pytest)")
+    # In a PyInstaller build ``sys.executable`` is the frozen server binary, not an
+    # interpreter — ``-m pytest`` would relaunch the server. This used to be a flat
+    # refusal; since ADR 0094 the managed runtime is a real target, so resolve through
+    # the shared helper and refuse only when there is genuinely nothing to spawn
+    # (ADR 0096 D3 — the legacy guard here is explicitly superseded by it).
+    from infra.python_runtime import pytest_interpreter
+
+    python_exe, interpreter_error = pytest_interpreter()
+    if python_exe is None:
+        return Verdict(passed=False, output=f"coder verifier unavailable — {interpreter_error}")
     with tempfile.TemporaryDirectory(prefix="coder_") as d:
         with open(os.path.join(d, f"{solution_name}.py"), "w", encoding="utf-8") as f:
             f.write(code)
@@ -87,7 +91,7 @@ async def run_tests(
                     child_env[_k] = os.environ[_k]
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
+                python_exe,
                 "-m",
                 "pytest",
                 "-q",

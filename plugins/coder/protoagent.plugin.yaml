@@ -24,6 +24,13 @@ capabilities:
   filesystem: workspace
   subprocess: ["python"]
 
+# The verifier spawns `<python> -m pytest` against each candidate. Same reasoning
+# as plugin-devkit: the frozen desktop app has no pytest of its own, so declare it
+# and let the frozen dep path put it in the managed runtime. `runtime` scope (the
+# default) — pytest is spawned, never imported in-process.
+requires_pip:
+  - "pytest>=8"
+
 # Plugin config + Settings (ADR 0019) — claims the top-level `coder` section.
 config_section: coder
 config:
