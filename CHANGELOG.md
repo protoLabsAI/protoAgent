@@ -15,6 +15,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.135.0] - 2026-08-12
+
+### Fixed
+- **The A2A agent card now describes the credentials the server actually accepts, and
+  multiple credentials are genuinely alternatives (#2620).** A bearer-gated agent
+  advertised `X-API-Key` in `/.well-known/agent-card.json` even with no API key configured,
+  so a standards-driven A2A client that picked the advertised scheme got 401 from a healthy,
+  correctly configured agent — it reads as offline, and blocks fleet onboarding and
+  third-party interop. Investigating it surfaced a second, larger problem: the guard checked
+  a legacy API key and a bearer in sequence, which made them a conjunction. With both
+  configured, **neither credential alone was accepted** — so enabling the legacy key
+  silently broke every bearer client. Nothing had ever specified that; the two checks were
+  added years apart, and it survived only because protoAgent's own internal callers always
+  send both. Configured credentials are now what they always read as: **alternatives** —
+  present any one. The card is derived from the guard that enforces them rather than from a
+  parallel re-reading of config and env, which is what let the two drift apart in the first
+  place; the same single source now backs the scheduler and console self-invocation paths,
+  replacing four separate derivations with different precedence.
+- **Note for anyone who set both `A2A_AUTH_TOKEN` and `<AGENT>_API_KEY`:** requests that
+  previously had to carry both headers now succeed with either. This is a deliberate
+  loosening of an accidental restriction — if you relied on both being required, treat the
+  two credentials as one and remove the one you don't want honoured.
+
+- **A fleet member that picks its own model no longer inherits an incompatible provider
+  from the host.** The config cascade merged `model.name` and `model.provider` as
+  independent fields. That was survivable while every provider spoke the same
+  OpenAI-compatible dialect — a mixed pair still built — but native OAuth (ADR 0097) ended
+  it. When a host switched to `anthropic-oauth`, the host layer published that provider,
+  and every member that had overridden only `model.name` with a gateway alias inherited the
+  OAuth provider on top of its own model id. `anthropic-oauth` + `protolabs/smart` cannot
+  be built, so those agents crash-looped at boot with "isn't running" in the console, while
+  members that overrode neither key kept working — which is why it presented as random. The
+  model identity now travels as one decision, the same coupling reset already used: an
+  agent that names either key supplies both, and the one it leaves out comes from the App
+  defaults rather than from a provider it never chose. `api_base` still inherits — it's an
+  endpoint, not an identity, and members legitimately override the model while using the
+  box's gateway. The error a bad pair produces now says the two halves came from different
+  layers and to set them together, instead of just naming the model id.
+
+### Removed
+- **The Hermes ACP runtime preset is deprecated (#2633).** `protoagent hermes` and
+  `agent_runtime: acp:hermes` made Hermes Agent the *brain* of a protoAgent instance — an
+  experiment that ACP **delegates** superseded, where an external agent is a worker the
+  native runtime dispatches to, so goal continuations, telemetry and the whole plugin
+  surface stay intact. Hermes no longer appears in the Settings runtime picker, the setup
+  wizard, `runtime list` or `/api/acp-agents`, and its guide is gone from the docs.
+  **Existing installs keep working**: an agent already on `acp:hermes` still resolves its
+  launch command and boots, and selecting it still succeeds — it now prints a deprecation
+  warning naming ACP delegates as the replacement. Removal will be a separate change.
+
+### Deprecated
+- **The legacy `<AGENT>_API_KEY` credential is deprecated (#2632).** It still authenticates
+  exactly as before — dropping a credential someone deployed against would lock them out of
+  their own agent — but setting it now logs a warning once at startup naming the
+  replacement. Use the bearer token (`auth.token` in `langgraph-config.yaml`, or
+  `A2A_AUTH_TOKEN`): it is settable from Settings and the wizard, rotatable at runtime,
+  routed through `secrets.yaml`, and it is what every protoAgent client already sends. The
+  API key had none of that — env-only, invisible in the console, unrotatable — which is the
+  worst state for a credential to be in. Removal is tracked in #2632; the guides no longer
+  present it as a current option.
+
 ## [0.134.1] - 2026-08-12
 
 ### Added

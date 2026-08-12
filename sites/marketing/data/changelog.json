@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.135.0",
+    "date": "2026-08-12",
+    "changes": [
+      "The A2A agent card now describes the credentials the server actually accepts, and multiple credentials are genuinely alternatives (#2620).",
+      "Note for anyone who set both A2A_AUTH_TOKEN and <AGENT>_API_KEY:",
+      "A fleet member that picks its own model no longer inherits an incompatible provider from the host.",
+      "The Hermes ACP runtime preset is deprecated (#2633).",
+      "The legacy <AGENT>_API_KEY credential is deprecated (#2632)."
+    ]
+  },
+  {
     "version": "v0.134.1",
     "date": "2026-08-12",
     "changes": [
