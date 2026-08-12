@@ -171,6 +171,31 @@ def test_archetype_catalog_specifically() -> None:
     assert "config/archetype-catalog.json" in _sidecar_bundled_sources()
 
 
+def test_plugins_dir_is_bundled_into_the_wheel() -> None:
+    """Core code imports directly from `plugins/` (e.g. `runtime/acp_runtime.py`'s
+    `from plugins.coding_agent.acp_client import AcpClient`), so omitting the tree from
+    the wheel isn't a missing extra — it's a `ModuleNotFoundError` on the first ACP-backed
+    turn of any non-editable install (#2624). This stayed invisible because editable/source
+    installs keep the repo root on `sys.path`, masking the omission entirely — only a real
+    `pip install` from the built wheel exercises this path."""
+    assert "plugins" in _wheel_seed_sources(), (
+        "'plugins' is not in hatch_build.py::_SEEDS — a `pip install` from the built wheel "
+        "would ship without it, and core code that imports from plugins/ (e.g. the ACP "
+        "client factory) raises ModuleNotFoundError on the first real turn, not at install "
+        "time or boot."
+    )
+
+
+def test_plugins_dir_is_bundled_into_the_desktop_sidecar() -> None:
+    """Same invariant as above, for the frozen desktop build — already correct (this is
+    the pattern #2624's wheel fix mirrors), pinned here so it can't silently regress."""
+    assert "plugins" in _sidecar_bundled_sources(), (
+        "'plugins' is not in build_sidecar.py::BUNDLED_DATA — the frozen desktop sidecar "
+        "would ship without it, and PyInstaller's import-scan can't see plugins/ loaded by "
+        "file path, so this can't be caught any other way."
+    )
+
+
 def test_project_manager_archetype_row() -> None:
     """#2178 ships the Project Manager archetype as catalog data only (ADR 0042) —
     pin the invariants the picker relies on: the id is unique (it's the RadioCard

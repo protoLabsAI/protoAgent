@@ -38,6 +38,14 @@ _SEEDS: dict[str, str] = {
     "config/skills": "config/skills",
     "static": "static",
     "apps/web/dist": "apps/web/dist",
+    # First-party plugins (ADR 0018/0019) — core code imports from this tree directly
+    # (e.g. runtime/acp_runtime.py's `from plugins.coding_agent.acp_client import
+    # AcpClient`), so omitting it isn't just a missing extra, it's a broken import on
+    # every non-editable install the moment an ACP-backed turn runs (#2624). Mirrors the
+    # desktop sidecar's identical `("plugins", "plugins")` entry (build_sidecar.py
+    # `_ASSETS`) — editable/source installs already work because the repo root stays on
+    # sys.path, which is exactly why this was invisible until a real wheel install.
+    "plugins": "plugins",
     # The published docs corpus — the bundled `docs` plugin reads it (`plugins/docs/
     # corpus.py::docs_root()` resolves `docs/` beside the installed `plugins/` tree) to
     # power docs_search/docs_read + the Docs view (#2626, the docs/ half of #2624's
