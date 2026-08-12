@@ -302,3 +302,33 @@ def test_deleting_someone_elses_fragment_does_not_satisfy_the_gate(tmp_path: Pat
     result = _run_gate(repo, head_ref="feature2")
 
     assert result.returncode == 1
+
+
+def test_prepare_release_branch_skips_the_gate(tmp_path: Path) -> None:
+    """The branch prepare-release.yml actually creates is `prepare-release/vX.Y.Z`, which
+    `release/*` does not match. It went unnoticed because a release PR DELETES every
+    fragment and the old check counted any changed changelog.d path — so those PRs passed
+    by accident, not by the escape hatch. #2600 stopped counting deletions and the accident
+    stopped covering, breaking the v0.134.0 release PR."""
+    repo = _pr_repo(tmp_path)
+    _add_fragment(repo, "2600.fixed.md", "- **An entry (#2600).** Body.\n")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "feature")
+    _git(repo, "checkout", "-qb", "prepare-release/v0.134.0")
+    (repo / "changelog.d" / "2600.fixed.md").unlink()  # what `collate` does
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [0.134.0]\n- entry\n", encoding="utf-8")
+    _git(repo, "commit", "-aqm", "chore: release v0.134.0")
+
+    result = _run_gate(repo, head_ref="prepare-release/v0.134.0")
+
+    assert result.returncode == 0
+    assert "release branch" in result.stdout
+
+
+def test_plain_release_branch_still_skips(tmp_path: Path) -> None:
+    repo = _pr_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "release/v1.2.3")
+    (repo / "code.py").write_text("x = 3\n", encoding="utf-8")
+    _git(repo, "commit", "-aqm", "release prep")
+
+    assert _run_gate(repo, head_ref="release/v1.2.3").returncode == 0

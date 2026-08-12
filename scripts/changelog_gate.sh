@@ -31,7 +31,8 @@
 #         second call, after `opened` already fired with an empty label set.
 #       * `gh run rerun` replays that same payload by definition.
 #     Neither matters now: both leave a red run that the `labeled` event supersedes.
-#   - PR_HEAD_REF matches release/* (release PRs roll [Unreleased] themselves)
+#   - PR_HEAD_REF matches release/* or prepare-release/* (release PRs roll [Unreleased]
+#     themselves; prepare-release.yml creates the latter spelling)
 #   - PR_ACTOR is dependabot[bot] (bot PRs never need entries)
 #
 # Pure git + jq + shell — no dependency install, safe to run first in CI.
@@ -45,7 +46,13 @@ if [ "${PR_ACTOR:-}" = "dependabot[bot]" ]; then
 fi
 
 case "${PR_HEAD_REF:-}" in
-  release/*)
+  # prepare-release.yml creates `prepare-release/vX.Y.Z`, which `release/*` does NOT
+  # match. That went unnoticed because a release PR *deletes* every fragment, and the
+  # old check counted any changed changelog.d path — including deletions — so those PRs
+  # passed by accident. #2600 stopped counting deletions (removing someone else's entry
+  # isn't self-documentation) and the accident stopped covering for the pattern, which
+  # broke the v0.134.0 release PR. Match both spellings.
+  release/*|prepare-release/*)
     echo "skip: release branch '${PR_HEAD_REF}' rolls [Unreleased] itself"
     exit 0
     ;;

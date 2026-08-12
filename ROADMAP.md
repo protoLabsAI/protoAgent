@@ -10,7 +10,6 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 ## Planned
 
 - **Federation token follow-ups** — management UI, peer rotation, and fleet integration for ADR 0066 tokens. (#1504)
-- **Backend-agnostic tracing** — generic OTLP / OpenInference trace export instead of hard-coding the Langfuse SDK. (#1884)
 - **Ollama & Hugging Face listings** — register protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app. (#1990)
 
 ## In progress

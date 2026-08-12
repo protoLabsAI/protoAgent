@@ -10,13 +10,6 @@
         ]
       },
       {
-        "title": "Backend-agnostic tracing",
-        "detail": "generic OTLP / OpenInference trace export instead of hard-coding the Langfuse SDK.",
-        "refs": [
-          "#1884"
-        ]
-      },
-      {
         "title": "Ollama & Hugging Face listings",
         "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
         "refs": [
