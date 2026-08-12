@@ -253,18 +253,23 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
 
 
 @pytest.mark.skipif(
-    not (_ON_CI and shutil.which("update-ca-certificates")),
-    reason="mutates the real system CA trust store via update-ca-certificates — CI-only (ephemeral runner), Debian/Ubuntu only",
+    not (_ON_CI and shutil.which("update-ca-certificates") and shutil.which("sudo")),
+    reason="mutates the real system CA trust store via sudo update-ca-certificates — CI-only (ephemeral runner), Debian/Ubuntu only",
 )
 def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_path):
     ca_cert, ca_key = _make_ca()
     leaf_cert, leaf_key = _make_leaf(ca_cert, ca_key)
     cert_path = tmp_path / "leaf.pem"
     key_path = tmp_path / "leaf.key"
+    generated_ca_path = tmp_path / "ca.pem"  # writable by this (non-root) test process
     cert_path.write_bytes(_pem(leaf_cert))
     key_path.write_bytes(_pem_key(leaf_key))
+    generated_ca_path.write_bytes(_pem(ca_cert))
 
     os.environ.pop("SSL_CERT_FILE", None)  # rule out the unrelated env-var shortcut
+    # /usr/local/share/ca-certificates/ is root-owned — the CI runner user isn't root,
+    # so installing/removing here goes through sudo (GH-hosted ubuntu-latest runners
+    # grant the job user passwordless sudo for exactly this kind of setup step).
     installed_ca_path = "/usr/local/share/ca-certificates/protoagent-test-ca.crt"
 
     with _serve_tls(str(cert_path), str(key_path)) as port:
@@ -273,10 +278,11 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
         with pytest.raises(httpx.ConnectError):
             httpx.get(f"https://localhost:{port}/", timeout=5)
 
-        with open(installed_ca_path, "wb") as f:
-            f.write(_pem(ca_cert))
+        subprocess.run(
+            ["sudo", "cp", str(generated_ca_path), installed_ca_path], check=True, capture_output=True, text=True
+        )
         try:
-            subprocess.run(["update-ca-certificates"], check=True, capture_output=True, text=True)
+            subprocess.run(["sudo", "update-ca-certificates"], check=True, capture_output=True, text=True)
 
             with pytest.raises(httpx.ConnectError):  # still fails — the CA install alone isn't enough
                 httpx.get(f"https://localhost:{port}/", timeout=5)
@@ -286,5 +292,5 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
             resp = httpx.get(f"https://localhost:{port}/", timeout=5)
             assert resp.status_code == 200
         finally:
-            os.remove(installed_ca_path)
-            subprocess.run(["update-ca-certificates"], check=False, capture_output=True, text=True)
+            subprocess.run(["sudo", "rm", "-f", installed_ca_path], check=False, capture_output=True, text=True)
+            subprocess.run(["sudo", "update-ca-certificates"], check=False, capture_output=True, text=True)
