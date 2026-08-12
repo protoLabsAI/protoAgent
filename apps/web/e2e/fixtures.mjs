@@ -523,6 +523,12 @@ const MARKDOWN_SMOKE_ANSWER = [
   // white-space:pre re-assertion in chat.css; a [data-streamdown] schema drift that drops it
   // collapses all four lines onto one forever-scrolling line — see markdown-smoke.spec.ts).
   "```ts",
+  "function demo(items: string[]) {",
+  "  if (items.length) {",
+  "    return items.map((s) => s.trim());",
+  "  }",
+  "  return [];",
+  "}",
   "export const add = (a: number, b: number): number => a + b;",
   "export const sub = (a: number, b: number): number => a - b;",
   "export const mul = (a: number, b: number): number => a * b;",

@@ -38,7 +38,16 @@ test("full markdown surface renders (structure + chrome)", async ({ page }, test
   await expect(tsPre).toBeVisible();
   const tsWhiteSpace = await tsPre.evaluate((el) => getComputedStyle(el).whiteSpace);
   expect(tsWhiteSpace).toMatch(/^pre/);
-  await expect(tsPre.locator("code > span")).toHaveCount(4);
+  // …but computed `white-space` alone cannot catch #2612: streamdown emits one <span> per
+  // LINE with no newline text nodes between them, so the lines flow together while
+  // `white-space` still reports `pre` and the span count still matches. Assert the property
+  // that actually matters — the RENDERED text keeps its line breaks AND its indentation.
+  // (The fixture block is indented on purpose; a flush-left fixture cannot fail this.)
+  const rendered = await tsPre.evaluate((el) => (el as HTMLElement).innerText);
+  expect(rendered).toContain("function demo(items: string[]) {\n");
+  expect(rendered).toContain("\n  if (items.length) {\n");
+  expect(rendered).toContain("\n    return items.map((s) => s.trim());\n");
+  await expect(tsPre.locator("code > span")).toHaveCount(10); // 6 indented lines + 4 exports
   await expect(md.locator("table")).toBeVisible();
   await expect(md.locator("table td").first()).toContainText("alpha");
   await expect(md.locator('[data-streamdown="horizontal-rule"]')).toBeVisible();

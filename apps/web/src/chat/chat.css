@@ -111,6 +111,14 @@
 .chat-session-slot .pl-markdown [data-streamdown="code-block-body"] code {
   white-space: pre;
 }
+/* …but `white-space: pre` only preserves whitespace that EXISTS in the DOM, and streamdown
+   emits ONE <span> PER LINE with no newline text nodes between them (#2612). With the spans
+   left inline the lines flow together — indentation survives, line breaks do not, which is
+   why re-asserting `white-space` alone (#2546) fixed only half the bug. Make each line span
+   a block so the line structure renders. */
+.chat-session-slot .pl-markdown [data-streamdown="code-block-body"] code > span {
+  display: block;
+}
 /* A no-language fence still renders an empty ~32px header band — hide it. The copy action lives
    in its own cluster (sibling to the header, not inside it on the current schema); float that
    cluster over the code's top-right instead of reserving a row. `:has()` pins the float to the
