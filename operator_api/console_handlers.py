@@ -30,7 +30,7 @@ from operator_api.subagents import (
     run_manual_subagent_batch as _operator_run_manual_subagent_batch,
 )
 from runtime.state import STATE
-from server import AGENT_NAME_ENV, _event_bus, _resolve_operator_project_root
+from server import _event_bus, _resolve_operator_project_root
 
 log = logging.getLogger("protoagent.server")
 
@@ -704,12 +704,14 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     # mandatory — the 0.3 `message/send` 404s with -32601. Mirrors the
     # scheduler's fire (scheduler/local.py).
     headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-    bearer = (
-        (STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")
-    ).strip()
+    # Present what the guard actually requires, rather than re-reading config + env here
+    # with this call site's own precedence — that duplication is what let the agent card
+    # advertise a credential the server never enforced (#2620).
+    from a2a_impl.auth import inbound_credentials
+
+    bearer, api_key = inbound_credentials()
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
-    api_key = os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", "").strip()
     if api_key:
         headers["X-API-Key"] = api_key
     mid = str(uuid4())

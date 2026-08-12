@@ -462,50 +462,12 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             # Fall through to the normal bearer/X-API-Key check below — a
             # server-to-server caller with an Authorization header still passes.
 
-        # X-API-Key (legacy) — enforced only when configured.
-        api_key = _API_KEY[0]
-        if api_key and not hmac.compare_digest(request.headers.get("x-api-key", "") or "", api_key):
-            return _unauthorized("Unauthorized")
-
-        # Bearer — enforced only when configured. Classify which credential matched
-        # (ADR 0066): the operator token → full access; a configured federation token →
-        # the /a2a + /v1 consumer surfaces only (the /api ceiling below denies it the
-        # operator surface). Open mode + single-token mode resolve to operator (R3
-        # backward-compat: unset federation_token ⇒ this is the old single-token check).
-        active = _BEARER[0]
-        fed = _FEDERATION[0]
+        # Configured credentials are ALTERNATIVES — satisfy any one (#2620).
         tier = "operator"
-        if active:
-            header = request.headers.get("Authorization", "")
-            if not header.startswith("Bearer "):
-                return _unauthorized("Unauthorized: expected 'Authorization: Bearer <token>'")
-            token = header[len("Bearer ") :]
-            # Constant-time compare against each configured secret; classify by which
-            # matched. Trust = the matched secret, never the path/Origin/loopback (R5).
-            fleet = _FLEET[0]
-            is_operator = hmac.compare_digest(token, active)
-            is_federation = fed is not None and hmac.compare_digest(token, fed)
-            is_fleet = fleet is not None and hmac.compare_digest(token, fleet)
-            if is_operator:
-                tier = "operator"
-            elif is_federation:
-                tier = "federation"
-            elif is_fleet:
-                # Fleet service token (ADR 0089): the hub already authenticated the external
-                # caller and presents members with this internal, loopback-only credential.
-                # Operator tier — a paired device reaches sister agents without the member
-                # ever seeing (or being able to verify) the device token. Checked before the
-                # device registry so the intra-fleet hot path is a single constant-time
-                # compare and never touches disk.
-                tier = "operator"
-            elif _device_token_ok(token):
-                # A paired device (ADR 0087 D1) is the OPERATOR — it runs the full console
-                # and needs the same surface the desktop does. The point of per-device
-                # tokens is identity + revocation, not a reduced tier. Checked last so the
-                # shared-bearer path stays a single compare and never touches disk.
-                tier = "operator"
-            else:
-                return _unauthorized("Unauthorized: invalid bearer token")
+        if _API_KEY[0] or _BEARER[0]:
+            tier = _classify_request(request)
+            if tier is None:
+                return _unauthorized(_credential_error())
 
         # R1 path ceiling (ADR 0066): a federation credential is denied the /api operator
         # surface — otherwise the token split is cosmetic (it has RCE via
@@ -525,6 +487,88 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
 
         return await call_next(request)
+
+
+def _credential_error() -> str:
+    """The 401 detail, naming every credential this agent would have accepted."""
+    accepted = []
+    if _BEARER[0]:
+        accepted.append("'Authorization: Bearer <token>'")
+    if _API_KEY[0]:
+        accepted.append("'X-API-Key: <key>'")
+    if not accepted:  # unreachable — the caller only asks when something is configured
+        return "Unauthorized"
+    return "Unauthorized: expected " + " or ".join(accepted)
+
+
+def _classify_request(request) -> str | None:
+    """The trust tier this request's credential earns, or None if none matched.
+
+    **Alternatives, not a conjunction (#2620).** This used to be two sequential checks —
+    an X-API-Key guard, then a bearer guard — which made them an AND: with a legacy key
+    AND a bearer configured, neither credential alone was accepted, so turning on the
+    legacy key silently broke every bearer client.
+
+    That was never a decision. The two checks were added years apart, nothing documents a
+    conjunction (this module's own docstring lists them as parallel mechanisms), and A2A's
+    ``securityRequirements`` list means alternatives. It survived because every INTERNAL
+    caller — the scheduler and console self-invoke paths — sends both credentials, so only
+    an external client trusting the agent card could ever hit it. One did.
+
+    Matching stays constant-time per secret, and trust is still the matched secret alone —
+    never the path, Origin or loopback-ness (R5).
+    """
+    # Legacy X-API-Key ⇒ operator. Checked first: it's a single compare and the internal
+    # callers that still present it are the hot path.
+    api_key = _API_KEY[0]
+    if api_key:
+        presented = request.headers.get("x-api-key", "") or ""
+        if presented and hmac.compare_digest(presented, api_key):
+            return "operator"
+
+    active = _BEARER[0]
+    if not active:
+        return None  # api key was the only credential configured, and it didn't match
+
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    token = header[len("Bearer ") :]
+
+    # Classify by WHICH secret matched (ADR 0066): the operator token → full access; a
+    # configured federation token → the /a2a + /v1 consumer surfaces only (the R1 ceiling
+    # below denies it /api). Single-token mode resolves to operator (R3 back-compat).
+    fed, fleet = _FEDERATION[0], _FLEET[0]
+    if hmac.compare_digest(token, active):
+        return "operator"
+    if fed is not None and hmac.compare_digest(token, fed):
+        return "federation"
+    if fleet is not None and hmac.compare_digest(token, fleet):
+        # Fleet service token (ADR 0089): the hub already authenticated the external caller
+        # and presents members with this internal, loopback-only credential. Operator tier —
+        # a paired device reaches sister agents without the member ever seeing (or being
+        # able to verify) the device token. Before the device registry so the intra-fleet
+        # hot path stays a single constant-time compare and never touches disk.
+        return "operator"
+    if _device_token_ok(token):
+        # A paired device (ADR 0087 D1) is the OPERATOR — it runs the full console and needs
+        # the same surface the desktop does. Per-device tokens are identity + revocation,
+        # not a reduced tier. Last, so the shared-bearer path never touches disk.
+        return "operator"
+    return None
+
+
+def inbound_credentials() -> tuple[str, str]:
+    """``(bearer, api_key)`` — the credentials a caller must present to THIS agent.
+
+    The single source for anything that needs to *present* or *describe* this agent's
+    inbound auth: the agent card, the scheduler's self-invocation client, the console's
+    self-invoke path. Each of those used to re-read ``auth.token`` / ``A2A_AUTH_TOKEN`` /
+    ``<AGENT>_API_KEY`` for itself, with subtly different precedence — five derivations of
+    one fact, which is how the card came to advertise a credential the guard never
+    enforced (#2620). Read it from the guard and there is nothing left to drift.
+    """
+    return _BEARER[0] or "", _API_KEY[0] or ""
 
 
 def enforced_schemes() -> tuple[bool, bool]:

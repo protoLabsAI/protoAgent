@@ -219,7 +219,23 @@ def _spawn_report_index(job) -> None:
 
 
 def _bearer_configured() -> bool:
-    return bool(os.environ.get("A2A_AUTH_TOKEN", "") or (STATE.graph_config and STATE.graph_config.auth_token))
+    """Whether THIS server requires a bearer — read from the guard that enforces it.
+
+    This used to re-derive the answer from ``A2A_AUTH_TOKEN`` + ``graph_config.auth_token``,
+    which is a second derivation of a fact ``a2a_impl.auth`` already owns. It drifted:
+    the guard resolves those two sources with its own precedence and can be rotated live
+    via ``set_bearer_token``, so a card built from the env could advertise a credential the
+    server did not enforce (#2620).
+
+    ``auth.bearer_configured()`` exists for precisely this reason — ADR 0087 D6 learned the
+    same lesson from the other side (a client's cached token says nothing about what the
+    server accepts). Delegating here means the card, the bind guard and the middleware all
+    answer from one place. Safe at every call site: ``auth.install()`` runs before both the
+    card build and the bind guard in ``server._main``.
+    """
+    from a2a_impl import auth
+
+    return auth.bearer_configured()
 
 
 # Skill declarations (ADR-0006 addendum / #476). A skill MAY declare an
@@ -396,13 +412,15 @@ def _apply_real_security(card, pa) -> None:
       when ``<AGENT>_API_KEY`` is set. On a bearer-only agent — the normal deployment — a
       standards-following client is entitled to pick the advertised apiKey scheme, and gets
       401 from an agent that is healthy and correctly configured.
-    * **The two are an AND, not an OR.** ``A2AAuthMiddleware`` checks them independently and
-      sequentially, so with both configured NEITHER credential alone is accepted. The card
-      promised either would do.
+    * **The two behaved as an AND.** The guard checked them independently and sequentially,
+      so with both configured neither credential alone was accepted, while the card
+      promised either would do. That conjunction was accidental rather than chosen, and is
+      now genuinely an OR (see ``auth._classify_request``) — so the card's OR shape became
+      the truth instead of the lie.
 
-    A2A gives us both operators: the requirements list is OR, and multiple schemes inside
-    ONE requirement are AND. So the honest card is a single requirement naming exactly the
-    credentials this guard will check — and nothing when it checks none (open mode).
+    Each configured credential is therefore its own requirement: the A2A requirements list
+    is a set of alternatives, which is exactly what the guard now implements. An agent that
+    enforces nothing advertises nothing.
 
     Best-effort: a card that fails to rewrite is worse than one that does, but not worse
     than no card at all, so a proto shape change degrades to the builder's output rather
@@ -414,22 +432,20 @@ def _apply_real_security(card, pa) -> None:
 
     bearer, api_key = enforced_schemes()
     try:
-        schemes, required = {}, {}
+        schemes = {}
         if api_key:
             schemes[pa.API_KEY_SCHEME_NAME] = pa.api_key_scheme()
-            required[pa.API_KEY_SCHEME_NAME] = StringList(list=[])
         if bearer:
             schemes[pa.BEARER_SCHEME_NAME] = pa.bearer_scheme()
-            required[pa.BEARER_SCHEME_NAME] = StringList(list=[])
 
         card.ClearField("security_schemes")
         card.ClearField("security_requirements")
         for name, scheme in schemes.items():
             card.security_schemes[name].CopyFrom(scheme)
-        if required:
-            # ONE requirement holding every configured scheme = "satisfy all of these",
-            # which is what the middleware does. Two requirements would mean "either".
-            card.security_requirements.append(SecurityRequirement(schemes=required))
+            # One requirement PER credential — the requirements list is a set of
+            # alternatives, and any one of these now authenticates. (Naming several
+            # schemes inside a single requirement would mean "present all of them".)
+            card.security_requirements.append(SecurityRequirement(schemes={name: StringList(list=[])}))
     except Exception:  # noqa: BLE001 — never let card polish break /.well-known
         log.warning("[a2a] could not rewrite the card security block; serving the builder's", exc_info=True)
 

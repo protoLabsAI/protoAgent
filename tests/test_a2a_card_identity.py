@@ -186,15 +186,19 @@ def test_api_key_only_agent_advertises_only_the_api_key_scheme():
     assert _card(None, "key") == (["apiKey"], [["apiKey"]])
 
 
-def test_both_configured_is_advertised_as_AND_not_two_alternatives():
-    """The second lie, which nobody had hit yet: the middleware checks the two
-    independently and sequentially, so with both configured NEITHER credential alone is
-    accepted. Two requirements would promise "either"; one requirement naming both is
-    "satisfy all of these", which is what the server does."""
+def test_both_configured_is_advertised_as_two_alternatives():
+    """With both configured, EITHER credential authenticates, so the card lists two
+    requirements — a set of alternatives.
+
+    This assertion was briefly the opposite. The guard used to check the two credentials
+    sequentially, making them an accidental AND, and the first cut of this fix faithfully
+    documented that on the card. The conjunction was never a decision (see
+    `auth._classify_request`), so the semantics were corrected instead of enshrined —
+    naming both schemes inside ONE requirement would now be the lie."""
     schemes, reqs = _card("tok", "key")
 
     assert schemes == ["apiKey", "bearer"]
-    assert reqs == [["apiKey", "bearer"]], "two entries here would advertise OR — the server means AND"
+    assert sorted(reqs) == [["apiKey"], ["bearer"]], "one requirement each = alternatives"
 
 
 def test_open_mode_advertises_no_credential_at_all():

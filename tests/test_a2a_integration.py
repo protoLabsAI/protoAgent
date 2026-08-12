@@ -113,10 +113,9 @@ def test_agent_card_bearer_when_token_set(monkeypatch) -> None:
     assert scheme_keys == [{"bearer"}]
 
 
-def test_agent_card_requirement_names_every_credential_the_server_checks(monkeypatch) -> None:
-    """With BOTH configured the middleware requires both — it checks them independently
-    and sequentially. One requirement naming both is AND; two requirements would promise
-    'either', which is what the card used to say and the server never honoured."""
+def test_agent_card_lists_each_configured_credential_as_an_alternative(monkeypatch) -> None:
+    """With BOTH configured, either credential authenticates (#2620 flipped the guard's
+    accidental AND to a deliberate OR), so the card lists one requirement per scheme."""
     monkeypatch.setenv("A2A_AUTH_TOKEN", "secret-test-token")
     import server
 
@@ -125,8 +124,8 @@ def test_agent_card_requirement_names_every_credential_the_server_checks(monkeyp
 
     card = _card_json()
     assert set(card.get("securitySchemes", {})) == {"apiKey", "bearer"}
-    scheme_keys = [set(r.get("schemes", {}).keys()) for r in card.get("securityRequirements", [])]
-    assert scheme_keys == [{"apiKey", "bearer"}]
+    scheme_keys = sorted(set(r.get("schemes", {}).keys()) for r in card.get("securityRequirements", []))
+    assert scheme_keys == [{"apiKey"}, {"bearer"}]
 
 
 def test_agent_card_declares_exactly_the_extensions_it_emits() -> None:
