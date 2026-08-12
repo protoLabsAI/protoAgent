@@ -387,6 +387,25 @@ class KnowledgeMiddleware(AgentMiddleware):
         # the viewer can render a per-section context budget. The memory label
         # carries the id-attributed counts the injection log already tracks.
         parts: list[tuple[str, str]] = []
+
+        # A runtime toolset change, announced ONCE to the next turn (#2640). First in
+        # `parts` on purpose: it's an instruction to re-check a conclusion, and it is
+        # worthless after the model has already reasoned past it.
+        #
+        # Only on the SPECULATIVE-safe path — `record=False` is a prompt preview, and
+        # consuming the one-shot there would burn the announcement without a turn ever
+        # seeing it (the #2388 P3 preview reads the same composer).
+        #
+        # COUPLING, stated rather than hidden: this rides the knowledge middleware's
+        # injection path, so `middleware.knowledge: false` also silences the notice.
+        # That is the trade for zero collision risk — a second middleware returning
+        # `context` would race this one for the same state key.
+        if record:
+            from graph.tool_delta import format_delta, take_pending_delta
+
+            if (delta := take_pending_delta()) is not None and (note := format_delta(delta)):
+                parts.append(("Toolset changed", note))
+
         if memory_parts:
             bits = []
             if digest_ids:

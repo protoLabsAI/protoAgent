@@ -1110,6 +1110,16 @@ def create_agent_graph(
         # search_tools can drop here.
         all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
+    # Record the FINAL bound toolset so a runtime change is observable to the agent and
+    # not only to the process (#2640). Here, after every filter and append, is the only
+    # place the set is what the model will actually see. No-op on the first build and
+    # whenever nothing changed; when it did change, the next turn gets a one-shot note
+    # (KnowledgeMiddleware). Without this an agent mid-session keeps refusing work it
+    # can now do — the ADR 0096 spine ends at *use*, and nothing told it.
+    from graph.tool_delta import record_toolset
+
+    record_toolset(t.name for t in all_tools)
+
     # Composed as labeled parts (#2243 P2) so PromptCapture can persist the
     # stable prefix's section boundaries with the blob it hashes — the prompt
     # the model receives is exactly these texts joined (build_system_prompt is
