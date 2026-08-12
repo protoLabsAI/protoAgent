@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 import tempfile
 
 from .solve import Verdict
@@ -72,6 +73,13 @@ async def run_tests(
     # (ADR 0096 D3 — the legacy guard here is explicitly superseded by it).
     from infra.python_runtime import pytest_interpreter
 
+    if getattr(sys, "frozen", False):
+        # Same first-use install as the devkit: the candidate's tests run in the child,
+        # so the child needs the test runtime (#2638).
+        from runtime.python_install import ensure_test_runtime
+
+        if (ensure_err := ensure_test_runtime()) is not None:
+            return Verdict(passed=False, output=f"coder verifier unavailable — {ensure_err}")
     python_exe, interpreter_error = pytest_interpreter()
     if python_exe is None:
         return Verdict(passed=False, output=f"coder verifier unavailable — {interpreter_error}")

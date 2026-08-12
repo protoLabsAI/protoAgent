@@ -18,17 +18,6 @@ capabilities:
   network: []
   filesystem: scoped
 
-# `test_plugin` spawns `<python> -m pytest` (ADR 0096 D3). A source run has pytest
-# in its own venv, but the frozen desktop app does not: the app bundle carries no
-# pytest, and the managed runtime's baseline is the ADR 0092 *document* stack. So
-# declare it — the frozen dep path (and the Plugins panel's "Install deps") then
-# puts pytest in the managed runtime, which is what closes the self-building loop
-# on desktop. `runtime` scope (the default) is correct and deliberate: pytest is
-# only ever invoked as a SUBPROCESS of the managed interpreter, never imported
-# into the host process, so a `host` scope would refuse the frozen install for a
-# requirement that does not exist.
-requires_pip:
-  - "pytest>=8"
 
 # Config + Settings (ADR 0019) — where scaffolded plugins are written, and which
 # ACP coding delegate develop_plugin dispatches to (ADR 0096 D5).

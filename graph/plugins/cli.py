@@ -206,8 +206,11 @@ def run_plugin_cli(argv: list[str]) -> int:
             return 0
         if args.cmd == "install-deps":
             deps = installer.install_deps(args.id)
+            # "satisfied", not "installed": the function returns what ENDED UP available,
+            # which includes deps that were already there and needed no install. Claiming
+            # an install it didn't perform is how a no-op read as success (#2638).
             print(
-                f"✓ installed {len(deps)} dep(s) for {args.id}: {', '.join(deps)}"
+                f"✓ {len(deps)} dep(s) satisfied for {args.id}: {', '.join(deps)}"
                 if deps
                 else f"{args.id} declares no deps"
             )

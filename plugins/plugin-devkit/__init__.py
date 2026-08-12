@@ -415,8 +415,16 @@ def _test_interpreter() -> tuple[str | None, str | None]:
         return sys.executable, None
     try:
         from infra.python_runtime import pytest_interpreter
+        from runtime.python_install import ensure_test_runtime
     except Exception:  # noqa: BLE001 — ancient build without the runtime module
         return None, "no Python available to run pytest in this packaged build"
+    # A scaffolded suite needs pytest + the plugin's own imports (langchain-core, …) in
+    # the CHILD interpreter, and they can't ride `requires_pip` — see the note on
+    # TEST_RUNTIME_REQUIREMENTS. Install on first use so provisioning stays lean; this
+    # is a dist-info scan and a no-op once they're there.
+    err = ensure_test_runtime()
+    if err:
+        return None, err
     return pytest_interpreter()
 
 

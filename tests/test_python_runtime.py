@@ -340,6 +340,50 @@ def test_install_requirements_pips_into_provisioned_runtime(box, monkeypatch):
     assert st["managed"] is True
 
 
+def test_test_runtime_missing_reports_all_when_unprovisioned(box):
+    assert pi.test_runtime_missing() == pi.TEST_RUNTIME_REQUIREMENTS
+
+
+def test_test_runtime_missing_ignores_host_importability(box):
+    """The #2638 trap: every one of these IS importable in this process, and that must
+    not count — the child has separate site-packages."""
+    _make_python(pr.managed_python_install_dir())
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    (site / "pytest-9.1.1.dist-info").mkdir()
+    missing = pi.test_runtime_missing()
+    assert "pytest>=8" not in missing  # the child has it
+    assert "langchain-core>=0.2" in missing  # importable HERE, absent THERE
+
+
+def test_ensure_test_runtime_installs_only_what_is_missing(box, monkeypatch):
+    _make_python(pr.managed_python_install_dir())
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    for d in ("pytest-9.1.1", "pyyaml-6.0.2", "langchain_core-0.3.0", "fastapi-0.115.0"):
+        (site / f"{d}.dist-info").mkdir()
+    calls = []
+    monkeypatch.setattr(pi, "_pip_install", lambda exe, spec, *, what, timeout=600.0: calls.append(spec))
+    assert pi.ensure_test_runtime() is None
+    assert calls == [["--", "httpx>=0.27"]]  # only the one gap, not all five
+
+
+def test_ensure_test_runtime_is_a_noop_once_satisfied(box, monkeypatch):
+    _make_python(pr.managed_python_install_dir())
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    for spec in pi.TEST_RUNTIME_REQUIREMENTS:
+        name = spec.split(">")[0].replace("-", "_")
+        (site / f"{name}-1.0.dist-info").mkdir()
+    monkeypatch.setattr(pi, "_pip_install", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no pip")))
+    assert pi.ensure_test_runtime() is None  # second call costs a dist-info scan, nothing more
+
+
+def test_ensure_test_runtime_names_provisioning_when_absent(box):
+    err = pi.ensure_test_runtime()
+    assert err and "provisioned" in err and "Settings" in err
+
+
 def test_install_requirements_empty_is_noop(box, monkeypatch):
     _make_python(pr.managed_python_install_dir())
     monkeypatch.setattr(pi, "_pip_install", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not pip")))
