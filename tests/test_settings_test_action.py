@@ -35,7 +35,7 @@ def test_comms_manifests_declare_test():
     # The generic Test button (ADR 0029): telegram declares it via the chat_surface
     # wirer. (Discord ships as an external plugin now — its manifest is tested there.)
     for p in ("telegram",):
-        m = yaml.safe_load(Path(f"plugins/{p}/protoagent.plugin.yaml").read_text())
+        m = yaml.safe_load(Path(f"plugins/{p}/protoagent.plugin.yaml").read_text(encoding="utf-8"))
         assert m.get("test") is True, p
 
 

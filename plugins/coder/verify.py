@@ -72,9 +72,9 @@ async def run_tests(
         # Python to run the tests, so fail cleanly (same guard as execute_code).
         return Verdict(passed=False, output="coder verifier unavailable in the packaged desktop app (no standalone Python to run pytest)")
     with tempfile.TemporaryDirectory(prefix="coder_") as d:
-        with open(os.path.join(d, f"{solution_name}.py"), "w") as f:
+        with open(os.path.join(d, f"{solution_name}.py"), "w", encoding="utf-8") as f:
             f.write(code)
-        with open(os.path.join(d, f"test_{solution_name}.py"), "w") as f:
+        with open(os.path.join(d, f"test_{solution_name}.py"), "w", encoding="utf-8") as f:
             f.write(tests)
         # Scrubbed env (no host secrets leak into the test subprocess), but a freshly
         # spawned python.exe needs a handful of OS-essential vars to even start on Windows

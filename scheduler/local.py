@@ -64,7 +64,7 @@ def _acquire_jobs_lock(path: Path):
     try:
         import fcntl
 
-        fd = open(key + ".lock", "w")
+        fd = open(key + ".lock", "w", encoding="utf-8")
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:

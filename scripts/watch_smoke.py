@@ -190,7 +190,7 @@ def battery(port: int, work: Path) -> None:
 
     print("\n== create + validation ==", flush=True)
     never = str(work / "never.txt")
-    Path(never).write_text("nothing\n")
+    Path(never).write_text("nothing\n", encoding="utf-8")
     st, b = create(port, "v-ok", {"type": "data", "path": never, "contains": "NOPE"})
     check("the operator channel accepts a non-plugin verifier", st == 200 and b.get("ok"))
     st, b = create(port, "v-bad", {"type": "data", "path": never, "contains": "x"}, trigger="whenever")
@@ -212,9 +212,9 @@ def battery(port: int, work: Path) -> None:
     print("\n== lifecycle ==", flush=True)
     one, edge, mon, frozen = (str(work / n) for n in ("one.txt", "edge.txt", "mon.txt", "frozen.txt"))
     for p in (one, edge):
-        Path(p).write_text("waiting\n")
-    Path(mon).write_text("v1\n")
-    Path(frozen).write_text("frozen\n")
+        Path(p).write_text("waiting\n", encoding="utf-8")
+    Path(mon).write_text("v1\n", encoding="utf-8")
+    Path(frozen).write_text("frozen\n", encoding="utf-8")
 
     create(port, "one-shot", {"type": "data", "path": one, "contains": "READY"})
     create(port, "edge", {"type": "data", "path": edge, "contains": "READY"}, repeat=True)
@@ -224,14 +224,14 @@ def battery(port: int, work: Path) -> None:
     create(port, "slow", {"type": "data", "path": frozen, "contains": "never"}, interval_s=3600)
     wait_checks(port, "one-shot", 1)
 
-    Path(one).write_text("READY\n")
+    Path(one).write_text("READY\n", encoding="utf-8")
     w = wait_checks(port, "one-shot", 99)
     check("a one-shot tripwire finishes `met` and records the fire", bool(w and w["status"] == "met" and w["fire_count"] == 1), f"status={w['status'] if w else '-'}")
     frozen_at = w["check_count"] if w else 0
 
     check("a change monitor's FIRST check only establishes a baseline", watches(port)["monitor"]["fire_count"] == 0)
 
-    Path(edge).write_text("READY\n")
+    Path(edge).write_text("READY\n", encoding="utf-8")
     w = wait_checks(port, "edge", watches(port)["edge"]["check_count"] + 1)
     check("a repeating watch fires on the rising edge and stays active", w["fire_count"] == 1 and w["status"] == "active", f"fires={w['fire_count']}")
     w = wait_checks(port, "edge", w["check_count"] + 3, timeout=INTERVAL_S * 14)
@@ -240,9 +240,9 @@ def battery(port: int, work: Path) -> None:
         w["fire_count"] == 1,
         f"checks={w['check_count']} fires={w['fire_count']} (must stay 1 — each fire can enqueue a turn)",
     )
-    Path(edge).write_text("waiting\n")
+    Path(edge).write_text("waiting\n", encoding="utf-8")
     w = wait_checks(port, "edge", w["check_count"] + 1)
-    Path(edge).write_text("READY\n")
+    Path(edge).write_text("READY\n", encoding="utf-8")
     w = wait_checks(port, "edge", w["check_count"] + 1)
     check("the next rising edge fires again", w["fire_count"] == 2, f"fires={w['fire_count']}")
 
@@ -250,7 +250,7 @@ def battery(port: int, work: Path) -> None:
     check("a terminal watch is no longer polled", w is None or w["check_count"] == frozen_at, f"{frozen_at} -> {w['check_count'] if w else 'pruned'}")
 
     base = watches(port)["monitor"]["check_count"]
-    Path(mon).write_text("v2\n")
+    Path(mon).write_text("v2\n", encoding="utf-8")
     w = wait_checks(port, "monitor", base + 1)
     check("moving the evidence fires the monitor", w["fire_count"] == 1, f"fires={w['fire_count']}")
     w = wait_checks(port, "monitor", w["check_count"] + 2, timeout=INTERVAL_S * 10)
@@ -307,7 +307,7 @@ def battery(port: int, work: Path) -> None:
 def retention(port: int, work: Path, keep_h: float) -> None:
     print(f"\n== retention (keep_terminal_h={keep_h}h = {keep_h * 3600:.1f}s) ==", flush=True)
     hit = str(work / "hit.txt")
-    Path(hit).write_text("READY\n")
+    Path(hit).write_text("READY\n", encoding="utf-8")
     create(port, "terminal", {"type": "data", "path": hit, "contains": "READY"})
     w = wait_checks(port, "terminal", 99)
     check("the watch reached a terminal state", bool(w and w["status"] == "met"), f"status={w['status'] if w else 'gone'}")

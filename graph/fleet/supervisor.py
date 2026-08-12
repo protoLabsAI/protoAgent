@@ -278,7 +278,7 @@ def start(ident: str) -> dict:
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_offset = log_path.stat().st_size if log_path.exists() else 0
-        logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
+        logf = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — handed to the child; closed on its exit
         # Detached (ADR 0098): its own tree root, so it survives this CLI's exit
         # and stop()/shutdown_all() can take down the whole member tree later.
         proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, **detached_kwargs())

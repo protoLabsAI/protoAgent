@@ -50,7 +50,7 @@ def scan_file(path: Path) -> list[_Violation]:
         print(f"[check_audit_clean] File not found: {path}", file=sys.stderr)
         return violations
 
-    for lineno, raw_line in enumerate(path.read_text().splitlines(), start=1):
+    for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         raw_line = raw_line.strip()
         if not raw_line:
             continue

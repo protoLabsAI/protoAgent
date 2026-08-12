@@ -129,7 +129,7 @@ def _run_one_model(
     # operator already set.
     env.setdefault("A2A_AUTH_TOKEN", f"eval-sweep-{ts}")
     print(f"\n=== {model} :: booting on {base_url} (instance={instance}) ===")
-    log_f = open(log_path, "w")
+    log_f = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(
         [sys.executable, "-m", "server", "--port", str(port), "--ui", "none"],
         cwd=str(_PROJECT_ROOT),

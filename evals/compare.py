@@ -84,8 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     if len(argv) != 2:
         sys.stderr.write("usage: python -m evals.compare <old.json> <new.json>\n")
         return 2
-    old = json.loads(Path(argv[0]).read_text())
-    new = json.loads(Path(argv[1]).read_text())
+    old = json.loads(Path(argv[0]).read_text(encoding="utf-8"))
+    new = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
     print(compare_reports(old, new))
     return 0
 

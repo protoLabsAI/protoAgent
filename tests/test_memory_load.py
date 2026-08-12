@@ -188,7 +188,7 @@ def test_load_memory_skips_malformed_file(tmp_path):
 
     # Write a malformed JSON file
     bad_path = os.path.join(str(tmp_path), "bad.json")
-    with open(bad_path, "w") as fh:
+    with open(bad_path, "w", encoding="utf-8") as fh:
         fh.write("this is not json {{{")
 
     mw = _make_middleware()

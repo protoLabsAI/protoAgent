@@ -189,7 +189,7 @@ def _prune_secrets(name: str, keep_env: set[str] | None, secret_field: str | Non
         current.pop(SECRETS_SECTION, None)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".yaml.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         _yaml.safe_dump(current, f, sort_keys=False, default_flow_style=False)
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)

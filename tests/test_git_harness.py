@@ -134,7 +134,7 @@ async def test_prepare_stashes_leftovers_and_seeds_exclude(repo):
     assert "leftover" in (await _git(repo, "stash", "list"))
     exclude = await _git(repo, "rev-parse", "--git-path", "info/exclude")
     path = repo / exclude if not exclude.startswith("/") else exclude
-    assert ".proto/" in open(path).read()
+    assert ".proto/" in open(path, encoding="utf-8").read()
 
 
 async def test_prepare_keeps_branch_with_prior_commits(repo):

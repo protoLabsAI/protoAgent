@@ -142,7 +142,7 @@ def test_no_host_file_matches_from_dict(tmp_path):
     path = _agent_yaml(tmp_path, body)
     import yaml as _yaml
 
-    doc = _yaml.safe_load(open(path))
+    doc = _yaml.safe_load(open(path, encoding="utf-8"))
     via_yaml = LangGraphConfig.from_yaml(path)
     via_dict = LangGraphConfig.from_dict(doc, config_dir=tmp_path)
     import dataclasses

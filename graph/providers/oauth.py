@@ -382,7 +382,7 @@ def _jwt_is_expiring(access_token: str, skew_s: int) -> bool:
 
 def _read_codex_tokens(path: Path) -> dict[str, Any] | None:
     try:
-        doc = json.loads(path.read_text())
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     if not isinstance(doc, dict):
@@ -468,7 +468,7 @@ PROVENANCE_DEVICE_LOGIN = "device_login"
 
 def _read_codex_provenance(path: Path) -> str:
     try:
-        doc = json.loads(path.read_text())
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return ""
     return str(doc.get("provenance", "") or "") if isinstance(doc, dict) else ""

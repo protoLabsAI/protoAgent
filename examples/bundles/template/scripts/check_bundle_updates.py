@@ -49,7 +49,7 @@ def latest_tag(url: str) -> str | None:
 
 def main(manifest_path: str) -> int:
     path = Path(manifest_path)
-    lines = path.read_text().splitlines(keepends=True)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     changed = False
     for i, line in enumerate(lines):
         m = _MEMBER.match(line)
@@ -61,7 +61,7 @@ def main(manifest_path: str) -> int:
             print(f"bump: {m['id']} {m['ref']} -> {newest}")
             changed = True
     if changed:
-        path.write_text("".join(lines))
+        path.write_text("".join(lines), encoding="utf-8")
     else:
         print("all tag pins current")
     return 0

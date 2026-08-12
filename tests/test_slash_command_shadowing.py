@@ -15,7 +15,7 @@ import runtime.state as rs
 
 
 def test_web_research_skill_slash_does_not_collide_with_research_workflow():
-    text = Path("config/skills/web-research/SKILL.md").read_text()
+    text = Path("config/skills/web-research/SKILL.md").read_text(encoding="utf-8")
     slash = next(
         (ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.strip().startswith("slash:")),
         None,

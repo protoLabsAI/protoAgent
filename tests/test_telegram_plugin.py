@@ -13,7 +13,7 @@ from plugins.telegram import TelegramAdapter
 
 
 def test_manifest_is_a_comms_plugin():
-    m = yaml.safe_load(Path("plugins/telegram/protoagent.plugin.yaml").read_text())
+    m = yaml.safe_load(Path("plugins/telegram/protoagent.plugin.yaml").read_text(encoding="utf-8"))
     assert m["id"] == "telegram" and m["config_section"] == "telegram"
     assert "bot_token" in m["secrets"]
     keys = {s["key"] for s in m["settings"]}

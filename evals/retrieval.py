@@ -85,7 +85,7 @@ def ndcg_at_k(retrieved: list, relevant: Iterable, k: int) -> float:
 
 def load_gold(path: str | Path = GOLD_PATH) -> tuple[list[dict], list[dict]]:
     """Return ``(corpus, queries)`` from the gold YAML."""
-    doc = yaml.safe_load(Path(path).read_text())
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     return doc.get("corpus", []), doc.get("queries", [])
 
 
@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(report, indent=2))
+        Path(args.json_out).write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"\n  wrote {args.json_out}")
     print()
     return 0

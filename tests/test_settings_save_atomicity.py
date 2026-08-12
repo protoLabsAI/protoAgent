@@ -44,7 +44,7 @@ def isolated_config(monkeypatch, tmp_path: Path):
 
 
 def _read(p: Path):
-    return _yaml.safe_load(p.read_text()) if p.exists() else None
+    return _yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 def test_failed_reload_rolls_the_config_back(monkeypatch, isolated_config) -> None:

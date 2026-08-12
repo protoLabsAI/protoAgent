@@ -363,7 +363,7 @@ class TestCuratorRun:
         SkillCurator(index=idx, audit_path=audit, dry_run=False).run()
 
         assert os.path.exists(audit)
-        with open(audit) as fh:
+        with open(audit, encoding="utf-8") as fh:
             entry = json.loads(fh.readline())
         assert "run_id" in entry
         assert entry["dry_run"] is False

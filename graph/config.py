@@ -40,7 +40,7 @@ def _load_secrets_doc(config_dir: Path) -> dict:
     if not secrets_path.exists():
         return {}
     try:
-        with open(secrets_path) as f:
+        with open(secrets_path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except (OSError, yaml.YAMLError):
         return {}
@@ -56,7 +56,7 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
 
     agent_data: dict = {}
     if p.exists():
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             agent_data = yaml.safe_load(f) or {}
 
     # Host is the base; the agent leaf overlays it (agent wins). No host layer ⇒

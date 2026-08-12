@@ -632,7 +632,7 @@ def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base
         "skipped": sum(1 for r in results if r.skipped),
         "results": [asdict(r) for r in results],
     }
-    path.write_text(json.dumps(payload, indent=2))
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nReport: {path}")
 
 

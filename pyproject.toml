@@ -221,7 +221,19 @@ extend-exclude = [".venv", "apps", "build", "dist", "*.egg-info"]
 # pervasively uses are ignored rather than churned: lazy/late imports (E402),
 # semicolon/lambda style (E702/E731), and the bare-except guard form (E722 is
 # kept; bare `except:` is genuinely banned here).
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "PLW1514"]
+# PLW1514 (unspecified-encoding) is preview-only, and `explicit-preview-rules`
+# keeps that opt-in to THIS rule — no other unstable rule rides along.
+#
+# It earns the exception: text IO without an explicit encoding uses the locale code
+# page on Windows, which has now produced four separate user-visible bugs — CP1252
+# in every config and registry (#2521), a config read that turned "Café" into
+# "CafÃ©" in the agent switcher and the Fleet API (#2520), a friction ledger that
+# mojibaked its own summaries, and the CRLF sibling of the same defect (#2586,
+# #2596). Each was fixed one call site at a time; this is what stops the next one
+# being written.
+preview = true
+explicit-preview-rules = true
 ignore = [
   "E402",  # module-level import not at top — late/lazy imports are idiomatic here
   "E501",  # line-too-long — long, readable comment lines are intentional
