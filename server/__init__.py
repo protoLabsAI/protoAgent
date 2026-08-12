@@ -116,8 +116,8 @@ def _ensure_ca_bundle_env() -> None:
 
 
 def _ensure_os_trust_store() -> None:
-    """Let httpx (and anything else on the stdlib ``ssl`` module) trust what the
-    OS trusts, not just the bundled ``certifi`` root list.
+    """Let httpx (and urllib3/requests, if either is in play) trust what the OS
+    trusts, not just the bundled ``certifi`` root list.
 
     httpx always verifies via ``ssl.create_default_context(cafile=certifi.where())``
     — a private/enterprise CA an operator installed in the OS trust store (Windows

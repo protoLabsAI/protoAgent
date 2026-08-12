@@ -1,13 +1,14 @@
-"""httpx (and everything else on the stdlib ``ssl`` module) only ever verifies
-against the bundled ``certifi`` root list — a private CA an operator installed in
-the OS trust store is invisible to it even though the OS's own HTTP clients trust
-it fine, which broke A2A delegate calls to a peer behind an internal CA on the
-packaged Windows desktop (#2643). ``truststore.inject_into_ssl()`` fixes that by
-replacing ``ssl.SSLContext`` process-wide with one that verifies through the
-native OS trust APIs instead — these pin that the injection happens, never blocks
-boot, an untrusted chain still fails closed (no ``verify=False`` regression), and
-— Windows only, where the bug was reported — a CA installed in the OS store is
-genuinely trusted end-to-end through a real TLS handshake."""
+"""httpx only ever verifies against the bundled ``certifi`` root list — a private
+CA an operator installed in the OS trust store is invisible to it even though the
+OS's own HTTP clients trust it fine, which broke A2A delegate calls to a peer
+behind an internal CA on the packaged Windows desktop (#2643).
+``truststore.inject_into_ssl()`` fixes that by replacing ``ssl.SSLContext``
+(and the urllib3/requests references that hold their own copy of it) process-wide
+with one that verifies through the native OS trust APIs instead — these pin that
+the injection happens, never blocks boot, an untrusted chain still fails closed
+(no ``verify=False`` regression), and — Windows and Linux, CI-gated since both
+mutate the real trust store — a CA installed in the OS store is genuinely trusted
+end-to-end through a real TLS handshake."""
 
 from __future__ import annotations
 
@@ -256,7 +257,7 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
     not (_ON_CI and shutil.which("update-ca-certificates") and shutil.which("sudo")),
     reason="mutates the real system CA trust store via sudo update-ca-certificates — CI-only (ephemeral runner), Debian/Ubuntu only",
 )
-def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_path):
+def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_path, monkeypatch):
     ca_cert, ca_key = _make_ca()
     leaf_cert, leaf_key = _make_leaf(ca_cert, ca_key)
     cert_path = tmp_path / "leaf.pem"
@@ -266,7 +267,12 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
     key_path.write_bytes(_pem_key(leaf_key))
     generated_ca_path.write_bytes(_pem(ca_cert))
 
-    os.environ.pop("SSL_CERT_FILE", None)  # rule out the unrelated env-var shortcut
+    # Rule out the unrelated env-var shortcut (SSL_CERT_FILE) and its capath sibling
+    # (SSL_CERT_DIR) — both feed ssl.get_default_verify_paths(), which is exactly what
+    # this test needs to bypass to exercise the real system-store path. monkeypatch
+    # restores whatever was there after the test, unlike a raw os.environ.pop.
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
     # /usr/local/share/ca-certificates/ is root-owned — the CI runner user isn't root,
     # so installing/removing here goes through sudo (GH-hosted ubuntu-latest runners
     # grant the job user passwordless sudo for exactly this kind of setup step).
