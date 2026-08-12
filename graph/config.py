@@ -64,7 +64,14 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     if host_layer:
         # Surface silent shadowing of a box default by the agent leaf (issue #1459).
         _warn_shadowed_host_keys(host_layer, agent_data)
-    merged = _deep_merge_dicts(copy.deepcopy(host_layer), agent_data) if host_layer else agent_data
+        host_copy = copy.deepcopy(host_layer)
+        # Treat model name+provider as an atomic identity: if the agent leaf touches
+        # either key, suppress both from the host copy so they don't leak into an
+        # incompatible pair (#2622). api_base keeps per-field inheritance.
+        _suppress_host_model_identity(host_copy, agent_data)
+        merged = _deep_merge_dicts(host_copy, agent_data)
+    else:
+        merged = agent_data
 
     return merged, _load_secrets_doc(p.parent), True
 
@@ -151,6 +158,32 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
 
 
 # ── App→Host→Agent settings cascade (ADR 0047) ───────────────────────────────
+
+
+def _suppress_host_model_identity(host_copy: dict, agent_data: dict) -> None:
+    """Treat model name+provider as an atomic identity in the cascade (#2622).
+
+    If the agent leaf supplies EITHER ``model.name`` or ``model.provider``, clear
+    BOTH from the host-layer copy before the deep merge — they only validate as a
+    coherent pair, and a partial override (name-only or provider-only) produces an
+    unbuildable combination (e.g. ``provider=anthropic-oauth`` +
+    ``name=protolabs/smart``).
+
+    ``model.api_base`` is deliberately NOT cleared: an endpoint is not an identity
+    — a member legitimately overrides the model while reusing the box's gateway.
+    Omitted keys fall through to the App-tier dataclass defaults in ``from_dict``.
+    """
+    host_model = host_copy.get("model")
+    if not isinstance(host_model, dict):
+        return
+    agent_model = agent_data.get("model") or {}
+    if not isinstance(agent_model, dict):
+        return
+    if "name" in agent_model or "provider" in agent_model:
+        host_model.pop("name", None)
+        host_model.pop("provider", None)
+        if not host_model:
+            host_copy.pop("model", None)
 
 
 def _deep_merge_dicts(base: dict, overlay: dict) -> dict:

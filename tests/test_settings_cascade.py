@@ -693,6 +693,88 @@ def test_member_reset_inherits_the_mirrored_host_model(tmp_path, monkeypatch):
     assert cfg.model_provider == "openai-codex"
 
 
+# ── #2622: model name+provider treated as atomic identity in the cascade ─────────
+# A member that supplies only model.name must NOT inherit the host's model.provider
+# (they only validate as a coherent pair). api_base keeps per-field inheritance.
+
+
+def test_model_identity_member_name_only_does_not_inherit_host_provider(tmp_path, monkeypatch):
+    """r1: name-only override on the agent leaf must not pull the host's provider
+    through the merge — that produces an unbuildable pair (#2622).
+    Resolved model_provider must be the App default ("openai"), not "anthropic-oauth"."""
+    _host_yaml(
+        tmp_path,
+        """\
+        model:
+          provider: anthropic-oauth
+          name: claude-opus-4-6
+          api_base: https://api.anthropic.com/v1
+        """,
+        monkeypatch,
+    )
+    path = _agent_yaml(tmp_path, "model:\n  name: protolabs/smart\n")
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.model_name == "protolabs/smart"
+    assert cfg.model_provider == LangGraphConfig.model_provider  # App default ("openai")
+    assert cfg.model_provider != "anthropic-oauth"
+
+
+def test_model_identity_explicit_pair_preserved(tmp_path, monkeypatch):
+    """r2: an agent that supplies BOTH name and provider keeps its explicit pair
+    — the suppression only fires when the agent touches one without the other."""
+    _host_yaml(
+        tmp_path,
+        "model:\n  provider: openai\n  name: gpt-4o\n  api_base: https://api.openai.com/v1\n",
+        monkeypatch,
+    )
+    path = _agent_yaml(
+        tmp_path, "model:\n  provider: anthropic-oauth\n  name: claude-opus-4-6\n"
+    )
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.model_provider == "anthropic-oauth"
+    assert cfg.model_name == "claude-opus-4-6"
+
+
+def test_model_identity_no_model_section_inherits_host_wholesale(tmp_path, monkeypatch):
+    """r3: an agent with NO model section inherits the host model group wholesale
+    — the suppression only fires when the agent doc contains a model key."""
+    _host_yaml(
+        tmp_path,
+        """\
+        model:
+          provider: anthropic-oauth
+          name: claude-opus-4-6
+          api_base: https://api.anthropic.com/v1
+        """,
+        monkeypatch,
+    )
+    path = _agent_yaml(tmp_path, "goal:\n  enabled: true\n")
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.model_provider == "anthropic-oauth"
+    assert cfg.model_name == "claude-opus-4-6"
+    assert cfg.api_base == "https://api.anthropic.com/v1"
+
+
+def test_model_identity_api_base_inherits_per_field(tmp_path, monkeypatch):
+    """r4: api_base still inherits per-field from the host layer even when
+    name+provider are suppressed — an endpoint is not an identity."""
+    _host_yaml(
+        tmp_path,
+        """\
+        model:
+          provider: anthropic-oauth
+          name: claude-opus-4-6
+          api_base: https://my-gateway.example.com/v1
+        """,
+        monkeypatch,
+    )
+    path = _agent_yaml(tmp_path, "model:\n  name: protolabs/smart\n")
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.model_name == "protolabs/smart"
+    assert cfg.api_base == "https://my-gateway.example.com/v1"  # inherited from host
+    assert cfg.model_provider == LangGraphConfig.model_provider  # NOT "anthropic-oauth"
+
+
 def test_host_model_mirror_never_conjures_directories(tmp_path, monkeypatch):
     """A host-config path whose parent doesn't exist means "no host layer here"
     (read-only sidecars, test sentinels) — the mirror must not mkdir its way
