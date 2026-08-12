@@ -1,5 +1,36 @@
 [
   {
+    "version": "v0.134.0",
+    "date": "2026-08-12",
+    "changes": [
+      "Project onboarding config (#2555).",
+      "onboard_project tool: clone a GitHub repo and register it as a managed project, bounded by the operator-consented onboarding config section",
+      "Mix a gateway, a Claude subscription and a ChatGPT subscription across model slots.",
+      "The model dropdowns now offer every provider you're signed in to.",
+      "Pick any signed-in provider's model straight from the chat.",
+      "Recorded friction is readable at last — GET /api/friction (#2595).",
+      "Marking a draft PR ready for review now triggers the Windows tests job (#2455).",
+      "Agent names with non-ASCII characters no longer render as mojibake (#2520).",
+      "The whole class is now a build failure, not a bug report.",
+      "protoagent config set no longer writes credentials in plaintext into the tracked config YAML (#2575).",
+      "protoagent up and protoagent status no longer mistake a stranger's listener for your server (#2576).",
+      "/v1/chat/completions now reports a failed turn as an HTTP error instead of a successful completion (#2578).",
+      "protoagent model use no longer invents an API key for a gateway that needs a real one (#2579).",
+      "protoagent model use --key and the Hermes preset store the credential in secrets.yaml, not the tracked config YAML (#2575).",
+      "An agent on a Claude subscription no longer dies when its own coders refresh the login (#2582).",
+      "Purging a fleet member no longer fails with a bare 500 after already stopping it (#2583).",
+      "POST /api/restart restarts the server on Windows instead of killing it (#2585).",
+      "write_file writes the line endings it was asked for, and read_file no longer hides it when it didn't (#2586).",
+      "edit_file no longer converts a whole CRLF file to LF as a side effect of one edit.",
+      "A busy fleet member can no longer freeze the whole console (#2590).",
+      "A turn that fails is now recorded in the conversation, instead of vanishing from it (#2593).",
+      "Config and registry files written on Windows are no longer silently converted to CRLF (#2596).",
+      "A config section that would be invisible in Settings now fails its test with a message saying so (#2598).",
+      "The changelog gate now checks a fragment will actually reach the release notes, not just that it exists (#2600).",
+      "Release PRs pass the changelog gate again."
+    ]
+  },
+  {
     "version": "v0.133.0",
     "date": "2026-08-11",
     "changes": [

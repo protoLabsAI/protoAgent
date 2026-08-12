@@ -15,6 +15,283 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.134.0] - 2026-08-12
+
+### Added
+- **Project onboarding config (#2555).** `onboarding` config section: `enabled`, `root`, `allow` globs, `write_default` — the operator-consented space for agent-driven project onboarding.
+- `onboard_project` tool: clone a GitHub repo and register it as a managed project, bounded by the operator-consented `onboarding` config section. Refusal paths name the bound crossed.
+
+- **Mix a gateway, a Claude subscription and a ChatGPT subscription across model slots.**
+  Every slot that takes a model name — fallbacks, the auxiliary model, compaction, goal
+  evaluation, subagents, and your `/model` favorites — can now name its own provider:
+  `anthropic-oauth:claude-sonnet-5`, `openai-codex:gpt-5.6-sol`, `gateway:protolabs/coder`.
+  Slots used to inherit whatever `model.provider` was, so holding all three accounts
+  still meant running everything on one of them. Now you can put Claude on review, Codex
+  on code and the gateway on cheap bulk work at the same time — and because the `/model`
+  quick-switch resolves favorites the same way, a pinned favorite from another provider
+  switches the chat's lane too. Existing unprefixed slot values are untouched.
+
+- **The model dropdowns now offer every provider you're signed in to.** Slot settings —
+  fallbacks, the auxiliary model, compaction, goal evaluation and your `/model`
+  favorites — used to list only the currently-configured provider's models, so holding a
+  gateway key *and* a Claude subscription *and* a ChatGPT subscription still meant
+  picking from one of them. They now list all three, each entry naming its lane
+  (`anthropic-oauth:claude-sonnet-5`), which is also what makes a saved choice survive a
+  later provider switch. A lane you can't use yet is shown with the reason rather than
+  quietly left out, and one expired credential no longer blanks the whole list — the
+  lane that's down says so and the others still work. `model.name` is unchanged: the
+  main model still belongs to `model.provider`.
+
+- **Pick any signed-in provider's model straight from the chat.** The composer's model
+  menu and `/model` used to offer only the configured provider's models; they now span
+  every lane you're signed in to, so you can put this tab on Claude while the agent's
+  default stays on the gateway. The menu groups models under a heading per account with
+  a divider between, and each row is just the model name — the routing prefix stays
+  behind the scenes, so favorites pinned from different providers read as one clean
+  list. `/model claude-sonnet-5` finds the right one without you typing the prefix.
+
+- **Recorded friction is readable at last — `GET /api/friction` (#2595).** The `friction`
+  plugin gives agents `record_friction`, and they use it: the entries land in
+  `friction.jsonl` and, until now, nothing ever read them. One agent's log held two
+  filable defects and a capability request repeated five times, all sitting unseen for
+  weeks — found only because an operator eventually opened the file by hand. The text the
+  plugin itself writes is *"candidate for a first-class tool"*, so it was always meant to
+  feed a triage loop that didn't exist. The new endpoint returns entries newest-first and,
+  by default, **grouped**: five identical escape-hatch reaches read as one item with
+  `count: 5`, which is what makes the list actionable rather than noise. Each group keeps
+  the worst severity seen and a first/last-seen window. The ledger is also **bounded** now
+  (it grew forever), and it is written and read as UTF-8, so a summary quoting an error
+  with an em dash or a non-ASCII path survives on Windows.
+
+### Fixed
+- **Marking a draft PR ready for review now triggers the Windows tests job (#2455).** The
+  `checks.yml` `pull_request` trigger had no `types:` key, so it only fired on `opened`,
+  `synchronize`, and `reopened` (GitHub's implicit defaults) — not `ready_for_review`. A PR
+  whose last push happened while it was a draft would permanently show "Windows tests (native) →
+  skipping", and once #2455 promotes that job to required, such PRs could merge with the
+  required check never having run. Fixed by adding `types: [opened, synchronize, reopened,
+  ready_for_review]` to the trigger; the existing draft guard and `concurrency` cancel-in-progress
+  are unchanged.
+
+- **Agent names with non-ASCII characters no longer render as mojibake (#2520).** Saving an
+  agent called `PA Windows Lifecycle Café` stored the name correctly, then showed
+  `PA Windows Lifecycle CafÃ©` in the header, the agent switcher and the Fleet API. The
+  config file was fine; the *read* was not — `graph/config.py` opened it in text mode
+  without naming an encoding, so on Windows it was decoded with the locale code page
+  (CP1252) and `Café` became `CafÃ©` in memory. That string then flowed into the fleet
+  label and was re-encoded on the way out, producing the double-encoded bytes an operator
+  finally traced by hand. The read now names UTF-8, as does the sibling read of
+  `secrets.yaml` — where the same defect would have silently mangled a credential
+  containing a non-ASCII character into one that no longer matches.
+- **The whole class is now a build failure, not a bug report.** Text IO without an explicit
+  encoding has produced four separate user-visible defects, each fixed one call site at a
+  time. Ruff's `unspecified-encoding` rule is enabled repo-wide and the remaining 36 call
+  sites are fixed, so the next one fails CI instead of shipping to a Windows user.
+
+- **`protoagent config set` no longer writes credentials in plaintext into the tracked
+  config YAML (#2575).** Setting `auth.token` or `model.api_key` with no server running
+  took a disk-only path that merged the value straight into `langgraph-config.yaml` and
+  never created `config/secrets.yaml` — the opposite of the documented contract that those
+  keys are *"never written to the tracked config YAML"*. The belt-and-suspenders half
+  ("every config save also strips any secret keys the main YAML might still carry, so a
+  checkout converges to secret-free") never fired on this path either, so a hand-seeded key
+  stayed inline through every later save. The headless write now takes the same route a
+  live server takes: secret-typed keys are split out and merged into the owner-only (0600)
+  `secrets.yaml`, the main document is scrubbed of any secret it still carried, and the
+  command reports which file each key actually landed in instead of always claiming
+  `config.yaml`. A blank secret value still means "leave the stored one unchanged", and now
+  says so rather than reporting a write it didn't make.
+
+- **`protoagent up` and `protoagent status` no longer mistake a stranger's listener for
+  your server (#2576).** Both decided "is this instance's server running?" with a bare TCP
+  probe of the port, so any unrelated process holding it — a container publishing 7870, a
+  hand-started `serve` — made `up` print `already running` and exit **0 without starting
+  anything**, and `status` report `running … (pid ?, v?)` with no pidfile on disk at all.
+  Following the CLI guide on a host that already used the port therefore looked like a
+  clean install right up until the first turn. Both verbs now agree with `down`, which
+  already got this right: running means *the pidfile names a living process*. A foreign
+  listener makes `up` refuse with a non-zero exit and `status` report stopped, each saying
+  plainly that the port is held by something it didn't start. `up` also refuses to launch a
+  second server when this instance already tracks one on another port, rather than
+  clobbering the pidfile and orphaning the first; and `status` distinguishes a server that
+  is still binding (live pid, port not yet accepting) from one that is down.
+
+- **`/v1/chat/completions` now reports a failed turn as an HTTP error instead of a
+  successful completion (#2578).** When a turn raised, the endpoint answered **HTTP 200**
+  with the exception text as the assistant's `content` and `finish_reason: "stop"` — no
+  `error` object, no non-2xx status. Every OpenAI SDK client therefore counted a hard
+  upstream failure as a real answer: a gateway rejecting the API key came back as an
+  assistant message reading `**Error:** Error code: 401 …`, and anything downstream
+  (an eval harness, a LiteLLM route, OpenWebUI) stored or acted on it as the model's reply.
+  Failures now return an OpenAI-shaped `{"error": {message, type, code, upstream_status}}`
+  body with a real status: a rate limit is **mirrored as 429** so client backoff works,
+  any other upstream HTTP failure becomes **502** — deliberately not the upstream status,
+  because a 401 from this endpoint already means *your protoAgent bearer is bad* and
+  echoing one would send callers to re-check the wrong credential — and a fault with no
+  HTTP status of its own is a **500**. `upstream_status` carries the original code. The
+  streaming path is covered too: the turn completes before the stream opens, so a failed
+  streaming request gets the same status rather than an SSE frame that reads as success.
+  The console is unchanged — it still renders the error inline as a chat bubble.
+
+- **`protoagent model use` no longer invents an API key for a gateway that needs a real one
+  (#2579).** Pointing at any endpoint without `--key` wrote the literal placeholder
+  `api_key: "local"` — correct for a keyless server on this machine, actively harmful for a
+  remote one. Because the value was non-blank, `protoagent setup` then read it as "a key is
+  configured", printed `setup: complete` and wrote `.setup-complete`; nothing warned at any
+  point and the first user turn failed with a 401. Following the CLI guide against a keyed
+  gateway therefore produced an agent that called itself fully set up and could not answer a
+  single message. The placeholder is now written only for a loopback base URL. For anything
+  else with no credential in the config, `secrets.yaml`, or `OPENAI_API_KEY`, the endpoint
+  is still saved but the command says plainly that no key is configured and how to set one —
+  and `setup` fails with an actionable reason instead of certifying a broken agent. Re-running
+  `model use` against a remote endpoint also clears a placeholder left behind by the old
+  behavior, so an instance already in this state heals itself.
+- **`protoagent model use --key` and the Hermes preset store the credential in
+  `secrets.yaml`, not the tracked config YAML (#2575).** Both wrote a real API key inline
+  into `langgraph-config.yaml` — the file operators fork, export and check in. It now goes
+  to the owner-only (0600) overlay like every other secret.
+
+- **An agent on a Claude subscription no longer dies when its own coders refresh the login
+  (#2582).** The OAuth access token was resolved once, at graph build, and frozen into the
+  client for the life of the process. Anything that rotated the shared Claude credential
+  then broke the agent permanently — and this setup rotates it *by doing its job*: a
+  board/PM agent that dispatches Claude Code coders shares their keychain login, and each
+  coder run can refresh it, invalidating the access token the agent is still presenting.
+  Every model call came back `401 … OAuth access token has been revoked`, while
+  `GET /api/config/oauth-status` — which reads the credential store live — went on
+  reporting a healthy signed-in session. The introspection surface and the running graph
+  disagreeing is what made this so hard to diagnose; the only cure was restarting the
+  agent. The credential is now re-read before each request and pushed into the live client,
+  so a rotation is picked up within seconds and no restart is needed. Resolution is cached
+  briefly, because reading the store can shell out to the macOS Keychain and a turn makes
+  tens of calls; a transient failure to read it keeps the working token rather than taking
+  down a live turn.
+
+- **Purging a fleet member no longer fails with a bare 500 after already stopping it
+  (#2583).** `DELETE /api/fleet/{member}?purge=true` stops the member and then deletes its
+  workspace. On Windows a member's own files can stay open for a moment after its process is
+  gone — handles are released asynchronously, and a scanner can hold them a little longer —
+  so the delete lost that race and `rmtree`'s error escaped as a generic 500. The member was
+  by then stopped, its port freed and its record cleared, with only the workspace left behind:
+  a terminal-looking failure on a half-completed destructive operation, which reproduced in
+  three separate Windows test rounds and always succeeded when repeated by hand. The delete
+  now retries with a short backoff (and clears the read-only bit, which makes `rmtree` raise
+  on Windows even when nothing holds the file), so the ordinary case just works. If the tree
+  genuinely won't go, the endpoint answers **409** with a message naming exactly what
+  happened — the agent is stopped, the workspace remains, retrying finishes it — instead of a
+  status that says only "something failed".
+
+- **`POST /api/restart` restarts the server on Windows instead of killing it (#2585).** The
+  endpoint answered `202 Accepted` and logged that it would drain and re-exec, then the
+  process vanished and nothing came back — port free, no server, recovery only by launching
+  the binary by hand. The drain was triggered by the server signalling itself
+  (`os.kill(getpid(), SIGINT)`), which is correct on POSIX and fatal on Windows: `os.kill`
+  there delivers only `CTRL_C_EVENT`/`CTRL_BREAK_EVENT` as signals and turns every other
+  value, `SIGINT` included, into `TerminateProcess`. So the server was killed outright at
+  exactly the point it was meant to wind down, its serve call never returned, and the
+  re-exec that follows it never ran. The re-exec logic itself was fine and already
+  frozen-aware, which is what made this look mysterious. The restart now asks the live
+  uvicorn server to exit — what uvicorn's own signal handler does, minus the signal — so
+  the drain, the graceful timeout and the re-exec behave identically on every platform, and
+  the path can be exercised in tests off Windows for the first time.
+
+- **`write_file` writes the line endings it was asked for, and `read_file` no longer hides it
+  when it didn't (#2586).** Both tools used Python's text mode, which rewrites `\n` to
+  `os.linesep` on write and `\r\n` back to `\n` on read. On Windows those cancelled out, so an
+  agent told to write LF-only content and verify it read its own request back verbatim and
+  reported a byte-exact match — while every requested `0A` had become `0D0A` on disk. The
+  masked verification was the worse half: the tool actively confirmed a corruption it had just
+  introduced. Reads and writes are now verbatim on every platform, so content round-trips
+  byte-for-byte and a check against the real bytes means something. Content that genuinely
+  wants CRLF still gets CRLF — nothing is normalized in either direction.
+- **`edit_file` no longer converts a whole CRLF file to LF as a side effect of one edit.** With
+  verbatim reads, a CRLF file's text carries `\r\n` while a model's `old` almost always uses
+  bare `\n`. Rather than normalize the file to make the match work — which would rewrite every
+  line ending in it — the needle is matched in the file's own convention, so a one-line edit
+  changes one line. The uniqueness guard counts matches in that same converted form, so an
+  ambiguous edit is still refused.
+
+- **A busy fleet member can no longer freeze the whole console (#2590).** The hub's slug proxy
+  built its HTTP client with no read timeout, so once a member accepted a connection the hub
+  would wait forever for a response. A member that stalls briefly — a board agent running the
+  repo's gate, say — was enough: the board view re-fetches on a ~3s poll, every poll parked
+  another connection, and once six were parked the browser's per-origin connection cap meant it
+  could issue **no** request to the console origin at all. A transient member stall became a
+  frozen app whose only recovery was force-quitting, which then had its own cost — the
+  relaunched hub found its port still held and silently fell back to an ephemeral one. The
+  comment above the client claimed the finite *connect* timeout prevented exactly this; it could
+  not, because "accepts then stalls" is the read phase, not the handshake.
+  Proxied requests now pick a read timeout per request, because httpx applies one to every
+  socket read — including the wait for the next SSE event, so a single global value cannot serve
+  every shape of traffic. Streams (`/a2a`, `/api/events`, or any request asking for
+  `text/event-stream`) stay unbounded as before; a whole agent turn posted to `/api/chat` gets a
+  long bound; everything else — plugin views, API reads, the polls that caused this — gets a
+  short one. A member that stalls now returns **504** so the panel can show a real error,
+  instead of parking the socket.
+
+- **A turn that fails is now recorded in the conversation, instead of vanishing from it
+  (#2593).** When a turn died on an exception the graph had already checkpointed your
+  message, the error went back to the caller, and nothing ever wrote it to the thread — so
+  the session held the request with no answer and no sign one had been attempted. An export
+  of that conversation read `message_count: 1`. The practical cost was worse than a missing
+  error bubble: a later turn on the same session had no idea the earlier one never ran, so
+  an instruction that died to a gateway timeout was silently dropped and only resurfaced
+  hours later when the session was reused. The failure is now appended to the thread as an
+  assistant entry, so it shows in history, in `/export`, and in the context the next turn
+  reads — tagged so a surface can render it as an error rather than as the agent's answer.
+  Both the streaming and non-streaming paths record the same thing, so an exported
+  transcript no longer depends on which one ran. Recording is best-effort by construction:
+  it happens on the failure path, so a problem there can never replace the error it
+  describes.
+
+- **Config and registry files written on Windows are no longer silently converted to CRLF
+  (#2596).** `atomic_write` — which writes every config, registry, workspace record and
+  snapshot protoAgent produces — opened its temp file in text mode with the default
+  newline handling, so every `\n` became `\r\n` on Windows regardless of what the caller
+  composed. Nothing broke, since YAML and JSON parse either way, but identical input
+  produced different bytes per platform: whole-file diffs on a checkout shared between a
+  Windows and a mac machine, churn in agent snapshots moving between them, and a spurious
+  difference to anything comparing or hashing a config to decide whether it changed. Line
+  endings now pass through exactly as the caller wrote them. This completes the pair with
+  the `write_file` fix (#2586) and the encoding fix before it (#2521), which corrected the
+  same function's encoding but left its newline translation in place.
+
+- **A config section that would be invisible in Settings now fails its test with a message
+  saying so (#2598).** `FIELDS` drives the console Settings surface, so a section that
+  exists in the config and round-trips through YAML but has no `FIELDS` entries renders
+  nowhere — the feature ships and no operator can find or enable it without hand-editing
+  YAML. The golden that should have caught this asserted a set *equality*, with the
+  exemption list written inline in the test body, so the cheapest way to make it green was
+  to append the new section name to that literal — which is exactly what happened once, and
+  the feature was caught by review rather than by any test. The exemption list now lives
+  next to `FIELDS` as `SETTINGS_EXEMPT_SECTIONS`, where widening it is a deliberate,
+  reviewable edit that asks you to justify why the shape can't be a `Field` (a nested dict
+  or list of dicts — the four current members are all genuinely one of those). The
+  assertion is split in three so each failure names its own consequence — unreachable from
+  Settings, declared but never emitted, or an exemption for a section that no longer
+  exists — instead of printing a set diff that reads as "make the sets match".
+
+- **The changelog gate now checks a fragment will actually reach the release notes, not
+  just that it exists (#2600).** `Changelog entry` only asserted that a
+  `changelog.d/<pr>.<kind>.md` file was added. A fragment whose text isn't a top-level
+  `- ` bullet passed that check, collated into `[Unreleased]` fine, and then contributed
+  nothing to the marketing changelog — `scaffold` derives entries from top-level bullets
+  only, and a release whose bullets all fail to parse is omitted from `/changelog`
+  entirely. So one malformed fragment could cost a whole version its entry, with green CI
+  at the PR and the failure surfacing days later to whoever cut the release. The gate now
+  validates each fragment the PR adds with the collator's own parser
+  (`changelog.py lint-fragments`, stdlib-only so the job still installs nothing), catching
+  a missing bullet, an unknown `<kind>`, and an empty file — each named, with the fix. It
+  also stops counting a *deleted* fragment as this PR documenting itself.
+
+- **Release PRs pass the changelog gate again.** `prepare-release.yml` creates
+  `prepare-release/vX.Y.Z`, which the gate's `release/*` escape hatch never matched —
+  those PRs had been passing by accident, because they delete every fragment and the old
+  check counted any changed `changelog.d/` path including deletions. Tightening that in
+  #2600 removed the accident and left release PRs failing a gate they were always meant to
+  skip. The hatch now matches both spellings, with a test that drives a real
+  `prepare-release/*` branch through the script.
+
 ## [0.133.0] - 2026-08-11
 
 ### Added
