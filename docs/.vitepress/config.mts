@@ -93,7 +93,6 @@ export default defineConfig({
             { text: "Schedule future work", link: "/guides/scheduler" },
             { text: "Middleware", link: "/guides/middleware" },
             { text: "Run on a coding agent (ACP runtime)", link: "/guides/acp-runtime" },
-            { text: "Run on Hermes (preset)", link: "/guides/hermes" },
           ],
         },
         {

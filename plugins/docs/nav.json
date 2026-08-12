@@ -81,10 +81,6 @@
         {
           "path": "guides/acp-runtime.md",
           "title": "Run on a coding agent (ACP runtime)"
-        },
-        {
-          "path": "guides/hermes.md",
-          "title": "Run on Hermes (preset)"
         }
       ]
     },

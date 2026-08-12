@@ -528,12 +528,20 @@ async def test_eviction_during_get_acp_runtime(monkeypatch):
 
 def test_adapters_derived_from_canonical_catalog():
     # Single source: the launch specs + the settings options all come from acp_agents.
+    #
+    # The launch registry is the catalog PLUS the deprecated agents (#2633). Those two roles
+    # used to be one list, so retiring an agent silently revoked it: `adapter_for` raises on
+    # an unknown id, and an install already on `agent_runtime: acp:<retired>` would stop
+    # booting. Hiding an option must not brick the people using it — so the sets differ by
+    # exactly the deprecated ids, and by nothing else.
     from graph.settings_schema import ACP_MODEL_OPTIONS
-    from runtime.acp_agents import acp_agent_catalog, acp_runtime_options
+    from runtime.acp_agents import DEPRECATED_ACP_AGENTS, acp_agent_catalog, acp_runtime_options
     from runtime.acp_runtime import _ACP_ADAPTERS
 
     catalog_ids = {a["id"] for a in acp_agent_catalog()}
-    assert set(_ACP_ADAPTERS) == catalog_ids
+    deprecated_ids = {a["id"] for a in DEPRECATED_ACP_AGENTS}
+    assert set(_ACP_ADAPTERS) == catalog_ids | deprecated_ids
+    assert not (catalog_ids & deprecated_ids), "a deprecated agent must not still be OFFERED"
     assert ACP_MODEL_OPTIONS == acp_runtime_options() == [f"acp:{a['id']}" for a in acp_agent_catalog()]
     # Both node adapters map to the maintained ACP-org packages, not the retired
     # @zed-industries ones. The codex half of this assertion is a REGRESSION guard: the

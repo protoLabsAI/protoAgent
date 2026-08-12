@@ -262,3 +262,61 @@ def test_use_hints_up_when_stopped(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(runtime_cli, "_running_server_port", lambda: None)
     run_runtime_cli(["use", "native"])
     assert "protoagent up" in capsys.readouterr().out
+
+
+# ── Hermes runtime deprecated (#2633) ───────────────────────────────────────
+
+
+def test_hermes_is_no_longer_offered_as_a_runtime():
+    """Gone from the Settings picker, the setup wizard, `runtime list` and
+    /api/acp-agents — all of which read the catalog."""
+    from runtime.acp_agents import acp_agent_catalog, acp_runtime_options
+
+    assert "acp:hermes" not in acp_runtime_options()
+    assert "hermes" not in [a["id"] for a in acp_agent_catalog()]
+
+
+def test_hermes_is_still_LAUNCHABLE_so_existing_installs_boot():
+    """The trap in retiring it: `acp_runtime` resolves launch commands from the same
+    catalog, and `_launch_spec` RAISES on an unknown id. Deleting the entry outright
+    would stop an existing `agent_runtime: acp:hermes` install from booting at all —
+    deprecating an option must hide it, not revoke it. (`adapter_for` raises on an
+    unknown id, so this is a real boot failure, not a degraded default.)"""
+    from runtime.acp_runtime import adapter_for
+
+    assert adapter_for("hermes")["command"] == "hermes-acp"
+
+
+def test_selecting_hermes_still_works_and_warns(monkeypatch, tmp_path, capsys, recwarn):
+    """`runtime use hermes` must keep working for anyone already on it, while saying
+    plainly that it's on the way out."""
+    cfg = _patch_instance(monkeypatch, tmp_path)
+    _patch_hermes_home(monkeypatch, tmp_path)
+    _no_install(monkeypatch)
+
+    assert run_runtime_cli(["use", "hermes"]) == 0
+
+    assert yaml.safe_load(cfg.read_text())["agent_runtime"] == "acp:hermes"
+    assert any(issubclass(w.category, DeprecationWarning) for w in recwarn), "programmatic callers get a warning"
+    err = capsys.readouterr().err
+    assert "deprecated" in err.lower(), "and a human at a terminal gets a readable line"
+    assert "delegates" in err.lower(), "which points at the replacement"
+
+
+def test_the_hermes_sugar_command_warns_too(monkeypatch, tmp_path, capsys):
+    cfg = _patch_instance(monkeypatch, tmp_path)
+    _patch_hermes_home(monkeypatch, tmp_path)
+    _no_install(monkeypatch)
+
+    assert run_hermes_cli([]) == 0
+
+    assert yaml.safe_load(cfg.read_text())["agent_runtime"] == "acp:hermes"
+    assert "deprecated" in capsys.readouterr().err.lower()
+
+
+def test_a_genuinely_unknown_runtime_is_still_rejected(monkeypatch, tmp_path):
+    """The deprecation carve-out must not become a hole that accepts anything."""
+    cfg = _patch_instance(monkeypatch, tmp_path)
+
+    assert run_runtime_cli(["use", "acp:nonsense"]) == 2
+    assert "agent_runtime" not in yaml.safe_load(cfg.read_text())

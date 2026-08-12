@@ -28,9 +28,22 @@ ACP_AGENT_CATALOG: list[dict] = [
     {"id": "gemini", "label": "Gemini CLI", "command": "gemini", "args": ["--experimental-acp"]},
     {"id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"]},
     {"id": "copilot", "label": "Copilot CLI", "command": "copilot", "args": ["--acp"]},
-    # Not a coding agent: NousResearch's personal agent, whose in-tree ACP adapter makes it
-    # a full protoAgent brain. Install/preset: `protoagent hermes` (runtime/cli.py).
-    {"id": "hermes", "label": "Hermes Agent", "command": "hermes-acp", "args": []},
+]
+
+# Deprecated agents: still LAUNCHABLE, no longer OFFERED (#2633).
+#
+# The catalog above was doing two jobs — the list we offer (Settings picker, setup wizard,
+# `runtime list`, /api/acp-agents) and the registry `acp_runtime` resolves a launch command
+# from. Deleting an entry outright therefore does more than hide it: `_launch_spec` raises
+# "no ACP adapter for 'hermes'", so an existing install with `agent_runtime: acp:hermes` in
+# its config stops booting. Retiring an option must never brick the people already using it.
+#
+# So the two roles are split. `hermes` lives here: absent from everything that OFFERS a
+# runtime, present in what LAUNCHES one. ACP delegates superseded the pattern (an external
+# agent as a worker the native brain dispatches to, rather than as the brain — which keeps
+# goal continuations, telemetry and the whole plugin surface).
+DEPRECATED_ACP_AGENTS: list[dict] = [
+    {"id": "hermes", "label": "Hermes Agent (deprecated)", "command": "hermes-acp", "args": []},
 ]
 
 

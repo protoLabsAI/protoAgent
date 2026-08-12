@@ -21,7 +21,7 @@ import os
 import sys
 from pathlib import Path
 
-from runtime.acp_agents import ACP_AGENT_CATALOG
+from runtime.acp_agents import ACP_AGENT_CATALOG, DEPRECATED_ACP_AGENTS
 from runtime.context import ContextAssembler
 
 log = logging.getLogger(__name__)
@@ -32,7 +32,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]  # repo root (where the `server
 # (runtime/acp_agents.py) — ACP servers drift, so these are *defaults* the operator can
 # override in config (``acp.agents.<name>: {command, args}``).
 _ACP_ADAPTERS: dict[str, dict] = {
-    a["id"]: {"command": a["command"], "args": list(a["args"])} for a in ACP_AGENT_CATALOG
+    # Deprecated agents are included: they are no longer OFFERED, but an install already
+    # on one must still resolve a launch command or it stops booting (#2633).
+    a["id"]: {"command": a["command"], "args": list(a["args"])}
+    for a in (*ACP_AGENT_CATALOG, *DEPRECATED_ACP_AGENTS)
 }
 
 

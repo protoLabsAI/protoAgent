@@ -62,7 +62,7 @@ _FORWARD_HELP = {
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
     "runtime": "Select the agent runtime — native (LangGraph) or an ACP agent (ADR 0033)",
-    "hermes": "One-command Hermes preset: wrap protoAgent around your existing ~/.hermes agent",
+    "hermes": "(DEPRECATED, #2633) One-command Hermes preset — use ACP delegates instead",
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
     "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
     "operator-mcp": "Serve the operator tools over MCP stdio (internal — mounted into ACP runtimes)",
