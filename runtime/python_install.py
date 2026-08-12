@@ -409,20 +409,41 @@ TEST_RUNTIME_REQUIREMENTS = [
 
 
 def test_runtime_missing() -> list[str]:
-    """Which :data:`TEST_RUNTIME_REQUIREMENTS` are absent from the managed runtime.
+    """Which :data:`TEST_RUNTIME_REQUIREMENTS` the managed runtime doesn't satisfy.
 
     Judged by the CHILD's site-packages only — host importability is meaningless here
     (see the note on the constant). Empty when the runtime isn't provisioned at all,
-    so callers check ``managed_python_exe()`` first and speak the provisioning step."""
-    from infra.python_runtime import managed_runtime_distributions, normalize_dist
+    so callers check ``managed_python_exe()`` first and speak the provisioning step.
 
-    have = managed_runtime_distributions()
+    The VERSION is compared, not just the name: a plugin's ``requires_pip`` installs
+    into this same runtime, so an older pin (``langchain-core<0.2``) can leave a dist
+    that satisfies the name and not the specifier. Answering "present" there would be
+    the same wrong-question failure this whole change exists to remove. Anything that
+    won't parse is reported missing — reinstalling is cheap and pip is idempotent,
+    where a wrong "satisfied" is a broken child."""
+    from infra.python_runtime import managed_runtime_distribution_versions, normalize_dist
+
+    have = managed_runtime_distribution_versions()
     if not have:
         return list(TEST_RUNTIME_REQUIREMENTS)
+    try:
+        from packaging.specifiers import SpecifierSet
+        from packaging.version import Version
+    except Exception:  # noqa: BLE001 — no packaging: fall back to name-only presence
+        SpecifierSet = Version = None  # type: ignore[assignment]
     missing = []
     for spec in TEST_RUNTIME_REQUIREMENTS:
-        name = re.split(r"[<>=!~\[]", spec, maxsplit=1)[0].strip()
-        if normalize_dist(name) not in have:
+        name, _, constraint = re.match(r"([^<>=!~\[]+)(\[[^\]]*\])?(.*)", spec).group(1, 2, 3)
+        installed = have.get(normalize_dist(name.strip()))
+        if installed is None:
+            missing.append(spec)
+            continue
+        if not constraint or SpecifierSet is None:
+            continue
+        try:
+            if Version(installed) not in SpecifierSet(constraint):
+                missing.append(spec)
+        except Exception:  # noqa: BLE001 — unparseable version/specifier → reinstall
             missing.append(spec)
     return missing
 

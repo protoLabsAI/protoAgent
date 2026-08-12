@@ -372,9 +372,16 @@ def test_ensure_test_runtime_is_a_noop_once_satisfied(box, monkeypatch):
     _make_python(pr.managed_python_install_dir())
     site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
     site.mkdir(parents=True, exist_ok=True)
-    for spec in pi.TEST_RUNTIME_REQUIREMENTS:
-        name = spec.split(">")[0].replace("-", "_")
-        (site / f"{name}-1.0.dist-info").mkdir()
+    # Versions that actually SATISFY each specifier — seeding "1.0" for everything would
+    # fail the version check, which is the point of it.
+    for name, version in (
+        ("pytest", "9.1.1"),
+        ("pyyaml", "6.0.2"),
+        ("langchain_core", "0.3.0"),
+        ("fastapi", "0.115.0"),
+        ("httpx", "0.28.1"),
+    ):
+        (site / f"{name}-{version}.dist-info").mkdir()
     monkeypatch.setattr(pi, "_pip_install", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no pip")))
     assert pi.ensure_test_runtime() is None  # second call costs a dist-info scan, nothing more
 
@@ -382,6 +389,49 @@ def test_ensure_test_runtime_is_a_noop_once_satisfied(box, monkeypatch):
 def test_ensure_test_runtime_names_provisioning_when_absent(box):
     err = pi.ensure_test_runtime()
     assert err and "provisioned" in err and "Settings" in err
+
+
+def _seed_dists(**name_to_version: str) -> None:
+    site = pr.managed_python_install_dir() / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    for name, version in name_to_version.items():
+        (site / f"{name}-{version}.dist-info").mkdir(exist_ok=True)
+
+
+def test_a_dist_below_its_minimum_is_missing_not_satisfied(box):
+    """Name-presence is the wrong question: a plugin's own requires_pip pins into this
+    same runtime, so an old langchain-core can sit here satisfying the NAME while
+    failing the specifier the scaffolded suite needs."""
+    _make_python(pr.managed_python_install_dir())
+    _seed_dists(pytest="1.0", pyyaml="6.0.2", langchain_core="0.1.9", fastapi="0.115.0", httpx="0.28.1")
+    missing = pi.test_runtime_missing()
+    assert "pytest>=8" in missing  # 1.0 does not satisfy >=8
+    assert "langchain-core>=0.2" in missing  # 0.1.9 does not satisfy >=0.2
+    assert "pyyaml>=6" not in missing and "httpx>=0.27" not in missing
+
+
+def test_a_dist_below_minimum_reaches_the_pip_arguments(box, monkeypatch):
+    _make_python(pr.managed_python_install_dir())
+    _seed_dists(pytest="1.0", pyyaml="6.0.2", langchain_core="0.3.0", fastapi="0.115.0", httpx="0.28.1")
+    calls = []
+    monkeypatch.setattr(pi, "_pip_install", lambda exe, spec, *, what, timeout=600.0: calls.append(spec))
+    assert pi.ensure_test_runtime() is None
+    assert calls == [["--", "pytest>=8"]]  # the stale one, and only it
+
+
+def test_versions_are_read_off_the_dist_info_names(box):
+    _make_python(pr.managed_python_install_dir())
+    _seed_dists(pytest="9.1.1", langchain_core="0.3.0")
+    have = pr.managed_runtime_distribution_versions()
+    assert have["pytest"] == "9.1.1"
+    assert have["langchain-core"] == "0.3.0"  # dist-info underscore → PEP 503 dash
+
+
+def test_an_unparseable_installed_version_is_reinstalled_not_trusted(box):
+    """Safe direction: pip is idempotent, a wrong 'satisfied' is a broken child."""
+    _make_python(pr.managed_python_install_dir())
+    _seed_dists(pytest="not-a-version")
+    assert "pytest>=8" in pi.test_runtime_missing()
 
 
 def test_install_requirements_empty_is_noop(box, monkeypatch):

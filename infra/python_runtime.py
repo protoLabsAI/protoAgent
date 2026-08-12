@@ -102,6 +102,29 @@ def managed_runtime_distributions() -> set[str]:
     return dists
 
 
+def managed_runtime_distribution_versions() -> dict[str, str]:
+    """``{normalized name: version}`` for the managed runtime's site-packages.
+
+    The version-carrying sibling of :func:`managed_runtime_distributions`, for callers
+    that must honour a requirement's specifier rather than only its name — a plugin's
+    ``requires_pip`` pins into this same runtime, so "a dist by that name exists" is not
+    the same question as "it satisfies ``>=8``"."""
+    versions: dict[str, str] = {}
+    install_dir = managed_python_install_dir()
+    if not install_dir.exists():
+        return versions
+    for site in (*install_dir.glob("lib/python3.*/site-packages"), install_dir / "Lib" / "site-packages"):
+        if not site.is_dir():
+            continue
+        for meta in (*site.glob("*.dist-info"), *site.glob("*.egg-info")):
+            stem = meta.name.rsplit(".", 1)[0]
+            name, _, version = stem.rpartition("-")
+            if not name:  # no version segment — nothing to compare against
+                continue
+            versions[normalize_dist(name)] = version
+    return versions
+
+
 def pytest_interpreter() -> tuple[str | None, str | None]:
     """``(python, error)`` — the interpreter to spawn ``-m pytest`` with (ADR 0096 D3).
 
