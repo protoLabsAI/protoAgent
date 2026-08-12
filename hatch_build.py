@@ -38,6 +38,15 @@ _SEEDS: dict[str, str] = {
     "config/skills": "config/skills",
     "static": "static",
     "apps/web/dist": "apps/web/dist",
+    # The published docs corpus — the `docs` plugin reads these to power
+    # docs_search/docs_read + the Docs view.  Only the five Diátaxis sections
+    # + ADRs; `docs/dev/` (internal handoffs) and `.vitepress/` (build config)
+    # are deliberately excluded.  Mirrors build_sidecar.py::BUNDLED_DATA.
+    "docs/tutorials": "docs/tutorials",
+    "docs/guides": "docs/guides",
+    "docs/reference": "docs/reference",
+    "docs/explanation": "docs/explanation",
+    "docs/adr": "docs/adr",
 }
 
 

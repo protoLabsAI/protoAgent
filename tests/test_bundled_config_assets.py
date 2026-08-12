@@ -263,6 +263,32 @@ def test_vendor_asset_routes_are_declared_public():
     assert not offenders, "vendor assets gated behind auth — will 401 on a sister agent: " + "; ".join(offenders)
 
 
+_DOC_SECTIONS = ("docs/tutorials", "docs/guides", "docs/reference", "docs/explanation", "docs/adr")
+
+
+@pytest.mark.parametrize("section", _DOC_SECTIONS)
+def test_doc_section_is_bundled_into_the_wheel(section: str) -> None:
+    """#2626 — docs/ was never in _SEEDS, so `pip install protoagent` shipped a
+    docs plugin that silently enumerated zero files (iter_docs skips missing dirs).
+    Each Diátaxis section + ADRs must be present individually; a bare `docs` entry
+    would also ship docs/dev/ (internal) and .vitepress/ (build config)."""
+    seeds = _wheel_seed_sources()
+    assert section in seeds, (
+        f"{section} is not in hatch_build.py::_SEEDS — the docs plugin would find "
+        f"no files on a PyPI install and silently serve an empty corpus."
+    )
+    assert "docs" not in seeds, (
+        "bare 'docs' entry found in _SEEDS — this would ship docs/dev/ and "
+        ".vitepress/ which must be excluded; use per-section entries instead."
+    )
+
+
+def test_no_bare_docs_entry_in_wheel_seeds() -> None:
+    """A bare 'docs' key would bundle docs/dev/ (internal) and .vitepress/ (build
+    config) into the wheel — only the five per-section entries are correct."""
+    assert "docs" not in _wheel_seed_sources()
+
+
 def test_cowork_archetype_requires_python_runtime() -> None:
     """The Cowork archetype's document skills route through execute_code, which on the
     desktop app needs the managed Python runtime (ADR 0094) — the catalog row declares
