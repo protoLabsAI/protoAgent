@@ -148,6 +148,19 @@ def _build_middleware(
             )
         )
 
+    # Runtime toolset changes (#2640), announced once to the next turn. ALWAYS on:
+    # an agent that refuses work it can now do is a worse failure than a missed
+    # injection, so this must not ride a switchable subsystem.
+    #
+    # Registered AFTER KnowledgeMiddleware deliberately — `context` has no reducer, so
+    # it composes with what knowledge just wrote rather than clobbering it. Each
+    # before_model hook is its own graph node and LangGraph applies updates in order,
+    # which is what makes reading the staged value here correct. Moving this earlier
+    # silently drops the knowledge/skills block.
+    from graph.middleware.tool_delta import ToolDeltaMiddleware
+
+    middleware.append(ToolDeltaMiddleware())
+
     # Deferred-tool disclosure (ADR 0005 #3) — trims the per-call tool set to
     # base + agent-loaded. Opt-in; the search_tools meta-tool is added to the
     # tool list in create_agent_graph when this is on.
