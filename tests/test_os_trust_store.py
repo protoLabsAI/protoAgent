@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import shutil
 import socket
 import ssl
 import subprocess
@@ -32,14 +33,32 @@ import server
 
 _ORIGINAL_SSL_CONTEXT = ssl.SSLContext  # captured before any test in this file can inject
 
+# Whether it's safe to mutate the REAL system/user certificate trust store: only on a
+# CI runner (ephemeral, destroyed after the job) — never on a contributor's own machine,
+# even if the platform tool happens to be present there too.
+_ON_CI = os.environ.get("CI") == "true"
+
 
 @pytest.fixture(autouse=True)
 def _restore_ssl_context():
-    """``inject_into_ssl()`` mutates ``ssl.SSLContext`` process-wide — undo it after
-    every test (pass or fail) so later, unrelated tests never see a patched ssl
-    module."""
+    """``inject_into_ssl()`` patches THREE module-level references — ``ssl.SSLContext``,
+    ``urllib3.util.ssl_.SSLContext``, and (when present) ``requests.adapters.
+    _preloaded_ssl_context`` — process-wide. Restoring only ``ssl.SSLContext`` by hand
+    leaves the other two patched, so a later, unrelated test using urllib3/requests
+    directly could still run against a truststore-backed context even though
+    ``ssl.SSLContext`` itself looks restored. ``truststore.extract_from_ssl()`` is the
+    library's own undo for the first two; the third has no library-provided undo, so
+    snapshot/restore it by hand (a no-op in environments where it doesn't exist)."""
+    try:
+        import requests.adapters as _requests_adapters
+    except ImportError:
+        _requests_adapters = None
+    _unset = object()
+    preloaded_before = getattr(_requests_adapters, "_preloaded_ssl_context", _unset) if _requests_adapters else _unset
     yield
-    ssl.SSLContext = _ORIGINAL_SSL_CONTEXT
+    truststore.extract_from_ssl()
+    if _requests_adapters is not None and preloaded_before is not _unset:
+        _requests_adapters._preloaded_ssl_context = preloaded_before
 
 
 # ── cert-chain helpers ──────────────────────────────────────────────────────────
@@ -179,7 +198,10 @@ def test_untrusted_self_signed_cert_still_fails_closed(tmp_path):
 # ── behavior: an OS-trusted private CA is honored (Windows — where #2643 was filed) ──
 
 
-@pytest.mark.skipif(os.name != "nt", reason="exercises the real Windows cert store via certutil")
+@pytest.mark.skipif(
+    not (os.name == "nt" and _ON_CI),
+    reason="mutates the real Windows cert store via certutil — CI-only (ephemeral runner)",
+)
 def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
     ca_cert, ca_key = _make_ca()
     leaf_cert, leaf_key = _make_leaf(ca_cert, ca_key)
@@ -215,3 +237,54 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
             capture_output=True,
             text=True,
         )
+
+
+# ── behavior: an OS-trusted private CA is honored (Linux — the leg every PR runs) ──
+#
+# SSL_CERT_FILE is NOT a stand-in for this: httpx already honors that env var in its
+# own default-verify branch, with or without truststore injected — it would prove
+# nothing about truststore's actual OS-trust-store path. The real, distinct thing
+# truststore's Linux backend (`truststore._openssl`) adds is consulting the system
+# default verify paths (`ssl.get_default_verify_paths()`) truststore-side, in a
+# process where `ssl.SSLContext` itself is a `truststore.SSLContext` — so the only
+# genuine test installs into the actual system trust store via `update-ca-certificates`
+# and confirms the SAME request still fails pre-injection (proving this isn't the
+# SSL_CERT_FILE shortcut) before it succeeds post-injection.
+
+
+@pytest.mark.skipif(
+    not (_ON_CI and shutil.which("update-ca-certificates")),
+    reason="mutates the real system CA trust store via update-ca-certificates — CI-only (ephemeral runner), Debian/Ubuntu only",
+)
+def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_path):
+    ca_cert, ca_key = _make_ca()
+    leaf_cert, leaf_key = _make_leaf(ca_cert, ca_key)
+    cert_path = tmp_path / "leaf.pem"
+    key_path = tmp_path / "leaf.key"
+    cert_path.write_bytes(_pem(leaf_cert))
+    key_path.write_bytes(_pem_key(leaf_key))
+
+    os.environ.pop("SSL_CERT_FILE", None)  # rule out the unrelated env-var shortcut
+    installed_ca_path = "/usr/local/share/ca-certificates/protoagent-test-ca.crt"
+
+    with _serve_tls(str(cert_path), str(key_path)) as port:
+        # Reproduces the reported bug (Linux analog): installed in the system store,
+        # but plain certifi-only httpx (pre-injection) still fails closed.
+        with pytest.raises(httpx.ConnectError):
+            httpx.get(f"https://localhost:{port}/", timeout=5)
+
+        with open(installed_ca_path, "wb") as f:
+            f.write(_pem(ca_cert))
+        try:
+            subprocess.run(["update-ca-certificates"], check=True, capture_output=True, text=True)
+
+            with pytest.raises(httpx.ConnectError):  # still fails — the CA install alone isn't enough
+                httpx.get(f"https://localhost:{port}/", timeout=5)
+
+            server._ensure_os_trust_store()
+
+            resp = httpx.get(f"https://localhost:{port}/", timeout=5)
+            assert resp.status_code == 200
+        finally:
+            os.remove(installed_ca_path)
+            subprocess.run(["update-ca-certificates"], check=False, capture_output=True, text=True)
