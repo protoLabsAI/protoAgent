@@ -74,6 +74,30 @@ test("Tab enters the card group on the SELECTED card; arrows move the selection 
   await expect(rolling).toHaveAttribute("aria-checked", "true");
 });
 
+test("ask_human's free-text textarea sends on Enter; Ctrl+Enter inserts a newline instead (#2614)", async ({ page }) => {
+  await send(page, "HITL_ASK: deploy the release");
+  const card = page.locator(`${SLOT} .hitl-float .hitl-card`);
+  await expect(card).toBeVisible();
+
+  // Same convention as the main composer (see chat.spec.ts "Enter sends; Ctrl+Enter
+  // inserts a newline"): the free-text textarea takes focus on appear.
+  const textarea = card.locator("textarea.hitl-freetext");
+  await expect(textarea).toBeFocused();
+  await textarea.fill("line one");
+  await textarea.press("Control+Enter"); // newline, not send
+  await expect(textarea).toHaveValue("line one\n");
+  await expect(card).toBeVisible();
+
+  await textarea.fill("staging"); // plain Enter sends
+  await textarea.press("Enter");
+  await expect(card).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .pl-message--user`).last()).toContainText("staging");
+  await expect(page.locator(`${SLOT} .pl-message--assistant`).last()).toContainText(
+    "Done — found 8 results.",
+  );
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeFocused();
+});
+
 test("a plain wizard focuses its first field, Enter advances, Esc dismisses to the composer (#1978)", async ({ page }) => {
   await send(page, "HITL_FORM: gather deployment details");
   const card = page.locator(`${SLOT} .hitl-float .hitl-card`);

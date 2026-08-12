@@ -341,6 +341,25 @@ export function HitlForm({
   // ask_human / free-text question.
   if (!isForm) {
     const prompt = payload.question || payload.description || payload.title || "Input requested.";
+    // Same convention as the chat composer's onComposerKeyDown (ChatSurface.tsx, #2614):
+    // bare Enter sends the response; ⌘/Ctrl+Enter inserts a newline at the caret (the
+    // textarea wouldn't on its own — a modified Enter has no default browser action).
+    const onFreeTextKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key !== "Enter") return;
+      if (event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        const ta = event.currentTarget;
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        setText(`${text.slice(0, start)}\n${text.slice(end)}`);
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+        });
+        return;
+      }
+      event.preventDefault();
+      if (!busy && text.trim()) onSubmit(text.trim());
+    };
     return (
       <div className="hitl-card" role="dialog" aria-label="Input requested" ref={rootRef} onKeyDown={onRootKeyDown}>
         <div className="hitl-title">{payload.title || "Input requested"}</div>
@@ -353,6 +372,7 @@ export function HitlForm({
           value={text}
           placeholder="Your answer…"
           onChange={(e) => setText(e.target.value)}
+          onKeyDown={onFreeTextKeyDown}
         />
         <div className="hitl-actions">
           <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
