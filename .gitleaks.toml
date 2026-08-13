@@ -17,4 +17,6 @@ paths = [
   # shaped like real credentials, because a test that only used obviously-fake strings
   # wouldn't prove the patterns catch the real thing.
   '''^tests/test_export_op\.py$''',
+  # And its structured-bundle sibling (#2680/#2681) — same reasoning, same fixtures.
+  '''^tests/test_chat_bundle\.py$''',
 ]

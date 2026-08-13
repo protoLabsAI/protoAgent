@@ -1153,3 +1153,83 @@ def test_blob_route_version_bounds(monkeypatch, tmp_path):
     assert c.get(base + "?version=0").content == b"v2"  # 0 → latest
     assert c.get(base + "?version=1").content == b"v1"  # explicit in-range
     assert c.get(base + "?version=99").status_code == 404  # out of range → 404 (not latest)
+
+
+# ── resolve_for_bundle (#2681 — the chat-bundle consumption seam) ───────────────
+
+
+def test_resolve_for_bundle_unknown_id(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    out = art.resolve_for_bundle("a-nope-000000", None)
+    assert out == {"id": "a-nope-000000", "available": False, "reason": "artifact no longer exists"}
+
+
+def test_resolve_for_bundle_fresh_creation(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<h1>Hi</h1>", "title": "T"})
+    aid = _arts(art)[0]["id"]
+    out = art.resolve_for_bundle(aid, None)
+    assert out == {
+        "id": aid,
+        "kind": "html",
+        "title": "T",
+        "version": 1,
+        "available": True,
+        "code": "<h1>Hi</h1>",
+        "by": "agent",
+    }
+
+
+def test_resolve_for_bundle_exact_version_after_update(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<h1>Hello</h1>"})
+    aid = _arts(art)[0]["id"]
+    art.update_artifact.invoke({"old_string": "Hello", "new_string": "World"})
+    v1 = art.resolve_for_bundle(aid, 1)
+    v2 = art.resolve_for_bundle(aid, 2)
+    assert v1["available"] and v1["code"] == "<h1>Hello</h1>"
+    assert v2["available"] and v2["code"] == "<h1>World</h1>"
+
+
+def test_resolve_for_bundle_out_of_range_version(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<x/>"})
+    aid = _arts(art)[0]["id"]
+    out = art.resolve_for_bundle(aid, 99)
+    assert out["available"] is False and "no longer available" in out["reason"]
+
+
+def test_resolve_for_bundle_file_kind_is_placeholder_only(monkeypatch, tmp_path):
+    """Josh's P2 scoping call: binary attachments are a note (kind/size/filename), never
+    the bytes, in this slice."""
+    art = _load(monkeypatch, tmp_path)
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF-1.4 fake pdf bytes")
+    art.save_file_artifact.invoke({"path": str(f), "title": "Report"})
+    aid = _arts(art)[0]["id"]
+    out = art.resolve_for_bundle(aid, 1)
+    assert out["available"] is False
+    assert out["kind"] == "file"
+    assert "not included" in out["reason"]
+    assert "code" not in out and "content" not in out  # no bytes, no preview text
+    assert out["file_meta"]["filename"] == "report.pdf"
+
+
+def test_resolve_for_bundle_detects_trim_and_reports_unavailable(monkeypatch, tmp_path):
+    """Once an artifact's version count has ever exceeded its retention cap, version
+    NUMBERS become ambiguous, not just the evicted one — two different commits can report
+    the same post-trim length. Must degrade to 'unavailable' for the WHOLE artifact's
+    numbered lookups from then on, never risk matching a reference to the wrong revision."""
+    monkeypatch.setenv("ARTIFACT_MAX_VERSIONS", "2")
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "v1"})
+    aid = _arts(art)[0]["id"]
+    art.update_artifact.invoke({"old_string": "v1", "new_string": "v2"})
+    art.update_artifact.invoke({"old_string": "v2", "new_string": "v3"})  # trims v1 away
+    assert len(_arts(art)[0]["versions"]) == 2  # cap held
+    out = art.resolve_for_bundle(aid, 1)  # the original "version 1" no longer exists
+    assert out["available"] is False and "trimmed" in out["reason"]
+    # "version 2" is now AMBIGUOUS (both the evicted v2 and the surviving v3 reported that
+    # same post-trim length) — also unavailable, not a lucky guess at the wrong content.
+    ambiguous = art.resolve_for_bundle(aid, 2)
+    assert ambiguous["available"] is False and "trimmed" in ambiguous["reason"]

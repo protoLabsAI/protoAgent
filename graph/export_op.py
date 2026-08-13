@@ -107,8 +107,13 @@ _ROLE_HEADINGS = {
 }
 
 
-def _role_of(message) -> str:
-    """The message's role, tolerant of LangChain objects and plain dicts."""
+def role_of(message) -> str:
+    """The message's role, tolerant of LangChain objects and plain dicts.
+
+    Public (no leading underscore): shared with ``graph.chat_bundle`` (#2681), which walks
+    the same message list into a structured bundle rather than flattened markdown. Keep the
+    two walks using the same primitives rather than let them drift.
+    """
     for attr in ("type", "role"):
         value = getattr(message, attr, None) or (message.get(attr) if isinstance(message, dict) else None)
         if value:
@@ -116,9 +121,12 @@ def _role_of(message) -> str:
     return type(message).__name__.replace("Message", "").lower() or "unknown"
 
 
-def _text_of(message) -> str:
+def text_of(message) -> str:
     """Message content as text. Multi-part content (the vision/tool-block shape) is
-    flattened to its text parts so an export never renders a raw Python repr."""
+    flattened to its text parts so an export never renders a raw Python repr.
+
+    Public — see ``role_of``.
+    """
     content = getattr(message, "content", None)
     if content is None and isinstance(message, dict):
         content = message.get("content")
@@ -138,7 +146,8 @@ def _text_of(message) -> str:
     return "" if content is None else str(content)
 
 
-def _tool_calls_of(message) -> list[dict]:
+def tool_calls_of(message) -> list[dict]:
+    """Public — see ``role_of``."""
     calls = getattr(message, "tool_calls", None)
     if not calls and isinstance(message, dict):
         calls = message.get("tool_calls")
@@ -176,12 +185,12 @@ def render_markdown(
 
     shown = 0
     for message in messages:
-        role = _role_of(message)
+        role = role_of(message)
         if role == "system":  # agent configuration, not conversation
             continue
         heading = _ROLE_HEADINGS.get(role, role.title() or "Message")
-        body = _scrub(_text_of(message)).strip()
-        calls = _tool_calls_of(message)
+        body = _scrub(text_of(message)).strip()
+        calls = tool_calls_of(message)
 
         if not body and not calls:
             continue
