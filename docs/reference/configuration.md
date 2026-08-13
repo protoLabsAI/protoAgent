@@ -63,7 +63,7 @@ All sampling params are optional — omit to use the gateway / model-card defaul
 
 ## Secrets
 
-Two **core** fields are secrets and are **never written to the tracked config YAML**: the model `api_key` and the A2A `auth.token`. (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
+Three **core** fields are secrets and are **never written to the tracked config YAML**: the model `api_key`, the A2A `auth.token`, and the A2A `auth.federation_token` (ADR 0066). (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
 
 ```yaml
 # config/secrets.yaml — never committed
@@ -74,7 +74,7 @@ auth:
   federation_token: fed-...   # optional (ADR 0066) — semi-trusted peers get THIS, not `token`
 ```
 
-`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts both fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value.
+`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts all three fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value. (`auth.federation_token` doesn't share `from_yaml`'s env-var fallback above — its own env source, `A2A_FEDERATION_TOKEN`, is read one layer down, by the A2A auth guard itself; see "Federation token" below.)
 
 ### External secrets manager (ADR 0080)
 

@@ -319,7 +319,7 @@ def test_reload_does_not_wipe_an_env_only_federation_token(tmp_path, monkeypatch
     config value is empty, so reload and boot disagreed (#1504 review)."""
     import server.agent_init as ai
 
-    leaf, calls = _stub_reload_for_auth_capture(tmp_path, monkeypatch)
+    _, calls = _stub_reload_for_auth_capture(tmp_path, monkeypatch)
     # No secrets.yaml at all — the config value resolves to "" for both fields.
     monkeypatch.setenv("A2A_AUTH_TOKEN", "env-operator-token")
     monkeypatch.setenv("A2A_FEDERATION_TOKEN", "env-federation-token")
