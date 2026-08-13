@@ -180,11 +180,18 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
         </ol>
       </div>
 
-      <!-- Beta note -->
+      <!-- Unsigned + beta note -->
       <div class="border-l-2 pl-4 mb-10" style="border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);">
         <p class="text-zinc-400 text-sm">
-          protoAgent is in <strong class="text-zinc-200">public beta</strong> and updates itself in
-          place; expect frequent releases.
+          <strong class="text-zinc-200">Unsigned build — expect a SmartScreen prompt.</strong> There’s
+          no Windows code-signing certificate yet, so both the installer and the first launch trigger
+          "Windows protected your PC." Click <strong class="text-zinc-200">More info → Run anyway</strong> —
+          that’s expected for this build, not a sign of tampering. protoAgent is in
+          <strong class="text-zinc-200">public beta</strong> and updates itself in place; expect
+          frequent releases.
+        </p>
+        <p class="text-zinc-500 text-xs mt-2">
+          <a href="/docs/guides/windows-desktop" target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">Full install, data-location & recovery guide →</a>
         </p>
       </div>
     </div>

@@ -184,6 +184,10 @@
           "title": "Operator console (React/Tauri)"
         },
         {
+          "path": "guides/windows-desktop.md",
+          "title": "Windows desktop app (install & recovery)"
+        },
+        {
           "path": "guides/python-runtime.md",
           "title": "Managed Python runtime (desktop)"
         },

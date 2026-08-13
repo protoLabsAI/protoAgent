@@ -142,6 +142,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
+            { text: "Windows desktop app (install & recovery)", link: "/guides/windows-desktop" },
             { text: "Managed Python runtime (desktop)", link: "/guides/python-runtime" },
             { text: "Command palette (⌘K)", link: "/guides/command-palette" },
             { text: "Developer flags (gate pre-release features)", link: "/guides/developer-flags" },
