@@ -15,7 +15,7 @@ are config flags in `config/langgraph-config.yaml`. This page is the map.
 | Prompt / prefix caching | `prompt_cache.*` | on (Anthropic-gated) | Cache the stable system+tools prefix across turns |
 | Cache warming | `prompt_cache.warm.*` | off | Keep the cached prefix warm for sporadic, latency-sensitive traffic |
 | Provider failover | `routing.fallback_models` | none | Retry on fallback models when the primary errors |
-| Iteration budget | `model.max_iterations`, subagent `max_turns` | 50 / per-subagent | Stop runaway loops |
+| Iteration budget | `model.max_iterations`, subagent `max_turns` | 2000 / per-subagent | Stop runaway loops |
 
 ## Context compaction
 

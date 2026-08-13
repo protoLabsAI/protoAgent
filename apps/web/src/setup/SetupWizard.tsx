@@ -94,7 +94,7 @@ function defaultState(): WizardState {
     modelName: "protolabs/reasoning",
     temperature: 0.2,
     maxTokens: 32768,
-    maxIterations: 50,
+    maxIterations: 2000,
     soul: "",
     archetype: "basic",
     middleware: {
@@ -125,7 +125,7 @@ function hydrateState(payload: ConfigPayload): WizardState {
     modelName: config.model.name || "protolabs/reasoning",
     temperature: Number(config.model.temperature ?? 0.2),
     maxTokens: Number(config.model.max_tokens ?? 32768),
-    maxIterations: Number(config.model.max_iterations ?? 50),
+    maxIterations: Number(config.model.max_iterations ?? 2000),
     // Start blank in the wizard (first-run-only flow): /api/config returns the
     // server's GENERIC default SOUL, not a user persona — the persona step seeds
     // the editor from the selected archetype instead. Leaving it blank lets that

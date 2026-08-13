@@ -154,7 +154,7 @@ def _goal_continuation_config(config: dict, goal_state) -> dict:
     base_tid = (config.get("configurable") or {}).get("thread_id") or "goal"
     return {
         "configurable": {"thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"},
-        "recursion_limit": 200,
+        "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200),
     }
 
 
@@ -1535,7 +1535,7 @@ async def _chat_langgraph_stream_impl(
             _tid = _resolve_thread_id(request_metadata, session_id)
             config = {
                 "configurable": {"thread_id": _tid},
-                "recursion_limit": 200,
+                "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200),
             }
 
             # Serialize turns on the SAME thread_id: two near-simultaneous A2A
@@ -2022,6 +2022,7 @@ async def _chat_langgraph_impl(
             config = {
                 "configurable": {"thread_id": _resolve_thread_id(None, session_id)},
                 "callbacks": [usage_cb],
+                "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200),
             }
 
             def _last_ai(result) -> str:

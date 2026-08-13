@@ -74,23 +74,26 @@ def test_loader_last_plugin_wins(monkeypatch):
 
 def test_same_session_goal_reuses_config():
     # Non-fresh-context: the checkpointer keeps history, so continuation reuses the config
-    # object as-is (identity — no new dict).
+    # object as-is (identity — no new dict). Short-circuits before touching
+    # STATE.graph_config, so no fixture needed here.
     cfg = {"configurable": {"thread_id": "a2a:s1"}, "recursion_limit": 200}
     assert _goal_continuation_config(cfg, _goal(False)) is cfg
     assert _goal_continuation_config(cfg, None) is cfg  # no active goal state
 
 
-def test_fresh_context_scopes_thread_from_current_config():
+def test_fresh_context_scopes_thread_from_current_config(monkeypatch):
     # Any base (a2a: or a legacy chat:) derives the SAME shape — the per-iteration
-    # sub-thread comes from the CURRENT thread_id (no drift), recursion_limit
-    # normalized on both.
+    # sub-thread comes from the CURRENT thread_id (no drift), recursion_limit sourced
+    # from STATE.graph_config.max_iterations (not a hardcoded literal) on both.
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(max_iterations=321), raising=False)
     a2a = _goal_continuation_config({"configurable": {"thread_id": "a2a:s1"}, "recursion_limit": 200}, _goal(True, 4))
-    assert a2a == {"configurable": {"thread_id": "a2a:s1:goal-iter-4"}, "recursion_limit": 200}
+    assert a2a == {"configurable": {"thread_id": "a2a:s1:goal-iter-4"}, "recursion_limit": 321}
     chat = _goal_continuation_config({"configurable": {"thread_id": "chat:s1"}}, _goal(True, 1))
-    assert chat == {"configurable": {"thread_id": "chat:s1:goal-iter-1"}, "recursion_limit": 200}
+    assert chat == {"configurable": {"thread_id": "chat:s1:goal-iter-1"}, "recursion_limit": 321}
 
 
-def test_fresh_context_missing_thread_id_falls_back():
+def test_fresh_context_missing_thread_id_falls_back(monkeypatch):
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(max_iterations=321), raising=False)
     out = _goal_continuation_config({}, _goal(True, 2))
     assert out["configurable"]["thread_id"] == "goal:goal-iter-2"
 

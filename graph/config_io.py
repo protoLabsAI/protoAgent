@@ -969,7 +969,7 @@ def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
         max_tokens = int(model.get("max_tokens", 4096))
         if max_tokens < 1:
             return False, f"max_tokens must be >= 1, got {max_tokens}"
-        max_iter = int(model.get("max_iterations", 50))
+        max_iter = int(model.get("max_iterations", 2000))
         if max_iter < 1:
             return False, f"max_iterations must be >= 1, got {max_iter}"
 

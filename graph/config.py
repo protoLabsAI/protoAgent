@@ -370,7 +370,13 @@ class LangGraphConfig:
     api_key: str = ""  # set via OPENAI_API_KEY env (gateway master key)
     temperature: float = 0.2
     max_tokens: int = 32768  # 32k — required headroom for the Qwen models we run
-    max_iterations: int = 50
+    # LangGraph `recursion_limit` for the main tool loop (server/chat.py). Counts graph
+    # steps through the middleware chain, not tool calls 1:1 — roughly 8 steps per tool
+    # call, so 2000 ≈ 250 tool calls/turn. Was a dead field until this was wired up (it
+    # only fed a display value); the hardcoded `recursion_limit: 200` it replaces was
+    # ≈25 tool calls/turn, so 2000 is deliberately generous headroom, not a copy of the
+    # old number. The real backstop for a runaway turn is `turn_stall_timeout_seconds`.
+    max_iterations: int = 2000
     # Seconds of stream SILENCE after which a turn is declared wedged and failed
     # (#2344). Deliberately a stall window, not a wall-clock cap: a long turn that
     # keeps emitting frames is healthy and must never be cut off, while a turn stuck

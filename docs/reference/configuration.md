@@ -14,7 +14,7 @@ model:
   api_key: ""
   temperature: 0.2
   max_tokens: 32768
-  max_iterations: 50
+  max_iterations: 2000
 
 subagents:
   researcher:
@@ -49,7 +49,7 @@ knowledge:
 | `api_key` | `""` | **Secret — not stored here.** Managed in the untracked `config/secrets.yaml` (see [Secrets](#secrets)); falls back to the `OPENAI_API_KEY` env var. |
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
-| `max_iterations` | `50` | Upper bound on tool-call loops per task. |
+| `max_iterations` | `2000` | LangGraph `recursion_limit` for the tool loop — counts graph steps through the middleware chain, not tool calls 1:1 (~8 steps/tool call, so 2000 ≈ 250 tool calls/turn). |
 | `favorites` | `[]` | Pinned go-to models for the chat `/model` quick-switch — the inline picker offers these, in this order, instead of the gateway's full list. Manage (add/remove/reorder) in Settings ▸ Model ▸ Favorite models. Empty = `/model` shows every gateway model with a hint to pin favorites. |
 | `request_timeout` | `120.0` | Per-call gateway timeout (seconds) — bounds a hung/slow gateway so a turn fails cleanly. |
 | `max_retries` | `2` | Transient-retry cap on the LLM client (→ `llm_max_retries`). |

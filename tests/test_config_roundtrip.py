@@ -174,7 +174,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_context_max_doc_chars": 12000,
     "knowledge_attach_inline_budget": 8000,
     "llm_max_retries": 2,
-    "max_iterations": 50,
+    "max_iterations": 2000,
     "turn_stall_timeout_seconds": 900.0,
     "max_tokens": 32768,
     "media_public": False,
