@@ -137,6 +137,13 @@ it, and a delegate probe/dispatch to that peer trusts it too. A chain the OS its
 doesn't trust still fails closed — there is no setting that disables verification
 (#2643).
 
+If you were previously pointing an `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` /
+`CURL_CA_BUNDLE` env var at a custom CA bundle to get a private CA trusted: on
+Windows and macOS that override no longer reaches delegate calls, since the OS
+trust APIs verify independently of it. Install the CA in the OS store instead —
+it keeps working on Linux only because the OS trust path there happens to read
+the same variable, not because it's a supported override mechanism.
+
 ## Manage via the REST API
 
 The plugin mounts a CRUD surface (operator-console posture — localhost-default,
