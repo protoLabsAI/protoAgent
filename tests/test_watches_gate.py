@@ -18,6 +18,11 @@ from tools.lg_tools import get_all_tools
 WATCH_TOOLS = {"create_watch", "list_watches", "update_watch", "clear_watch"}
 
 
+def _register_verifiers(monkeypatch, *names):
+    """Populate the plugin-verifier registry so get_all_tools gates open."""
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {n: object() for n in names})
+
+
 # --- get_all_tools gating --------------------------------------------------
 
 
@@ -28,25 +33,35 @@ def test_watch_tools_absent_when_the_flag_is_off():
     assert not (WATCH_TOOLS & names)
 
 
-def test_watch_tools_bound_when_flag_and_goal_mode_on():
+def test_watch_tools_bound_when_flag_and_goal_mode_on(monkeypatch):
+    _register_verifiers(monkeypatch, "test:check")
     names = {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=True)}
     assert WATCH_TOOLS <= names
 
 
-def test_watch_tools_are_independent_of_goal_mode():
+def test_watch_tools_are_independent_of_goal_mode(monkeypatch):
     # `watches.enabled` alone binds the tools — a watch is not a goal, so goal mode has no
     # say. (It used to: the tools were nested in the goal-enabled group, so an instance
     # that turned goal mode off lost watches it never asked to lose.)
+    _register_verifiers(monkeypatch, "test:check")
     names = {t.name for t in get_all_tools(goal_enabled=False, watches_enabled=True)}
     assert WATCH_TOOLS <= names
     # ...and the goal tools stay gone, so this didn't just leak the whole group.
     assert not ({"set_goal", "abandon_goal"} & names)
 
 
-def test_goal_tools_do_not_bring_watch_tools_along():
+def test_goal_tools_do_not_bring_watch_tools_along(monkeypatch):
     # The inverse coupling: goal mode on with watches off binds set_goal but no watch tool.
+    _register_verifiers(monkeypatch, "test:check")
     names = {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=False)}
     assert "set_goal" in names
+    assert not (WATCH_TOOLS & names)
+
+
+def test_no_goal_or_watch_tools_without_verifiers():
+    # Both flags on but no plugin verifiers → all goal+watch tools suppressed.
+    names = {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=True)}
+    assert not ({"set_goal", "update_goal_plan", "abandon_goal"} & names)
     assert not (WATCH_TOOLS & names)
 
 
@@ -122,7 +137,8 @@ def _lead_graph_tool_names(*, goal_enabled: bool, watches_enabled: bool) -> set[
     raise AssertionError("could not locate the ToolNode tool map")
 
 
-def test_watch_tools_bound_to_lead_graph_only_when_enabled():
+def test_watch_tools_bound_to_lead_graph_only_when_enabled(monkeypatch):
+    _register_verifiers(monkeypatch, "test:check")
     on = _lead_graph_tool_names(goal_enabled=True, watches_enabled=True)
     assert WATCH_TOOLS <= on
     off = _lead_graph_tool_names(goal_enabled=True, watches_enabled=False)

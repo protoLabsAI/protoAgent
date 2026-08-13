@@ -17,10 +17,17 @@ def _register_verifiers(monkeypatch, *names):
     monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {n: object() for n in names})
 
 
-def test_get_all_tools_gates_set_goal_on_goal_enabled():
+def test_get_all_tools_gates_set_goal_on_goal_enabled(monkeypatch):
+    _register_verifiers(monkeypatch, "test:check")
     on = {t.name for t in get_all_tools(goal_enabled=True)}
     off = {t.name for t in get_all_tools(goal_enabled=False)}
     assert "set_goal" in on and "set_goal" not in off
+
+
+def test_get_all_tools_no_goal_tools_without_verifiers():
+    # goal_enabled=True but no plugin verifiers registered → tools absent (no-op trap).
+    names = {t.name for t in get_all_tools(goal_enabled=True)}
+    assert not ({"set_goal", "update_goal_plan", "abandon_goal"} & names)
 
 
 def _lead_graph_tool_names(goal_enabled: bool) -> set[str]:
@@ -51,11 +58,12 @@ def _lead_graph_tool_names(goal_enabled: bool) -> set[str]:
     raise AssertionError("could not locate the ToolNode tool map")
 
 
-def test_set_goal_is_actually_bound_to_the_lead_agent_when_enabled():
+def test_set_goal_is_actually_bound_to_the_lead_agent_when_enabled(monkeypatch):
     # bd-2aa regression: get_all_tools(goal_enabled=True) including set_goal is
     # NOT enough — create_agent_graph must thread goal_enabled into that call, or
     # set_goal is advertised (/api/tools) but never bound to the model. This
     # asserts the binding on the COMPILED graph, which is what was broken.
+    _register_verifiers(monkeypatch, "test:check")
     assert "set_goal" in _lead_graph_tool_names(goal_enabled=True)
     assert "set_goal" not in _lead_graph_tool_names(goal_enabled=False)
 

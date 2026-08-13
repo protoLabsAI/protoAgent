@@ -2029,13 +2029,16 @@ def get_all_tools(
         tools.extend(_build_inbox_tools(inbox_store))
     if tasks_store is not None:
         tools.extend(_build_task_tools(tasks_store))
+    from graph.goals.verifiers import plugin_verifier_names
+
+    _has_verifiers = bool(plugin_verifier_names())
     if goal_enabled or watches_enabled:
         tools.append(_build_list_verifiers_tool())  # discover registered verifiers before set_goal/create_watch
-    if goal_enabled:
+    if goal_enabled and _has_verifiers:
         tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
         tools.append(_build_goal_plan_tool())  # goal loop — record running plan (retired <goal_plan>)
         tools.append(_build_abandon_goal_tool())  # goal loop — explicit give-up (retired <goal_unachievable>)
-    if watches_enabled:
+    if watches_enabled and _has_verifiers:
         # ADR 0067 — many concurrent supervised watches, gated by `watches.enabled` ALONE.
         # A watch is not a goal: it's verifier-only, keyed by its own id, and moved by an
         # external process, so binding it inside the goal-enabled group (as it was until

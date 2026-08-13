@@ -44,6 +44,7 @@ def test_tools_tab_exactly_matches_the_bound_graph(monkeypatch):
     import operator_api.console_handlers as ch
     import runtime.state as rs
 
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"test:check": object()})
     g, cfg = _graph(goal_enabled=True)
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
@@ -141,6 +142,21 @@ def test_tools_tab_omits_set_goal_when_goal_disabled(monkeypatch):
     import runtime.state as rs
 
     g, cfg = _graph(goal_enabled=False)
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
+
+    listed = {t["name"] for t in ch._operator_tools_list()["tools"]}
+    assert "set_goal" not in listed
+
+
+def test_tools_tab_omits_set_goal_when_no_verifiers_registered(monkeypatch):
+    # goal_enabled=True but no plugin verifiers → set_goal absent from the operator inventory.
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    g, cfg = _graph(goal_enabled=True)  # _PLUGIN_VERIFIERS empty → set_goal not bound
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
