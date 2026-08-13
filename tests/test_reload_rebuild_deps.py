@@ -144,6 +144,7 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         import a2a_impl.auth as _a2a_auth
 
         monkeypatch.setattr(_a2a_auth, "set_bearer_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_federation_token", lambda *a, **k: None)
         monkeypatch.setattr(_a2a_auth, "set_public_prefixes", lambda *a, **k: None)
     except ImportError:
         pass
@@ -212,22 +213,18 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         gv.set_plugin_verifiers({})
 
 
-def test_reload_rotates_the_federation_token_live(tmp_path, monkeypatch):
-    """A Settings-drawer save of auth.federation_token must take effect without a
-    restart, same as auth.token already does (#1504). Before this fix, the reload
-    commit block called set_bearer_token but never set_federation_token — a
-    federation-token edit would persist to secrets.yaml but silently keep using
-    whatever token (or none) was active at boot until the next full restart."""
+def _stub_reload_for_auth_capture(tmp_path, monkeypatch):
+    """Common heavy-builder stubbing so `_reload_langgraph_agent()` reaches its commit
+    block, shared by the two auth-token-reload tests below. Returns the recorded
+    (kind, token) calls list — populate a leaf/secrets file before calling
+    `ai._reload_langgraph_agent()`."""
     import graph.config_io as cio
     import server.agent_init as ai
     from runtime.state import STATE
 
     leaf = tmp_path / "langgraph-config.yaml"
     leaf.write_text("scheduler:\n  enabled: false\n")
-    secrets_path = tmp_path / "secrets.yaml"
-    secrets_path.write_text("auth:\n  token: new-operator-token\n  federation_token: new-federation-token\n")
     monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
-    monkeypatch.setattr(cio, "secrets_yaml_path", lambda: secrets_path)
     monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
     monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
 
@@ -287,6 +284,22 @@ def test_reload_rotates_the_federation_token_live(tmp_path, monkeypatch):
     monkeypatch.setattr(_a2a_auth, "set_bearer_token", lambda t: calls.append(("bearer", t)))
     monkeypatch.setattr(_a2a_auth, "set_federation_token", lambda t: calls.append(("federation", t)))
     monkeypatch.setattr(_a2a_auth, "set_public_prefixes", lambda *a, **k: None)
+    return leaf, calls
+
+
+def test_reload_rotates_the_federation_token_live(tmp_path, monkeypatch):
+    """A Settings-drawer save of auth.federation_token must take effect without a
+    restart, same as auth.token already does (#1504). Before this fix, the reload
+    commit block called set_bearer_token but never set_federation_token — a
+    federation-token edit would persist to secrets.yaml but silently keep using
+    whatever token (or none) was active at boot until the next full restart."""
+    import graph.config_io as cio
+    import server.agent_init as ai
+
+    leaf, calls = _stub_reload_for_auth_capture(tmp_path, monkeypatch)
+    secrets_path = leaf.parent / "secrets.yaml"
+    secrets_path.write_text("auth:\n  token: new-operator-token\n  federation_token: new-federation-token\n")
+    monkeypatch.setattr(cio, "secrets_yaml_path", lambda: secrets_path)
 
     ok, msg = ai._reload_langgraph_agent()
 
@@ -294,6 +307,28 @@ def test_reload_rotates_the_federation_token_live(tmp_path, monkeypatch):
     assert ("bearer", "new-operator-token") in calls
     # THE regression: federation_token must rotate live exactly like the bearer token.
     assert ("federation", "new-federation-token") in calls
+
+
+def test_reload_does_not_wipe_an_env_only_federation_token(tmp_path, monkeypatch):
+    """A deployment configured purely via A2A_FEDERATION_TOKEN/A2A_AUTH_TOKEN (no
+    secrets.yaml/YAML value — the documented env-only path, `docs/reference/
+    configuration.md`) must not have its live credential silently cleared by the
+    FIRST Settings save of ANYTHING, auth-related or not. Before this fix, the reload
+    passed the empty config value straight to set_bearer_token/set_federation_token
+    with no env fallback — boot's auth.configure() DOES fall back to env whenever the
+    config value is empty, so reload and boot disagreed (#1504 review)."""
+    import server.agent_init as ai
+
+    leaf, calls = _stub_reload_for_auth_capture(tmp_path, monkeypatch)
+    # No secrets.yaml at all — the config value resolves to "" for both fields.
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "env-operator-token")
+    monkeypatch.setenv("A2A_FEDERATION_TOKEN", "env-federation-token")
+
+    ok, msg = ai._reload_langgraph_agent()
+
+    assert ok is True, msg
+    assert ("bearer", "env-operator-token") in calls
+    assert ("federation", "env-federation-token") in calls
 
 
 def test_pre_setup_reload_does_not_crash_on_the_surface_publish(tmp_path, monkeypatch):
@@ -405,6 +440,17 @@ def test_reload_restamps_a_members_fleet_display_name(tmp_path, monkeypatch):
         monkeypatch.setattr(STATE, name, object(), raising=False)
     for name in ("scheduler", "graph", "workflow_registry", "workflow_run"):
         monkeypatch.setattr(STATE, name, None, raising=False)
+    try:
+        import a2a_impl.auth as _a2a_auth
+
+        # This test's reload reaches the commit block (ok is True) — without these, it runs
+        # the REAL setters and clears whatever bearer/federation token this process actually
+        # has live (module-global state), leaking into whichever test runs next (#1504 review).
+        monkeypatch.setattr(_a2a_auth, "set_bearer_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_federation_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_public_prefixes", lambda *a, **k: None)
+    except ImportError:
+        pass
 
     ok, msg = ai._reload_langgraph_agent()
     assert ok is True, msg

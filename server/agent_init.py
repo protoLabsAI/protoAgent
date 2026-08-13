@@ -2128,8 +2128,13 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     try:
         from a2a_impl import auth
 
-        auth.set_bearer_token(new_config.auth_token or None)
-        auth.set_federation_token(new_config.federation_token or None)  # ADR 0066, #1504
+        # An empty config value falls back to the matching env var, same precedence as
+        # boot's auth.configure() (a2a_impl/auth.py) — otherwise a deployment configured
+        # purely via A2A_AUTH_TOKEN/A2A_FEDERATION_TOKEN (no secrets.yaml/YAML value) has
+        # its live credential silently wiped by the FIRST Settings save of anything, not
+        # just an auth-related one, until the next full restart (#1504 review).
+        auth.set_bearer_token(new_config.auth_token or os.environ.get("A2A_AUTH_TOKEN") or None)
+        auth.set_federation_token(new_config.federation_token or os.environ.get("A2A_FEDERATION_TOKEN") or None)
     except ImportError:
         # a2a_impl.auth not yet imported (e.g. during early-boot reload before
         # _main wires routes) — harmless.
