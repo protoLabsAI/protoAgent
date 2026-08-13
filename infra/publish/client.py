@@ -18,6 +18,11 @@ ADR 0099): ``POST <endpoint_url>`` with the bundle zip bytes as the body
 ``{"public_url": str, "revoke_token": str, "expires_at": str | null}``. ``429``/``413``
 are treated as a real, informative rejection (quota / bundle too large) rather than a
 generic failure, surfacing the response body's ``detail`` when present.
+
+Revocation (#2684) is a SEPARATE configured endpoint (``publish.revoke_endpoint_url``),
+not a path convention off ``endpoint_url`` — presuming a URL shape on a service that
+doesn't exist yet would be a guess dressed up as a contract. ``POST <revoke_endpoint_url>``
+with JSON body ``{"revoke_token": str}``; success is any 2xx.
 """
 
 from __future__ import annotations
@@ -104,6 +109,54 @@ def publish_bundle(
         return PublishResult(error=f"unexpected response shape: {e}", error_kind=PublishErrorKind.BAD_RESPONSE)
     except Exception as e:  # noqa: BLE001 — the contract is never-raise
         return PublishResult(error=f"{e.__class__.__name__}: {e}", error_kind=PublishErrorKind.INTERNAL)
+
+
+@dataclass
+class RevokeResult:
+    """What ``revoke_bundle`` hands back — no payload beyond success/failure, unlike
+    publishing there's nothing new to report."""
+
+    ok: bool = False
+    error: str = ""
+    error_kind: PublishErrorKind | None = None
+
+
+def revoke_bundle(
+    revoke_token: str,
+    *,
+    endpoint_url: str,
+    timeout_seconds: float = 15.0,
+    transport: httpx.BaseTransport | None = None,
+) -> RevokeResult:
+    """POST ``revoke_token`` to ``endpoint_url`` to un-share a previously published
+    bundle. Never raises — same error taxonomy as ``publish_bundle``, reused rather than
+    forked since the failure modes (not configured, network, timeout, bad response) are
+    identical; ``REJECTED`` here just means the hosted service rejected the token itself
+    (already revoked, unknown), not a quota/size limit.
+    """
+    endpoint_url = (endpoint_url or "").strip()
+    if not endpoint_url:
+        return RevokeResult(
+            error="revocation isn't configured — set publish.revoke_endpoint_url in Settings",
+            error_kind=PublishErrorKind.NOT_CONFIGURED,
+        )
+    try:
+        with httpx.Client(timeout=timeout_seconds, transport=transport) as client:
+            r = client.post(endpoint_url, json={"revoke_token": revoke_token})
+        if 200 <= r.status_code < 300:
+            return RevokeResult(ok=True)
+        detail = _detail(r)
+        kind = PublishErrorKind.REJECTED if r.status_code in (400, 404, 409) else PublishErrorKind.BAD_RESPONSE
+        return RevokeResult(error=detail or f"revoke endpoint returned HTTP {r.status_code}", error_kind=kind)
+    except httpx.TimeoutException:
+        return RevokeResult(
+            error=f"timed out after {timeout_seconds:g}s revoking at {endpoint_url}",
+            error_kind=PublishErrorKind.TIMEOUT,
+        )
+    except httpx.HTTPError as e:
+        return RevokeResult(error=f"network error: {e.__class__.__name__}: {e}", error_kind=PublishErrorKind.NETWORK)
+    except Exception as e:  # noqa: BLE001 — the contract is never-raise
+        return RevokeResult(error=f"{e.__class__.__name__}: {e}", error_kind=PublishErrorKind.INTERNAL)
 
 
 def _detail(r: httpx.Response) -> str:

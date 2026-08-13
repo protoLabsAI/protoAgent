@@ -39,6 +39,7 @@ import type {
   MemorySessionDigest,
   PromptCall,
   PromptTaskResponse,
+  PublishedLink,
   NodeRuntimePayload,
   PythonRuntimePayload,
   RuntimeStatus,
@@ -1807,6 +1808,7 @@ export const api = {
   publishChatSession(sessionId: string, title?: string) {
     return request<{
       published: boolean;
+      link_id?: string | null;
       public_url?: string;
       revoke_token?: string;
       expires_at?: string | null;
@@ -1815,6 +1817,21 @@ export const api = {
       reason?: string;
       message: string;
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/publish`, { method: "POST", body: { title } });
+  },
+
+  // Everything this instance has published (#2684) — never includes the revoke token,
+  // which stays server-internal (presented to the hosted service by the revoke call
+  // below, never sent back to the browser after the initial publish).
+  publishedLinks() {
+    return request<{ links: PublishedLink[] }>("/api/chat/publish/links");
+  },
+  // `ok: false` with `reason: "not_configured"` when no revoke endpoint is set — same
+  // honest-state shape as publishing itself, not an error status.
+  revokePublishedLink(id: string) {
+    return request<{ ok: boolean; reason?: string; error?: string }>(
+      `/api/chat/publish/links/${encodeURIComponent(id)}/revoke`,
+      { method: "POST" },
+    );
   },
 
   // `/btw` (#2180): ask a side question about this session's context WITHOUT changing

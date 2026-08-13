@@ -1829,8 +1829,28 @@ async def publish_session(
         }
         return {**outcome, "message": _publish_message(outcome)}
 
+    # Record it LOCALLY so it can be listed/revoked later (#2684) — best-effort: the
+    # bundle is already live on the hosted service at this point, so a local disk hiccup
+    # must not make a successful publish read back as a failure. It just means this
+    # instance loses its own memory of the link (still revocable by hand, if the operator
+    # kept the URL/token some other way).
+    link_id = None
+    from infra.publish import record_publish
+
+    try:
+        link_id = record_publish(
+            thread_id=result["manifest"]["thread_id"],
+            title=result["manifest"]["title"],
+            public_url=publish_result.public_url,
+            revoke_token=publish_result.revoke_token or "",
+            expires_at=publish_result.expires_at,
+        ).id
+    except OSError:
+        log.warning("[publish] could not record published link locally", exc_info=True)
+
     outcome = {
         "published": True,
+        "link_id": link_id,
         "public_url": publish_result.public_url,
         "revoke_token": publish_result.revoke_token,
         "expires_at": publish_result.expires_at,
@@ -1838,6 +1858,38 @@ async def publish_session(
         "artifact_notes": bundle.artifact_notes,
     }
     return {**outcome, "message": _publish_message(outcome)}
+
+
+async def revoke_published_link(link_id: str) -> dict:
+    """Un-share a previously published thread (#2684).
+
+    Looks up the link's stored revoke_token and presents it to the hosted service —
+    marks it revoked LOCALLY only once that call confirms, never before (a local-only
+    revoke would tell the operator a link is dead while it's still live). Returns
+    ``{ok, error?, reason?}``.
+    """
+    from infra.publish import get_link, mark_revoked, revoke_bundle
+
+    link = get_link(link_id)
+    if link is None:
+        return {"ok": False, "reason": "not_found", "error": "unknown published link"}
+    if link.revoked_at is not None:
+        return {"ok": True}  # idempotent — already revoked, nothing to do
+
+    cfg = STATE.graph_config
+    result = revoke_bundle(
+        link.revoke_token,
+        endpoint_url=getattr(cfg, "publish_revoke_endpoint_url", "") or "",
+        timeout_seconds=getattr(cfg, "publish_timeout_seconds", 15.0) or 15.0,
+    )
+    if not result.ok:
+        return {
+            "ok": False,
+            "reason": result.error_kind.value if result.error_kind else "internal",
+            "error": result.error,
+        }
+    mark_revoked(link_id)
+    return {"ok": True}
 
 
 async def aside_session(

@@ -643,6 +643,90 @@ def test_publish_session_route_refuses_when_flag_off(monkeypatch):
     resp = c.post("/api/chat/sessions/s1/publish")
     assert resp.status_code == 403
     assert "chat.publish" in resp.json()["detail"]
+
+
+def test_list_published_links_route(monkeypatch):
+    # Thin pass-through to infra.publish.list_published_links — imported at the top of
+    # chat_routes.py (a `from X import Y` binding), so it's patched on
+    # operator_api.chat_routes itself; patching "infra.publish.list_published_links" by
+    # string wouldn't reach the already-bound name in this module's namespace.
+    import operator_api.chat_routes as cr
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_CHAT_PUBLISH", "1")
+    monkeypatch.setattr(
+        cr,
+        "list_published_links",
+        lambda: [
+            {
+                "id": "abc",
+                "thread_id": "t1",
+                "title": "My chat",
+                "public_url": "https://x.test/c/1",
+                "published_at": 1.0,
+                "expires_at": None,
+                "revoked_at": None,
+            }
+        ],
+    )
+    c = _client(monkeypatch)
+    body = c.get("/api/chat/publish/links").json()
+    assert body["links"][0]["id"] == "abc"
+    assert "revoke_token" not in body["links"][0]
+
+
+def test_list_published_links_route_refuses_when_flag_off(monkeypatch):
+    import operator_api.chat_routes as cr
+
+    monkeypatch.delenv("PROTOAGENT_FLAG_CHAT_PUBLISH", raising=False)
+    monkeypatch.setenv("PROTOAGENT_CHANNEL", "prod")
+    called: list[str] = []
+    monkeypatch.setattr(cr, "list_published_links", lambda: called.append("called") or [])
+    c = _client(monkeypatch)
+    resp = c.get("/api/chat/publish/links")
+    assert resp.status_code == 403
+    assert called == []
+
+
+def test_revoke_published_link_route(monkeypatch):
+    # Thin pass-through to server.chat.revoke_published_link — imported at the top of
+    # chat_routes.py like every other domain function here (export_session,
+    # publish_session, ...), so it's patched on operator_api.chat_routes itself, same
+    # as those. NOT a lazy in-handler import — that would need patching the string path
+    # "server.chat.revoke_published_link", which hits a real trap: `import server.chat`
+    # resolves to the `chat` FUNCTION re-exported by the `server` package's __init__,
+    # not the submodule (see tests/test_thread_id_resolver.py's note on it).
+    import operator_api.chat_routes as cr
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_CHAT_PUBLISH", "1")
+    seen: list[str] = []
+
+    async def _fake_revoke(link_id):
+        seen.append(link_id)
+        return {"ok": True}
+
+    monkeypatch.setattr(cr, "revoke_published_link", _fake_revoke)
+    c = _client(monkeypatch)
+    body = c.post("/api/chat/publish/links/abc/revoke").json()
+    assert seen == ["abc"]
+    assert body == {"ok": True}
+
+
+def test_revoke_published_link_route_refuses_when_flag_off(monkeypatch):
+    import operator_api.chat_routes as cr
+
+    monkeypatch.delenv("PROTOAGENT_FLAG_CHAT_PUBLISH", raising=False)
+    monkeypatch.setenv("PROTOAGENT_CHANNEL", "prod")
+    called: list[str] = []
+
+    async def _fake_revoke(link_id):
+        called.append(link_id)
+        return {}
+
+    monkeypatch.setattr(cr, "revoke_published_link", _fake_revoke)
+    c = _client(monkeypatch)
+    resp = c.post("/api/chat/publish/links/abc/revoke")
+    assert resp.status_code == 403
+    assert called == []
     assert called == []
 
 

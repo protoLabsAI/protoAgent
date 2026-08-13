@@ -134,12 +134,47 @@ purpose-built summary card — kind/title/version/availability + a trimmed conte
 snippet — deliberately **not** a full sandboxed render (that's the hosted viewer's job,
 `#2685`, not this confirm step's).
 
+**D10 — Revocation is a separate configured endpoint, and the local record never leaves
+the server with its token intact.** `#2684` adds `infra/publish/store.py`
+(`published_links.json` at `instance_root`, mirroring `security/devices.py`'s ADR-0087
+shape: atomic write, 0600 permissions — both hold a live credential). The one deliberate
+divergence from that precedent: devices.py never stores a token, only its hash, because a
+device token only ever needs to be *verified* locally; a revoke token has the opposite
+requirement — this instance must *present* it to the hosted service later, and a hash
+can't be reversed back into the original value. So it's stored in plaintext (like any
+other locally-held API credential) but `list_published_links()` — the shape a route can
+hand to the browser — never includes it; only the server-internal `get_link()` does.
+Revocation itself targets `publish.revoke_endpoint_url`, a field **separate** from
+`publish.endpoint_url` rather than a path convention off it (`/revoke` suffix, say) —
+presuming a URL shape on a service that doesn't exist yet would be a guess dressed up as
+a contract, the same reasoning as D7's original wire contract.
+
+**D11 — A link is marked revoked locally only after the hosted service confirms, never
+before.** `revoke_published_link` (`server/chat.py`) is idempotent (revoking an
+already-revoked link is a no-op success, no second network call) and ORDERED: look up the
+stored token → present it to `publish.revoke_endpoint_url` → mark `revoked_at` locally
+**only on a confirmed 2xx**. A local-first mark would tell the operator a link is dead
+while it might still be serving — worse than the honest "still live, revocation isn't
+configured" state `NOT_CONFIGURED` produces when no revoke endpoint is set.
+
+**D12 — Found and fixed a real gap from #2682/#2683 while building this: the
+`publish.*` config fields were unreachable in the Settings UI.** They were mapped to the
+`"Capabilities"` category, but nothing renders that category generically — Skills/MCP/
+Filesystem/Tools are bespoke console panels whose Capabilities-mapped fields surface as a
+sharing/tier chip *inside* them, not through a standalone `SettingsCategoryPanel`. Fixed
+by giving `"Publish"` its **own** dedicated category (`_SECTION_CATEGORY["Publish"] =
+"Publish"`, added to `_CATEGORY_ORDER`), the same pattern `"Secrets manager"` → `"Secrets"`
+already established, with a new Settings ▸ Publish section
+(`SettingsCategoryPanel category="Publish" footer={<PublishedLinksSection />}`) — the
+schema fields and the published-links list/revoke card share one panel, exactly like
+Secrets' fields + status card.
+
 ## Consequences
 
 - `graph/chat_bundle.py` (`build_bundle`, `export_bundle`, `build_bundle_zip`) now has
   real callers: `server/chat.py::publish_preview`/`publish_session`, behind the two new
   routes (D7/D8). #2680/#2681 shipped first with no caller (PR #2688); #2682/#2683 wire it
-  in (this slice).
+  in.
 - `plugins/artifact/__init__.py` gained a public consumption seam
   (`resolve_for_bundle`) and a new stored field (`version_count`) — additive, safe for
   existing `history.json` files (old artifacts fall back to `len(versions)` until their next
@@ -149,19 +184,27 @@ snippet — deliberately **not** a full sandboxed render (that's the hosted view
   (degrades gracefully — never crashes the export). A wording change in
   `plugins/artifact`'s result strings is a silent regression here worth a grep before
   shipping.
-- New config: `publish.endpoint_url` / `publish.timeout_seconds` (empty/15s default) —
-  Settings ▸ Publish, no hand-written UI (schema-driven, same as every other settings
-  field). New developer flag: `chat.publish` (tier `off`, `runtime/flags.py`), removable
-  once `#2685` exists and this graduates out of pre-release.
-- `#2684` (revocation) can now build against a real `revoke_token` — `publish_session`
-  returns one whenever `#2685`'s response includes it, but nothing in this repo persists
-  or manages it yet; the console currently only ever shows it once, inline, in the
-  success note.
+- New config: `publish.endpoint_url` / `publish.timeout_seconds` / `publish.revoke_endpoint_url`
+  (empty/15s/empty defaults) — Settings ▸ Publish, its own category (D12), schema-driven.
+  New developer flag: `chat.publish` (tier `off`, `runtime/flags.py`), removable once
+  `#2685` exists and this graduates out of pre-release.
+- `publish_session` now records every successful publish locally (best-effort — a disk
+  write failure logs a warning and returns `link_id: null` rather than making a REAL
+  success on the hosted side read back as a failure) and returns `link_id` in its
+  response. The console's success note no longer carries the raw revoke token (D10 made
+  that unnecessary) — it points at Settings ▸ Publish instead.
+- The e2e test suite's mock `/api/settings/schema` fixture
+  (`apps/web/e2e/fixtures.mjs`) needed its own "Publish" section added — it's a static
+  fixture, not derived from the real Python schema, so a new core config section is
+  invisible to e2e tests until someone adds it there by hand. Caught by a real e2e run
+  (the schema fields silently rendered empty), not by `tsc`/unit tests.
 
 ## Refs
 
 #2179 (P2 parent) · #2680/#2681 (format + builder, PR #2688) · #2682/#2683 (pre-publish
-review + publish client, this slice) · #2684 (revocation) · #2685 (hosted infra, separate
-repo) · #2158/#2181 (P1) · ADR 0091 (agent-snapshot zip/manifest/REVIEW.md precedent, and
-the `infra/secrets` error-taxonomy pattern D7 mirrors) · ADR 0068 (developer flags) ·
-ADR 0080 (external secrets manager, source of the `infra/publish` client shape).
+review + publish client, PR #2694) · #2684 (revocation + published-links, this slice) ·
+#2685 (hosted infra, separate repo) · #2158/#2181 (P1) · ADR 0091 (agent-snapshot
+zip/manifest/REVIEW.md precedent, and the `infra/secrets` error-taxonomy pattern D7/D10
+mirror) · ADR 0068 (developer flags) · ADR 0080 (external secrets manager, source of the
+`infra/publish` client shape) · ADR 0087 (device pairing, source of the
+`infra/publish/store.py` registry shape).

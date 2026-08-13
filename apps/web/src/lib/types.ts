@@ -613,6 +613,18 @@ export type ChatBundleManifest = {
   messages: ChatBundleMessage[];
 };
 
+/** One thread this instance has published to the hosted viewer (#2684) — never carries
+ *  the revoke token, which stays server-internal. `revoked_at` null = still live. */
+export type PublishedLink = {
+  id: string;
+  thread_id: string;
+  title: string;
+  public_url: string;
+  published_at: number;
+  expires_at: string | null;
+  revoked_at: number | null;
+};
+
 /** Wire shape of a single tool event streamed over the A2A tool-call DataPart. */
 export type ToolEvent = {
   id: string;

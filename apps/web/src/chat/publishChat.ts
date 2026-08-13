@@ -45,13 +45,12 @@ export async function confirmPublish(sessionId: string, title?: string): Promise
     const missing = res.artifact_notes?.length
       ? ` ${res.artifact_notes.length} artifact(s) noted but not fully included — see the link for details.`
       : "";
-    // No revocation UI exists yet (#2684, not built) — surface the raw token so the
-    // operator at least has it recorded, rather than implying a management surface
-    // that isn't there.
-    const revoke = res.revoke_token ? `\n\nRevoke token: \`${res.revoke_token}\` (save this — no UI to look it up yet).` : "";
+    // The server already recorded this link (#2684) — Settings ▸ Publish is where it can
+    // be revoked, so the note doesn't need to carry the raw token anymore.
+    const manage = res.link_id ? " Manage or revoke it from Settings ▸ Publish." : "";
     append(
       sessionId,
-      note(`**Published.** [${res.public_url}](${res.public_url})${redacted}${missing}${revoke}`, "success"),
+      note(`**Published.** [${res.public_url}](${res.public_url})${redacted}${missing}${manage}`, "success"),
     );
   } catch (e) {
     append(sessionId, note(`Publish failed — ${errMsg(e)}`, "danger"));

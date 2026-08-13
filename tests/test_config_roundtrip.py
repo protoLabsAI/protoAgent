@@ -151,6 +151,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "secrets_manager_timeout_seconds": 10.0,
     "publish_endpoint_url": "",
     "publish_timeout_seconds": 15.0,
+    "publish_revoke_endpoint_url": "",
     "knowledge_backend": "",
     "knowledge_db_path": "/sandbox/knowledge/agent.db",
     "knowledge_scope": "",

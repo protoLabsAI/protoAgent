@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
 import { visibleSections } from "./sectionGate";
 import type { LucideIcon } from "lucide-react";
@@ -30,6 +30,7 @@ import { developerPanelVisible, useDeveloperChannel } from "../flags/flags";
 import { OverviewPanel } from "./OverviewPanel";
 import { DevicesPanel } from "./DevicesPanel";
 import { SecretsPanel } from "./SecretsPanel";
+import { PublishedLinksSection } from "./PublishedLinksSection";
 import { OAuthAccountSection } from "./OAuthAccountSection";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
@@ -111,6 +112,14 @@ const AGENT_SECTIONS: Section[] = [
   // Flag-off: `shown()` drops it from the nav AND from id resolution, so a persisted "secrets"
   // id falls back to the first visible section instead of a blank pane.
   { id: "secrets", label: "Secrets", icon: Lock, flag: "secrets-panel", render: () => <SecretsPanel /> },
+  // Publishing a chat thread to the hosted viewer (#2179 P2, #2682-#2684) — schema fields
+  // (endpoint URLs) + the published-links list/revoke card, same footer-seam pattern as
+  // Secrets above. Behind `chat.publish` (ADR 0068), off by default: the hosted service
+  // (#2685) doesn't exist yet, so there's nothing for this panel to manage until an
+  // operator has a real endpoint to configure.
+  { id: "publish", label: "Publish", icon: Share2, flag: "chat.publish", render: () => (
+    <SettingsCategoryPanel category="Publish" title="Publish" footer={<PublishedLinksSection />} />
+  ) },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
   // Last in the group on purpose: a snapshot exports what every section above configures
   // (identity, model, behavior, plugins) — it IS this agent's definition (ADR 0091).

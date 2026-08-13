@@ -26,6 +26,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from infra.publish import list_published_links
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
@@ -39,6 +40,7 @@ from server.chat import (
     export_session,
     publish_preview,
     publish_session,
+    revoke_published_link,
     rewind_session,
 )
 
@@ -414,6 +416,48 @@ def register_chat_routes(app, ui: str) -> None:
             )
         title = (body or {}).get("title")
         return await publish_session(session_id, title=title)
+
+    @app.get("/api/chat/publish/links")
+    async def _api_list_published_links():
+        """Everything this instance has published to the hosted viewer (#2684) —
+        title, public URL, timestamps, revoked state. Never includes the revoke
+        token — that's server-internal only, presented to the hosted service by
+        the revoke route below, never sent back to the browser after the initial
+        publish. Not per-session: a link outlives the tab it was published from.
+
+        Pre-release: behind the ``chat.publish`` developer flag (ADR 0068)."""
+        from fastapi import HTTPException
+
+        from runtime.flags import flag_enabled
+
+        if not flag_enabled("chat.publish"):
+            raise HTTPException(
+                status_code=403,
+                detail="/publish is pre-release — enable the chat.publish developer flag (ADR 0068)",
+            )
+        return {"links": list_published_links()}
+
+    @app.post("/api/chat/publish/links/{link_id}/revoke")
+    async def _api_revoke_published_link(link_id: str):
+        """Un-share a previously published thread (#2684). Looks up the link's stored
+        revoke_token and presents it to the configured ``publish.revoke_endpoint_url`` —
+        marks the link revoked LOCALLY only once the hosted service confirms, never
+        before (a local-only revoke would tell the operator a link is dead while it's
+        still live). Returns ``{ok, error?}``: ``ok: false`` with
+        ``reason: "not_configured"`` when no revoke endpoint is set, same honest-state
+        shape as publish itself.
+
+        Pre-release: behind the ``chat.publish`` developer flag (ADR 0068)."""
+        from fastapi import HTTPException
+
+        from runtime.flags import flag_enabled
+
+        if not flag_enabled("chat.publish"):
+            raise HTTPException(
+                status_code=403,
+                detail="/publish is pre-release — enable the chat.publish developer flag (ADR 0068)",
+            )
+        return await revoke_published_link(link_id)
 
     @app.post("/api/chat/sessions/{session_id}/aside")
     async def _api_aside_session(session_id: str, body: dict | None = None):

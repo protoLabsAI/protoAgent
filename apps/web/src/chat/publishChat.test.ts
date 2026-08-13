@@ -31,9 +31,10 @@ beforeEach(() => {
 });
 
 describe("confirmPublish", () => {
-  it("success note carries the public link, redaction count, and revoke token", async () => {
+  it("success note carries the public link, redaction count, and a pointer to manage it (#2684) — never the raw token", async () => {
     publishChatSession.mockResolvedValue({
       published: true,
+      link_id: "a1b2c3d4",
       public_url: "https://protolabs.studio/c/abc123",
       revoke_token: "rvk_xyz",
       expires_at: null,
@@ -51,7 +52,10 @@ describe("confirmPublish", () => {
     expect(messages[0].noteTone).toBe("success");
     expect(messages[0].content).toContain("https://protolabs.studio/c/abc123");
     expect(messages[0].content).toContain("1 secret pattern(s) were redacted");
-    expect(messages[0].content).toContain("rvk_xyz");
+    expect(messages[0].content).toContain("Settings ▸ Publish");
+    // The server now persists the link (#2684) — the raw token never needs to leave the
+    // server, unlike the pre-#2684 note that had nowhere else to put it.
+    expect(messages[0].content).not.toContain("rvk_xyz");
   });
 
   it("not-configured is a warning note, not a danger one — it's an expected state", async () => {
@@ -93,9 +97,10 @@ describe("confirmPublish", () => {
     expect(messages[0].content).toContain("network down");
   });
 
-  it("omits the redaction/missing-artifact clauses when there's nothing to report", async () => {
+  it("omits the redaction/missing-artifact/manage clauses when there's nothing to report", async () => {
     publishChatSession.mockResolvedValue({
       published: true,
+      link_id: null,
       public_url: "https://protolabs.studio/c/xyz",
       revoke_token: "",
       expires_at: null,
@@ -110,6 +115,8 @@ describe("confirmPublish", () => {
     const content = messagesOf(sessionId)[0].content;
     expect(content).not.toContain("redacted");
     expect(content).not.toContain("artifact(s) noted");
-    expect(content).not.toContain("Revoke token");
+    // No link_id (e.g. the local record-write failed, #2684's best-effort path) → no
+    // false claim of a management surface that has nothing to show.
+    expect(content).not.toContain("Settings ▸ Publish");
   });
 });

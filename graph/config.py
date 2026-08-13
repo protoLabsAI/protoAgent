@@ -1131,6 +1131,10 @@ class LangGraphConfig:
     # erroring or silently no-opping. Behind the chat.publish developer flag (ADR 0068).
     publish_endpoint_url: str = ""
     publish_timeout_seconds: float = 15.0
+    # Revocation (#2684) — a SEPARATE configured endpoint, not a path convention off
+    # endpoint_url: presuming a URL shape on a service that doesn't exist yet would be a
+    # guess dressed up as a contract. See infra/publish/client.py's revoke_bundle.
+    publish_revoke_endpoint_url: str = ""
 
     def __post_init__(self):
         # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
@@ -1534,6 +1538,9 @@ class LangGraphConfig:
             ),
             publish_endpoint_url=str(publish.get("endpoint_url", cls.publish_endpoint_url) or ""),
             publish_timeout_seconds=float(publish.get("timeout_seconds", cls.publish_timeout_seconds) or 15.0),
+            publish_revoke_endpoint_url=str(
+                publish.get("revoke_endpoint_url", cls.publish_revoke_endpoint_url) or ""
+            ),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
             # fallback only fires when the merged dict omits the key (zero-migration).

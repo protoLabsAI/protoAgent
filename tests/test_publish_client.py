@@ -7,9 +7,11 @@ without a real network call or a real #2685 to point at.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
-from infra.publish.client import PublishErrorKind, publish_bundle
+from infra.publish.client import PublishErrorKind, publish_bundle, revoke_bundle
 
 
 def _mock(handler):
@@ -110,5 +112,66 @@ def test_never_raises_on_an_unexpected_exception():
         raise RuntimeError("something the client never anticipated")
 
     out = publish_bundle(b"x", endpoint_url="https://hosted.test/bundles", transport=_mock(handler))
+    assert out.ok is False
+    assert out.error_kind is PublishErrorKind.INTERNAL
+
+
+# ── revoke_bundle (#2684) ────────────────────────────────────────────────────────────
+def test_revoke_not_configured_never_makes_a_network_call():
+    def _boom(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not attempt a request with no revoke endpoint configured")
+
+    out = revoke_bundle("tok", endpoint_url="", transport=_mock(_boom))
+    assert out.ok is False
+    assert out.error_kind is PublishErrorKind.NOT_CONFIGURED
+
+
+def test_revoke_happy_path_posts_the_token_and_reports_ok():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"revoked": True})
+
+    out = revoke_bundle("tok-1", endpoint_url="https://hosted.test/revoke", transport=_mock(handler))
+    assert seen["body"] == {"revoke_token": "tok-1"}
+    assert out.ok is True
+    assert out.error == ""
+
+
+def test_revoke_unknown_token_is_rejected_not_bad_response():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "unknown revoke token"})
+
+    out = revoke_bundle("tok-1", endpoint_url="https://hosted.test/revoke", transport=_mock(handler))
+    assert out.ok is False
+    assert out.error_kind is PublishErrorKind.REJECTED
+    assert out.error == "unknown revoke token"
+
+
+def test_revoke_server_error_is_bad_response():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    out = revoke_bundle("tok-1", endpoint_url="https://hosted.test/revoke", transport=_mock(handler))
+    assert out.error_kind is PublishErrorKind.BAD_RESPONSE
+
+
+def test_revoke_timeout_is_reported_as_timeout():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("timed out")
+
+    out = revoke_bundle(
+        "tok-1", endpoint_url="https://hosted.test/revoke", timeout_seconds=3.0, transport=_mock(handler)
+    )
+    assert out.error_kind is PublishErrorKind.TIMEOUT
+    assert "3s" in out.error
+
+
+def test_revoke_never_raises_on_an_unexpected_exception():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("unexpected")
+
+    out = revoke_bundle("tok-1", endpoint_url="https://hosted.test/revoke", transport=_mock(handler))
     assert out.ok is False
     assert out.error_kind is PublishErrorKind.INTERNAL
