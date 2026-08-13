@@ -34,20 +34,67 @@ test("full markdown surface renders (structure + chrome)", async ({ page }, test
   // <pre> COMPUTES to a whitespace-preserving mode (a future drift that loses the selector's grip
   // reverts it to `normal` and trips this), and that streamdown still emits one span per source
   // line (the 4-line ts fixture → 4 line spans).
-  const tsPre = md.locator("pre").filter({ hasText: "export const add" });
-  await expect(tsPre).toBeVisible();
-  const tsWhiteSpace = await tsPre.evaluate((el) => getComputedStyle(el).whiteSpace);
+  //
+  // #2659: streamdown's code block renders through a Suspense boundary — a synchronous raw
+  // fallback `<pre>` (streamdown/dist/chunk*.js `st`), swapped ONCE for a freshly-mounted
+  // `<pre>` from the lazy-loaded HighlightedCodeBlockBody (streamdown/dist/highlighted-body*.js)
+  // as soon as that chunk resolves, which then updates its own children in place as Shiki's
+  // async `highlight()` (@streamdown/code) resolves real tokens. Reading whiteSpace/innerText/
+  // span-count as SEPARATE Playwright round-trips can straddle that swap and catch an
+  // already-detached node (empty computed style, or an innerText collapsed because a detached
+  // element has no layout box for the browser's line-break algorithm to key off). There's no
+  // "highlighting done" DOM attribute/event exposed, but the fallback tokens are recognizable —
+  // every fallback token's inline `--sdm-c` custom property is literally the string "inherit"
+  // (chunk*.js `st`'s synthetic token list), while real Shiki tokens always carry a concrete
+  // theme color. Poll INSIDE the page for the first REAL (non-fallback) render, then require a
+  // few consecutive identical reads before trusting it's settled, and take every measurement
+  // (whiteSpace, innerText, span count) from that SAME browser-side snapshot — one coherent
+  // final read instead of a sequence of reads that can straddle the node swap.
+  const finalSnapshot = await page.waitForFunction(
+    () => {
+      const w = window as unknown as { __mdSmokePrevJson?: string; __mdSmokeStableCount?: number };
+      const candidates = Array.from(document.querySelectorAll("pre")).filter((el) =>
+        (el.textContent || "").includes("export const add"),
+      );
+      if (candidates.length !== 1 || !candidates[0].isConnected) {
+        w.__mdSmokeStableCount = 0;
+        return null; // zero or >1 matches (or a detached node) — mid-swap, keep polling
+      }
+      const pre = candidates[0] as HTMLElement;
+      const firstToken = pre.querySelector("code > span > span");
+      const colorMatch = /--sdm-c:\s*([^;]+)/.exec(firstToken?.getAttribute("style") || "");
+      const isRealHighlight = !!colorMatch && colorMatch[1].trim() !== "inherit";
+      if (!isRealHighlight) {
+        w.__mdSmokeStableCount = 0;
+        return null; // still the synthetic pre-highlight fallback — keep polling
+      }
+      const snapshot = {
+        whiteSpace: getComputedStyle(pre).whiteSpace,
+        innerText: pre.innerText,
+        spanCount: pre.querySelectorAll("code > span").length,
+      };
+      const json = JSON.stringify(snapshot);
+      w.__mdSmokeStableCount = json === w.__mdSmokePrevJson ? (w.__mdSmokeStableCount || 0) + 1 : 1;
+      w.__mdSmokePrevJson = json;
+      // Require 3 consecutive identical reads (not just "highlighted once") so a stray
+      // in-place re-render right after the swap can't slip a half-updated snapshot through.
+      return w.__mdSmokeStableCount >= 3 ? snapshot : null;
+    },
+    undefined,
+    { timeout: 15_000, polling: 25 },
+  );
+  const { whiteSpace: tsWhiteSpace, innerText: rendered, spanCount: tsSpanCount } =
+    (await finalSnapshot.jsonValue()) as { whiteSpace: string; innerText: string; spanCount: number };
   expect(tsWhiteSpace).toMatch(/^pre/);
   // …but computed `white-space` alone cannot catch #2612: streamdown emits one <span> per
   // LINE with no newline text nodes between them, so the lines flow together while
   // `white-space` still reports `pre` and the span count still matches. Assert the property
   // that actually matters — the RENDERED text keeps its line breaks AND its indentation.
   // (The fixture block is indented on purpose; a flush-left fixture cannot fail this.)
-  const rendered = await tsPre.evaluate((el) => (el as HTMLElement).innerText);
   expect(rendered).toContain("function demo(items: string[]) {\n");
   expect(rendered).toContain("\n  if (items.length) {\n");
   expect(rendered).toContain("\n    return items.map((s) => s.trim());\n");
-  await expect(tsPre.locator("code > span")).toHaveCount(10); // 6 indented lines + 4 exports
+  expect(tsSpanCount).toBe(10); // 6 indented lines + 4 exports
   await expect(md.locator("table")).toBeVisible();
   await expect(md.locator("table td").first()).toContainText("alpha");
   await expect(md.locator('[data-streamdown="horizontal-rule"]')).toBeVisible();
