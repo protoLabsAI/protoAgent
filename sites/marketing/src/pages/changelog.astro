@@ -1,8 +1,41 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import ChangelogEntries from '../components/ChangelogEntries.astro';
 import changelog from '../../data/changelog.json';
 
 const releases = 'https://github.com/protoLabsAI/protoAgent/releases';
+
+// Group the (already newest-first) flat list into year-month buckets, keeping each
+// entry's global index (startIndex) so only the true first release overall keeps
+// the "latest" badge — not the first of each month.
+interface Group {
+  key: string;
+  label: string;
+  entries: typeof changelog;
+  startIndex: number;
+}
+
+function monthLabel(key: string): string {
+  const [y, m] = key.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+const groups: Group[] = [];
+changelog.forEach((entry, i) => {
+  const key = entry.date.slice(0, 7); // "2026-08"
+  const last = groups[groups.length - 1];
+  if (!last || last.key !== key) {
+    groups.push({ key, label: monthLabel(key), entries: [entry], startIndex: i });
+  } else {
+    last.entries.push(entry);
+  }
+});
+
+const [currentMonth, ...priorMonths] = groups;
 ---
 
 <BaseLayout
@@ -13,56 +46,33 @@ const releases = 'https://github.com/protoLabsAI/protoAgent/releases';
     <h1 class="text-4xl font-bold mb-2">Changelog</h1>
     <p class="text-zinc-400 mb-16 text-lg">Every release, newest first.</p>
 
-    <div class="relative">
-      <!-- Timeline spine -->
-      <div class="absolute left-[3.25rem] top-2 bottom-0 w-px" style="background: var(--pl-color-border)"></div>
+    {currentMonth && <ChangelogEntries entries={currentMonth.entries} startIndex={currentMonth.startIndex} />}
 
-      <ol class="space-y-12">
-        {changelog.map(({ version, date, changes }, i) => (
-          <li class="flex gap-6 relative">
-            <!-- Dot -->
-            <div class="shrink-0 w-[1.625rem] h-[1.625rem] mt-0.5 rounded-full border flex items-center justify-center z-10"
-                 style={i === 0
-                   ? 'background: color-mix(in srgb, var(--pl-color-brand-lavender) 15%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 50%, transparent);'
-                   : 'background: var(--pl-color-bg-raised); border-color: var(--pl-color-border);'}>
-              <div class="w-1.5 h-1.5 rounded-full"
-                   style={i === 0 ? 'background: var(--pl-color-brand-lavender);' : 'background: #52525b;'}></div>
-            </div>
-
-            <!-- Content -->
-            <div class="flex-1 pb-2">
-              <div class="flex flex-wrap items-center gap-3 mb-3">
-                <a
-                  href={`${releases}/tag/${version}`}
-                  class="px-2 py-0.5 rounded font-mono text-sm border transition-colors"
-                  style={i === 0
-                    ? 'background: color-mix(in srgb, var(--pl-color-brand-lavender) 10%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent); color: var(--pl-color-brand-lavender);'
-                    : 'background: var(--pl-color-bg-raised); border-color: var(--pl-color-border); color: var(--pl-color-fg-muted);'}
+    {priorMonths.length > 0 && (
+      <div class="mt-12 space-y-3">
+        {priorMonths.map((group) => (
+          <details class="group rounded-lg border" style="border-color: var(--pl-color-border);">
+            <summary
+              class="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer select-none list-none marker:hidden [&::-webkit-details-marker]:hidden"
+            >
+              <span class="font-medium text-zinc-300">{group.label}</span>
+              <span class="flex items-center gap-2">
+                <span class="text-xs text-zinc-500">{group.entries.length} release{group.entries.length === 1 ? '' : 's'}</span>
+                <svg
+                  class="w-4 h-4 text-zinc-500 transition-transform duration-150 group-open:rotate-90"
+                  viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"
                 >
-                  {version}
-                </a>
-                <span class="text-zinc-500 text-sm">{date}</span>
-                {i === 0 && (
-                  <span class="px-1.5 py-0.5 rounded text-xs font-mono border"
-                        style="background: color-mix(in srgb, var(--pl-color-brand-lavender) 8%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 25%, transparent); color: var(--pl-color-brand-lavender);">
-                    latest
-                  </span>
-                )}
-              </div>
-
-              <ul class="space-y-1.5">
-                {changes.map((change) => (
-                  <li class="flex items-start gap-2 text-sm text-zinc-300">
-                    <span class="text-zinc-600 mt-0.5 shrink-0">—</span>
-                    <span>{change}</span>
-                  </li>
-                ))}
-              </ul>
+                  <path d="M7 5l6 5-6 5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+            </summary>
+            <div class="px-4 pb-6 pt-2">
+              <ChangelogEntries entries={group.entries} startIndex={group.startIndex} />
             </div>
-          </li>
+          </details>
         ))}
-      </ol>
-    </div>
+      </div>
+    )}
 
     <div class="mt-16 pt-8 border-t border-white/5">
       <p class="text-zinc-500 text-sm">
