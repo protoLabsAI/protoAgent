@@ -134,7 +134,16 @@ def _ensure_os_trust_store() -> None:
     push-notification delivery) picks this up identically with no per-call-site
     change, and a chain the OS itself doesn't trust still fails closed. Not
     frozen-gated: the certifi-only gap is in httpx itself, present in a source
-    checkout too. Must run before the first outbound TLS request."""
+    checkout too. Must run before the first outbound TLS request.
+
+    Side effect worth knowing: on Windows/macOS this also supersedes
+    ``_ensure_ca_bundle_env()``'s ``SSL_CERT_FILE`` for httpx/ssl clients
+    specifically — SChannel/Security.framework verify through the OS store
+    regardless of what ``cafile`` was loaded, so an operator's env-var CA override
+    stops influencing them there (install the CA in the OS store instead — see
+    ``docs/guides/delegates.md``). It keeps working on Linux, where truststore's
+    own backend reads that same variable. ``ddgs``/``primp`` (a native, non-``ssl``-
+    module client) is unaffected either way — it never goes through this patch."""
     try:
         import truststore
 
