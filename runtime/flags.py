@@ -67,6 +67,19 @@ FLAGS: list[Flag] = [
         remove_by="2026-10-01",
     ),
     Flag(
+        id="chat.publish",
+        description=(
+            "Publish a chat thread to a hosted, read-only link (#2179 P2, #2683). OFF by "
+            "default: the hosted viewer service (#2685) doesn't exist yet — every publish "
+            "attempt returns 'not configured' until publish.endpoint_url is set to a real "
+            "one. Exists so the plumbing (bundle build, pre-publish review, wire contract) "
+            "can be built and tested ahead of that infra landing."
+        ),
+        tier="off",
+        owner="kj",
+        remove_by="2026-11-01",
+    ),
+    Flag(
         id="secrets-panel",
         description=(
             "Settings ▸ Secrets — external secrets manager panel (ADR 0080). Dev channel "

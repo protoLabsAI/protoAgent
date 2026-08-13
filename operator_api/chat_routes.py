@@ -31,7 +31,16 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
-from server.chat import _resolve_thread_id, aside_session, chat, compact_session, export_session, rewind_session
+from server.chat import (
+    _resolve_thread_id,
+    aside_session,
+    chat,
+    compact_session,
+    export_session,
+    publish_preview,
+    publish_session,
+    rewind_session,
+)
 
 
 class ChatRequest(BaseModel):
@@ -361,6 +370,50 @@ def register_chat_routes(app, ui: str) -> None:
         machine, so the operator reviews rather than trusting a silent filter.
         Redaction is a safety net, not a guarantee."""
         return await export_session(session_id, title=title)
+
+    @app.get("/api/chat/sessions/{session_id}/publish/preview")
+    async def _api_publish_preview(session_id: str, title: str | None = None):
+        """Build the structured chat-bundle for the pre-publish review (#2179 P2, #2682)
+        — **read-only**, sends nothing anywhere. The operator reviews this before
+        deciding to publish. Returns
+        ``{found, manifest, message_count, redactions, reason, message}``.
+
+        Pre-release: behind the ``chat.publish`` developer flag (ADR 0068) — the hosted
+        service this feeds (#2685) doesn't exist yet."""
+        from fastapi import HTTPException
+
+        from runtime.flags import flag_enabled
+
+        if not flag_enabled("chat.publish"):
+            raise HTTPException(
+                status_code=403,
+                detail="/publish is pre-release — enable the chat.publish developer flag (ADR 0068)",
+            )
+        return await publish_preview(session_id, title=title)
+
+    @app.post("/api/chat/sessions/{session_id}/publish")
+    async def _api_publish_session(session_id: str, body: dict | None = None):
+        """Publish a chat thread to the hosted viewer (#2179 P2, #2683).
+
+        Builds the bundle server-side, fresh — never accepts a client-supplied bundle —
+        then POSTs it to the configured ``publish.endpoint_url``. Returns
+        ``{published, public_url, revoke_token, expires_at, redactions, artifact_notes,
+        reason, message}``; a false ``published`` carries a ``reason`` (e.g.
+        ``not_configured`` when no hosted endpoint is set) rather than an error status,
+        since "not configured yet" is an expected state, not a failure.
+
+        Pre-release: behind the ``chat.publish`` developer flag (ADR 0068)."""
+        from fastapi import HTTPException
+
+        from runtime.flags import flag_enabled
+
+        if not flag_enabled("chat.publish"):
+            raise HTTPException(
+                status_code=403,
+                detail="/publish is pre-release — enable the chat.publish developer flag (ADR 0068)",
+            )
+        title = (body or {}).get("title")
+        return await publish_session(session_id, title=title)
 
     @app.post("/api/chat/sessions/{session_id}/aside")
     async def _api_aside_session(session_id: str, body: dict | None = None):

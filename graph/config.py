@@ -1124,6 +1124,14 @@ class LangGraphConfig:
     secrets_manager_override_env: bool = False
     secrets_manager_timeout_seconds: float = 10.0
 
+    # Hosted chat-thread publishing (#2179 P2, #2683) — POST a redacted bundle
+    # (graph.chat_bundle) to a hosted viewer service and get back a public link. Empty
+    # host is the expected default until the hosted service (#2685, a separate,
+    # not-yet-started repo) exists: publish then reports "not configured" rather than
+    # erroring or silently no-opping. Behind the chat.publish developer flag (ADR 0068).
+    publish_endpoint_url: str = ""
+    publish_timeout_seconds: float = 15.0
+
     def __post_init__(self):
         # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
         # boot the same agent against different models without editing config
@@ -1324,6 +1332,7 @@ class LangGraphConfig:
         secrets_manager = data.get("secrets_manager", {})
         secret_sm_client_id = secrets.get("secrets_manager", {}).get("client_id")
         secret_sm_client_secret = secrets.get("secrets_manager", {}).get("client_secret")
+        publish = data.get("publish", {}) or {}
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -1523,6 +1532,8 @@ class LangGraphConfig:
             secrets_manager_timeout_seconds=float(
                 secrets_manager.get("timeout_seconds", cls.secrets_manager_timeout_seconds) or 10.0
             ),
+            publish_endpoint_url=str(publish.get("endpoint_url", cls.publish_endpoint_url) or ""),
+            publish_timeout_seconds=float(publish.get("timeout_seconds", cls.publish_timeout_seconds) or 15.0),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
             # fallback only fires when the merged dict omits the key (zero-migration).

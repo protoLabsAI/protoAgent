@@ -551,6 +551,101 @@ def test_export_session_route(monkeypatch):
     assert body["redactions"] == ["openai-key"]
 
 
+def test_publish_preview_route(monkeypatch):
+    # Thin pass-through to server.chat.publish_preview. Behind chat.publish (ADR 0068)
+    # — force it ON via the env override so the pass-through is what's under test.
+    import operator_api.chat_routes as cr
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_CHAT_PUBLISH", "1")
+    seen: list[tuple] = []
+
+    async def _fake_preview(session_id, *, title=None):
+        seen.append((session_id, title))
+        return {
+            "found": True,
+            "manifest": {"bundle_version": 1, "thread_id": "s1", "messages": []},
+            "message_count": 2,
+            "redactions": ["openai-key"],
+            "reason": "ok",
+            "message": "2 message(s) ready to review.",
+        }
+
+    monkeypatch.setattr(cr, "publish_preview", _fake_preview)
+    c = _client(monkeypatch)
+    body = c.get("/api/chat/sessions/s1/publish/preview?title=My%20Chat").json()
+    assert seen == [("s1", "My Chat")]
+    assert body["found"] is True
+    assert body["manifest"]["bundle_version"] == 1
+    assert body["redactions"] == ["openai-key"]
+
+
+def test_publish_preview_route_refuses_when_flag_off(monkeypatch):
+    import operator_api.chat_routes as cr
+
+    monkeypatch.delenv("PROTOAGENT_FLAG_CHAT_PUBLISH", raising=False)
+    monkeypatch.setenv("PROTOAGENT_CHANNEL", "prod")
+    called: list[str] = []
+
+    async def _fake_preview(session_id, **_k):
+        called.append(session_id)
+        return {}
+
+    monkeypatch.setattr(cr, "publish_preview", _fake_preview)
+    c = _client(monkeypatch)
+    resp = c.get("/api/chat/sessions/s1/publish/preview")
+    assert resp.status_code == 403
+    assert "chat.publish" in resp.json()["detail"]
+    assert called == []
+
+
+def test_publish_session_route(monkeypatch):
+    # Thin pass-through to server.chat.publish_session — forwards session_id + the
+    # body's title, returns the outcome verbatim.
+    import operator_api.chat_routes as cr
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_CHAT_PUBLISH", "1")
+    seen: list[tuple] = []
+
+    async def _fake_publish(session_id, *, title=None):
+        seen.append((session_id, title))
+        return {
+            "published": True,
+            "public_url": "https://protolabs.studio/c/abc123",
+            "revoke_token": "rvk_xyz",
+            "expires_at": None,
+            "redactions": [],
+            "artifact_notes": [],
+            "message": "Published — https://protolabs.studio/c/abc123",
+        }
+
+    monkeypatch.setattr(cr, "publish_session", _fake_publish)
+    c = _client(monkeypatch)
+    body = c.post("/api/chat/sessions/s1/publish", json={"title": "My Chat"}).json()
+    assert seen == [("s1", "My Chat")]
+    assert body["published"] is True
+    assert body["public_url"] == "https://protolabs.studio/c/abc123"
+    assert body["revoke_token"] == "rvk_xyz"
+
+
+def test_publish_session_route_refuses_when_flag_off(monkeypatch):
+    import operator_api.chat_routes as cr
+
+    monkeypatch.delenv("PROTOAGENT_FLAG_CHAT_PUBLISH", raising=False)
+    monkeypatch.setenv("PROTOAGENT_CHANNEL", "prod")
+    called: list[str] = []
+
+    async def _fake_publish(session_id, **_k):
+        called.append(session_id)
+        return {}
+
+    monkeypatch.setattr(cr, "publish_session", _fake_publish)
+    c = _client(monkeypatch)
+    resp = c.post("/api/chat/sessions/s1/publish")
+    assert resp.status_code == 403
+    assert "chat.publish" in resp.json()["detail"]
+    assert called == []
+
+
 def test_aside_session_route(monkeypatch):
     # Thin pass-through to server.chat.aside_session — forwards the path session_id +
     # the body's question, returns the result verbatim. POST (it runs a turn), no

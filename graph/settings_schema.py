@@ -1154,6 +1154,26 @@ FIELDS: list[Field] = [
         minimum=1,
         depends_on={"key": "secrets_manager.enabled"},
     ),
+    # ── Publish (#2179 P2, #2683) — hosted chat-thread viewer ────────────────
+    Field(
+        "publish.endpoint_url",
+        "publish_endpoint_url",
+        "Hosted publish endpoint URL",
+        "string",
+        "Publish",
+        "Where a redacted chat-bundle zip is POSTed when publishing a thread to a "
+        "shareable link (behind the chat.publish developer flag). Empty = publishing "
+        "isn't configured yet — the hosted viewer service doesn't exist as of this "
+        "writing, so leave this unset until you're pointing at a real one.",
+    ),
+    Field(
+        "publish.timeout_seconds",
+        "publish_timeout_seconds",
+        "Publish timeout (seconds)",
+        "number",
+        "Publish",
+        minimum=1,
+    ),
     # ── Plugins ──────────────────────────────────────────────────────────────
     Field(
         "plugins.allow_unbundled_deps",
@@ -1391,6 +1411,9 @@ _SECTION_CATEGORY = {
     "Tools": "Capabilities",
     # Project onboarding (#2555) — operator-consented clone+register space.
     "Project onboarding": "Capabilities",
+    # Publish (#2179 P2, #2683) — a capability toggle for the pre-release hosted-viewer
+    # publish gesture, not a secrets-fetch integration (that's "Secrets").
+    "Publish": "Capabilities",
     # Knowledge — recall / RAG config, split into sub-sections (see _KNOWLEDGE_SUBSECTION).
     "Recall": "Knowledge",
     "Ingestion": "Knowledge",

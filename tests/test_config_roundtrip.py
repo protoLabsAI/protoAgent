@@ -149,6 +149,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "secrets_manager_required": False,
     "secrets_manager_override_env": False,
     "secrets_manager_timeout_seconds": 10.0,
+    "publish_endpoint_url": "",
+    "publish_timeout_seconds": 15.0,
     "knowledge_backend": "",
     "knowledge_db_path": "/sandbox/knowledge/agent.db",
     "knowledge_scope": "",

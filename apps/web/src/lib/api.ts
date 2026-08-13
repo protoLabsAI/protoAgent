@@ -9,6 +9,7 @@ import type {
   ArchetypePreview,
   BackgroundJobDTO,
   BrowseListing,
+  ChatBundleManifest,
   FsProject,
   ManagedProjects,
   Task,
@@ -1783,6 +1784,37 @@ export const api = {
       reason: string;
       message: string;
     }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export${q}`, { method: "GET" });
+  },
+
+  // Build the structured chat-bundle for the pre-publish review (#2179 P2, #2682) —
+  // read-only, sends nothing anywhere. Behind the `chat.publish` developer flag.
+  fetchPublishPreview(sessionId: string, title?: string) {
+    const q = title ? `?title=${encodeURIComponent(title)}` : "";
+    return request<{
+      found: boolean;
+      manifest: ChatBundleManifest | null;
+      message_count: number;
+      redactions: string[];
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/publish/preview${q}`, { method: "GET" });
+  },
+
+  // Publish a chat thread to the hosted viewer (#2179 P2, #2683). Rebuilds the bundle
+  // server-side fresh — never sends the client-side preview back up — so `published:
+  // false` with `reason: "not_configured"` is the expected state until the hosted
+  // service (#2685) exists and an operator points `publish.endpoint_url` at it.
+  publishChatSession(sessionId: string, title?: string) {
+    return request<{
+      published: boolean;
+      public_url?: string;
+      revoke_token?: string;
+      expires_at?: string | null;
+      redactions?: string[];
+      artifact_notes?: string[];
+      reason?: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/publish`, { method: "POST", body: { title } });
   },
 
   // `/btw` (#2180): ask a side question about this session's context WITHOUT changing

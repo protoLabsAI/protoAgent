@@ -29,9 +29,11 @@ import {
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { exportChatToFile } from "./exportChat";
+import { PublishDialog } from "./PublishDialog";
+import { openPublishDialog } from "./publishDialogStore";
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
-import { useFlagPredicate } from "../flags/flags";
+import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
@@ -142,6 +144,9 @@ export function ChatSurface({
   const closingGoal = pendingClose
     ? goalSessions.find((g) => g.session_id === pendingClose && g.status === "active")
     : undefined;
+  // Pre-release (chat.publish, ADR 0068) — gates the tab context-menu item; the /publish
+  // slash command gates itself via its own `flag:` tag through the registry.
+  const publishEnabled = useFlag("chat.publish");
 
   useEffect(() => {
     if (!chat.currentSessionId && chat.sessions.length === 0) {
@@ -276,6 +281,9 @@ export function ChatSurface({
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onExport: () => void exportChatToFile(id),
+      // Pre-release (chat.publish, ADR 0068): the menu item is simply absent while the
+      // flag is off, same pattern as the flag-tagged slash commands below.
+      onPublish: publishEnabled ? () => openPublishDialog(id) : undefined,
       onClose: () => setPendingClose(id),
       onCloseOthers: others.length ? () => startBulkClose(others) : undefined,
       onCloseLeft: left.length ? () => startBulkClose(left) : undefined,
@@ -2076,6 +2084,8 @@ function ChatSessionSlot({
           This will discard everything below this message — cannot be undone.
         </p>
       </ConfirmDialog>
+
+      <PublishDialog />
     </div>
   );
 }

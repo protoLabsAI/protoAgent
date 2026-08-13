@@ -1713,6 +1713,133 @@ async def export_session(
     return {**result, "message": _export_message(result)}
 
 
+def _artifact_resolver():
+    """``plugins.artifact.resolve_for_bundle``, imported defensively — the artifact
+    plugin is in-tree and on by default but still a plugin an operator can disable.
+    ``None`` degrades ``chat_bundle.build_bundle`` to unavailable artifact parts rather
+    than an ``ImportError`` (ADR 0099 D3)."""
+    try:
+        from plugins.artifact import resolve_for_bundle
+
+        return resolve_for_bundle
+    except ImportError:
+        return None
+
+
+async def _build_bundle(session_id: str, *, title: str | None, request_metadata: dict | None):
+    """Shared by ``publish_preview`` and ``publish_session`` — the exact same bundle a
+    preview shows is what gets published; there is no second build path."""
+    tid = _resolve_thread_id(request_metadata, session_id)
+    async with _thread_lock(tid):
+        from graph.chat_bundle import export_bundle
+
+        return await export_bundle(
+            STATE.graph, STATE.checkpointer, tid, title=title, artifact_resolver=_artifact_resolver()
+        )
+
+
+def _publish_preview_message(result: dict) -> str:
+    reason = result.get("reason") or ""
+    if reason == "no_checkpointer":
+        return "Nothing to preview — no conversation checkpoint yet."
+    if reason == "empty_thread":
+        return "Nothing to publish — this conversation has no messages yet."
+    redactions = result.get("redactions") or []
+    note = f" {len(redactions)} secret pattern(s) would be redacted." if redactions else ""
+    return f"{result.get('message_count', 0)} message(s) ready to review.{note}"
+
+
+async def publish_preview(
+    session_id: str,
+    *,
+    title: str | None = None,
+    request_metadata: dict | None = None,
+) -> dict:
+    """Build the structured chat-bundle for the pre-publish review (#2682) — **read-only,
+    never sends anything anywhere**. The operator reviews this before deciding to publish;
+    ``publish_session`` rebuilds fresh from the live thread rather than trusting this
+    snapshot, so a stale preview can never diverge from what actually gets published.
+
+    Returns ``{found, manifest, message_count, redactions, reason, message}``.
+    """
+    if STATE.graph is None:
+        return {
+            "found": False,
+            "manifest": None,
+            "message_count": 0,
+            "redactions": [],
+            "reason": "setup",
+            "message": "Setup required — finish the setup wizard first.",
+        }
+    result = await _build_bundle(session_id, title=title, request_metadata=request_metadata)
+    return {**result, "message": _publish_preview_message(result)}
+
+
+def _publish_message(outcome: dict) -> str:
+    if outcome.get("published"):
+        return f"Published — {outcome.get('public_url')}"
+    reason = outcome.get("reason") or "internal"
+    if reason == "not_configured":
+        return "Hosted publishing isn't configured on this instance yet."
+    if reason in ("no_checkpointer", "empty_thread"):
+        return "Nothing to publish — this conversation has no messages yet."
+    return f"Publish failed ({reason}) — {outcome.get('error') or 'see server logs'}."
+
+
+async def publish_session(
+    session_id: str,
+    *,
+    title: str | None = None,
+    request_metadata: dict | None = None,
+) -> dict:
+    """Publish a chat thread to the hosted viewer (#2179 P2, #2683).
+
+    Builds the bundle **server-side, fresh** — never accepts a client-supplied bundle,
+    the same trust boundary ``export_session`` already draws, now with a public network
+    hop behind it. Returns
+    ``{published, public_url, revoke_token, expires_at, redactions, artifact_notes,
+    reason, message}``; ``published`` is ``False`` with a ``reason`` (``not_configured``
+    when ``publish.endpoint_url`` is unset — the honest default until #2685's hosted
+    service exists — or an ``infra.publish.PublishErrorKind`` value) rather than raising.
+    """
+    if STATE.graph is None:
+        outcome = {"published": False, "reason": "setup"}
+        return {**outcome, "message": "Setup required — finish the setup wizard first."}
+
+    result = await _build_bundle(session_id, title=title, request_metadata=request_metadata)
+    if not result["found"]:
+        outcome = {"published": False, "reason": result["reason"]}
+        return {**outcome, "message": _publish_message(outcome)}
+
+    from graph.chat_bundle import build_bundle_zip
+    from infra.publish import publish_bundle
+
+    bundle = build_bundle_zip(result["manifest"], result["redactions"])
+    cfg = STATE.graph_config
+    publish_result = publish_bundle(
+        bundle.data,
+        endpoint_url=getattr(cfg, "publish_endpoint_url", "") or "",
+        timeout_seconds=getattr(cfg, "publish_timeout_seconds", 15.0) or 15.0,
+    )
+    if not publish_result.ok:
+        outcome = {
+            "published": False,
+            "reason": publish_result.error_kind.value if publish_result.error_kind else "internal",
+            "error": publish_result.error,
+        }
+        return {**outcome, "message": _publish_message(outcome)}
+
+    outcome = {
+        "published": True,
+        "public_url": publish_result.public_url,
+        "revoke_token": publish_result.revoke_token,
+        "expires_at": publish_result.expires_at,
+        "redactions": result["redactions"],
+        "artifact_notes": bundle.artifact_notes,
+    }
+    return {**outcome, "message": _publish_message(outcome)}
+
+
 async def aside_session(
     session_id: str,
     question: str,

@@ -578,6 +578,41 @@ export type ToolCall = {
   parentId?: string;
 };
 
+/** One artifact reference resolved into a chat-bundle tool_call part (#2179 P2, graph.chat_bundle
+ *  / plugins.artifact.resolve_for_bundle). `available: false` covers a deleted artifact, a binary
+ *  `file`-kind artifact (bytes are never bundled — `file_meta` only), or a version the artifact
+ *  plugin's own retention has since trimmed away — never a guess at the wrong content. */
+export type ChatBundleArtifact =
+  | { id: string; artifact_kind: string; title: string; version: number; available: true; content: string }
+  | {
+      id: string;
+      artifact_kind: string;
+      title: string;
+      available: false;
+      reason: string;
+      file_meta?: { filename: string; mime: string; size: number };
+    };
+
+/** One block of a chat-bundle message (graph.chat_bundle.build_bundle) — ordered text runs and
+ *  tool-call groups, mirroring `ChatPart`/`ToolCall` so a bundle can render close to 1:1 with
+ *  what the console showed, rather than a flattened transcript. */
+export type ChatBundlePart =
+  | { kind: "text"; text: string }
+  | { kind: "tool_call"; id: string; name: string; input: Record<string, unknown>; output: string; artifact?: ChatBundleArtifact };
+
+export type ChatBundleMessage = { role: "user" | "assistant"; parts: ChatBundlePart[] };
+
+/** The structured chat-bundle manifest (ADR 0099) — what the pre-publish review previews and
+ *  what actually gets published, verbatim (the server never lets those two diverge). */
+export type ChatBundleManifest = {
+  bundle_version: number;
+  kind: "chat-bundle";
+  exported_at: string;
+  thread_id: string;
+  title: string;
+  messages: ChatBundleMessage[];
+};
+
 /** Wire shape of a single tool event streamed over the A2A tool-call DataPart. */
 export type ToolEvent = {
   id: string;

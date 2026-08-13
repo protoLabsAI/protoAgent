@@ -13,6 +13,7 @@ import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
 import { exportChatToFile } from "./exportChat";
+import { openPublishDialog } from "./publishDialogStore";
 import { buildGoalSetBody, goalFormPayload } from "./goalForm";
 import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
@@ -53,6 +54,18 @@ registerSlashCommand({
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
     void exportChatToFile(ctx.sessionId);
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "publish",
+  description: "Publish this chat to a shareable, read-only link",
+  flag: "chat.publish", // pre-release (ADR 0068) — hidden + inert while the flag is off
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    openPublishDialog(ctx.sessionId);
     ctx.focusComposer();
     return true;
   },
