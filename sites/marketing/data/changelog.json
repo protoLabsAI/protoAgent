@@ -1,5 +1,32 @@
 [
   {
+    "version": "v0.136.0",
+    "date": "2026-08-13",
+    "changes": [
+      "The federation token is now manageable from Settings, and rotates live (#1504).",
+      "A structured, artifact-aware chat-bundle export now exists alongside the Markdown one (#2680, #2681).",
+      "list_verifiers tool (#2686).",
+      "The self-building loop now closes in the packaged desktop app (#2636).",
+      "The desktop self-building loop actually runs its tests now (#2638).",
+      "An agent is told when its own tools change (#2640).",
+      "Multi-turn tool-call conversations no longer 400 in DeepSeek-style thinking mode (#2642).",
+      "Inbound A2A delegate turns now appear in the receiving agent's Activity feed (#2644).",
+      "The bundle template's pin-bump PRs no longer pile up unverified (#2645).",
+      "python -m server --config <path> now fails loudly instead of silently ignoring the path (#2647).",
+      "The \"isolated\" live-smoke run no longer probes real local protoAgents (#2651).",
+      "A completed tagged Desktop Build now refreshes the public download page (#2655).",
+      "The markdown smoke e2e no longer races Streamdown's code-block highlight swap (#2659).",
+      "Goal and Watch form data verifiers now resolve relative paths under the managed workspace (#2660).",
+      "Native Windows CI now retries one transient Node syntax-check timeout (#2662).",
+      "Chat answers stream in smaller, more frequent blocks (#2672).",
+      "model.max_iterations now actually caps the agent loop (#2679).",
+      "Goal/watch tools hidden when no verifiers registered (#2686).",
+      "A2A delegate calls now trust what the OS trusts, not just certifi (#2643).",
+      "Locked web dependencies with active advisories have been refreshed (#2649).",
+      "A Windows operator now has one guide covering install through recovery (#2656)."
+    ]
+  },
+  {
     "version": "v0.135.0",
     "date": "2026-08-12",
     "changes": [

@@ -15,6 +15,228 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.136.0] - 2026-08-13
+
+### Added
+- **The federation token (ADR 0066) is now manageable from Settings, and rotates live (#1504).**
+  `auth.federation_token` — a second A2A credential scoped to `/a2a` + `/v1`,
+  denied the `/api` operator surface — was config/env-only since it shipped:
+  no Settings field, and a saved edit wouldn't take effect until a full
+  restart (the reload path updated the bearer token but never the federation
+  one). Both gaps are fixed: it's now a redacted secret field alongside
+  `auth.token`, and a Settings-drawer save rotates it live like every other
+  credential. The delegate config panel's `auth.token` field now also points
+  operators at it directly — when a peer has a federation token, use that
+  value instead of their operator token. `docs/reference/configuration.md`
+  gained a concrete rotation runbook (issue/set/rotate/verify) — setting a
+  federation token protects nothing until each peer is individually rotated
+  onto it; the operator bearer keeps working everywhere until then.
+
+- **A structured, artifact-aware chat-bundle export now exists alongside the Markdown one (#2680, #2681).**
+  `graph/chat_bundle.py` builds a versioned JSON manifest of a thread — ordered text/tool-call
+  parts mirroring the console's own message model, with inline artifact content (HTML/SVG/
+  Mermaid/React/Markdown) resolved via a new `plugins.artifact.resolve_for_bundle` seam.
+  Binary file-artifacts stay a placeholder (kind/size/filename, never bytes) in this slice.
+  Packaged as a zip (`manifest.json` + a `REVIEW.md` disclosure of redactions and any
+  artifacts not fully included), the same shape as the ADR 0091 agent-snapshot bundle. This
+  is the foundation issue #2179 (P2's hosted viewer) needs; nothing consumes it yet by
+  design — the pre-publish review UI and publish client are separate, still-open issues.
+  See ADR 0099.
+
+- **list_verifiers tool (#2686).** Agents can now discover registered goal/watch verifiers before attempting set_goal or create_watch.
+
+### Fixed
+- **The self-building loop now closes in the packaged desktop app (#2636).**
+  Scaffolding a plugin and running its tests worked on a source run and failed on
+  desktop, which is the build a new user actually downloads. Two causes, both
+  predicted by ADR 0096 §8 and left open: `test_plugin` resolved a valid managed
+  interpreter and then died on a bare `No module named pytest` — the app bundle
+  ships no pytest and the managed runtime's baseline is the document stack
+  (docx/xlsx/pptx/pdf) — while `coder`'s verifier still returned the pre-ADR-0094
+  flat refusal that ADR 0096 had already declared superseded. Both spawners now
+  share one `infra.python_runtime.pytest_interpreter()`, which checks the managed
+  runtime for pytest *before* spawning so the failure names its own remedy instead
+  of leaking the child's traceback; `plugin-devkit` and `coder` declare
+  `pytest>=8`, so the Plugins panel's **Install deps** button can satisfy it. A
+  frozen build still never falls back to a discovered system Python.
+
+- **The desktop self-building loop actually runs its tests now (#2638).**
+  #2637 declared `pytest` as a plugin dependency so the Plugins panel could install it.
+  Built as a real PyInstaller sidecar and driven end to end, that could never work:
+  PyInstaller bundles pytest transitively, so the dep gate saw it importable in the
+  host and reported it satisfied — the console then hid the **Install deps** button
+  (it renders only when something is missing) and the CLI printed
+  `✓ installed 1 dep(s)` having installed nothing, while the managed runtime, the only
+  interpreter that can ever spawn it, stayed empty. Tightening the gate wasn't the
+  answer either: a bundled dep satisfying `requires_pip` is deliberate (ADR 0058 D2 —
+  it's why cowork works on desktop unmodified). And pytest alone was never enough — a
+  scaffolded suite also needs `pyyaml` and `langchain-core`, because every real plugin
+  does `from langchain_core.tools import tool`. The test runtime now installs into the
+  managed Python on first use, only the missing pieces, so provisioning stays lean for
+  the majority who never author a plugin. Verified on a frozen build: a plugin
+  scaffolded by the packaged binary runs its suite green.
+
+- **An agent is told when its own tools change (#2640).**
+  Capabilities appear at runtime here — a scaffolded plugin, an `enable_plugin`, a
+  plugin update, an operator settings change all rebuild the graph with a different
+  toolset — but nothing told the running agent, so one mid-session kept operating on a
+  stale belief about what it could do. The failure is worse than a missed opportunity:
+  the agent **refuses work it is capable of**, politely and with reasoning, which reads
+  to an operator as a missing feature rather than a stale toolset. Observed live: a tool
+  was deployed and bound, with a description matching the need almost word for word, and
+  the agent still reported it didn't exist — it had concluded that before the deploy and
+  written the conclusion into its friction log, so the stale belief sat in its own
+  context reinforcing itself. The bound toolset is now recorded at every graph build, and
+  a change leaves a one-shot note for the next turn naming what appeared or vanished, and
+  telling the agent to re-check any conclusion it reached for lack of a tool. Silent on
+  boot and silent when nothing changed, and it composes with the knowledge/skills block
+  rather than replacing it.
+
+- **Multi-turn tool-call conversations no longer 400 in DeepSeek-style thinking mode (#2642).**
+  Once a tool call happened anywhere in a conversation, every subsequent turn failed
+  with `The reasoning_content in the thinking mode must be passed back to the API`.
+  `langchain_openai`'s outbound message builder silently drops the model's
+  `reasoning_content` — a non-standard field it explicitly says integrations must
+  handle themselves — so the assistant messages protoAgent sent back on the next
+  turn were missing the field DeepSeek requires once thinking has been used.
+  `_ReasoningChatOpenAI` now restores it on every assistant message when thinking
+  is enabled, including an empty string for a turn that captured no reasoning of
+  its own (an absent key still 400s; only a present key, even empty, satisfies
+  the API). Gated on the existing `thinking` config flag, so this only affects
+  models that set it — every other provider is unchanged.
+
+- **Inbound A2A delegate turns now appear in the receiving agent's Activity feed (#2644).**
+  protoAgent stamps peer-delegation provenance independently of tracing and preserves the
+  receiver's real A2A context, task ID, stimulus, terminal state, and failure detail, so a
+  successful or failed sister-agent handoff no longer leaves the receiving console looking idle.
+
+- **The bundle template's pin-bump PRs no longer pile up unverified (#2645).**
+  `verify-bundle.yml`'s scheduled `bump` job opened a fresh `bump-pins-<date>` PR every
+  week with the repository `GITHUB_TOKEN` — which GitHub never auto-runs a `pull_request`
+  workflow for, so the promised `verify` check never started and each week's PR just
+  joined the unverified pile (17 open across the four published stacks). The job now
+  pushes one stable `bump-pins` branch and updates that stack's single open pin-bump PR
+  in place instead of opening a duplicate, and — since GITHUB_TOKEN-authored PRs are an
+  explicit-approval model here, not a bug, given this template has no GitHub App/PAT
+  provisioned — polls after pushing and fails loudly (PR comment, `needs-approval` label,
+  red job) if the run it just queued sits `action_required` with nothing started, so an
+  unapproved candidate reads as a maintenance failure instead of rotting silently. The
+  contract is written down in the template's own README. Template-only: migrating the
+  four already-published stacks and reconciling their existing backlog is tracked
+  separately on the issue, each being its own repo.
+
+- **`python -m server --config <path>` now fails loudly instead of silently ignoring the path (#2647).**
+  The flag was declared but never consumed by any startup path — every boot,
+  including `--setup`, silently used the default instance's config and
+  credentials regardless of what file was given. An operator who deliberately
+  scoped a model, delegate roster, or network policy via `--config` could
+  unknowingly boot with the default instance's settings instead, with no
+  indication anything was wrong. `--config` now exits with a clear error
+  pointing at `PROTOAGENT_HOME` — the existing, ADR-0065-sanctioned mechanism
+  for running against a genuinely isolated instance's config, secrets, and
+  data stores, which already fully covers the need. A separate config-path
+  override was deliberately not implemented: it's architecturally the same
+  shape as `PROTOAGENT_CONFIG_DIR`, which ADR 0065 removed after a
+  double-scoping bug once deleted a live instance's gateway key.
+
+- **The "isolated" live-smoke run no longer probes real local protoAgents (#2651).**
+  `scripts/live_smoke.py` sets a scratch `PROTOAGENT_HOME`/`PROTOAGENT_BOX_ROOT` for its
+  spawned server, but that only isolates the instance/box config tiers — the server's
+  normal at-boot fleet-discovery sweep still port-scanned `127.0.0.1:7860-7910`
+  regardless, so on a dev host with a real protoAgent on 7870 the "isolated" smoke
+  contacted it (`GET /.well-known/agent-card.json` + `boot sweep cached 1 peer(s)` in the
+  smoke's own log). The smoke script now sets `PROTOAGENT_DISCOVERY_DISABLE=1` on its
+  spawned server, and `graph/fleet/discovery.py`'s `start_boot_sweep()` — the entry point
+  server boot calls — skips scheduling the sweep entirely when it's set. Scoped to that one
+  boot-time entry point: manual discovery (`GET /api/fleet/discover`) and normal
+  (non-smoke) server boot are unaffected.
+
+- **A completed tagged Desktop Build now refreshes the public download page (#2655).**
+  Marketing redeploys only after the desktop matrix and updater fan-in succeed, so a release
+  no longer remains stuck on the previous macOS and Windows installers.
+
+- **The markdown smoke e2e no longer races Streamdown's code-block highlight swap (#2659).**
+  `markdown-smoke.spec.ts`'s multi-line fence guard read a TypeScript `<pre>` element's
+  computed `white-space` and `innerText` as two separate Playwright round-trips. Streamdown
+  renders that block through a Suspense boundary — a synchronous raw fallback `<pre>`, swapped
+  once for a freshly-mounted node from the lazily-loaded highlighter, which then updates its
+  own children in place as Shiki's async tokenizer resolves. A read landing on that swap could
+  catch an already-detached node: `getComputedStyle` reporting an empty `whiteSpace`, or
+  `innerText` collapsing every source line onto one, on an otherwise-unchanged base (3/5 under
+  `--repeat-each=5 --workers=1`) — noise that already cost real reviewer time on unrelated PRs.
+  The spec now polls inside the page for the first render carrying real (non-fallback) Shiki
+  token colors, waits for it to read identically three times in a row, and takes
+  `whiteSpace`/`innerText`/span-count from that single coherent snapshot — no more reads
+  split across the node-replacement boundary. Verified locally with 40 serial repeats green,
+  and confirmed the guard still fails red against both a reverted `white-space: pre` and a
+  reverted line-span `display: block`.
+
+- **Goal and Watch form data verifiers now resolve relative paths under the managed workspace (#2660).**
+  UI/chat checks see the same files as structured filesystem tools; direct operator specs keep legacy CWD-relative behavior, while untrusted chat cannot use absolute or escaping paths.
+
+- **Native Windows CI now retries one transient Node syntax-check timeout (#2662).**
+  Persistent stalls and JavaScript syntax failures still fail the bundled plugin-view sweep.
+
+- **Chat answers stream in smaller, more frequent blocks (#2672).**
+  The console's live answer text was batched to a 240-character flush threshold,
+  raised there in the past over concern that more frames would race the A2A
+  teardown-cancel grace window. Re-tested that concern directly (30x through the
+  real streaming path at the original, much lower threshold, with an 11KB answer
+  forcing ~480 frames) and found no teardown-grace warnings and no dropped text —
+  the grace window only fires on a genuinely hung producer, not frame count.
+  Lowered the threshold to 60 chars so the console fills in noticeably smaller,
+  more frequent blocks instead of ~40-word jumps.
+
+- **`model.max_iterations` now actually caps the agent loop (#2679).** The
+  Settings field ("Max tool iterations — Hard cap on the agent loop per
+  turn") was dead: the real LangGraph `recursion_limit` was hardcoded at
+  `200` in two places in `server/chat.py`, and the non-streaming `/api/chat`
+  path set no limit at all, silently falling back to LangGraph's own
+  default. All three call sites now read `model.max_iterations`, whose
+  default is bumped `50 → 2000` (≈250 tool calls/turn) so nobody's
+  effective limit regresses now that the field is live. Raising or lowering
+  the per-turn ceiling is a Settings edit, not a code change. Existing
+  installs get a one-time, automatic migration on their next boot: since the
+  field was previously unused, a live config still holding the old dead
+  default of `50` is corrected to `2000` — an install that had already
+  hand-picked some other value is left untouched.
+
+- **Goal/watch tools hidden when no verifiers registered (#2686).** `set_goal` and `create_watch` no longer appear in the agent toolset on instances with no plugin-contributed verifiers, removing the guaranteed-fail trap.
+
+### Security
+- **A2A delegate calls now trust what the OS trusts, not just certifi (#2643).**
+  httpx's default verification never discovered the OS trust store — a private CA
+  an operator installed there (Windows cert store, macOS Keychain, a Linux distro
+  bundle) was invisible to it even though the OS's own HTTP clients trusted it
+  fine —
+  breaking A2A delegate probe/dispatch to a peer behind an internal CA or a
+  TLS-terminating proxy, hit hardest on the packaged Windows desktop. Delegate
+  calls (and every other outbound httpx client in the process) now verify through
+  the native OS trust APIs via `truststore`, matching what Chrome/PowerShell
+  already accept on the same machine. A chain the OS itself doesn't trust still
+  fails closed — no `verify=False` path was introduced.
+
+- **Locked web dependencies with active advisories have been refreshed (#2649).**
+  The browser console's Markdown and diagram dependency chain and the shared CSS
+  build path now resolve to patched Mermaid, DOMPurify, PostCSS, and Nano ID
+  releases. The test-only Undici lock also advances to its patched release;
+  package ranges and runtime behavior are unchanged.
+
+### Docs
+- **A Windows operator now has one guide covering install through recovery (#2656).**
+  The packaged Windows build was public with no single task-oriented page: the
+  source-checkout tutorial is Unix-flavored, the console guide is architecture not
+  procedure, and the download page's three steps link nowhere. The new
+  [Windows desktop app](/guides/windows-desktop) guide covers the supported
+  system + how to verify the release asset, the current unsigned/SmartScreen posture,
+  how the desktop shell / frozen server / console at `127.0.0.1:7870/app/` relate, where
+  writable config/data/logs live (`%APPDATA%\studio.protolabs.protoagent\`), what
+  uninstall/reinstall "keep data" actually means, update behavior and how to confirm your
+  running version, when the managed Python/Node runtimes are needed, and safe recovery
+  steps ordered from a restart up through a non-destructive backup before any destructive
+  reset — routing to the existing deep-dive pages instead of duplicating them. Linked from
+  both the Windows download block and the docs sidebar.
+
 ## [0.135.0] - 2026-08-12
 
 ### Fixed
