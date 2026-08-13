@@ -383,7 +383,18 @@ def _main():
     # D8 network.bind, which folds in the PROTOAGENT_HOST env fallback); an explicit
     # --host always wins.
     parser.add_argument("--host", type=str, default=None)
-    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="REMOVED (#2647) — this flag was declared but never consumed by any "
+        "startup path, so passing it silently booted the DEFAULT instance's config "
+        "and credentials instead of the file given. Kept here only so a caller "
+        "gets a clear, actionable error instead of argparse's generic "
+        "'unrecognized arguments'. Use PROTOAGENT_HOME=<dir> (or "
+        "PROTOAGENT_INSTANCE=<id> under a shared PROTOAGENT_BOX_ROOT) to run "
+        "against a genuinely isolated instance instead — see ADR 0065.",
+    )
     parser.add_argument(
         "--ui",
         choices=["console", "none", "full"],
@@ -406,6 +417,15 @@ def _main():
         "complete, then exit. No wizard/UI needed.",
     )
     args = parser.parse_args()
+    if args.config is not None:
+        # #2647: fail loudly instead of silently ignoring it — see the --config
+        # help text above and ADR 0065 for why this isn't implemented instead.
+        parser.error(
+            "--config was removed: it never actually loaded the given file — every "
+            "startup silently used the default instance's config regardless. Use "
+            "PROTOAGENT_HOME=<dir> python -m server ... to run against an isolated "
+            "instance's config, secrets, and data stores instead."
+        )
     STATE.active_port = args.port
 
     # Resolve the UI tier: explicit --ui/PROTOAGENT_UI wins; else the deprecated
