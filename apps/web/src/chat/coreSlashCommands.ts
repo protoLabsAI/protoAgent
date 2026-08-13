@@ -19,6 +19,7 @@ import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 import { promptNoteMarkdown } from "./promptView";
+import { perfNoteMarkdown } from "./perfView";
 
 // Local id for the system notes /compact posts (the command manages messages
 // directly, like /clear, so it needs to own the ids it can later replace).
@@ -162,6 +163,33 @@ registerSlashCommand({
       })
       .catch((e) => {
         ctx.noteToThread(`Prompt fetch failed — ${errMsg(e)}`, { tone: "danger" });
+      });
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "perf",
+  description: "Show a performance snapshot — latency, cost, cache-hit, outlier turns",
+  usage: "/perf",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    // Instance-wide, not session-scoped (unlike /prompt) — same data as System ▸
+    // Telemetry, just chat-native. Both calls are local reads; fetch together.
+    void Promise.all([api.telemetrySummary(), api.telemetryInsights()])
+      .then(([summaryRes, insightsRes]) => {
+        if (!summaryRes.enabled) {
+          ctx.noteToThread(
+            "Telemetry is off — enable it in Settings to record turn/tool/model performance data.",
+            { tone: "warning" },
+          );
+          return;
+        }
+        ctx.noteToThread(perfNoteMarkdown(summaryRes.summary, insightsRes.insights), { tone: "info" });
+      })
+      .catch((e) => {
+        ctx.noteToThread(`Performance snapshot failed — ${errMsg(e)}`, { tone: "danger" });
       });
     ctx.focusComposer();
     return true;

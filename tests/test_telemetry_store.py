@@ -126,6 +126,7 @@ def test_summary_aggregates(store):
     assert s["cache_hit_ratio"] == round(500 / 4000, 4)
     assert s["p50_duration_ms"] in (1000, 3000)
     assert s["p95_duration_ms"] == 3000
+    assert s["p99_duration_ms"] == 3000
 
 
 def test_summary_by_model(store):
@@ -136,6 +137,28 @@ def test_summary_by_model(store):
     assert models["claude-opus-4-8"]["cost_usd"] == 0.05
     # ordered by cost desc → opus first
     assert s["by_model"][0]["model"] == "claude-opus-4-8"
+
+
+def test_summary_by_model_includes_per_model_duration_percentiles(store):
+    # #2678 — p50/p95/p99 duration per model, computed from the SAME turns
+    # already durably recorded (no new capture seam needed).
+    store.record(_row("t1", model="claude-opus-4-8", duration_ms=1000))
+    store.record(_row("t2", model="claude-opus-4-8", duration_ms=3000))
+    store.record(_row("t3", model="claude-haiku-4-5", duration_ms=500))
+    s = store.summary()
+    models = {m["model"]: m for m in s["by_model"]}
+    assert models["claude-opus-4-8"]["p50_duration_ms"] in (1000, 3000)
+    assert models["claude-opus-4-8"]["p95_duration_ms"] == 3000
+    assert models["claude-opus-4-8"]["p99_duration_ms"] == 3000
+    assert models["claude-haiku-4-5"]["p50_duration_ms"] == 500
+
+
+def test_summary_by_model_percentiles_respect_since_filter(store):
+    store.record(_row("old", model="claude-opus-4-8", duration_ms=9000, ended_at="2026-05-01T00:00:00+00:00"))
+    store.record(_row("new", model="claude-opus-4-8", duration_ms=1000, ended_at="2026-06-01T00:00:00+00:00"))
+    s = store.summary(since_iso="2026-05-15T00:00:00+00:00")
+    models = {m["model"]: m for m in s["by_model"]}
+    assert models["claude-opus-4-8"]["p50_duration_ms"] == 1000
 
 
 def test_summary_since_filter(store):

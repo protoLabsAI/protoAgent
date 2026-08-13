@@ -21,6 +21,8 @@ import logging
 import os
 import re
 import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -57,6 +59,26 @@ def _serialized_config_write(fn):
     return wrapper
 
 
+@contextmanager
+def _timed_boot_phase(phase: str, sink: dict[str, float] | None = None):
+    """Time one agent-construction phase (#2674) — same ``time.monotonic()`` idiom
+    as ``AuditMiddleware``'s tool-call timing (``graph/middleware/audit.py``),
+    applied to boot instead of a turn. Emits to the ``*_boot_phase_seconds{phase}``
+    histogram unconditionally (no-ops when metrics are disabled); also records
+    into ``sink`` when given, so a caller can log one structured summary line
+    covering every phase instead of one log line per phase."""
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        duration_s = time.monotonic() - t0
+        from observability import metrics
+
+        metrics.record_boot_phase(phase, duration_s)
+        if sink is not None:
+            sink[phase] = duration_s
+
+
 def _init_langgraph_agent(headless_setup: bool = False):
     """Initialize the LangGraph backend — setup-aware.
 
@@ -83,6 +105,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
         mark_setup_complete,
         validate_for_headless,
     )
+
+    # Boot-phase timing (#2674) — populated as the phases below run, logged as one
+    # structured summary line once the graph is ready (or we know it won't be).
+    _boot_phases: dict[str, float] = {}
 
     # Warn loudly if running UNSCOPED while the data home already has state — an unscoped
     # instance shares the loose root and can clobber a co-located sibling (#706).
@@ -144,7 +170,8 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Conversation checkpointer: durable SQLite when a path is configured (chat
     # history survives restarts), else in-memory. Bound into the graph at
     # compile time below — a checkpointer in the invoke config is ignored.
-    STATE.checkpointer = _build_checkpointer(STATE.graph_config)
+    with _timed_boot_phase("checkpointer", _boot_phases):
+        STATE.checkpointer = _build_checkpointer(STATE.graph_config)
 
     # Plugin metric timeseries (#1632) — sdk.record_metric / metric_history / metric_last.
     # Wired BEFORE any plugin load (including the pre-setup routes/surfaces load below)
@@ -197,7 +224,8 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # bind to. Forks that don't want a store can set
     # ``middleware.knowledge: false`` and remove the memory tools from
     # the worker subagent — the store is still cheap to construct.
-    STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
+    with _timed_boot_phase("knowledge_store", _boot_phases):
+        STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
 
     # Scheduler — the bundled local sqlite backend (or None when disabled).
     # Agent-tool surface: schedule_task / list_schedules / cancel_schedule.
@@ -208,15 +236,16 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # (register_mcp_server, e.g. Google) is injected into the MCP discovery
     # below. Collision check uses core tools only — MCP tools are namespaced
     # (<server>__<tool>) so they can't be shadowed by a plugin tool anyway.
-    _plugins = _build_plugins(
-        STATE.graph_config,
-        existing_tools=get_all_tools(
-            STATE.knowledge_store,
-            scheduler=STATE.scheduler,
-            goal_enabled=getattr(STATE.graph_config, "goal_enabled", True),
-            watches_enabled=getattr(STATE.graph_config, "watches_enabled", False),
-        ),
-    )
+    with _timed_boot_phase("plugins", _boot_phases):
+        _plugins = _build_plugins(
+            STATE.graph_config,
+            existing_tools=get_all_tools(
+                STATE.knowledge_store,
+                scheduler=STATE.scheduler,
+                goal_enabled=getattr(STATE.graph_config, "goal_enabled", True),
+                watches_enabled=getattr(STATE.graph_config, "watches_enabled", False),
+            ),
+        )
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
         _plugins.tools,
         _plugins.skill_dirs,
@@ -253,9 +282,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # MCP — external Model Context Protocol servers; their tools become agent
     # tools (namespaced <server>__<tool>). Off unless mcp.enabled OR a plugin
     # contributes a managed server (ADR 0019).
-    STATE.mcp_clients, STATE.mcp_tools, STATE.mcp_meta = _build_mcp(
-        STATE.graph_config, plugin_servers=[s["factory"] for s in _plugins.mcp_servers]
-    )
+    with _timed_boot_phase("mcp", _boot_phases):
+        STATE.mcp_clients, STATE.mcp_tools, STATE.mcp_meta = _build_mcp(
+            STATE.graph_config, plugin_servers=[s["factory"] for s in _plugins.mcp_servers]
+        )
 
     # Skills — human-authored SKILL.md folders (bundle + live + plugin-bundled)
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
@@ -288,22 +318,24 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
 
     try:
-        STATE.graph = create_agent_graph(
-            STATE.graph_config,
-            knowledge_store=STATE.knowledge_store,
-            scheduler=STATE.scheduler,
-            skills_index=STATE.skills_index,
-            extra_tools=STATE.mcp_tools + STATE.plugin_tools,
-            extra_middleware=STATE.plugin_middleware,
-            late_tool_factories=STATE.plugin_late_tool_factories,
-            checkpointer=STATE.checkpointer,
-            inbox_store=STATE.inbox_store,
-            tasks_store=STATE.tasks_store,
-            background_mgr=STATE.background_mgr,
-            # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a persona
-            # self-edit is live on the next turn — injected, so tools/ never imports server/.
-            reload_callback=_reload_langgraph_agent,
-        )
+        with _timed_boot_phase("graph_compile", _boot_phases):
+            STATE.graph = create_agent_graph(
+                STATE.graph_config,
+                knowledge_store=STATE.knowledge_store,
+                scheduler=STATE.scheduler,
+                skills_index=STATE.skills_index,
+                extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+                extra_middleware=STATE.plugin_middleware,
+                late_tool_factories=STATE.plugin_late_tool_factories,
+                checkpointer=STATE.checkpointer,
+                inbox_store=STATE.inbox_store,
+                tasks_store=STATE.tasks_store,
+                background_mgr=STATE.background_mgr,
+                # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a
+                # persona self-edit is live on the next turn — injected, so tools/ never
+                # imports server/.
+                reload_callback=_reload_langgraph_agent,
+            )
     except OAuthCredentialError as exc:
         # Signed-out is an intentional state, not a boot failure (#2458): the user
         # disconnected a native OAuth provider and the marker survived a restart.
@@ -331,6 +363,17 @@ def _init_langgraph_agent(headless_setup: bool = False):
         # both exist, warn about commitments no tool backs (the model narrates those
         # as done).
         _audit_persona_tools(STATE.graph, trigger="boot")
+
+    # #2674 — one structured summary line covering every timed phase, so "session
+    # felt slow to start" is diagnosable from a boot log without scraping /metrics.
+    # Fires even on a graphless boot (OAuthCredentialError) — the phases that DID
+    # run (checkpointer/knowledge_store/plugins/mcp) are still useful signal.
+    if _boot_phases:
+        log.info(
+            "[boot] phase timings: %s (total %.2fs)",
+            ", ".join(f"{phase}={duration:.2f}s" for phase, duration in _boot_phases.items()),
+            sum(_boot_phases.values()),
+        )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
     # for an Anthropic-family model (see graph/cache_warmer.py). Not built while

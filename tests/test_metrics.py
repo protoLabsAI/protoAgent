@@ -28,3 +28,19 @@ def _try_init() -> bool:
         return metrics.is_enabled()
     except Exception:
         return False  # already-registered or prometheus missing — skip
+
+
+def test_record_boot_phase_safe_when_disabled():
+    # #2674 — no init() — must be a no-op, never raise.
+    metrics.record_boot_phase("plugins", 0.5)
+
+
+def test_record_boot_phase_observes_when_enabled():
+    if metrics.is_enabled() or _try_init():
+        from prometheus_client import REGISTRY
+
+        p = metrics._prefix()
+        before = REGISTRY.get_sample_value(f"{p}_boot_phase_seconds_count", {"phase": "graph_compile"}) or 0.0
+        metrics.record_boot_phase("graph_compile", 1.2)
+        after = REGISTRY.get_sample_value(f"{p}_boot_phase_seconds_count", {"phase": "graph_compile"}) or 0.0
+        assert after == before + 1.0

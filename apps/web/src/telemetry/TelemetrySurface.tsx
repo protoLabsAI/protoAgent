@@ -124,6 +124,7 @@ function TelemetryBody() {
               <Metric icon={<Database size={16} />} label="Cache hit" value={pct(summary.cache_hit_ratio)} />
               <Metric icon={<Clock size={16} />} label="Latency p50" value={ms(summary.p50_duration_ms)} />
               <Metric icon={<Clock size={16} />} label="Latency p95" value={ms(summary.p95_duration_ms)} />
+              <Metric icon={<Clock size={16} />} label="Latency p99" value={ms(summary.p99_duration_ms)} />
               <Metric icon={<Layers size={16} />} label="Tokens" value={tokens(summary.total_tokens)} />
               <Metric icon={<Wrench size={16} />} label="Tool calls" value={String(summary.tool_calls)} />
             </div>
@@ -133,7 +134,7 @@ function TelemetryBody() {
                 <h2 className="panel-kicker">By model</h2>
                 <Table className="telemetry-table">
                   <THead>
-                    <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cost</Th></Tr>
+                    <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cost</Th><Th>p50</Th><Th>p95</Th></Tr>
                   </THead>
                   <TBody>
                     {summary.by_model.map((m) => (
@@ -142,6 +143,8 @@ function TelemetryBody() {
                         <Td>{m.turns}</Td>
                         <Td>{tokens(m.total_tokens)}</Td>
                         <Td>{usd(m.cost_usd)}</Td>
+                        <Td>{ms(m.p50_duration_ms)}</Td>
+                        <Td>{ms(m.p95_duration_ms)}</Td>
                       </Tr>
                     ))}
                   </TBody>

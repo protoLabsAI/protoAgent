@@ -908,6 +908,20 @@ export type SetupStatus = {
 };
 
 // Telemetry (ADR 0006 Slice 3) — mirrors /api/telemetry/* (telemetry_store.py).
+
+// One row of TelemetrySummary.by_model — cost/token totals plus this model's
+// OWN p50/p95/p99 duration (#2678), computed from the same turns already
+// recorded, distinct from the turn-level percentiles alongside it.
+export type TelemetryByModelRow = {
+  model: string;
+  turns: number;
+  cost_usd: number;
+  total_tokens: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  p99_duration_ms: number;
+};
+
 export type TelemetrySummary = {
   turns: number;
   input_tokens: number;
@@ -921,9 +935,10 @@ export type TelemetrySummary = {
   avg_duration_ms: number;
   p50_duration_ms: number;
   p95_duration_ms: number;
+  p99_duration_ms: number;
   success_rate: number;
   cache_hit_ratio: number;
-  by_model: { model: string; turns: number; cost_usd: number; total_tokens: number }[];
+  by_model: TelemetryByModelRow[];
 };
 
 export type TelemetryTurn = {
@@ -955,7 +970,7 @@ export type TelemetryInsights = {
   flagged_count: number;
   levers: {
     cache: { hit_ratio: number; read_tokens: number; est_savings_usd: number };
-    routing: { by_model: { model: string; turns: number; cost_usd: number; total_tokens: number }[] };
+    routing: { by_model: TelemetryByModelRow[] };
     success_rate: number;
   };
   unproven_levers: string[];

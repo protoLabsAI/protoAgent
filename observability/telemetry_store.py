@@ -194,6 +194,7 @@ class TelemetryStore:
             ]
             out["p50_duration_ms"] = _percentile(durations, 50)
             out["p95_duration_ms"] = _percentile(durations, 95)
+            out["p99_duration_ms"] = _percentile(durations, 99)  # #2678
             by_model = db.execute(
                 f"""
                 SELECT model,
@@ -205,7 +206,31 @@ class TelemetryStore:
                 """,
                 params,
             ).fetchall()
-            out["by_model"] = [{**dict(r), "cost_usd": round(r["cost_usd"] or 0.0, 6)} for r in by_model]
+            # #2678 — durable p50/p95/p99 duration PER MODEL, not just the whole-turn
+            # figures above. Uses the SAME `duration_ms`/`model` columns the turn-level
+            # percentiles above already read — no new capture seam or schema needed,
+            # since `model` is already recorded per turn. (Per-TOOL percentiles would
+            # need one: `tool_calls` is a per-turn count today, not which tools ran —
+            # tracked separately, not attempted here.)
+            model_where = f"{where} AND model = ?" if where else "WHERE model = ?"
+            by_model_out = []
+            for row in by_model:
+                model_durations = [
+                    r[0]
+                    for r in db.execute(
+                        f"SELECT duration_ms FROM turns {model_where} ORDER BY duration_ms",
+                        [*params, row["model"]],
+                    ).fetchall()
+                    if r[0] is not None
+                ]
+                by_model_out.append({
+                    **dict(row),
+                    "cost_usd": round(row["cost_usd"] or 0.0, 6),
+                    "p50_duration_ms": _percentile(model_durations, 50),
+                    "p95_duration_ms": _percentile(model_durations, 95),
+                    "p99_duration_ms": _percentile(model_durations, 99),
+                })
+            out["by_model"] = by_model_out
             return out
         finally:
             db.close()

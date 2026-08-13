@@ -26,6 +26,7 @@ _watch_fires = None
 _watch_flapping = None
 _a2a_turns = None
 _a2a_turn_latency = None
+_boot_phase_latency = None
 
 
 def _prefix() -> str:
@@ -36,7 +37,7 @@ def _prefix() -> str:
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
     global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
-    global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping
+    global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -121,6 +122,18 @@ def init():
             "A2A turn wall-clock duration",
             buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300],
         )
+        # Boot / session-init latency (#2674) — the one gap ADR 0006's turn-scoped
+        # instrumentation structurally can't cover: nothing measures agent
+        # construction itself, so "session felt slow to start" and "first turn was
+        # slow" were indistinguishable. Labelled by the discrete builder phase
+        # (`server.agent_init._init_langgraph_agent`) so a specific slow subsystem
+        # (a heavy plugin, a large knowledge store) shows up by name.
+        _boot_phase_latency = Histogram(
+            f"{p}_boot_phase_seconds",
+            "Agent construction / session-init latency by phase",
+            ["phase"],
+            buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60],
+        )
         _enabled = True
         print(f"[metrics] Prometheus metrics initialized (prefix={p}_)")
     except ImportError:
@@ -200,6 +213,12 @@ def record_watch_fire(trigger: str, *, flapping: bool = False):
         _watch_fires.labels(trigger=trigger or "met").inc()
     if flapping and _watch_flapping is not None:
         _watch_flapping.labels(trigger=trigger or "met").inc()
+
+
+def record_boot_phase(phase: str, duration_s: float):
+    """Record one agent-construction phase's wall-clock duration (#2674)."""
+    if _enabled and _boot_phase_latency is not None:
+        _boot_phase_latency.labels(phase=phase).observe(duration_s)
 
 
 def session_started():
