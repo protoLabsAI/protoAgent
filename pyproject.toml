@@ -19,12 +19,11 @@ requires-python = ">=3.11"
 # core (the `none`/`console` tiers) — mirrors requirements-core.txt:
 dependencies = [
   "httpx>=0.27",
-  # httpx verifies exclusively against the bundled certifi root list, so a
-  # private/enterprise CA an operator installed in the OS trust store (Windows
-  # cert store, macOS Keychain, a Linux distro bundle) is invisible to it even
-  # though the OS's own HTTP clients trust it fine — breaking A2A delegate calls
-  # behind an internal CA (#2643). truststore verifies through the native OS
-  # trust APIs instead.
+  # httpx's default verification never discovers the OS trust store, so a
+  # private/enterprise CA an operator installed there (Windows cert store, macOS
+  # Keychain, a Linux distro bundle) is invisible to it even though the OS's own
+  # HTTP clients trust it fine — breaking A2A delegate calls behind an internal
+  # CA (#2643). truststore verifies through the native OS trust APIs instead.
   "truststore>=0.10",
   # IANA timezone database for stdlib zoneinfo — Windows ships none (every
   # ZoneInfo(...) raised there, #1683) and slim containers often lack

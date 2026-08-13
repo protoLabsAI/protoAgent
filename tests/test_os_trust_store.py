@@ -1,7 +1,9 @@
-"""httpx only ever verifies against the bundled ``certifi`` root list — a private
-CA an operator installed in the OS trust store is invisible to it even though the
-OS's own HTTP clients trust it fine, which broke A2A delegate calls to a peer
-behind an internal CA on the packaged Windows desktop (#2643).
+"""httpx's default verification never discovers the OS trust store: it checks the
+``SSL_CERT_FILE`` env var, then falls back to the bundled ``certifi`` root list —
+either way, a private CA an operator installed in the OS trust store is invisible
+to it, even though the OS's own HTTP clients trust it fine, which broke A2A
+delegate calls to a peer behind an internal CA on the packaged Windows desktop
+(#2643).
 ``truststore.inject_into_ssl()`` fixes that by replacing ``ssl.SSLContext``
 (and the urllib3/requests references that hold their own copy of it) process-wide
 with one that verifies through the native OS trust APIs instead — these pin that
@@ -199,19 +201,22 @@ def test_untrusted_self_signed_cert_still_fails_closed(tmp_path):
 # ── behavior: an OS-trusted private CA is honored (Windows — where #2643 was filed) ──
 
 
-# certutil -addstore and Import-Certificate both go through a "friendly" layer
-# that shows an interactive "install this root certificate?" confirmation dialog
-# for Root-store additions — no documented CLI flag suppresses it (confirmed: `-f`
-# means force-overwrite, not skip-prompt; it still hung). On a headless runner
-# there's nobody to click it, so the process blocks until an external timeout
-# kills it. The documented, reliable non-interactive path is the .NET
-# X509Store API directly — it talks to the same underlying CryptoAPI store but
-# bypasses the confirmation-dialog layer entirely, since that dialog belongs to
-# certutil/Import-Certificate's own UI code, not the store API itself.
+# certutil -addstore, Import-Certificate, AND X509Store("Root", "CurrentUser").Add()
+# all show an interactive "install this root certificate?" confirmation dialog —
+# this is a deliberate Windows security gate on the CurrentUser\Root store
+# specifically, since any non-admin user can write there (dotnet/runtime#24160
+# confirms X509Store.Add() itself pops it, not just the CLI tools). On a headless
+# runner there's nobody to click it, so the process blocks until an external
+# timeout kills it. LocalMachine\Root does NOT show the dialog: being able to
+# write there at all already requires admin, so Windows doesn't layer an extra
+# confirmation on top of that gate — and the CI runner user (GH Actions:
+# `runneradmin`) is an administrator. This also better matches how an org
+# actually deploys an internal CA in practice (machine-wide via GPO, not
+# per-user) than CurrentUser would have.
 _ADD_TRUST_PS1 = """
 param([string]$CertPath)
 $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath)
-$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
 $store.Open("ReadWrite")
 $store.Add($cert)
 $store.Close()
@@ -219,7 +224,7 @@ $store.Close()
 
 _REMOVE_TRUST_PS1 = """
 param([string]$Thumbprint)
-$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
 $store.Open("ReadWrite")
 $found = $store.Certificates.Find([System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $Thumbprint, $false)
 foreach ($c in $found) { $store.Remove($c) }

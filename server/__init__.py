@@ -119,8 +119,10 @@ def _ensure_os_trust_store() -> None:
     """Let httpx (and urllib3/requests, if either is in play) trust what the OS
     trusts, not just the bundled ``certifi`` root list.
 
-    httpx always verifies via ``ssl.create_default_context(cafile=certifi.where())``
-    — a private/enterprise CA an operator installed in the OS trust store (Windows
+    httpx's default verification never discovers the OS trust store: it checks
+    ``SSL_CERT_FILE``, then falls back to
+    ``ssl.create_default_context(cafile=certifi.where())`` — either way, a
+    private/enterprise CA an operator installed in the OS trust store (Windows
     cert store, macOS Keychain, a Linux distro bundle) is invisible to it even
     though the OS's own HTTP clients (Chrome, PowerShell) trust it fine. That broke
     A2A delegate calls to a peer behind an internal CA or TLS-terminating proxy
