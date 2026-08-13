@@ -350,7 +350,10 @@ class A2aAdapter(Adapter):
                 "auth.token",
                 "Auth token",
                 "secret",
-                help="Stored in secrets.yaml (gitignored), never in tracked config.",
+                help="Stored in secrets.yaml (gitignored), never in tracked config. If the "
+                "peer has an auth.federation_token configured (ADR 0066), use THAT value "
+                "here instead of their operator token — it reaches only /a2a + /v1 on "
+                "their side, not their full operator surface.",
             ),
             FieldSpec(
                 "poll_timeout_s",
@@ -494,7 +497,7 @@ class A2aAdapter(Adapter):
                 "parts": [{"text": query}],
                 "messageId": str(uuid.uuid4()),
                 "metadata": dict(provenance),
-            }
+            },
         }
         try:
             from observability import tracing

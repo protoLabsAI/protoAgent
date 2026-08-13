@@ -375,7 +375,7 @@ def test_round_trip_preserves_emitted_fields(tmp_path):
     for attr in EMITTED_ATTRS:
         original = getattr(cfg, attr)
         round_tripped = getattr(reloaded, attr)
-        if attr in ("api_key", "auth_token"):
+        if attr in ("api_key", "auth_token", "federation_token"):
             # Redacted secrets resolve to "" on both sides (no secrets.yaml).
             assert original == "" and round_tripped == "", attr
             continue

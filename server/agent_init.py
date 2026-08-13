@@ -321,8 +321,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             "relogin": exc.relogin,
         }
         log.warning(
-            "[oauth] %s — starting without a compiled graph; reconnect %s from the "
-            "console to restore chat.",
+            "[oauth] %s — starting without a compiled graph; reconnect %s from the console to restore chat.",
             exc,
             exc.provider,
         )
@@ -2130,6 +2129,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         from a2a_impl import auth
 
         auth.set_bearer_token(new_config.auth_token or None)
+        auth.set_federation_token(new_config.federation_token or None)  # ADR 0066, #1504
     except ImportError:
         # a2a_impl.auth not yet imported (e.g. during early-boot reload before
         # _main wires routes) — harmless.

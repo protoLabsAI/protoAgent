@@ -852,6 +852,22 @@ FIELDS: list[Field] = [
         "Identity",
         "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live.",
     ),
+    # ADR 0066 — a second, narrower credential for cross-instance peers: valid on
+    # /a2a + /v1 only, explicitly denied the /api operator surface auth.token can
+    # reach. Opt-in (blank = single-token mode, unchanged); set it, then rotate each
+    # peer's delegate auth.token to this same value so a leaked/legacy operator
+    # bearer can no longer masquerade as a peer (#1504).
+    Field(
+        "auth.federation_token",
+        "federation_token",
+        "Federation token (peers)",
+        "secret",
+        "Identity",
+        "A second A2A credential for cross-instance peers, scoped to /a2a + /v1 only — "
+        "it cannot reach the /api operator surface even though the console's operator "
+        "token still can. Optional; give it to remote peers instead of the operator "
+        "token. Stored in secrets.yaml; applies live.",
+    ),
     # A plugin's Settings group is declared by its manifest (ADR 0019) and rendered
     # via the plugin-fields path in build_schema — same for bundled or external
     # plugins; the generic Test button + guide link come from the manifest (ADR 0059).

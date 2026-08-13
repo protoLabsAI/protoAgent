@@ -113,6 +113,7 @@ def presets_dir() -> Path:
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
     ("model", "api_key"),
     ("auth", "token"),
+    ("auth", "federation_token"),  # ADR 0066, #1504
     # Secrets-manager bootstrap machine identity (ADR 0080) — the one credential pair
     # that can't come from the manager itself, routed to secrets.yaml like the API key.
     ("secrets_manager", "client_id"),
@@ -1025,7 +1026,6 @@ def soul_revision() -> str:
     soul-history version ids, so a tagged run can be lined up with an archived version."""
     text = read_soul()
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8] if text else ""
-
 
 
 def sync_host_model_layer(config) -> bool:
