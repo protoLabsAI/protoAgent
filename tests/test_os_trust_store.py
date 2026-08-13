@@ -215,10 +215,14 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
     thumbprint = ca_cert.fingerprint(hashes.SHA1()).hex()
 
     subprocess.run(
-        ["certutil", "-user", "-addstore", "Root", str(ca_path)],
+        # -f: force, no interactive "install this root certificate?" confirmation
+        # dialog — without it, certutil can block waiting on UI input that never
+        # comes on a headless runner, hanging the job until its own timeout kills it.
+        ["certutil", "-f", "-user", "-addstore", "Root", str(ca_path)],
         check=True,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     try:
         with _serve_tls(str(cert_path), str(key_path)) as port:
@@ -233,10 +237,11 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
             assert resp.status_code == 200
     finally:
         subprocess.run(
-            ["certutil", "-user", "-delstore", "Root", thumbprint],
+            ["certutil", "-f", "-user", "-delstore", "Root", thumbprint],
             check=False,
             capture_output=True,
             text=True,
+            timeout=30,
         )
 
 
@@ -285,10 +290,14 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
             httpx.get(f"https://localhost:{port}/", timeout=5)
 
         subprocess.run(
-            ["sudo", "cp", str(generated_ca_path), installed_ca_path], check=True, capture_output=True, text=True
+            ["sudo", "cp", str(generated_ca_path), installed_ca_path],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         try:
-            subprocess.run(["sudo", "update-ca-certificates"], check=True, capture_output=True, text=True)
+            subprocess.run(["sudo", "update-ca-certificates"], check=True, capture_output=True, text=True, timeout=30)
 
             with pytest.raises(httpx.ConnectError):  # still fails — the CA install alone isn't enough
                 httpx.get(f"https://localhost:{port}/", timeout=5)
@@ -298,5 +307,7 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
             resp = httpx.get(f"https://localhost:{port}/", timeout=5)
             assert resp.status_code == 200
         finally:
-            subprocess.run(["sudo", "rm", "-f", installed_ca_path], check=False, capture_output=True, text=True)
-            subprocess.run(["sudo", "update-ca-certificates"], check=False, capture_output=True, text=True)
+            subprocess.run(
+                ["sudo", "rm", "-f", installed_ca_path], check=False, capture_output=True, text=True, timeout=30
+            )
+            subprocess.run(["sudo", "update-ca-certificates"], check=False, capture_output=True, text=True, timeout=30)
