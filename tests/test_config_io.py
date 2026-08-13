@@ -309,6 +309,79 @@ def test_seed_config_env_missing_falls_back_to_example(monkeypatch, tmp_path: Pa
     assert "from-template" in live.read_text()
 
 
+# ── _migrate_dead_max_iterations_default (#2679 QA blocker) ──────────────────
+# model.max_iterations was dead (never consumed) before #2679, so every existing
+# install's live config was silently sitting at the old placeholder default of
+# 50. Once the field started driving the real recursion_limit, an untouched
+# live config would drop an existing install's effective cap from ~200 to 50 —
+# these guard the one-time, marker-gated fix for that.
+
+
+def test_migrates_untouched_50_to_2000(monkeypatch, tmp_path: Path) -> None:
+    from graph import config_io
+
+    live = tmp_path / "langgraph-config.yaml"
+    live.write_text("model:\n  max_iterations: 50\n  name: protolabs/reasoning\n")
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
+
+    assert config_io._migrate_dead_max_iterations_default() is True
+    assert "max_iterations: 2000" in live.read_text()
+    assert (tmp_path / config_io._MAX_ITERATIONS_MIGRATION_MARKER).exists()
+
+
+def test_leaves_a_custom_value_untouched(monkeypatch, tmp_path: Path) -> None:
+    # An operator who already hand-picked a cap (anything other than the dead
+    # field's exact old default) must never be silently overridden.
+    from graph import config_io
+
+    live = tmp_path / "langgraph-config.yaml"
+    live.write_text("model:\n  max_iterations: 100\n")
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
+
+    assert config_io._migrate_dead_max_iterations_default() is False
+    assert "max_iterations: 100" in live.read_text()
+    # Still marks it checked so the one-shot never re-runs.
+    assert (tmp_path / config_io._MAX_ITERATIONS_MIGRATION_MARKER).exists()
+
+
+def test_marker_makes_it_truly_one_shot(monkeypatch, tmp_path: Path) -> None:
+    # An operator who migrates once, then LATER deliberately sets max_iterations
+    # back to 50 on purpose, must keep that choice — the migration never re-fires.
+    from graph import config_io
+
+    live = tmp_path / "langgraph-config.yaml"
+    live.write_text("model:\n  max_iterations: 50\n")
+    (tmp_path / config_io._MAX_ITERATIONS_MIGRATION_MARKER).write_text("")
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
+
+    assert config_io._migrate_dead_max_iterations_default() is False
+    assert "max_iterations: 50" in live.read_text()  # untouched — already migrated once
+
+
+def test_noop_when_no_live_config(monkeypatch, tmp_path: Path) -> None:
+    from graph import config_io
+
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: tmp_path / "langgraph-config.yaml")
+
+    assert config_io._migrate_dead_max_iterations_default() is False
+    assert not (tmp_path / config_io._MAX_ITERATIONS_MIGRATION_MARKER).exists()
+
+
+def test_ensure_live_config_runs_the_migration_for_existing_installs(monkeypatch, tmp_path: Path) -> None:
+    # The blocker this whole migration exists for: an EXISTING install (live
+    # config already present) must get the fix on its next boot, not just fresh
+    # installs — ensure_live_config's early-return-if-exists must not skip it.
+    from graph import config_io
+
+    live = tmp_path / "langgraph-config.yaml"
+    live.write_text("model:\n  max_iterations: 50\n")
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: live)
+    monkeypatch.setattr(config_io, "migrate_legacy_layout", lambda: False)
+
+    assert config_io.ensure_live_config() is False  # live already existed
+    assert "max_iterations: 2000" in live.read_text()  # but the migration still ran
+
+
 # ── apply_seed_merge (merge-on-boot declarative seeding, #2071) ──────────────
 #
 # The regression these guard is subtle: two-way "deep-merge the seed under live"

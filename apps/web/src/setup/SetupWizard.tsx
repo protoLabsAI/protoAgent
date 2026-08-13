@@ -133,14 +133,14 @@ function hydrateState(payload: ConfigPayload): WizardState {
     soul: "",
     archetype: "basic",
     middleware: {
-      knowledge: Boolean(config.middleware.knowledge),
-      audit: Boolean(config.middleware.audit),
-      memory: Boolean(config.middleware.memory),
-      scheduler: Boolean(config.middleware.scheduler),
+      knowledge: Boolean(config.middleware?.knowledge),
+      audit: Boolean(config.middleware?.audit),
+      memory: Boolean(config.middleware?.memory),
+      scheduler: Boolean(config.middleware?.scheduler),
     },
-    researcherTurns: Number(config.subagents.researcher.max_turns ?? 40),
-    knowledgePath: config.knowledge.db_path || "",
-    knowledgeTopK: Number(config.knowledge.top_k ?? 5),
+    researcherTurns: Number(config.subagents?.researcher?.max_turns ?? 40),
+    knowledgePath: config.knowledge?.db_path || "",
+    knowledgeTopK: Number(config.knowledge?.top_k ?? 5),
     allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
     initTasks: false,
   };
@@ -184,15 +184,16 @@ const OAUTH_LABEL: Record<string, string> = {
 // race it against a timeout so `busy` always clears and the step never locks (which
 // would disable Next, trapping the user on the runtime step).
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_resolve, reject) =>
-      setTimeout(
-        () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the API base and key`)),
-        ms,
-      ),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the API base and key`)),
+      ms,
+    );
+  });
+  // Repeated model probes / connection tests would otherwise accumulate uncleared
+  // timers until each one's own `ms` elapsed — clear on whichever side settles first.
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 export function SetupWizard({
