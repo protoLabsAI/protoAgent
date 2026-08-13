@@ -315,8 +315,16 @@ def test_reload_does_not_wipe_an_env_only_federation_token(tmp_path, monkeypatch
     configuration.md`) must not have its live credential silently cleared by the
     FIRST Settings save of ANYTHING, auth-related or not. Before this fix, the reload
     passed the empty config value straight to set_bearer_token/set_federation_token
-    with no env fallback — boot's auth.configure() DOES fall back to env whenever the
-    config value is empty, so reload and boot disagreed (#1504 review)."""
+    with no env fallback at all.
+
+    auth.configure()'s OWN contract distinguishes None ("unspecified, check env") from
+    an explicit "" ("off, no fallback") — but boot's one real caller (server/__init__.py
+    _main()) always collapses an empty config value to None before calling it
+    (`(... or "") or None`), so boot's OBSERVED behavior is "falls back whenever the
+    config value is empty" even though configure() itself can express the finer
+    distinction for a caller that preserves it. The reload's new `or os.environ.get(...)`
+    fallback matches that observed boot behavior, not configure()'s full three-state
+    contract (#1504 review)."""
     import server.agent_init as ai
 
     _, calls = _stub_reload_for_auth_capture(tmp_path, monkeypatch)
