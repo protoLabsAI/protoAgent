@@ -111,6 +111,13 @@ def main() -> int:
         "PROTOAGENT_BOX_ROOT": str(box_dir),
         "PROTOAGENT_INSTANCE": "cismoke",
         "PROTOAGENT_HEADLESS_SETUP": "1",
+        # PROTOAGENT_HOME/BOX_ROOT above isolate the INSTANCE/box config tiers, but the
+        # spawned server still runs its normal at-boot fleet-discovery sweep, which
+        # port-scans 127.0.0.1:7860-7910 regardless of instance isolation (#2651) — on a
+        # dev host with a real protoAgent on 7870, an "isolated" smoke run was contacting
+        # it. Disable just that automatic sweep for this spawned server; the smoke itself
+        # never exercises fleet discovery, so nothing here is under test.
+        "PROTOAGENT_DISCOVERY_DISABLE": "1",
         "PYTHONPATH": str(ROOT),
     }
 

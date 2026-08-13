@@ -96,6 +96,19 @@ def _mdns_enabled() -> bool:
     return bool(getattr(cfg, "discovery_mdns", False)) if cfg is not None else False
 
 
+def _boot_sweep_disabled() -> bool:
+    """True when ``PROTOAGENT_DISCOVERY_DISABLE`` is set — the isolated-smoke escape hatch
+    (#2651). ``scripts/live_smoke.py`` sets this before spawning its server so the boot-time
+    background sweep (local port-scan + mDNS browse + tailnet scan, all three channels —
+    ``discover()``) never probes a co-located REAL protoAgent sharing the default discovery
+    port range (7860-7910): on a dev host with a real agent on 7870, the "isolated" smoke's
+    own boot sweep was contacting it despite PROTOAGENT_HOME/BOX_ROOT isolation. Only the
+    automatic at-boot sweep is gated — manual discovery (``GET /api/fleet/discover``) and a
+    directly-called ``discover()``/``boot_sweep()`` are untouched, so normal (non-smoke)
+    discovery behavior — including a normal server's own boot sweep — is unaffected."""
+    return os.environ.get("PROTOAGENT_DISCOVERY_DISABLE", "").strip().lower() in ("1", "true", "yes")
+
+
 def _config_port_range() -> tuple[int, int]:
     cfg = _cfg()
     if cfg is None:
@@ -369,8 +382,15 @@ def start_boot_sweep(**kwargs) -> None:
 
     ``discover()`` offloads the sync zeroconf browse to a thread itself, so scheduling the
     coroutine on the loop is safe. A reference is held in ``_sweep_task`` so the task isn't
-    garbage-collected mid-flight. No running loop (CLI context) ⇒ skipped, never raises."""
+    garbage-collected mid-flight. No running loop (CLI context) ⇒ skipped, never raises.
+
+    Skipped entirely when ``PROTOAGENT_DISCOVERY_DISABLE`` is set (see
+    ``_boot_sweep_disabled`` — the isolated-smoke escape hatch, #2651): no task is
+    scheduled, so the sweep never sends a single probe."""
     global _sweep_task
+    if _boot_sweep_disabled():
+        log.info("[discovery] boot sweep disabled via PROTOAGENT_DISCOVERY_DISABLE — skipping")
+        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

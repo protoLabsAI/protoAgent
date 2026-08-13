@@ -300,3 +300,80 @@ def test_start_boot_sweep_schedules_task_on_loop(monkeypatch):
 
     asyncio.run(_drive())
     assert [p["name"] for p in discovery.cached_peers()] == ["loc"]
+
+
+# ── isolated-smoke escape hatch (#2651) ────────────────────────────────────────
+async def _bind_probe_target():
+    """A real loopback listener standing in for a co-located protoAgent. Returns
+    ``(server, port, hit_event)`` — ``hit_event`` fires the moment *any* connection lands,
+    regardless of what's sent, so the test proves contact (or its absence), not response
+    parsing."""
+    hit = asyncio.Event()
+
+    async def _handler(reader, writer):
+        hit.set()
+        await reader.read(65536)
+        writer.close()
+
+    server = await asyncio.start_server(_handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, port, hit
+
+
+def test_start_boot_sweep_disabled_env_var_sends_no_probe(monkeypatch):
+    """The isolated-smoke escape hatch (#2651): with PROTOAGENT_DISCOVERY_DISABLE set,
+    start_boot_sweep() — the entry point server boot actually calls — must not send a
+    single byte to a co-located service sitting in the normal discovery port range, not
+    even a connection attempt. This is the regression a live host with a real protoAgent
+    on 7870 hit: an "isolated" smoke run's own boot sweep still probed it."""
+    monkeypatch.setenv("PROTOAGENT_DISCOVERY_DISABLE", "1")
+
+    async def _drive():
+        server, port, hit = await _bind_probe_target()
+        try:
+            discovery.start_boot_sweep(port_range=(port, port))
+            assert discovery._sweep_task is None  # nothing was even scheduled
+            await asyncio.sleep(0.2)  # give a regressed sweep time to land a connection
+            assert not hit.is_set(), "co-located service in the discovery range was contacted"
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(_drive())
+    assert discovery.cached_peers() == []  # no probe ⇒ nothing warmed the cache either
+
+
+def test_start_boot_sweep_without_env_var_still_probes_normally(monkeypatch):
+    """Control for the test above: with the env var unset (the default, non-smoke case),
+    start_boot_sweep() DOES contact a co-located service in range — proving the disable
+    flag is the reason nothing was contacted, not an unrelated fixture quirk, and that
+    normal (non-smoke) discovery behavior is unchanged."""
+    monkeypatch.delenv("PROTOAGENT_DISCOVERY_DISABLE", raising=False)
+
+    async def _drive():
+        server, port, hit = await _bind_probe_target()
+        try:
+            discovery.start_boot_sweep(port_range=(port, port))
+            assert discovery._sweep_task is not None
+            await discovery._sweep_task
+            assert hit.is_set(), "expected the normal boot sweep to probe the co-located service"
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(_drive())
+
+
+def test_boot_sweep_and_discover_ignore_the_disable_flag(monkeypatch):
+    """The disable flag scopes ONLY the automatic start_boot_sweep() entry point (what
+    server boot calls) — a directly-called boot_sweep()/discover() (manual `GET
+    /api/fleet/discover`, tests, future callers) still runs, so the smoke escape hatch
+    can't accidentally neuter discovery for anything but the boot-time auto-sweep."""
+    monkeypatch.setenv("PROTOAGENT_DISCOVERY_DISABLE", "1")
+    _stub_channels(
+        monkeypatch,
+        local=[{"name": "loc", "url": "http://127.0.0.1:7871", "host": "127.0.0.1", "port": 7871}],
+    )
+
+    swept = asyncio.run(discovery.boot_sweep())
+    assert [p["name"] for p in swept] == ["loc"]

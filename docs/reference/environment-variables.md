@@ -54,6 +54,7 @@ The hub spawns local fleet members as detached `--ui none` processes on their ow
 | `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` | (unset) | By default the hub **spins its local members down when it shuts down** ("host down → fleet down" — keeps a rebuilt hub from leaving members running stale code; sessions resume from their `instance.id`-scoped checkpoints on the next switch, so it stops processes, not work). Set `1`/`true` to keep members running across a hub restart — for genuinely long-running detached agents. |
 | `PROTOAGENT_FLEET_MAX_WARM` | `0` | Keep-N-warm cap: at most this many members stay running; switching to another resumes it and evicts the least-recently-active beyond the cap (`0`/unset = unlimited). |
 | `PROTOAGENT_FLEET_WARM_GRACE` | `0` | Seconds a just-active member is spared from keep-warm eviction (may be mid background turn); `0` = pure LRU. |
+| `PROTOAGENT_DISCOVERY_DISABLE` | (unset) | Set `1`/`true` to skip the automatic at-boot fleet-discovery sweep (local port-scan + mDNS browse + tailnet scan across the discovery port range). `scripts/live_smoke.py` sets this on its spawned server so an "isolated" smoke run never probes a co-located real protoAgent (#2651) — it does not affect manual discovery (`GET /api/fleet/discover`) or a directly-called `discover()`/`boot_sweep()`. |
 
 ## Authentication — A2A bearer token
 
