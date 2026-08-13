@@ -85,6 +85,7 @@ jobs:
           git checkout -b "$branch"
           git commit -am "chore: bump plugin pins to latest release tags"
           git push --force origin "$branch"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
           # (A heredoc nested inside a `$(...)` command substitution mis-parses any
           # apostrophe in its body under bash — write straight to a file instead.)
@@ -118,6 +119,15 @@ jobs:
       # PRs) — or never shows up at all within the bounded wait, which is worse —
       # comment on the PR, label it, and fail this job so an unapproved candidate
       # turns the weekly schedule red instead of rotting quietly.
+      #
+      # `bump-pins` is a permanently-reused branch (one candidate per stack,
+      # see the step above), so on a repeat run the branch name alone can
+      # match a STALE prior run (already-approved from last week, or a
+      # leftover from a since-closed PR) before GitHub has even registered a
+      # run for the commit just pushed — run creation is async. Filter on the
+      # exact commit SHA (`gh run list -c/--commit`) so the poll can only ever
+      # see the run for THIS push, not whatever last happened to be on top of
+      # the branch's run list.
       - name: Flag the approval-required verify run
         if: steps.check.outputs.changed == 'true'
         env:
@@ -125,12 +135,13 @@ jobs:
         run: |
           number="${{ steps.pr.outputs.number }}"
           branch="${{ steps.pr.outputs.branch }}"
+          sha="${{ steps.pr.outputs.sha }}"
 
           status=""
           conclusion=""
           run_url=""
           for _ in 1 2 3 4 5 6; do
-            run_json="$(gh run list --branch "$branch" --event pull_request \
+            run_json="$(gh run list --branch "$branch" --commit "$sha" --event pull_request \
               --workflow verify-bundle.yml --limit 1 \
               --json status,conclusion,url 2>/dev/null || echo '[]')"
             status="$(echo "$run_json" | jq -r '.[0].status // empty')"
