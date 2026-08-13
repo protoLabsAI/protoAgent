@@ -311,7 +311,7 @@ def test_config_to_dict_shape_and_redaction():
     # existing sections, never a new top-level one).
     assert _FIELDS_SECTIONS <= set(d.keys())
     # secrets redacted (blank-means-unchanged).
-    assert d["model"]["api_key"] == "" and d["auth"]["token"] == ""
+    assert d["model"]["api_key"] == "" and d["auth"]["token"] == "" and d["auth"]["federation_token"] == ""
     # representative nested values round-trip from the cfg.
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
