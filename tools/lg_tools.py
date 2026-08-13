@@ -1287,6 +1287,37 @@ def _build_set_goal_tool():
     return set_goal
 
 
+def _build_list_verifiers_tool():
+    """Catalog every goal/watch verifier available on this instance."""
+
+    @tool
+    async def list_verifiers() -> str:
+        """List all verifier types and plugin checks registered on this instance.
+
+        Returns core verifier types (command, test, ci, data, llm, plugin) with
+        descriptions, then any plugin-contributed checks with their <plugin-id>:<name>
+        identifier and description. Call this before set_goal or create_watch to pick
+        a valid verifier.
+        """
+        from graph.goals.verifiers import verifier_catalog
+
+        catalog = verifier_catalog()
+        lines: list[str] = ["Core verifier types:"]
+        for t in catalog["types"]:
+            lines.append(f"  {t['value']}: {t['description']}")
+        lines.append("")
+        checks = catalog["plugin_checks"]
+        if checks:
+            lines.append("Plugin verifiers:")
+            for c in checks:
+                lines.append(f"  {c['name']}: {c['description']}")
+        else:
+            lines.append("No plugin verifiers registered.")
+        return "\n".join(lines)
+
+    return list_verifiers
+
+
 def _build_goal_plan_tool():
     """The agent records its running plan for the active goal (goal loop). Replaces the
     retired ``<goal_plan>`` continuation tag — the plan is persisted to the goal state /
@@ -1998,6 +2029,8 @@ def get_all_tools(
         tools.extend(_build_inbox_tools(inbox_store))
     if tasks_store is not None:
         tools.extend(_build_task_tools(tasks_store))
+    if goal_enabled or watches_enabled:
+        tools.append(_build_list_verifiers_tool())  # discover registered verifiers before set_goal/create_watch
     if goal_enabled:
         tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
         tools.append(_build_goal_plan_tool())  # goal loop — record running plan (retired <goal_plan>)
