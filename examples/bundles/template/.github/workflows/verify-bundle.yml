@@ -7,7 +7,16 @@
 #            every PR (so a pin-bump must prove itself), on demand, and weekly
 #            (so a rotted pin set turns the schedule red instead of rotting silently).
 #   bump   — (schedule/dispatch only) checks each tag-pinned member for a newer
-#            release tag and opens a PR with the bump; that PR then runs `verify`.
+#            release tag and opens/updates a PR with the bump; that PR then runs
+#            `verify`. But a PR opened with the repository GITHUB_TOKEN never
+#            auto-starts a `pull_request` run — GitHub holds it `action_required`
+#            until a maintainer approves it (see README.md "Pin-bump PR lifecycle",
+#            #2645). So this job (a) reuses ONE branch/PR per stack instead of
+#            piling up duplicates every week, and (b) fails loudly — PR comment +
+#            label + a red job — if the run it just pushed doesn't show up started
+#            within a bounded wait, so an unapproved candidate reads as a
+#            maintenance failure instead of quietly rotting.
+
 name: verify-bundle
 
 on:
@@ -19,6 +28,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write # labeling the pin-bump PR (`gh pr edit --add-label`) rides the issues API
+  actions: read # `gh run list`, to detect the approval-required stall below
 
 jobs:
   verify:
@@ -55,15 +66,104 @@ jobs:
           python3 scripts/check_bundle_updates.py protoagent.bundle.yaml | tee /tmp/bumps.txt
           echo "changed=$(git diff --quiet && echo false || echo true)" >> "$GITHUB_OUTPUT"
 
-      - name: Open the pin-bump PR
+      # ONE candidate per stack (#2645): a stable branch name means a later
+      # scheduled run force-pushes and updates the existing open PR instead of
+      # opening a duplicate. One manifest per bundle repo, so "per stack" here is
+      # just "per repo" — see README.md "Pin-bump PR lifecycle" for the full
+      # contract. Treat `bump-pins` as bot-owned: it is rewritten wholesale every
+      # run, so hand edits to it don't survive the next bump.
+      - name: Open or update the pin-bump PR
         if: steps.check.outputs.changed == 'true'
+        id: pr
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          branch="bump-pins-$(date +%Y%m%d)"
+          set -euo pipefail
+          branch="bump-pins"
           git config user.name "bundle-bot"
           git config user.email "bundle-bot@users.noreply.github.com"
           git checkout -b "$branch"
           git commit -am "chore: bump plugin pins to latest release tags"
-          git push origin "$branch"
-          gh pr create --fill --body "$(printf 'Automated pin bump (ADR 0049).\n\n```\n%s\n```\n\nMerging requires the verify job green — the pin only moves through a passing verification.' "$(cat /tmp/bumps.txt)")"
+          git push --force origin "$branch"
+
+          # (A heredoc nested inside a `$(...)` command substitution mis-parses any
+          # apostrophe in its body under bash — write straight to a file instead.)
+          cat > /tmp/pr_body.md <<BODY
+          Automated pin bump (ADR 0049).
+
+          \`\`\`
+          $(cat /tmp/bumps.txt)
+          \`\`\`
+
+          Merging requires the verify job green — the pin only moves through a passing verification.
+
+          This PR was opened with the repository GITHUB_TOKEN, so GitHub holds its \`verify\` run for approval (Actions tab -> **Approve and run workflows**) instead of starting it automatically — the documented explicit-approval contract, see README.md's "Pin-bump PR lifecycle" section (#2645). A later scheduled run updates THIS PR in place rather than opening a new one.
+          BODY
+
+          number="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            echo "updating existing pin-bump PR #$number"
+            gh pr edit "$number" --body-file /tmp/pr_body.md
+          else
+            gh pr create --title "chore: bump plugin pins to latest release tags" --body-file /tmp/pr_body.md
+            number="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number')"
+            echo "opened pin-bump PR #$number"
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      # Make the approval-required stall visible instead of silent (#2645): poll
+      # for the `verify` run this push should have queued. If it comes back
+      # `action_required` (GitHub's recursion guard for GITHUB_TOKEN-authored
+      # PRs) — or never shows up at all within the bounded wait, which is worse —
+      # comment on the PR, label it, and fail this job so an unapproved candidate
+      # turns the weekly schedule red instead of rotting quietly.
+      - name: Flag the approval-required verify run
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number="${{ steps.pr.outputs.number }}"
+          branch="${{ steps.pr.outputs.branch }}"
+
+          status=""
+          conclusion=""
+          run_url=""
+          for _ in 1 2 3 4 5 6; do
+            run_json="$(gh run list --branch "$branch" --event pull_request \
+              --workflow verify-bundle.yml --limit 1 \
+              --json status,conclusion,url 2>/dev/null || echo '[]')"
+            status="$(echo "$run_json" | jq -r '.[0].status // empty')"
+            conclusion="$(echo "$run_json" | jq -r '.[0].conclusion // empty')"
+            run_url="$(echo "$run_json" | jq -r '.[0].url // empty')"
+            if [ -n "$status" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "$conclusion" = "action_required" ] || [ -z "$status" ]; then
+            if [ -z "$status" ]; then
+              why="its verify run never showed up in the run list at all (even more silent than the known action_required stall)"
+            else
+              why="its verify run concluded action_required with no jobs started"
+            fi
+            msg="Pin-bump PR #$number needs a maintainer to approve its verify run — $why. GITHUB_TOKEN-authored PRs don't run \`pull_request\` workflows automatically; click **Approve and run workflows** on the Actions tab${run_url:+ ($run_url)}. This is the documented explicit-approval step (README.md \"Pin-bump PR lifecycle\", #2645) — approve it (or close the PR) so the pin doesn't sit unverified."
+            echo "::error::$msg"
+
+            gh label create "needs-approval" --color FBCA04 \
+              --description "A workflow run is stuck action_required and needs a maintainer to approve it" \
+              2>/dev/null || true
+            gh pr edit "$number" --add-label "needs-approval" || true
+
+            already="$(gh pr view "$number" --json comments --jq \
+              '[.comments[].body | select(contains("Approve and run workflows"))] | length' \
+              2>/dev/null || echo 0)"
+            if [ "${already:-0}" -eq 0 ]; then
+              gh pr comment "$number" --body "$msg" || true
+            fi
+
+            exit 1
+          fi
+
+          echo "verify run started without manual approval (status=$status)"
