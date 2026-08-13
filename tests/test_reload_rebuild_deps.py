@@ -215,8 +215,10 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
 
 def _stub_reload_for_auth_capture(tmp_path, monkeypatch):
     """Common heavy-builder stubbing so `_reload_langgraph_agent()` reaches its commit
-    block, shared by the two auth-token-reload tests below. Returns the recorded
-    (kind, token) calls list — populate a leaf/secrets file before calling
+    block, shared by the two auth-token-reload tests below. Writes a minimal live leaf
+    config and returns `(leaf_path, calls)` — `calls` records every `(kind, token)`
+    set_bearer_token/set_federation_token call the reload makes. Callers that need a
+    secrets.yaml sibling write it under `leaf_path.parent` before calling
     `ai._reload_langgraph_agent()`."""
     import graph.config_io as cio
     import server.agent_init as ai
