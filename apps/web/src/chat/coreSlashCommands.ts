@@ -176,8 +176,11 @@ registerSlashCommand({
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
     // Instance-wide, not session-scoped (unlike /prompt) — same data as System ▸
-    // Telemetry, just chat-native. Both calls are local reads; fetch together.
-    void Promise.all([api.telemetrySummary(), api.telemetryInsights()])
+    // Telemetry, just chat-native. Both calls are local reads; fetch together —
+    // but insights failing shouldn't discard a successful summary (perfNoteMarkdown
+    // already renders fine with null insights), so it gets its own catch rather
+    // than sharing Promise.all's single rejection with the summary fetch.
+    void Promise.all([api.telemetrySummary(), api.telemetryInsights().catch(() => null)])
       .then(([summaryRes, insightsRes]) => {
         if (!summaryRes.enabled) {
           ctx.noteToThread(
@@ -186,7 +189,7 @@ registerSlashCommand({
           );
           return;
         }
-        ctx.noteToThread(perfNoteMarkdown(summaryRes.summary, insightsRes.insights), { tone: "info" });
+        ctx.noteToThread(perfNoteMarkdown(summaryRes.summary, insightsRes?.insights ?? null), { tone: "info" });
       })
       .catch((e) => {
         ctx.noteToThread(`Performance snapshot failed — ${errMsg(e)}`, { tone: "danger" });

@@ -212,17 +212,16 @@ class TelemetryStore:
             # since `model` is already recorded per turn. (Per-TOOL percentiles would
             # need one: `tool_calls` is a per-turn count today, not which tools ran —
             # tracked separately, not attempted here.)
-            model_where = f"{where} AND model = ?" if where else "WHERE model = ?"
+            # One query for every row's (model, duration_ms), grouped in Python — avoids
+            # an N+1 query per model, and sidesteps `model = ?` never matching a NULL
+            # model group (SQL equality never matches NULL; grouping in Python does).
+            durations_by_model: dict[str | None, list[int]] = {}
+            for r in db.execute(f"SELECT model, duration_ms FROM turns {where}", params).fetchall():
+                if r["duration_ms"] is not None:
+                    durations_by_model.setdefault(r["model"], []).append(r["duration_ms"])
             by_model_out = []
             for row in by_model:
-                model_durations = [
-                    r[0]
-                    for r in db.execute(
-                        f"SELECT duration_ms FROM turns {model_where} ORDER BY duration_ms",
-                        [*params, row["model"]],
-                    ).fetchall()
-                    if r[0] is not None
-                ]
+                model_durations = sorted(durations_by_model.get(row["model"], []))
                 by_model_out.append({
                     **dict(row),
                     "cost_usd": round(row["cost_usd"] or 0.0, 6),

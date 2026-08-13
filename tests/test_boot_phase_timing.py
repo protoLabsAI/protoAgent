@@ -4,6 +4,7 @@ tool-call timing, applied to boot instead of a turn."""
 
 from __future__ import annotations
 
+import dataclasses
 import time
 
 import pytest
@@ -46,3 +47,49 @@ def test_timed_boot_phase_sink_is_optional():
     # but the helper itself doesn't require it).
     with ai._timed_boot_phase("checkpointer"):
         pass
+
+
+def test_log_boot_phase_summary_noop_on_empty_dict(caplog):
+    ai._log_boot_phase_summary({})
+    assert "[boot] phase timings" not in caplog.text
+
+
+def test_log_boot_phase_summary_logs_every_phase(caplog):
+    with caplog.at_level("INFO"):
+        ai._log_boot_phase_summary({"checkpointer": 0.01, "mcp": 0.5})
+    assert "checkpointer=0.01s" in caplog.text
+    assert "mcp=0.50s" in caplog.text
+    assert "total 0.51s" in caplog.text
+
+
+@pytest.fixture
+def state_guard():
+    # Snapshot/restore every AppState field — _init_langgraph_agent mutates the
+    # process-wide singleton (same guard tests/test_oauth_disconnected_boot.py uses).
+    from runtime.state import STATE, AppState
+
+    saved = {f.name: getattr(STATE, f.name) for f in dataclasses.fields(AppState)}
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(STATE, name, value)
+
+
+def test_setup_pending_boot_still_emits_the_partial_summary(tmp_path, monkeypatch, state_guard):
+    # #2678-adjacent CodeRabbit finding: the setup-pending early return (no
+    # .setup-complete marker, non-headless) used to skip the boot-summary log
+    # entirely — a fresh install's first boot would run the checkpointer phase
+    # and then say nothing about it. The helper must fire on THIS path too, not
+    # just the full-graph-compile path at the bottom of _init_langgraph_agent.
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(ai, "_log_boot_phase_summary", lambda phases: calls.append(dict(phases)))
+
+    ai._init_langgraph_agent()
+
+    from runtime.state import STATE
+
+    assert STATE.graph is None  # setup wizard not completed — graphless boot
+    assert len(calls) == 1
+    assert "checkpointer" in calls[0]  # the one phase that runs before the early return

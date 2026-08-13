@@ -79,6 +79,20 @@ def _timed_boot_phase(phase: str, sink: dict[str, float] | None = None):
             sink[phase] = duration_s
 
 
+def _log_boot_phase_summary(phases: dict[str, float]) -> None:
+    """One structured summary line covering every phase timed so far (#2674), so
+    "session felt slow to start" is diagnosable from a boot log without scraping
+    /metrics. Called from every ``_init_langgraph_agent`` exit point — including
+    the setup-pending early return, which only reaches the checkpointer phase —
+    so first-run boot logs aren't silently missing whatever phases DID run."""
+    if phases:
+        log.info(
+            "[boot] phase timings: %s (total %.2fs)",
+            ", ".join(f"{phase}={duration:.2f}s" for phase, duration in phases.items()),
+            sum(phases.values()),
+        )
+
+
 def _init_langgraph_agent(headless_setup: bool = False):
     """Initialize the LangGraph backend — setup-aware.
 
@@ -213,6 +227,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
                 "(plugin routes/surfaces still mounted). "
                 "Open the UI to finish setup (or run headless: --ui none / --setup).",
             )
+            _log_boot_phase_summary(_boot_phases)
             return
 
     from graph.agent import create_agent_graph
@@ -364,16 +379,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
         # as done).
         _audit_persona_tools(STATE.graph, trigger="boot")
 
-    # #2674 — one structured summary line covering every timed phase, so "session
-    # felt slow to start" is diagnosable from a boot log without scraping /metrics.
     # Fires even on a graphless boot (OAuthCredentialError) — the phases that DID
     # run (checkpointer/knowledge_store/plugins/mcp) are still useful signal.
-    if _boot_phases:
-        log.info(
-            "[boot] phase timings: %s (total %.2fs)",
-            ", ".join(f"{phase}={duration:.2f}s" for phase, duration in _boot_phases.items()),
-            sum(_boot_phases.values()),
-        )
+    _log_boot_phase_summary(_boot_phases)
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
     # for an Anthropic-family model (see graph/cache_warmer.py). Not built while

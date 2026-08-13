@@ -153,6 +153,19 @@ def test_summary_by_model_includes_per_model_duration_percentiles(store):
     assert models["claude-haiku-4-5"]["p50_duration_ms"] == 500
 
 
+def test_summary_by_model_percentiles_handle_a_null_model_group(store):
+    # A turn recorded with no model set groups under model=NULL — SQL equality
+    # (`model = ?`) never matches NULL, so a naive per-model lookup would silently
+    # report zero percentiles for that group despite it having recorded turns.
+    store.record(_row("t1", model=None, duration_ms=2000))
+    store.record(_row("t2", model=None, duration_ms=4000))
+    s = store.summary()
+    null_row = next(m for m in s["by_model"] if m["model"] is None)
+    assert null_row["turns"] == 2
+    assert null_row["p50_duration_ms"] in (2000, 4000)
+    assert null_row["p95_duration_ms"] == 4000
+
+
 def test_summary_by_model_percentiles_respect_since_filter(store):
     store.record(_row("old", model="claude-opus-4-8", duration_ms=9000, ended_at="2026-05-01T00:00:00+00:00"))
     store.record(_row("new", model="claude-opus-4-8", duration_ms=1000, ended_at="2026-06-01T00:00:00+00:00"))
