@@ -64,9 +64,14 @@ log = logging.getLogger("protoagent.server")
 # Agent setup
 # ---------------------------------------------------------------------------
 
-_event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
-# lifetime singleton; producers publish, /api/events
-# streams to connected consoles.
+_event_bus = EventBus(ring=512)  # Server→client SSE push channel (ADR 0003). Process-
+# lifetime singleton; producers publish, /api/events streams to connected consoles.
+# ring=512 (was the 128 default, #2692): one shared replay ring across every retained
+# topic on the instance — turn.usage, background.*, activity.*, goal.*, etc. — so a busy
+# instance running several sessions concurrently can evict a background.completed a
+# reconnecting client still needs before it gets replayed. A larger ring buys more
+# headroom without touching the ring's shape; retain=False on the chattiest live-only
+# topics (chat.progress, background.progress) is the other half of that fix.
 
 
 def _bundle_root() -> Path:

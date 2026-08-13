@@ -2,14 +2,15 @@ import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Spinner } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
-import { Bot, Check, CheckCircle2, Copy, Square, Trash2, XCircle } from "lucide-react";
+import { ArrowUpRight, Bot, Check, CheckCircle2, Copy, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { chatStore } from "../chat/chat-store";
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
-import { applyProgress, byRecency, fmtElapsed, nowIso, type ProgressTool } from "./background-jobs";
+import { applyProgress, byRecency, fmtElapsed, nowIso, unreadJobIds, type ProgressTool } from "./background-jobs";
 
 // Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
 // GET /api/background, then tracks live via the bus: `background.{started,completed}` for
@@ -18,12 +19,36 @@ import { applyProgress, byRecency, fmtElapsed, nowIso, type ProgressTool } from 
 // job's status, elapsed, live tool activity, result (markdown), and a Stop control for
 // running jobs. (Pure helpers live in ./background-jobs — react-dom-free + unit-tested.)
 
+// localStorage (not sessionStorage): unlike BackgroundWatch's per-tab "already toasted"
+// dedup, this is the durable badge itself (#2692) — it must survive a full browser
+// restart, since a job can finish while nothing is open at all.
+const SEEN_KEY = "protoagent.bgjobs.seen";
+
+function seenSet(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function markSeen(ids: string[]) {
+  if (!ids.length) return;
+  try {
+    const s = seenSet();
+    for (const id of ids) s.add(id);
+    localStorage.setItem(SEEN_KEY, JSON.stringify([...s].slice(-300)));
+  } catch {
+    /* best-effort */
+  }
+}
+
 export function BackgroundJobs() {
   const [enabled, setEnabled] = useState(false);
   const [jobs, setJobs] = useState<Record<string, BackgroundJobDTO>>({});
   const [progress, setProgress] = useState<Record<string, ProgressTool[]>>({});
   const [open, setOpen] = useState(false);
-  const [unread, setUnread] = useState(0);
+  const [seen, setSeen] = useState<Set<string>>(() => seenSet());
   const [, setTick] = useState(0); // re-render for live elapsed while open
 
   // Pull the durable registry — every job's FULL result. The live bus only carries a
@@ -118,9 +143,12 @@ export function BackgroundJobs() {
         result: String(d.result || ""),
         completed_at: nowIso(),
       });
-      setUnread((u) => u + 1);
       // The event's `result` is the trimmed preview — pull the durable full result so
-      // "show result" renders the entire report, not the …[truncated] copy.
+      // "show result" renders the entire report, not the …[truncated] copy. `unread`
+      // is derived from `jobs` below (not bumped here), so a completion whose live
+      // event never arrived — evicted from the replay ring, or the client wasn't
+      // connected — still shows unread once THIS hydrate (or the next reconnect's)
+      // picks it up (#2692).
       hydrate();
     });
 
@@ -134,6 +162,8 @@ export function BackgroundJobs() {
   const list = useMemo(() => Object.values(jobs).sort(byRecency), [jobs]);
   const running = list.filter((j) => j.status === "running").length;
   const finished = list.length - running;
+  const unreadIds = useMemo(() => unreadJobIds(list, seen), [list, seen]);
+  const unread = unreadIds.length;
 
   // Hover popover copy (matches the Inbox/Activity widgets), reflecting live state.
   const info =
@@ -174,6 +204,16 @@ export function BackgroundJobs() {
     }
   }
 
+  // Switch to a job's origin session — only offered when it's ALREADY a locally open
+  // tab (BgJobRow checks this before rendering the button at all). Resurrecting a
+  // session that was never opened in this browser needs a fetch-and-open path that
+  // doesn't exist yet (#2692's fallback for THAT case is this durable panel itself,
+  // not session resurrection), so this deliberately doesn't attempt it.
+  function jumpToChat(sessionId: string) {
+    chatStore.switchSession(sessionId);
+    setOpen(false);
+  }
+
   // Clear all finished entries at once (running jobs stay).
   async function clearFinished() {
     setJobs((m) => Object.fromEntries(Object.entries(m).filter(([, j]) => j.status === "running")));
@@ -194,7 +234,10 @@ export function BackgroundJobs() {
           className="util-btn bg-jobs-pill"
           onClick={() => {
             setOpen(true);
-            setUnread(0);
+            // Persist past this session (#2692) — a reload must not re-show a badge
+            // for a job the user already reviewed.
+            markSeen(unreadIds);
+            setSeen(seenSet());
             hydrate(); // fetch the FULL results when the panel opens (replaces any live previews)
           }}
           aria-label={`Background agents${running ? ` — ${running} running` : ""}`}
@@ -220,7 +263,14 @@ export function BackgroundJobs() {
               ) : null}
               <ul className="bg-jobs-list">
                 {list.map((j) => (
-                  <BgJobRow key={j.id} job={j} tools={progress[j.id] || []} onStop={stop} onDelete={del} />
+                  <BgJobRow
+                    key={j.id}
+                    job={j}
+                    tools={progress[j.id] || []}
+                    onStop={stop}
+                    onDelete={del}
+                    onJumpToChat={jumpToChat}
+                  />
                 ))}
               </ul>
             </>
@@ -236,14 +286,20 @@ function BgJobRow({
   tools,
   onStop,
   onDelete,
+  onJumpToChat,
 }: {
   job: BackgroundJobDTO;
   tools: ProgressTool[];
   onStop: (jobId: string) => void;
   onDelete: (jobId: string) => void;
+  onJumpToChat: (sessionId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const running = job.status === "running";
+  // Only offered when the origin session is ALREADY an open local tab — there's no
+  // fetch-and-open path for a session that was never opened in this browser (#2692).
+  const originIsOpenTab =
+    !!job.origin_session && chatStore.getSnapshot().sessions.some((s) => s.id === job.origin_session);
   const icon = running ? (
     <Spinner size={14} />
   ) : job.status === "failed" ? (
@@ -290,6 +346,17 @@ function BgJobRow({
             ) : null}
           </span>
         </button>
+        {originIsOpenTab ? (
+          <button
+            type="button"
+            className="bg-jobs-stop"
+            onClick={() => onJumpToChat(job.origin_session!)}
+            title="Jump to the chat this ran from"
+            aria-label="Jump to chat"
+          >
+            <ArrowUpRight size={12} />
+          </button>
+        ) : null}
         {running ? (
           <button
             type="button"

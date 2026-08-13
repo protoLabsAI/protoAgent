@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyProgress, byRecency, fmtElapsed, isShortResult } from "./background-jobs";
+import { applyProgress, byRecency, fmtElapsed, isShortResult, unreadJobIds } from "./background-jobs";
 import type { BackgroundJobDTO } from "../lib/types";
 
 function job(p: Partial<BackgroundJobDTO>): BackgroundJobDTO {
@@ -68,6 +68,24 @@ describe("applyProgress", () => {
     // a later frame without output for the same tool keeps the captured value
     p = applyProgress(p, { phase: "tool_end", tool: "web_search", tool_call_id: "tc1" });
     expect(p[0].output).toBe("found 3 results");
+  });
+});
+
+describe("unreadJobIds", () => {
+  it("counts finished jobs not in the seen set", () => {
+    const jobs = [job({ id: "a", status: "completed" }), job({ id: "b", status: "failed" })];
+    expect(unreadJobIds(jobs, new Set())).toEqual(["a", "b"]);
+    expect(unreadJobIds(jobs, new Set(["a"]))).toEqual(["b"]);
+  });
+
+  it("never counts a running job as unread", () => {
+    const jobs = [job({ id: "r", status: "running" })];
+    expect(unreadJobIds(jobs, new Set())).toEqual([]);
+  });
+
+  it("is empty once every finished job has been seen", () => {
+    const jobs = [job({ id: "a", status: "completed" }), job({ id: "b", status: "canceled" })];
+    expect(unreadJobIds(jobs, new Set(["a", "b"]))).toEqual([]);
   });
 });
 

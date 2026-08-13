@@ -108,7 +108,10 @@ export function BackgroundWatch() {
       toast({
         tone: failed ? "error" : "success",
         title: failed ? "Background task failed" : "Background task finished",
-        message: injected ? desc : `${desc} — open the chat to read it.`,
+        // "open the chat to read it" was wrong when the origin session isn't a local
+        // tab (#2692) — there's no chat to open in that case. The Background agents
+        // panel is durable and tab-independent, so it's always a real place to look.
+        message: injected ? desc : `${desc} — see the Background agents panel.`,
       });
       notifyIfHidden(failed ? "Background task failed" : "Background task finished", desc);
     });

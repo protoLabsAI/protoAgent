@@ -59,6 +59,16 @@ export function byRecency(a: BackgroundJobDTO, b: BackgroundJobDTO): number {
   return bt - at;
 }
 
+/** Finished jobs the user hasn't opened the panel to see yet (#2692). Pure so the
+ *  "durable badge" logic is testable without the localStorage-backed `seen` set the
+ *  component keeps — recomputed from the FULL jobs list (not just live bus events),
+ *  so a `background.completed` event the client missed (evicted from the replay ring,
+ *  or simply not connected at the time) still surfaces once the next hydrate() picks
+ *  the finished job up. Running jobs are never "unread" — only a terminal state counts. */
+export function unreadJobIds(jobs: BackgroundJobDTO[], seen: ReadonlySet<string>): string[] {
+  return jobs.filter((j) => j.status !== "running" && !seen.has(j.id)).map((j) => j.id);
+}
+
 /** Whether a completed job's result should render as a compact inline note instead of
  *  the report card (#1651). Short = a successful single line that arrived complete
  *  (the server truncates previews at 2000 chars with a `…_[truncated]_` suffix, so an

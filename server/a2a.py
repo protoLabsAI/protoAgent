@@ -782,6 +782,11 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
             "output": out,
             "error": bool(frame.get("error")),
         },
+        # Live-only (#2692), same treatment as _publish_chat_progress just above: a
+        # busy background job's own tool_start/tool_end chatter was crowding
+        # background.completed — the event the replay ring most needs to protect —
+        # out of the shared 128-slot ring before a reconnecting client could replay it.
+        retain=False,
     )
 
 

@@ -43,7 +43,15 @@ export function ChatResumeWatch() {
       seen.add(render.key);
 
       const target = chatStore.getSnapshot().sessions.find((s) => s.id === render.session);
-      if (!target) return; // chat not open in this window — nothing to surface here
+      if (!target) {
+        // Chat not open in this window — there's no transcript to inject into, but
+        // the toast/OS-notification are the only live signal this turn resumed at
+        // all (#2692's same-root-cause sibling: unlike BackgroundWatch, this path
+        // used to drop the event entirely rather than degrade to a toast).
+        toast(render.toast);
+        notifyIfHidden(render.notify.title, render.notify.body);
+        return;
+      }
 
       const liveIdx = target.messages.findIndex((m) =>
         isLiveServerTurn(m, render.taskId, render.session),

@@ -799,12 +799,15 @@ class TestProgressHook:
         )
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
         published: list = []
-        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None, **kw: published.append((t, d, kw)))
         a2a._a2a_progress(f"background:{jid}", "task-42", {"phase": "tool_start", "id": "tc1", "name": "web_search"})
         assert len(published) == 1
-        topic, data = published[0]
+        topic, data, kwargs = published[0]
         assert topic == "background.progress"
         assert data["job_id"] == jid and data["tool"] == "web_search" and data["phase"] == "tool_start"
+        # #2692 — live-only, same as chat.progress: a busy job's own tool chatter must
+        # not crowd background.completed out of the shared replay ring.
+        assert kwargs.get("retain") is False
 
     def test_non_background_context_ignored(self, monkeypatch):
         """An OPERATOR-driven chat turn publishes nothing: the browser is streaming that
