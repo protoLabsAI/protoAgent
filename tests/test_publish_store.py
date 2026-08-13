@@ -101,7 +101,12 @@ def test_a_hand_edited_partial_entry_is_skipped_not_fatal(store):
     assert store.list_published_links() == []
 
 
-def test_registry_file_is_written_with_restrictive_permissions(store):
+def test_registry_file_is_owner_only(store):
+    """Portable check (tests/privacy_asserts.py, #2412 phase 4) — POSIX mode bits are
+    decorative on Windows (stat reports 0666 regardless of chmod), so a raw
+    `st_mode == 0o600` assertion is wrong there, not just untested; this is the same
+    helper agent_snapshot_import / media_store / config_io's credential files use."""
+    from tests.privacy_asserts import assert_owner_only
+
     store.record_publish(thread_id="t1", title="t", public_url="https://x/1", revoke_token="tok", expires_at=None)
-    mode = store._registry_path().stat().st_mode & 0o777
-    assert mode == 0o600
+    assert_owner_only(store._registry_path())

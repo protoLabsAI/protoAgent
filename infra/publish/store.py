@@ -2,14 +2,22 @@
 hosted viewer, and the revoke token each needs to be un-shared.
 
 Mirrors ``security/devices.py``'s shape (one JSON file at ``instance_root``, atomic
-write, 0600 — both hold a live credential) with one deliberate divergence: devices.py
-NEVER stores a token, only its hash, because a device token only ever needs to be
-*verified* locally. A revoke token has the opposite requirement — this instance must
-*present* it to the hosted service's revoke endpoint later, and a hash can't be reversed
-back into the original value. So the token is stored in plaintext here, same as any other
-locally-held API credential (mirroring how ``secrets.yaml`` holds real values, not
-hashes), and ``list_published_links()`` (the shape sent to the browser) never includes it
-— only ``get_link()`` (server-internal, used to actually call the hosted service) does.
+write — both hold a live credential) with one deliberate divergence: devices.py NEVER
+stores a token, only its hash, because a device token only ever needs to be *verified*
+locally. A revoke token has the opposite requirement — this instance must *present* it to
+the hosted service's revoke endpoint later, and a hash can't be reversed back into the
+original value. So the token is stored in plaintext here, same as any other locally-held
+API credential (mirroring how ``secrets.yaml`` holds real values, not hashes), and
+``list_published_links()`` (the shape sent to the browser) never includes it — only
+``get_link()`` (server-internal, used to actually call the hosted service) does.
+
+Because the plaintext token makes this a genuinely sensitive file (unlike devices.json's
+hashes, "aren't replayable" doesn't apply here), it uses the full portable owner-only
+contract (``infra.paths.harden_private_file``, #2412 phase 4) rather than a bare
+``os.chmod`` — POSIX mode bits are decorative on Windows (``stat`` reports 0666
+regardless), so a raw ``chmod(0o600)`` alone leaves the file NOT actually restricted
+there; see ``tests/privacy_asserts.assert_owner_only`` for how this gets verified
+cross-platform.
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from infra.paths import instance_paths
+from infra.paths import harden_private_file, instance_paths
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +100,9 @@ def _save(links: list[PublishedLink]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps([asdict(link) for link in links], indent=2), "utf-8")
-    os.chmod(tmp, 0o600)  # live revoke tokens live here — same treatment as devices.json
+    os.chmod(tmp, 0o600)  # POSIX belt on the tmp file, before the rename
     os.replace(tmp, path)  # atomic — a crash mid-write can't truncate the registry
+    harden_private_file(path)  # the Windows ACL belt, applied to the final path post-rename
 
 
 def record_publish(
