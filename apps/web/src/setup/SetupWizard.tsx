@@ -184,7 +184,7 @@ const OAUTH_LABEL: Record<string, string> = {
 // race it against a timeout so `busy` always clears and the step never locks (which
 // would disable Next, trapping the user on the runtime step).
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((_resolve, reject) => {
     timer = setTimeout(
       () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the API base and key`)),

@@ -389,10 +389,14 @@ def ensure_live_config() -> bool:
       would then freeze + shadow on later image updates).
     - Otherwise copy the bundled ``.example`` template (``config_example_path()``).
 
-    Idempotent — does nothing once the live file exists, so edits are never clobbered.
-    That is the right contract for operator-owned config but leaves the seed's
-    *declarative* half stranded on an image roll; ``apply_seed_merge`` (opt-in, #2071)
-    is the boot-time companion that re-applies it without clobbering operator edits.
+    Idempotent for the SEED step — does nothing once the live file exists, so
+    operator edits are never clobbered. That is the right contract for operator-owned
+    config but leaves the seed's *declarative* half stranded on an image roll;
+    ``apply_seed_merge`` (opt-in, #2071) is the boot-time companion that re-applies it
+    without clobbering operator edits. This function also runs
+    ``_migrate_dead_max_iterations_default`` unconditionally before the seed-exists
+    check — that's a narrow, marker-gated, one-shot field correction, not a
+    reopening of the general no-clobber contract.
     """
     # Bridge an in-place upgrade first: if an old-layout config exists, copy it into the
     # new instance_root/config so the seed-from-.example branch below never strands it.
