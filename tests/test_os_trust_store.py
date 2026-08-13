@@ -199,26 +199,65 @@ def test_untrusted_self_signed_cert_still_fails_closed(tmp_path):
 # ── behavior: an OS-trusted private CA is honored (Windows — where #2643 was filed) ──
 
 
+# certutil -addstore and Import-Certificate both go through a "friendly" layer
+# that shows an interactive "install this root certificate?" confirmation dialog
+# for Root-store additions — no documented CLI flag suppresses it (confirmed: `-f`
+# means force-overwrite, not skip-prompt; it still hung). On a headless runner
+# there's nobody to click it, so the process blocks until an external timeout
+# kills it. The documented, reliable non-interactive path is the .NET
+# X509Store API directly — it talks to the same underlying CryptoAPI store but
+# bypasses the confirmation-dialog layer entirely, since that dialog belongs to
+# certutil/Import-Certificate's own UI code, not the store API itself.
+_ADD_TRUST_PS1 = """
+param([string]$CertPath)
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath)
+$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+$store.Open("ReadWrite")
+$store.Add($cert)
+$store.Close()
+"""
+
+_REMOVE_TRUST_PS1 = """
+param([string]$Thumbprint)
+$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+$store.Open("ReadWrite")
+$found = $store.Certificates.Find([System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $Thumbprint, $false)
+foreach ($c in $found) { $store.Remove($c) }
+$store.Close()
+"""
+
+
 @pytest.mark.skipif(
     not (os.name == "nt" and _ON_CI),
-    reason="mutates the real Windows cert store via certutil — CI-only (ephemeral runner)",
+    reason="mutates the real Windows cert store — CI-only (ephemeral runner)",
 )
 def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
     ca_cert, ca_key = _make_ca()
     leaf_cert, leaf_key = _make_leaf(ca_cert, ca_key)
     cert_path = tmp_path / "leaf.pem"
     key_path = tmp_path / "leaf.key"
-    ca_path = tmp_path / "ca.pem"
+    # DER, not PEM: unambiguous for X509Certificate2's file constructor, no format
+    # auto-detection involved.
+    ca_der_path = tmp_path / "ca.cer"
     cert_path.write_bytes(_pem(leaf_cert))
     key_path.write_bytes(_pem_key(leaf_key))
-    ca_path.write_bytes(_pem(ca_cert))
-    thumbprint = ca_cert.fingerprint(hashes.SHA1()).hex()
+    ca_der_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.DER))
+    thumbprint = ca_cert.fingerprint(hashes.SHA1()).hex().upper()
 
+    add_script = tmp_path / "add_trust.ps1"
+    add_script.write_text(_ADD_TRUST_PS1)
     subprocess.run(
-        # -f: force, no interactive "install this root certificate?" confirmation
-        # dialog — without it, certutil can block waiting on UI input that never
-        # comes on a headless runner, hanging the job until its own timeout kills it.
-        ["certutil", "-f", "-user", "-addstore", "Root", str(ca_path)],
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(add_script),
+            "-CertPath",
+            str(ca_der_path),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -236,8 +275,20 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
             resp = httpx.get(f"https://localhost:{port}/", timeout=5)
             assert resp.status_code == 200
     finally:
+        remove_script = tmp_path / "remove_trust.ps1"
+        remove_script.write_text(_REMOVE_TRUST_PS1)
         subprocess.run(
-            ["certutil", "-f", "-user", "-delstore", "Root", thumbprint],
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(remove_script),
+                "-Thumbprint",
+                thumbprint,
+            ],
             check=False,
             capture_output=True,
             text=True,
