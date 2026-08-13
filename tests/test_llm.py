@@ -4,8 +4,17 @@ import httpcore
 import httpx
 import pytest
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
 from graph.config import LangGraphConfig
-from graph.llm import _GATEWAY_UA, _build_llm_kwargs, _stream_with_reconnect, gateway_client, gateway_sync_client
+from graph.llm import (
+    _GATEWAY_UA,
+    _ReasoningChatOpenAI,
+    _build_llm_kwargs,
+    _stream_with_reconnect,
+    gateway_client,
+    gateway_sync_client,
+)
 
 
 def test_defaults_omit_optional_sampling_params():
@@ -85,6 +94,93 @@ def test_blank_thinking_is_omitted():
     # "" is the inherit sentinel — no thinking key emitted.
     kwargs = _build_llm_kwargs(LangGraphConfig(thinking=""))
     assert "extra_body" not in kwargs
+
+
+# ── #2642: reasoning_content round-trips outbound when thinking is enabled ──────────
+
+
+def _thinking_model(**extra_body_overrides):
+    extra_body = {"thinking": {"type": "enabled"}, **extra_body_overrides}
+    return _ReasoningChatOpenAI(
+        model="deepseek-v4", api_key="sk-test", base_url="http://localhost:1/v1", extra_body=extra_body
+    )
+
+
+def test_reasoning_content_round_trips_across_a_multi_tool_turn_conversation():
+    # The base ChatOpenAI._get_request_payload silently drops additional_kwargs
+    # ["reasoning_content"] when building the outbound request — DeepSeek then 400s
+    # any turn after a tool call that's missing it. This is the exact shape from the
+    # issue: tool call → tool result → summary → a SECOND tool call.
+    model = _thinking_model()
+    messages = [
+        SystemMessage("be helpful"),
+        HumanMessage("use a tool please"),
+        AIMessage(
+            content="",
+            additional_kwargs={"reasoning_content": "I should call the tool now."},
+            tool_calls=[{"name": "get_weather", "args": {"city": "NYC"}, "id": "call_1"}],
+        ),
+        ToolMessage(content="72F sunny", tool_call_id="call_1"),
+        AIMessage(content="It is 72F and sunny in NYC.", additional_kwargs={"reasoning_content": "Summarize."}),
+        HumanMessage("thanks, and Boston?"),
+        AIMessage(
+            content="",
+            additional_kwargs={},  # no reasoning captured this turn — see the next test
+            tool_calls=[{"name": "get_weather", "args": {"city": "Boston"}, "id": "call_2"}],
+        ),
+        ToolMessage(content="65F cloudy", tool_call_id="call_2"),
+    ]
+    payload = model._get_request_payload(messages)
+    assistant_msgs = [m for m in payload["messages"] if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 3
+    assert assistant_msgs[0]["reasoning_content"] == "I should call the tool now."
+    assert assistant_msgs[1]["reasoning_content"] == "Summarize."
+    # Every non-tool, non-user message keeps its own role/content untouched.
+    assert payload["messages"][0] == {"role": "system", "content": "be helpful"}
+    assert payload["messages"][3]["role"] == "tool"
+
+
+def test_reasoning_content_defaults_to_empty_string_when_not_captured():
+    # DeepSeek requires the KEY present, not merely non-empty — a tool-only turn
+    # whose delta never carried reasoning must still get "", not be omitted, or it
+    # 400s on exactly the turn this fix exists to unbreak.
+    model = _thinking_model()
+    messages = [
+        HumanMessage("go"),
+        AIMessage(content="", additional_kwargs={}, tool_calls=[{"name": "x", "args": {}, "id": "c1"}]),
+    ]
+    payload = model._get_request_payload(messages)
+    assistant_msg = next(m for m in payload["messages"] if m["role"] == "assistant")
+    assert assistant_msg["reasoning_content"] == ""
+
+
+def test_reasoning_content_not_injected_when_thinking_disabled():
+    model = _thinking_model()
+    model.extra_body = {"thinking": {"type": "disabled"}}
+    messages = [
+        HumanMessage("hi"),
+        AIMessage(
+            content="", additional_kwargs={"reasoning_content": "x"}, tool_calls=[{"name": "y", "args": {}, "id": "c1"}]
+        ),
+    ]
+    payload = model._get_request_payload(messages)
+    assistant_msg = next(m for m in payload["messages"] if m["role"] == "assistant")
+    assert "reasoning_content" not in assistant_msg
+
+
+def test_reasoning_content_not_injected_without_extra_body():
+    # The default shape for every non-DeepSeek-style model (Claude, GPT, ungated
+    # gateway slots) — no extra_body at all. Must stay a true no-op.
+    model = _ReasoningChatOpenAI(model="gpt-5.6-sol", api_key="sk-test", base_url="http://localhost:1/v1")
+    messages = [
+        HumanMessage("hi"),
+        AIMessage(
+            content="", additional_kwargs={"reasoning_content": "x"}, tool_calls=[{"name": "y", "args": {}, "id": "c1"}]
+        ),
+    ]
+    payload = model._get_request_payload(messages)
+    assistant_msg = next(m for m in payload["messages"] if m["role"] == "assistant")
+    assert "reasoning_content" not in assistant_msg
 
 
 def test_from_yaml_reads_reasoning_controls(tmp_path):

@@ -153,6 +153,42 @@ class _ReasoningChatOpenAI(ChatOpenAI):
                 gen.message.additional_kwargs["reasoning_content"] = reasoning
         return gen
 
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        """Round-trip ``reasoning_content`` back out on the NEXT turn (#2642).
+
+        The base class's outbound message-dict builder drops it — same "use a
+        provider-specific subclass" non-preservation the docstring on
+        ``_convert_chunk_to_generation_chunk`` above already routes around for the
+        inbound side. Once any tool call has occurred, DeepSeek 400s a later turn
+        that's missing ``reasoning_content`` on an assistant message — even an
+        empty string satisfies it, but an ABSENT key doesn't, so every assistant
+        message gets the key once thinking is on, not just the ones that happen to
+        carry a captured value (a tool-only turn else re-400s on the very case this
+        fix was written for). Gated on ``extra_body.thinking`` (#1113) — a no-op for
+        every model that doesn't set it, so this never touches Claude/GPT/ungated
+        gateway slots."""
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if (self.extra_body or {}).get("thinking", {}).get("type") == "enabled":
+            messages = self._convert_input(input_).to_messages()
+            payload_messages = payload.get("messages") or []
+            if len(messages) != len(payload_messages):
+                # Base-class conversion is 1:1 today (verified against a multi-turn
+                # tool-call transcript) — if a future langchain_openai starts
+                # merging/splitting messages this silently degrades back to the bug
+                # this fix exists for, so surface it instead of guessing an alignment.
+                log.warning(
+                    "[llm] reasoning_content round-trip skipped: input/payload message "
+                    "count mismatch (%d vs %d) — a later turn may 400 (#2642)",
+                    len(messages),
+                    len(payload_messages),
+                )
+            else:
+                for msg, msg_dict in zip(messages, payload_messages, strict=True):
+                    if msg_dict.get("role") == "assistant":
+                        extra = getattr(msg, "additional_kwargs", None) or {}
+                        msg_dict["reasoning_content"] = extra.get("reasoning_content") or ""
+        return payload
+
     async def _astream(self, *args, **kwargs):
         """Reconnect a provider stream that drops before emitting any content (#1728).
 
