@@ -384,12 +384,23 @@ class ProtoAgentExecutor(AgentExecutor):
         _answer_started = False  # first chunk creates the artifact (append=False); rest append
         # Batched by a char threshold: small enough that the live bubble still fills
         # smoothly, large enough that a long answer doesn't emit hundreds of frames.
-        # The frame count directly scales the SSE backpressure + teardown-cancel
-        # window (a2a_impl/registry.py grants the producer a 0.5s grace then cancels)
-        # that can strand the terminal REPLACE + COMPLETED frames on a slow/large
-        # stream — an 11KB answer at 24 chars was ~480 frames; at 240 it's ~48.
-        # Governs both the answer text (below) and reasoning batching (#1710).
-        _FLUSH_CHARS = 240
+        # This was 240 (an 11KB answer ≈ 48 frames), raised from an original 24
+        # (≈ 480 frames) out of concern that more frames would race the
+        # teardown-cancel grace window (a2a_impl/registry.py FLUSH_GRACE_S, #1713)
+        # and strand the terminal REPLACE + COMPLETED frames on a slow/large
+        # stream. 240 reads as chunky in the console — the model writes in
+        # visible ~40-word blocks instead of a stream. Re-tested that concern
+        # directly: 30x through the real SendStreamingMessage SSE body at the
+        # original 24 (≈ 480 frames for the same 11KB case) produced zero
+        # teardown-grace warnings and zero dropped/truncated answers (see
+        # tests/test_a2a_flush_granularity.py) — FLUSH_GRACE_S only fires on a
+        # genuinely hung producer, not on frame count, so lowering this is safe
+        # as far as the app-level producer/consumer path goes. (Not re-tested:
+        # real TCP/network backpressure or a slow browser-side consumer — if a
+        # future report ties this back to teardown behavior under real load,
+        # look there first.) Governs both the answer text (below) and reasoning
+        # batching (#1710).
+        _FLUSH_CHARS = 60
         # Reasoning ("thinking") deltas arrive one token at a time. Batch them
         # like the answer text so the live thinking bubble still fills word by
         # word without a WORKING status frame per token — unbatched, one turn
