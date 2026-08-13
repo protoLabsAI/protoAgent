@@ -134,7 +134,7 @@ function TelemetryBody() {
                 <h2 className="panel-kicker">By model</h2>
                 <Table className="telemetry-table">
                   <THead>
-                    <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cost</Th><Th>p50</Th><Th>p95</Th></Tr>
+                    <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cost</Th><Th>p50</Th><Th>p95</Th><Th>p99</Th></Tr>
                   </THead>
                   <TBody>
                     {summary.by_model.map((m) => (
@@ -145,6 +145,7 @@ function TelemetryBody() {
                         <Td>{usd(m.cost_usd)}</Td>
                         <Td>{ms(m.p50_duration_ms)}</Td>
                         <Td>{ms(m.p95_duration_ms)}</Td>
+                        <Td>{ms(m.p99_duration_ms)}</Td>
                       </Tr>
                     ))}
                   </TBody>
