@@ -15,6 +15,35 @@ import sys
 from graph.plugins import installer, scaffold
 
 
+def _enabled_in_live_config(plugin_id: str) -> bool:
+    """Was the plugin in ``plugins.enabled`` before this uninstall? Read from the live
+    YAML (the CLI runs without a loaded LangGraphConfig — same pattern as
+    ``installer.configured_allowlist``). Best-effort: unreadable config → False."""
+    try:
+        import yaml
+
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
+        if not cfg_path.exists():
+            return False
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+        return plugin_id in ((data.get("plugins") or {}).get("enabled") or [])
+    except Exception:  # noqa: BLE001 — advisory only, never block the uninstall
+        return False
+
+
+def _live_servers() -> list[dict]:
+    """Live protoAgent servers sharing this data root (#818 heartbeats, stale-pruned).
+    From this non-server process every running server on the instance shows up."""
+    try:
+        from infra.paths import colocated_instances
+
+        return colocated_instances()
+    except Exception:  # noqa: BLE001 — advisory only
+        return []
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m server plugin",
@@ -190,6 +219,7 @@ def run_plugin_cli(argv: list[str]) -> int:
                     print(f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}")
             return 0
         if args.cmd == "uninstall":
+            was_enabled = _enabled_in_live_config(args.id)
             rep = installer.uninstall(args.id, purge=args.purge)
             print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
             if rep["deps_left"]:
@@ -198,6 +228,19 @@ def run_plugin_cli(argv: list[str]) -> int:
                 )
             if not args.purge:
                 print("  config + secrets kept (reinstall restores them). Use --purge to remove them too.")
+            # This CLI runs OUT-OF-PROCESS: it scrubs disk + config, but a running server
+            # keeps the plugin's tools/routers live until its next restart or config
+            # reload (#2717 — the console uninstall route does the live teardown; a
+            # separate process can't). Detect a live server on this data root via the
+            # #818 heartbeats and say so, instead of silently diverging.
+            if was_enabled:
+                for inst in _live_servers():
+                    where = f"pid {inst['pid']}" + (f", port {inst['port']}" if inst.get("port") else "")
+                    print(
+                        f"  ⚠ a protoAgent server is RUNNING ({where}) — {args.id} stays loaded in it "
+                        f"until a restart or config reload. For a live teardown, uninstall from the "
+                        f"console (Settings ▸ Plugins) instead."
+                    )
             return 0
         if args.cmd == "sync":
             for r in installer.sync(allow=installer.configured_allowlist()):
