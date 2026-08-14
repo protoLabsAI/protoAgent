@@ -34,6 +34,10 @@ class InstallResult:
     # Bundle mcp: servers seeded into the HOST config this install (#2118) — empty for
     # single plugins, non-activated installs, and bundles that declare no servers.
     mcp_seeded: list[str] = field(default_factory=list)
+    # Per-plugin import/registration failures from the post-enable reload (#2716):
+    # a plugin that fails to LOAD is skipped by the loader, so the reload itself still
+    # succeeds — `reloaded=True` + an id in `enabled` is NOT proof the code is live.
+    load_errors: dict[str, str] = field(default_factory=dict)
 
 
 def _enabled_ids_from_summary(summary: dict) -> list[str]:
@@ -139,8 +143,23 @@ async def install_and_activate(
 
     ok, messages = apply_settings(config_updates)
     if ok:
+        # The reload "succeeding" only means the graph rebuilt — the loader SKIPS a
+        # plugin whose import/registration fails and records the failure on its meta
+        # entry, so read the post-reload roster for the ids we just enabled (#2716).
+        from runtime.state import STATE
+
+        load_errors = {
+            str(m.get("id")): str(m.get("error"))
+            for m in (STATE.plugin_meta or [])
+            if m.get("id") in ids and m.get("error")
+        }
         return InstallResult(
-            summary=summary, installed_ids=installed_ids, enabled=ids, reloaded=True, mcp_seeded=mcp_seeded
+            summary=summary,
+            installed_ids=installed_ids,
+            enabled=ids,
+            reloaded=True,
+            mcp_seeded=mcp_seeded,
+            load_errors=load_errors,
         )
     # The install itself succeeded (code on disk + locked); surface the enable-reload
     # failure without failing the whole op — it can be enabled manually.

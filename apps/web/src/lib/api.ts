@@ -2296,8 +2296,10 @@ export const api = {
     return request<{ plugins: CatalogPlugin[] }>("/api/plugins/catalog");
   },
   // Install AUTO-ENABLES + runs the plugin (trust-by-default): `enabled` lists the
-  // ids now live; `reloaded` whether the hot-reload landed; `enable_error` is set if
-  // the install succeeded but the enable-reload failed (enable it manually then).
+  // ids now in plugins.enabled; `reloaded` whether the hot-reload landed; `enable_error`
+  // is set if the install succeeded but the enable-reload failed (enable it manually
+  // then). `load_errors` (#2716) maps enabled ids that FAILED to import on that reload —
+  // in plugins.enabled but not running — optional so older backends parse fine.
   installPlugin(url: string, ref?: string, force?: boolean) {
     return request<{
       installed: PluginInstallSummary;
@@ -2305,6 +2307,7 @@ export const api = {
       reloaded: boolean;
       restart_recommended: boolean;
       enable_error: string | null;
+      load_errors?: Record<string, string>;
     }>(
       "/api/plugins/install",
       { method: "POST", body: { url, ref: ref || undefined, force: force || undefined } },

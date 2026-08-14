@@ -31,10 +31,12 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
       refreshAll();
       setUrl("");
       setRef("");
-      // Clean install (auto-enabled, nothing to flag) → close; the new row shows in the
-      // list. If auto-enable failed or there are deps to install manually, keep the
-      // dialog open with the note so it isn't lost.
-      if (!res.enable_error && !s.requires_pip?.length) {
+      // Clean install (auto-enabled, everything loaded, nothing to flag) → close; the
+      // new row shows in the list. If auto-enable failed, a plugin failed to LOAD on
+      // the reload (#2716), or there are deps to install manually, keep the dialog
+      // open with the note so it isn't lost.
+      const loadErrs = Object.entries(res.load_errors ?? {});
+      if (!res.enable_error && !loadErrs.length && !s.requires_pip?.length) {
         onClose();
         return;
       }
@@ -43,7 +45,9 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
       setStatus(
         res.enable_error
           ? `Installed ${who} — auto-enable failed (${res.enable_error}); enable it from the list${deps}`
-          : `Installed ${who}${deps}`,
+          : loadErrs.length
+            ? `Installed ${who} — failed to load: ${loadErrs.map(([id, e]) => `${id} (${e})`).join("; ")}${deps}`
+            : `Installed ${who}${deps}`,
       );
     },
     onError: (e: unknown) => setStatus(e instanceof Error ? e.message : "install failed"),

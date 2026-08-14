@@ -570,7 +570,18 @@ function DiscoverTab() {
       // and its Configure dialog opened EMPTY until a page refresh (#1643). It also
       // hid the row's Configure/Uninstall buttons (inventory + schema drive both).
       refreshAll();
-      toast({ tone: "success", title: "Plugin installed", message: `${p.name}${res.reloaded ? " — enabled and live" : ""}.` });
+      // "reloaded" alone isn't "live": the loader skips a plugin whose import fails
+      // and the reload still succeeds (#2716) — don't toast success for dead code.
+      const failed = Object.entries(res.load_errors ?? {});
+      if (failed.length) {
+        toast({
+          tone: "error",
+          title: "Plugin installed but not running",
+          message: `${p.name}: ${failed.map(([, e]) => e).join("; ")}`,
+        });
+      } else {
+        toast({ tone: "success", title: "Plugin installed", message: `${p.name}${res.reloaded ? " — enabled and live" : ""}.` });
+      }
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install plugin", message: `${p.name}: ${errMsg(err)}` }),
   });

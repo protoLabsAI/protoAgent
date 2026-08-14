@@ -165,6 +165,33 @@ def test_install_bundle_without_declared_enable_enables_every_member(monkeypatch
     assert body["enabled"] == ["a", "b"]
 
 
+def test_install_surfaces_load_errors(monkeypatch):
+    """An enabled plugin that fails to IMPORT on the reload is skipped by the loader —
+    the reload still succeeds — so the install response must carry the failure
+    (#2716). Before, the console toasted "enabled and live" for code that never loaded."""
+    from graph.plugins import installer
+
+    _wire(
+        monkeypatch,
+        enabled=[],
+        disabled=[],
+        meta=[{"id": "broken", "enabled": True, "error": "No module named 'leftpad'"}],
+    )
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "broken"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/broken"}).json()
+    assert body["reloaded"] is True and body["enabled"] == ["broken"]
+    assert body["load_errors"] == {"broken": "No module named 'leftpad'"}
+
+
+def test_install_clean_load_reports_empty_load_errors(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[{"id": "fine", "enabled": True}])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "fine"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/fine"}).json()
+    assert body["load_errors"] == {}
+
+
 def test_install_bundle_seeds_config_defaults_without_clobbering(monkeypatch):
     """A bundle's recommended config defaults ride the same enable write (#1350) —
     filling only keys the operator hasn't already set in the live config."""
@@ -456,6 +483,31 @@ def test_installed_route_merges_loader_meta(monkeypatch):
     assert by_id["github"]["enabled"] is True and by_id["github"]["needs_config"] == ["token"]
     assert by_id["ghosty"]["enabled"] is False and by_id["ghosty"]["incomplete"] is False
     assert "manifest" not in by_id["github"]  # present=False → manifest never loaded
+
+
+def test_installed_route_carries_load_error(monkeypatch):
+    """The last reload's per-plugin load failure rides the inventory rows (#2716) —
+    previously only the console/runtime-status payload carried it, so API consumers
+    saw an enabled-but-dead plugin as healthy."""
+    from pathlib import Path
+
+    from graph.plugins import installer
+
+    _wire(
+        monkeypatch,
+        enabled=["broken"],
+        disabled=[],
+        meta=[{"id": "broken", "enabled": True, "error": "boom"}, {"id": "fine", "enabled": True}],
+    )
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: Path("/nonexistent-plugins-dir"))
+    monkeypatch.setattr(
+        installer,
+        "list_installed",
+        lambda: [{"id": "broken", "present": False}, {"id": "fine", "present": False}],
+    )
+    by_id = {p["id"]: p for p in _client().get("/api/plugins/installed").json()["plugins"]}
+    assert by_id["broken"]["error"] == "boom"
+    assert by_id["fine"]["error"] is None
 
 
 def test_updates_route_returns_check_results(monkeypatch):

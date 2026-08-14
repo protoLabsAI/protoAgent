@@ -123,6 +123,10 @@ def register_plugin_routes(app) -> None:
                 "enabled": bool(mt.get("enabled")),
                 "incomplete": bool(mt.get("incomplete")),
                 "needs_config": list(mt.get("needs_config") or []),
+                # Load failure from the last reload (#2716) — previously only the
+                # console/runtime-status payload carried it, so API consumers of this
+                # inventory saw an enabled-but-dead plugin as healthy.
+                "error": str(mt.get("error")) if mt.get("error") else None,
             }
             if e["id"] in bundle_by_member:
                 item["bundle"] = bundle_by_member[e["id"]]
@@ -265,6 +269,8 @@ def register_plugin_routes(app) -> None:
         ]
         if result.enable_error:
             log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
+        for pid, err in result.load_errors.items():
+            log.warning("[plugins] %s installed + enabled but FAILED to load: %s", pid, err)
         return {
             "installed": result.summary,
             "enabled": result.enabled,  # the ids now live
@@ -273,6 +279,9 @@ def register_plugin_routes(app) -> None:
             # live router serves stale routes until restart (#942).
             "restart_recommended": bool(stale_after_reload),
             "enable_error": result.enable_error,
+            # Per-plugin import failures from the post-enable reload (#2716) — an id in
+            # `enabled` whose entry is here is in plugins.enabled but NOT running.
+            "load_errors": result.load_errors,
             # Bundle mcp: servers seeded into the host config this install (#2118).
             "mcp_seeded": result.mcp_seeded,
         }

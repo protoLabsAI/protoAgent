@@ -536,11 +536,19 @@ export function SetupWizard({
         setMessage(`Setting up the ${personaLabel} tools — this can take a few seconds…`);
         try {
           const r = await api.installPlugin(pickedBundle);
+          const failedLoad = Object.keys(r.load_errors ?? {});
           if (r.enable_error) {
             toast({
               tone: "info",
               title: "Setup complete",
               message: `${personaLabel} tools installed but couldn't auto-enable (${r.enable_error}) — turn them on in Settings ▸ Plugins.`,
+            });
+          } else if (failedLoad.length) {
+            // Enabled but not running (#2716) — same toast-not-Callout reasoning as above.
+            toast({
+              tone: "info",
+              title: "Setup complete",
+              message: `${personaLabel} tools installed but ${failedLoad.join(", ")} failed to load — check Settings ▸ Plugins.`,
             });
           } else {
             toast({ tone: "success", title: "Setup complete", message: `${personaLabel} tools are ready.` });

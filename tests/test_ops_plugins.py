@@ -73,6 +73,39 @@ async def test_no_applier_installs_only(monkeypatch):
     assert res.enabled == [] and res.reloaded is False and res.installed_ids == ["demo"]
 
 
+async def test_load_failure_lands_in_load_errors(monkeypatch):
+    """A plugin that fails to IMPORT is skipped by the loader — the reload still returns
+    ok — so the op must read the post-reload roster and carry the failure (#2716).
+    Before this, the route toasted "enabled and live" for code that never loaded."""
+    from runtime.state import STATE
+
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    monkeypatch.setattr(
+        STATE,
+        "plugin_meta",
+        [
+            {"id": "demo", "enabled": True, "error": "No module named 'leftpad'"},
+            {"id": "other", "enabled": True, "error": "unrelated"},  # not part of this install
+        ],
+    )
+
+    res = await install_and_activate("https://x", ctx=_ctx(), apply_settings=lambda u: (True, ["ok"]))
+    assert res.reloaded is True and res.enabled == ["demo"]
+    assert res.load_errors == {"demo": "No module named 'leftpad'"}
+
+
+async def test_clean_load_reports_no_load_errors(monkeypatch):
+    from runtime.state import STATE
+
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    monkeypatch.setattr(STATE, "plugin_meta", [{"id": "demo", "enabled": True}])
+
+    res = await install_and_activate("https://x", ctx=_ctx(), apply_settings=lambda u: (True, ["ok"]))
+    assert res.load_errors == {}
+
+
 async def test_reload_failure_surfaces_enable_error(monkeypatch):
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
     monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
