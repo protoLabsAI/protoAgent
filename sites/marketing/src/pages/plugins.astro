@@ -9,7 +9,6 @@ import overrides from '../../data/plugins.json';
 const topic = 'https://github.com/topics/protoagent-plugin';
 const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/sites/marketing/data/plugins.json';
 const publishDocs = '/docs/guides/plugin-registry';
-const lavender = 'var(--pl-color-brand-lavender)';
 
 // ── The plugin catalog is built automatically at deploy time ──────────────────────────
 // (1) BUNDLED plugins: parse every plugins/<id>/protoagent.plugin.yaml manifest in the
@@ -23,7 +22,7 @@ const lavender = 'var(--pl-color-brand-lavender)';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 
-// Derive a tidy category from a repo's topics so cards group sensibly with no manual
+// Derive a tidy category from a repo's topics so rows group sensibly with no manual
 // upkeep. A small keyword map covers common domains; anything else falls back to its
 // first real topic (and plugins.json can always override the category per id).
 const CAT_MAP: [RegExp, string][] = [
@@ -106,7 +105,7 @@ async function ecosystemPlugins() {
         return {
           // The ecosystem repo convention is `<id>-plugin`, but editorial overrides in
           // plugins.json are keyed by the bare plugin id. Strip the suffix so a scraped
-          // card folds onto its override instead of rendering a duplicate (#1772).
+          // row folds onto its override instead of rendering a duplicate (#1772).
           id: r.name.replace(/-plugin$/, ''),
           name: r.name,
           tagline: String(r.description || (isBundle ? 'A protoAgent plugin bundle.' : 'A protoAgent plugin.')).trim(),
@@ -143,7 +142,7 @@ for (const o of overrides as any[]) {
 }
 const plugins = merged;
 
-// Category chips (built from the data, with counts) for quick navigation.
+// Category filters (built from the data, with counts) for quick navigation.
 const categories = [...new Set(plugins.map((p: any) => p.category || 'Other'))].sort();
 const counts = Object.fromEntries(
   categories.map((c) => [c, plugins.filter((p: any) => (p.category || 'Other') === c).length]),
@@ -154,139 +153,139 @@ const counts = Object.fromEntries(
   title="Plugins — protoAgent"
   description="Plugins for protoAgent — drop-in packages that add tools, skills, subagents, workflows, console views, and more. Filter by category, search, and install from a git URL."
 >
-  <div class="max-w-5xl mx-auto px-6 py-24">
-    <h1 class="text-4xl font-bold mb-2">Plugins</h1>
-    <p class="text-zinc-400 mb-3 text-lg max-w-2xl">
-      Drop-in packages that extend a running agent without touching core — tools, skills,
-      subagents, workflows, FastAPI routes, console dashboards, managed MCP servers, memory
-      backends, and their own config + secrets.
-    </p>
-    <p class="text-zinc-500 mb-10 text-sm max-w-2xl">
-      A plugin is just a repo — install one with
-      <code class="px-1.5 py-0.5 rounded bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] font-mono text-zinc-300">python -m server plugin install &lt;git-url&gt;</code>
-      (pinned in <code class="font-mono text-zinc-400">plugins.lock</code>). The first-party ones below ship with protoAgent.
-    </p>
+  <section class="pl-hero">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Plugins</p>
+      <h1>Extend a running agent</h1>
+      <p class="pl-lead">
+        Drop-in packages that extend a running agent without touching core — tools, skills,
+        subagents, workflows, FastAPI routes, console dashboards, managed MCP servers, memory
+        backends, and their own config + secrets.
+      </p>
+      <p class="meta-note">
+        A plugin is just a repo. Install one with
+        <code>python -m server plugin install &lt;git-url&gt;</code> (pinned in
+        <code>plugins.lock</code>). The first-party ones below ship with protoAgent.
+      </p>
+    </div>
+  </section>
 
-    <!-- Toolbar: search + sort -->
-    <div class="flex flex-col sm:flex-row gap-3 sm:items-center mb-4">
-      <input
-        id="plugin-search"
-        type="search"
-        placeholder="Search plugins…"
-        autocomplete="off"
-        class="flex-1 rounded-lg bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] px-3.5 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-[color:var(--pl-color-brand-lavender)]"
-      />
-      <div class="flex items-center gap-2 text-sm text-zinc-400">
-        <label for="plugin-sort">Sort</label>
-        <select id="plugin-sort"
-          class="rounded-lg bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] px-2.5 py-2 text-sm text-zinc-200 focus:outline-none focus:border-[color:var(--pl-color-brand-lavender)]">
-          <option value="category" selected>Category</option>
-          <option value="featured">Featured</option>
-          <option value="name">Name A–Z</option>
-        </select>
+  <section class="pl-section">
+    <div class="pl-container">
+      <div class="catalog-toolbar">
+        <label for="plugin-search" class="visually-hidden">Search plugins</label>
+        <input id="plugin-search" type="search" placeholder="Search plugins…" autocomplete="off" class="pl-input" />
+        <div class="catalog-toolbar__sort">
+          <label for="plugin-sort">Sort</label>
+          <select id="plugin-sort" class="pl-input pl-select">
+            <option value="category" selected>Category</option>
+            <option value="featured">Featured</option>
+            <option value="name">Name A–Z</option>
+          </select>
+        </div>
       </div>
+
+      {/* .pl-tabs--segmented is the design system's scope toggle — it scrolls
+          rather than spilling when there are more categories than fit. */}
+      <div class="catalog-filters">
+        <div class="pl-tabs pl-tabs--segmented" role="toolbar" aria-label="Filter by category">
+          <button class="pl-seg pl-seg--active" data-cat-chip="all" type="button" aria-pressed="true">
+            All <span class="pl-count">{plugins.length}</span>
+          </button>
+          {categories.map((c) => (
+            <button class="pl-seg" data-cat-chip={c} type="button" aria-pressed="false">
+              {c} <span class="pl-count">{counts[c]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <p id="plugin-count" class="catalog-count">{plugins.length} plugins</p>
+
+      <div id="plugin-list">
+        {plugins.map((p, i) => (
+          <div class="pl-row pl-row--wide" data-plugin
+               data-order={i}
+               data-name={p.name}
+               data-tagline={p.tagline}
+               data-category={p.category || 'Other'}
+               data-adds={(p.adds || []).join(' ')}
+               data-official={String(!!p.official)}>
+            <div class="pl-row__label">{p.category}</div>
+            <div>
+              <div class="plugin-head">
+                <span class="pl-row__name" style="margin: 0">{p.name}</span>
+                {p.official && <span class="pl-badge">official</span>}
+              </div>
+              <div class="pl-row__desc">{p.tagline}</div>
+              {(p.adds || []).length > 0 && (
+                <div class="plugin-tags">
+                  {p.adds.map((a: string) => <span class="pl-tag">{a}</span>)}
+                </div>
+              )}
+              <div class="plugin-install">
+                {p.bundled
+                  ? <span>bundled · enable <strong>{p.enable}</strong> in <strong>plugins.enabled</strong></span>
+                  : <span>plugin install <strong>{p.install}</strong></span>}
+              </div>
+            </div>
+            <div class="plugin-links">
+              <a href={p.links.source} target="_blank" rel="noopener noreferrer">source ↗</a>
+              <a href={p.links.docs} target="_blank" rel="noopener noreferrer">docs ↗</a>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p id="plugin-empty" class="pl-empty" style="display: none">
+        No plugins match — try a different category or search.
+      </p>
     </div>
+  </section>
 
-    <!-- Category chips -->
-    <div class="flex flex-wrap gap-2 mb-4">
-      <button class="chip" data-cat-chip="all" data-active="true" type="button">All <span class="opacity-50">{plugins.length}</span></button>
-      {categories.map((c) => (
-        <button class="chip" data-cat-chip={c} data-active="false" type="button">{c} <span class="opacity-50">{counts[c]}</span></button>
-      ))}
-    </div>
-
-    <p id="plugin-count" class="text-xs text-zinc-500 mb-6">{plugins.length} plugins</p>
-
-    <div id="plugin-grid" class="grid sm:grid-cols-2 gap-5">
-      {plugins.map((p, i) => (
-        <div class="card p-6 flex flex-col gap-3" data-plugin
-             data-order={i}
-             data-name={p.name}
-             data-tagline={p.tagline}
-             data-category={p.category || 'Other'}
-             data-adds={(p.adds || []).join(' ')}
-             data-official={String(!!p.official)}>
-          <div class="flex items-center gap-2.5 flex-wrap">
-            <h2 class="font-semibold text-zinc-100">{p.name}</h2>
-            {p.official && (
-              <span class="px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider"
-                    style={`color:${lavender};background:color-mix(in srgb, ${lavender} 12%, transparent);border:1px solid color-mix(in srgb, ${lavender} 35%, transparent);`}>
-                Official
-              </span>
-            )}
-            <span class="ml-auto text-[11px] font-mono text-zinc-500">{p.category}</span>
-          </div>
-          <p class="text-sm text-zinc-400 flex-1">{p.tagline}</p>
-          <div class="flex flex-wrap gap-1.5">
-            {p.adds.map((a) => (
-              <span class="px-1.5 py-0.5 rounded text-[11px] font-mono text-zinc-400 bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)]">{a}</span>
-            ))}
-          </div>
-          <div class="mt-1 font-mono text-xs text-zinc-500">
-            {p.bundled
-              ? <span>Bundled · enable <span class="text-zinc-300">{p.enable}</span> in <span class="text-zinc-300">plugins.enabled</span></span>
-              : <span>plugin install <span class="text-zinc-300">{p.install}</span></span>}
-          </div>
-          <div class="flex items-center gap-4 text-sm pt-1">
-            <a href={p.links.source} target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-white transition-colors">Source ↗</a>
-            <a href={p.links.docs} target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-white transition-colors">Docs ↗</a>
+  <section class="pl-section">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Publish your own</p>
+      <p class="pl-section-intro">
+        A plugin is a public repo with a <code>protoagent.plugin.yaml</code> manifest — anyone can
+        install one from its git URL with <code>plugin install &lt;git-url&gt;</code>. For safety,
+        this page only auto-lists plugins from the <strong>protoLabsAI</strong> org; tagging an
+        outside repo never links it here on its own.
+      </p>
+      <div class="pl-steps">
+        <div class="pl-step">
+          <div class="pl-step__num">1</div>
+          <div>
+            <div class="pl-step__title">First-party (in our org)</div>
+            <div class="pl-step__body">
+              Tag the repo with the
+              <a href={topic} target="_blank" rel="noopener noreferrer"><code>protoagent-plugin</code></a>
+              topic and it lists itself on the next deploy.
+            </div>
           </div>
         </div>
-      ))}
-    </div>
-
-    <p id="plugin-empty" class="text-zinc-500 text-sm py-12 text-center" style="display:none">
-      No plugins match — try a different category or search.
-    </p>
-
-    <!-- Publish your own -->
-    <div class="mt-16 card p-8">
-      <h2 class="text-2xl font-semibold mb-2">Publish your own</h2>
-      <p class="text-zinc-400 mb-4 max-w-2xl text-sm">
-        A plugin is a public repo with a <code class="font-mono text-zinc-300">protoagent.plugin.yaml</code> manifest —
-        anyone can install one from its git URL with <code class="font-mono text-zinc-300">plugin install &lt;git-url&gt;</code>.
-      </p>
-      <p class="text-zinc-500 mb-6 max-w-2xl text-sm">
-        For safety, this page only auto-lists plugins from the <strong class="text-zinc-300">protoLabsAI</strong> org —
-        tagging an outside repo never links it here on its own.
-      </p>
-      <ol class="space-y-3 text-sm text-zinc-300 mb-6">
-        <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">1.</span>
-          <span><strong>First-party</strong> (in our org): tag the repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> topic and it lists itself on the next deploy.</span></li>
-        <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">2.</span>
-          <span><strong>Community</strong>: tag the topic so it's discoverable across GitHub, then open a PR adding it to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a> — we review it before it's listed here.</span></li>
-      </ol>
-      <div class="flex flex-wrap items-center gap-4">
-        <a href={publishDocs} target="_blank" rel="noopener noreferrer"
-           class="rounded-lg px-4 py-2 text-sm font-medium text-[var(--pl-color-bg)]" style={`background:${lavender}`}>Publishing guide</a>
-        <a href={topic} target="_blank" rel="noopener noreferrer"
-           class="rounded-lg border border-[var(--pl-color-border)] px-4 py-2 text-sm font-medium text-zinc-200 hover:border-white/30 transition-colors">Browse the topic ↗</a>
+        <div class="pl-step">
+          <div class="pl-step__num">2</div>
+          <div>
+            <div class="pl-step__title">Community</div>
+            <div class="pl-step__body">
+              Tag the topic so it's discoverable across GitHub, then open a PR adding it to
+              <a href={listFile} target="_blank" rel="noopener noreferrer"><code>plugins.json</code></a>
+              — we review it before it's listed here.
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <a href={publishDocs} target="_blank" rel="noopener noreferrer" class="pl-btn pl-btn--primary">Publishing guide</a>
+        <a href={topic} target="_blank" rel="noopener noreferrer" class="pl-btn">Browse the topic ↗</a>
       </div>
     </div>
-  </div>
-
-  <style>
-    .chip {
-      padding: 0.35rem 0.75rem;
-      border-radius: 9999px;
-      font-size: 0.8rem;
-      color: var(--pl-color-text-muted, #a1a1aa);
-      background: var(--pl-color-bg-raised);
-      border: 1px solid var(--pl-color-border);
-      transition: color 0.15s, border-color 0.15s, background 0.15s;
-      cursor: pointer;
-    }
-    .chip:hover { color: #fff; }
-    .chip[data-active="true"] {
-      color: var(--pl-color-brand-lavender);
-      border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 50%, transparent);
-      background: color-mix(in srgb, var(--pl-color-brand-lavender) 12%, transparent);
-    }
-  </style>
+  </section>
 
   <script>
-    const grid = document.getElementById('plugin-grid');
-    const cards = Array.from(document.querySelectorAll('[data-plugin]'));
+    const list = document.getElementById('plugin-list');
+    const rows = Array.from(document.querySelectorAll('[data-plugin]')) as HTMLElement[];
     const search = document.getElementById('plugin-search') as HTMLInputElement;
     const sortSel = document.getElementById('plugin-sort') as HTMLSelectElement;
     const chips = Array.from(document.querySelectorAll('[data-cat-chip]')) as HTMLElement[];
@@ -297,8 +296,7 @@ const counts = Object.fromEntries(
     function apply() {
       const q = (search?.value || '').trim().toLowerCase();
       let shown = 0;
-      for (const c of cards) {
-        const el = c as HTMLElement;
+      for (const el of rows) {
         const matchCat = activeCat === 'all' || el.dataset.category === activeCat;
         const hay = `${el.dataset.name} ${el.dataset.tagline} ${el.dataset.adds} ${el.dataset.category}`.toLowerCase();
         const matchQ = !q || hay.includes(q);
@@ -310,9 +308,9 @@ const counts = Object.fromEntries(
       if (emptyEl) emptyEl.style.display = shown ? 'none' : '';
     }
 
-    function sortCards() {
+    function sortRows() {
       const mode = sortSel?.value || 'featured';
-      const arr = [...cards] as HTMLElement[];
+      const arr = [...rows];
       arr.sort((a, b) => {
         if (mode === 'name') return (a.dataset.name || '').localeCompare(b.dataset.name || '');
         if (mode === 'category')
@@ -320,19 +318,23 @@ const counts = Object.fromEntries(
                  (a.dataset.name || '').localeCompare(b.dataset.name || '');
         return Number(a.dataset.order) - Number(b.dataset.order);
       });
-      for (const c of arr) grid?.appendChild(c);
+      for (const el of arr) list?.appendChild(el);
     }
 
     for (const ch of chips) {
       ch.addEventListener('click', () => {
         activeCat = ch.dataset.catChip || 'all';
-        for (const x of chips) x.dataset.active = String(x === ch);
+        for (const x of chips) {
+          const on = x === ch;
+          x.classList.toggle('pl-seg--active', on);
+          x.setAttribute('aria-pressed', String(on));
+        }
         apply();
       });
     }
     search?.addEventListener('input', apply);
-    sortSel?.addEventListener('change', () => { sortCards(); apply(); });
-    sortCards();
+    sortSel?.addEventListener('change', () => { sortRows(); apply(); });
+    sortRows();
     apply();
   </script>
 </BaseLayout>

@@ -2,20 +2,23 @@
 const year = 2026;
 ---
 
-<footer class="border-t border-[var(--color-edge)] mt-24">
-  <div class="mx-auto max-w-6xl px-5 py-10 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-zinc-500">
-    <div class="flex items-center gap-2">
-      <span>Built by <a href="https://protolabs.studio" class="text-zinc-300 hover:text-white">protoLabs.studio</a></span>
+<footer class="footer">
+  <div class="pl-container">
+    <div>
+      <div class="footer__brand">protoAgent</div>
+      <div class="footer__tagline">A lean, A2A-native agent you own.</div>
+      <div class="footer__legal">
+        © {year} · MIT · built by <a href="https://protolabs.studio">protoLabs.studio</a>
+      </div>
     </div>
-    <div class="flex items-center gap-5">
-      <a href="/download" class="hover:text-white">Download</a>
-      <a href="/features" class="hover:text-white">Features</a>
-      <a href="/docs/" target="_blank" rel="noopener noreferrer" class="hover:text-white">Docs</a>
-      <a href="/plugins" class="hover:text-white">Plugins</a>
-      <a href="/roadmap" class="hover:text-white">Roadmap</a>
-      <a href="/changelog" class="hover:text-white">Changelog</a>
-      <a href="https://github.com/protoLabsAI/protoAgent" target="_blank" rel="noopener noreferrer" class="hover:text-white">GitHub</a>
+    <div class="footer__links">
+      <a href="/features">Features</a>
+      <a href="/docs/" target="_blank" rel="noopener noreferrer">Docs</a>
+      <a href="/plugins">Plugins</a>
+      <a href="/roadmap">Roadmap</a>
+      <a href="/changelog">Changelog</a>
+      <a href="/download">Download</a>
+      <a href="https://github.com/protoLabsAI/protoAgent" target="_blank" rel="noopener noreferrer">GitHub</a>
     </div>
   </div>
-  <div class="text-center text-xs text-zinc-600 pb-8">© {year} protoLabs.studio</div>
 </footer>

@@ -4,9 +4,9 @@ import { fetchLatestDesktopRelease } from '../lib/desktop-release';
 
 const repo = 'https://github.com/protoLabsAI/protoAgent';
 
-// Buttondown newsletter — gates the not-yet-public platforms (Windows / Linux)
-// behind a notify-me signup until those builds are tested here. Set this to the
-// account's Buttondown username.
+// Buttondown newsletter — gates the not-yet-public platform (Linux) behind a
+// notify-me signup until that build is tested here. Set this to the account's
+// Buttondown username.
 const BUTTONDOWN_USER = 'protoLabsAI';
 
 // Desktop and source/server releases share one tag sequence but ship on separate
@@ -20,6 +20,30 @@ const { dmgUrl, setupExeUrl } = desktop;
 
 const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
 const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
+
+const macRequirements = [
+  'Apple Silicon (M1 or later)',
+  'macOS 13 Ventura or newer',
+  'A model gateway — connect an OpenAI-compatible endpoint or key in setup',
+];
+
+const macInstall = [
+  'Download the .dmg above.',
+  'Open it and drag protoAgent to Applications.',
+  'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+  'The setup wizard connects your model and you’re live.',
+];
+
+const winRequirements = [
+  'Windows 11, 64-bit (x64)',
+  'A model gateway or subscription — connect an OpenAI-compatible endpoint, an API key, or your ChatGPT/Claude plan in setup',
+];
+
+const winInstall = [
+  'Download the setup.exe above and run it.',
+  'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+  'The setup wizard connects your model and you’re live.',
+];
 ---
 
 <BaseLayout
@@ -53,211 +77,170 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
     })();
   </script>
 
-  <div class="max-w-2xl mx-auto px-6 py-24">
-    <!-- Header -->
-    <div class="mb-10">
-      <h1 class="text-4xl font-bold tracking-tight mb-3">Download protoAgent</h1>
-      <div class="flex items-center gap-3">
-        <span
-          class="px-2 py-0.5 rounded text-sm font-mono border border-[var(--color-edge)] bg-[var(--color-surface-1)]"
-          style="color: var(--pl-color-brand-lavender);"
-        >
-          {desktop.tag}
-        </span>
-        <span
-          class="px-2 py-0.5 rounded text-xs font-mono uppercase tracking-wider"
-          style="color: var(--pl-color-brand-lavender); border: 1px solid color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent);"
-        >
-          Beta
-        </span>
-        <span class="text-zinc-500 text-sm">{desktop.date}</span>
+  <section class="pl-hero">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Download</p>
+      <h1>protoAgent on your desktop</h1>
+      <div class="meta-row">
+        <span class="pl-badge">{desktop.tag}</span>
+        <span class="pl-badge">beta</span>
+        <span class="pl-badge">{desktop.date}</span>
+      </div>
+
+      <!-- ===== macOS ===== -->
+      <div class="dl-os dl-os-mac">
+        <div class="pl-hero__cta">
+          <a href={dmgUrl} class="pl-btn pl-btn--primary">Download for macOS (.dmg)</a>
+          <a href={setupExeUrl} class="pl-btn">Windows (setup.exe)</a>
+        </div>
+        <p class="meta-note">Apple Silicon · signed &amp; notarized · updates itself in place.</p>
+      </div>
+
+      <!-- ===== Windows ===== -->
+      <div class="dl-os dl-os-windows">
+        <div class="pl-hero__cta">
+          <a href={setupExeUrl} class="pl-btn pl-btn--primary">Download for Windows (setup.exe)</a>
+          <a href={dmgUrl} class="pl-btn">macOS (.dmg)</a>
+        </div>
+        <p class="meta-note">Windows 11 x64 · unsigned build · updates itself in place.</p>
+      </div>
+
+      <!-- ===== Linux / other: no desktop build yet ===== -->
+      <div class="dl-os dl-os-other">
+        <p class="pl-lead">
+          No Linux desktop build yet. It compiles on every release but is still being tested
+          before we hand it out. Leave your email below and we’ll tell you the moment it’s
+          ready — or run protoAgent from source today.
+        </p>
+        <div class="pl-hero__cta">
+          <a href={repo} target="_blank" rel="noopener noreferrer" class="pl-btn pl-btn--primary">Run it from source</a>
+          <a href={dmgUrl} class="pl-btn">macOS (.dmg)</a>
+          <a href={setupExeUrl} class="pl-btn">Windows (setup.exe)</a>
+        </div>
       </div>
     </div>
+  </section>
 
-    <!-- ===== macOS: the only shipping download ===== -->
-    <div class="dl-os dl-os-mac">
-      <a
-        href={dmgUrl}
-        class="flex items-center justify-center gap-2.5 w-full py-4 px-6 rounded-xl font-semibold text-[#0a0a0c] text-lg mb-10 bg-[var(--color-accent)] hover:brightness-110 transition"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        Download protoAgent {desktop.tag} (.dmg)
-      </a>
-
-      <!-- System requirements -->
-      <div class="card p-5 mb-10">
-        <h3 class="font-semibold mb-3">System requirements</h3>
-        <ul class="space-y-1.5">
-          {[
-            'Apple Silicon (M1 or later)',
-            'macOS 13 Ventura or newer',
-            'A model gateway — connect an OpenAI-compatible endpoint or key in setup',
-          ].map((item) => (
-            <li class="text-zinc-400 text-sm flex items-start gap-2">
-              <span class="text-zinc-600 mt-0.5">—</span>
-              {item}
-            </li>
+  <!-- ===== macOS: requirements + install ===== -->
+  <div class="dl-os dl-os-mac">
+    <section class="pl-section">
+      <div class="pl-container">
+        <p class="pl-eyebrow">System requirements — macOS</p>
+        <div class="pl-checks">
+          {macRequirements.map((r) => (
+            <div class="pl-check">
+              <span class="pl-check__mark" aria-hidden="true">—</span>
+              <span>{r}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       </div>
+    </section>
 
-      <!-- Install steps -->
-      <div class="mb-10">
-        <h2 class="text-lg font-semibold mb-5">Installation</h2>
-        <ol class="space-y-4">
-          {[
-            'Download the .dmg above.',
-            'Open it and drag protoAgent to Applications.',
-            'Launch protoAgent — it starts its own bundled server, nothing else to install.',
-            'The setup wizard connects your model and you’re live.',
-          ].map((step, i) => (
-            <li class="flex gap-4 items-start">
-              <span class="font-mono text-sm w-5 shrink-0 pt-0.5" style="color: var(--color-accent);">{i + 1}</span>
-              <span class="text-zinc-300 text-sm">{step}</span>
-            </li>
+    <section class="pl-section">
+      <div class="pl-container">
+        <p class="pl-eyebrow">Installation</p>
+        <div class="pl-steps">
+          {macInstall.map((step, i) => (
+            <div class="pl-step">
+              <div class="pl-step__num">{i + 1}</div>
+              <div class="pl-step__body">{step}</div>
+            </div>
           ))}
-        </ol>
+        </div>
+        <div class="pl-deliverable" style="margin-top: 2rem">
+          <div class="pl-deliverable__title">Signed &amp; notarized by Apple</div>
+          <div class="pl-deliverable__body">
+            Opens cleanly, no Gatekeeper workaround. protoAgent is in public beta and updates
+            itself in place; expect frequent releases.
+          </div>
+        </div>
       </div>
+    </section>
+  </div>
 
-      <!-- Signed + beta note -->
-      <div class="border-l-2 pl-4 mb-10" style="border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);">
-        <p class="text-zinc-400 text-sm">
-          <strong class="text-zinc-200">Signed &amp; notarized by Apple</strong> — opens cleanly, no
-          Gatekeeper workaround. protoAgent is in <strong class="text-zinc-200">public beta</strong> and
-          updates itself in place; expect frequent releases.
-        </p>
-      </div>
-    </div>
-
-    <!-- ===== Windows: the setup.exe ===== -->
-    <div class="dl-os dl-os-windows">
-      <a
-        href={setupExeUrl}
-        class="flex items-center justify-center gap-2.5 w-full py-4 px-6 rounded-xl font-semibold text-[#0a0a0c] text-lg mb-10 bg-[var(--color-accent)] hover:brightness-110 transition"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        Download protoAgent {desktop.tag} (setup.exe)
-      </a>
-
-      <!-- System requirements -->
-      <div class="card p-5 mb-10">
-        <h3 class="font-semibold mb-3">System requirements</h3>
-        <ul class="space-y-1.5">
-          {[
-            'Windows 11, 64-bit (x64)',
-            'A model gateway or subscription — connect an OpenAI-compatible endpoint, an API key, or your ChatGPT/Claude plan in setup',
-          ].map((item) => (
-            <li class="text-zinc-400 text-sm flex items-start gap-2">
-              <span class="text-zinc-600 mt-0.5">—</span>
-              {item}
-            </li>
+  <!-- ===== Windows: requirements + install ===== -->
+  <div class="dl-os dl-os-windows">
+    <section class="pl-section">
+      <div class="pl-container">
+        <p class="pl-eyebrow">System requirements — Windows</p>
+        <div class="pl-checks">
+          {winRequirements.map((r) => (
+            <div class="pl-check">
+              <span class="pl-check__mark" aria-hidden="true">—</span>
+              <span>{r}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       </div>
+    </section>
 
-      <!-- Install steps -->
-      <div class="mb-10">
-        <h2 class="text-lg font-semibold mb-5">Installation</h2>
-        <ol class="space-y-4">
-          {[
-            'Download the setup.exe above and run it.',
-            'Launch protoAgent — it starts its own bundled server, nothing else to install.',
-            'The setup wizard connects your model and you’re live.',
-          ].map((step, i) => (
-            <li class="flex gap-4 items-start">
-              <span class="font-mono text-sm w-5 shrink-0 pt-0.5" style="color: var(--color-accent);">{i + 1}</span>
-              <span class="text-zinc-300 text-sm">{step}</span>
-            </li>
+    <section class="pl-section">
+      <div class="pl-container">
+        <p class="pl-eyebrow">Installation</p>
+        <div class="pl-steps">
+          {winInstall.map((step, i) => (
+            <div class="pl-step">
+              <div class="pl-step__num">{i + 1}</div>
+              <div class="pl-step__body">{step}</div>
+            </div>
           ))}
-        </ol>
+        </div>
+        <div class="pl-deliverable" style="margin-top: 2rem">
+          <div class="pl-deliverable__title">Unsigned build — expect a SmartScreen prompt</div>
+          <div class="pl-deliverable__body">
+            There’s no Windows code-signing certificate yet, so both the installer and the first
+            launch trigger "Windows protected your PC." Click <strong>More info → Run anyway</strong> —
+            that’s expected for this build, not a sign of tampering. protoAgent is in public beta
+            and updates itself in place; expect frequent releases.
+            <div style="margin-top: 0.5rem">
+              <a href="/docs/guides/windows-desktop" target="_blank" rel="noopener noreferrer">Full install, data-location &amp; recovery guide →</a>
+            </div>
+          </div>
+        </div>
       </div>
+    </section>
+  </div>
 
-      <!-- Unsigned + beta note -->
-      <div class="border-l-2 pl-4 mb-10" style="border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);">
-        <p class="text-zinc-400 text-sm">
-          <strong class="text-zinc-200">Unsigned build — expect a SmartScreen prompt.</strong> There’s
-          no Windows code-signing certificate yet, so both the installer and the first launch trigger
-          "Windows protected your PC." Click <strong class="text-zinc-200">More info → Run anyway</strong> —
-          that’s expected for this build, not a sign of tampering. protoAgent is in
-          <strong class="text-zinc-200">public beta</strong> and updates itself in place; expect
-          frequent releases.
-        </p>
-        <p class="text-zinc-500 text-xs mt-2">
-          <a href="/docs/guides/windows-desktop" target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">Full install, data-location & recovery guide →</a>
-        </p>
-      </div>
-    </div>
-
-    <!-- ===== Linux / other: not yet downloadable ===== -->
-    <div class="dl-os dl-os-other">
-      <div class="card p-6 mb-10">
-        <h2 class="text-lg font-semibold mb-2">No Linux desktop build yet</h2>
-        <p class="text-zinc-400 text-sm">
-          The Linux build compiles on every release but is still being tested before we hand it
-          out. Drop your email below and we’ll tell you the moment it’s ready — or run protoAgent
-          from source today.
-        </p>
-      </div>
-    </div>
-
-    <!-- ===== Mailing list (shown to everyone) ===== -->
-    <div class="card p-6 mb-10">
-      <h2 class="text-lg font-semibold mb-1">Get notified about Linux</h2>
-      <p class="text-zinc-400 text-sm mb-5">
-        The desktop app ships for macOS and Windows; Linux is still in testing. Leave your
-        email and we’ll let you know the moment it ships.
+  <!-- ===== Mailing list (shown to everyone) ===== -->
+  <section class="pl-section">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Get notified about Linux</p>
+      <p class="pl-section-intro">
+        The desktop app ships for macOS and Windows; Linux is still in testing. Leave your email
+        and we’ll let you know the moment it ships.
       </p>
       <form
         action={subscribeAction}
         method="post"
         target="popupwindow"
         onsubmit={`window.open('${subscribePopup}', 'popupwindow')`}
-        class="embeddable-buttondown-form flex flex-col sm:flex-row gap-3"
+        class="embeddable-buttondown-form subscribe-form"
       >
-        <label for="bd-email" class="sr-only">Email</label>
-        <input
-          type="email"
-          name="email"
-          id="bd-email"
-          required
-          placeholder="you@example.com"
-          class="flex-1 rounded-lg border border-[var(--color-edge)] bg-[var(--color-surface-1)] px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-[var(--color-accent)] focus:outline-none"
-        />
-        <button
-          type="submit"
-          class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition whitespace-nowrap"
-        >
-          Notify me
-        </button>
+        <label for="bd-email" class="visually-hidden">Email</label>
+        <input type="email" name="email" id="bd-email" required placeholder="you@example.com" class="pl-input" />
+        <button type="submit" class="pl-btn pl-btn--primary">Notify me</button>
       </form>
-      <p class="text-zinc-500 text-xs mt-3">No spam — release announcements only. Unsubscribe anytime.</p>
+      <p class="meta-note">No spam — release announcements only. Unsubscribe anytime.</p>
     </div>
+  </section>
 
-    <!-- ===== Build from source (shown to everyone) ===== -->
-    <div class="border-l-2 border-[var(--color-edge)] pl-4 mb-10">
-      <p class="text-zinc-400 text-sm">
-        <strong class="text-zinc-200">Prefer to run it yourself?</strong> protoAgent is open source —
-        clone
-        <a href={repo} target="_blank" rel="noopener noreferrer" class="text-zinc-300 hover:text-zinc-100 transition-colors underline underline-offset-2">the repo</a>
-        and run the console + server locally (<code class="text-zinc-300">npm ci</code> then
-        <code class="text-zinc-300">python -m server</code>). The
-        <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer" class="text-zinc-300 hover:text-zinc-100 transition-colors underline underline-offset-2">first-agent tutorial</a>
+  <!-- ===== Build from source (shown to everyone) ===== -->
+  <section class="pl-section">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Prefer to run it yourself?</p>
+      <p class="pl-section-intro">
+        protoAgent is open source — clone
+        <a href={repo} target="_blank" rel="noopener noreferrer">the repo</a> and run the console
+        + server locally (<code>npm ci</code> then <code>python -m server</code>). The
+        <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer">first-agent tutorial</a>
         walks through it. Runs anywhere Python does — macOS, Linux, or Windows.
       </p>
+      <p class="endnote" style="margin-top: 0">
+        <a href="/changelog">View full release history →</a>
+      </p>
     </div>
-
-    <p class="text-zinc-500 text-sm">
-      <a href="/changelog" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">View full release history →</a>
-    </p>
-  </div>
+  </section>
 
   <style is:global>
     /* OS-gated blocks — the inline head script sets data-os on <html>. */

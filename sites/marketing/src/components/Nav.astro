@@ -1,23 +1,81 @@
 ---
-const repo = 'https://github.com/protoLabsAI/protoAgent';
+// Chrome mirrors protolabs.studio's Nav: mono wordmark, muted links, no CTA
+// fill. The brand restraint is the point — the design system's primary button
+// is a stronger border, not a lavender block.
+const LINKS = [
+  { href: '/features', label: 'Features' },
+  { href: '/docs/', label: 'Docs', external: true },
+  { href: '/plugins', label: 'Plugins' },
+  { href: '/roadmap', label: 'Roadmap' },
+  { href: '/changelog', label: 'Changelog' },
+  { href: '/download', label: 'Download' },
+  { href: 'https://github.com/protoLabsAI/protoAgent', label: 'GitHub', external: true },
+];
+
+// Astro.url.pathname keeps a trailing slash on the static build; normalise so
+// /features/ still matches the /features link.
+const here = Astro.url.pathname.replace(/\/$/, '') || '/';
 ---
 
-<header class="fixed top-0 inset-x-0 z-50 h-14 border-b border-[var(--color-edge)] bg-[#0a0a0c]/80 backdrop-blur">
-  <nav class="mx-auto max-w-6xl h-full px-5 flex items-center justify-between">
-    <a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
-      <img src="/favicon.svg" alt="" width="22" height="22" />
+<header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="nav-brand" aria-label="protoAgent home">
+      <img src="/favicon.svg" alt="" aria-hidden="true" />
       <span>protoAgent</span>
-      <span class="px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider"
-            style="color: var(--pl-color-brand-lavender); background: color-mix(in srgb, var(--pl-color-brand-lavender) 12%, transparent); border: 1px solid color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent);">Beta</span>
+      <span class="pl-badge">beta</span>
     </a>
-    <div class="flex items-center gap-6 text-sm text-zinc-400">
-      <a href="/features" class="hover:text-white transition-colors hidden sm:inline">Features</a>
-      <a href="/docs/" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">Docs</a>
-      <a href="/plugins" class="hover:text-white transition-colors hidden sm:inline">Plugins</a>
-      <a href="/roadmap" class="hover:text-white transition-colors hidden sm:inline">Roadmap</a>
-      <a href="/changelog" class="hover:text-white transition-colors hidden sm:inline">Changelog</a>
-      <a href={repo} target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a>
-      <a href="/download" class="rounded-lg bg-[var(--color-accent)] px-3.5 py-1.5 font-medium text-[#0a0a0c] hover:brightness-110 transition-colors">Download</a>
-    </div>
+
+    <nav class="nav-links" aria-label="Primary">
+      {LINKS.map((l) =>
+        l.external ? (
+          <a href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>
+        ) : (
+          <a href={l.href} aria-current={here === l.href ? 'page' : undefined}>{l.label}</a>
+        ),
+      )}
+    </nav>
+
+    <button
+      type="button"
+      class="nav-toggle"
+      aria-label="Open menu"
+      aria-expanded="false"
+      aria-controls="mobile-menu"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M4 7h16M4 12h16M4 17h16" />
+      </svg>
+    </button>
+  </div>
+
+  <nav id="mobile-menu" class="nav-mobile" aria-label="Primary mobile" hidden>
+    {LINKS.map((l) =>
+      l.external ? (
+        <a href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>
+      ) : (
+        <a href={l.href} aria-current={here === l.href ? 'page' : undefined}>{l.label}</a>
+      ),
+    )}
   </nav>
 </header>
+
+<script>
+  const toggle = document.querySelector<HTMLButtonElement>('.nav-toggle');
+  const menu = document.getElementById('mobile-menu');
+
+  function setOpen(open: boolean) {
+    if (!toggle || !menu) return;
+    menu.classList.toggle('is-open', open);
+    menu.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  }
+
+  toggle?.addEventListener('click', () => {
+    setOpen(toggle.getAttribute('aria-expanded') !== 'true');
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setOpen(false);
+  });
+</script>

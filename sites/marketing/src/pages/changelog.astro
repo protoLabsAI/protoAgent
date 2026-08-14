@@ -42,43 +42,41 @@ const [currentMonth, ...priorMonths] = groups;
   title="Changelog — protoAgent"
   description="Release history for protoAgent — the LangGraph + A2A agent template."
 >
-  <div class="max-w-2xl mx-auto px-6 py-24">
-    <h1 class="text-4xl font-bold mb-2">Changelog</h1>
-    <p class="text-zinc-400 mb-16 text-lg">Every release, newest first.</p>
+  <section class="pl-hero">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Changelog</p>
+      <h1>Every release, newest first</h1>
+    </div>
+  </section>
 
-    {currentMonth && <ChangelogEntries entries={currentMonth.entries} startIndex={currentMonth.startIndex} />}
+  <section class="pl-section">
+    <div class="pl-container">
+      {currentMonth && <ChangelogEntries entries={currentMonth.entries} startIndex={currentMonth.startIndex} />}
 
-    {priorMonths.length > 0 && (
-      <div class="mt-12 space-y-3">
-        {priorMonths.map((group) => (
-          <details class="group rounded-lg border" style="border-color: var(--pl-color-border);">
-            <summary
-              class="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer select-none list-none marker:hidden [&::-webkit-details-marker]:hidden"
-            >
-              <span class="font-medium text-zinc-300">{group.label}</span>
-              <span class="flex items-center gap-2">
-                <span class="text-xs text-zinc-500">{group.entries.length} release{group.entries.length === 1 ? '' : 's'}</span>
-                <svg
-                  class="w-4 h-4 text-zinc-500 transition-transform duration-150 group-open:rotate-90"
-                  viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"
-                >
-                  <path d="M7 5l6 5-6 5" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </span>
-            </summary>
-            <div class="px-4 pb-6 pt-2">
-              <ChangelogEntries entries={group.entries} startIndex={group.startIndex} />
-            </div>
-          </details>
-        ))}
-      </div>
-    )}
+      {priorMonths.length > 0 && (
+        <div class="month-archive">
+          {priorMonths.map((group) => (
+            <details class="month">
+              <summary class="month__summary">
+                <span class="month__label">{group.label}</span>
+                <span class="month__meta">
+                  <span class="pl-count">{group.entries.length}</span>
+                  <svg class="month__chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M7 5l6 5-6 5" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </span>
+              </summary>
+              <div class="month__body">
+                <ChangelogEntries entries={group.entries} startIndex={group.startIndex} />
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
 
-    <div class="mt-16 pt-8 border-t border-white/5">
-      <p class="text-zinc-500 text-sm">
-        Full release notes + source on{' '}
-        <a href={releases} class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">GitHub</a>.
+      <p class="endnote">
+        Full release notes + source on <a href={releases} target="_blank" rel="noopener noreferrer">GitHub</a>.
       </p>
     </div>
-  </div>
+  </section>
 </BaseLayout>

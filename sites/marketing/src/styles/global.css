@@ -1,59 +1,470 @@
-@import "tailwindcss";
-/* Canonical protoLabs brand tokens (from @protolabsai/design — source: protoContent).
-   Use these instead of hand-rolled hexes so the site tracks the brand. */
-@import "@protolabsai/design/css/tokens";
+/* protoAgent marketing site — brand chrome only.
+ *
+ * The page content is built from the shared design system:
+ *   @protolabsai/design  → the --pl-* tokens + element base layer
+ *   @protolabsai/ui      → the .pl-* component classes
+ * …the exact two imports protolabs.studio's frontend layout uses, so this site
+ * tracks the brand instead of re-deriving it. Bump the two packages and the
+ * design follows.
+ *
+ * Rule (inherited from the design system): gray and small. Content is the hero,
+ * not the chrome. No glows, no gradient fills, no card-lift hovers — the one
+ * gradient is .pl-gradient-text on a single hero word.
+ *
+ * What stays here: the nav + footer, which are app-specific (routing, sticky
+ * header, mobile menu) and not in the shared component lib. Ported from
+ * protolabs.studio's frontend styles.css so both sites read as one brand.
+ */
 
-/* Map the brand tokens into Tailwind's theme so utilities (bg-accent, text-fg…)
-   AND var() refs resolve to the canonical values. */
-@theme {
-  --color-bg: var(--pl-color-bg);
-  --color-bg-raised: var(--pl-color-bg-raised);
-  --color-fg: var(--pl-color-fg);
-  --color-fg-muted: var(--pl-color-fg-muted);
-  --color-accent: var(--pl-color-brand-lavender);
-  --color-accent-light: var(--pl-color-brand-lavender-light);
-  --color-edge: var(--pl-color-border);
-  --font-sans: var(--pl-font-sans);
-  --font-mono: var(--pl-font-mono);
-}
+@import "@protolabsai/design/css";
+@import "@protolabsai/ui/styles.css";
 
-html {
+/* ───────────────────────────── nav (chrome) ───────────────────────────── */
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
   background: var(--pl-color-bg);
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
+}
+
+.nav-inner {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
   color: var(--pl-color-fg);
-  -webkit-font-smoothing: antialiased;
-  scroll-behavior: smooth;
+  font-family: var(--pl-font-mono);
+  font-size: 13px;
 }
 
-body {
-  font-family: var(--pl-font-sans);
-  min-height: 100vh;
+.nav-brand img {
+  height: 22px;
+  width: 22px;
 }
 
-/* Brand gradient (canonical) for hero wordmark + accents. */
-.gradient-text {
-  background: var(--pl-gradient-brand);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  font-size: 13px;
 }
 
-/* Soft brand glow behind the hero. */
-.hero-glow {
-  background: radial-gradient(60% 50% at 50% 0%, rgba(155, 135, 242, 0.16) 0%, transparent 70%);
+.nav-links a {
+  text-decoration: none;
+  color: var(--pl-color-fg-muted);
 }
 
-.card {
+.nav-links a:hover,
+.nav-links a[aria-current="page"] {
+  color: var(--pl-color-fg);
+}
+
+/* Hamburger — hidden above the breakpoint. */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  border: var(--pl-border-width) solid var(--pl-color-border-strong);
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-fg);
+  cursor: pointer;
+  transition: border-color var(--pl-motion-fast) var(--pl-motion-ease);
+}
+
+.nav-toggle:hover {
+  border-color: var(--pl-color-fg);
+}
+
+/* Mobile panel — absolute so opening it doesn't shift the page. .nav is
+   sticky, which establishes the containing block. */
+.nav-mobile {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  flex-direction: column;
+  border-top: var(--pl-border-width) solid var(--pl-color-border);
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
+  background: var(--pl-color-bg);
+  padding: 0.5rem 1.5rem 1rem;
+  font-size: 14px;
+}
+
+.nav-mobile a {
+  display: block;
+  padding: 0.6rem 0;
+  text-decoration: none;
+  color: var(--pl-color-fg-muted);
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
+}
+
+.nav-mobile a:last-of-type {
+  border-bottom: none;
+}
+
+.nav-mobile a:hover {
+  color: var(--pl-color-fg);
+}
+
+@media (max-width: 720px) {
+  .nav-links {
+    display: none;
+  }
+  .nav-toggle {
+    display: inline-flex;
+  }
+  .nav-mobile.is-open {
+    display: flex;
+  }
+}
+
+/* ──────────────────────────── footer (chrome) ──────────────────────────── */
+
+.footer {
+  border-top: var(--pl-border-width) solid var(--pl-color-border);
+  padding: 2rem 0;
+  margin-top: 4rem;
+  font-size: 13px;
+  color: var(--pl-color-fg-muted);
+}
+
+.footer .pl-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.footer a {
+  color: var(--pl-color-fg-muted);
+  text-decoration-color: transparent;
+}
+
+.footer a:hover {
+  color: var(--pl-color-fg);
+}
+
+.footer__brand {
+  font-family: var(--pl-font-mono);
+  color: var(--pl-color-fg);
+}
+
+.footer__tagline,
+.footer__legal {
+  margin-top: 0.3rem;
+  font-size: 12px;
+}
+
+.footer__links {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+/* ───────────────────────── shared page utilities ───────────────────────── */
+
+/* Section-level actions (a row of buttons under a block). .pl-hero__cta covers
+   the hero; this is the same shape for the body of a page. */
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+}
+
+/* Standalone code well — the design system styles <pre> inside .pl-prose, so a
+   bare snippet outside prose gets the same frame here. */
+.code-well {
   background: var(--pl-color-bg-raised);
-  border: 1px solid var(--pl-color-border);
-  border-radius: 14px;
-  transition: border-color var(--pl-motion-base, 200ms) ease, transform var(--pl-motion-base, 200ms) ease;
-}
-.card:hover {
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent);
-  transform: translateY(-2px);
+  border: var(--pl-border-width) solid var(--pl-color-border-strong);
+  border-radius: var(--pl-radius);
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--pl-color-fg);
 }
 
-/* In-action cards: top accent border to visually differentiate from feature cards. */
-.card-accent {
-  border-top: 2px solid var(--pl-color-brand-lavender);
+.code-well .comment {
+  color: var(--pl-color-fg-muted);
+}
+
+/* ──────────────── changelog: collapsed prior-month archive ──────────────── */
+
+.month-archive {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 3rem;
+}
+
+.month {
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+}
+
+.month__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-size: 13px;
+  color: var(--pl-color-fg-muted);
+}
+
+/* Suppress the native disclosure triangle — the chevron below replaces it. */
+.month__summary::-webkit-details-marker {
+  display: none;
+}
+
+.month__summary:hover {
+  color: var(--pl-color-fg);
+}
+
+.month__label {
+  font-family: var(--pl-font-mono);
+  color: var(--pl-color-fg);
+}
+
+.month__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.month__chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--pl-color-fg-subtle);
+  transition: transform var(--pl-motion-fast) var(--pl-motion-ease);
+}
+
+.month[open] .month__chevron {
+  transform: rotate(90deg);
+}
+
+.month__body {
+  padding: 0.5rem 1rem 1.5rem;
+}
+
+/* Roadmap: issue / release refs live in the row's mono label column. */
+.pl-row__label a {
+  display: inline-block;
+  margin-right: 0.5rem;
+  color: var(--pl-color-fg-muted);
+  text-decoration-color: transparent;
+}
+
+.pl-row__label a:hover {
+  color: var(--pl-color-fg);
+}
+
+/* ───────────────────────── plugin catalog (rows) ───────────────────────── */
+
+/* Toolbar: search + sort, above the category filter. */
+.catalog-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.catalog-toolbar .pl-input {
+  flex: 1 1 14rem;
+  width: auto;
+}
+
+.catalog-toolbar__sort {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: var(--pl-color-fg-muted);
+}
+
+.catalog-toolbar__sort .pl-input {
+  flex: none;
+  width: auto;
+}
+
+.catalog-filters {
+  margin-bottom: 0.75rem;
+}
+
+/* FORWARD-PORT — delete on the next @protolabsai/ui bump.
+ * The segmented control has no width ceiling in the published 0.59.0, so an
+ * inline-flex strip of ~15 category pills grows past its container and takes
+ * the whole page into horizontal scroll. Upstream already fixed this (ui:
+ * "segmented Tabs scroll instead of spilling") — these are that fix's exact
+ * rules, held here only until the release lands on npm. Verify against
+ * node_modules/@protolabsai/ui/src/styles/navigation.css before removing. */
+.pl-tabs--segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  /* No visible bar — the pills are focusable buttons, so Tab scrolls the strip
+     and the control keeps reading as one pill. */
+  scrollbar-width: none;
+}
+
+.pl-tabs--segmented::-webkit-scrollbar {
+  display: none;
+}
+
+/* Keep natural width so the strip scrolls; the flex default (shrink: 1) would
+   squeeze the pills to fit and never trigger the parent's overflow. */
+.pl-seg {
+  flex: none;
+}
+
+.catalog-count {
+  margin: 0 0 1.5rem;
+  font-family: var(--pl-font-mono);
+  font-size: 11px;
+  color: var(--pl-color-fg-subtle);
+}
+
+.plugin-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.plugin-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.plugin-install {
+  margin-top: 0.5rem;
+  font-family: var(--pl-font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--pl-color-fg-subtle);
+  word-break: break-all;
+}
+
+.plugin-install strong {
+  color: var(--pl-color-fg-muted);
+  font-weight: 400;
+}
+
+/* Third column of .pl-row--wide — the per-plugin links. */
+.plugin-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-end;
+  font-family: var(--pl-font-mono);
+  font-size: 11px;
+}
+
+.plugin-links a {
+  color: var(--pl-color-fg-muted);
+  text-decoration-color: transparent;
+  white-space: nowrap;
+}
+
+.plugin-links a:hover {
+  color: var(--pl-color-fg);
+}
+
+@media (max-width: 640px) {
+  .plugin-links {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-top: 0.5rem;
+  }
+}
+
+/* Newsletter signup — field + submit, stacking on narrow screens. */
+.subscribe-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.subscribe-form .pl-input {
+  flex: 1 1 16rem;
+  width: auto;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Source trail under a row — the files that back the claim. */
+.evidence {
+  margin-top: 0.4rem;
+  font-family: var(--pl-font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--pl-color-fg-subtle);
+  word-break: break-word;
+}
+
+/* Roadmap status groups — one section, so the gap between groups is a group
+   gap and not two stacked section paddings. */
+.status-group + .status-group {
+  margin-top: 3rem;
+}
+
+/* Meta line under a heading (version · date · badges). */
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 2rem;
+}
+
+.meta-note {
+  margin-top: 0.75rem;
+  font-size: 12px;
+  color: var(--pl-color-fg-muted);
+}
+
+/* Closing note above the fold-out — the small print at the end of a page. */
+.endnote {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: var(--pl-border-width) solid var(--pl-color-border);
+  font-size: 13px;
+  color: var(--pl-color-fg-muted);
 }

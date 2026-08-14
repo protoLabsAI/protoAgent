@@ -2,6 +2,10 @@
 // Renders one contiguous run of changelog releases as a timeline (spine + dot per
 // entry). Shared by the current month (always visible) and each collapsed prior
 // month in changelog.astro, so the two never drift.
+//
+// Markup is the design system's .pl-changelog — the same DOM @protolabsai/ui's
+// React <Changelog>/<ChangelogEntry>/<ChangelogChange> emit, so this timeline
+// tracks the brand instead of re-deriving it.
 interface Entry {
   version: string;
   date: string;
@@ -11,7 +15,7 @@ interface Entry {
 interface Props {
   entries: Entry[];
   // Global position of entries[0] in the full changelog — only the very first
-  // release overall gets the lavender "latest" treatment, not the first of
+  // release overall gets the accent "latest" treatment, not the first of
   // each month.
   startIndex: number;
 }
@@ -20,53 +24,28 @@ const { entries, startIndex } = Astro.props;
 const releases = 'https://github.com/protoLabsAI/protoAgent/releases';
 ---
 
-<div class="relative">
-  <div class="absolute left-[3.25rem] top-2 bottom-0 w-px" style="background: var(--pl-color-border)"></div>
-
-  <ol class="space-y-12">
-    {entries.map(({ version, date, changes }, i) => {
-      const isLatest = startIndex + i === 0;
-      return (
-        <li class="flex gap-6 relative">
-          <div class="shrink-0 w-[1.625rem] h-[1.625rem] mt-0.5 rounded-full border flex items-center justify-center z-10"
-               style={isLatest
-                 ? 'background: color-mix(in srgb, var(--pl-color-brand-lavender) 15%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 50%, transparent);'
-                 : 'background: var(--pl-color-bg-raised); border-color: var(--pl-color-border);'}>
-            <div class="w-1.5 h-1.5 rounded-full"
-                 style={isLatest ? 'background: var(--pl-color-brand-lavender);' : 'background: #52525b;'}></div>
+<ol class="pl-changelog">
+  {entries.map(({ version, date, changes }, i) => {
+    const isLatest = startIndex + i === 0;
+    return (
+      <li class={`pl-changelog__entry${isLatest ? ' pl-changelog__entry--latest' : ''}`}>
+        <span class="pl-changelog__dot" aria-hidden="true"></span>
+        <div class="pl-changelog__body">
+          <div class="pl-changelog__meta">
+            <a class="pl-changelog__version" href={`${releases}/tag/${version}`}>{version}</a>
+            <span class="pl-changelog__date">{date}</span>
+            {isLatest && <span class="pl-changelog__latest">latest</span>}
           </div>
-
-          <div class="flex-1 pb-2">
-            <div class="flex flex-wrap items-center gap-3 mb-3">
-              <a
-                href={`${releases}/tag/${version}`}
-                class="px-2 py-0.5 rounded font-mono text-sm border transition-colors"
-                style={isLatest
-                  ? 'background: color-mix(in srgb, var(--pl-color-brand-lavender) 10%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent); color: var(--pl-color-brand-lavender);'
-                  : 'background: var(--pl-color-bg-raised); border-color: var(--pl-color-border); color: var(--pl-color-fg-muted);'}
-              >
-                {version}
-              </a>
-              <span class="text-zinc-500 text-sm">{date}</span>
-              {isLatest && (
-                <span class="px-1.5 py-0.5 rounded text-xs font-mono border"
-                      style="background: color-mix(in srgb, var(--pl-color-brand-lavender) 8%, transparent); border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 25%, transparent); color: var(--pl-color-brand-lavender);">
-                  latest
-                </span>
-              )}
-            </div>
-
-            <ul class="space-y-1.5">
-              {changes.map((change) => (
-                <li class="flex items-start gap-2 text-sm text-zinc-300">
-                  <span class="text-zinc-600 mt-0.5 shrink-0">—</span>
-                  <span>{change}</span>
-                </li>
-              ))}
-            </ul>
+          <div class="pl-changelog__changes">
+            {changes.map((change) => (
+              <div class="pl-changelog__change">
+                <span class="pl-changelog__bullet" aria-hidden="true">—</span>
+                <span>{change}</span>
+              </div>
+            ))}
           </div>
-        </li>
-      );
-    })}
-  </ol>
-</div>
+        </div>
+      </li>
+    );
+  })}
+</ol>

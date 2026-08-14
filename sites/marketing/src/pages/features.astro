@@ -16,99 +16,129 @@ const pillars = [
   },
   {
     title: 'Fleet orchestration',
-    body: "Every protoAgent is a first-class A2A 1.0 server. Agents discover and delegate to one another (delegate_to over a2a / openai / acp), and a single slug-routed console manages the whole fleet — built to run distributed across your machines, not as one monolith on one box.",
+    body: 'Every protoAgent is a first-class A2A 1.0 server. Agents discover and delegate to one another (delegate_to over a2a / openai / acp), and a single slug-routed console manages the whole fleet — built to run distributed across your machines, not as one monolith on one box.',
   },
 ];
 
-// The features that carry those three ideas — accurate to the codebase, no competitor framing.
+// The features that carry those three ideas — accurate to the codebase, no competitor
+// framing. `key` is the scannable mono label in the row's first column.
 const differentiators = [
   {
+    key: 'a2a 1.0',
     title: 'A2A 1.0 as the native interface',
-    body: "protoAgent IS a spec-compliant A2A 1.0 server — HTTP/JSON-RPC, an agent card, and wire extensions (per-turn cost, confidence). A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints, so agents discover and delegate to each other over the open standard.",
+    body: 'protoAgent IS a spec-compliant A2A 1.0 server — HTTP/JSON-RPC, an agent card, and wire extensions (per-turn cost, confidence). A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints, so agents discover and delegate to each other over the open standard.',
   },
   {
+    key: 'langgraph',
     title: 'Built on LangGraph',
-    body: "The runtime is LangGraph — durable checkpointing, the tool/subagent loop, and the LangChain ecosystem underneath. You extend a graph, not a bespoke loop, so what you learn here transfers.",
+    body: 'The runtime is LangGraph — durable checkpointing, the tool/subagent loop, and the LangChain ecosystem underneath. You extend a graph, not a bespoke loop, so what you learn here transfers.',
   },
   {
+    key: 'lean core',
     title: 'A lean core, not a bundle',
-    body: "A small, legible core ships by default; you add the rest as git-URL plugins — pinned in a lockfile, removable cleanly, shareable as repos. A plugin is a full package (tools, skills, subagents, workflows, routes, console views), so you opt in to surface area instead of opting out of it.",
+    body: 'A small, legible core ships by default; you add the rest as git-URL plugins — pinned in a lockfile, removable cleanly, shareable as repos. A plugin is a full package (tools, skills, subagents, workflows, routes, console views), so you opt in to surface area instead of opting out of it.',
   },
   {
+    key: 'extend',
     title: 'Extend without forking',
-    body: "Three opt-in ways to extend a running agent: SKILL.md skills (auto-retrieved into context, even agent-authored), MCP servers (external tools over stdio/HTTP), and plugins (full packages). Shared-runtime fixes land upstream; your domain logic lives in your fork or your plugins.",
+    body: 'Three opt-in ways to extend a running agent: SKILL.md skills (auto-retrieved into context, even agent-authored), MCP servers (external tools over stdio/HTTP), and plugins (full packages). Shared-runtime fixes land upstream; your domain logic lives in your fork or your plugins.',
   },
   {
+    key: 'console',
     title: 'An operator console + custom dashboards',
-    body: "A dedicated React console (and a native desktop app) where a plugin can add its own left-rail dashboard — a Fleet view, a Quant Desk — without a rebuild. Run from chat, manage from surfaces, orchestrate a fleet from one place.",
+    body: 'A dedicated React console (and a native desktop app) where a plugin can add its own left-rail dashboard — a Fleet view, a Quant Desk — without a rebuild. Run from chat, manage from surfaces, orchestrate a fleet from one place.',
   },
   {
+    key: 'knowledge',
     title: 'Memory, knowledge & skills',
-    body: "A bundled hybrid knowledge store (SQLite FTS5 + embeddings, RRF fusion) the agent reads before every turn, with ingestion for docs / web / audio / video. Skills are retrieved into context automatically and curated over time — the agent can even author its own.",
+    body: 'A bundled hybrid knowledge store (SQLite FTS5 + embeddings, RRF fusion) the agent reads before every turn, with ingestion for docs / web / audio / video. Skills are retrieved into context automatically and curated over time — the agent can even author its own.',
   },
   {
+    key: 'goals',
     title: 'Goals with testable outcomes',
-    body: "Beyond a scheduler: goal mode with pluggable verifiers (a goal is met when a check passes, not when the model says so) and monitor goals for long-horizon, externally-driven targets — e.g. a background loop grinding toward 1M credits, evaluated out-of-band.",
+    body: 'Beyond a scheduler: goal mode with pluggable verifiers (a goal is met when a check passes, not when the model says so) and monitor goals for long-horizon, externally-driven targets — e.g. a background loop grinding toward 1M credits, evaluated out-of-band.',
   },
   {
+    key: 'telemetry',
     title: 'Built-in cost & latency telemetry',
-    body: "A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Cost and latency visibility is treated as core, not an add-on.",
+    body: 'A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Cost and latency visibility is treated as core, not an add-on.',
   },
   {
+    key: 'acp',
     title: 'Drive any coding agent (ACP)',
-    body: "Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol — or run the whole turn on one. protoAgent orchestrates coding agents rather than competing as one.",
+    body: 'Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol — or run the whole turn on one. protoAgent orchestrates coding agents rather than competing as one.',
   },
   {
+    key: 'local-first',
     title: 'Local-first & model-agnostic',
-    body: "Powered by your models through an OpenAI-compatible gateway — a local 30B, a hosted frontier model, whatever you point it at. Model choice is gateway config, not code.",
+    body: 'Powered by your models through an OpenAI-compatible gateway — a local 30B, a hosted frontier model, whatever you point it at. Model choice is gateway config, not code.',
   },
   {
+    key: 'headless',
     title: 'Headless, API-first',
-    body: "Run it with no UI (--ui none): A2A + an OpenAI-compatible /v1 endpoint + /metrics. Point any OpenAI client or agent fleet at it. The console is optional, not the product.",
+    body: 'Run it with no UI (--ui none): A2A + an OpenAI-compatible /v1 endpoint + /metrics. Point any OpenAI client or agent fleet at it. The console is optional, not the product.',
   },
   {
+    key: 'sandbox',
     title: 'Sandboxed by design',
-    body: "Optional OpenShell isolation (kernel-enforced filesystem + seccomp + an egress proxy) and a deny-by-default fetch_url host fence — generated from your config, so the blast radius is bounded without hand-writing policy.",
+    body: 'Optional OpenShell isolation (kernel-enforced filesystem + seccomp + an egress proxy) and a deny-by-default fetch_url host fence — generated from your config, so the blast radius is bounded without hand-writing policy.',
   },
 ];
 ---
 
-<BaseLayout title="Features — protoAgent" description="protoAgent: a simple, legible core, a fully extensible plugin platform, and A2A-native fleet orchestration. Run one agent or orchestrate many — local-first.">
-  <div class="mx-auto max-w-6xl px-6 py-20">
-    <h1 class="text-4xl font-bold tracking-tight mb-3">Why protoAgent</h1>
-    <p class="text-zinc-400 text-lg max-w-2xl mb-14">
-      Three ideas, one substrate: a <strong class="text-zinc-200">simple core</strong> you can
-      actually read, a <strong class="text-zinc-200">fully extensible</strong> plugin platform,
-      and <strong class="text-zinc-200">A2A-native fleet orchestration</strong>. Start with a
-      working agent on a fresh clone, grow it into exactly what you need, and run it solo or as a
-      fleet across your machines.
-    </p>
-
-    <!-- Pillars -->
-    <div class="grid gap-5 sm:grid-cols-3 mb-20">
-      {pillars.map((p) => (
-        <div class="card p-6">
-          <h2 class="font-semibold text-lg mb-2">{p.title}</h2>
-          <p class="text-sm text-zinc-400 leading-relaxed">{p.body}</p>
-        </div>
-      ))}
+<BaseLayout
+  title="Features — protoAgent"
+  description="protoAgent: a simple, legible core, a fully extensible plugin platform, and A2A-native fleet orchestration. Run one agent or orchestrate many — local-first."
+>
+  <section class="pl-hero">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Features</p>
+      <h1>Why protoAgent</h1>
+      <p class="pl-lead">
+        Three ideas, one substrate: a simple core you can actually read, a fully extensible
+        plugin platform, and A2A-native fleet orchestration. Start with a working agent on a
+        fresh clone, grow it into exactly what you need, and run it solo or as a fleet across
+        your machines.
+      </p>
     </div>
+  </section>
 
-    <!-- Deep dive -->
-    <h2 class="text-2xl font-bold tracking-tight mb-6">The features behind the three ideas</h2>
-    <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-20">
-      {differentiators.map((f) => (
-        <div class="card p-6">
-          <h3 class="font-semibold mb-2">{f.title}</h3>
-          <p class="text-sm text-zinc-400 leading-relaxed">{f.body}</p>
-        </div>
-      ))}
+  <section class="pl-section">
+    <div class="pl-container">
+      <p class="pl-eyebrow">The three ideas</p>
+      <div class="pl-deliverables">
+        {pillars.map((p) => (
+          <div class="pl-deliverable">
+            <div class="pl-deliverable__title">{p.title}</div>
+            <div class="pl-deliverable__body">{p.body}</div>
+          </div>
+        ))}
+      </div>
     </div>
+  </section>
 
-    <!-- Dogfooding -->
-    <div class="card p-8 mb-16">
-      <h2 class="text-2xl font-bold tracking-tight mb-3">Stress-tested by building on it</h2>
-      <p class="text-zinc-400 leading-relaxed max-w-3xl">
+  <section class="pl-section">
+    <div class="pl-container">
+      <p class="pl-eyebrow">The features behind them</p>
+      <div>
+        {differentiators.map((f) => (
+          <div class="pl-row">
+            <div class="pl-row__label">{f.key}</div>
+            <div>
+              <div class="pl-row__name">{f.title}</div>
+              <div class="pl-row__desc">{f.body}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="pl-section">
+    <div class="pl-container">
+      <p class="pl-eyebrow">Dogfooding</p>
+      <h2 class="pl-heading">Stress-tested by building on it</h2>
+      <p class="pl-section-intro">
         We don't just ship the core — we build real agents on it and contribute the patterns
         back as plugins. A <strong>SpaceTraders</strong> agent runs an OODA loop on the scheduler
         (observe every 20 min, escalate to a strategist subagent hourly) toward a standing goal
@@ -117,17 +147,11 @@ const differentiators = [
         paper broker. <strong>ORBIS</strong> (voice companion) connects over A2A to control it by
         voice. Same substrate, wildly different agents.
       </p>
-      <div class="mt-5 flex flex-wrap gap-4 text-sm">
-        <a href="/plugins" class="text-[var(--pl-color-brand-lavender)] hover:brightness-110">Browse plugins →</a>
-        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-white">Read the docs ↗</a>
+      <div class="actions">
+        <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer" class="pl-btn pl-btn--primary">Build your agent →</a>
+        <a href="/plugins" class="pl-btn">Browse plugins</a>
+        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="pl-btn">Read the docs</a>
       </div>
     </div>
-
-    <div class="text-center">
-      <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer"
-         class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[var(--pl-color-bg)] hover:brightness-110 transition">
-        Build your agent →
-      </a>
-    </div>
-  </div>
+  </section>
 </BaseLayout>
