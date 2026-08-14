@@ -51,6 +51,13 @@ def repo(tmp_path: Path) -> Path:
     _git(work, "commit", "-qm", "seed")
     _git(work, "branch", "-M", "main")
     _git(work, "push", "-q", "-u", "origin", "main")
+    # `git init --bare` stamps the origin's HEAD at `init.defaultBranch` (git-version- and
+    # config-dependent — "master" on some setups) and does NOT repoint it just because a
+    # differently-named branch got pushed. A later `git clone` of that origin then follows
+    # a HEAD pointing nowhere, and its checkout behavior on a dangling HEAD isn't
+    # consistent across git versions — this bit us on CI's git while passing locally.
+    # Pin it explicitly so every clone of `origin` unambiguously lands on `main`.
+    _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
     # The pin bump itself — what `check_bundle_updates.py` would have rewritten.
     (work / "protoagent.bundle.yaml").write_text("members:\n  - name: x\n    ref: v2\n", encoding="utf-8")
     return work
