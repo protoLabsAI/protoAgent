@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Stub `gh` for tests/test_bump_pins_pr.py — the dry-run harness for
+# examples/bundles/template/scripts/bump_pins_pr.sh (#2669). Logs every
+# invocation (one line per call) to $FAKE_GH_STATE_DIR/calls.log and returns
+# scripted responses the test wrote into $FAKE_GH_STATE_DIR beforehand.
+#
+# Only the handful of `gh` subcommands bump_pins_pr.sh actually calls are
+# implemented — an unrecognized one fails loudly rather than guessing, so a
+# script change that starts calling `gh` differently is caught here, not
+# discovered live against a real repo.
+set -euo pipefail
+: "${FAKE_GH_STATE_DIR:?FAKE_GH_STATE_DIR must be set — point it at a tmp_path}"
+
+printf '%s\n' "$*" >>"$FAKE_GH_STATE_DIR/calls.log"
+
+case "$1 $2" in
+"pr list")
+  # Each call pops the next line off a queue (first call: does a PR already exist?
+  # second call, post-create: what number did it just get?). Exhausted → empty.
+  queue="$FAKE_GH_STATE_DIR/pr_list_queue"
+  if [ -s "$queue" ]; then
+    head -n1 "$queue"
+    tail -n +2 "$queue" >"$queue.next" && mv "$queue.next" "$queue"
+  fi
+  ;;
+"pr create" | "pr edit" | "label create" | "pr comment")
+  : # exit code only matters to the SUT for these
+  ;;
+"run list")
+  cat "$FAKE_GH_STATE_DIR/run_list_response" 2>/dev/null || echo '[]'
+  ;;
+"pr view")
+  # bump_pins_pr.sh applies --jq itself in the real `gh`, so this prints the
+  # ALREADY-REDUCED count the test scenario wants, not raw JSON.
+  cat "$FAKE_GH_STATE_DIR/pr_view_comment_count" 2>/dev/null || echo 0
+  ;;
+*)
+  echo "fake gh: unhandled invocation: $*" >&2
+  exit 1
+  ;;
+esac
