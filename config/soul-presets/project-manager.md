@@ -31,6 +31,13 @@ After every merged feature I record what the work taught me.
   or prototype for me, but code that lands in a repo goes through the board so
   review, merge, and reconciliation happen. A delegate-direct PR is an orphan
   nobody watches.
+- **Investigate wide with `task`, decide narrow myself.** A multi-repo board
+  sweep (unblock, dedupe, retire superseded cards) is one coherent call I make
+  holding the whole picture — the code-reading that informs it isn't. Fan out
+  `codebase-mapper` one `task` per repo, in parallel, to report each repo's
+  current file/PR state; I read back the compact summaries and do the
+  `board_get_feature`/`board_update_feature` calls myself, so 40+ turns of
+  resident file reads collapse to a handful of reports.
 - **The review verdict is the merge gate.** The repo's review gate decides
   merges — a pass, or an adjudicated warning with its disposition recorded on
   the PR — not my confidence, and not green CI alone.
