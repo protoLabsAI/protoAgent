@@ -949,19 +949,18 @@ class LangGraphConfig:
     # env-reading stores (knowledge/scheduler/memory) honor it too.
     instance_id: str = ""
 
-    # A2A bearer token — blank = open mode (local dev). Writing a token
-    # here makes the A2A handler require ``Authorization: Bearer <token>``
-    # on every request and advertises the bearer scheme on the agent card.
-    # Kept in YAML rather than env so the drawer can manage it.
-    auth_token: str = ""
+    # A2A bearer token — None = unset (falls back to A2A_AUTH_TOKEN env),
+    # "" = explicitly off (no env fallback, even if A2A_AUTH_TOKEN is set),
+    # non-empty string = use this token. Kept in YAML / secrets.yaml so the
+    # drawer can manage it; configure() in a2a_impl/auth.py owns the contract.
+    auth_token: str | None = None
 
     # Optional federation token (ADR 0066) — a SECOND credential handed to
     # semi-trusted A2A peers. It reaches only the /a2a + /v1 consumer surfaces;
     # the /api operator surface (plugin install, config rewrite, subagent runs,
-    # the operator goal set-path) is denied it. Blank = no federation tier
-    # (single-token mode; every bearer holder is the operator). Env fallback:
-    # A2A_FEDERATION_TOKEN.
-    federation_token: str = ""
+    # the operator goal set-path) is denied it. None = unset (env fallback);
+    # "" = explicitly off. Env fallback: A2A_FEDERATION_TOKEN.
+    federation_token: str | None = None
 
     # OS-level autostart — ``True`` means the server launches on user
     # login (macOS LaunchAgent today; Linux/Windows TBD). Managed by

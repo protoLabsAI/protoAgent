@@ -2179,13 +2179,19 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     try:
         from a2a_impl import auth
 
-        # An empty config value falls back to the matching env var, same precedence as
-        # boot's auth.configure() (a2a_impl/auth.py) — otherwise a deployment configured
-        # purely via A2A_AUTH_TOKEN/A2A_FEDERATION_TOKEN (no secrets.yaml/YAML value) has
-        # its live credential silently wiped by the FIRST Settings save of anything, not
-        # just an auth-related one, until the next full restart (#1504 review).
-        auth.set_bearer_token(new_config.auth_token or os.environ.get("A2A_AUTH_TOKEN") or None)
-        auth.set_federation_token(new_config.federation_token or os.environ.get("A2A_FEDERATION_TOKEN") or None)
+        # None (field absent from config) falls back to env — a deployment configured
+        # purely via A2A_AUTH_TOKEN/A2A_FEDERATION_TOKEN must not have its credential
+        # silently cleared by the first Settings save of anything (#1504 review).
+        # "" (explicitly set to empty) means bearer off: do NOT fall back to env,
+        # otherwise auth: {token: ""} silently re-enables auth via the env var (#2691).
+        auth.set_bearer_token(
+            new_config.auth_token if new_config.auth_token is not None
+            else (os.environ.get("A2A_AUTH_TOKEN") or None)
+        )
+        auth.set_federation_token(
+            new_config.federation_token if new_config.federation_token is not None
+            else (os.environ.get("A2A_FEDERATION_TOKEN") or None)
+        )
     except ImportError:
         # a2a_impl.auth not yet imported (e.g. during early-boot reload before
         # _main wires routes) — harmless.

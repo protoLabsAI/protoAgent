@@ -828,3 +828,61 @@ def test_valid_sse_token_marks_operator_tier_for_the_fleet_swap():
     app2.add_middleware(auth.A2AAuthMiddleware)
     r2 = TestClient(app2).get("/agents/roxy/api/events", params={"token": tok})
     assert r2.status_code == 200 and r2.text == "operator"
+
+
+# ── 10. explicit-empty vs unset: three-state bearer/federation contract (#2691) ─
+#
+# configure() (called at boot) and set_bearer_token/set_federation_token (called at
+# reload) must distinguish three states carried by auth_token / federation_token:
+#   None  — unset in config → fall back to A2A_AUTH_TOKEN / A2A_FEDERATION_TOKEN env
+#   ""    — explicitly off  → NO env fallback; a stray env var must not enable auth
+#   "tok" — explicit value  → use it directly
+#
+# The boot caller (server/__init__.py) passes the raw config field value to
+# configure(). The reload caller (server/agent_init.py) resolves the env fallback
+# itself before calling set_bearer_token/set_federation_token.
+
+
+def test_configure_explicit_empty_bearer_stays_off_despite_env(monkeypatch):
+    """auth: {token: ""} disables bearer even when A2A_AUTH_TOKEN is set in env."""
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "env-secret")
+    auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
+    assert auth._BEARER[0] is None
+    assert not auth.bearer_configured()
+    assert _client().post("/a2a").status_code == 200  # open mode — no auth required
+
+
+def test_configure_explicit_empty_federation_stays_off_despite_env(monkeypatch):
+    """auth: {federation_token: ""} disables federation even when env is set."""
+    monkeypatch.setenv("A2A_FEDERATION_TOKEN", "env-fed-secret")
+    auth.configure(bearer_token="op-token", api_key="", allowed_origins_raw="", federation_token="")
+    assert auth._FEDERATION[0] is None
+    # The operator token still works, but there is no federation tier.
+    assert _client().post("/a2a", headers={"Authorization": "Bearer op-token"}).status_code == 200
+
+
+def test_configure_absent_federation_picks_up_env(monkeypatch):
+    """federation_token=None falls back to A2A_FEDERATION_TOKEN env (#2691 r3)."""
+    monkeypatch.setenv("A2A_FEDERATION_TOKEN", "env-fed-secret")
+    auth.configure(bearer_token="op-token", api_key="", allowed_origins_raw="", federation_token=None)
+    assert auth._FEDERATION[0] == "env-fed-secret"
+
+
+def test_set_bearer_token_explicit_empty_disables_auth(monkeypatch):
+    """set_bearer_token("") — the reload path's call when auth_token="" — disables auth.
+
+    The reload caller in server/agent_init.py passes auth_token directly (not the env
+    value) when auth_token is not None, so set_bearer_token("") results in open mode.
+    """
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "env-secret")
+    auth.set_bearer_token("")
+    assert auth._BEARER[0] is None
+    assert not auth.bearer_configured()
+
+
+def test_set_federation_token_explicit_empty_disables_federation(monkeypatch):
+    """set_federation_token("") disables the federation tier, preserving r3."""
+    monkeypatch.setenv("A2A_FEDERATION_TOKEN", "env-fed-secret")
+    auth._BEARER[0] = "op-token"  # configure operator bearer directly
+    auth.set_federation_token("")
+    assert auth._FEDERATION[0] is None

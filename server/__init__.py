@@ -974,10 +974,10 @@ def _main():
     # card but does not enforce them). Bearer = YAML auth.token / A2A_AUTH_TOKEN;
     # X-API-Key = <AGENT>_API_KEY; origin = A2A_ALLOWED_ORIGINS.
     #
-    # ``auth_token`` defaults to "" when no YAML/secret token is set — collapse
-    # that to ``None`` so configure() applies the documented A2A_AUTH_TOKEN env
-    # fallback. (configure() treats an explicit "" as "bearer off, no fallback";
-    # protoAgent has no separate apiKey-only flag, so unset ⇒ env, not off.)
+    # Pass auth_token / federation_token raw: None (field absent) tells configure()
+    # to fall back to the env var; "" (explicitly set to empty) means bearer off
+    # with no env fallback (#2691). Collapsing either to None before the call would
+    # silently re-enable auth via the env var when the operator intended it off.
     # Plugin-declared auth-exempt prefixes (namespace-scoped in the manifest parser)
     # — registered before the gate is installed so an inbound webhook / public view
     # page passes under a token-gated deployment.
@@ -995,10 +995,10 @@ def _main():
         fleet_token = None
     auth.install(
         fastapi_app,
-        bearer_token=((STATE.graph_config.auth_token if STATE.graph_config else "") or None),
+        bearer_token=(STATE.graph_config.auth_token if STATE.graph_config else None),
         api_key=os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", ""),
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
-        federation_token=((STATE.graph_config.federation_token if STATE.graph_config else "") or None),
+        federation_token=(STATE.graph_config.federation_token if STATE.graph_config else None),
         fleet_token=fleet_token,
     )
 
