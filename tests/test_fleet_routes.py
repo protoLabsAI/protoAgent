@@ -170,6 +170,30 @@ def test_create_forwards_inputs_and_secrets(client, monkeypatch):
     assert captured["secrets"] == [{"key": "openai_api_key", "value": "sk-1"}]
 
 
+def test_create_forwards_requires_tools(client, monkeypatch):
+    """POST /api/fleet threads the archetype's `requires_tools` contract into manager.create
+    (#2277/#2713) — blank entries dropped, absent field → None so nothing is persisted."""
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(kwargs)
+        return {"id": f"{name}-0", "name": name, "port": 7999, "path": "/tmp", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    r = client.post(
+        "/api/fleet",
+        json={"name": "pm", "start": False, "requires_tools": ["github_create_issue", "  "]},
+    )
+    assert r.status_code == 200
+    assert captured["requires_tools"] == ["github_create_issue"]
+
+    captured.clear()
+    assert client.post("/api/fleet", json={"name": "pm2", "start": False}).status_code == 200
+    assert captured["requires_tools"] is None
+
+
 def test_create_ignores_malformed_inputs_and_secrets(client, monkeypatch):
     """A malformed `inputs`/`secrets` field degrades to None (env-only fallback), never a 500."""
     from graph.workspaces import manager

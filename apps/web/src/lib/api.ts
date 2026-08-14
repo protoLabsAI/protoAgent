@@ -1624,6 +1624,9 @@ export const api = {
     // `secrets` carry values for the bundle's declared secrets. Omitted → env-only.
     inputs?: Record<string, string>;
     secrets?: { key: string; value: string }[];
+    // The picked archetype's capability contract (#2277), persisted to the member's
+    // workspace.yaml so it can warn at boot when its toolset doesn't cover the persona.
+    requires_tools?: string[];
   }) {
     return request<{ ok: boolean; agent: FleetAgent; installed: string[] }>("/api/fleet", {
       method: "POST",

@@ -111,6 +111,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         soul: archetype?.soul || undefined,
         inputs: Object.keys(inputs).length ? inputs : undefined,
         secrets: secrets.length ? secrets : undefined,
+        requires_tools: archetype?.requires_tools?.length ? archetype.requires_tools : undefined,
       });
     },
     onError: (e: Error) => toast({ tone: "error", title: "Couldn't create agent", message: e.message }),

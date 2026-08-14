@@ -1295,6 +1295,10 @@ export type Archetype = {
   // the desktop app needs the managed CPython). The picker warns at choose-time when
   // a requirement isn't provisioned. Optional: absent on older hosts.
   requires?: string[];
+  // Tool names the archetype's persona assumes exist (#2277). Forwarded verbatim on
+  // create so the member persists them to workspace.yaml and warns at boot when its
+  // bound toolset doesn't cover the contract. Optional: absent on older hosts.
+  requires_tools?: string[];
 };
 
 // What an archetype's bundle would set up — the read-only pre-install peek

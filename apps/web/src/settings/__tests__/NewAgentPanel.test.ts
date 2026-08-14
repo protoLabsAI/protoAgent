@@ -293,3 +293,78 @@ describe("NewAgentPanel — advanced-tier archetypes collapse behind a toggle", 
     expect(radioFor("scout")).toBeTruthy();
   });
 });
+
+describe("NewAgentPanel — create forwards the archetype's capability contract (#2713)", () => {
+  // The backend has persisted + checked `requires_tools` since #2315, but the panel never
+  // sent it — so every console-created agent shipped without its contract (#2277's bug).
+  // These tests pin the browser half of the seam.
+  const WITH_CONTRACT: Archetype[] = [
+    { id: "basic", label: "Basic", icon: "bot", blurb: "A plain agent", bundle: null, soul: "" },
+    {
+      id: "pm",
+      label: "Project Manager",
+      icon: "clipboard",
+      blurb: "PM bundle",
+      bundle: "https://example.com/pm.git",
+      soul: "pm-persona",
+      requires_tools: ["github_create_issue"],
+    },
+  ];
+
+  function radioFor(value: string): HTMLInputElement | undefined {
+    return [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((r) => r.value === value);
+  }
+
+  async function typeName(name: string) {
+    const input = container.querySelector<HTMLInputElement>(".archetype-name-field input");
+    if (!input) throw new Error("no name input rendered");
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(input, name);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function mockCreate() {
+    return vi.spyOn(api, "createAgent").mockResolvedValue({
+      ok: true,
+      agent: { id: "x-0", name: "x" } as never,
+      installed: [],
+    });
+  }
+
+  it("sends requires_tools when the picked archetype carries a contract", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_CONTRACT });
+    const create = mockCreate();
+    await mountPanel();
+
+    await typeName("pm-agent");
+    await act(async () => {
+      radioFor("pm")!.click();
+    });
+    await act(async () => {
+      createButton().click();
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ requires_tools: ["github_create_issue"] }),
+    );
+  });
+
+  it("omits requires_tools for a contract-less archetype", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_CONTRACT });
+    const create = mockCreate();
+    await mountPanel();
+
+    await typeName("plain");
+    await act(async () => {
+      radioFor("basic")!.click();
+    });
+    await act(async () => {
+      createButton().click();
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].requires_tools).toBeUndefined();
+  });
+});
