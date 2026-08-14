@@ -315,31 +315,6 @@
   margin-bottom: 0.75rem;
 }
 
-/* FORWARD-PORT — delete on the next @protolabsai/ui bump.
- * The segmented control has no width ceiling in the published 0.59.0, so an
- * inline-flex strip of ~15 category pills grows past its container and takes
- * the whole page into horizontal scroll. Upstream already fixed this (ui:
- * "segmented Tabs scroll instead of spilling") — these are that fix's exact
- * rules, held here only until the release lands on npm. Verify against
- * node_modules/@protolabsai/ui/src/styles/navigation.css before removing. */
-.pl-tabs--segmented {
-  max-width: 100%;
-  overflow-x: auto;
-  /* No visible bar — the pills are focusable buttons, so Tab scrolls the strip
-     and the control keeps reading as one pill. */
-  scrollbar-width: none;
-}
-
-.pl-tabs--segmented::-webkit-scrollbar {
-  display: none;
-}
-
-/* Keep natural width so the strip scrolls; the flex default (shrink: 1) would
-   squeeze the pills to fit and never trigger the parent's overflow. */
-.pl-seg {
-  flex: none;
-}
-
 .catalog-count {
   margin: 0 0 1.5rem;
   font-family: var(--pl-font-mono);
