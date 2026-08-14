@@ -3,8 +3,9 @@
 Backs the console Plugins panel: list installed plugins (with their manifest +
 declared capabilities for review), install from a git URL, uninstall, and
 enable/disable. **Installing AUTO-ENABLES + runs the plugin** (trust-by-default — the
-console flashes a one-time "this runs code" confirm for unofficial sources first; opt
-out with ``PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`` for strict install ≠ enable).
+install dialog carries a static "this enables and runs it" warning only; there is NO
+per-install confirm until the ADR 0071 D3 consent layer lands. Opt out with
+``PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`` for strict install ≠ enable).
 Enable/disable edits ``plugins.enabled`` and hot-reloads.
 
 ENABLE is fully live: tools/middleware/MCP rebuild with the graph, and a plugin's
@@ -48,8 +49,9 @@ def _sources_allowlist() -> list[str] | None:
 
 def _install_no_enable() -> bool:
     """Opt out of auto-enable-on-install — back to ADR 0027's strict install ≠ enable.
-    Default off: installing a plugin enables + runs it (trust-by-default; the console
-    flashes a one-time "this runs code" confirm for unofficial sources first)."""
+    Default off: installing a plugin enables + runs it (trust-by-default; the only
+    console-side friction is the install dialog's static warning — the per-install
+    consent ack is ADR 0071 D3, not yet built)."""
     import os
 
     return os.environ.get("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "").strip().lower() in ("1", "true", "yes")
@@ -235,9 +237,10 @@ def register_plugin_routes(app) -> None:
         from ops.plugins import install_and_activate
 
         # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default): installing IS
-        # the consent (the console flashes a one-time "this runs code" confirm for unofficial
-        # sources first). The op adds it to plugins.enabled + hot-reloads via _apply_settings_
-        # changes — the live-agent rebuild this REST adapter injects. Opt out with
+        # the consent — the dialog's static warning is the only friction; the per-install
+        # "this runs code" ack is ADR 0071 D3, not yet built (the Discover one-click path
+        # has no confirm at all). The op adds it to plugins.enabled + hot-reloads via
+        # _apply_settings_changes — the live-agent rebuild this REST adapter injects. Opt out with
         # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (strict install ≠ enable).
         from server.agent_init import _apply_settings_changes
 

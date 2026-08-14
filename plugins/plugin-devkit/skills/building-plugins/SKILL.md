@@ -296,8 +296,11 @@ A plugin that outgrows the in-place loop becomes a first-class project:
 Publish as a git repo; others install by URL:
 `python -m server plugin install <git-url> --ref <tag>` (or the console Plugins
 panel). Install pins a commit SHA in `plugins.lock`; `plugin sync` reproduces it.
-**install ≠ enable ≠ trust** — installing only fetches code, never runs it; enabling
-is the trust decision. For untrusted code, ship an MCP server instead (sandboxed).
+**install ≠ enable ≠ trust holds on the CLI only** — `plugin install` fetches code and
+never runs it; enabling is the trust decision. The **console** install path is
+different: it auto-enables and RUNS the plugin immediately (set
+`PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1` to restore strict install ≠ enable there).
+For untrusted code, ship an MCP server instead (sandboxed).
 Remove cleanly with `plugin uninstall <id>` (`--purge` also drops config + secrets).
 
 ## Gotchas (learned the hard way)
