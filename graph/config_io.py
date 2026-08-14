@@ -763,7 +763,15 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "disabled": list(config.plugins_disabled),
                 "dir": config.plugins_dir,
                 "allow_unbundled_deps": config.plugins_allow_unbundled_deps,
-                "sources": {"allow": list(config.plugins_sources_allow)},
+                # `official`/`acked`/`trust_unverified` (ADR 0071 D3, #2721): the ack
+                # store MUST survive this dict — an ack that doesn't persist re-asks
+                # forever (the exact write-path drop the June audit warned about).
+                "sources": {
+                    "allow": list(config.plugins_sources_allow),
+                    "official": list(config.plugins_sources_official),
+                    "acked": list(config.plugins_sources_acked),
+                },
+                "trust_unverified": config.plugins_trust_unverified,
                 "update_policy": dict(config.plugins_update_policy),
                 "autoupdate_interval_hours": config.plugins_autoupdate_interval_hours,
             },

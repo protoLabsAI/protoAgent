@@ -911,6 +911,16 @@ class LangGraphConfig:
     # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org globs
     # (e.g. ``github.com/protoLabsAI/*``); empty = any URL allowed (gated install).
     plugins_sources_allow: list[str] = field(default_factory=list)
+    # Trust & consent (ADR 0071 D3, #2721) — decides only whether the console asks
+    # for a one-time "this runs code" confirm before an install; install ≠ enable ≠
+    # trust semantics are untouched. ``official``: auto-trusted source globs —
+    # default the protoLabsAI org, FORK-OVERRIDABLE (an explicit empty list means
+    # "no official sources", distinct from the key being absent). ``acked``:
+    # sources the operator confirmed once (the ack API appends here).
+    plugins_sources_official: list[str] = field(default_factory=lambda: ["github.com/protoLabsAI/*"])
+    plugins_sources_acked: list[str] = field(default_factory=list)
+    # The consent dialog's "don't show again" — every source treated as acked.
+    plugins_trust_unverified: bool = False
     # Opt-in auto-update policy (#1720), keyed by plugin id. Each value is a policy
     # dict ``{"track": "main", "when": "idle"}`` — ``track`` opts the plugin in (a
     # non-empty value; the actual ref comes from the lock), ``when`` gates the
@@ -1511,6 +1521,16 @@ class LangGraphConfig:
             plugins_dir=plugins.get("dir", cls.plugins_dir),
             plugins_allow_unbundled_deps=bool(plugins.get("allow_unbundled_deps", cls.plugins_allow_unbundled_deps)),
             plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
+            # ``official``'s absent-vs-explicit-empty distinction is load-bearing
+            # (#2691's lesson): absent → the protoLabsAI default; an explicit empty
+            # list → "no official sources" (a fork's hardening choice).
+            plugins_sources_official=(
+                list((plugins.get("sources", {}) or {})["official"] or [])
+                if "official" in (plugins.get("sources", {}) or {})
+                else ["github.com/protoLabsAI/*"]
+            ),
+            plugins_sources_acked=list((plugins.get("sources", {}) or {}).get("acked", []) or []),
+            plugins_trust_unverified=bool(plugins.get("trust_unverified", cls.plugins_trust_unverified)),
             plugins_update_policy=dict(plugins.get("update_policy", {}) or {}),
             plugins_autoupdate_interval_hours=int(
                 plugins.get("autoupdate_interval_hours", cls.plugins_autoupdate_interval_hours) or 0

@@ -205,6 +205,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "plugins_disabled": [],
     "plugins_enabled": [],
     "plugins_sources_allow": [],
+    "plugins_sources_official": ["github.com/protoLabsAI/*"],  # ADR 0071 D3 (#2721)
+    "plugins_sources_acked": [],
+    "plugins_trust_unverified": False,
     "plugins_update_policy": {},
     "presence_penalty": None,
     "prompt_cache_enabled": True,
@@ -738,7 +741,14 @@ def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
         "disabled": ["beta"],
         "dir": "/custom/plugins",
         "allow_unbundled_deps": False,
-        "sources": {"allow": ["github.com/protolabsai/*"]},
+        # official/acked/trust_unverified joined the section with ADR 0071 D3 (#2721) —
+        # the ack store rides the same write path N6 fixed for disabled/sources.allow.
+        "sources": {
+            "allow": ["github.com/protolabsai/*"],
+            "official": ["github.com/protoLabsAI/*"],
+            "acked": [],
+        },
+        "trust_unverified": False,
         "update_policy": {},
         "autoupdate_interval_hours": 6,
     }
