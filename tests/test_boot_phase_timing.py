@@ -5,7 +5,6 @@ tool-call timing, applied to boot instead of a turn."""
 from __future__ import annotations
 
 import dataclasses
-import time
 
 import pytest
 
@@ -13,12 +12,42 @@ import server.agent_init as ai
 from observability import metrics
 
 
-def test_timed_boot_phase_records_into_the_sink():
+def test_timed_boot_phase_records_the_measured_elapsed_time(monkeypatch):
+    # Deterministic clock instead of a real sleep. The original version slept 10ms
+    # and asserted the result was `> 0`, which fails at random on the native
+    # Windows runner: under Python 3.12 `time.monotonic()` is backed by
+    # `GetTickCount64()` with ~15.6ms granularity, so a 10ms sleep legitimately
+    # measures as exactly 0.0. (`time.monotonic()` only moved to
+    # `QueryPerformanceCounter` in 3.13.) The sibling
+    # `test_timed_boot_phase_calls_record_boot_phase` already asserts `>= 0` for
+    # this reason — this test was the odd one out.
+    #
+    # Scripting the clock also makes the assertion stronger than the one it
+    # replaces: it pins the recorded value to the exact delta between the
+    # helper's two reads, so a hardcoded 0.0 (or a swapped subtraction) fails
+    # here, where `> 0` would have been satisfied by any positive number.
+    ticks = iter([100.0, 100.25])
+    last = 100.25
+
+    def fake_monotonic() -> float:
+        # Falls back to the final tick once the script is exhausted — anything
+        # else running in-process (logging, pytest internals) must not blow up
+        # on a StopIteration while the patch is live.
+        nonlocal last
+        try:
+            last = next(ticks)
+        except StopIteration:
+            pass
+        return last
+
+    monkeypatch.setattr(ai.time, "monotonic", fake_monotonic)
+
     sink: dict[str, float] = {}
     with ai._timed_boot_phase("plugins", sink):
-        time.sleep(0.01)
+        pass
+
     assert "plugins" in sink
-    assert sink["plugins"] > 0
+    assert sink["plugins"] == pytest.approx(0.25)
 
 
 def test_timed_boot_phase_records_even_when_the_body_raises(monkeypatch):
