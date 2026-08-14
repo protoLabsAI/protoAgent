@@ -77,6 +77,7 @@ def _run(
     pr_list_queue: list[str] | None = None,
     run_list_response: list[dict] | None = None,
     pr_view_comment_count: int | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if pr_list_queue is not None:
         (gh_state / "pr_list_queue").write_text("\n".join(pr_list_queue) + ("\n" if pr_list_queue else ""))
@@ -91,6 +92,7 @@ def _run(
     env["BUMP_PINS_SCRATCH_DIR"] = str(gh_state)  # keep pr_body.md/bumps.txt out of real /tmp
     env["BUMP_PINS_POLL_INTERVAL"] = "0"  # no real sleeping in tests
     env.pop("GITHUB_OUTPUT", None)
+    env.update(extra_env or {})
     return subprocess.run(
         [real_bash(), str(SCRIPT), *args],
         cwd=repo,
@@ -247,3 +249,36 @@ def test_flag_approval_filters_run_list_on_the_exact_commit_sha(repo: Path, gh_s
     calls = _calls(gh_state)
     assert any("--commit cafef00d" in c for c in calls)
     assert any("--branch bump-pins" in c for c in calls)
+
+
+def test_flag_approval_defaults_to_verify_bundle_workflow(repo: Path, gh_state: Path) -> None:
+    _run(
+        repo,
+        gh_state,
+        "flag-approval",
+        "9",
+        "bump-pins",
+        "cafef00d",
+        run_list_response=[{"status": "completed", "conclusion": "success", "url": ""}],
+    )
+    calls = _calls(gh_state)
+    assert any("--workflow verify-bundle.yml" in c for c in calls)
+
+
+def test_flag_approval_respects_a_different_workflow_filename(repo: Path, gh_state: Path) -> None:
+    # product-stack's pin-bump job lives in ci.yml, not verify-bundle.yml (#2669) — the
+    # poll must search the workflow THIS repo actually runs, or it always reports the
+    # "run never showed up" false-negative regardless of what actually happened.
+    _run(
+        repo,
+        gh_state,
+        "flag-approval",
+        "9",
+        "bump-pins",
+        "cafef00d",
+        run_list_response=[{"status": "completed", "conclusion": "success", "url": ""}],
+        extra_env={"BUMP_PINS_WORKFLOW_FILE": "ci.yml"},
+    )
+    calls = _calls(gh_state)
+    assert any("--workflow ci.yml" in c for c in calls)
+    assert not any("--workflow verify-bundle.yml" in c for c in calls)

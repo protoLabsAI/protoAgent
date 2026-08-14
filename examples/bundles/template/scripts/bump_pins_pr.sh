@@ -73,9 +73,10 @@ cmd_flag_approval() {
   local number="$1" branch="$2" sha="$3"
   local status="" conclusion="" run_url=""
 
+  local workflow_file="${BUMP_PINS_WORKFLOW_FILE:-verify-bundle.yml}"
   for _ in 1 2 3 4 5 6; do
     run_json="$(gh run list --branch "$branch" --commit "$sha" --event pull_request \
-      --workflow verify-bundle.yml --limit 1 \
+      --workflow "$workflow_file" --limit 1 \
       --json status,conclusion,url 2>/dev/null || echo '[]')"
     status="$(echo "$run_json" | jq -r '.[0].status // empty')"
     conclusion="$(echo "$run_json" | jq -r '.[0].conclusion // empty')"
