@@ -669,3 +669,146 @@ def test_reload_flags_silent_noop_only_under_devkit_roots(monkeypatch, tmp_path)
     out = _run(mod.reload_plugins.ainvoke({}))
     assert "quiet-one" in out and "registered NOTHING" in out
     assert "execute_code" not in out
+
+
+# ── lifecycle tools (#2719) — install / update / disable / uninstall / verify ──
+
+
+def _install_result(**over):
+    from types import SimpleNamespace
+
+    base = dict(
+        summary={"id": "demo"},
+        installed_ids=["demo"],
+        enabled=["demo"],
+        reloaded=True,
+        enable_error=None,
+        load_errors={},
+        mcp_seeded=[],
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_install_plugin_tool_reports_live_and_load_errors(monkeypatch):
+    mod = _load_devkit_module(None)
+    import ops.plugins as op
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+
+    async def fake_install(url, ref=None, **kw):
+        assert kw["by"] == "devkit" and kw["activate"] is True
+        return _install_result(load_errors={"demo": "No module named 'leftpad'"})
+
+    monkeypatch.setattr(op, "install_and_activate", fake_install)
+    out = _run(mod.install_plugin.ainvoke({"url": "https://x/demo"}))
+    assert "installed" in out and "enabled + live: demo" in out
+    assert "FAILED to load" in out and "leftpad" in out  # honest per #2716
+
+
+def test_install_plugin_tool_fetch_only_without_graph(monkeypatch):
+    mod = _load_devkit_module(None)
+    import ops.plugins as op
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+
+    async def fake_install(url, ref=None, **kw):
+        assert kw["apply_settings"] is None  # no live applier → ops skips activation
+        return _install_result(enabled=[], reloaded=False)
+
+    monkeypatch.setattr(op, "install_and_activate", fake_install)
+    out = _run(mod.install_plugin.ainvoke({"url": "https://x/demo"}))
+    assert "fetched only" in out and "no live agent" in out
+
+
+def test_update_plugin_tool_routes_bundles_to_update_bundle(monkeypatch):
+    mod = _load_devkit_module(None)
+    import ops.plugins as op
+    from graph.plugins import installer
+
+    monkeypatch.setattr(installer, "bundle_entry", lambda bid: {"id": bid})
+
+    async def fake_update(bid, **kw):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(install=_install_result(installed_ids=["a", "b"]), removed_members=["dead"], retire_error=None)
+
+    monkeypatch.setattr(op, "update_bundle", fake_update)
+    out = _run(mod.update_plugin.ainvoke({"plugin_id": "stacky"}))
+    assert "updated bundle stacky" in out and "2 member(s) re-pinned" in out
+    assert "retired" in out and "dead" in out
+
+
+def test_update_plugin_tool_unknown_id(monkeypatch):
+    mod = _load_devkit_module(None)
+    from graph.plugins import installer
+
+    monkeypatch.setattr(installer, "bundle_entry", lambda bid: None)
+    monkeypatch.setattr(installer, "list_installed", lambda: [])
+    out = _run(mod.update_plugin.ainvoke({"plugin_id": "ghost"}))
+    assert "not an installed plugin or bundle" in out
+
+
+def test_uninstall_plugin_tool_single_without_graph(monkeypatch):
+    mod = _load_devkit_module(None)
+    from graph.plugins import installer, loader
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+    removed: list[str] = []
+    monkeypatch.setattr(installer, "bundle_entry", lambda bid: None)
+    monkeypatch.setattr(installer, "uninstall", lambda pid, purge=False: removed.append(pid))
+    purged: list[str] = []
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: purged.append(pid))
+    out = _run(mod.uninstall_plugin.ainvoke({"plugin_id": "demo"}))
+    assert removed == ["demo"] and purged == ["demo"]
+    assert "uninstalled demo" in out and "no live agent" in out  # honest about the reload
+
+
+def test_disable_plugin_tool_needs_live_graph(monkeypatch):
+    mod = _load_devkit_module(None)
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+    out = _run(mod.disable_plugin.ainvoke({"plugin_id": "demo"}))
+    assert out.startswith("✗") and "no live agent" in out
+
+
+def test_verify_bundle_tool_flags_archetype_problems(monkeypatch):
+    mod = _load_devkit_module(None)
+    import ops.plugins as op
+
+    async def fake_peek(url, ref=None):
+        return {
+            "kind": "bundle",
+            "id": "stacky",
+            "name": "Stacky",
+            "members": [
+                {"id": "a", "builtin": False, "ref": "v1"},
+                {"id": "b", "builtin": False, "ref": None, "error": "manifest unreadable"},
+            ],
+            "mcp": [{"template": {"name": "github"}}],
+            "secrets": [{"key": "token"}],
+            "archetype": {"label": "", "souls": "typo"},
+        }
+
+    monkeypatch.setattr(op, "peek_bundle", fake_peek)
+    out = _run(mod.verify_bundle.ainvoke({"url": "https://x/stacky"}))
+    assert "bundle stacky" in out and "member a (v1)" in out
+    assert "manifest unreadable" in out
+    assert "seeds MCP: github" in out and "declares secrets: token" in out
+    assert "unknown key(s): souls" in out and "no label" in out
+
+
+def test_verify_bundle_tool_rejects_non_bundle(monkeypatch):
+    mod = _load_devkit_module(None)
+    import ops.plugins as op
+
+    async def fake_peek(url, ref=None):
+        return {"kind": "plugin", "id": "solo"}
+
+    monkeypatch.setattr(op, "peek_bundle", fake_peek)
+    out = _run(mod.verify_bundle.ainvoke({"url": "https://x/solo"}))
+    assert out.startswith("✗") and "not a bundle repo" in out

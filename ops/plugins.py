@@ -407,6 +407,9 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
             # up front, WITHOUT installing (this is a read-only peek). Slice 1 of #2041.
             "mcp": list(bundle.get("mcp") or []),
             "secrets": list(bundle.get("secrets") or []),
+            # The archetype: block, verbatim — so pre-install surfaces (the devkit's
+            # verify_bundle, future preview UI) can sanity-check it without installing.
+            "archetype": dict(bundle.get("archetype") or {}),
         }
 
     _peek_cache[url] = (now, result)

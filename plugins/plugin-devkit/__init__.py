@@ -2,7 +2,9 @@
 
 The featured full-bundle example: in ONE plugin it contributes **tools**
 (`scaffold_plugin`, `scaffold_bundle`, `enable_plugin`, `reload_plugins`,
-`plugin_list_files`, `plugin_read_file`, `plugin_write_file`, `test_plugin`), a
+`plugin_list_files`, `plugin_read_file`, `plugin_write_file`, `test_plugin`, and the
+lifecycle set `install_plugin` / `update_plugin` / `disable_plugin` /
+`uninstall_plugin` / `verify_bundle`, #2719), a
 **subagent** (`plugin-architect`), a bundled **skill** (`skills/building-plugins`),
 a **workflow** (`workflows/design-plugin`), a **console view** (`/guide`), and
 **config/settings** — every contribution type.
@@ -734,6 +736,231 @@ async def enable_plugin(plugin_id: str) -> str:
     return f"✓ {plugin_id}: {detail}" if ok else f"✗ {plugin_id}: {detail}"
 
 
+# ── lifecycle tools (#2719) — the devkit's charter is the ENTIRE lifecycle; until
+# these it stopped at authoring (scaffold/edit/test/enable/reload) and the agent had
+# to hand installs/updates/removals back to the operator. Everything routes through
+# the same ops/installer layers the console uses, so load failures surface (#2716)
+# and teardown is live (#1955). Consent posture: the devkit is opt-in — enabling it
+# IS the consent gate until ADR 0071 D3's ack layer lands (ADR 0096) — and the
+# configured source allowlist still applies to every install.
+
+
+def _live_apply(config_updates: dict | None) -> tuple[bool, str]:
+    """Apply a config change (None = pure reload) to the RUNNING agent — the same
+    ``_apply_settings_changes`` path the console uses. (False, why) with no live graph."""
+    from runtime.state import STATE
+
+    if getattr(STATE, "graph", None) is None:
+        return False, "no live agent (run inside the server)"
+    from server.agent_init import _apply_settings_changes
+
+    ok, msgs = _apply_settings_changes(config=config_updates)
+    return bool(ok), ("; ".join(str(m) for m in msgs) or ("applied" if ok else "reload failed"))
+
+
+def _config_allowlist() -> list[str] | None:
+    from runtime.state import STATE
+
+    cfg = getattr(STATE, "graph_config", None)
+    allow = getattr(cfg, "plugins_sources_allow", None) if cfg else None
+    return list(allow) if allow else None
+
+
+def _ops_applier():
+    """The ``(ok, messages_list)`` applier the ops layer expects, bound to the live
+    server — or ``None`` when there's no live graph (ops then skips activation)."""
+    from runtime.state import STATE
+
+    if getattr(STATE, "graph", None) is None:
+        return None
+    from server.agent_init import _apply_settings_changes
+
+    return lambda updates: _apply_settings_changes(config=updates)
+
+
+@tool
+async def install_plugin(url: str, ref: str = "", activate: bool = True) -> str:
+    """Install a plugin — or a whole bundle — from a git URL and (by default) enable +
+    hot-reload it, exactly like the console install. **Installing with activate=True
+    RUNS the plugin's code** (trust-by-default, ADR 0071); the configured source
+    allowlist still applies. ``activate=False`` fetches only (install ≠ enable).
+
+    Reports what enabled, any member that FAILED to load (in ``plugins.enabled`` but
+    not running — fix it, then ``reload_plugins``), and seeded MCP servers."""
+    from ops import OpContext
+    from ops.plugins import install_and_activate
+
+    from graph.plugins import installer
+
+    applier = _ops_applier() if activate else None
+    try:
+        res = await install_and_activate(
+            url,
+            ref or None,
+            by="devkit",
+            allow=_config_allowlist(),
+            activate=activate,
+            ctx=OpContext.from_state(),
+            apply_settings=applier,
+        )
+    except installer.InstallError as exc:
+        return f"✗ install failed: {exc}"
+    live = applier is not None
+    s = res.summary
+    what = f"bundle {s['bundle']} ({len(s.get('installed') or [])} member(s))" if "bundle" in s else s.get("id", "plugin")
+    lines = [f"✓ installed {what}"]
+    if res.enabled:
+        lines.append(f"  enabled + live: {', '.join(res.enabled)}" if res.reloaded else f"  enabled: {', '.join(res.enabled)}")
+    elif activate and not live:
+        lines.append("  fetched only — no live agent to enable into (enable_plugin later)")
+    else:
+        lines.append("  fetched only (activate=False) — enable_plugin turns it on")
+    for pid, err in (res.load_errors or {}).items():
+        lines.append(f"  ✗ {pid} FAILED to load: {err} — fix it, then reload_plugins")
+    if res.enable_error:
+        lines.append(f"  ⚠ enable-reload failed: {res.enable_error}")
+    if res.mcp_seeded:
+        lines.append(f"  seeded MCP server(s): {', '.join(res.mcp_seeded)}")
+    return "\n".join(lines)
+
+
+@tool
+async def update_plugin(plugin_id: str) -> str:
+    """Pull the latest code for an installed plugin (a release-tag pin moves to the
+    newest semver tag; a branch ref pulls its head; a SHA pin stays put), rewrite the
+    lock, and hot-reload if it's enabled — the same semantics as the console's Update
+    button. For a BUNDLE id, updates the whole bundle (member re-pins + retiring
+    members the new manifest dropped, #2718)."""
+    from ops import OpContext
+    from ops.plugins import update_bundle
+
+    from graph.plugins import installer
+    from graph.plugins.loader import purge_plugin_modules
+
+    if installer.bundle_entry(plugin_id) is not None:
+        try:
+            res = await update_bundle(
+                plugin_id,
+                by="devkit",
+                allow=_config_allowlist(),
+                ctx=OpContext.from_state(),
+                apply_settings=_ops_applier(),
+            )
+        except installer.InstallError as exc:
+            return f"✗ update failed: {exc}"
+        inst = res.install
+        lines = [f"✓ updated bundle {plugin_id} — {len(inst.installed_ids)} member(s) re-pinned"]
+        if res.removed_members:
+            lines.append(f"  retired (dropped from the manifest): {', '.join(res.removed_members)}")
+        for pid, err in (inst.load_errors or {}).items():
+            lines.append(f"  ✗ {pid} FAILED to load: {err}")
+        if res.retire_error:
+            lines.append(f"  ⚠ {res.retire_error}")
+        return "\n".join(lines)
+
+    entry = next((e for e in installer.list_installed() if e.get("id") == plugin_id), None)
+    if entry is None:
+        return f"✗ {plugin_id!r} is not an installed plugin or bundle (see plugins.lock)"
+    ref = entry.get("requested_ref", "") or None
+    if ref and installer.is_release_tag(ref):
+        try:
+            status = await asyncio.to_thread(installer.check_plugin_update, entry)
+            ref = status.get("latest_ref") or ref
+        except Exception:  # noqa: BLE001 — best-effort; fall back to the recorded ref
+            pass
+    try:
+        summary = await asyncio.to_thread(
+            installer.install, entry.get("source_url", ""), ref, force=True, by="devkit", allow=_config_allowlist()
+        )
+    except installer.InstallError as exc:
+        return f"✗ update failed: {exc}"
+    purge_plugin_modules(plugin_id)
+    ok, detail = await asyncio.to_thread(_live_apply, None)  # pure reload picks the fresh code up
+    tail = "reloaded live" if ok else f"reload: {detail} — restart to pick it up"
+    return f"✓ updated {plugin_id} @ {str(summary.get('resolved_sha', ''))[:10]} — {tail}"
+
+
+@tool
+async def disable_plugin(plugin_id: str) -> str:
+    """Turn a plugin OFF live (moves it to ``plugins.disabled`` + hot-reload) — its
+    tools and views leave the running agent; the code stays installed. The inverse of
+    ``enable_plugin``. Use ``uninstall_plugin`` to remove the code too."""
+    from runtime.state import STATE
+
+    cfg = getattr(STATE, "graph_config", None)
+    enabled = [p for p in (getattr(cfg, "plugins_enabled", []) or []) if p != plugin_id]
+    disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != plugin_id] + [plugin_id]
+    ok, detail = await asyncio.to_thread(_live_apply, {"plugins": {"enabled": enabled, "disabled": disabled}})
+    return f"✓ {plugin_id} disabled — {detail}" if ok else f"✗ disable failed: {detail}"
+
+
+@tool
+async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
+    """Remove an installed plugin — or a whole BUNDLE by its id — live: code + lock +
+    enabled ref go, modules purge, and the running agent reloads so its tools/routes
+    actually leave (the CLI can't do that half, #2717). ``purge=True`` also removes
+    its config section + secrets."""
+    from graph.plugins import installer
+    from graph.plugins.loader import purge_plugin_modules
+
+    if installer.bundle_entry(plugin_id) is not None:
+        try:
+            rep = await asyncio.to_thread(installer.uninstall_bundle, plugin_id, purge=purge)
+        except installer.InstallError as exc:
+            return f"✗ uninstall failed: {exc}"
+        for pid in rep.get("removed_members") or []:
+            purge_plugin_modules(pid)
+        ok, detail = await asyncio.to_thread(_live_apply, None)
+        kept = f"; kept (shared): {', '.join(rep['kept'])}" if rep.get("kept") else ""
+        return f"✓ uninstalled bundle {plugin_id} — removed {', '.join(rep['removed_members']) or 'nothing'}{kept} ({detail if ok else 'reload failed: ' + detail})"
+
+    try:
+        await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
+    except installer.InstallError as exc:
+        return f"✗ uninstall failed: {exc}"
+    purge_plugin_modules(plugin_id)
+    ok, detail = await asyncio.to_thread(_live_apply, None)
+    return f"✓ uninstalled {plugin_id} ({detail if ok else 'reload failed: ' + detail})"
+
+
+@tool
+async def verify_bundle(url: str) -> str:
+    """READ-ONLY sanity check of a bundle repo before installing it: fetches to a
+    throwaway dir (never touches plugins.lock or the live config), lists members +
+    each member's manifest identity, the MCP servers/secrets it would seed, and flags
+    archetype-block problems. The full install→load→view probe is the bundle repo's
+    own verify CI (ADR 0049), not this tool."""
+    from ops.plugins import peek_bundle
+
+    from graph.plugins import installer
+    from graph.plugins.installer import _ARCHETYPE_KEYS
+
+    try:
+        peek = await peek_bundle(url)
+    except installer.InstallError as exc:
+        return f"✗ verify failed: {exc}"
+    if peek.get("kind") != "bundle":
+        return f"✗ {url} is not a bundle repo (no protoagent.bundle.yaml — kind: {peek.get('kind')})"
+    lines = [f"✓ bundle {peek.get('id')} — {peek.get('name') or 'unnamed'}"]
+    for m in peek.get("members") or []:
+        mid = m.get("id") or "?"
+        tag = "builtin" if m.get("builtin") else (m.get("ref") or "HEAD")
+        problem = f"  ⚠ {m['error']}" if m.get("error") else ""
+        lines.append(f"  member {mid} ({tag}){problem}")
+    if peek.get("mcp"):
+        names = [str((i.get("template") or {}).get("name") or "?") for i in peek["mcp"]]
+        lines.append(f"  seeds MCP: {', '.join(names)}")
+    if peek.get("secrets"):
+        lines.append(f"  declares secrets: {', '.join(str(s.get('key')) for s in peek['secrets'])}")
+    arch = peek.get("archetype") or {}
+    unknown = sorted(set(arch) - _ARCHETYPE_KEYS) if arch else []
+    if unknown:
+        lines.append(f"  ⚠ archetype: unknown key(s): {', '.join(unknown)} — known: {', '.join(sorted(_ARCHETYPE_KEYS))}")
+    if arch and not arch.get("label"):
+        lines.append("  ⚠ archetype: no label — the block won't register in the new-agent picker")
+    return "\n".join(lines)
+
+
 @tool
 async def reload_plugins() -> str:
     """Hot-reload all enabled plugins — re-exec their code (every file, not just
@@ -1039,6 +1266,10 @@ def _build_guide_router():
                 (a load failure reports WITH its traceback)</li>
             <li><code>enable_plugin</code> — turn on a plugin that's on disk but off</li>
             <li><code>scaffold_bundle</code> — a <code>protoagent.bundle.yaml</code> bundle manifest (ADR 0040)</li>
+            <li><code>install_plugin</code> / <code>update_plugin</code> / <code>disable_plugin</code> /
+                <code>uninstall_plugin</code> — the whole lifecycle, live (installing runs code —
+                trust-by-default, the source allowlist applies)</li>
+            <li><code>verify_bundle</code> — read-only pre-install peek of a bundle repo</li>
           </ul>
           <h2>Also contributes</h2>
           <ul>
@@ -1087,6 +1318,14 @@ def register(registry) -> None:
     registry.register_tool(_build_register_project_tool(registry.config))  # graduate to a managed project (ADR 0096 D6)
     registry.register_tool(enable_plugin)  # turn on an on-disk plugin live
     registry.register_tool(reload_plugins)  # pick up edits live
+    # Lifecycle tools (#2719) — the devkit now covers the WHOLE lifecycle, not just
+    # authoring: install/update/disable/uninstall route through the same ops/installer
+    # layers the console uses (load failures surface, teardown is live).
+    registry.register_tool(install_plugin)
+    registry.register_tool(update_plugin)
+    registry.register_tool(disable_plugin)
+    registry.register_tool(uninstall_plugin)
+    registry.register_tool(verify_bundle)  # read-only pre-install sanity check
     registry.register_subagent(_plugin_architect())  # a subagent
     # PUBLIC /plugins/plugin-devkit (ADR 0026) — the console iframes /guide, and an
     # iframe page-load can't carry a bearer, so the page route must NOT be gated.
