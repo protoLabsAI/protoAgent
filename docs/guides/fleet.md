@@ -9,7 +9,8 @@ primitives:
 |---|---|---|
 | **Workspace** | a named agent — its own config, secrets, plugins, scoped data, port | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Bundle** | a curated, pinned set of plugins installed as one | [0040](../adr/0040-plugin-bundles.md) |
-| **Archetype** | a starter *agent type* in the new-agent picker — the built-in **Basic**/**Custom** (from a data-driven catalog) plus any installed bundle that declares one | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| **Stack** | a *published* bundle repo that ships an archetype (`cowork-stack`, `social-stack`, …) — product naming for the starter catalog; the mechanism is always "bundle" | [0040](../adr/0040-plugin-bundles.md) / [0100](../adr/0100-agent-archetypes.md) |
+| **Archetype** | a starter *agent type* in the new-agent picker — the shipped catalog plus any installed bundle that declares one | [0100](../adr/0100-agent-archetypes.md) |
 | **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
@@ -72,21 +73,38 @@ archetype:
   label: Product Manager
   icon: Compass
   blurb: Researches, strategizes, and specs products from evidence — renders roadmaps and personas inline.
+  # optional persona: inline markdown, or a host preset stem under config/soul-presets/
+  # (unknown preset → warns + the picker falls back to the base persona)
+  soul_preset: project-manager
+  # optional picker placement: "standard" (default, inline card) or "advanced"
+  # (collapsed under the picker's "Advanced (N)" toggle)
+  tier: advanced
   # optional: host capabilities the archetype needs to be USEFUL — the picker warns at
   # choose-time when one isn't provisioned (e.g. cowork's document skills route through
   # execute_code, which on the desktop app needs the managed Python runtime, ADR 0094)
   requires: [python_runtime]
+  # optional capability contract (#2277): tool names the persona commits to using —
+  # persisted to the created agent's workspace.yaml, checked against its bound
+  # toolset at boot (advisory warning, never a gate)
+  requires_tools: [github_create_issue]
 ```
+
+Unknown keys in the block warn at install time; the full annotated field set lives in
+`examples/bundles/template/protoagent.bundle.yaml`.
 
 The picker draws from **two** sources:
 
 - **The archetype catalog** — `config/archetype-catalog.json`, served by `GET /api/archetypes`.
-  It ships the two code-free personas — **Basic** (the bare loop + tools, no plugins) and
-  **Custom** (write-your-own SOUL) — and is **data-driven**: add or remove archetypes by
-  editing the JSON, no code change. A fork or instance overrides it by dropping its own
-  `archetype-catalog.json` in the live config dir (same rule as `plugin-catalog.json`). Each
-  entry names a `soul_preset` (a file under `config/soul-presets/`) or an inline `soul` for the
-  base persona.
+  The shipped catalog carries the starter set (2026-08: Basic, Cowork, Social Marketing,
+  Project Manager, Design System, Custom — the two code-free personas are Basic and
+  Custom; the rest reference published stacks) and is **data-driven**: add or remove
+  archetypes by editing the JSON, no code change. A fork or instance overrides it by
+  dropping its own `archetype-catalog.json` in the live config dir (same rule as
+  `plugin-catalog.json`); if the file is missing entirely, a hardcoded Basic + Custom
+  fallback keeps the picker from rendering empty. Each entry names a `soul_preset` (a
+  file under `config/soul-presets/`) or an inline `soul` for the base persona.
+  `GET /api/archetypes/{id}/preview` peeks a bundle archetype's members/MCP
+  servers/secrets before anything installs.
 - **Installed bundles** — any bundle whose manifest carries an `archetype:` block
   **self-registers** on top of the catalog (deduped by id + bundle URL). Install the bundle
   and its starter type appears in the picker for free — no catalog edit needed.

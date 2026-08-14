@@ -133,7 +133,8 @@ def run_plugin_cli(argv: list[str]) -> int:
             print(f"  wrote: {', '.join(res.made)}")
             if not members:
                 print("  fill in the REPLACE_ME member(s), then:")
-            print("  commit/push it, then `plugin install <repo-url>` to install + enable the stack (ADR 0040).")
+            # NB: CLI install is fetch-only (never enables) — don't promise otherwise here.
+            print("  commit/push it, then `plugin install <repo-url>` to install the bundle (ADR 0040).")
             return 0
         if args.cmd == "install":
             s = installer.install(args.url, args.ref, force=args.force, allow=installer.configured_allowlist())
@@ -152,7 +153,7 @@ def run_plugin_cli(argv: list[str]) -> int:
                     )
                 if s["enabled"]:
                     print(
-                        f"  NOT enabled. To turn on the stack, set plugins.enabled to include: "
+                        f"  NOT enabled. To turn on the bundle's plugins, set plugins.enabled to include: "
                         f"[{', '.join(s['enabled'])}], then restart."
                     )
                 if s["config"]:

@@ -90,18 +90,18 @@ stay at their locked SHAs forever.
 
 **The update button skips SHA-pinned plugins — by design.**
 `check_plugin_update` treats `requested_ref` matching `_SHA_RE` as **pinned** and
-returns immediately with `behind: False` (`installer.py:433,439-442`). Intent:
-"pinned = intentional, never auto-updates" (`docs/guides/plugin-registry.md:50-52`).
-The trap: a *bundle* can pin you there without you choosing it.
+returns immediately with `behind: False` (`installer.py::check_plugin_update`). Intent:
+"pinned = intentional, never auto-updates" (`docs/guides/plugin-registry.md`, pin
+lifecycle section). The trap: a *bundle* can pin you there without you choosing it.
 
 **Bundles pin their sub-plugins through that same path, and there's no
-bundle-level re-pin.** `_install_bundle` installs each member with the manifest's
-`ref` straight through (`installer.py:256-257`) → each sub-plugin gets a normal
-`plugins.lock` entry with `requested_ref = <bundle's pin>`. `pm-stack` is fetched at
-HEAD on agent-create (`operator_api/fleet_routes.py:214-218`) **but its sub-plugin
-refs come from whatever that manifest pins** — so latest-bundle ≠ latest-sub-plugins.
-`check_updates()`/`POST /update` only ever read `lock["plugins"]`; the
-`lock["bundles"]` provenance (`installer.py:259-269`) is never re-resolved. **A
+bundle-level re-pin.** `installer.py::_install_bundle` installs each member with the
+manifest's `ref` straight through → each sub-plugin gets a normal `plugins.lock`
+entry with `requested_ref = <bundle's pin>`. A stack repo is fetched at HEAD on
+agent-create (`manager.create(bundle=…)`) **but its sub-plugin refs come from
+whatever that manifest pins** — so latest-bundle ≠ latest-sub-plugins.
+`check_updates()`/`sync()`/`POST /update` only ever read `lock["plugins"]`; the
+`lock["bundles"]` provenance row is never re-resolved (tracked as #2718). **A
 bundle that pinned a sub-plugin to a SHA produces a plugin the UI can never advance.**
 
 **The only core↔plugin compat check is one-directional.** A manifest's

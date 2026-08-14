@@ -64,6 +64,15 @@ mcp:
     inputs:
       - { key: token, env: GITHUB_MCP_TOKEN, required: true, secret: true }
 
+# Standalone secrets the bundle's plugins need (#2041) — same input shape as an
+# mcp-catalog row. Cached in plugins.lock so the create/install surfaces (fleet
+# new-agent Configure step, setup wizard, POST /api/plugins/install) can prompt for
+# each and write it to the agent's secrets.yaml (0600, merge-not-clobber). A value the
+# operator skips falls back to the environment. Omit if your plugins declare their
+# secrets in their own manifests and need nothing bundle-level.
+secrets:
+  - { key: acme_api_key, label: "Acme API key", placeholder: "ak-…", secret: true, required: false }
+
 # Agent archetype (ADR 0042) — presents this bundle as a starter "agent type" in the
 # new-agent picker. Additive metadata; it doesn't change the bundle shape. Unknown
 # keys warn at install (#2715) — the full set is below.

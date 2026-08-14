@@ -123,7 +123,8 @@ record.
 | POST | `/api/fleet/{name}/{start,stop,activate}` · `/api/fleet/down` | Lifecycle control |
 | GET | `/api/fleet/discover` | Discover agents (LAN mDNS + tailnet) |
 | POST · DELETE | `/api/fleet/remotes[/{ident}]` | Register / remove a remote member |
-| GET | `/api/archetypes` | Starter agent types (bundles + Basic) |
+| GET | `/api/archetypes` | Starter agent types (catalog + installed bundles) |
+| GET | `/api/archetypes/{id}/preview` | Peek a bundle archetype's members/MCP/secrets before install |
 
 ## Plugins & MCP
 

@@ -314,7 +314,7 @@ def _build_scaffold_bundle_tool(config: dict | None):
         REPLACE_ME template. ``enabled`` defaults to every member.
 
         A bundle is a reference manifest (no code) — it's not enabled live like a
-        plugin. Commit/push it, then install the whole stack with
+        plugin. Commit/push it, then install the whole bundle with
         ``plugin install <bundle-repo-url>``.
         """
         try:
@@ -332,7 +332,7 @@ def _build_scaffold_bundle_tool(config: dict | None):
             f"✓ scaffolded bundle {res.id!r} at {res.path}\n"
             f"  wrote: {', '.join(res.made)}\n"
             f"  next: fill in the member plugins (git url + ref, or builtin: true), then commit/push it\n"
-            f"        and install the stack: `plugin install <this-repo-url>` (ADR 0040)."
+            f"        and install the bundle: `plugin install <this-repo-url>` (ADR 0040)."
         )
 
     return scaffold_bundle
@@ -1038,7 +1038,7 @@ def _build_guide_router():
             <li><code>reload_plugins</code> — re-exec every plugin file; edits go live next turn
                 (a load failure reports WITH its traceback)</li>
             <li><code>enable_plugin</code> — turn on a plugin that's on disk but off</li>
-            <li><code>scaffold_bundle</code> — a <code>protoagent.bundle.yaml</code> stack (ADR 0040)</li>
+            <li><code>scaffold_bundle</code> — a <code>protoagent.bundle.yaml</code> bundle manifest (ADR 0040)</li>
           </ul>
           <h2>Also contributes</h2>
           <ul>

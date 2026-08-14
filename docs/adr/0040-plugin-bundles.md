@@ -1,8 +1,17 @@
 # 0040 — Plugin bundles (install a curated set of plugins as one)
 
 - Status: Accepted
-- Date: 2026-06-09
+- Date: 2026-06-09 (amended 2026-08-14 — manifest fields + install-time seeding grew
+  through July: `mcp:`/`secrets:` (#2011/#2041/#2118), `archetype:` (ADR 0042/0100,
+  #2715), `verified_against` (ADR 0049); the console/ops install path now enables and
+  seeds by default, superseding the original suggestions-only claim — see the amendment
+  note in Decision.)
 - Builds on: ADR 0027 (git-installable plugins — `plugin install <url>` + `plugins.lock` + `sync`).
+
+> **Terminology.** A *bundle* is the mechanism this ADR defines. A **stack** is a
+> *published* bundle repo that ships an `archetype:` block (`cowork-stack`,
+> `social-stack`, …) — product naming for the starter catalog (ADR 0100). Code, API,
+> and UI say `bundle`.
 
 ## Context
 
@@ -35,6 +44,13 @@ plugins:
 enabled: [delegates, project_board, agent_browser]
 config:
   agent_browser: { panel_mode: full }
+# Fields added after this ADR's first writing (full worked example:
+# examples/bundles/template/protoagent.bundle.yaml):
+#   verified_against: <core version the pins were last verified on>   # ADR 0049
+#   mcp:      [{ template, inputs }]      # MCP servers to seed (#2011, ADR 0083 D5)
+#   secrets:  [{ key, label, … }]         # declared secrets to prompt for/seed (#2041)
+#   archetype: { label, icon, blurb, soul/soul_preset, tier, requires, requires_tools }
+#                                         # starter-type self-registration (ADR 0100)
 ```
 
 `plugin install <bundle-url>` detects the bundle manifest and **fans out to per-plugin `install()`**
@@ -44,9 +60,18 @@ a `bundles:` section of the lock for traceability + reproducible re-install. `bu
 are skipped (they ship with the host). `plugin sync` already re-clones the locked set, so bundle
 members re-sync for free — no bundle-specific sync path.
 
-Crucially, **install ≠ enable ≠ trust still holds** (ADR 0027): a bundle install only puts code on
-disk and pins it. The `enabled` list and `config` are *returned as suggestions* (printed by the CLI),
-never written to the live config — turning the stack on remains the operator's explicit decision.
+**Amendment (2026-08): install ≠ enable ≠ trust now holds on the CLI only.** As first
+written, the `enabled` list and `config` were *returned as suggestions*, never written to
+the live config. Three paths have since deliberately moved to enable-and-seed — installing
+there IS the consent (ADR 0071's trust-by-default posture):
+
+- **console/ops** (`POST /api/plugins/install` → `ops.plugins.install_and_activate`):
+  enables the bundle's curated set, seeds `config:` as defaults (operator values never
+  clobbered, #1350), seeds `mcp:` servers + supplied `secrets:` (#2118), hot-reloads.
+- **workspace create** (`manager.create(bundle=…)`): same seeding into the new agent,
+  atomic (full rollback on failure).
+- **CLI `plugin install`** remains fetch-only — suggestions printed, nothing enabled —
+  the strict-mode escape is `PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1` on the console path.
 
 ## Consequences
 
@@ -56,8 +81,9 @@ never written to the live config — turning the stack on remains the operator's
   share, one ref to bump when the combo is re-validated.
 - **Lock is still the source of truth** — members appear in `plugins.lock` like any plugin; the
   `bundles:` entry is additive provenance. Existing `list`/`sync`/`uninstall` are unaffected.
-- **Trust boundary unchanged** — no auto-enable, no auto-config, no auto-dep-install. A bundle can't
-  silently turn anything on.
+- **Trust boundary** — *(2026-08)* the console/ops and workspace-create paths auto-enable
+  and seed (installing is the consent, ADR 0071); the CLI stays fetch-only. Deps are
+  never auto-installed anywhere.
 - Minor: a bundle install is non-atomic across members (if member 3 fails, members 1–2 are already
   installed). Acceptable — they're independently pinned and a re-run with `--force` is idempotent.
 
