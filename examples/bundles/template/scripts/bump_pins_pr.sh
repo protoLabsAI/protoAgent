@@ -62,7 +62,16 @@ BODY
     gh pr edit "$number" --body-file "$SCRATCH/pr_body.md"
   else
     gh pr create --title "chore: bump plugin pins to latest release tags" --body-file "$SCRATCH/pr_body.md"
-    number="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number')"
+    number="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')"
+    if [ -z "$number" ]; then
+      # gh pr list is eventually consistent — a create can return before a
+      # follow-up list sees the new PR. Fail loudly rather than emit
+      # number=null: flag-approval would run `gh pr edit null`/`gh pr comment
+      # null` on it, corrupting the approval-stall signal for a PR that DID
+      # get created, just not read back successfully.
+      echo "::error::opened a pin-bump PR for $branch but could not read its number back" >&2
+      exit 1
+    fi
     echo "opened pin-bump PR #$number"
   fi
   emit number "$number"

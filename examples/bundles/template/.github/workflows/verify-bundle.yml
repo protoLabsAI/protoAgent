@@ -63,7 +63,7 @@ jobs:
       - name: Check tag-pinned members for newer releases
         id: check
         run: |
-          python3 scripts/check_bundle_updates.py protoagent.bundle.yaml | tee /tmp/bumps.txt
+          python3 scripts/check_bundle_updates.py protoagent.bundle.yaml | tee "${BUMP_PINS_SCRATCH_DIR:-/tmp}/bumps.txt"
           echo "changed=$(git diff --quiet && echo false || echo true)" >> "$GITHUB_OUTPUT"
 
       # ONE candidate per stack (#2645): a stable branch name means a later

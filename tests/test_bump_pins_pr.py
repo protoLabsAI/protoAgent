@@ -146,7 +146,8 @@ def test_open_or_update_force_pushes_the_stable_branch(repo: Path, gh_state: Pat
     # FRESH clone from the same origin, matching real CI: `actions/checkout@v4` re-clones
     # at the start of every job, so `bump-pins` never already exists in the LOCAL working
     # tree the way it would if this test reused one directory across both invocations.
-    _run(repo, gh_state, "open-or-update", pr_list_queue=["", "1"])
+    first = _run(repo, gh_state, "open-or-update", pr_list_queue=["", "1"])
+    assert first.returncode == 0, first.stderr
 
     origin = repo.parent / "origin.git"
     second_clone = repo.parent / "work2"
@@ -237,7 +238,7 @@ def test_flag_approval_filters_run_list_on_the_exact_commit_sha(repo: Path, gh_s
     # The fake doesn't parse --commit itself (it just returns the scripted response
     # regardless of args), but this pins the CALL SHAPE: a regression that drops the
     # --commit filter (the #2645 fix for a stale-run false-positive) breaks this assertion.
-    _run(
+    result = _run(
         repo,
         gh_state,
         "flag-approval",
@@ -246,13 +247,14 @@ def test_flag_approval_filters_run_list_on_the_exact_commit_sha(repo: Path, gh_s
         "cafef00d",
         run_list_response=[{"status": "completed", "conclusion": "success", "url": ""}],
     )
+    assert result.returncode == 0, result.stderr
     calls = _calls(gh_state)
     assert any("--commit cafef00d" in c for c in calls)
     assert any("--branch bump-pins" in c for c in calls)
 
 
 def test_flag_approval_defaults_to_verify_bundle_workflow(repo: Path, gh_state: Path) -> None:
-    _run(
+    result = _run(
         repo,
         gh_state,
         "flag-approval",
@@ -261,6 +263,7 @@ def test_flag_approval_defaults_to_verify_bundle_workflow(repo: Path, gh_state: 
         "cafef00d",
         run_list_response=[{"status": "completed", "conclusion": "success", "url": ""}],
     )
+    assert result.returncode == 0, result.stderr
     calls = _calls(gh_state)
     assert any("--workflow verify-bundle.yml" in c for c in calls)
 
@@ -269,7 +272,7 @@ def test_flag_approval_respects_a_different_workflow_filename(repo: Path, gh_sta
     # product-stack's pin-bump job lives in ci.yml, not verify-bundle.yml (#2669) — the
     # poll must search the workflow THIS repo actually runs, or it always reports the
     # "run never showed up" false-negative regardless of what actually happened.
-    _run(
+    result = _run(
         repo,
         gh_state,
         "flag-approval",
@@ -279,6 +282,41 @@ def test_flag_approval_respects_a_different_workflow_filename(repo: Path, gh_sta
         run_list_response=[{"status": "completed", "conclusion": "success", "url": ""}],
         extra_env={"BUMP_PINS_WORKFLOW_FILE": "ci.yml"},
     )
+    assert result.returncode == 0, result.stderr
     calls = _calls(gh_state)
     assert any("--workflow ci.yml" in c for c in calls)
     assert not any("--workflow verify-bundle.yml" in c for c in calls)
+
+
+def test_open_or_update_writes_outputs_to_github_output_file(repo: Path, gh_state: Path, tmp_path: Path) -> None:
+    # emit() has two branches: stdout (what every other test above reads) and appending
+    # to $GITHUB_OUTPUT — the branch the real workflow actually depends on
+    # (steps.pr.outputs.number/branch/sha). _run() strips GITHUB_OUTPUT from the test
+    # environment by default so tests don't clobber the real one if run under `act` or
+    # similar; this test opts back in explicitly to cover that path.
+    output_file = tmp_path / "github_output"
+    output_file.write_text("")
+    result = _run(
+        repo,
+        gh_state,
+        "open-or-update",
+        pr_list_queue=["", "42"],
+        extra_env={"GITHUB_OUTPUT": str(output_file)},
+    )
+    assert result.returncode == 0, result.stderr
+    out = output_file.read_text()
+    assert "number=42" in out
+    assert "branch=bump-pins" in out
+    assert "sha=" in out
+
+
+def test_open_or_update_fails_fast_when_gh_pr_list_lags_behind_the_create(repo: Path, gh_state: Path) -> None:
+    # gh pr list is eventually consistent: a `gh pr create` can return success before a
+    # follow-up `gh pr list` sees the new PR. The script must fail loudly here rather than
+    # emit `number=` (empty) — a downstream `flag-approval` call with an empty PR number
+    # would silently no-op instead of flagging the real approval-required stall.
+    result = _run(repo, gh_state, "open-or-update", pr_list_queue=["", ""])
+    assert result.returncode == 1
+    assert "could not read its number back" in result.stdout + result.stderr
+    calls = _calls(gh_state)
+    assert any(c.startswith("pr create") for c in calls)
