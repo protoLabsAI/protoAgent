@@ -174,6 +174,92 @@ def test_summary_by_model_percentiles_respect_since_filter(store):
     assert models["claude-opus-4-8"]["p50_duration_ms"] == 1000
 
 
+def test_summary_by_tool(store):
+    # #2697 — per-tool p50/p95/p99 duration, aggregated from the same per-turn
+    # tool_durations JSON blob already durably recorded (no new capture seam).
+    import json
+
+    store.record(_row("t1", tool_durations=json.dumps({"web_search": [800, 2200]})))
+    store.record(_row("t2", tool_durations=json.dumps({"web_search": [3000], "calculator": [20]})))
+    s = store.summary()
+    tools = {t["tool"]: t for t in s["by_tool"]}
+    assert tools["web_search"]["calls"] == 3
+    assert tools["web_search"]["p50_duration_ms"] in (800, 2200, 3000)
+    assert tools["web_search"]["p95_duration_ms"] == 3000
+    assert tools["calculator"]["calls"] == 1
+    assert tools["calculator"]["p50_duration_ms"] == 20
+    # sorted p95 descending — slowest tool first
+    assert s["by_tool"][0]["tool"] == "web_search"
+
+
+def test_summary_by_tool_skips_turns_with_no_tool_durations(store):
+    # A turn with tool_durations NULL/empty (an older row, or a turn whose only
+    # tool_end producer doesn't stamp a duration) contributes nothing — not an
+    # error, not a phantom zero-duration sample.
+    import json
+
+    store.record(_row("t1", tool_durations=None))
+    store.record(_row("t2", tool_durations=""))
+    store.record(_row("t3", tool_durations=json.dumps({"web_search": [500]})))
+    s = store.summary()
+    assert len(s["by_tool"]) == 1
+    assert s["by_tool"][0]["tool"] == "web_search"
+    assert s["by_tool"][0]["calls"] == 1
+
+
+def test_summary_by_tool_ignores_malformed_json(store):
+    store.record(_row("t1", tool_durations="not json"))
+    store.record(_row("t2", tool_durations="[1, 2, 3]"))  # valid JSON, wrong shape (not a dict)
+    s = store.summary()
+    assert s["by_tool"] == []
+
+
+def test_summary_by_tool_respects_since_filter(store):
+    import json
+
+    store.record(
+        _row(
+            "old",
+            tool_durations=json.dumps({"web_search": [9000]}),
+            ended_at="2026-05-01T00:00:00+00:00",
+        )
+    )
+    store.record(
+        _row(
+            "new",
+            tool_durations=json.dumps({"web_search": [1000]}),
+            ended_at="2026-06-01T00:00:00+00:00",
+        )
+    )
+    s = store.summary(since_iso="2026-05-15T00:00:00+00:00")
+    tools = {t["tool"]: t for t in s["by_tool"]}
+    assert tools["web_search"]["calls"] == 1
+    assert tools["web_search"]["p50_duration_ms"] == 1000
+
+
+def test_tool_durations_migrates_onto_an_older_db(tmp_path):
+    # A store created before tool_durations existed gets the column via the
+    # guarded ALTER on open, so a tool_durations row then round-trips.
+    import json
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    cols = (
+        "task_id TEXT PRIMARY KEY, session_id TEXT, state TEXT, success INTEGER, model TEXT, "
+        "models TEXT, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, "
+        "cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, cost_usd REAL, "
+        "duration_ms INTEGER, llm_calls INTEGER, tool_calls INTEGER, created_at TEXT, ended_at TEXT"
+    )
+    db = sqlite3.connect(path)
+    db.execute(f"CREATE TABLE turns ({cols})")
+    db.commit()
+    db.close()
+
+    store = TelemetryStore(path)  # _init_db runs the guarded ALTER
+    store.record(_row("t1", tool_durations=json.dumps({"web_search": [500]})))
+    assert store.recent()[0]["tool_durations"] == json.dumps({"web_search": [500]})
+
+
 def test_summary_since_filter(store):
     store.record(_row("old", ended_at="2026-05-01T00:00:00+00:00"))
     store.record(_row("new", ended_at="2026-06-01T00:00:00+00:00"))
@@ -188,6 +274,7 @@ def test_summary_empty(store):
     assert s["success_rate"] == 0.0
     assert s["cache_hit_ratio"] == 0.0
     assert s["by_model"] == []
+    assert s["by_tool"] == []
 
 
 def test_prune(store):
@@ -321,6 +408,91 @@ def test_record_telemetry_uses_actual_models(store, telemetry_server):
     row = store.recent()[0]
     assert row["model"] == "protolabs/reasoning"  # primary = first actual
     assert row["models"] == "protolabs/reasoning,claude-haiku-4-5"
+
+
+def test_record_telemetry_writes_tool_durations(store, telemetry_server):
+    """#2697 — TurnOutcome.tool_durations round-trips as a JSON TEXT column,
+    the tool_durations sibling of the models test above."""
+    import json
+
+    server = telemetry_server
+    server._record_a2a_telemetry(
+        _outcome(
+            task_id="task-tools",
+            context_id="s",
+            state="completed",
+            text="hi",
+            usage={"input_tokens": 100, "output_tokens": 10},
+            cost_usd=0.001,
+            duration_ms=1000,
+            models=["claude-opus-4-8"],
+            tool_durations={"web_search": [800, 2200], "calculator": [20]},
+        )
+    )
+    row = store.recent()[0]
+    assert json.loads(row["tool_durations"]) == {"web_search": [800, 2200], "calculator": [20]}
+
+
+def test_record_telemetry_omits_tool_durations_when_empty(store, telemetry_server):
+    # An empty dict (no duration-carrying tool_end this turn) stores NULL, not
+    # "{}" — keeps the by-tool aggregation's `if not raw: continue` skip working
+    # without special-casing the empty-object string.
+    server = telemetry_server
+    server._record_a2a_telemetry(
+        _outcome(
+            task_id="task-no-tools",
+            context_id="s",
+            state="completed",
+            text="hi",
+            usage={"input_tokens": 100, "output_tokens": 10},
+            cost_usd=0.001,
+            duration_ms=1000,
+        )
+    )
+    row = store.recent()[0]
+    assert row["tool_durations"] is None
+
+
+def test_executor_accumulates_tool_durations():
+    """#2697 — the executor collects tool_end frames carrying duration_ms into
+    TurnOutcome.tool_durations, keyed by tool name, mirroring the models
+    accumulation test above."""
+    import asyncio
+
+    from a2a.server.context import ServerCallContext
+    from a2a.server.agent_execution import RequestContext
+    from a2a.server.events.event_queue import EventQueueLegacy as EventQueue
+    from a2a.types import Message, Part, Role, SendMessageRequest
+
+    from a2a_impl.executor import ProtoAgentExecutor, set_terminal_hook
+
+    captured = []
+    set_terminal_hook(captured.append)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_start", {"id": "1", "name": "web_search"})
+        yield ("tool_end", {"id": "1", "name": "web_search", "output": "x", "duration_ms": 800})
+        yield ("tool_start", {"id": "2", "name": "web_search"})
+        yield ("tool_end", {"id": "2", "name": "web_search", "output": "x", "duration_ms": 2200})
+        yield ("tool_start", {"id": "3", "name": "calculator"})
+        yield ("tool_end", {"id": "3", "name": "calculator", "output": "4", "duration_ms": 20})
+        # An unmeasured tool_end (no run_id at start, per on_tool_start's fallback) —
+        # duration_ms == 0 must be excluded, not counted as a real sub-ms sample.
+        yield ("tool_end", {"id": "4", "name": "calculator", "output": "0", "duration_ms": 0})
+        yield ("done", "ok")
+
+    async def run():
+        q = EventQueue()
+        req = SendMessageRequest(message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="hi")]))
+        ctx = RequestContext(call_context=ServerCallContext(), request=req, task_id="t", context_id="c")
+        await ProtoAgentExecutor(stream).execute(ctx, q)
+
+    try:
+        asyncio.run(run())
+    finally:
+        set_terminal_hook(None)
+
+    assert captured[0].tool_durations == {"web_search": [800, 2200], "calculator": [20]}
 
 
 def test_executor_accumulates_distinct_models_in_first_seen_order():

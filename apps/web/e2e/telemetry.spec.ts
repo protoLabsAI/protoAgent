@@ -21,9 +21,11 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   await expect(surface.getByText("Cache hit")).toBeVisible();
   await expect(surface.getByText("60%", { exact: true })).toBeVisible(); // cache-hit card
 
-  // Per-model + recent-turns tables.
+  // Per-model + per-tool (#2697) + recent-turns tables.
   await expect(surface.getByText("By model")).toBeVisible();
   await expect(surface.getByText("claude-opus-4-8").first()).toBeVisible();
+  await expect(surface.getByText("By tool")).toBeVisible();
+  await expect(surface.getByText("web_search")).toBeVisible();
   await expect(surface.getByText("Recent turns")).toBeVisible();
   // The failed turn renders its state pill.
   await expect(surface.getByText("failed")).toBeVisible();

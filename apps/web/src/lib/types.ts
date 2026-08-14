@@ -922,6 +922,20 @@ export type TelemetryByModelRow = {
   p99_duration_ms: number;
 };
 
+// One row of TelemetrySummary.by_tool (#2697) — per-tool p50/p95/p99 EXECUTION
+// duration (on_tool_start→on_tool_end in the turn loop), not the whole-turn
+// figures. `calls` is the number of duration samples aggregated, which can be
+// less than the turn-level `tool_calls` total when a call didn't carry a
+// duration (an older row, or a tool_end producer that doesn't stamp one).
+// Sorted by p95 descending server-side — slowest tools lead.
+export type TelemetryByToolRow = {
+  tool: string;
+  calls: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  p99_duration_ms: number;
+};
+
 export type TelemetrySummary = {
   turns: number;
   input_tokens: number;
@@ -939,6 +953,7 @@ export type TelemetrySummary = {
   success_rate: number;
   cache_hit_ratio: number;
   by_model: TelemetryByModelRow[];
+  by_tool: TelemetryByToolRow[];
 };
 
 export type TelemetryTurn = {

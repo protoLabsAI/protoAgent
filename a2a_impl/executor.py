@@ -135,6 +135,12 @@ class TurnOutcome:
     llm_calls: int = 0
     tool_calls: int = 0
     models: list[str] = field(default_factory=list)
+    # Per-tool execution durations, tool name → list of durations in ms across this
+    # turn's calls (#2697) — one turn can call the same tool more than once, and
+    # distinct tools too. Empty when the stream's tool_end frames carried no
+    # duration_ms (an older/alternate producer, e.g. a workflow yield) — those calls
+    # still count toward `tool_calls` above, just not toward this durable breakdown.
+    tool_durations: dict[str, list[int]] = field(default_factory=dict)
     # Provenance (ADR 0022) — what triggered this turn, from the inbound A2A
     # message metadata. ``origin`` ∈ scheduler|inbox|webhook|a2a|"" (empty = a
     # live/operator turn); ``trigger`` is a human label (job id / inbox source);
@@ -370,6 +376,7 @@ class ProtoAgentExecutor(AgentExecutor):
         llm_calls = 0
         tool_calls = 0
         models: list[str] = []
+        tool_durations: dict[str, list[int]] = {}  # tool name → durations this turn, ms (#2697)
 
         # Live answer streaming: forward each text delta as an incremental
         # artifact-update (append) frame so the console fills the bubble as the
@@ -532,6 +539,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 llm_calls=llm_calls,
                 tool_calls=tool_calls,
                 models=list(models),
+                tool_durations={k: list(v) for k, v in tool_durations.items()},
                 origin=_origin,
                 trigger=_trigger,
                 priority=_priority,
@@ -584,6 +592,19 @@ class ProtoAgentExecutor(AgentExecutor):
                         last_activity[0] = f"running the `{name}` tool" if name else "running a tool"
                     else:
                         last_activity[0] = "waiting for the model"
+                        # #2697: only tool_end carries a finished duration, and only from
+                        # the main turn-loop's on_tool_start/on_tool_end pair — other
+                        # tool_end producers (a workflow-step yield, a subagent-result
+                        # summary) don't stamp one. Those calls still counted above, they
+                        # just contribute no durable duration sample. `duration_ms == 0`
+                        # is the on_tool_start-had-no-run_id fallback, not a real
+                        # sub-millisecond call (there's always at least async/model-loop
+                        # overhead) — treated the same as "unmeasured", not "instant".
+                        if isinstance(payload, dict):
+                            end_name = payload.get("name")
+                            duration_ms = payload.get("duration_ms")
+                            if end_name and isinstance(duration_ms, int) and duration_ms > 0:
+                                tool_durations.setdefault(end_name, []).append(duration_ms)
                     part, tc_meta = _tool_call_frame(event_type, payload)
                     if part is not None or tc_meta is not None:
                         await updater.update_status(

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TelemetryInsights, TelemetrySummary } from "../lib/types";
-import { byModelLine, perfNoteMarkdown } from "./perfView";
+import { byModelLine, byToolLine, perfNoteMarkdown } from "./perfView";
 
 function mkSummary(over: Partial<TelemetrySummary> = {}): TelemetrySummary {
   return {
@@ -39,6 +39,10 @@ function mkSummary(over: Partial<TelemetrySummary> = {}): TelemetrySummary {
         p95_duration_ms: 3500,
         p99_duration_ms: 7000,
       },
+    ],
+    by_tool: [
+      { tool: "web_search", calls: 18, p50_duration_ms: 800, p95_duration_ms: 2200, p99_duration_ms: 3000 },
+      { tool: "calculator", calls: 12, p50_duration_ms: 20, p95_duration_ms: 40, p99_duration_ms: 60 },
     ],
     ...over,
   };
@@ -85,6 +89,30 @@ describe("byModelLine", () => {
   });
 });
 
+describe("byToolLine", () => {
+  it("formats tool/p95/calls, already server-sorted by p95 descending", () => {
+    const summary = mkSummary();
+    expect(byToolLine(summary)).toBe("web_search (2.2s p95, 18 calls) · calculator (40ms p95, 12 calls)");
+  });
+
+  it("caps at topN without re-sorting (server order is trusted)", () => {
+    const summary = mkSummary({
+      by_tool: ["a", "b", "c", "d"].map((tool, i) => ({
+        tool,
+        calls: 5 - i,
+        p50_duration_ms: 100,
+        p95_duration_ms: 400 - i * 100,
+        p99_duration_ms: 500,
+      })),
+    });
+    expect(byToolLine(summary, 2)).toBe("a (400ms p95, 5 calls) · b (300ms p95, 4 calls)");
+  });
+
+  it("is empty when there's no by_tool data (an instance with no recorded durations yet)", () => {
+    expect(byToolLine(mkSummary({ by_tool: [] }))).toBe("");
+  });
+});
+
 describe("perfNoteMarkdown", () => {
   it("renders a no-data note when there are zero turns", () => {
     expect(perfNoteMarkdown(mkSummary({ turns: 0 }), null)).toBe(
@@ -105,6 +133,12 @@ describe("perfNoteMarkdown", () => {
     expect(md).toContain("cache-hit 62%");
     expect(md).toContain("cost $12.34");
     expect(md).toContain("_By model:_ protolabs/reasoning (30 turns, $9.00)");
+    expect(md).toContain("_Slowest tools:_ web_search (2.2s p95, 18 calls)");
+  });
+
+  it("omits the tools line when there's no by_tool data", () => {
+    const md = perfNoteMarkdown(mkSummary({ by_tool: [] }), mkInsights());
+    expect(md).not.toContain("Slowest tools");
   });
 
   it("omits the outlier line when nothing is flagged", () => {

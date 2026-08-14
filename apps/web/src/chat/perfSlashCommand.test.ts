@@ -48,6 +48,7 @@ const enabledSummary = {
     success_rate: 1,
     cache_hit_ratio: 0.5,
     by_model: [],
+    by_tool: [],
   },
 };
 

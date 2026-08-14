@@ -15,6 +15,7 @@ imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
 """
 
 import asyncio
+import json
 import logging
 import os
 
@@ -646,6 +647,10 @@ def _record_a2a_telemetry(outcome) -> None:
                 # already reset by the time this hook runs) — lets the console pivot a
                 # telemetry row straight to its Langfuse trace tree.
                 "trace_id": getattr(outcome, "trace_id", "") or "",
+                # Per-tool durations this turn, tool name → [ms, ...] (#2697). JSON, not
+                # comma-joined like `models` above — durations need real structure
+                # (name AND numbers), not just a flat list.
+                "tool_durations": json.dumps(outcome.tool_durations) if outcome.tool_durations else None,
             }
         )
     except Exception:  # noqa: BLE001 — telemetry is best-effort

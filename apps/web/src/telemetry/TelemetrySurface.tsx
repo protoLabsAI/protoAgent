@@ -153,6 +153,28 @@ function TelemetryBody() {
               </div>
             ) : null}
 
+            {summary.by_tool.length > 0 ? (
+              <div className="telemetry-section">
+                <h2 className="panel-kicker">By tool</h2>
+                <Table className="telemetry-table">
+                  <THead>
+                    <Tr><Th>Tool</Th><Th>Calls</Th><Th>p50</Th><Th>p95</Th><Th>p99</Th></Tr>
+                  </THead>
+                  <TBody>
+                    {summary.by_tool.map((t) => (
+                      <Tr key={t.tool}>
+                        <Td>{t.tool}</Td>
+                        <Td>{t.calls}</Td>
+                        <Td>{ms(t.p50_duration_ms)}</Td>
+                        <Td>{ms(t.p95_duration_ms)}</Td>
+                        <Td>{ms(t.p99_duration_ms)}</Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            ) : null}
+
             <div className="telemetry-section">
               <h2 className="panel-kicker">Recent turns</h2>
               <Table className="telemetry-table">

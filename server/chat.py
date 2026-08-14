@@ -698,6 +698,7 @@ async def _run_turn_stream(
 
     accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
+    _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
         graph_input,
@@ -725,9 +726,18 @@ async def _run_turn_stream(
             # args on on_chat_model_end, both keyed by the tool_call id so on_tool_end
             # closes the same card. Execution-start carries only a run_id (no
             # tool_call id to correlate), so it would just make a duplicate card.
-            pass
+            # It IS the right place to stamp EXECUTION latency though (#2697) — unlike
+            # the card-announce timing above, on_tool_start/on_tool_end bracket exactly
+            # how long the tool took to run, mirroring _llm_started's run_id-keyed idiom.
+            rid = event.get("run_id")
+            if rid:
+                _tool_started[rid] = time.monotonic()
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
+            rid = event.get("run_id")
+            tool_duration_ms = (
+                int(max(0.0, time.monotonic() - _tool_started.pop(rid, time.monotonic())) * 1000) if rid else 0
+            )
             # Close the card keyed by the tool_call id (the ToolMessage carries it);
             # fall back to run_id/name for non-tool-message producers. A ToolMessage
             # the ToolNode stamped status="error" (a raised tool — a declined
@@ -755,6 +765,7 @@ async def _run_turn_stream(
                     "name": name,
                     "output": coerced,
                     "error": getattr(output, "status", None) == "error",
+                    "duration_ms": tool_duration_ms,  # #2697 — execution time, on_tool_start→on_tool_end
                     **({"parentId": parent_tool_id} if parent_tool_id else {}),
                 },
             )

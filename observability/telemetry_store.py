@@ -15,6 +15,7 @@ hosts that want to cap retention.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Iterator
@@ -43,6 +44,7 @@ _COLUMNS = (
     "ended_at",
     "soul_rev",  # short hash of the persona (SOUL.md) live for this turn (#1691)
     "trace_id",  # Langfuse trace for this turn — lets the console deep-link to the trace tree
+    "tool_durations",  # JSON {tool_name: [ms, ...]} for this turn's calls (#2697)
 )
 
 
@@ -86,14 +88,20 @@ class TelemetryStore:
                     created_at                  TEXT,
                     ended_at                    TEXT,
                     soul_rev                    TEXT,
-                    trace_id                    TEXT
+                    trace_id                    TEXT,
+                    tool_durations               TEXT
                 )
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_ended ON turns(ended_at)")
             # Lightweight migrations for stores created before a column existed. Each ALTER is
             # idempotent-guarded by the try/except (fires once on an older DB, no-ops after).
-            for _col, _type in (("models", "TEXT"), ("soul_rev", "TEXT"), ("trace_id", "TEXT")):  # `models`: ADR 0006 4b; `soul_rev`: #1691; `trace_id`: console→Langfuse pivot
+            for _col, _type in (
+                ("models", "TEXT"),  # ADR 0006 4b
+                ("soul_rev", "TEXT"),  # #1691
+                ("trace_id", "TEXT"),  # console→Langfuse pivot
+                ("tool_durations", "TEXT"),  # #2697
+            ):
                 try:
                     db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
                 except sqlite3.OperationalError:
@@ -230,6 +238,43 @@ class TelemetryStore:
                     "p99_duration_ms": _percentile(model_durations, 99),
                 })
             out["by_model"] = by_model_out
+            # #2697 — durable p50/p95/p99 duration PER TOOL, the by-model breakdown's
+            # sibling. Unlike `model` (one scalar column, GROUP BY-able in SQL),
+            # `tool_durations` is a per-turn JSON blob that can span several distinct
+            # tools — so this is Python-side aggregation across every matching row's
+            # blob, not a SQL GROUP BY. A turn with no duration-carrying tool_end (an
+            # older row, or a tool_end producer that doesn't stamp one — see #2697)
+            # has `tool_durations` NULL/empty and is skipped, not an error.
+            durations_by_tool: dict[str, list[int]] = {}
+            for r in db.execute(f"SELECT tool_durations FROM turns {where}", params).fetchall():
+                raw = r["tool_durations"]
+                if not raw:
+                    continue
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                for tool_name, values in parsed.items():
+                    if not isinstance(values, list):
+                        continue
+                    bucket = durations_by_tool.setdefault(tool_name, [])
+                    bucket.extend(v for v in values if isinstance(v, int))
+            by_tool_out = []
+            for tool_name, values in durations_by_tool.items():
+                tool_durations_sorted = sorted(values)
+                by_tool_out.append({
+                    "tool": tool_name,
+                    "calls": len(tool_durations_sorted),
+                    "p50_duration_ms": _percentile(tool_durations_sorted, 50),
+                    "p95_duration_ms": _percentile(tool_durations_sorted, 95),
+                    "p99_duration_ms": _percentile(tool_durations_sorted, 99),
+                })
+            # Slowest first — the whole point of this breakdown is "what's tool X's p99",
+            # so lead with the tools worth looking at rather than the most-called ones.
+            by_tool_out.sort(key=lambda row: row["p95_duration_ms"], reverse=True)
+            out["by_tool"] = by_tool_out
             return out
         finally:
             db.close()

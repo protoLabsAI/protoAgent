@@ -990,6 +990,10 @@ export const TELEMETRY_SUMMARY = {
     { model: "claude-opus-4-8", turns: 2, cost_usd: 0.21, total_tokens: 12000 },
     { model: "claude-haiku-4-5", turns: 1, cost_usd: 0.0054, total_tokens: 1800 },
   ],
+  by_tool: [
+    { tool: "web_search", calls: 3, p50_duration_ms: 800, p95_duration_ms: 2200, p99_duration_ms: 3000 },
+    { tool: "calculator", calls: 1, p50_duration_ms: 20, p95_duration_ms: 40, p99_duration_ms: 60 },
+  ],
 };
 
 export const TELEMETRY_TURNS = [
