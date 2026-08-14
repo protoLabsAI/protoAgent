@@ -23,7 +23,9 @@ import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { lucideIcon } from "../lib/lucideIcon";
-import { archetypesQuery } from "../lib/queries";
+import { pythonRuntimeView } from "../app/pythonRuntime";
+import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
+import { archetypeConfigFields, fieldId, isMissingRequiredConfig, splitConfigValues } from "../lib/archetypeConfig";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
@@ -217,6 +219,12 @@ export function SetupWizard({
   // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
   // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
   const archetypes = useQuery(archetypesQuery());
+  // Inline Configure step for a bundle archetype's MCP inputs + declared secrets —
+  // NewAgentPanel parity (#2714; the fleet picker got this in #2041, the wizard —
+  // the surface a NEW user actually hits first — installed the bundle with no prompt).
+  // Collapsible: skipping falls back to this host's environment, same as the panel.
+  const [configOpen, setConfigOpen] = useState(true);
+  const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
   // Flips true once the initial config load finishes. The persona seed waits on it
   // so the async load() (which replaces the whole state) can't clobber the seed.
@@ -408,6 +416,8 @@ export function SetupWizard({
   // blanking the editor (see personaSoul).
   function pickArchetype(a: Archetype) {
     update({ archetype: a.id, soul: personaSoul(a, archetypeList) });
+    setConfigValues({}); // a token typed for one archetype must not carry into the next
+    setConfigOpen(true);
   }
 
   // Pre-fill the editor once with the default archetype's base SOUL so the persona
@@ -433,6 +443,32 @@ export function SetupWizard({
   // an archetype with a bundle (e.g. Product Manager → product-stack) installs its plugins
   // into this host on finish, so the persona arrives WITH its tools.
   const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
+
+  // The picked archetype's read-only peek — the Configure form's fields (its bundle's
+  // MCP inputs + declared secrets), NewAgentPanel parity (#2714). Shares the preview
+  // dialog's cache key; only fetched for bundle-backed archetypes.
+  const archetypePeek = useQuery({
+    queryKey: ["archetype-preview", state.archetype],
+    queryFn: () => api.archetypePreview(state.archetype),
+    enabled: Boolean(pickedArchetype?.bundle),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+  const configFields = useMemo(() => archetypeConfigFields(archetypePeek.data), [archetypePeek.data]);
+  // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure
+  // step (or a field) falls back to this host's environment, same as NewAgentPanel.
+  const missingRequired = configOpen && isMissingRequiredConfig(configFields, configValues);
+
+  // Runtime requirement at CHOOSE-time (#2186): same affordance as NewAgentPanel —
+  // the wizard's first-run pick of Cowork on a runtime-less desktop otherwise ends at
+  // silently no-op document skills. Host runtime state is exactly what setup targets.
+  const pyRuntime = pythonRuntimeView(useQuery(pythonRuntimeQuery()).data);
+  const runtimeWarning =
+    pickedArchetype?.requires?.includes("python_runtime") && pyRuntime.kind === "action" && !pyRuntime.stale
+      ? pyRuntime.installing
+        ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
+        : `${pickedArchetype.label} needs the managed Python runtime for its document skills — you can finish setup now and install it later in Settings ▸ Tools.`
+      : null;
   const personaLabel = pickedArchetype?.label ?? state.archetype;
   const pickedBundle = pickedArchetype?.bundle ?? null;
   // Brain step derived view (ADR 0097): the selected card + whether it's an OAuth provider.
@@ -535,7 +571,16 @@ export function SetupWizard({
       if (pickedBundle) {
         setMessage(`Setting up the ${personaLabel} tools — this can take a few seconds…`);
         try {
-          const r = await api.installPlugin(pickedBundle);
+          // Collected Configure values ride the install (#2714) — the same two seed
+          // channels POST /api/fleet uses (#2041). Collapsed/absent form → env-only.
+          const { inputs, secrets } =
+            configOpen && configFields.length
+              ? splitConfigValues(configFields, configValues)
+              : { inputs: {}, secrets: [] };
+          const r = await api.installPlugin(pickedBundle, undefined, undefined, {
+            inputs: Object.keys(inputs).length ? inputs : undefined,
+            secrets: secrets.length ? secrets : undefined,
+          });
           const failedLoad = Object.keys(r.load_errors ?? {});
           if (r.enable_error) {
             toast({
@@ -699,6 +744,61 @@ export function SetupWizard({
               ) : null}
               {previewOpen && pickedArchetype ? (
                 <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
+              ) : null}
+              {runtimeWarning ? (
+                <p className="archetype-runtime-notice" role="note">
+                  {runtimeWarning}
+                </p>
+              ) : null}
+              {/* Inline Configure step — NewAgentPanel parity (#2714/#2041): appears only when
+                  the picked bundle declares MCP inputs or secrets. Collapsing skips it
+                  (→ env-only seeding on install). */}
+              {configFields.length ? (
+                <div className="archetype-configure">
+                  <button
+                    type="button"
+                    className="archetype-configure-toggle"
+                    aria-expanded={configOpen}
+                    onClick={() => setConfigOpen((o) => !o)}
+                  >
+                    {configOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                    <span>Configure {pickedArchetype?.label}</span>
+                    <span className="field-hint">optional — skip to use this host&apos;s environment</span>
+                  </button>
+                  {configOpen ? (
+                    <div className="archetype-configure-fields">
+                      {configFields.map((f) => (
+                        <label key={fieldId(f)} className="field">
+                          <span>
+                            {f.label}
+                            {f.required ? " *" : ""}
+                          </span>
+                          {f.secret ? (
+                            <SecretInput
+                              placeholder={f.placeholder}
+                              value={configValues[fieldId(f)] ?? ""}
+                              aria-label={f.label}
+                              onChange={(e) => setConfigValues((v) => ({ ...v, [fieldId(f)]: e.target.value }))}
+                            />
+                          ) : (
+                            <Input
+                              type="text"
+                              placeholder={f.placeholder}
+                              value={configValues[fieldId(f)] ?? ""}
+                              aria-label={f.label}
+                              onChange={(e) => setConfigValues((v) => ({ ...v, [fieldId(f)]: e.target.value }))}
+                            />
+                          )}
+                        </label>
+                      ))}
+                      {missingRequired ? (
+                        <span className="field-hint">
+                          Fields marked * connect their server — fill them, or skip to use this host&apos;s environment.
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
               <FormField label="SOUL.md">
                 <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />

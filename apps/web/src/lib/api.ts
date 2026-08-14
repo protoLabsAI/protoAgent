@@ -2303,7 +2303,15 @@ export const api = {
   // is set if the install succeeded but the enable-reload failed (enable it manually
   // then). `load_errors` (#2716) maps enabled ids that FAILED to import on that reload —
   // in plugins.enabled but not running — optional so older backends parse fine.
-  installPlugin(url: string, ref?: string, force?: boolean) {
+  installPlugin(
+    url: string,
+    ref?: string,
+    force?: boolean,
+    // Bundle create-time seed values (#2041/#2118): `inputs` fill the bundle's MCP
+    // `${input}` placeholders, `secrets` its declared secrets — same body shapes as
+    // POST /api/fleet. Omitted → env-only seeding.
+    seed?: { inputs?: Record<string, string>; secrets?: { key: string; value: string }[] },
+  ) {
     return request<{
       installed: PluginInstallSummary;
       enabled: string[];
@@ -2313,7 +2321,16 @@ export const api = {
       load_errors?: Record<string, string>;
     }>(
       "/api/plugins/install",
-      { method: "POST", body: { url, ref: ref || undefined, force: force || undefined } },
+      {
+        method: "POST",
+        body: {
+          url,
+          ref: ref || undefined,
+          force: force || undefined,
+          inputs: seed?.inputs,
+          secrets: seed?.secrets,
+        },
+      },
     );
   },
   // Server-side directory listing behind the path pickers. Deliberately the SERVER's
