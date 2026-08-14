@@ -732,6 +732,26 @@ def bundle_config_overlay(bundle_config: dict | None, current: dict | None) -> d
     return overlay
 
 
+# Every archetype: key the reader (`fleet_routes._archetypes`) consumes. The block is
+# otherwise cached verbatim into plugins.lock, so anything outside this set is dead
+# weight the author almost certainly misspelled.
+_ARCHETYPE_KEYS = {"label", "icon", "blurb", "soul", "soul_preset", "tier", "requires", "requires_tools"}
+
+
+def _checked_archetype_block(bundle_id: str, arch: dict | None) -> dict:
+    """The bundle's ``archetype:`` block, warning on keys no reader consumes (#2715)."""
+    arch = dict(arch or {})
+    unknown = sorted(set(arch) - _ARCHETYPE_KEYS)
+    if unknown:
+        log.warning(
+            "[plugins] bundle %s archetype: block has unknown key(s) %s — known keys: %s",
+            bundle_id,
+            ", ".join(unknown),
+            ", ".join(sorted(_ARCHETYPE_KEYS)),
+        )
+    return arch
+
+
 def _install_bundle(
     bundle: dict, bundle_url: str, bundle_sha: str, ref: str | None, *, force: bool, by: str, allow: list[str] | None
 ) -> dict:
@@ -787,8 +807,10 @@ def _install_bundle(
             # manifest (#2041, slice 1).
             "secrets": list(bundle.get("secrets") or []),
             # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
-            # this bundle as a starter type without re-reading its manifest.
-            "archetype": bundle.get("archetype") or {},
+            # this bundle as a starter type without re-reading its manifest. Unknown keys
+            # are cached but never read — warn (not fail) so a typo'd field (`souls:`,
+            # `require_tools:`) surfaces at install instead of vanishing silently (#2715).
+            "archetype": _checked_archetype_block(bid, bundle.get("archetype")),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "by": by,
         }

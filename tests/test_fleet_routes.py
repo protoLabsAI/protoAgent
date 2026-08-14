@@ -68,6 +68,40 @@ def test_archetypes_fall_back_when_catalog_missing(client, monkeypatch):
     assert all(a["soul"].strip() for a in arr)  # soul_preset resolved to real content
 
 
+def test_bundle_archetype_resolves_soul_preset(client, monkeypatch):
+    """A bundle's archetype: block can name a host `soul_preset` — the same soul /
+    soul_preset pair the catalog supports (#2715). Before, only inline `soul` worked on
+    the bundle path, and a preset-naming bundle silently fell back to the base persona.
+    An unknown preset resolves to "" (warned in the log; the console then falls back)."""
+
+    def fake_lock():
+        return {
+            "bundles": [
+                {
+                    "id": "presetful",
+                    "source_url": "https://github.com/x/a",
+                    "archetype": {"label": "P", "soul_preset": "base"},
+                },
+                {
+                    "id": "inline",
+                    "source_url": "https://github.com/x/b",
+                    "archetype": {"label": "I", "soul": "# Inline"},
+                },
+                {
+                    "id": "ghost",
+                    "source_url": "https://github.com/x/c",
+                    "archetype": {"label": "G", "soul_preset": "no-such-preset"},
+                },
+            ]
+        }
+
+    monkeypatch.setattr("graph.plugins.installer._read_lock", fake_lock)
+    by_id = {a["id"]: a for a in client.get("/api/archetypes").json()["archetypes"]}
+    assert by_id["presetful"]["soul"].strip()  # resolved to the real preset content
+    assert by_id["inline"]["soul"] == "# Inline"  # inline still wins when present
+    assert by_id["ghost"]["soul"] == ""  # unknown preset → empty, console falls back
+
+
 def test_archetypes_dedupe_installed_bundle_against_catalog(client, monkeypatch):
     # An installed bundle whose id/URL already appears in the catalog must NOT produce a
     # duplicate RadioCard (duplicate React key + ambiguous radio value). Catalog wins.

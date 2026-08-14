@@ -65,8 +65,26 @@ mcp:
       - { key: token, env: GITHUB_MCP_TOKEN, required: true, secret: true }
 
 # Agent archetype (ADR 0042) — presents this bundle as a starter "agent type" in the
-# new-agent picker. Additive metadata; it doesn't change the bundle shape.
+# new-agent picker. Additive metadata; it doesn't change the bundle shape. Unknown
+# keys warn at install (#2715) — the full set is below.
 archetype:
   label: My Stack
   icon: Boxes
   blurb: One-line pitch shown on the archetype card.
+  # Persona: inline `soul` (markdown) OR `soul_preset` (a stem under the host's
+  # config/soul-presets/ — warns + falls back to the base persona if the host
+  # doesn't ship it). Omit both and a created agent keeps the default persona.
+  # soul: |
+  #   # My Stack operator
+  #   …
+  # soul_preset: cowork
+  # Picker placement: "standard" (default, renders inline) or "advanced"
+  # (collapses under the picker's "Advanced (N)" toggle).
+  # tier: standard
+  # Host capabilities the archetype needs to be USEFUL (#2186) — the picker warns
+  # at choose-time when one isn't provisioned. e.g. python_runtime.
+  # requires: [python_runtime]
+  # Capability contract (#2277): tool names the persona commits to using. Persisted
+  # to the created agent's workspace.yaml; the member warns at boot when its bound
+  # toolset doesn't cover the contract.
+  # requires_tools: [github_create_issue]

@@ -628,6 +628,41 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     assert bundles[0]["secrets"] == [{"key": "api_key", "label": "API Key", "secret": True, "required": True}]
 
 
+def test_archetype_block_warns_on_unknown_keys(caplog):
+    """The archetype: block is cached verbatim into plugins.lock and consumed field-by-
+    field — a typo'd key used to vanish with no signal anywhere (#2715). Now it warns
+    at install (never fails: existing bundles must keep installing)."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="graph.plugins.installer"):
+        arch = installer._checked_archetype_block(
+            "demo_stack", {"label": "Demo", "souls": "typo", "require_tools": ["x"]}
+        )
+    assert arch == {"label": "Demo", "souls": "typo", "require_tools": ["x"]}  # cached as-is
+    warning = "\n".join(r.message for r in caplog.records)
+    assert "demo_stack" in warning and "require_tools" in warning and "souls" in warning
+
+
+def test_archetype_block_known_keys_stay_silent(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="graph.plugins.installer"):
+        installer._checked_archetype_block(
+            "demo_stack",
+            {
+                "label": "Demo",
+                "icon": "Boxes",
+                "blurb": "x",
+                "soul": "p",
+                "soul_preset": "base",
+                "tier": "advanced",
+                "requires": ["python_runtime"],
+                "requires_tools": ["github_create_issue"],
+            },
+        )
+    assert not caplog.records
+
+
 def test_bundle_reinstall_converges_instead_of_erroring(env):
     """Re-running a bundle install over an already-provisioned host must converge:
     unchanged members report up-to-date, a member whose repo moved gets updated —

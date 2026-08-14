@@ -443,6 +443,22 @@ def _archetypes() -> list[dict]:
             seen_ids.add(bid)
             if url:
                 seen_urls.add(_norm_url(url))
+            # A bundle declares its persona inline (`soul`) or names a host preset
+            # (`soul_preset`) — the same pair the catalog supports (#2715; before,
+            # only inline worked here and a preset-naming bundle silently fell back
+            # to the base persona via the console's personaSoul()). An unknown
+            # preset name resolves to "" — warn, because the operator sees the
+            # fallback persona with no other signal.
+            soul = str(arch.get("soul") or "")
+            if not soul and arch.get("soul_preset"):
+                soul = read_soul_preset(str(arch["soul_preset"]))
+                if not soul:
+                    log.warning(
+                        "[fleet] bundle %s names soul_preset %r — not found on this host; "
+                        "the picker will fall back to the base persona",
+                        bid,
+                        arch["soul_preset"],
+                    )
             out.append(
                 {
                     "id": bid,
@@ -450,7 +466,7 @@ def _archetypes() -> list[dict]:
                     "icon": arch.get("icon", "Package"),
                     "blurb": arch.get("blurb", ""),
                     "bundle": url or None,
-                    "soul": arch.get("soul", ""),
+                    "soul": soul,
                     # A bundle can file itself under the picker's "Advanced" toggle too —
                     # same optional tag as the catalog field, normalized to standard/advanced.
                     "tier": _norm_tier(arch.get("tier")),
