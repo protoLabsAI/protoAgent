@@ -165,6 +165,68 @@ def test_install_bundle_without_declared_enable_enables_every_member(monkeypatch
     assert body["enabled"] == ["a", "b"]
 
 
+def test_updates_route_includes_bundles(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "check_updates", lambda: [{"id": "solo", "behind": False}])
+    monkeypatch.setattr(installer, "check_bundle_updates", lambda: [{"id": "stacky", "behind": True}])
+    body = _client().get("/api/plugins/updates").json()
+    assert body["plugins"] == [{"id": "solo", "behind": False}]
+    assert body["bundles"] == [{"id": "stacky", "behind": True}]
+
+
+def test_update_bundle_route_repins_and_reports(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "", "plugins": ["a", "dead"]},
+    )
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "stacky", "installed": [{"id": "a"}], "enabled": ["a"]},
+    )
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: ["dead"])
+    monkeypatch.setattr(installer, "uninstall", lambda pid, **k: None)
+
+    body = _client().post("/api/plugins/bundles/stacky/update").json()
+    assert body["enabled"] == ["a"] and body["reloaded"] is True
+    assert body["removed_members"] == ["dead"] and body["retire_error"] is None
+    assert body["load_errors"] == {}
+
+
+def test_update_bundle_route_404s_unknown(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "bundle_entry", lambda bid: None)
+    assert _client().post("/api/plugins/bundles/ghost/update").status_code == 400
+
+
+def test_uninstall_bundle_route(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=["a"], disabled=[], meta=[])
+    monkeypatch.setattr(
+        installer,
+        "uninstall_bundle",
+        lambda bid, purge=False: {
+            "id": bid,
+            "removed_members": ["a"],
+            "skipped_missing": [],
+            "kept": [],
+            "purged": purge,
+        },
+    )
+    body = _client().delete("/api/plugins/bundles/stacky?purge=true").json()
+    assert body["ok"] is True and body["removed_members"] == ["a"] and body["purged"] is True
+    assert body["reloaded"] is True
+
+
 def test_install_surfaces_load_errors(monkeypatch):
     """An enabled plugin that fails to IMPORT on the reload is skipped by the loader —
     the reload still succeeds — so the install response must carry the failure
@@ -515,8 +577,10 @@ def test_updates_route_returns_check_results(monkeypatch):
 
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
     monkeypatch.setattr(installer, "check_updates", lambda: [{"id": "github", "update_available": True}])
+    monkeypatch.setattr(installer, "check_bundle_updates", lambda: [])
     body = _client().get("/api/plugins/updates").json()
-    assert body == {"plugins": [{"id": "github", "update_available": True}]}
+    # `bundles` rides alongside since #2718 (empty when no bundles are installed).
+    assert body == {"plugins": [{"id": "github", "update_available": True}], "bundles": []}
 
 
 # ── install-deps route + deps_missing (wizard post-install report) ────────────

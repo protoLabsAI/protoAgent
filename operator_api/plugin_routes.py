@@ -346,8 +346,84 @@ def register_plugin_routes(app) -> None:
 
         Pinned-to-SHA plugins skip the network; the rest ls-remote their ref
         (TTL-cached + timeout-bounded so the poll can't hang). Errors are
-        non-fatal per entry — surfaced in each row's ``error``."""
-        return {"plugins": await asyncio.to_thread(installer.check_updates)}
+        non-fatal per entry — surfaced in each row's ``error``.
+
+        ``bundles`` (#2718, ADR 0049 D4): the same status per installed BUNDLE —
+        ``behind`` there means the bundle repo's manifest moved (member pins may
+        move with it; ``POST /api/plugins/bundles/{id}/update`` re-resolves)."""
+        return {
+            "plugins": await asyncio.to_thread(installer.check_updates),
+            "bundles": await asyncio.to_thread(installer.check_bundle_updates),
+        }
+
+    @app.post("/api/plugins/bundles/{bundle_id}/update")
+    async def _update_bundle(bundle_id: str):
+        """Bundle-level update (#2718): force re-install the bundle repo at its
+        recorded ref (release-tag pins move to the newest semver tag), re-pin every
+        member, re-apply the declared enable set (WITHOUT undoing an operator's
+        explicit disable) + config/mcp defaults, retire members the new manifest
+        dropped, hot-reload. The lock's ``bundles`` row is rewritten — this is the
+        re-pin surface ADR 0049 D4 deferred."""
+        mounted_before = _mounted_router_ids()
+        prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
+
+        from ops import OpContext
+        from ops.plugins import update_bundle
+
+        from server.agent_init import _apply_settings_changes
+
+        try:
+            res = await update_bundle(
+                bundle_id,
+                by="console",
+                allow=_sources_allowlist(),
+                ctx=OpContext.from_state(),
+                apply_settings=lambda updates: _apply_settings_changes(config=updates),
+            )
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        inst = res.install
+        # Same #942 truth as single-plugin update: a force re-install over a LIVE
+        # router keeps serving the old routes until restart.
+        stale_after_reload = [
+            pid for pid in inst.installed_ids if pid in mounted_before or _has_surface(prev_meta.get(pid))
+        ]
+        for pid, err in inst.load_errors.items():
+            log.warning("[plugins] bundle %s member %s updated but FAILED to load: %s", bundle_id, pid, err)
+        return {
+            "installed": inst.summary,
+            "enabled": inst.enabled,
+            "reloaded": inst.reloaded,
+            "restart_recommended": bool(stale_after_reload),
+            "enable_error": inst.enable_error,
+            "load_errors": inst.load_errors,
+            "mcp_seeded": inst.mcp_seeded,
+            "removed_members": res.removed_members,
+            "retire_error": res.retire_error,
+        }
+
+    @app.delete("/api/plugins/bundles/{bundle_id}")
+    async def _uninstall_bundle(bundle_id: str, purge: bool = False):
+        """One-action bundle removal (#2718): uninstall the bundle's exclusively-owned
+        members (shared / re-owned ones stay), drop the lock row, purge modules,
+        hot-reload so their tools/routes leave the live agent. ``?purge=true``
+        forwards to each member uninstall (config + secrets removal)."""
+        from ops import OpContext
+        from ops.plugins import uninstall_bundle
+
+        from server.agent_init import _apply_settings_changes
+
+        try:
+            report = await uninstall_bundle(
+                bundle_id,
+                purge=purge,
+                ctx=OpContext.from_state(),
+                apply_settings=lambda updates: _apply_settings_changes(config=updates),
+            )
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"ok": True, **report}
 
     @app.post("/api/plugins/sync")
     async def _sync():

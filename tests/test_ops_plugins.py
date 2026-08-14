@@ -73,6 +73,94 @@ async def test_no_applier_installs_only(monkeypatch):
     assert res.enabled == [] and res.reloaded is False and res.installed_ids == ["demo"]
 
 
+async def test_respect_disabled_keeps_operator_disable(monkeypatch):
+    """UPDATE semantics (#2718): re-installing a bundle must not undo an operator's
+    explicit disable — a declared-enable member sitting in plugins.disabled stays
+    there; members with no recorded state still get fresh-install enablement."""
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "s", "installed": [{"id": "a"}, {"id": "b"}], "enabled": ["a", "b"]},
+    )
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    captured, apply = _capture_apply()
+
+    res = await install_and_activate(
+        "https://x", force=True, respect_disabled=True, ctx=_ctx(disabled=["a"]), apply_settings=apply
+    )
+    assert res.enabled == ["b"]  # a stays off
+    assert captured["updates"]["plugins"]["enabled"] == ["b"]
+    assert captured["updates"]["plugins"]["disabled"] == ["a"]  # untouched
+
+
+async def test_update_bundle_repins_and_retires_dropped(monkeypatch):
+    from ops.plugins import update_bundle
+
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "", "plugins": ["a", "dead"]},
+    )
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "s", "installed": [{"id": "a"}], "enabled": ["a"]},
+    )
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: ["dead"])
+    uninstalled: list[str] = []
+    monkeypatch.setattr(installer, "uninstall", lambda pid, **k: uninstalled.append(pid))
+    purged: list[str] = []
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: purged.append(pid))
+
+    calls: list = []
+
+    def apply(updates):
+        calls.append(updates)
+        return True, ["ok"]
+
+    res = await update_bundle("s", ctx=_ctx(), apply_settings=apply)
+    assert res.install.enabled == ["a"] and res.install.reloaded is True
+    assert res.removed_members == ["dead"] and uninstalled == ["dead"] and "dead" in purged
+    assert res.retire_error is None
+    # two applies: the activate reload (with a config patch) + the retire pure reload (None)
+    assert len(calls) == 2 and calls[1] is None
+
+
+async def test_update_bundle_unknown_id_raises(monkeypatch):
+    from ops.plugins import update_bundle
+
+    monkeypatch.setattr(installer, "bundle_entry", lambda bid: None)
+    with pytest.raises(installer.InstallError):
+        await update_bundle("ghost", ctx=_ctx(), apply_settings=None)
+
+
+async def test_uninstall_bundle_op_purges_and_reloads(monkeypatch):
+    from ops.plugins import uninstall_bundle
+
+    monkeypatch.setattr(
+        installer,
+        "uninstall_bundle",
+        lambda bid, purge=False: {
+            "id": bid,
+            "removed_members": ["a"],
+            "skipped_missing": [],
+            "kept": ["b"],
+            "purged": purge,
+        },
+    )
+    purged: list[str] = []
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: purged.append(pid))
+    calls: list = []
+
+    def apply(updates):
+        calls.append(updates)
+        return True, ["ok"]
+
+    rep = await uninstall_bundle("s", ctx=_ctx(), apply_settings=apply)
+    assert rep["removed_members"] == ["a"] and rep["kept"] == ["b"]
+    assert purged == ["a"] and rep["reloaded"] is True and calls == [None]
+
+
 async def test_load_failure_lands_in_load_errors(monkeypatch):
     """A plugin that fails to IMPORT is skipped by the loader — the reload still returns
     ok — so the op must read the post-reload roster and carry the failure (#2716).

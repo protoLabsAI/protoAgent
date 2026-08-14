@@ -628,6 +628,105 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     assert bundles[0]["secrets"] == [{"key": "api_key", "label": "API Key", "secret": True, "required": True}]
 
 
+# ── Bundle lifecycle past install (ADR 0049 D4, #2718) ─────────────────────────
+
+
+def test_check_bundle_updates_reports_behind_when_bundle_repo_moves(env):
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+
+    rows = installer.check_bundle_updates()
+    assert len(rows) == 1 and rows[0]["id"] == "demo_stack" and rows[0]["behind"] is False
+
+    # a new commit on the bundle repo = the manifest moved → behind (fresh TTL key not
+    # needed: the cache stores the FIRST answer, so bust it by expiring the entry)
+    (bundle / "README.md").write_text("bump\n")
+    _git(bundle, "add", "-A")
+    _git(bundle, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "bump")
+    installer._lsremote_cache.clear()
+    rows = installer.check_bundle_updates()
+    assert rows[0]["behind"] is True and rows[0]["latest_sha"]
+
+
+def test_update_via_force_reinstall_repins_moved_member(env):
+    """The bundle-update primitive: a force re-install of the bundle re-resolves each
+    member at its ref — a member repo that moved gets a NEW pinned SHA in the lock."""
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+    old_sha = next(e for e in installer._read_lock()["plugins"] if e["id"] == "demo_a")["resolved_sha"]
+
+    (a / "__init__.py").write_text("def register(registry):\n    pass  # v2\n")
+    _git(a, "add", "-A")
+    _git(a, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v2")
+
+    installer.install(str(bundle), force=True, by="cli-update-bundle:demo_stack")
+    new_sha = next(e for e in installer._read_lock()["plugins"] if e["id"] == "demo_a")["resolved_sha"]
+    assert new_sha != old_sha
+
+
+def test_orphaned_bundle_members_after_manifest_drop(env):
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+    before = list(installer.bundle_entry("demo_stack")["plugins"])
+    assert set(before) == {"demo_a", "demo_b"}
+
+    # the new manifest revision drops demo_b
+    manifest = (bundle / "protoagent.bundle.yaml").read_text()
+    (bundle / "protoagent.bundle.yaml").write_text(
+        "\n".join(ln for ln in manifest.splitlines() if "src-demo_b" not in ln) + "\n"
+    )
+    _git(bundle, "add", "-A")
+    _git(bundle, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "drop b")
+    installer.install(str(bundle), force=True)
+
+    assert installer.orphaned_bundle_members("demo_stack", before) == ["demo_b"]
+    # …and demo_a, still in the manifest, is not orphaned
+    assert "demo_a" in installer.bundle_entry("demo_stack")["plugins"]
+
+
+def test_uninstall_bundle_removes_exclusive_keeps_shared(env):
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+
+    # simulate a SECOND bundle that also lists demo_b → demo_b is shared, kept
+    lock = installer._read_lock()
+    lock["bundles"].append({"id": "other_stack", "source_url": "https://x/other", "plugins": ["demo_b"]})
+    installer._write_lock(lock)
+
+    rep = installer.uninstall_bundle("demo_stack")
+    assert rep["removed_members"] == ["demo_a"] and rep["kept"] == ["demo_b"]
+    assert not (installer.live_plugins_dir() / "demo_a").exists()
+    assert (installer.live_plugins_dir() / "demo_b").exists()
+    lock = installer._read_lock()
+    assert [b_["id"] for b_ in lock["bundles"]] == ["other_stack"]  # row gone, other intact
+    assert {e["id"] for e in lock["plugins"]} == {"demo_b"}
+
+
+def test_uninstall_bundle_tolerates_individually_removed_member(env):
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+    installer.uninstall("demo_a")  # provenance row still lists demo_a (#2718's stale-row gap)
+
+    rep = installer.uninstall_bundle("demo_stack")
+    assert rep["removed_members"] == ["demo_b"]
+    assert installer.bundle_entry("demo_stack") is None
+
+
+def test_uninstall_bundle_unknown_id_raises(env):
+    with pytest.raises(installer.InstallError):
+        installer.uninstall_bundle("nope")
+
+
 def test_archetype_block_warns_on_unknown_keys(caplog):
     """The archetype: block is cached verbatim into plugins.lock and consumed field-by-
     field — a typo'd key used to vanish with no signal anywhere (#2715). Now it warns

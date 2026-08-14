@@ -1322,6 +1322,112 @@ def check_updates() -> list[dict]:
     return [check_plugin_update(e) for e in _read_lock()["plugins"]]
 
 
+# ── Bundle-level lifecycle (ADR 0049 D4, #2718) ────────────────────────────────
+# A bundle was first-class at install and never again: `check_updates`/`sync` read
+# lock["plugins"] only, and uninstall had no bundle notion — so a published stack's
+# pin never moved on an installed host, and removing one meant hand-uninstalling
+# members against a provenance row that slowly went stale.
+
+
+def bundle_entry(bundle_id: str) -> dict | None:
+    """The ``lock["bundles"]`` row for ``bundle_id`` (None when not installed)."""
+    return next((b for b in _read_lock().get("bundles") or [] if b.get("id") == bundle_id), None)
+
+
+def check_bundle_updates() -> list[dict]:
+    """Bundle-level update status. A bundle lock row carries the same
+    ``{id, source_url, requested_ref, resolved_sha}`` shape as a plugin row, so each
+    rides ``check_plugin_update`` unchanged — ``behind`` means the bundle REPO moved
+    (its member pins may have moved with it; ``ops.plugins.update_bundle``
+    re-resolves them). Same pinned/release-tag/TTL semantics as plugins."""
+    return [check_plugin_update(b) for b in _read_lock().get("bundles") or []]
+
+
+def exclusive_bundle_members(bundle_id: str) -> list[str]:
+    """The bundle's members owned ONLY by it: still carrying this bundle's ``by``
+    provenance in ``lock["plugins"]`` and not listed by any other bundle row. These
+    are what ``uninstall_bundle`` removes — a member another bundle lists, or one the
+    operator re-installed directly since (its ``by`` moved), stays."""
+    lock = _read_lock()
+    row = next((b for b in lock.get("bundles") or [] if b.get("id") == bundle_id), None)
+    if row is None:
+        return []
+    listed_elsewhere: set[str] = set()
+    for b in lock.get("bundles") or []:
+        if b.get("id") != bundle_id:
+            listed_elsewhere.update(str(p) for p in b.get("plugins") or [])
+    by_of = {e.get("id"): e.get("by", "") for e in lock.get("plugins") or []}
+    return [
+        str(pid)
+        for pid in row.get("plugins") or []
+        if pid not in listed_elsewhere and by_of.get(pid, "") == f"bundle:{bundle_id}"
+    ]
+
+
+def orphaned_bundle_members(bundle_id: str, before_members: list[str]) -> list[str]:
+    """After a bundle update rewrote its lock row: the members the NEW manifest
+    dropped that are still exclusively this bundle's (by-provenance, not listed by
+    any other bundle). The update path uninstalls these so a manifest that removed a
+    member doesn't leave it installed forever with dangling provenance."""
+    lock = _read_lock()
+    row = next((b for b in lock.get("bundles") or [] if b.get("id") == bundle_id), None)
+    current = {str(p) for p in (row.get("plugins") or [])} if row else set()
+    listed_elsewhere: set[str] = set()
+    for b in lock.get("bundles") or []:
+        if b.get("id") != bundle_id:
+            listed_elsewhere.update(str(p) for p in b.get("plugins") or [])
+    by_of = {e.get("id"): e.get("by", "") for e in lock.get("plugins") or []}
+    return [
+        str(pid)
+        for pid in before_members
+        if pid not in current and pid not in listed_elsewhere and by_of.get(pid, "") == f"bundle:{bundle_id}"
+    ]
+
+
+def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
+    """Remove a bundle: uninstall its exclusively-owned members and drop the lock
+    row. Shared members (listed by another bundle) and members whose ``by``
+    provenance moved (re-installed directly) are kept; a member already gone from
+    disk+lock (uninstalled individually — the provenance row still listed it) is
+    skipped, not an error. ``purge`` forwards to each member uninstall (config +
+    secrets removal)."""
+    row = bundle_entry(bundle_id)
+    if row is None:
+        raise InstallError(f"bundle {bundle_id!r} is not installed.")
+    members = exclusive_bundle_members(bundle_id)
+    removed_members: list[str] = []
+    skipped: list[str] = []
+    for pid in members:
+        try:
+            uninstall(pid, purge=purge)
+            removed_members.append(pid)
+        except InstallError:
+            skipped.append(pid)
+    # Re-read — each member uninstall rewrote the lock — then drop the row itself.
+    lock = _read_lock()
+    lock["bundles"] = [b for b in lock.get("bundles") or [] if b.get("id") != bundle_id]
+    _write_lock(lock)
+    kept = [str(p) for p in (row.get("plugins") or []) if p not in members]
+    _audit(
+        "uninstall-bundle",
+        {"id": bundle_id, "purge": purge},
+        f"uninstalled bundle {bundle_id} ({len(removed_members)} member(s), {len(kept)} kept)",
+    )
+    log.info(
+        "[plugins] uninstalled bundle %s — removed: %s; kept (shared/re-owned): %s",
+        bundle_id,
+        ", ".join(removed_members) or "none",
+        ", ".join(kept) or "none",
+    )
+    return {
+        "id": bundle_id,
+        "removed_members": removed_members,
+        "skipped_missing": skipped,
+        "kept": kept,
+        "purged": purge,
+    }
+
+
 def sync(*, allow: list[str] | None = None) -> list[dict]:
     """Re-clone every locked plugin at its pinned SHA (reproducible install set).
     Missing ones are fetched; present ones are left as-is."""

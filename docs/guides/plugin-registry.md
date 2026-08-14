@@ -1,10 +1,12 @@
 # Install & publish plugins (git URLs)
 
 Plugins can live in their own GitHub repo and be installed by URL — so you can
-make one and share it, and pull others in. A plugin repo is a **full bundle**: it
+make one and share it, and pull others in. A plugin repo is a **complete package**: it
 can contribute tools, subagents, SKILL.md skills, workflows, console views, routes,
 MCP servers, and config — all from the one repo. See
 [ADR 0027](/adr/0027-install-plugins-from-git-url) for the design + safety model.
+(To install several plugins as one curated, pinned *set*, see
+[Bundles](/guides/bundles) — a different thing than a single plugin repo.)
 
 ## Install one
 

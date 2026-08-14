@@ -54,8 +54,9 @@ workspace rm <name> [--purge] # --purge also deletes its scoped data
 
 A **bundle** ([ADR 0040](../adr/0040-plugin-bundles.md)) is a repo whose
 `protoagent.bundle.yaml` names a *pinned set of plugins* to install together, plus a
-suggested enable list + config. Install one into a workspace and you skip the
-plugin-by-plugin setup:
+suggested enable list + config — the full lifecycle (manifest reference, updating,
+uninstalling, publishing a stack) is in the [Bundles guide](./bundles.md). Install
+one into a workspace and you skip the plugin-by-plugin setup:
 
 ```bash
 python -m server plugin install https://github.com/protoLabsAI/product-stack   # fans out + pins each member
