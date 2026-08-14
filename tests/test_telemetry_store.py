@@ -495,6 +495,53 @@ def test_executor_accumulates_tool_durations():
     assert captured[0].tool_durations == {"web_search": [800, 2200], "calculator": [20]}
 
 
+def test_executor_counts_each_tool_call_once_despite_the_announce_then_finalize_pair():
+    """server/chat.py legitimately announces a tool_start TWICE per real call for a
+    streaming model — once early (tool-call name streamed, empty args, so the card
+    shows "running" right away) and once more at on_chat_model_end (SAME id, full
+    args, to fill the card in). Before this fix the executor's naive `tool_calls += 1`
+    counted both, doubling the metric everywhere it's read (dashboard, /perf, cost
+    correlations). Dedupe by tool_call id: two tool_start frames sharing an id count
+    as ONE call; a call with no id (a legacy plain-string producer) still counts."""
+    import asyncio
+
+    from a2a.server.context import ServerCallContext
+    from a2a.server.agent_execution import RequestContext
+    from a2a.server.events.event_queue import EventQueueLegacy as EventQueue
+    from a2a.types import Message, Part, Role, SendMessageRequest
+
+    from a2a_impl.executor import ProtoAgentExecutor, set_terminal_hook
+
+    captured = []
+    set_terminal_hook(captured.append)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        # Two real calls, each announced+finalized (4 tool_start events, 2 distinct ids).
+        yield ("tool_start", {"id": "1", "name": "read_file", "input": ""})
+        yield ("tool_start", {"id": "1", "name": "read_file", "input": '{"path": "a.py"}'})
+        yield ("tool_end", {"id": "1", "name": "read_file", "output": "x"})
+        yield ("tool_start", {"id": "2", "name": "read_file", "input": ""})
+        yield ("tool_start", {"id": "2", "name": "read_file", "input": '{"path": "b.py"}'})
+        yield ("tool_end", {"id": "2", "name": "read_file", "output": "y"})
+        # A legacy id-less producer still counts once, not zero.
+        yield ("tool_start", "legacy string producer")
+        yield ("tool_end", "done")
+        yield ("done", "ok")
+
+    async def run():
+        q = EventQueue()
+        req = SendMessageRequest(message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="hi")]))
+        ctx = RequestContext(call_context=ServerCallContext(), request=req, task_id="t", context_id="c")
+        await ProtoAgentExecutor(stream).execute(ctx, q)
+
+    try:
+        asyncio.run(run())
+    finally:
+        set_terminal_hook(None)
+
+    assert captured[0].tool_calls == 3
+
+
 def test_executor_accumulates_distinct_models_in_first_seen_order():
     """The executor records each distinct model once, in first-seen order, on
     the TurnOutcome — the routing-proof signal."""

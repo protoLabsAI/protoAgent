@@ -375,6 +375,7 @@ class ProtoAgentExecutor(AgentExecutor):
         context_tokens = 0
         llm_calls = 0
         tool_calls = 0
+        _counted_tool_call_ids: set[str] = set()  # dedupe key for tool_calls below
         models: list[str] = []
         tool_durations: dict[str, list[int]] = {}  # tool name → durations this turn, ms (#2697)
 
@@ -585,7 +586,18 @@ class ProtoAgentExecutor(AgentExecutor):
                     # in frame-arrival order, so text must reach it before the tool.
                     await _flush_text()
                     if event_type == "tool_start":
-                        tool_calls += 1
+                        # server/chat.py announces a tool_start TWICE per real call — once
+                        # early (streamed tool-call name, empty args, so the card shows
+                        # "running" immediately) and once more at on_chat_model_end (same
+                        # id, full args, to fill the card in) — both intentional, by design.
+                        # A naive increment here double-counted every call; dedupe by the
+                        # tool_call id so a call with no id (a legacy plain-string producer)
+                        # still counts once, and a call announced twice counts once too.
+                        tc_id = payload.get("id") if isinstance(payload, dict) else None
+                        if tc_id is None or tc_id not in _counted_tool_call_ids:
+                            tool_calls += 1
+                            if tc_id is not None:
+                                _counted_tool_call_ids.add(tc_id)
                         # The overwhelmingly likely thing to wedge a turn is a tool
                         # that never returns, so name it for the stall message.
                         name = payload.get("name") if isinstance(payload, dict) else None
