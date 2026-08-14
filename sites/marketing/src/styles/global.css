@@ -71,9 +71,16 @@
   color: var(--pl-color-fg);
 }
 
-/* Hamburger — hidden above the breakpoint. */
-.nav-toggle {
+/* Mobile menu is a native <details> disclosure, so it opens with no JS.
+   Hidden above the breakpoint. */
+.nav-disclosure {
   display: none;
+}
+
+/* The <summary> is the hamburger. `list-style: none` + the -webkit rule kill
+   the native disclosure triangle in every engine. */
+.nav-toggle {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 36px;
@@ -84,7 +91,12 @@
   border-radius: var(--pl-radius);
   color: var(--pl-color-fg);
   cursor: pointer;
+  list-style: none;
   transition: border-color var(--pl-motion-fast) var(--pl-motion-ease);
+}
+
+.nav-toggle::-webkit-details-marker {
+  display: none;
 }
 
 .nav-toggle:hover {
@@ -94,7 +106,8 @@
 /* Mobile panel — absolute so opening it doesn't shift the page. .nav is
    sticky, which establishes the containing block. */
 .nav-mobile {
-  display: none;
+  /* <details> handles show/hide — no `display: none` toggle needed here. */
+  display: flex;
   position: absolute;
   top: 100%;
   left: 0;
@@ -128,11 +141,8 @@
   .nav-links {
     display: none;
   }
-  .nav-toggle {
-    display: inline-flex;
-  }
-  .nav-mobile.is-open {
-    display: flex;
+  .nav-disclosure {
+    display: block;
   }
 }
 
@@ -330,6 +340,12 @@
   margin-bottom: 0.25rem;
 }
 
+/* .pl-row__name carries its own bottom margin for the stacked row layout; in
+   the flex head the row's gap handles the spacing instead. */
+.plugin-head .pl-row__name {
+  margin-bottom: 0;
+}
+
 .plugin-tags {
   display: flex;
   flex-wrap: wrap;
@@ -420,6 +436,17 @@
   margin-top: 3rem;
 }
 
+/* A .pl-deliverable used as a standalone note under a block, rather than as
+   one cell of a .pl-deliverables grid (which owns its own gaps). */
+.note-block {
+  margin-top: var(--pl-space-8);
+}
+
+/* A link on its own line at the end of a note body. */
+.note-block__link {
+  margin-top: var(--pl-space-2);
+}
+
 /* Meta line under a heading (version · date · badges). */
 .meta-row {
   display: flex;
@@ -442,4 +469,16 @@
   border-top: var(--pl-border-width) solid var(--pl-color-border);
   font-size: 13px;
   color: var(--pl-color-fg-muted);
+}
+
+/* The endnote is already the first thing in its own section — the section
+   padding supplies the space, so drop the stacked top margin. */
+.endnote--flush {
+  margin-top: 0;
+}
+
+/* .pl-eyebrow owns the gap to whatever it labels; inside .meta-row the row's
+   own gap does that job, so the margin would double it. */
+.meta-row .pl-eyebrow {
+  margin: 0;
 }

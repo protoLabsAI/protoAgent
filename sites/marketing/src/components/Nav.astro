@@ -2,6 +2,13 @@
 // Chrome mirrors protolabs.studio's Nav: mono wordmark, muted links, no CTA
 // fill. The brand restraint is the point — the design system's primary button
 // is a stronger border, not a lavender block.
+//
+// The mobile menu is a native <details>/<summary> disclosure, NOT a
+// button + JS toggle. protolabs.studio can afford the JS version (it's a React
+// app — no JS, no page), but this is a static Astro site that renders fine
+// without it, and the nav it replaced kept Docs/GitHub/Download visible on
+// mobile with no JS at all. A scripted toggle would have made navigation the
+// one thing on the site that needs JavaScript to work.
 const LINKS = [
   { href: '/features', label: 'Features' },
   { href: '/docs/', label: 'Docs', external: true },
@@ -35,47 +42,34 @@ const here = Astro.url.pathname.replace(/\/$/, '') || '/';
       )}
     </nav>
 
-    <button
-      type="button"
-      class="nav-toggle"
-      aria-label="Open menu"
-      aria-expanded="false"
-      aria-controls="mobile-menu"
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-        <path d="M4 7h16M4 12h16M4 17h16" />
-      </svg>
-    </button>
+    <details class="nav-disclosure">
+      <summary class="nav-toggle" aria-label="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      </summary>
+      <nav class="nav-mobile" aria-label="Primary mobile">
+        {LINKS.map((l) =>
+          l.external ? (
+            <a href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>
+          ) : (
+            <a href={l.href} aria-current={here === l.href ? 'page' : undefined}>{l.label}</a>
+          ),
+        )}
+      </nav>
+    </details>
   </div>
-
-  <nav id="mobile-menu" class="nav-mobile" aria-label="Primary mobile" hidden>
-    {LINKS.map((l) =>
-      l.external ? (
-        <a href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>
-      ) : (
-        <a href={l.href} aria-current={here === l.href ? 'page' : undefined}>{l.label}</a>
-      ),
-    )}
-  </nav>
 </header>
 
 <script>
-  const toggle = document.querySelector<HTMLButtonElement>('.nav-toggle');
-  const menu = document.getElementById('mobile-menu');
-
-  function setOpen(open: boolean) {
-    if (!toggle || !menu) return;
-    menu.classList.toggle('is-open', open);
-    menu.hidden = !open;
-    toggle.setAttribute('aria-expanded', String(open));
-    toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
-  }
-
-  toggle?.addEventListener('click', () => {
-    setOpen(toggle.getAttribute('aria-expanded') !== 'true');
-  });
-
+  // Progressive enhancement only — the disclosure above already opens, closes
+  // and is keyboard-operable with this script absent. This just adds
+  // Escape-to-close, which <details> has no native equivalent for.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') setOpen(false);
+    if (e.key !== 'Escape') return;
+    const menu = document.querySelector<HTMLDetailsElement>('.nav-disclosure[open]');
+    if (!menu) return;
+    menu.open = false;
+    menu.querySelector<HTMLElement>('summary')?.focus();
   });
 </script>

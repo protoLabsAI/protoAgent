@@ -214,7 +214,7 @@ const counts = Object.fromEntries(
             <div class="pl-row__label">{p.category}</div>
             <div>
               <div class="plugin-head">
-                <span class="pl-row__name" style="margin: 0">{p.name}</span>
+                <span class="pl-row__name">{p.name}</span>
                 {p.official && <span class="pl-badge">official</span>}
               </div>
               <div class="pl-row__desc">{p.tagline}</div>
@@ -237,7 +237,7 @@ const counts = Object.fromEntries(
         ))}
       </div>
 
-      <p id="plugin-empty" class="pl-empty" style="display: none">
+      <p id="plugin-empty" class="pl-empty" hidden>
         No plugins match — try a different category or search.
       </p>
     </div>
@@ -305,7 +305,10 @@ const counts = Object.fromEntries(
         if (show) shown++;
       }
       if (countEl) countEl.textContent = `${shown} ${shown === 1 ? 'plugin' : 'plugins'}`;
-      if (emptyEl) emptyEl.style.display = shown ? 'none' : '';
+      // `hidden` works here because .pl-empty sets no display of its own. The
+      // rows above still need style.display: .pl-row is display:grid, and an
+      // author rule beats the UA's [hidden] { display: none }.
+      if (emptyEl) emptyEl.hidden = shown > 0;
     }
 
     function sortRows() {

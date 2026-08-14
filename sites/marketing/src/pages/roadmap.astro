@@ -35,7 +35,7 @@ const refHref = (ref: string) =>
       {roadmap.map(({ status, items }) => (
         <div class="status-group">
           <div class="meta-row">
-            <span class="pl-eyebrow" style="margin: 0">{status}</span>
+            <span class="pl-eyebrow">{status}</span>
             <span class={`pl-badge ${badgeVariant[status] ?? ''}`}>{items.length}</span>
           </div>
           <div>

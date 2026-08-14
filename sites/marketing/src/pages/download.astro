@@ -148,7 +148,7 @@ const winInstall = [
             </div>
           ))}
         </div>
-        <div class="pl-deliverable" style="margin-top: 2rem">
+        <div class="pl-deliverable note-block">
           <div class="pl-deliverable__title">Signed &amp; notarized by Apple</div>
           <div class="pl-deliverable__body">
             Opens cleanly, no Gatekeeper workaround. protoAgent is in public beta and updates
@@ -186,14 +186,14 @@ const winInstall = [
             </div>
           ))}
         </div>
-        <div class="pl-deliverable" style="margin-top: 2rem">
+        <div class="pl-deliverable note-block">
           <div class="pl-deliverable__title">Unsigned build — expect a SmartScreen prompt</div>
           <div class="pl-deliverable__body">
             There’s no Windows code-signing certificate yet, so both the installer and the first
             launch trigger "Windows protected your PC." Click <strong>More info → Run anyway</strong> —
             that’s expected for this build, not a sign of tampering. protoAgent is in public beta
             and updates itself in place; expect frequent releases.
-            <div style="margin-top: 0.5rem">
+            <div class="note-block__link">
               <a href="/docs/guides/windows-desktop" target="_blank" rel="noopener noreferrer">Full install, data-location &amp; recovery guide →</a>
             </div>
           </div>
@@ -236,7 +236,7 @@ const winInstall = [
         <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer">first-agent tutorial</a>
         walks through it. Runs anywhere Python does — macOS, Linux, or Windows.
       </p>
-      <p class="endnote" style="margin-top: 0">
+      <p class="endnote endnote--flush">
         <a href="/changelog">View full release history →</a>
       </p>
     </div>
