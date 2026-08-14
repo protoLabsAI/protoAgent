@@ -246,6 +246,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "thinking": "",
     "tools_deferred_enabled": False,
     "tools_deferred_keep": [],
+    "tools_memoize_reads_enabled": False,
     "tools_disabled": [],
     "tools_hidden": [],
     "settings_hidden": [],

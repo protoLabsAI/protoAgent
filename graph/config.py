@@ -510,6 +510,17 @@ class LangGraphConfig:
     tools_deferred_enabled: bool = False
     tools_deferred_keep: list[str] = field(default_factory=list)
 
+    # Skip re-executing an allowlisted read call when this turn's history already
+    # has an up-to-date result for the identical (tool, project, path). Found via a
+    # live-session audit: `read_file` on the same file, called twice non-
+    # consecutively (so stall_guard's stuck-loop detector never saw it), returning
+    # byte-identical truncated content both times. Scoped to explicitly idempotent
+    # read tools only (never state-reading tools like a board/issue listing, which
+    # can legitimately change within a turn as the agent's own actions alter it),
+    # and invalidated the moment a write tool touches the same (project, path) this
+    # turn. OFF by default — new, unproven in production.
+    tools_memoize_reads_enabled: bool = False
+
     # Tool denylist — drop named core tools from the agent without editing
     # ``tools/lg_tools.py::get_all_tools``. A fork keeps what it wants by listing
     # the rest here (config ``tools.disabled``); plugins still ADD tools. So
@@ -1382,6 +1393,9 @@ class LangGraphConfig:
             compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
+            tools_memoize_reads_enabled=data.get("tools", {})
+            .get("memoize_reads", {})
+            .get("enabled", cls.tools_memoize_reads_enabled),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
             settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),

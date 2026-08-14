@@ -28,8 +28,11 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated, Any
 
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
+from langgraph.prebuilt import InjectedState
 
 from tools.shell import run_command as _shell_run
 
@@ -293,6 +296,63 @@ def _bypass_requested() -> bool:
     return bool(current_request_metadata().get("bypass_permissions"))
 
 
+# `read_file` memoization (opt-in, `tools.memoize_reads.enabled`) — found via a
+# live-session transcript audit: the same file, read twice non-consecutively in one
+# turn, returned byte-identical truncated content both times (stall_guard's stuck-
+# loop detector only watches the trailing *contiguous* run, so a non-consecutive
+# repeat like this passes it unnoticed). A file's content is static within a turn
+# UNLESS the agent itself writes it, so a cached read is invalidated the moment a
+# write to the SAME (project, path) lands later in the turn.
+#
+# Lives inside `read_file` itself (via InjectedState), not as middleware around it:
+# an earlier middleware-based design that returned a cached result WITHOUT calling
+# the real tool handler silently skipped the `on_tool_end` callback event the rest
+# of the stack depends on (the console tool card, tool_durations, the turn's own
+# stall-message logic) — verified empirically against a real graph run. Checking
+# inside the tool body instead means the tool still "runs" (cheaply — no real read),
+# so the normal callback path fires exactly as it does for every other call.
+_WRITE_TOOLS = frozenset({"write_file", "edit_file", "delete_file"})
+
+
+def _this_turn_messages(state) -> list:
+    messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", None) or []
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            return list(messages[i + 1 :])
+    return list(messages)
+
+
+def _memoized_read(state, project: str, path: str, offset: int) -> str | None:
+    """The prior read's content to reuse, or None to read for real. Only a call
+    whose EXACT (project, path, offset) hasn't been written to since its read
+    qualifies — a different offset is a different chunk of the file, not a repeat,
+    so it's keyed in too. The LAST event touching that key (read or write),
+    scanned in turn order, decides."""
+    if state is None:
+        return None
+    messages = _this_turn_messages(state)
+    results_by_id = {
+        m.tool_call_id: m for m in messages if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None)
+    }
+    last_content: str | None = None
+    for msg in messages:
+        if not isinstance(msg, AIMessage):
+            continue
+        for tc in msg.tool_calls or []:
+            tc_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            tc_args = (tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)) or {}
+            if tc_args.get("project") != project or tc_args.get("path") != path:
+                continue
+            if tc_name in _WRITE_TOOLS:
+                last_content = None  # a later write invalidates any earlier cached read at ANY offset
+            elif tc_name == "read_file" and int(tc_args.get("offset", 0) or 0) == offset:
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                result = results_by_id.get(tc_id)
+                if result is not None and getattr(result, "status", "success") != "error":
+                    last_content = result.content if isinstance(result.content, str) else None
+    return last_content
+
+
 def build_fs_tools(config) -> list:
     """Build the fenced filesystem tools from config. Empty list when no valid
     projects are registered (so the primitive is inert by default)."""
@@ -311,6 +371,7 @@ def build_fs_tools(config) -> list:
             log.info("[fs] filesystem enabled but no valid projects registered — no tools")
         return []
     allow_run = bool(getattr(config, "filesystem_allow_run", False))
+    memoize_reads = bool(getattr(config, "tools_memoize_reads_enabled", False))
     # run_command is unsandboxed (arbitrary argv as the server user), so by
     # default each invocation is gated behind a HITL approval (the operator sees
     # the command + approves/denies). Forks can disable the gate (e.g. inside a
@@ -350,21 +411,43 @@ def build_fs_tools(config) -> list:
         return "\n".join(out) + more if out else "(empty)"
 
     @tool
-    def read_file(project: str, path: str) -> str:
-        """Read a text file inside a managed project (relative path). Truncated if large."""
+    def read_file(
+        project: str,
+        path: str,
+        offset: int = 0,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Read a text file inside a managed project (relative path).
+
+        Returns up to _MAX_READ_CHARS chars starting at `offset` (0 = the start of
+        the file). A truncated result names the offset to pass next, so a file
+        larger than one chunk is reachable in full across a few calls instead of
+        being permanently capped at the first chunk.
+        """
         try:
             target = registry.resolve(project, path)
         except ValueError as exc:
             return f"Error: {exc}"
         if not target.is_file():
             return f"Error: no such file: {path}"
+        if memoize_reads and _memoized_read(state, project, path, max(0, offset)) is not None:
+            # A short pointer, not the content again — the saving is real context
+            # tokens (the earlier full result is still visible earlier in this
+            # turn's history), not just a skipped disk read.
+            return f"(unchanged since the identical read earlier this turn — see that read_file result above for {project}/{path}.)"
         try:
             text = _read_text_verbatim(target)
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
-        if len(text) > _MAX_READ_CHARS:
-            return text[:_MAX_READ_CHARS] + f"\n… (truncated at {_MAX_READ_CHARS} chars)"
-        return text
+        total = len(text)
+        offset = max(0, offset)
+        if offset and offset >= total:
+            return f"Error: offset {offset} is past the end of {path} ({total} chars)."
+        end = offset + _MAX_READ_CHARS
+        chunk = text[offset:end]
+        if end < total:
+            return chunk + f"\n… (showing chars {offset}-{offset + len(chunk)} of {total}; call again with offset={offset + len(chunk)} for more)"
+        return chunk
 
     @tool
     def find_files(project: str, pattern: str = "**/*") -> str:

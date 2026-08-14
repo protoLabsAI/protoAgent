@@ -22,6 +22,7 @@ class _Cfg:
     filesystem_run_requires_approval: bool = True
     filesystem_bypass_allowed: bool = True
     filesystem_projects: list = field(default_factory=list)
+    tools_memoize_reads_enabled: bool = False
 
 
 @pytest.fixture
@@ -155,6 +156,40 @@ def test_search_lists_its_exclusions_in_the_tool_description(workspace):
 
     desc = t["search_files"].description
     assert "__pycache__" in desc and "node_modules" in desc and "include_generated" in desc
+
+
+def test_read_file_pages_past_the_truncation_cap(workspace):
+    # A file bigger than _MAX_READ_CHARS used to be permanently capped at the
+    # first chunk — no way to see the rest in any call. offset pages through it.
+    from tools.fs_tools import _MAX_READ_CHARS
+
+    _, a, _ = workspace
+    big = "x" * (_MAX_READ_CHARS + 100)
+    (a / "big.txt").write_text(big)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    first = t["read_file"].invoke({"project": "a", "path": "big.txt"})
+    assert first.startswith("x" * 100)
+    assert f"offset={_MAX_READ_CHARS}" in first
+    assert len(first) - len(f"\n… (showing chars 0-{_MAX_READ_CHARS} of {len(big)}; call again with offset={_MAX_READ_CHARS} for more)") == _MAX_READ_CHARS
+
+    second = t["read_file"].invoke({"project": "a", "path": "big.txt", "offset": _MAX_READ_CHARS})
+    assert second == "x" * 100  # the remainder, no truncation note — it's the end
+
+
+def test_read_file_offset_past_the_end_is_an_error(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    out = t["read_file"].invoke({"project": "a", "path": "README.md", "offset": 10_000})
+    assert out.startswith("Error:") and "past the end" in out
+
+
+def test_read_file_default_offset_is_unaffected_by_the_new_param(workspace):
+    # A small file's default (no offset) call is byte-for-byte identical to
+    # before — no truncation note, no behavior change for the common case.
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    assert t["read_file"].invoke({"project": "a", "path": "src/main.py"}) == "print('hello')\nTODO: fix\n"
 
 
 def test_read_file_escape_is_refused(workspace):
@@ -651,6 +686,129 @@ def test_read_file_does_not_mask_crlf(workspace):
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
 
     assert t["read_file"].invoke({"project": "a", "path": "win.txt"}) == "one\r\ntwo\r\n"
+
+
+# ── read_file memoization (opt-in, tools.memoize_reads.enabled) ────────────────
+# Found via a live-session transcript audit: the same file, read twice non-
+# consecutively in one turn, returned byte-identical truncated content both times.
+
+
+def _msgs(*events):
+    """Build a turn's message list from ("read"|"write"|"human", ...) shorthand.
+
+    ("human",) -> HumanMessage marking the turn boundary
+    ("read", id, project, path, offset, result) -> AIMessage(tool_calls=[...]) + ToolMessage
+    ("write", id, project, path) -> AIMessage(tool_calls=[write_file]) + ToolMessage
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    out = []
+    for ev in events:
+        kind = ev[0]
+        if kind == "human":
+            out.append(HumanMessage(content="go"))
+        elif kind == "read":
+            _, cid, project, path, offset, result = ev
+            args = {"project": project, "path": path}
+            if offset:
+                args["offset"] = offset
+            out.append(AIMessage(content="", tool_calls=[{"name": "read_file", "args": args, "id": cid}]))
+            out.append(ToolMessage(content=result, tool_call_id=cid, name="read_file"))
+        elif kind == "write":
+            _, cid, project, path = ev
+            out.append(
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "write_file", "args": {"project": project, "path": path, "content": "x"}, "id": cid}],
+                )
+            )
+            out.append(ToolMessage(content="Overwrote.", tool_call_id=cid, name="write_file"))
+    return out
+
+
+def test_memoization_off_by_default_always_reads_for_real(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "STALE CACHED CONTENT"))}
+    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
+    assert out == "print('hello')\nTODO: fix\n"  # the REAL file content, cache ignored
+
+
+def test_memoization_serves_a_pointer_not_the_content_again(workspace):
+    # The saving is real context tokens, not just a skipped disk read — a hit
+    # returns a short pointer, not the (possibly huge) content a second time.
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "CACHED CONTENT"))}
+    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
+    assert out != "CACHED CONTENT"
+    assert "unchanged" in out and "a/src/main.py" in out
+
+
+def test_memoization_a_write_to_the_same_path_invalidates_the_cache(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    state = {
+        "messages": _msgs(
+            ("human",),
+            ("read", "1", "a", "src/main.py", 0, "STALE — before the write"),
+            ("write", "2", "a", "src/main.py"),
+        )
+    }
+    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
+    assert out == "print('hello')\nTODO: fix\n"  # re-read for real, not the stale cache
+
+
+def test_memoization_a_different_offset_is_not_treated_as_the_same_call(workspace):
+    # Pagination and memoization must compose: reading a DIFFERENT chunk of the
+    # same file is not a repeat, even though (project, path) matches.
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "chunk at offset 0"))}
+    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "offset": 5, "state": state})
+    assert out != "chunk at offset 0"
+    assert out == "print('hello')\nTODO: fix\n"[5:]  # the real file's content starting at char 5
+
+
+def test_memoization_a_different_path_is_not_confused_with_the_cached_one(workspace):
+    _, a, _ = workspace
+    (a / "other.py").write_text("different file")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "main.py's cached content"))}
+    out = t["read_file"].invoke({"project": "a", "path": "other.py", "state": state})
+    assert out == "different file"
+
+
+def test_memoization_only_scans_the_current_turn(workspace):
+    # A read from a PRIOR turn must not be treated as still valid this turn.
+    from langchain_core.messages import HumanMessage
+
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    state = {
+        "messages": [
+            *_msgs(("human",), ("read", "1", "a", "src/main.py", 0, "turn 1's cached content")),
+            HumanMessage(content="turn 2"),
+        ]
+    }
+    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
+    assert out == "print('hello')\nTODO: fix\n"  # re-read — the cached read belongs to turn 1
+
+
+def test_memoization_an_errored_prior_read_is_not_served_as_a_cached_success(workspace):
+    _, a, _ = workspace
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    state = {
+        "messages": [
+            HumanMessage(content="go"),
+            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"project": "a", "path": "src/main.py"}, "id": "1"}]),
+            ToolMessage(content="Error: cannot read", tool_call_id="1", name="read_file", status="error"),
+        ]
+    }
+    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
+    assert out == "print('hello')\nTODO: fix\n"  # a real read, not the errored one echoed back
 
 
 def test_write_then_read_round_trips_exactly(workspace):
