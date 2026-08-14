@@ -188,8 +188,9 @@ def test_read_file_default_offset_is_unaffected_by_the_new_param(workspace):
     # A small file's default (no offset) call is byte-for-byte identical to
     # before — no truncation note, no behavior change for the common case.
     _, a, _ = workspace
+    p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
-    assert t["read_file"].invoke({"project": "a", "path": "src/main.py"}) == "print('hello')\nTODO: fix\n"
+    assert t["read_file"].invoke({"project": "a", "path": p}) == _EXACT_CONTENT
 
 
 def test_read_file_escape_is_refused(workspace):
@@ -692,6 +693,19 @@ def test_read_file_does_not_mask_crlf(workspace):
 # Found via a live-session transcript audit: the same file, read twice non-
 # consecutively in one turn, returned byte-identical truncated content both times.
 
+# write_text() applies platform newline translation (CRLF on Windows) — fine for
+# the workspace fixture's src/main.py, which every OTHER test here only substring-
+# checks, but wrong for these tests' exact `==` comparisons. write_bytes() with an
+# explicit LF payload keeps the on-disk content (and therefore read_file's verbatim
+# output) identical across platforms, matching read_file's own no-normalization
+# contract (test_read_file_does_not_mask_crlf).
+_EXACT_CONTENT = "print('hello')\nTODO: fix\n"
+
+
+def _write_exact(a) -> str:
+    (a / "exact.py").write_bytes(_EXACT_CONTENT.encode("utf-8"))
+    return "exact.py"
+
 
 def _msgs(*events):
     """Build a turn's message list from ("read"|"write"|"human", ...) shorthand.
@@ -728,53 +742,58 @@ def _msgs(*events):
 
 def test_memoization_off_by_default_always_reads_for_real(workspace):
     _, a, _ = workspace
+    p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "STALE CACHED CONTENT"))}
-    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
-    assert out == "print('hello')\nTODO: fix\n"  # the REAL file content, cache ignored
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "STALE CACHED CONTENT"))}
+    out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
+    assert out == _EXACT_CONTENT  # the REAL file content, cache ignored
 
 
 def test_memoization_serves_a_pointer_not_the_content_again(workspace):
     # The saving is real context tokens, not just a skipped disk read — a hit
     # returns a short pointer, not the (possibly huge) content a second time.
     _, a, _ = workspace
+    p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "CACHED CONTENT"))}
-    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "CACHED CONTENT"))}
+    out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
     assert out != "CACHED CONTENT"
-    assert "unchanged" in out and "a/src/main.py" in out
+    assert "unchanged" in out and f"a/{p}" in out
 
 
 def test_memoization_a_write_to_the_same_path_invalidates_the_cache(workspace):
     _, a, _ = workspace
+    p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
     state = {
         "messages": _msgs(
             ("human",),
-            ("read", "1", "a", "src/main.py", 0, "STALE — before the write"),
-            ("write", "2", "a", "src/main.py"),
+            ("read", "1", "a", p, 0, "STALE — before the write"),
+            ("write", "2", "a", p),
         )
     }
-    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
-    assert out == "print('hello')\nTODO: fix\n"  # re-read for real, not the stale cache
+    out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
+    assert out == _EXACT_CONTENT  # re-read for real, not the stale cache
 
 
 def test_memoization_a_different_offset_is_not_treated_as_the_same_call(workspace):
     # Pagination and memoization must compose: reading a DIFFERENT chunk of the
     # same file is not a repeat, even though (project, path) matches.
     _, a, _ = workspace
+    p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "chunk at offset 0"))}
-    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "offset": 5, "state": state})
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "chunk at offset 0"))}
+    out = t["read_file"].invoke({"project": "a", "path": p, "offset": 5, "state": state})
     assert out != "chunk at offset 0"
-    assert out == "print('hello')\nTODO: fix\n"[5:]  # the real file's content starting at char 5
+    assert out == _EXACT_CONTENT[5:]  # the real file's content starting at char 5
 
 
 def test_memoization_a_different_path_is_not_confused_with_the_cached_one(workspace):
     _, a, _ = workspace
-    (a / "other.py").write_text("different file")
+    p = _write_exact(a)
+    (a / "other.py").write_bytes(b"different file")
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", "src/main.py", 0, "main.py's cached content"))}
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "cached content"))}
     out = t["read_file"].invoke({"project": "a", "path": "other.py", "state": state})
     assert out == "different file"
 
@@ -784,31 +803,33 @@ def test_memoization_only_scans_the_current_turn(workspace):
     from langchain_core.messages import HumanMessage
 
     _, a, _ = workspace
+    p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
     state = {
         "messages": [
-            *_msgs(("human",), ("read", "1", "a", "src/main.py", 0, "turn 1's cached content")),
+            *_msgs(("human",), ("read", "1", "a", p, 0, "turn 1's cached content")),
             HumanMessage(content="turn 2"),
         ]
     }
-    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
-    assert out == "print('hello')\nTODO: fix\n"  # re-read — the cached read belongs to turn 1
+    out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
+    assert out == _EXACT_CONTENT  # re-read — the cached read belongs to turn 1
 
 
 def test_memoization_an_errored_prior_read_is_not_served_as_a_cached_success(workspace):
     _, a, _ = workspace
+    p = _write_exact(a)
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
     state = {
         "messages": [
             HumanMessage(content="go"),
-            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"project": "a", "path": "src/main.py"}, "id": "1"}]),
+            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"project": "a", "path": p}, "id": "1"}]),
             ToolMessage(content="Error: cannot read", tool_call_id="1", name="read_file", status="error"),
         ]
     }
-    out = t["read_file"].invoke({"project": "a", "path": "src/main.py", "state": state})
-    assert out == "print('hello')\nTODO: fix\n"  # a real read, not the errored one echoed back
+    out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
+    assert out == _EXACT_CONTENT  # a real read, not the errored one echoed back
 
 
 def test_write_then_read_round_trips_exactly(workspace):
