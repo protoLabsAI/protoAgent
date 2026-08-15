@@ -291,6 +291,8 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print(f"  kept (shared with another bundle / re-installed directly): {', '.join(rep['kept'])}")
             if rep["skipped_missing"]:
                 print(f"  already gone (uninstalled individually earlier): {', '.join(rep['skipped_missing'])}")
+            for pid, why in (rep.get("failed") or {}).items():
+                print(f"  ✗ {pid} could not be removed: {why}")
             if rep["removed_members"]:
                 for inst in _live_servers():
                     where = f"pid {inst['pid']}" + (f", port {inst['port']}" if inst.get("port") else "")

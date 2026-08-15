@@ -727,8 +727,32 @@ def test_uninstall_bundle_tolerates_individually_removed_member(env):
 
 
 def test_uninstall_bundle_unknown_id_raises(env):
-    with pytest.raises(installer.InstallError):
+    # The TYPED subclass — HTTP adapters map it to 404 without string-matching,
+    # closing the pre-check TOCTOU the 2740 review flagged.
+    with pytest.raises(installer.BundleNotInstalledError):
         installer.uninstall_bundle("nope")
+
+
+def test_uninstall_bundle_reports_raised_failures_separately(env, monkeypatch):
+    """An uninstall that RAISED is not "already gone" — it lands in `failed`, never
+    skipped_missing (2740 review nit)."""
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+    installer.install(str(bundle))
+
+    real_uninstall = installer.uninstall
+
+    def flaky(pid, **k):
+        if pid == "demo_b":
+            raise installer.InstallError("demo_b is wedged")
+        return real_uninstall(pid, **k)
+
+    monkeypatch.setattr(installer, "uninstall", flaky)
+    rep = installer.uninstall_bundle("demo_stack")
+    assert rep["removed_members"] == ["demo_a"]
+    assert rep["failed"] == {"demo_b": "demo_b is wedged"}
+    assert rep["skipped_missing"] == []
 
 
 def test_archetype_block_warns_on_unknown_keys(caplog):

@@ -83,6 +83,12 @@ class InstallError(RuntimeError):
     """A plugin install/uninstall/sync failed (bad URL, manifest, git, collision)."""
 
 
+class BundleNotInstalledError(InstallError):
+    """The named bundle has no ``plugins.lock`` row — typed so HTTP adapters can map
+    "doesn't exist" to 404 without string-matching, even when a concurrent DELETE
+    wins the race between a route's pre-check and the op (2740 review)."""
+
+
 def live_plugins_dir() -> Path:
     """Where git-installed plugins land — the live dir the loader discovers
     (``instance_paths().plugins_dir``, honoring ``PROTOAGENT_PLUGINS_DIR``)."""
@@ -1419,7 +1425,7 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
     secrets removal)."""
     row, listed_elsewhere, by_of = _bundle_ownership(bundle_id)
     if row is None:
-        raise InstallError(f"bundle {bundle_id!r} is not installed.")
+        raise BundleNotInstalledError(f"bundle {bundle_id!r} is not installed.")
     # Bucket every row member honestly (the 2732 review's bucketing finding: a member
     # uninstalled individually earlier — the stale-provenance case this function
     # exists for — landed in "kept" as if it were still installed and shared):
@@ -1428,6 +1434,7 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
     #   anything else         → shared / re-owned    → kept
     removed_members: list[str] = []
     skipped: list[str] = []
+    failed: dict[str, str] = {}
     kept: list[str] = []
     for raw in row.get("plugins") or []:
         pid = str(raw)
@@ -1437,8 +1444,10 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
             try:
                 uninstall(pid, purge=purge)
                 removed_members.append(pid)
-            except InstallError:
-                skipped.append(pid)
+            except InstallError as exc:
+                # An uninstall that RAISED is not "already gone" — reporting it in
+                # skipped_missing mislabeled a real failure (2740 review nit).
+                failed[pid] = str(exc)
         else:
             kept.append(pid)
     # Re-read — each member uninstall rewrote the lock — then drop the row itself.
@@ -1460,6 +1469,9 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
         "id": bundle_id,
         "removed_members": removed_members,
         "skipped_missing": skipped,
+        # Members whose uninstall RAISED (a race, a refusal) — distinct from
+        # skipped_missing so callers never label a failure "already gone".
+        "failed": failed,
         "kept": kept,
         "purged": purge,
     }

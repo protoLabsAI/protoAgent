@@ -225,7 +225,7 @@ async def update_bundle(
 
     entry = await asyncio.to_thread(installer.bundle_entry, bundle_id)
     if entry is None:
-        raise installer.InstallError(f"bundle {bundle_id!r} is not installed.")
+        raise installer.BundleNotInstalledError(f"bundle {bundle_id!r} is not installed.")
     source_url = str(entry.get("source_url") or "")
     if not source_url:
         raise installer.InstallError(f"bundle {bundle_id!r} has no source_url — cannot update.")
