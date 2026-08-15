@@ -38,21 +38,42 @@ def normalize_source(url: str) -> str:
     return norm[:-4] if norm.endswith(".git") else norm
 
 
-def _matches(url: str, globs: list[str] | None) -> bool:
-    # The prefix fallback is PATH-BOUNDARY widening ("pat/*"), never bare "pat*":
-    # an acked exact repo `github.com/x/y` must not silently trust the
-    # name-collision `github.com/x/y-evil` (the 2733 review's fix-first finding —
-    # a bare-`*` widening is a consent bypass). The boundary form still gives the
-    # org shorthand: an entry `github.com/org` matches `github.com/org/repo`.
-    #
-    # BOTH sides run the one normalizer: an entry hand-written in a canonical
-    # spelling (`…/thing.git`, a trailing slash, even a git@ prefix) must keep
-    # matching the same repo — trimming only the URL side silently fail-closed
-    # `.git`-spelled entries (the 2739 re-review's major). normalize_source is
-    # glob-safe: it never touches `*`.
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _normalize_pattern(pat: str) -> str:
+    """A pattern entry in the same host/path form the URL side normalizes to.
+
+    Scheme/``git@`` strip, ``:`` → ``/``, and the trailing-slash trim are safe for
+    every entry. The ``.git`` trim applies ONLY to glob-free (exact-repo) entries:
+    on a glob it CHANGES semantics fail-open — ``github.com/acme/*.git`` would
+    become ``…/acme/*`` (admitting the whole org) and a bare ``*.git`` would
+    become ``*`` (admitting everything) — the 2739 round-3 finding."""
+    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", str(pat or "")).replace(":", "/").strip()
+    norm = norm.rstrip("/")
+    if norm.endswith(".git") and not _GLOB_CHARS.intersection(norm):
+        norm = norm[:-4]
+    return norm
+
+
+def source_matches(url: str, globs: list[str] | None) -> bool:
+    """THE match predicate — shared by the trust matcher and the installer
+    allowlist so the two can never drift (they did, byte-for-byte, twice).
+
+    The prefix fallback is PATH-BOUNDARY widening (``pat/*``), never bare
+    ``pat*``: an exact entry ``github.com/x/y`` must not match the
+    name-collision ``github.com/x/y-evil`` (a bare-``*`` widening is a consent
+    bypass). The boundary form still gives the org shorthand: an entry
+    ``github.com/org`` matches ``github.com/org/repo``. Both sides normalize —
+    exact entries fully (spelling-insensitive), glob entries without the
+    ``.git`` trim (see ``_normalize_pattern``)."""
     norm = normalize_source(url)
-    pats = [normalize_source(p) for p in globs or []]
+    pats = [_normalize_pattern(p) for p in globs or []]
     return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "/*") for pat in pats if pat)
+
+
+def _matches(url: str, globs: list[str] | None) -> bool:
+    return source_matches(url, globs)
 
 
 def source_official(url: str, official: list[str] | None) -> bool:

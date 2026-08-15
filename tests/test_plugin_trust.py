@@ -131,3 +131,19 @@ def test_ack_store_survives_the_write_path():
     assert out["sources"]["official"] == ["github.com/acme/*"]
     assert out["sources"]["acked"] == ["github.com/x/y"]
     assert out["trust_unverified"] is True
+
+
+def test_glob_entries_keep_their_git_suffix_semantics():
+    """The 2739 round-3 fail-open: trimming .git on a GLOB changed its meaning —
+    `github.com/acme/*.git` became `…/acme/*` (the whole org) and a bare `*.git`
+    became `*` (everything). Glob entries keep their suffix; exact entries stay
+    spelling-insensitive."""
+    from graph.plugins.installer import _source_allowed
+
+    # a glob written to match only .git-suffixed paths must NOT widen
+    assert not _source_allowed("https://github.com/acme/thing", ["github.com/acme/*.git"])
+    assert not source_trusted("https://github.com/x/y", official=["*.git"], acked=[])
+    # …while an EXACT entry's .git is spelling, trimmed as before
+    assert _source_allowed("https://github.com/acme/thing", ["github.com/acme/thing.git"])
+    # ordinary globs unaffected
+    assert _source_allowed("https://github.com/acme/thing.git", ["github.com/acme/*"])

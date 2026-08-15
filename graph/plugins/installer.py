@@ -122,23 +122,16 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
     """Optional fork lock-down (ADR 0027 D3): if an allowlist is configured, the
     URL must match one of its host/org globs (e.g. ``github.com/protoLabsAI/*``).
 
-    The prefix fallback is PATH-BOUNDARY widening (``pat/*``), never bare ``pat*`` —
-    the bare form let an allowlisted ``github.com/org`` admit ``github.com/org-evil``
-    (the same name-collision widening the 2733 review flagged in the byte-identical
-    trust matcher). Normalization is ONE function shared with the trust matcher
-    (``trust.normalize_source``): scheme + ``git@`` strip together, ``.git`` and a
-    trailing slash trim — applied to BOTH sides, because trimming only the URL made
-    a ``….git``-spelled allow ENTRY fail-close against its own repo (the 2739
-    re-review's major; normalize_source is glob-safe, ``*`` survives)."""
+    The predicate is ``trust.source_matches`` — ONE function shared with the trust
+    matcher (they drifted byte-for-byte twice; the 2739 panel asked for one home):
+    path-boundary widening (never bare ``pat*``), both sides normalized, with the
+    ``.git`` trim applied only to glob-free entries (a glob's ``.git`` suffix is
+    semantics, not spelling)."""
     if not allow:
         return True
-    import fnmatch
+    from graph.plugins.trust import source_matches
 
-    from graph.plugins.trust import normalize_source
-
-    norm = normalize_source(url)
-    pats = [normalize_source(p) for p in allow]
-    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "/*") for pat in pats if pat)
+    return source_matches(url, allow)
 
 
 def _normalize_lock(data: object) -> dict:
