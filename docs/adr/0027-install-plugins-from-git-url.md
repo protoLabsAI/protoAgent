@@ -1,6 +1,7 @@
 # 0027 — Install plugins from a git URL (shareable plugin repos)
 
-Status: **Accepted** (sliced)
+Status: **Accepted** (sliced; D3 confirm amended 2026-08-15 — provenance-based
+consent, [ADR 0071](./0071-plugin-permissions-trust-model.md) D3)
 
 ## Context
 
@@ -59,6 +60,14 @@ capabilities (network/fs/secrets), and what it contributes (tools/views/routes/
 subagents). A fork can lock down with `plugins.sources.allow: [github.com/org/*]`
 (refuse anything off-allowlist). **Default: open + gated** (builder-friendly, never
 silent).
+
+> **Amendment (2026-08-15):** the confirm is now provenance-based rather than
+> per-install ([ADR 0071](./0071-plugin-permissions-trust-model.md) D3, shipped
+> #2733/#2739/#2734): sources matching `plugins.sources.official` (default: the
+> protoLabsAI org; fork-overridable) install with no ask, any other source gets a
+> **one-time** "this plugin runs code" consent recorded in `plugins.sources.acked`,
+> and `plugins.trust_unverified` is the operator's "don't ask again" switch. The
+> `sources.allow` hard allowlist above is unchanged and checked first.
 
 ### D4 — Dependencies: declare-only, explicit install (no surprise code-exec)
 

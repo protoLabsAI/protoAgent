@@ -1,6 +1,9 @@
 # ADR 0071 — Plugin permissions: a trust-and-consent model, not a runtime sandbox
 
-- **Status:** Accepted (2026-07-03) — design-only; the consent layer (§3 D3) is a tracked follow-up, no runtime code lands with this ADR.
+- **Status:** Accepted (2026-07-03); **D3 consent layer shipped 2026-08-15** — config
+  foundation + official gate (#2733), matcher hardening (#2739), ack API + console
+  dialog (#2734). The trust predicate lives in `graph/plugins/trust.py`; operator
+  docs in [the bundles guide](../guides/bundles.md).
 - **Deciders:** core maintainers
 - **Issue:** #1725
 - **Relates to:** [ADR 0001](./0001-extensibility-and-plugin-architecture.md) (plugin architecture), [ADR 0018](./0018-plugin-surfaces-routes-subagents.md) (backend seams), [ADR 0019](./0019-plugin-config-settings-secrets.md) (config/secrets), [ADR 0027](./0027-install-plugins-from-git-url.md) (git-URL install, `install ≠ enable ≠ trust`), [ADR 0008](./0008-sandboxing-and-openshell.md) (sandboxing posture), [ADR 0005](./0005-tool-pollution-and-progressive-disclosure.md) (`tools.disabled`)
@@ -157,6 +160,14 @@ official/acked gate, the consent dialog + ack API, the `capabilities:` relabel i
 console/docs) is a tracked follow-up sliced as in the plugin-hardening plan
 (foundation → gate → API → client → UI → docs). No runtime behavior changes when
 this ADR merges.
+
+> **Amendment (2026-08-15):** the D3 slices shipped — S1/S2 config fields,
+> persistence, and the official gate (#2733); the shared source matcher with its
+> security hardening (path-boundary globs, `.git`-spelling normalization, #2739);
+> S4–S6 `needs_ack` + `POST /api/plugins/ack`, the api.ts client, and the console
+> `TrustAckDialog` with the "don't ask again" switch (#2734). Explicit-empty
+> `sources.allow` semantics and an `install-deps` trust re-check remain tracked
+> in #2743.
 
 ## 4. Consequences
 
