@@ -27,14 +27,21 @@ import fnmatch
 import re
 
 
+def _strip_source_prefix(value: str) -> str:
+    """The shared half of both normalizers: scheme AND ``git@`` strip together
+    (``ssh://git@host/...`` carries both — the 2733 review caught the
+    single-alternation version leaving ``git@`` behind), ``:`` → ``/``, and the
+    trailing-slash trim. The ``.git`` handling deliberately stays with each caller:
+    unconditional for URLs, glob-aware for pattern entries."""
+    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", str(value or "")).replace(":", "/").strip()
+    return norm.rstrip("/")
+
+
 def normalize_source(url: str) -> str:
-    """A git URL in host/path form — the same rule as the install allowlist's
-    ``_source_allowed`` (scheme/``git@`` strip, ``:`` → ``/``), plus a trailing-slash
-    and ``.git`` trim, so an acked/official glob matches every spelling of one source.
-    Scheme AND ``git@`` strip together (``ssh://git@host/...`` carries both — the
-    2733 review caught the single-alternation version leaving ``git@`` behind)."""
-    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", str(url or "")).replace(":", "/").strip()
-    norm = norm.rstrip("/")
+    """A git URL in host/path form — prefix strip (see ``_strip_source_prefix``)
+    plus an unconditional ``.git`` trim, so an acked/official entry matches every
+    spelling of one source."""
+    norm = _strip_source_prefix(url)
     return norm[:-4] if norm.endswith(".git") else norm
 
 
@@ -49,8 +56,7 @@ def _normalize_pattern(pat: str) -> str:
     on a glob it CHANGES semantics fail-open — ``github.com/acme/*.git`` would
     become ``…/acme/*`` (admitting the whole org) and a bare ``*.git`` would
     become ``*`` (admitting everything) — the 2739 round-3 finding."""
-    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", str(pat or "")).replace(":", "/").strip()
-    norm = norm.rstrip("/")
+    norm = _strip_source_prefix(pat)
     if norm.endswith(".git") and not _GLOB_CHARS.intersection(norm):
         norm = norm[:-4]
     return norm

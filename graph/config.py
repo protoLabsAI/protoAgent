@@ -1538,8 +1538,13 @@ class LangGraphConfig:
             # `not _falsey(...)`, never bool(): a string "false" (JSON overlay, env,
             # hand-edit) is truthy, and bool() would silently DISABLE the consent
             # gate — the 2733 review's fail-open finding. Ambiguity resolves toward
-            # asking, matching _falsey's less-access design.
-            plugins_trust_unverified=not _falsey(plugins.get("trust_unverified"), default=True),
+            # asking, matching _falsey's less-access design. The absent-key default
+            # DERIVES from the field (a fork changing the class default stays
+            # coherent): _falsey answers "is this a NO?", so absent must read as
+            # the negation of the field's default.
+            plugins_trust_unverified=not _falsey(
+                plugins.get("trust_unverified"), default=not cls.plugins_trust_unverified
+            ),
             plugins_update_policy=dict(plugins.get("update_policy", {}) or {}),
             plugins_autoupdate_interval_hours=int(
                 plugins.get("autoupdate_interval_hours", cls.plugins_autoupdate_interval_hours) or 0
