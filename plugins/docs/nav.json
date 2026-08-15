@@ -798,6 +798,10 @@
           "title": "0099 — Chat-bundle format v1: a structured, artifact-aware export for the P2 hosted viewer"
         },
         {
+          "path": "adr/0100-agent-archetypes.md",
+          "title": "0100 — Agent archetypes (starter agent types, ratified)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
