@@ -77,6 +77,20 @@ TypeScript is the console.
 Run the **same commands CI runs** (`.github/workflows/checks.yml`) — locally,
 before the PR, not after. CI is the merge gate; a red PR is wasted cycles.
 
+**The fast gate is one command** — the same repo-owned script CI's `lint` job
+invokes, so the local and CI gates can't drift:
+
+```
+python scripts/gate.py              # ruff + lint-imports + attribution + uv lock + pytest
+python scripts/gate.py --lint-only  # just the lint checks (quick pre-commit smoke)
+```
+
+It runs sequentially and stops at the first failure; `uv lock --check` is
+skipped with a warning when `uv` isn't installed. Cross-platform (pure Python,
+no shell) — the same command works on Windows. The heavier legs below (live
+smoke, web unit/e2e, Windows matrix) are *not* part of the fast gate; run them
+when your change touches those surfaces. The full breakdown:
+
 | Gate | Command |
 |------|---------|
 | Lint | `ruff check .` (pinned `ruff==0.15.10`) |

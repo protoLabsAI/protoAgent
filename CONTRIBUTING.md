@@ -13,8 +13,10 @@ an external PR mergeable.
 
 ## Sending a pull request
 
-The gates and gotchas live in [PROTO.md](./PROTO.md) — run the "Must pass before
-opening a PR" table locally first. Beyond green checks:
+The gates and gotchas live in [PROTO.md](./PROTO.md) — `python scripts/gate.py`
+runs the fast gate (lint + unit tests, the same script CI invokes) in one
+command; the "Must pass before opening a PR" table there has the full
+breakdown. Beyond green checks:
 
 1. **Add a changelog fragment** — `changelog.d/<pr>.<kind>.md`, a markdown
    bullet with a **bold lead-in** ending in `(#NNNN)`. Shape and kinds:
