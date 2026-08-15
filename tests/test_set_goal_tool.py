@@ -162,6 +162,30 @@ def test_list_verifiers_no_plugin_verifiers_message(monkeypatch):
     assert "command" in out  # core types still present
 
 
+def test_list_verifiers_warns_core_types_are_not_usable_by_set_goal_or_create_watch(monkeypatch):
+    """Found live (protoEngineer, 2026-08-15): list_verifiers used to describe core
+    types (command/test/ci/data/llm/plugin) with no caveat, so the model read `ci`
+    in the list and tried `create_watch(..., check='ci', ...)` — which always fails,
+    because create_watch/set_goal only ever accept a PLUGIN verifier name (#2686).
+    The output must say so explicitly, both when a plugin verifier IS available
+    (so the model doesn't reach for a core type instead) and when none is (so the
+    model reports the real gap instead of guessing a core type anyway)."""
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {})
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIER_META", {})
+    tool = _build_list_verifiers_tool()
+    out = asyncio.run(tool.ainvoke({}))
+    assert "operator-only" in out
+    assert "core type" in out and "will fail" in out
+
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"spacetraders:credits": object()})
+    monkeypatch.setattr(
+        "graph.goals.verifiers._PLUGIN_VERIFIER_META",
+        {"spacetraders:credits": {"plugin_id": "spacetraders", "description": "Credits balance check"}},
+    )
+    out = asyncio.run(tool.ainvoke({}))
+    assert "usable by your set_goal/create_watch" in out
+
+
 def test_list_verifiers_includes_plugin_checks(monkeypatch):
     monkeypatch.setattr(
         "graph.goals.verifiers._PLUGIN_VERIFIERS",

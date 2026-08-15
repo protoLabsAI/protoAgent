@@ -1294,25 +1294,32 @@ def _build_list_verifiers_tool():
     async def list_verifiers() -> str:
         """List all verifier types and plugin checks registered on this instance.
 
-        Returns core verifier types (command, test, ci, data, llm, plugin) with
-        descriptions, then any plugin-contributed checks with their <plugin-id>:<name>
-        identifier and description. Call this before set_goal or create_watch to pick
-        a valid verifier.
+        Returns core verifier types (command, test, ci, data, llm, plugin) for your
+        AWARENESS — they exist and an operator can use any of them — then any
+        plugin-contributed checks with their <plugin-id>:<name> identifier and
+        description. Only the plugin-contributed checks are valid for YOUR set_goal
+        or create_watch calls; both tools accept a plugin verifier name only, never
+        a core type directly. If no plugin verifiers are registered, set_goal and
+        create_watch have nothing they can use yet — say so rather than trying one
+        of the core types, which will fail with "unknown plugin verifier".
         """
         from graph.goals.verifiers import verifier_catalog
 
         catalog = verifier_catalog()
-        lines: list[str] = ["Core verifier types:"]
+        lines: list[str] = ["Core verifier types (informational — operator-only, not usable by your set_goal/create_watch):"]
         for t in catalog["types"]:
             lines.append(f"  {t['value']}: {t['description']}")
         lines.append("")
         checks = catalog["plugin_checks"]
         if checks:
-            lines.append("Plugin verifiers:")
+            lines.append("Plugin verifiers (usable by your set_goal/create_watch):")
             for c in checks:
                 lines.append(f"  {c['name']}: {c['description']}")
         else:
-            lines.append("No plugin verifiers registered.")
+            lines.append(
+                "No plugin verifiers registered. set_goal and create_watch have nothing they "
+                "can use right now — don't pass a core type (e.g. 'ci') to either; it will fail."
+            )
         return "\n".join(lines)
 
     return list_verifiers
