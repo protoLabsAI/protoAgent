@@ -507,7 +507,14 @@ def test_config_round_trip() -> None:
         "disabled": ["c"],
         "dir": "/x",
         "allow_unbundled_deps": False,
-        "sources": {"allow": ["github.com/protolabsai/*"]},
+        # official/acked/trust_unverified joined with ADR 0071 D3 (#2721) — the ack
+        # store rides the same write path this test pins.
+        "sources": {
+            "allow": ["github.com/protolabsai/*"],
+            "official": ["github.com/protoLabsAI/*"],
+            "acked": [],
+        },
+        "trust_unverified": False,
         "update_policy": {},
         "autoupdate_interval_hours": 6,
     }
