@@ -85,8 +85,9 @@ class InstallError(RuntimeError):
 
 class BundleNotInstalledError(InstallError):
     """The named bundle has no ``plugins.lock`` row — typed so HTTP adapters can map
-    "doesn't exist" to 404 without string-matching, even when a concurrent DELETE
-    wins the race between a route's pre-check and the op (2740 review)."""
+    "doesn't exist" to 404 without string-matching. Raised by the op itself, so the
+    mapping stays correct even when a concurrent DELETE removes the bundle just
+    before the op runs (there is no route-level pre-check to race)."""
 
 
 def live_plugins_dir() -> Path:
@@ -1430,7 +1431,7 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
     # uninstalled individually earlier — the stale-provenance case this function
     # exists for — landed in "kept" as if it were still installed and shared):
     #   no lock entry at all  → already gone         → skipped_missing
-    #   exclusively ours      → uninstall            → removed_members (or skipped on race)
+    #   exclusively ours      → uninstall            → removed_members (or failed{pid: why})
     #   anything else         → shared / re-owned    → kept
     removed_members: list[str] = []
     skipped: list[str] = []

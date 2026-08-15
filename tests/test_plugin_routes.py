@@ -647,3 +647,57 @@ def test_installed_carries_bundle_provenance(monkeypatch, tmp_path):
     by_id = {p["id"]: p for p in body["plugins"]}
     assert by_id["board"]["bundle"] == {"id": "pm_stack", "name": "Project Manager", "url": "https://x/pm-stack"}
     assert "bundle" not in by_id["solo"]
+
+
+def test_update_bundle_route_maps_install_failure_to_400(monkeypatch):
+    """The typed split: BundleNotInstalledError → 404 (tested above), any other
+    InstallError → 400 — a genuine install failure must not read as 'doesn't exist'."""
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "", "plugins": []},
+    )
+
+    def boom(url, ref=None, **k):
+        raise installer.InstallError("clone failed")
+
+    monkeypatch.setattr(installer, "install", boom)
+    res = _client().post("/api/plugins/bundles/stacky/update")
+    assert res.status_code == 400 and "clone failed" in res.json()["detail"]
+
+
+def test_uninstall_bundle_route_maps_other_failures_to_400(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+
+    def boom(bid, purge=False):
+        raise installer.InstallError("lock write refused")
+
+    monkeypatch.setattr(installer, "uninstall_bundle", boom)
+    res = _client().delete("/api/plugins/bundles/stacky")
+    assert res.status_code == 400 and "lock write refused" in res.json()["detail"]
+
+
+def test_update_bundle_route_flags_stale_router_restart(monkeypatch):
+    """A force re-install over a LIVE mounted router serves stale routes until
+    restart (#942) — the bundle update route must flag it like the single-plugin one."""
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[], router_keys={("board", "/api/plugins/board")})
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "", "plugins": ["board"]},
+    )
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "stacky", "installed": [{"id": "board"}], "enabled": ["board"]},
+    )
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: [])
+    body = _client().post("/api/plugins/bundles/stacky/update").json()
+    assert body["restart_recommended"] is True  # live router → old routes until restart
