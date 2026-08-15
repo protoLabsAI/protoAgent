@@ -27,6 +27,7 @@ _watch_flapping = None
 _a2a_turns = None
 _a2a_turn_latency = None
 _boot_phase_latency = None
+_plugin_lifecycle_latency = None
 
 
 def _prefix() -> str:
@@ -38,6 +39,7 @@ def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
     global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
     global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
+    global _plugin_lifecycle_latency
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -134,6 +136,19 @@ def init():
             ["phase"],
             buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60],
         )
+        # Plugin lifecycle latency (#2675, instrumentation point #3 of #2245) —
+        # per-plugin timing of the three lifecycle stages (load = module import,
+        # config = schema/resolved-config binding, registration = register(registry)),
+        # so a slow plugin shows up by NAME and stage instead of hiding inside the
+        # aggregate "plugins" bucket of the boot-phase histogram above. `plugin` is
+        # the installed-plugin id — operator-bounded (dozens at most), not a
+        # cardinality risk like watch ids.
+        _plugin_lifecycle_latency = Histogram(
+            f"{p}_plugin_lifecycle_seconds",
+            "Plugin lifecycle stage latency (load / config / registration), per plugin",
+            ["plugin", "phase"],
+            buckets=[0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+        )
         _enabled = True
         print(f"[metrics] Prometheus metrics initialized (prefix={p}_)")
     except ImportError:
@@ -219,6 +234,14 @@ def record_boot_phase(phase: str, duration_s: float):
     """Record one agent-construction phase's wall-clock duration (#2674)."""
     if _enabled and _boot_phase_latency is not None:
         _boot_phase_latency.labels(phase=phase).observe(duration_s)
+
+
+def record_plugin_lifecycle(plugin: str, phase: str, duration_s: float):
+    """Record one plugin lifecycle stage's wall-clock duration (#2675). Emitted
+    from ``graph.plugins.host.timed_lifecycle_phase`` around the loader's load /
+    config / registration stages and pconfig's per-plugin schema discovery."""
+    if _enabled and _plugin_lifecycle_latency is not None:
+        _plugin_lifecycle_latency.labels(plugin=plugin, phase=phase).observe(duration_s)
 
 
 def session_started():

@@ -74,6 +74,7 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
     genuinely-empty result and fail SAFE rather than open.
     """
     try:
+        from graph.plugins.host import timed_lifecycle_phase
         from graph.plugins.loader import discover_plugins
 
         enabled = set(enabled_ids or set())
@@ -85,27 +86,34 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
                 continue
             if not (m.config or m.settings or m.secrets):
                 continue
-            section = (m.config_section or m.id).strip()
-            if section in _RESERVED_SECTIONS:
-                log.warning("[plugins] %s: config_section %r collides with a built-in — ignored", m.id, section)
-                continue
-            if section in claimed:
-                log.warning(
-                    "[plugins] config_section %r claimed by %s and %s — keeping first", section, claimed[section], m.id
+            # Config stage of the plugin lifecycle (#2675) — this plugin's schema/
+            # defaults/secrets resolution, timed per plugin like the loader's
+            # load/registration stages.
+            with timed_lifecycle_phase(m.id, "config"):
+                section = (m.config_section or m.id).strip()
+                if section in _RESERVED_SECTIONS:
+                    log.warning("[plugins] %s: config_section %r collides with a built-in — ignored", m.id, section)
+                    continue
+                if section in claimed:
+                    log.warning(
+                        "[plugins] config_section %r claimed by %s and %s — keeping first",
+                        section,
+                        claimed[section],
+                        m.id,
+                    )
+                    continue
+                claimed[section] = m.id
+                out.append(
+                    PluginConfigSchema(
+                        m.id,
+                        section,
+                        dict(m.config or {}),
+                        list(m.secrets or []),
+                        list(m.settings or []),
+                        test=bool(getattr(m, "test", False)),
+                        guide_url=str(getattr(m, "guide_url", "") or ""),
+                    )
                 )
-                continue
-            claimed[section] = m.id
-            out.append(
-                PluginConfigSchema(
-                    m.id,
-                    section,
-                    dict(m.config or {}),
-                    list(m.secrets or []),
-                    list(m.settings or []),
-                    test=bool(getattr(m, "test", False)),
-                    guide_url=str(getattr(m, "guide_url", "") or ""),
-                )
-            )
         return out
     except Exception:  # noqa: BLE001 — discovery is best-effort
         log.exception("[plugins] config-schema discovery failed")

@@ -20,6 +20,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from graph.plugins.host import timed_lifecycle_phase
 from graph.plugins.manifest import PluginManifest, load_manifest
 from graph.plugins.registry import PluginRegistry
 
@@ -527,13 +528,20 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             result.meta.append(entry)
             continue
 
+        # Lifecycle timing (#2675): each stage per plugin — load (module import),
+        # config (resolved-config binding), registration (register(registry)). The
+        # helper records in `finally`, so a stage that raises into the except below
+        # still gets timed — that's the plugin worth diagnosing.
         try:
-            register = _import_register(manifest)
-            # Resolved config section (ADR 0019) — defaults if not in plugin_config.
-            section = manifest.config_section or manifest.id
-            pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
-            registry = PluginRegistry(manifest.id, manifest.path, config=pconf, config_section=section)
-            register(registry)
+            with timed_lifecycle_phase(manifest.id, "load"):
+                register = _import_register(manifest)
+            with timed_lifecycle_phase(manifest.id, "config"):
+                # Resolved config section (ADR 0019) — defaults if not in plugin_config.
+                section = manifest.config_section or manifest.id
+                pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
+                registry = PluginRegistry(manifest.id, manifest.path, config=pconf, config_section=section)
+            with timed_lifecycle_phase(manifest.id, "registration"):
+                register(registry)
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
             # Clear diagnostic when an enabled plugin's declared deps aren't
             # installed (ADR 0027 D4: install fetches code; deps are explicit).

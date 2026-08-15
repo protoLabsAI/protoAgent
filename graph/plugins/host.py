@@ -8,12 +8,22 @@ singleton) or ``from graph.plugins.host import HOST``.
 
 Each is optional (``None`` until the server wires it / in a non-server context),
 so a plugin guards: ``if registry.host.invoke: ...``.
+
+This module also carries the plugin lifecycle timing helper (#2675) — a host-side
+facility the plugin machinery shares: it lives here rather than in ``loader.py``
+because ``pconfig.py`` needs it too and only imports the loader lazily (to stay a
+pure-data path), while this module imports nothing from ``graph.plugins``.
 """
 
 from __future__ import annotations
 
+import logging
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
+
+log = logging.getLogger("protoagent.plugins")
 
 
 @dataclass
@@ -42,3 +52,38 @@ class PluginHost:
 
 # Process-lifetime singleton. The server fills it in; plugins read it.
 HOST = PluginHost()
+
+
+# ── Plugin lifecycle timing (#2675, instrumentation point #3 of #2245) ────────
+
+# A lifecycle stage crossing this logs at WARNING — a slow plugin drags every
+# boot/reload, and the histogram alone doesn't name the culprit in the boot log.
+SLOW_LIFECYCLE_THRESHOLD_S = 0.5
+
+
+@contextmanager
+def timed_lifecycle_phase(plugin_id: str, phase: str):
+    """Time one plugin lifecycle stage (load / config / registration) — the same
+    ``time.monotonic()`` idiom as ``AuditMiddleware``'s tool-call timing
+    (``graph/middleware/audit.py``) and ``_timed_boot_phase`` (#2674), applied per
+    plugin. Emits to the ``*_plugin_lifecycle_seconds{plugin,phase}`` histogram
+    (no-op when metrics are disabled) and logs a >500ms outlier at WARNING.
+    Records in ``finally`` so a stage that raises — exactly the plugin worth
+    diagnosing — is still timed. Overhead is two clock reads and a label lookup
+    per stage, so wrapping every stage adds nothing measurable to boot."""
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        duration_s = time.monotonic() - t0
+        from observability import metrics
+
+        metrics.record_plugin_lifecycle(plugin_id, phase, duration_s)
+        if duration_s > SLOW_LIFECYCLE_THRESHOLD_S:
+            log.warning(
+                "[plugins] %s: %s stage took %.2fs (> %.1fs) — this plugin is slowing boot/reload",
+                plugin_id,
+                phase,
+                duration_s,
+                SLOW_LIFECYCLE_THRESHOLD_S,
+            )
