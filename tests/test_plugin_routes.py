@@ -213,9 +213,13 @@ def test_ack_route_trust_all_string_false_stays_off(monkeypatch):
     assert "trust_unverified" not in captured["config"]["plugins"]
 
 
-def test_ack_route_requires_a_target(monkeypatch):
+def test_ack_route_requires_a_url(monkeypatch):
+    """An ack is consent for a NAMED source — a bare {"trust_all": true} must not
+    pre-approve every future source with nothing on screen naming that stake
+    (2734 review); the global switch only rides alongside a concrete ack."""
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
     assert _client().post("/api/plugins/ack", json={}).status_code == 400
+    assert _client().post("/api/plugins/ack", json={"trust_all": True}).status_code == 400
 
 
 def test_install_auto_enables_and_runs(monkeypatch):

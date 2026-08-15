@@ -40,6 +40,11 @@ from runtime.state import STATE
 
 log = logging.getLogger(__name__)
 
+# Serializes the ack route's read-modify-write of plugins.sources.acked (ADR 0071
+# D3): _CONFIG_WRITE_LOCK guards only the inside of _apply_settings_changes, so two
+# concurrent acks reading the same list would drop one entry without this.
+_ACK_RMW_LOCK = asyncio.Lock()
+
 
 def _sources_allowlist() -> list[str] | None:
     """`plugins.sources.allow` from config, if a fork locked installs down (PR3
@@ -376,23 +381,31 @@ def register_plugin_routes(app) -> None:
         # exact fail-open shape the 2733 review caught on trust_unverified itself.
         raw_trust = body.get("trust_all")
         trust_all = raw_trust is True or str(raw_trust or "").strip().lower() in ("1", "true", "yes", "on")
-        if not url and not trust_all:
-            raise HTTPException(status_code=400, detail="url (or trust_all) is required")
+        # A url is REQUIRED: an ack is consent for a NAMED source the dialog just
+        # showed. A bare {"trust_all": true} would pre-approve every future source
+        # with nothing on screen naming that stake (2734 review) — the global switch
+        # only rides alongside a concrete ack, exactly like the dialog's checkbox.
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required")
         from graph.plugins.trust import ack_pattern
 
         from server.agent_init import _apply_settings_changes
 
-        cfg = STATE.graph_config
-        acked = list(getattr(cfg, "plugins_sources_acked", []) or []) if cfg else []
-        pattern = ack_pattern(url) if url else ""
-        if pattern and pattern not in acked:
-            acked.append(pattern)
-        updates: dict = {"plugins": {"sources": {"acked": acked}}}
-        if trust_all:
-            updates["plugins"]["trust_unverified"] = True
-        # Off the event loop — config write + full graph rebuild (2734 review; the
-        # same D9 rule every other reload call site follows).
-        ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
+        # Serialize the read-modify-write: two concurrent acks both reading the same
+        # acked list would drop one entry (_CONFIG_WRITE_LOCK guards only the inside
+        # of the apply, not this route-level RMW — 2734 review). One process-wide
+        # async lock held across read → merge → apply.
+        async with _ACK_RMW_LOCK:
+            cfg = STATE.graph_config
+            acked = list(getattr(cfg, "plugins_sources_acked", []) or []) if cfg else []
+            pattern = ack_pattern(url)
+            if pattern and pattern not in acked:
+                acked.append(pattern)
+            updates: dict = {"plugins": {"sources": {"acked": acked}}}
+            if trust_all:
+                updates["plugins"]["trust_unverified"] = True
+            # Off the event loop — config write + full graph rebuild (D9 rule).
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "persisting the ack failed")
         return {"ok": True, "acked": pattern or None, "trust_all": trust_all}
@@ -512,7 +525,10 @@ def register_plugin_routes(app) -> None:
         if fetched & enabled_now:
             from server.agent_init import _apply_settings_changes
 
-            ok, messages = _apply_settings_changes(
+            # Off the event loop — config write + full graph rebuild (2734 review;
+            # the D9 rule every reload call site follows).
+            ok, messages = await asyncio.to_thread(
+                _apply_settings_changes,
                 config={
                     "plugins": {
                         "enabled": sorted(enabled_now),
@@ -583,7 +599,9 @@ def register_plugin_routes(app) -> None:
 
             enabled = list(getattr(cfg, "plugins_enabled", []) or [])
             disabled = list(getattr(cfg, "plugins_disabled", []) or [])
-            ok, messages = _apply_settings_changes(
+            # Off the event loop — full graph rebuild (2734 review, D9 rule).
+            ok, messages = await asyncio.to_thread(
+                _apply_settings_changes,
                 config={"plugins": {"enabled": enabled, "disabled": disabled}},
             )
             if not ok:
@@ -627,7 +645,9 @@ def register_plugin_routes(app) -> None:
 
             enabled = [p for p in (getattr(cfg, "plugins_enabled", []) or []) if p != plugin_id]
             disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != plugin_id]
-            ok, messages = _apply_settings_changes(
+            # Off the event loop — full graph rebuild (2734 review, D9 rule).
+            ok, messages = await asyncio.to_thread(
+                _apply_settings_changes,
                 config={"plugins": {"enabled": enabled, "disabled": disabled}},
             )
             if not ok:
