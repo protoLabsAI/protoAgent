@@ -317,7 +317,7 @@ async def uninstall_bundle(
 # Enumerate what an UN-installed bundle would set up — members, each member's
 # manifest identity, skills, pip deps, capabilities — without installing anything.
 # Read-only: fetches to a throwaway staging dir, never touches plugins.lock or
-# config. Results are TTL-cached per URL so the archetype picker can call freely.
+# config. Results are TTL-cached per (url, ref) so the archetype picker can call freely.
 
 _PEEK_TTL_SECONDS = 600.0
 # Keyed by (url, ref) — a url-only key served one ref's preview for every ref of

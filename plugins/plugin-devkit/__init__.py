@@ -774,14 +774,22 @@ def _config_allowlist() -> list[str] | None:
 
 def _ops_applier():
     """The ``(ok, messages_list)`` applier the ops layer expects, bound to the live
-    server — or ``None`` when there's no live graph (ops then skips activation)."""
+    server — or ``None`` when there's no live graph (ops then skips activation).
+    Guarded like ``_live_apply`` (2741 review): a raising reload inside an op must
+    come back as ``(False, [why])``, never escape the calling tool."""
     from runtime.state import STATE
 
     if getattr(STATE, "graph", None) is None:
         return None
     from server.agent_init import _apply_settings_changes
 
-    return lambda updates: _apply_settings_changes(config=updates)
+    def _applier(updates):
+        try:
+            return _apply_settings_changes(config=updates)
+        except Exception as e:  # noqa: BLE001 — surface, don't crash the tool
+            return False, [f"reload failed: {e}"]
+
+    return _applier
 
 
 @tool
@@ -937,7 +945,15 @@ async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
         except installer.InstallError as exc:
             return f"✗ uninstall failed: {exc}"
         kept = f"; kept (shared): {', '.join(rep['kept'])}" if rep.get("kept") else ""
-        tail = "reloaded live" if rep.get("reloaded") else (rep.get("reload_error") or "no live agent — restart to finish")
+        # reloaded=False has THREE honest readings (2741 review): the op skips the
+        # reload when nothing was removed (all members shared/kept), the reload
+        # itself failed, or there was no live applier at all.
+        if rep.get("reloaded"):
+            tail = "reloaded live"
+        elif not (rep.get("removed_members") or []):
+            tail = "nothing removed — no reload needed"
+        else:
+            tail = rep.get("reload_error") or "no live agent — restart to finish"
         return (
             f"✓ uninstalled bundle {plugin_id} — removed "
             f"{', '.join(rep['removed_members']) or 'nothing'}{kept} ({tail})"

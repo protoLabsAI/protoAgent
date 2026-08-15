@@ -874,3 +874,52 @@ def test_install_plugin_reload_failure_is_not_fetched_only(monkeypatch):
     out = _run(mod.install_plugin.ainvoke({"url": "https://x/demo"}))
     assert "activate=False" not in out
     assert "enable-reload failed" in out and "graph compile failed" in out
+
+
+def test_live_apply_guards_a_raising_reload(monkeypatch):
+    """The headline _live_apply fix, regression-tested (2741 review): a RAISING
+    reload comes back as a clean (False, reason) through a tool, never an
+    unhandled error."""
+    import sys
+    import types
+
+    mod = _load_devkit_module(None)
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "plugin_meta", [{"id": "demo", "loaded": True}], raising=False)
+    monkeypatch.setattr(STATE, "graph_config", types.SimpleNamespace(plugins_enabled=["demo"], plugins_disabled=[]), raising=False)
+
+    fake = types.ModuleType("server.agent_init")
+
+    def _boom(config=None, soul=None):
+        raise OSError("disk full writing langgraph-config.yaml")
+
+    fake._apply_settings_changes = _boom
+    monkeypatch.setitem(sys.modules, "server.agent_init", fake)
+
+    out = _run(mod.disable_plugin.ainvoke({"plugin_id": "demo"}))
+    assert out.startswith("✗") and "disk full" in out  # clean failure, not a crash
+
+
+def test_ops_applier_guards_a_raising_reload(monkeypatch):
+    """Same guard on the applier handed to the OPS layer (2741 review): a reload
+    raising inside ops.uninstall_bundle must not escape uninstall_plugin."""
+    import sys
+    import types
+
+    mod = _load_devkit_module(None)
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    fake = types.ModuleType("server.agent_init")
+
+    def _boom(config=None, soul=None):
+        raise RuntimeError("reload exploded")
+
+    fake._apply_settings_changes = _boom
+    monkeypatch.setitem(sys.modules, "server.agent_init", fake)
+
+    applier = mod._ops_applier()
+    ok, msgs = applier(None)
+    assert ok is False and any("reload exploded" in str(m) for m in msgs)
