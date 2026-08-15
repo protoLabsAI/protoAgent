@@ -49,6 +49,12 @@ def test_installer_allowlist_shares_the_boundary_fix():
     assert _source_allowed("https://github.com/org/repo", ["github.com/org"])
     assert not _source_allowed("https://github.com/org-evil/repo", ["github.com/org"])
     assert _source_allowed("ssh://git@github.com/org/repo.git", ["github.com/org/*"])
+    # The 2739 re-review's major: an exact-repo entry must match the canonical .git
+    # spelling — the old bare-`*` covered it by accident, so the boundary fix has to
+    # cover it by NORMALIZATION (one shared normalize_source, .git trimmed).
+    assert _source_allowed("https://github.com/acme/thing.git", ["github.com/acme/thing"])
+    assert _source_allowed("https://github.com/acme/thing/", ["github.com/acme/thing"])
+    assert not _source_allowed("https://github.com/acme/thing-evil.git", ["github.com/acme/thing"])
 
 
 def test_official_org_glob_matches_every_repo_in_the_org():

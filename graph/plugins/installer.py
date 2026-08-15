@@ -125,12 +125,17 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
     The prefix fallback is PATH-BOUNDARY widening (``pat/*``), never bare ``pat*`` —
     the bare form let an allowlisted ``github.com/org`` admit ``github.com/org-evil``
     (the same name-collision widening the 2733 review flagged in the byte-identical
-    trust matcher). Scheme + ``git@`` strip together (``ssh://git@…`` carries both)."""
+    trust matcher). Normalization is ONE function shared with the trust matcher
+    (``trust.normalize_source``): scheme + ``git@`` strip together, ``.git`` and a
+    trailing slash trim — without the ``.git`` trim, the boundary fix rejected the
+    canonical ``….git`` spelling of an exact-repo entry (2739 review's major)."""
     if not allow:
         return True
     import fnmatch
 
-    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", url).replace(":", "/")
+    from graph.plugins.trust import normalize_source
+
+    norm = normalize_source(url)
     return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat.rstrip("/") + "/*") for pat in allow)
 
 
@@ -185,7 +190,11 @@ def _write_lock(data: dict) -> None:
     )
     lock = lock_path()
     lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text(json.dumps(data, indent=2) + "\n")
+    # Atomic: a crash mid-write must not leave a truncated lock that _read_lock
+    # then treats as a FRESH one (silently dropping every pin — 2739 review nit).
+    tmp = lock.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, lock)
 
 
 def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:

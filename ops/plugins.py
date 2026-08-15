@@ -309,7 +309,9 @@ _PEEK_TTL_SECONDS = 600.0
 _peek_cache: dict[str, tuple[float, dict]] = {}
 
 # A bundle-manifest member id used in a filesystem path must be ONE safe path
-# component — same character class the plugin loader accepts for ids.
+# component: leading alnum, then alnum/dot/underscore/hyphen — no separators, so
+# `..`/`x/../y` can't resolve outside the peek tempdir. (Deliberately a superset of
+# the loader's install-time id rule; this guard is about path safety only.)
 _SAFE_MEMBER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
