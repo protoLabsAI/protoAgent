@@ -343,16 +343,23 @@ function LocalTab() {
   // the new manifest dropped); Uninstall removes exclusively-owned members + the
   // lock row (shared members stay). Distinct bundles derive from the inventory's
   // provenance join; freshness from the updates poll's `bundles` rows.
-  const installedBundles = distinctBundles(installed.data?.plugins);
+  // The lock registry is the truth when the backend sends it — a bundle whose
+  // members were all removed individually has NO member rows but is still
+  // installed (and uninstallable). Member-derivation stays as the older-backend
+  // fallback only.
+  const installedBundles =
+    installed.data && "bundles" in installed.data
+      ? (installed.data.bundles ?? []).filter((b) => b.id).map((b) => ({ id: b.id, name: b.name || b.id }))
+      : distinctBundles(installed.data?.plugins);
   const bundleUpdateById = new Map((updates.data?.bundles ?? []).map((u) => [u.id, u]));
   const [bundleRemovePending, setBundleRemovePending] = useState<{ id: string; name: string } | null>(null);
   const updateBundle = useMutation({
     mutationFn: (b: { id: string; name: string }) => api.updateBundle(b.id),
     onSuccess: (res, b) => {
       refreshAll();
-      // Read EVERY failure field the backend declares (the 2737 review's major: a
-      // failed retirement / enable-reload toasted as full success while the member
-      // stayed live or disabled). Success only when nothing failed.
+      // Read EVERY failure field the backend declares — a failed retirement or
+      // enable-reload must never toast as full success while the member stays
+      // live or disabled. Success only when nothing failed.
       const failed = Object.entries(res.load_errors ?? {});
       const retired = res.removed_members?.length ? ` Retired: ${res.removed_members.join(", ")}.` : "";
       const problems = [

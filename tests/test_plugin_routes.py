@@ -808,3 +808,24 @@ def test_update_bundle_route_flags_stale_router_restart(monkeypatch):
     monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: [])
     body = _client().post("/api/plugins/bundles/stacky/update").json()
     assert body["restart_recommended"] is True  # live router → old routes until restart
+
+
+def test_installed_route_emits_the_bundle_registry(monkeypatch):
+    """`bundles` = the lock's registry verbatim (#2718): a bundle whose members were
+    all removed individually has NO member rows but is still installed — the console
+    strip must list it, so the route sends the authoritative list."""
+    from pathlib import Path
+
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: Path("/nonexistent-plugins-dir"))
+    monkeypatch.setattr(installer, "list_installed", lambda: [])
+    monkeypatch.setattr(
+        installer,
+        "_read_lock",
+        lambda: {"plugins": [], "bundles": [{"id": "ghost_stack", "name": "Ghost", "plugins": ["gone"]}]},
+    )
+    body = _client().get("/api/plugins/installed").json()
+    assert body["plugins"] == []
+    assert body["bundles"] == [{"id": "ghost_stack", "name": "Ghost"}]

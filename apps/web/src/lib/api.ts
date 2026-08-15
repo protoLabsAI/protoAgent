@@ -2291,7 +2291,12 @@ export const api = {
   },
   // Git-installed plugins (ADR 0027). install fetches code only (does NOT enable).
   installedPlugins() {
-    return request<{ plugins: InstalledPlugin[] }>("/api/plugins/installed");
+    // `bundles` = the lock's bundles[] registry verbatim (#2718) — the authoritative
+    // installed-bundle list (a bundle whose members were all removed individually
+    // still has a row and is still uninstallable). Optional: absent on older backends.
+    return request<{ plugins: InstalledPlugin[]; bundles?: { id: string; name?: string }[] }>(
+      "/api/plugins/installed",
+    );
   },
   // The curated official-plugin directory (Discover, ADR 0059), merged with install
   // state. One-click install posts each entry's `repo` to installPlugin().

@@ -117,7 +117,13 @@ def register_plugin_routes(app) -> None:
         # anonymous individual plugins. `name` is absent on locks written before it was
         # persisted; consumers fall back to the id.
         bundle_by_member: dict[str, dict] = {}
+        # The lock's bundles[] registry, verbatim — the AUTHORITATIVE installed-bundle
+        # list. Deriving it client-side from member provenance drifts: a bundle whose
+        # members were all removed individually still has a row (and is still
+        # uninstallable), but no member row would carry its chip.
+        bundle_rows: list[dict] = []
         for b in installer._read_lock().get("bundles") or []:
+            bundle_rows.append({"id": b.get("id") or "", "name": b.get("name") or ""})
             for member_id in b.get("plugins") or []:
                 bundle_by_member[member_id] = {
                     "id": b.get("id") or "",
@@ -163,7 +169,7 @@ def register_plugin_routes(app) -> None:
                 _, missing = installer._deps_satisfied(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
                 item["deps_missing"] = missing
             out.append(item)
-        return {"plugins": out}
+        return {"plugins": out, "bundles": bundle_rows}
 
     @app.post("/api/plugins/install-deps")
     async def _install_deps(body: dict | None = None):
