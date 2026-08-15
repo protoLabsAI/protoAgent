@@ -397,8 +397,7 @@ class LocalScheduler:
         db = self._connect()
         try:
             cur = db.execute(
-                "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ? "
-                "WHERE id = ? AND agent_name = ?",
+                "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
                 (prompt, schedule, timezone, next_fire, job_id, self.agent_name),
             )
             if cur.rowcount == 0:
@@ -550,7 +549,13 @@ class LocalScheduler:
             ok = await self._fire(job)
             if not cron:
                 if ok:
-                    self._delete_job(job.id)
+                    # `_fire` blocks for the whole agent turn, which can itself call
+                    # `wait` again with this job's own id (a wait-chain resume) — that
+                    # reschedules the row to a new `next_fire` before we get here. Scope
+                    # the delete to the `next_fire` we actually claimed so we only ever
+                    # remove the row we fired, never a fresher reschedule that landed
+                    # mid-turn (#2751).
+                    self._delete_job(job.id, next_fire=job.next_fire)
                 else:
                     log.warning(
                         "[scheduler] one-shot fire failed for job %s; leaving for retry",
@@ -564,10 +569,16 @@ class LocalScheduler:
         finally:
             self._inflight_ids.discard(job.id)
 
-    def _delete_job(self, job_id: str) -> None:
+    def _delete_job(self, job_id: str, *, next_fire: str | None = None) -> None:
         db = self._connect()
         try:
-            db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
+            if next_fire is not None:
+                db.execute(
+                    "DELETE FROM jobs WHERE id = ? AND agent_name = ? AND next_fire = ?",
+                    (job_id, self.agent_name, next_fire),
+                )
+            else:
+                db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
             db.commit()
         except sqlite3.DatabaseError:
             log.exception("[scheduler] delete failed for job %s", job_id)

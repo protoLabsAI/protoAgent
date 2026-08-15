@@ -248,6 +248,56 @@ class TestRescheduleOrDelete:
         assert rescheduled.last_fire == fired_at.isoformat()
 
 
+class TestFireAndSettle:
+    """``_fire_and_settle`` is the one-shot cleanup wrapper around ``_fire`` — it
+    deletes the row on a successful fire. But ``_fire`` blocks for the *whole*
+    agent turn (the self-POST is synchronous), and a wait-chain resume (#2751)
+    can call ``wait`` again from inside that turn, rescheduling this exact job id
+    to a new ``next_fire`` before the outer POST returns. The post-fire delete
+    must not clobber that reschedule."""
+
+    @pytest.mark.asyncio
+    async def test_one_shot_deleted_after_clean_fire(self, tmp_path, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+        job = s.add_job("hi", past, job_id="wait:chat-1")
+
+        await s._fire_and_settle(job, cron=False)
+
+        assert s.list_jobs() == []
+
+    @pytest.mark.asyncio
+    async def test_wait_rescheduled_mid_fire_survives_the_post_fire_delete(self, tmp_path, monkeypatch):
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+        job = s.add_job("retry after rate limit", past, job_id="wait:chat-1", context_id="chat-1")
+
+        class _SupersedingClient(_FakeClient):
+            """Stands in for the self-POST — while the (synchronous, from the
+            scheduler's view) agent turn is "running", the turn calls `wait`
+            again for the same session, which cancels + re-adds this exact
+            job id (the real `wait` tool's supersede path)."""
+
+            async def post(self, url, headers=None, json=None):
+                s.cancel_job("wait:chat-1")
+                s.add_job("rate limit cleared, retry", _FUTURE_ISO, job_id="wait:chat-1", context_id="chat-1")
+                return await super().post(url, headers=headers, json=json)
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _SupersedingClient(_FakeResponse(200)))
+
+        await s._fire_and_settle(job, cron=False)
+
+        jobs = s.list_jobs()
+        assert [j.id for j in jobs] == ["wait:chat-1"]  # the reschedule, not deleted
+        assert jobs[0].prompt == "rate limit cleared, retry"
+        assert jobs[0].next_fire == _FUTURE_ISO
+
+
 class TestMissedFireRecovery:
     def test_stale_oneshot_dropped(self, tmp_path):
         s = _make_scheduler(tmp_path)
@@ -959,9 +1009,9 @@ class TestRenameDoesNotOrphanJobs:
     def test_two_real_stores_start_clean_and_say_so(self, tmp_path, monkeypatch, caplog):
         """Guessing between two schedules would silently resurrect (or bury) the wrong one."""
         for name in ("traderAgent", "merchantBot"):
-            LocalScheduler(
-                agent_name=name, invoke_url="http://127.0.0.1:7870", db_dir=tmp_path / "scheduler"
-            ).add_job(f"{name} job", "0 9 * * *")
+            LocalScheduler(agent_name=name, invoke_url="http://127.0.0.1:7870", db_dir=tmp_path / "scheduler").add_job(
+                f"{name} job", "0 9 * * *"
+            )
 
         with caplog.at_level("WARNING"):
             s = self._instance_scheduler(tmp_path, "merchantAgent", monkeypatch)
