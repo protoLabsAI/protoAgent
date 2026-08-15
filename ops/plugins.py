@@ -17,6 +17,7 @@ about the live HTTP app, so it stays in the REST adapter — computed there from
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -307,6 +308,10 @@ async def uninstall_bundle(
 _PEEK_TTL_SECONDS = 600.0
 _peek_cache: dict[str, tuple[float, dict]] = {}
 
+# A bundle-manifest member id used in a filesystem path must be ONE safe path
+# component — same character class the plugin loader accepts for ids.
+_SAFE_MEMBER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
 
 def _peek_skills(root: Path) -> list[dict]:
     """Name + description of every SKILL.md a plugin checkout ships."""
@@ -382,6 +387,15 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
         members = []
         for entry in bundle.get("plugins", []):
             pid = entry.get("id")
+            # The id comes from a FETCHED manifest — untrusted data used in a path.
+            # Without this check a manifest id like `x/../../dir` resolves the member
+            # dir OUTSIDE the TemporaryDirectory before installer._fetch writes (the
+            # 2735 review's major). One safe path component, nothing else.
+            if not _SAFE_MEMBER_ID_RE.fullmatch(str(pid or "")):
+                members.append(
+                    {"id": pid, "builtin": bool(entry.get("builtin")), "error": "invalid member id in manifest"}
+                )
+                continue
             try:
                 if entry.get("builtin"):
                     members.append(_peek_member_from(builtin_root / pid, entry))

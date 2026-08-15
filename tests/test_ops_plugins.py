@@ -290,6 +290,43 @@ async def test_peek_bundle_enumerates_members(tmp_path, monkeypatch):
     assert m1["skills"] == [{"name": "demo", "description": "Demo skill."}]
 
 
+async def test_peek_bundle_refuses_traversal_member_id(tmp_path, monkeypatch):
+    """The 2735 review's major: a fetched manifest's member id is untrusted data used
+    in a path — `x/../../dir` escaped the TemporaryDirectory before _fetch wrote.
+    An unsafe id now yields an error row and NEVER reaches the filesystem/fetch."""
+    import shutil
+    from pathlib import Path
+
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    bundle = tmp_path / "bundle-evil"
+    bundle.mkdir()
+    (bundle / "protoagent.bundle.yaml").write_text(
+        "id: stack\nname: Stack\ndescription: D\n"
+        "plugins:\n"
+        "  - { id: ../../escape, url: https://example.test/evil }\n"
+        "  - { id: fine, url: https://example.test/fine }\n"
+    )
+    member = tmp_path / "member-fine"
+    member.mkdir()
+    (member / "protoagent.plugin.yaml").write_text("id: fine\nname: Fine\nversion: 1.0.0\ndescription: ok.\n")
+    fetched: list[str] = []
+
+    def fake_fetch(url, ref, dest):
+        fetched.append(url)
+        shutil.copytree(bundle if url.endswith("/stack-evil") else member, Path(dest))
+        return "deadbeef"
+
+    monkeypatch.setattr(installer, "_fetch", fake_fetch)
+    result = await plugin_ops.peek_bundle("https://example.test/stack-evil")
+    by_id = {m["id"]: m for m in result["members"]}
+    assert by_id["../../escape"]["error"] == "invalid member id in manifest"
+    assert not any(u.endswith("/evil") for u in fetched)  # the unsafe member never fetched
+    assert "error" not in by_id["fine"]  # safe members still peek normally
+
+
 async def test_peek_bundle_survives_unreachable_member(tmp_path, monkeypatch):
     import ops.plugins as plugin_ops
     from graph.plugins import installer

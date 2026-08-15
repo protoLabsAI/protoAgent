@@ -120,13 +120,18 @@ def _validate_ref(ref: str) -> None:
 
 def _source_allowed(url: str, allow: list[str] | None) -> bool:
     """Optional fork lock-down (ADR 0027 D3): if an allowlist is configured, the
-    URL must match one of its host/org globs (e.g. ``github.com/protoLabsAI/*``)."""
+    URL must match one of its host/org globs (e.g. ``github.com/protoLabsAI/*``).
+
+    The prefix fallback is PATH-BOUNDARY widening (``pat/*``), never bare ``pat*`` —
+    the bare form let an allowlisted ``github.com/org`` admit ``github.com/org-evil``
+    (the same name-collision widening the 2733 review flagged in the byte-identical
+    trust matcher). Scheme + ``git@`` strip together (``ssh://git@…`` carries both)."""
     if not allow:
         return True
     import fnmatch
 
-    norm = re.sub(r"^(https?://|git://|ssh://|git@)", "", url).replace(":", "/")
-    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "*") for pat in allow)
+    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", url).replace(":", "/")
+    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat.rstrip("/") + "/*") for pat in allow)
 
 
 def _normalize_lock(data: object) -> dict:

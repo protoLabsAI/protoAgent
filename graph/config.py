@@ -247,6 +247,11 @@ def _env_default(name: str, default, cast=str):
 
 _FALSE_STRINGS = {"false", "no", "off", "0", ""}
 
+# The one home for the auto-trusted-sources default (ADR 0071 D3) — the field's
+# default_factory and from_dict's absent-key branch both read it, so a fork
+# override or a default change can't drift between the two.
+_OFFICIAL_SOURCES_DEFAULT = ("github.com/protoLabsAI/*",)
+
 
 def _falsey(value, *, default: bool) -> bool:
     """Is this config value a NO? ``default`` is the answer when the key is absent.
@@ -917,7 +922,7 @@ class LangGraphConfig:
     # default the protoLabsAI org, FORK-OVERRIDABLE (an explicit empty list means
     # "no official sources", distinct from the key being absent). ``acked``:
     # sources the operator confirmed once (the ack API appends here).
-    plugins_sources_official: list[str] = field(default_factory=lambda: ["github.com/protoLabsAI/*"])
+    plugins_sources_official: list[str] = field(default_factory=lambda: list(_OFFICIAL_SOURCES_DEFAULT))
     plugins_sources_acked: list[str] = field(default_factory=list)
     # The consent dialog's "don't show again" — every source treated as acked.
     plugins_trust_unverified: bool = False
@@ -1527,10 +1532,14 @@ class LangGraphConfig:
             plugins_sources_official=(
                 list((plugins.get("sources", {}) or {})["official"] or [])
                 if "official" in (plugins.get("sources", {}) or {})
-                else ["github.com/protoLabsAI/*"]
+                else list(_OFFICIAL_SOURCES_DEFAULT)
             ),
             plugins_sources_acked=list((plugins.get("sources", {}) or {}).get("acked", []) or []),
-            plugins_trust_unverified=bool(plugins.get("trust_unverified", cls.plugins_trust_unverified)),
+            # `not _falsey(...)`, never bool(): a string "false" (JSON overlay, env,
+            # hand-edit) is truthy, and bool() would silently DISABLE the consent
+            # gate — the 2733 review's fail-open finding. Ambiguity resolves toward
+            # asking, matching _falsey's less-access design.
+            plugins_trust_unverified=not _falsey(plugins.get("trust_unverified"), default=True),
             plugins_update_policy=dict(plugins.get("update_policy", {}) or {}),
             plugins_autoupdate_interval_hours=int(
                 plugins.get("autoupdate_interval_hours", cls.plugins_autoupdate_interval_hours) or 0

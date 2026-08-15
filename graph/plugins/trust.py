@@ -30,15 +30,24 @@ import re
 def normalize_source(url: str) -> str:
     """A git URL in host/path form — the same rule as the install allowlist's
     ``_source_allowed`` (scheme/``git@`` strip, ``:`` → ``/``), plus a trailing-slash
-    and ``.git`` trim, so an acked/official glob matches every spelling of one source."""
-    norm = re.sub(r"^(https?://|git://|ssh://|git@)", "", str(url or "")).replace(":", "/").strip()
+    and ``.git`` trim, so an acked/official glob matches every spelling of one source.
+    Scheme AND ``git@`` strip together (``ssh://git@host/...`` carries both — the
+    2733 review caught the single-alternation version leaving ``git@`` behind)."""
+    norm = re.sub(r"^(?:(?:https?|git|ssh)://)?(?:git@)?", "", str(url or "")).replace(":", "/").strip()
     norm = norm.rstrip("/")
     return norm[:-4] if norm.endswith(".git") else norm
 
 
 def _matches(url: str, globs: list[str] | None) -> bool:
+    # The prefix fallback is PATH-BOUNDARY widening ("pat/*"), never bare "pat*":
+    # an acked exact repo `github.com/x/y` must not silently trust the
+    # name-collision `github.com/x/y-evil` (the 2733 review's fix-first finding —
+    # a bare-`*` widening is a consent bypass). The boundary form still gives the
+    # org shorthand: an entry `github.com/org` matches `github.com/org/repo`.
     norm = normalize_source(url)
-    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "*") for pat in globs or [])
+    return any(
+        fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat.rstrip("/") + "/*") for pat in globs or []
+    )
 
 
 def source_official(url: str, official: list[str] | None) -> bool:
