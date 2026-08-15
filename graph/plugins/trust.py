@@ -44,10 +44,15 @@ def _matches(url: str, globs: list[str] | None) -> bool:
     # name-collision `github.com/x/y-evil` (the 2733 review's fix-first finding —
     # a bare-`*` widening is a consent bypass). The boundary form still gives the
     # org shorthand: an entry `github.com/org` matches `github.com/org/repo`.
+    #
+    # BOTH sides run the one normalizer: an entry hand-written in a canonical
+    # spelling (`…/thing.git`, a trailing slash, even a git@ prefix) must keep
+    # matching the same repo — trimming only the URL side silently fail-closed
+    # `.git`-spelled entries (the 2739 re-review's major). normalize_source is
+    # glob-safe: it never touches `*`.
     norm = normalize_source(url)
-    return any(
-        fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat.rstrip("/") + "/*") for pat in globs or []
-    )
+    pats = [normalize_source(p) for p in globs or []]
+    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "/*") for pat in pats if pat)
 
 
 def source_official(url: str, official: list[str] | None) -> bool:

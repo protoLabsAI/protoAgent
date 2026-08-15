@@ -127,8 +127,9 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
     (the same name-collision widening the 2733 review flagged in the byte-identical
     trust matcher). Normalization is ONE function shared with the trust matcher
     (``trust.normalize_source``): scheme + ``git@`` strip together, ``.git`` and a
-    trailing slash trim — without the ``.git`` trim, the boundary fix rejected the
-    canonical ``….git`` spelling of an exact-repo entry (2739 review's major)."""
+    trailing slash trim — applied to BOTH sides, because trimming only the URL made
+    a ``….git``-spelled allow ENTRY fail-close against its own repo (the 2739
+    re-review's major; normalize_source is glob-safe, ``*`` survives)."""
     if not allow:
         return True
     import fnmatch
@@ -136,7 +137,8 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
     from graph.plugins.trust import normalize_source
 
     norm = normalize_source(url)
-    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat.rstrip("/") + "/*") for pat in allow)
+    pats = [normalize_source(p) for p in allow]
+    return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "/*") for pat in pats if pat)
 
 
 def _normalize_lock(data: object) -> dict:

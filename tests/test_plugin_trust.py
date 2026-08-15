@@ -55,6 +55,16 @@ def test_installer_allowlist_shares_the_boundary_fix():
     assert _source_allowed("https://github.com/acme/thing.git", ["github.com/acme/thing"])
     assert _source_allowed("https://github.com/acme/thing/", ["github.com/acme/thing"])
     assert not _source_allowed("https://github.com/acme/thing-evil.git", ["github.com/acme/thing"])
+    # …and the REVERSE direction (round 2's major): entries hand-written in a
+    # canonical spelling normalize too — a `.git`/trailing-slash/git@-spelled entry
+    # keeps matching its own repo instead of silently fail-closing.
+    assert _source_allowed("https://github.com/acme/thing", ["github.com/acme/thing.git"])
+    assert _source_allowed("https://github.com/acme/thing", ["github.com/acme/thing/"])
+    assert _source_allowed("https://github.com/acme/thing", ["git@github.com:acme/thing.git"])
+    assert not _source_allowed("https://github.com/acme/thing-evil", ["github.com/acme/thing.git"])
+    assert source_trusted(
+        "https://github.com/acme/thing", official=[], acked=["github.com/acme/thing.git"]
+    )
 
 
 def test_official_org_glob_matches_every_repo_in_the_org():
