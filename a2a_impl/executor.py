@@ -208,6 +208,39 @@ def _notify_progress(context_id: str, task_id: str, frame: dict) -> None:
         logger.exception("[a2a] progress hook failed for context %s", context_id)
 
 
+def _begin_knowledge_ops():
+    """Arm per-turn knowledge-op accumulation (#2676): hybrid-store query /
+    ingest / embed timings recorded anywhere inside this turn's async context
+    fold into the turn. Returns the disarm token (None if metrics is broken)."""
+    try:
+        from observability import metrics
+
+        return metrics.begin_knowledge_turn()
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        return None
+
+
+def _current_knowledge_ops() -> dict:
+    """The armed turn's knowledge-op durations (op → [ms, ...]), or {}."""
+    try:
+        from observability import metrics
+
+        return metrics.current_knowledge_ops() or {}
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        return {}
+
+
+def _end_knowledge_ops(token) -> None:
+    if token is None:
+        return
+    try:
+        from observability import metrics
+
+        metrics.end_knowledge_turn(token)
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        pass
+
+
 def _text_part(text: str) -> Part:
     return Part(text=text)
 
@@ -378,6 +411,11 @@ class ProtoAgentExecutor(AgentExecutor):
         _counted_tool_call_ids: set[str] = set()  # dedupe key for tool_calls below
         models: list[str] = []
         tool_durations: dict[str, list[int]] = {}  # tool name → durations this turn, ms (#2697)
+        # Knowledge-op accumulation (#2676): the stream (and the graph inside it)
+        # runs in THIS call's async context, so hybrid-store query/ingest/embed
+        # timings recorded mid-turn land in the armed contextvar and merge into
+        # `_outcome` below. Disarmed in the `finally` — after every outcome read.
+        knowledge_token = _begin_knowledge_ops()
 
         # Live answer streaming: forward each text delta as an incremental
         # artifact-update (append) frame so the console fills the bubble as the
@@ -529,6 +567,12 @@ class ProtoAgentExecutor(AgentExecutor):
                 pass
 
         def _outcome(state: str, final_text: str, error: str = "") -> TurnOutcome:
+            durations = {k: list(v) for k, v in tool_durations.items()}
+            # Knowledge ops attribute to the SAME per-turn durations blob as tool
+            # calls (#2676), under `knowledge:{op}` pseudo-tool keys — so the
+            # telemetry row (and its by-tool percentiles) needs no new column.
+            for op, samples in _current_knowledge_ops().items():
+                durations.setdefault(f"knowledge:{op}", []).extend(samples)
             return TurnOutcome(
                 task_id=context.task_id,
                 context_id=context.context_id,
@@ -540,7 +584,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 llm_calls=llm_calls,
                 tool_calls=tool_calls,
                 models=list(models),
-                tool_durations={k: list(v) for k, v in tool_durations.items()},
+                tool_durations=durations,
                 origin=_origin,
                 trigger=_trigger,
                 priority=_priority,
@@ -740,6 +784,12 @@ class ProtoAgentExecutor(AgentExecutor):
             logger.exception("[a2a] execute crashed for task %s", context.task_id)
             await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
             _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
+
+        finally:
+            # Every `_outcome` read happens in the except/return paths above, so
+            # disarming here can never lose a turn's samples. Also covers the
+            # input_required park — the resumed execute() re-arms fresh.
+            _end_knowledge_ops(knowledge_token)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)

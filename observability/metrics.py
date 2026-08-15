@@ -8,6 +8,7 @@ own namespace without manual edits.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 
@@ -28,6 +29,20 @@ _a2a_turns = None
 _a2a_turn_latency = None
 _boot_phase_latency = None
 _plugin_lifecycle_latency = None
+_knowledge_op_latency = None
+
+# Per-turn knowledge-op accumulator (#2676). The A2A executor arms it at turn
+# start (``begin_knowledge_turn``); ``record_knowledge_op`` then folds each op's
+# duration in, and the executor merges the result into the turn's telemetry row
+# alongside the tool durations. A ContextVar so concurrent turns can't see each
+# other's ops: child tasks/threads inherit a copy of the context that still
+# references the SAME dict, so ops recorded inside tool bodies and recall
+# middleware attribute to the arming turn. None ⇒ no turn armed (a background
+# ingest, a CLI call) — the op still hits Prometheus, just not a turn row.
+_knowledge_turn_ops: contextvars.ContextVar[dict[str, list[int]] | None] = contextvars.ContextVar(
+    "_protoagent_knowledge_turn_ops",
+    default=None,
+)
 
 
 def _prefix() -> str:
@@ -39,7 +54,7 @@ def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
     global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
     global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
-    global _plugin_lifecycle_latency
+    global _plugin_lifecycle_latency, _knowledge_op_latency
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -149,6 +164,19 @@ def init():
             ["plugin", "phase"],
             buckets=[0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
         )
+        # Knowledge / memory-store op latency (#2676, instrumentation point #6 of
+        # #2245) — the hybrid store's three hot paths: query (RRF hybrid search),
+        # ingest (add_document / add_chunk), embed (embed_fn round-trips). `op` is
+        # that closed three-value set, not a cardinality risk. Embed samples ride
+        # INSIDE their enclosing query/ingest sample on purpose — the split shows
+        # how much of a slow query was the embedding round-trip. Buckets span
+        # sub-ms FTS5 lookups up to a transport-timeout embed outage.
+        _knowledge_op_latency = Histogram(
+            f"{p}_knowledge_op_seconds",
+            "Knowledge-store operation latency (query / ingest / embed)",
+            ["op"],
+            buckets=[0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+        )
         _enabled = True
         print(f"[metrics] Prometheus metrics initialized (prefix={p}_)")
     except ImportError:
@@ -242,6 +270,40 @@ def record_plugin_lifecycle(plugin: str, phase: str, duration_s: float):
     config / registration stages and pconfig's per-plugin schema discovery."""
     if _enabled and _plugin_lifecycle_latency is not None:
         _plugin_lifecycle_latency.labels(plugin=plugin, phase=phase).observe(duration_s)
+
+
+def record_knowledge_op(op: str, duration_s: float):
+    """Record one knowledge-store op's wall-clock duration (#2676). Emitted from
+    ``knowledge.hybrid_store`` around the query / ingest / embed hot paths. Also
+    folds the sample into the active per-turn accumulator when a turn armed one
+    (``begin_knowledge_turn``) — that half works even with Prometheus disabled,
+    since the turn row's durability doesn't depend on prometheus-client."""
+    if _enabled and _knowledge_op_latency is not None:
+        _knowledge_op_latency.labels(op=op).observe(duration_s)
+    ops = _knowledge_turn_ops.get()
+    if ops is not None:
+        ops.setdefault(op, []).append(int(duration_s * 1000))
+
+
+def begin_knowledge_turn() -> contextvars.Token:
+    """Arm per-turn knowledge-op accumulation for the current context (#2676).
+    Called by the A2A executor at turn start; disarm with ``end_knowledge_turn``."""
+    return _knowledge_turn_ops.set({})
+
+
+def current_knowledge_ops() -> dict[str, list[int]] | None:
+    """The armed turn's accumulated ops (op → [ms, ...]), or None outside a turn."""
+    return _knowledge_turn_ops.get()
+
+
+def end_knowledge_turn(token: contextvars.Token) -> dict[str, list[int]]:
+    """Disarm the per-turn accumulator and return what it captured."""
+    ops = _knowledge_turn_ops.get() or {}
+    try:
+        _knowledge_turn_ops.reset(token)
+    except ValueError:  # token minted in another context — just clear
+        _knowledge_turn_ops.set(None)
+    return ops
 
 
 def session_started():

@@ -23,6 +23,7 @@ real vector DB (override ``_vector_search``).
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import math
@@ -31,10 +32,28 @@ import time
 from collections.abc import Callable
 
 from knowledge.store import _BULK_DELETE_REASON, KnowledgeStore, _namespace_clause, _normalize_before
+from observability import metrics
 
 log = logging.getLogger(__name__)
 
 EmbedFn = Callable[[str], "list[float]"]
+
+# Reentrancy guard for ingest timing (#2676): add_document's fallback path loops
+# self.add_chunk, and without the guard a 10-chunk document would emit eleven
+# ingest samples (the document + every chunk). A ContextVar, not an instance
+# flag, so concurrent ingests on other threads/tasks can't see each other.
+_ingest_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_knowledge_ingest_active", default=False)
+
+
+def _record_op(op: str, started: float) -> None:
+    """Emit one op's ``time.monotonic()`` delta to the metrics seam (#2676,
+    instrumentation point #6 of #2245): the ``*_knowledge_op_seconds{op=...}``
+    histogram, plus per-turn attribution when an A2A turn is live. Best-effort
+    by contract — a metrics failure must never break a knowledge op."""
+    try:
+        metrics.record_knowledge_op(op, time.monotonic() - started)
+    except Exception:  # noqa: BLE001 — observability must never break the store
+        pass
 
 
 class HybridKnowledgeStore(KnowledgeStore):
@@ -153,6 +172,7 @@ class HybridKnowledgeStore(KnowledgeStore):
     def _embed(self, text: str) -> list[float] | None:
         if self._embed_fn is None or self._breaker_open():
             return None
+        t0 = time.monotonic()
         try:
             vec = self._embed_fn(text)
             self._record_embed_success()
@@ -161,6 +181,10 @@ class HybridKnowledgeStore(KnowledgeStore):
             log.warning("[knowledge] embed_fn failed: %s", exc)
             self._record_embed_failure()
             return None
+        finally:
+            # A FAILED embed is timed too — the failure worth diagnosing is
+            # precisely the slow one (a transport timeout eating the turn).
+            _record_op("embed", t0)
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
         """Embed a list of texts in one call (shares the circuit breaker with
@@ -168,6 +192,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         unavailable, the breaker is open, or the request fails."""
         if self._embed_batch_fn is None or self._breaker_open():
             return None
+        t0 = time.monotonic()
         try:
             vecs = self._embed_batch_fn(texts)
             self._record_embed_success()
@@ -176,6 +201,8 @@ class HybridKnowledgeStore(KnowledgeStore):
             log.warning("[knowledge] embed_batch_fn failed: %s", exc)
             self._record_embed_failure()
             return None
+        finally:
+            _record_op("embed", t0)
 
     # ── vector storage ──────────────────────────────────────────────────────────
 
@@ -192,26 +219,34 @@ class HybridKnowledgeStore(KnowledgeStore):
             db.close()
 
     def add_chunk(self, content: str, domain: str = "general", heading=None, **kw) -> int | None:
-        chunk_id = super().add_chunk(content, domain, heading, **kw)
-        if chunk_id is None or self._embed_fn is None:
+        # When nested inside add_document, the document-level timer owns the
+        # ingest sample — see _ingest_ctx.
+        nested = _ingest_ctx.get()
+        t0 = time.monotonic()
+        try:
+            chunk_id = super().add_chunk(content, domain, heading, **kw)
+            if chunk_id is None or self._embed_fn is None:
+                return chunk_id
+            # Embed the heading+content so semantic search sees the same text FTS5 does.
+            text = (heading + "\n" if heading else "") + content
+            vec = self._embed(text)
+            if vec is not None:
+                db = self._get_db()
+                if db is not None:
+                    try:
+                        db.execute(
+                            "INSERT OR REPLACE INTO chunk_vectors (chunk_id, vec) VALUES (?, ?)",
+                            (chunk_id, json.dumps(vec)),
+                        )
+                        db.commit()
+                    except sqlite3.DatabaseError as exc:
+                        log.warning("[knowledge] store vector failed for %d: %s", chunk_id, exc)
+                    finally:
+                        db.close()
             return chunk_id
-        # Embed the heading+content so semantic search sees the same text FTS5 does.
-        text = (heading + "\n" if heading else "") + content
-        vec = self._embed(text)
-        if vec is not None:
-            db = self._get_db()
-            if db is not None:
-                try:
-                    db.execute(
-                        "INSERT OR REPLACE INTO chunk_vectors (chunk_id, vec) VALUES (?, ?)",
-                        (chunk_id, json.dumps(vec)),
-                    )
-                    db.commit()
-                except sqlite3.DatabaseError as exc:
-                    log.warning("[knowledge] store vector failed for %d: %s", chunk_id, exc)
-                finally:
-                    db.close()
-        return chunk_id
+        finally:
+            if not nested:
+                _record_op("ingest", t0)
 
     def add_document(self, content: str, domain: str = "general", heading=None, **kw) -> list[int]:
         """Chunk + enrich, then embed ALL of the document's chunks in ONE batched
@@ -221,39 +256,45 @@ class HybridKnowledgeStore(KnowledgeStore):
         ``add_chunk``) when there's nothing to batch — a single chunk, no batched
         embedder, embeddings off, or the breaker open. Rows are always written
         first, so an embed failure still leaves FTS5-searchable chunks."""
-        # Pull the chunk-knob + enrich kwargs out for _chunk_and_enrich; the rest
-        # (domain/heading/source/…) are chunk-write kwargs.
-        prep_kw = {k: kw.pop(k) for k in ("max_chars", "overlap_chars", "min_chars", "enrich") if k in kw}
-        texts = self._chunk_and_enrich(content, **prep_kw)
-        batchable = (
-            len(texts) > 1
-            and self._embed_fn is not None
-            and self._embed_batch_fn is not None
-            and not self._breaker_open()
-        )
-        if not batchable:
-            # Base path: per-chunk add_chunk (single embed each, or FTS-only).
-            ids: list[int] = []
-            for text in texts:
-                cid = self.add_chunk(text, domain, heading, **kw)
-                if cid is not None:
-                    ids.append(cid)
-            return ids
+        t0 = time.monotonic()
+        guard = _ingest_ctx.set(True)
+        try:
+            # Pull the chunk-knob + enrich kwargs out for _chunk_and_enrich; the rest
+            # (domain/heading/source/…) are chunk-write kwargs.
+            prep_kw = {k: kw.pop(k) for k in ("max_chars", "overlap_chars", "min_chars", "enrich") if k in kw}
+            texts = self._chunk_and_enrich(content, **prep_kw)
+            batchable = (
+                len(texts) > 1
+                and self._embed_fn is not None
+                and self._embed_batch_fn is not None
+                and not self._breaker_open()
+            )
+            if not batchable:
+                # Base path: per-chunk add_chunk (single embed each, or FTS-only).
+                ids: list[int] = []
+                for text in texts:
+                    cid = self.add_chunk(text, domain, heading, **kw)
+                    if cid is not None:
+                        ids.append(cid)
+                return ids
 
-        # Batched path: write rows WITHOUT per-chunk embed (the BASE add_chunk),
-        # then one embed call for the whole document, then bulk-store the vectors.
-        rows: list[tuple[int, str]] = []
-        for text in texts:
-            cid = KnowledgeStore.add_chunk(self, text, domain, heading, **kw)
-            if cid is not None:
-                # Embed heading+content so vector search sees what FTS5 sees.
-                rows.append((cid, (heading + "\n" if heading else "") + text))
-        if not rows:
-            return []
-        vecs = self._embed_batch([t for _, t in rows])
-        if vecs is not None and len(vecs) == len(rows):
-            self._store_vectors([(cid, v) for (cid, _), v in zip(rows, vecs)])
-        return [cid for cid, _ in rows]
+            # Batched path: write rows WITHOUT per-chunk embed (the BASE add_chunk),
+            # then one embed call for the whole document, then bulk-store the vectors.
+            rows: list[tuple[int, str]] = []
+            for text in texts:
+                cid = KnowledgeStore.add_chunk(self, text, domain, heading, **kw)
+                if cid is not None:
+                    # Embed heading+content so vector search sees what FTS5 sees.
+                    rows.append((cid, (heading + "\n" if heading else "") + text))
+            if not rows:
+                return []
+            vecs = self._embed_batch([t for _, t in rows])
+            if vecs is not None and len(vecs) == len(rows):
+                self._store_vectors([(cid, v) for (cid, _), v in zip(rows, vecs)])
+            return [cid for cid, _ in rows]
+        finally:
+            _ingest_ctx.reset(guard)
+            _record_op("ingest", t0)
 
     def _store_vectors(self, pairs: list[tuple[int, list[float]]]) -> None:
         """Bulk-insert chunk vectors in one transaction."""
@@ -427,46 +468,49 @@ class HybridKnowledgeStore(KnowledgeStore):
         """
         if not query or not query.strip():
             return []
+        t0 = time.monotonic()  # the empty-query fast path above is no op at all — untimed
+        try:
+            base = super().search(
+                query,
+                k=self._vector_k,
+                domain=domain,
+                namespace=namespace,
+                include_invalidated=include_invalidated,
+                epoch=epoch,
+            )
+            query_vec = self._embed(query)
+            if query_vec is None:
+                return base[:k]
 
-        base = super().search(
-            query,
-            k=self._vector_k,
-            domain=domain,
-            namespace=namespace,
-            include_invalidated=include_invalidated,
-            epoch=epoch,
-        )
-        query_vec = self._embed(query)
-        if query_vec is None:
-            return base[:k]
+            vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace, include_invalidated, epoch)
+            if not vec_ids:
+                return base[:k]
 
-        vec_ids = self._vector_search(query_vec, self._vector_k, domain, namespace, include_invalidated, epoch)
-        if not vec_ids:
-            return base[:k]
+            # Reciprocal Rank Fusion over the two rankings, keyed by chunk id.
+            scores: dict[int, float] = {}
+            by_id: dict[int, dict] = {}
+            for rank, item in enumerate(base):
+                cid = item.get("id")
+                if cid is None:
+                    continue
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
+                by_id[cid] = item
+            for rank, cid in enumerate(vec_ids):
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
 
-        # Reciprocal Rank Fusion over the two rankings, keyed by chunk id.
-        scores: dict[int, float] = {}
-        by_id: dict[int, dict] = {}
-        for rank, item in enumerate(base):
-            cid = item.get("id")
-            if cid is None:
-                continue
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
-            by_id[cid] = item
-        for rank, cid in enumerate(vec_ids):
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
-
-        ordered = sorted(scores, key=lambda c: scores[c], reverse=True)
-        if self._min_score > 0:
-            ordered = [cid for cid in ordered if scores[cid] >= self._min_score]
-        ordered = ordered[:k]
-        results: list[dict] = []
-        for cid in ordered:
-            item = by_id.get(cid) or self._hydrate_chunk(cid)
-            if item is not None:
-                item["score"] = round(scores[cid], 6)  # RRF fused relevance (#1043)
-                results.append(item)
-        return results
+            ordered = sorted(scores, key=lambda c: scores[c], reverse=True)
+            if self._min_score > 0:
+                ordered = [cid for cid in ordered if scores[cid] >= self._min_score]
+            ordered = ordered[:k]
+            results: list[dict] = []
+            for cid in ordered:
+                item = by_id.get(cid) or self._hydrate_chunk(cid)
+                if item is not None:
+                    item["score"] = round(scores[cid], 6)  # RRF fused relevance (#1043)
+                    results.append(item)
+            return results
+        finally:
+            _record_op("query", t0)
 
     def _hydrate_chunk(self, chunk_id: int) -> dict | None:
         """Build a result dict for a vector-only hit not in the FTS5 results."""
