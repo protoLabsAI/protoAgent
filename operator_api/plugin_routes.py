@@ -256,7 +256,11 @@ def register_plugin_routes(app) -> None:
                 url,
                 official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
                 acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
-                trust_unverified=bool(getattr(cfg, "plugins_trust_unverified", False)) if cfg else False,
+                # Literal-True only: from_dict already parses string forms via
+                # _falsey (#2739), so the attribute is a real bool — but this flag
+                # WIDENS trust, so the gate is belt-and-braces fail-closed against
+                # any exotic value that could ever land on the config object.
+                trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
             ):
                 return {"needs_ack": True, "source": normalize_source(url)}
 
