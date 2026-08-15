@@ -15,12 +15,16 @@ def _client():
     return TestClient(app)
 
 
-def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=()):
+def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=(), official=(), acked=(), trust_unverified=True):
     """Fake the hot-reload apply + STATE; return a dict that captures the config patch.
 
     ``router_keys`` seeds the live-mount registry (``STATE.plugin_router_keys``,
     ``{(plugin_id, prefix), …}``) — the ground truth for "this plugin's router is
-    already mounted" that the force re-install restart check reads (#942)."""
+    already mounted" that the force re-install restart check reads (#942).
+
+    ``trust_unverified`` defaults True so the consent gate (ADR 0071 D3, #2721) stays
+    OUT of every unrelated install test's way; the gate's own tests pass the real
+    posture (``trust_unverified=False`` + explicit ``official``/``acked``)."""
     captured: dict = {}
     fake = types.ModuleType("server.agent_init")
 
@@ -33,7 +37,13 @@ def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=()):
 
     import runtime.state as rs
 
-    cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
+    cfg = types.SimpleNamespace(
+        plugins_enabled=list(enabled),
+        plugins_disabled=list(disabled),
+        plugins_sources_official=list(official),
+        plugins_sources_acked=list(acked),
+        plugins_trust_unverified=trust_unverified,
+    )
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_meta", meta, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_router_keys", set(router_keys), raising=False)
@@ -115,6 +125,90 @@ def test_disabling_a_surface_only_plugin_does_not_recommend_restart(monkeypatch)
 
 
 # ── auto-enable on install (trust-by-default; install = enabled + running) ────────
+# ── consent gate + ack (ADR 0071 D3 S4, #2721) ─────────────────────────────────
+
+
+def _real_posture(monkeypatch, *, acked=(), trust_unverified=False, installed=None):
+    """The shipped trust posture: protoLabsAI official, nothing acked unless said."""
+    from graph.plugins import installer
+
+    captured = _wire(
+        monkeypatch,
+        enabled=[],
+        disabled=[],
+        meta=[],
+        official=["github.com/protoLabsAI/*"],
+        acked=acked,
+        trust_unverified=trust_unverified,
+    )
+    calls: list[str] = []
+
+    def _install_fake(url, ref=None, **k):
+        calls.append(url)
+        return installed or {"id": "demo"}
+
+    monkeypatch.setattr(installer, "install", _install_fake)
+    return captured, calls
+
+
+def test_install_untrusted_source_returns_needs_ack_and_fetches_nothing(monkeypatch):
+    _captured, calls = _real_posture(monkeypatch)
+    body = _client().post("/api/plugins/install", json={"url": "https://github.com/rando/thing.git"}).json()
+    assert body == {"needs_ack": True, "source": "github.com/rando/thing"}
+    assert calls == []  # the gate fires BEFORE any fetch — nothing ran
+
+
+def test_install_official_source_skips_the_ack(monkeypatch):
+    _captured, calls = _real_posture(monkeypatch)
+    body = _client().post("/api/plugins/install", json={"url": "https://github.com/protoLabsAI/thing"}).json()
+    assert "needs_ack" not in body and body["enabled"] == ["demo"]
+    assert calls  # install ran
+
+
+def test_install_acked_source_skips_the_ack(monkeypatch):
+    _captured, calls = _real_posture(monkeypatch, acked=["github.com/rando/thing"])
+    body = _client().post("/api/plugins/install", json={"url": "git@github.com:rando/thing.git"}).json()
+    assert "needs_ack" not in body and calls  # every spelling of the acked repo passes
+
+
+def test_install_trust_unverified_skips_the_ack(monkeypatch):
+    _captured, calls = _real_posture(monkeypatch, trust_unverified=True)
+    body = _client().post("/api/plugins/install", json={"url": "https://github.com/rando/thing"}).json()
+    assert "needs_ack" not in body and calls
+
+
+def test_install_fetch_only_mode_skips_the_gate(monkeypatch):
+    """PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 installs run no code — nothing to consent
+    to yet; the explicit ENABLE that follows is the operator's act."""
+    _captured, calls = _real_posture(monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "1")
+    body = _client().post("/api/plugins/install", json={"url": "https://github.com/rando/thing"}).json()
+    assert "needs_ack" not in body and calls
+
+
+def test_ack_route_persists_exact_source(monkeypatch):
+    captured = _wire(
+        monkeypatch, enabled=[], disabled=[], meta=[], official=["github.com/protoLabsAI/*"], trust_unverified=False
+    )
+    body = _client().post("/api/plugins/ack", json={"url": "git@github.com:rando/thing.git"}).json()
+    assert body["ok"] is True and body["acked"] == "github.com/rando/thing"
+    # narrowest grant, persisted through the settings write path
+    assert captured["config"]["plugins"]["sources"]["acked"] == ["github.com/rando/thing"]
+    assert "trust_unverified" not in captured["config"]["plugins"]
+
+
+def test_ack_route_trust_all_flips_the_switch(monkeypatch):
+    captured = _wire(monkeypatch, enabled=[], disabled=[], meta=[], trust_unverified=False)
+    body = _client().post("/api/plugins/ack", json={"url": "https://x/y", "trust_all": True}).json()
+    assert body["ok"] is True and body["trust_all"] is True
+    assert captured["config"]["plugins"]["trust_unverified"] is True
+
+
+def test_ack_route_requires_a_target(monkeypatch):
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    assert _client().post("/api/plugins/ack", json={}).status_code == 400
+
+
 def test_install_auto_enables_and_runs(monkeypatch):
     from graph.plugins import installer
 

@@ -2319,6 +2319,11 @@ export const api = {
       restart_recommended: boolean;
       enable_error: string | null;
       load_errors?: Record<string, string>;
+      // Consent gate (ADR 0071 D3, #2721): set INSTEAD of the fields above when the
+      // source needs a one-time "this runs code" confirm — nothing was fetched.
+      // Ack via ackPluginSource, then retry the install.
+      needs_ack?: boolean;
+      source?: string;
     }>(
       "/api/plugins/install",
       {
@@ -2332,6 +2337,15 @@ export const api = {
         },
       },
     );
+  },
+  // One-time source consent (ADR 0071 D3, #2721): persists the exact normalized repo
+  // into plugins.sources.acked (trustAll also flips plugins.trust_unverified — the
+  // dialog's "don't ask again"). The caller retries its install afterwards.
+  ackPluginSource(url: string, trustAll?: boolean) {
+    return request<{ ok: boolean; acked: string | null; trust_all: boolean }>("/api/plugins/ack", {
+      method: "POST",
+      body: { url, trust_all: trustAll || undefined },
+    });
   },
   // Server-side directory listing behind the path pickers. Deliberately the SERVER's
   // filesystem: the console may be configuring a different machine, and the browser's

@@ -234,6 +234,25 @@ def register_plugin_routes(app) -> None:
         # re-registered router is dropped for the mounted one — FastAPI can't swap in place,
         # #942), so the OLD code keeps serving → restart. Install (git clone) doesn't touch
         # the live registry/meta — only the reload does — so this pre-op snapshot is exact.
+        # Consent gate (ADR 0071 D3 S4, #2721): an untrusted source needs the one-time
+        # "this runs code" ack BEFORE anything is fetched. 200-with-needs_ack, not a
+        # 4xx — the client turns it into the confirm dialog and retries after
+        # POST /api/plugins/ack; an error status would render as a failure toast.
+        # Fetch-only installs (PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1) skip the gate:
+        # no code runs, so there is nothing to consent to yet — the ENABLE that
+        # follows is the operator's explicit act.
+        if not _install_no_enable():
+            from graph.plugins.trust import normalize_source, source_trusted
+
+            cfg = STATE.graph_config
+            if not source_trusted(
+                url,
+                official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
+                acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
+                trust_unverified=bool(getattr(cfg, "plugins_trust_unverified", False)) if cfg else False,
+            ):
+                return {"needs_ack": True, "source": normalize_source(url)}
+
         mounted_before = _mounted_router_ids()
         prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
 
@@ -339,6 +358,37 @@ def register_plugin_routes(app) -> None:
         # on the reload reconcile (ADR 0018) — so a surface-ONLY plugin turns off cleanly.
         restart = bool(not want and _lingers_on_disable(prev_meta))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
+
+    @app.post("/api/plugins/ack")
+    async def _ack(body: dict | None = None):
+        """Persist a one-time source ack (ADR 0071 D3 S4, #2721). A bare Confirm
+        writes the EXACT normalized source into ``plugins.sources.acked`` (narrowest
+        grant — acking one repo trusts that repo, not its org; org-wide trust is
+        ``sources.official``, fork-overridable). ``trust_all: true`` (the dialog's
+        "don't ask again") flips ``plugins.trust_unverified`` too. Persists through
+        the same write path settings use — an ack that doesn't survive a restart
+        re-asks forever."""
+        body = body or {}
+        url = str(body.get("url", "") or body.get("source", "")).strip()
+        trust_all = bool(body.get("trust_all"))
+        if not url and not trust_all:
+            raise HTTPException(status_code=400, detail="url (or trust_all) is required")
+        from graph.plugins.trust import ack_pattern
+
+        from server.agent_init import _apply_settings_changes
+
+        cfg = STATE.graph_config
+        acked = list(getattr(cfg, "plugins_sources_acked", []) or []) if cfg else []
+        pattern = ack_pattern(url) if url else ""
+        if pattern and pattern not in acked:
+            acked.append(pattern)
+        updates: dict = {"plugins": {"sources": {"acked": acked}}}
+        if trust_all:
+            updates["plugins"]["trust_unverified"] = True
+        ok, messages = _apply_settings_changes(config=updates)
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "persisting the ack failed")
+        return {"ok": True, "acked": pattern or None, "trust_all": trust_all}
 
     @app.get("/api/plugins/updates")
     async def _updates():

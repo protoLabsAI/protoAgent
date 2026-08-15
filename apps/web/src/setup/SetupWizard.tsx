@@ -582,7 +582,18 @@ export function SetupWizard({
             secrets: secrets.length ? secrets : undefined,
           });
           const failedLoad = Object.keys(r.load_errors ?? {});
-          if (r.enable_error) {
+          // Consent gate (#2721) — only reachable when a fork's catalog points an
+          // archetype at a source outside its own sources.official (the shipped
+          // catalog is all-official). Setup is already written: finish (fall through
+          // to onFinished below), and send the operator to the Plugins panel where
+          // the TrustAckDialog handles the confirm.
+          if (r.needs_ack) {
+            toast({
+              tone: "info",
+              title: "Setup complete",
+              message: `${personaLabel} tools come from an untrusted source (${r.source ?? pickedBundle}) — install them from Settings ▸ Plugins to review and confirm.`,
+            });
+          } else if (r.enable_error) {
             toast({
               tone: "info",
               title: "Setup complete",
