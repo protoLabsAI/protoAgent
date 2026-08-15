@@ -364,6 +364,13 @@ def register_plugin_routes(app) -> None:
         explicit disable) + config/mcp defaults, retire members the new manifest
         dropped, hot-reload. The lock's ``bundles`` row is rewritten — this is the
         re-pin surface ADR 0049 D4 deferred."""
+        # Unknown bundle → 404 (the resource doesn't exist), matching the DELETE
+        # route and the single-plugin update; 400 stays for genuine install
+        # failures. The 2732 review caught the two routes mapping the same
+        # "not installed" InstallError to different codes.
+        if await asyncio.to_thread(installer.bundle_entry, bundle_id) is None:
+            raise HTTPException(status_code=404, detail=f"bundle {bundle_id!r} is not installed")
+
         mounted_before = _mounted_router_ids()
         prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
 

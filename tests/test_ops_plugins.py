@@ -126,6 +126,86 @@ async def test_update_bundle_repins_and_retires_dropped(monkeypatch):
     assert len(calls) == 2 and calls[1] is None
 
 
+async def test_update_bundle_release_tag_moves_to_newest(monkeypatch):
+    """The headline 'release-tag pin moves to the newest semver tag' was untested
+    (the 2732 review: every prior test fed requested_ref='')."""
+    from ops.plugins import update_bundle
+
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "v1.0.0", "plugins": ["a"]},
+    )
+    monkeypatch.setattr(installer, "check_plugin_update", lambda entry: {"latest_ref": "v2.0.0"})
+    seen: dict = {}
+
+    def fake_install(url, ref=None, **k):
+        seen["ref"] = ref
+        return {"bundle": "s", "installed": [{"id": "a"}], "enabled": ["a"]}
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: [])
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+
+    await update_bundle("s", ctx=_ctx(), apply_settings=lambda u: (True, ["ok"]))
+    assert seen["ref"] == "v2.0.0"  # tags are immutable — the recorded one would no-op forever
+
+
+async def test_update_bundle_explicit_ref_is_never_replaced(monkeypatch):
+    """An explicit caller `ref` is a pin request — the newest-tag chase must not
+    silently override it (the 2732 review's coderabbit major)."""
+    from ops.plugins import update_bundle
+
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "v1.0.0", "plugins": ["a"]},
+    )
+
+    def boom(entry):
+        raise AssertionError("check_plugin_update must not run for an explicit ref")
+
+    monkeypatch.setattr(installer, "check_plugin_update", boom)
+    seen: dict = {}
+
+    def fake_install(url, ref=None, **k):
+        seen["ref"] = ref
+        return {"bundle": "s", "installed": [{"id": "a"}], "enabled": ["a"]}
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: [])
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+
+    await update_bundle("s", ref="v1.5.0", ctx=_ctx(), apply_settings=lambda u: (True, ["ok"]))
+    assert seen["ref"] == "v1.5.0"
+
+
+async def test_update_bundle_accumulates_retire_errors(monkeypatch):
+    """Retire failures reassigned per member reported only the LAST one (2732 review)."""
+    from ops.plugins import update_bundle
+
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "", "plugins": ["a", "d1", "d2"]},
+    )
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "s", "installed": [{"id": "a"}], "enabled": ["a"]},
+    )
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: ["d1", "d2"])
+
+    def failing_uninstall(pid, **k):
+        raise installer.InstallError(f"{pid} is stuck")
+
+    monkeypatch.setattr(installer, "uninstall", failing_uninstall)
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+
+    res = await update_bundle("s", ctx=_ctx(), apply_settings=lambda u: (True, ["ok"]))
+    assert "d1: d1 is stuck" in res.retire_error and "d2: d2 is stuck" in res.retire_error
+
+
 async def test_update_bundle_unknown_id_raises(monkeypatch):
     from ops.plugins import update_bundle
 

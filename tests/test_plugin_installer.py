@@ -719,6 +719,10 @@ def test_uninstall_bundle_tolerates_individually_removed_member(env):
 
     rep = installer.uninstall_bundle("demo_stack")
     assert rep["removed_members"] == ["demo_b"]
+    # The 2732 review's bucketing finding: the already-gone member must land in
+    # skipped_missing — reporting it as "kept" claimed a plugin that isn't installed.
+    assert rep["skipped_missing"] == ["demo_a"]
+    assert rep["kept"] == []
     assert installer.bundle_entry("demo_stack") is None
 
 

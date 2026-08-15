@@ -82,17 +82,21 @@ python -m server plugin update-bundle my-stack --ref v2.0 # explicit target ref
 ```
 
 or `POST /api/plugins/bundles/{id}/update` (what the console uses), which also
-hot-reloads. Semantics, in both:
+hot-reloads. Shared semantics:
 
 - The bundle repo re-installs at its recorded ref — a **release-tag** pin moves to the
   newest semver tag (tags are immutable; re-installing the recorded one would be a
-  no-op forever), a branch ref pulls its head, a SHA pin stays put.
+  no-op forever), a branch ref pulls its head, a SHA pin stays put. An explicitly
+  passed ref is a pin request and is never replaced.
 - Member pins re-resolve exactly as a fresh install; the lock row is rewritten.
-- The declared enable set and `config:`/`mcp:` defaults re-apply — **without undoing
-  an operator's explicit disable**, and never clobbering operator values.
-- Members the new manifest **dropped** are retired (uninstalled + unloaded) when they
-  belong only to this bundle; a member another bundle lists, or one you re-installed
-  directly, is left alone.
+- Members the new manifest **dropped** are retired when they belong only to this
+  bundle; a member another bundle lists, or one you re-installed directly, is left
+  alone.
+
+**Console/API only** (the CLI is code + lock, out-of-process — a running server picks
+the new code up on its next restart/reload): the declared enable set and
+`config:`/`mcp:` defaults re-apply — **without undoing an operator's explicit
+disable**, and never clobbering operator values — and retired members unload live.
 
 ## Uninstall one
 

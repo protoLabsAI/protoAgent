@@ -200,11 +200,13 @@ def test_update_bundle_route_repins_and_reports(monkeypatch):
 
 
 def test_update_bundle_route_404s_unknown(monkeypatch):
+    """Unknown bundle → 404 on BOTH bundle routes (the 2732 review caught update
+    mapping the same 'not installed' case to 400 while delete returned 404)."""
     from graph.plugins import installer
 
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
     monkeypatch.setattr(installer, "bundle_entry", lambda bid: None)
-    assert _client().post("/api/plugins/bundles/ghost/update").status_code == 400
+    assert _client().post("/api/plugins/bundles/ghost/update").status_code == 404
 
 
 def test_uninstall_bundle_route(monkeypatch):

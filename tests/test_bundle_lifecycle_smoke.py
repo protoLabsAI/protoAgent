@@ -110,8 +110,12 @@ def test_bundle_lifecycle_single_agent(agent, monkeypatch):
     assert set(row["plugins"]) == {"member_a", "member_b"} and row["resolved_sha"]
 
     # ── 2. ENABLE the declared set → both members load, tools registered ─────────
+    # The enabled list comes FROM the lock row's declared set (the 2736 review: a
+    # hand-written list let a manifest→lock propagation regression pass unnoticed).
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [installer.live_plugins_dir()])
-    cfg_path.write_text("plugins:\n  enabled: [member_a, member_b]\n")
+    declared = list(row["enabled"])
+    assert declared == ["member_a", "member_b"]  # the manifest's set survived into the lock
+    cfg_path.write_text(f"plugins:\n  enabled: [{', '.join(declared)}]\n")
     res = load_plugins(LangGraphConfig.from_yaml(str(cfg_path)))
     by_id = {m["id"]: m for m in res.meta}
     assert by_id["member_a"]["loaded"] and by_id["member_b"]["loaded"]
@@ -159,9 +163,21 @@ def test_bundle_lifecycle_single_agent(agent, monkeypatch):
     ping = next(t for t in res.tools if getattr(t, "name", "") == "member_a_ping")
     assert ping.invoke({}) == "pong v2"
 
-    # ── 6. UNINSTALL — one action; nothing dangles ───────────────────────────────
+    # ── 6. UNINSTALL — one action; nothing dangles, shared members survive ───────
+    # Exercise the shared-member leg the docstring promises (the 2736 review: only
+    # one bundle ever existed, so "kept" was never smoke-tested): a second bundle
+    # row claiming member_a means uninstall must LEAVE it.
+    lock = installer._read_lock()
+    lock["bundles"].append({"id": "other_stack", "source_url": "https://x/other", "plugins": ["member_a"]})
+    installer._write_lock(lock)
     rep = installer.uninstall_bundle("smoke_stack")
-    assert rep["removed_members"] == ["member_a"]
+    assert rep["removed_members"] == [] and rep["kept"] == ["member_a"]
+    assert (installer.live_plugins_dir() / "member_a").exists()  # shared → survives
     assert installer.bundle_entry("smoke_stack") is None
+
+    # …and with the sharer gone, uninstalling ITS row removes the member for real.
+    rep = installer.uninstall_bundle("other_stack")
+    assert rep["removed_members"] == []  # by-provenance is smoke_stack's — other never owned it
+    installer.uninstall("member_a")  # the individually-owned leftover goes explicitly
     assert installer.list_installed() == []
     assert not (installer.live_plugins_dir() / "member_a").exists()
