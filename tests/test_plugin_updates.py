@@ -377,8 +377,13 @@ def test_updates_route_returns_check_updates(monkeypatch):
         "check_updates",
         lambda: [{"id": "demo", "behind": True, "pinned": False, "error": None}],
     )
+    # bundles rides alongside since #2718 — pinned hermetic so the real lock never runs.
+    monkeypatch.setattr(installer, "check_bundle_updates", lambda: [])
     body = _client().get("/api/plugins/updates").json()
-    assert body == {"plugins": [{"id": "demo", "behind": True, "pinned": False, "error": None}]}
+    assert body == {
+        "plugins": [{"id": "demo", "behind": True, "pinned": False, "error": None}],
+        "bundles": [],
+    }
 
 
 def test_update_route_reinstalls_and_reloads(monkeypatch):
