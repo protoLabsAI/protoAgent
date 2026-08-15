@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bundleLabel,
+  distinctBundles,
   contributionCount,
   filterInstalled,
   needsAttention,
@@ -126,5 +127,25 @@ describe("bundle provenance", () => {
 describe("statusCounts", () => {
   it("counts every chip", () => {
     expect(statusCounts(ROWS)).toEqual({ All: 6, Loaded: 5, Disabled: 1, Attention: 3 });
+  });
+});
+
+describe("distinctBundles (#2718 bundle actions strip)", () => {
+  it("dedupes by id, first name wins, name falls back to id", () => {
+    const rows = [
+      { bundle: { id: "cowork-stack", name: "Cowork" } },
+      { bundle: { id: "cowork-stack", name: "Cowork (dup row)" } },
+      { bundle: { id: "bare-stack" } }, // pre-name lock — id is the label
+      {}, // standalone plugin, no provenance
+    ];
+    expect(distinctBundles(rows)).toEqual([
+      { id: "cowork-stack", name: "Cowork" },
+      { id: "bare-stack", name: "bare-stack" },
+    ]);
+  });
+
+  it("handles an empty/undefined inventory", () => {
+    expect(distinctBundles(undefined)).toEqual([]);
+    expect(distinctBundles([])).toEqual([]);
   });
 });

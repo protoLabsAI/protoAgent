@@ -26,6 +26,21 @@ export function bundleLabel(r: InstalledRow): string | null {
   return r.bundle.name || r.bundle.id || null;
 }
 
+/** Distinct installed bundles from the inventory's provenance join (#2718) — one
+ *  entry per bundle id, first row's name wins, the same name-falls-back-to-id rule
+ *  as `bundleLabel`. Drives the Installed tab's bundle actions strip. */
+export function distinctBundles(
+  plugins: { bundle?: { id: string; name?: string } }[] | undefined,
+): { id: string; name: string }[] {
+  const by = new Map<string, { id: string; name: string }>();
+  for (const p of plugins ?? []) {
+    if (p.bundle?.id && !by.has(p.bundle.id)) {
+      by.set(p.bundle.id, { id: p.bundle.id, name: p.bundle.name || p.bundle.id });
+    }
+  }
+  return [...by.values()];
+}
+
 export type InstalledStatus = "All" | "Loaded" | "Disabled" | "Attention";
 export type InstalledSortKey = "name" | "status" | "contributions";
 export type InstalledSort = { key: InstalledSortKey; dir: "asc" | "desc" };

@@ -22,6 +22,7 @@ import { usePluginManage, usePluginRefresh } from "./usePluginManage";
 import { catalogCategories, filterCatalog } from "./catalog";
 import {
   bundleLabel,
+  distinctBundles,
   filterInstalled,
   needsAttention,
   sortInstalled,
@@ -342,26 +343,29 @@ function LocalTab() {
   // the new manifest dropped); Uninstall removes exclusively-owned members + the
   // lock row (shared members stay). Distinct bundles derive from the inventory's
   // provenance join; freshness from the updates poll's `bundles` rows.
-  const installedBundles = (() => {
-    const by = new Map<string, { id: string; name: string }>();
-    for (const ip of installed.data?.plugins ?? []) {
-      if (ip.bundle?.id && !by.has(ip.bundle.id)) by.set(ip.bundle.id, { id: ip.bundle.id, name: ip.bundle.name || ip.bundle.id });
-    }
-    return [...by.values()];
-  })();
+  const installedBundles = distinctBundles(installed.data?.plugins);
   const bundleUpdateById = new Map((updates.data?.bundles ?? []).map((u) => [u.id, u]));
   const [bundleRemovePending, setBundleRemovePending] = useState<{ id: string; name: string } | null>(null);
   const updateBundle = useMutation({
     mutationFn: (b: { id: string; name: string }) => api.updateBundle(b.id),
     onSuccess: (res, b) => {
       refreshAll();
+      // Read EVERY failure field the backend declares (the 2737 review's major: a
+      // failed retirement / enable-reload toasted as full success while the member
+      // stayed live or disabled). Success only when nothing failed.
       const failed = Object.entries(res.load_errors ?? {});
       const retired = res.removed_members?.length ? ` Retired: ${res.removed_members.join(", ")}.` : "";
-      if (failed.length) {
+      const problems = [
+        ...failed.map(([id, e]) => `${id} failed to load (${e})`),
+        ...(res.enable_error ? [`enable-reload failed: ${res.enable_error}`] : []),
+        ...(res.retire_error ? [`retire: ${res.retire_error}`] : []),
+        ...(!res.reloaded && !res.enable_error ? ["not hot-reloaded — restart to apply"] : []),
+      ];
+      if (problems.length) {
         toast({
           tone: "error",
-          title: "Bundle updated, but not fully running",
-          message: `${b.name}: ${failed.map(([id, e]) => `${id} (${e})`).join("; ")}.${retired}`,
+          title: "Bundle updated, with problems",
+          message: `${b.name}: ${problems.join("; ")}.${retired}`,
         });
       } else {
         toast({
@@ -378,11 +382,19 @@ function LocalTab() {
     onSuccess: (res, b) => {
       refreshAll();
       const kept = res.kept?.length ? ` Kept (shared): ${res.kept.join(", ")}.` : "";
-      toast({
-        tone: "success",
-        title: "Bundle uninstalled",
-        message: `${b.name} — removed ${res.removed_members.join(", ") || "nothing"}.${kept}`,
-      });
+      if (res.reload_error) {
+        toast({
+          tone: "error",
+          title: "Bundle uninstalled, but the reload failed",
+          message: `${b.name} — removed ${res.removed_members.join(", ") || "nothing"}; ${res.reload_error}. Restart to finish.${kept}`,
+        });
+      } else {
+        toast({
+          tone: "success",
+          title: "Bundle uninstalled",
+          message: `${b.name} — removed ${res.removed_members.join(", ") || "nothing"}.${kept}`,
+        });
+      }
     },
     onError: (err: unknown, b) => toast({ tone: "error", title: "Couldn't uninstall bundle", message: `${b.name}: ${errMsg(err)}` }),
   });
