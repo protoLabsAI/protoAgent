@@ -337,6 +337,56 @@ function LocalTab() {
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install deps", message: `${p.name}: ${errMsg(err)}` }),
   });
 
+  // ── Bundle-level lifecycle (#2718, ADR 0049 D4) — the provenance chips' bundles,
+  // now actionable: Update re-pins every member at the bundle's ref (retiring ones
+  // the new manifest dropped); Uninstall removes exclusively-owned members + the
+  // lock row (shared members stay). Distinct bundles derive from the inventory's
+  // provenance join; freshness from the updates poll's `bundles` rows.
+  const installedBundles = (() => {
+    const by = new Map<string, { id: string; name: string }>();
+    for (const ip of installed.data?.plugins ?? []) {
+      if (ip.bundle?.id && !by.has(ip.bundle.id)) by.set(ip.bundle.id, { id: ip.bundle.id, name: ip.bundle.name || ip.bundle.id });
+    }
+    return [...by.values()];
+  })();
+  const bundleUpdateById = new Map((updates.data?.bundles ?? []).map((u) => [u.id, u]));
+  const [bundleRemovePending, setBundleRemovePending] = useState<{ id: string; name: string } | null>(null);
+  const updateBundle = useMutation({
+    mutationFn: (b: { id: string; name: string }) => api.updateBundle(b.id),
+    onSuccess: (res, b) => {
+      refreshAll();
+      const failed = Object.entries(res.load_errors ?? {});
+      const retired = res.removed_members?.length ? ` Retired: ${res.removed_members.join(", ")}.` : "";
+      if (failed.length) {
+        toast({
+          tone: "error",
+          title: "Bundle updated, but not fully running",
+          message: `${b.name}: ${failed.map(([id, e]) => `${id} (${e})`).join("; ")}.${retired}`,
+        });
+      } else {
+        toast({
+          tone: res.restart_recommended ? "info" : "success",
+          title: "Bundle updated",
+          message: `${b.name} re-pinned.${retired}${res.restart_recommended ? " Restart to serve the fresh routes." : ""}`,
+        });
+      }
+    },
+    onError: (err: unknown, b) => toast({ tone: "error", title: "Couldn't update bundle", message: `${b.name}: ${errMsg(err)}` }),
+  });
+  const removeBundle = useMutation({
+    mutationFn: (b: { id: string; name: string }) => api.uninstallBundle(b.id),
+    onSuccess: (res, b) => {
+      refreshAll();
+      const kept = res.kept?.length ? ` Kept (shared): ${res.kept.join(", ")}.` : "";
+      toast({
+        tone: "success",
+        title: "Bundle uninstalled",
+        message: `${b.name} — removed ${res.removed_members.join(", ") || "nothing"}.${kept}`,
+      });
+    },
+    onError: (err: unknown, b) => toast({ tone: "error", title: "Couldn't uninstall bundle", message: `${b.name}: ${errMsg(err)}` }),
+  });
+
   // Re-clone locked-but-missing plugins (fresh clone / restored data dir).
   const sync = useMutation({
     mutationFn: () => api.syncPlugins(),
@@ -468,6 +518,46 @@ function LocalTab() {
                 onSelect={(id) => setStatus(id as InstalledStatus)}
               />
             </div>
+            {installedBundles.length ? (
+              <div className="plugin-bundles-strip" role="group" aria-label="Installed bundles">
+                {installedBundles.map((b) => {
+                  const u = bundleUpdateById.get(b.id);
+                  return (
+                    <div key={b.id} className="plugin-bundle-row">
+                      <span className="plugin-bundle-name">{b.name}</span>
+                      {u?.behind ? <Badge status="info">update available</Badge> : null}
+                      {u?.error ? <Badge status="warning">check failed</Badge> : null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        loading={updateBundle.isPending && updateBundle.variables?.id === b.id}
+                        onClick={() => updateBundle.mutate(b)}
+                      >
+                        <RefreshCw size={13} /> Update
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setBundleRemovePending(b)}>
+                        <Trash2 size={13} /> Uninstall
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            <ConfirmDialog
+              open={bundleRemovePending !== null}
+              title="Uninstall bundle?"
+              confirmLabel="Uninstall"
+              destructive
+              onConfirm={() => {
+                if (bundleRemovePending) removeBundle.mutate(bundleRemovePending);
+                setBundleRemovePending(null);
+              }}
+              onClose={() => setBundleRemovePending(null)}
+            >
+              {bundleRemovePending
+                ? `Uninstall ${bundleRemovePending.name} and the plugins only it installed? Members shared with another bundle are kept.`
+                : undefined}
+            </ConfirmDialog>
             <div className="plugin-table-wrap">
               <Table className="plugin-table">
                 <THead>

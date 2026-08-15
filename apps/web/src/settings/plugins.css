@@ -75,6 +75,14 @@
    chips in a controls row above it). Configure still opens the per-plugin settings
    dialog (ADR 0059); the action cluster lives in the last cell. */
 .plugin-installed-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 12px; }
+
+/* Installed BUNDLES strip (#2718) — the provenance chips' bundles, actionable:
+   one compact row per installed bundle (name, freshness badge, Update, Uninstall)
+   above the members table. */
+.plugin-bundles-strip { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
+.plugin-bundle-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--pl-color-border); border-radius: 8px; background: var(--pl-color-bg-raised); }
+.plugin-bundle-name { font-size: 13px; font-weight: 600; margin-right: auto; }
+
 .plugin-table-wrap { overflow-x: auto; }
 .plugin-table { width: 100%; }
 .plugin-table td { vertical-align: middle; }
