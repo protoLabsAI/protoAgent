@@ -320,7 +320,9 @@ async def uninstall_bundle(
 # config. Results are TTL-cached per URL so the archetype picker can call freely.
 
 _PEEK_TTL_SECONDS = 600.0
-_peek_cache: dict[str, tuple[float, dict]] = {}
+# Keyed by (url, ref) — a url-only key served one ref's preview for every ref of
+# the same bundle within the TTL (2735 review).
+_peek_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 
 # A bundle-manifest member id used in a filesystem path must be ONE safe path
 # component: leading alnum, then alnum/dot/underscore/hyphen — no separators, so
@@ -378,7 +380,7 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
     from infra.paths import instance_paths
 
     now = time.monotonic()
-    hit = _peek_cache.get(url)
+    hit = _peek_cache.get((url, ref or ""))
     if hit and now - hit[0] < _PEEK_TTL_SECONDS:
         return hit[1]
 
@@ -397,7 +399,7 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
                 "mcp": [],
                 "secrets": [],
             }
-            _peek_cache[url] = (now, result)
+            _peek_cache[(url, ref or "")] = (now, result)
             return result
 
         members = []
@@ -442,7 +444,7 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
             "archetype": dict(bundle.get("archetype") or {}),
         }
 
-    _peek_cache[url] = (now, result)
+    _peek_cache[(url, ref or "")] = (now, result)
     return result
 
 

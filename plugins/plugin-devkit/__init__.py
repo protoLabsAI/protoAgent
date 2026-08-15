@@ -747,14 +747,20 @@ async def enable_plugin(plugin_id: str) -> str:
 
 def _live_apply(config_updates: dict | None) -> tuple[bool, str]:
     """Apply a config change (None = pure reload) to the RUNNING agent — the same
-    ``_apply_settings_changes`` path the console uses. (False, why) with no live graph."""
+    ``_apply_settings_changes`` path the console uses. (False, why) with no live graph.
+    Guarded like ``_live_enable``'s identical call (2735 review): a raising reload
+    (YAML write error, …) must come back as a clean (False, reason), never escape a
+    tool as an unhandled error."""
     from runtime.state import STATE
 
     if getattr(STATE, "graph", None) is None:
         return False, "no live agent (run inside the server)"
-    from server.agent_init import _apply_settings_changes
+    try:
+        from server.agent_init import _apply_settings_changes
 
-    ok, msgs = _apply_settings_changes(config=config_updates)
+        ok, msgs = _apply_settings_changes(config=config_updates)
+    except Exception as e:  # noqa: BLE001 — surface, don't crash the tool
+        return False, f"reload failed: {e}"
     return bool(ok), ("; ".join(str(m) for m in msgs) or ("applied" if ok else "reload failed"))
 
 
@@ -811,8 +817,15 @@ async def install_plugin(url: str, ref: str = "", activate: bool = True) -> str:
     lines = [f"✓ installed {what}"]
     if res.enabled:
         lines.append(f"  enabled + live: {', '.join(res.enabled)}" if res.reloaded else f"  enabled: {', '.join(res.enabled)}")
+    elif res.enable_error:
+        # The enable-reload FAILED (enabled=[] + enable_error set) — saying "fetched
+        # only (activate=False)" here contradicted the ⚠ line below and misinformed
+        # the agent (the 2735 review's misreport finding).
+        lines.append("  installed, but the enable-reload failed — see below; enable_plugin retries it")
     elif activate and not live:
         lines.append("  fetched only — no live agent to enable into (enable_plugin later)")
+    elif activate:
+        lines.append("  installed — nothing to enable (the bundle declares no enable set)")
     else:
         lines.append("  fetched only (activate=False) — enable_plugin turns it on")
     for pid, err in (res.load_errors or {}).items():
@@ -887,6 +900,14 @@ async def disable_plugin(plugin_id: str) -> str:
     ``enable_plugin``. Use ``uninstall_plugin`` to remove the code too."""
     from runtime.state import STATE
 
+    # A builtin ALWAYS loads (the loader ignores plugins.disabled for builtin: true)
+    # — refuse like the console's enable route does, instead of writing config,
+    # reloading, and reporting a false "✓ disabled" (the 2735 review's cross-file
+    # finding; the plugin would still be live).
+    meta = _plugin_meta(plugin_id)
+    if meta and meta.get("builtin"):
+        return f"✗ {plugin_id} is a built-in plugin and can't be disabled"
+
     cfg = getattr(STATE, "graph_config", None)
     enabled = [p for p in (getattr(cfg, "plugins_enabled", []) or []) if p != plugin_id]
     disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != plugin_id] + [plugin_id]
@@ -904,15 +925,23 @@ async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
     from graph.plugins.loader import purge_plugin_modules
 
     if installer.bundle_entry(plugin_id) is not None:
+        # The shared op owns the bundle teardown (purge + pure reload) — the 2735
+        # review caught this branch reimplementing ops.uninstall_bundle step-for-step.
+        from ops import OpContext
+        from ops.plugins import uninstall_bundle
+
         try:
-            rep = await asyncio.to_thread(installer.uninstall_bundle, plugin_id, purge=purge)
+            rep = await uninstall_bundle(
+                plugin_id, purge=purge, ctx=OpContext.from_state(), apply_settings=_ops_applier()
+            )
         except installer.InstallError as exc:
             return f"✗ uninstall failed: {exc}"
-        for pid in rep.get("removed_members") or []:
-            purge_plugin_modules(pid)
-        ok, detail = await asyncio.to_thread(_live_apply, None)
         kept = f"; kept (shared): {', '.join(rep['kept'])}" if rep.get("kept") else ""
-        return f"✓ uninstalled bundle {plugin_id} — removed {', '.join(rep['removed_members']) or 'nothing'}{kept} ({detail if ok else 'reload failed: ' + detail})"
+        tail = "reloaded live" if rep.get("reloaded") else (rep.get("reload_error") or "no live agent — restart to finish")
+        return (
+            f"✓ uninstalled bundle {plugin_id} — removed "
+            f"{', '.join(rep['removed_members']) or 'nothing'}{kept} ({tail})"
+        )
 
     try:
         await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)

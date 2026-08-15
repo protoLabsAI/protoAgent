@@ -613,3 +613,26 @@ async def test_activate_false_skips_bundle_service_seeding(tmp_path, monkeypatch
     res = await install_and_activate("https://x/stack", ctx=_ctx(), activate=False, apply_settings=None)
     assert res.mcp_seeded == [] and res.reloaded is False
     assert cfg.read_text() == before  # not even opened for write
+
+
+async def test_peek_cache_is_keyed_by_url_and_ref(tmp_path, monkeypatch):
+    """A url-only cache key served one ref's preview for every ref of the same bundle
+    within the TTL (2735 review) — two refs must peek independently."""
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    fixture = _write_bundle_fixture(tmp_path)
+    calls: list = []
+
+    def counting_fetch(url, ref, dest):
+        calls.append((url, ref))
+        return fixture(url, ref, dest)
+
+    monkeypatch.setattr(installer, "_fetch", counting_fetch)
+    await plugin_ops.peek_bundle("https://example.test/stack")
+    n_first = len(calls)
+    await plugin_ops.peek_bundle("https://example.test/stack")  # same (url, ref) → cached
+    assert len(calls) == n_first
+    await plugin_ops.peek_bundle("https://example.test/stack", ref="v2")  # new ref → fresh peek
+    assert len(calls) > n_first

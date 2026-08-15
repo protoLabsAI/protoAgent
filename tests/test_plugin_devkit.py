@@ -812,3 +812,65 @@ def test_verify_bundle_tool_rejects_non_bundle(monkeypatch):
     monkeypatch.setattr(op, "peek_bundle", fake_peek)
     out = _run(mod.verify_bundle.ainvoke({"url": "https://x/solo"}))
     assert out.startswith("✗") and "not a bundle repo" in out
+
+
+# ── 2735 review follow-through ─────────────────────────────────────────────────
+
+
+def test_update_plugin_single_release_tag_success(monkeypatch):
+    """The success branch the 2735 review called untested: release-tag bump via
+    check_plugin_update → force reinstall → module purge → live reload."""
+    mod = _load_devkit_module(None)
+    from graph.plugins import installer, loader
+
+    monkeypatch.setattr(installer, "bundle_entry", lambda bid: None)
+    monkeypatch.setattr(
+        installer,
+        "list_installed",
+        lambda: [{"id": "demo", "source_url": "https://x/demo", "requested_ref": "v1.0.0", "resolved_sha": "a" * 40}],
+    )
+    monkeypatch.setattr(installer, "check_plugin_update", lambda e: {"latest_ref": "v2.0.0"})
+    seen: dict = {}
+
+    def fake_install(url, ref=None, **k):
+        seen["ref"] = ref
+        return {"id": "demo", "resolved_sha": "b" * 40}
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    purged: list[str] = []
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: purged.append(pid))
+    monkeypatch.setattr(mod, "_live_apply", lambda updates: (True, "applied"))
+
+    out = _run(mod.update_plugin.ainvoke({"plugin_id": "demo"}))
+    assert seen["ref"] == "v2.0.0"  # immutable tag → newest semver, not the recorded one
+    assert purged == ["demo"] and "reloaded live" in out and "bbbbbbbbbb" in out
+
+
+def test_disable_plugin_refuses_builtins(monkeypatch):
+    """A builtin ALWAYS loads (loader ignores plugins.disabled) — the old path wrote
+    config, reloaded, and reported a false '✓ disabled' (2735 cross-file finding)."""
+    mod = _load_devkit_module(None)
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "plugin_meta", [{"id": "delegates", "builtin": True, "loaded": True}], raising=False)
+    out = _run(mod.disable_plugin.ainvoke({"plugin_id": "delegates"}))
+    assert out.startswith("✗") and "built-in" in out
+
+
+def test_install_plugin_reload_failure_is_not_fetched_only(monkeypatch):
+    """enabled=[] + enable_error is a RELOAD FAILURE, not a fetch-only install — the
+    old message said 'fetched only (activate=False)' beside the ⚠ line (2735 review)."""
+    mod = _load_devkit_module(None)
+    import ops.plugins as op
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+
+    async def fake_install(url, ref=None, **kw):
+        return _install_result(enabled=[], reloaded=False, enable_error="graph compile failed")
+
+    monkeypatch.setattr(op, "install_and_activate", fake_install)
+    out = _run(mod.install_plugin.ainvoke({"url": "https://x/demo"}))
+    assert "activate=False" not in out
+    assert "enable-reload failed" in out and "graph compile failed" in out
