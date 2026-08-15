@@ -185,11 +185,21 @@ def _write_lock(data: dict) -> None:
     )
     lock = lock_path()
     lock.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic: a crash mid-write must not leave a truncated lock that _read_lock
-    # then treats as a FRESH one (silently dropping every pin — 2739 review nit).
-    tmp = lock.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, lock)
+    # Atomic + concurrency-safe: a crash mid-write must not leave a truncated lock
+    # that _read_lock treats as FRESH (silently dropping every pin), and each writer
+    # stages to its OWN temp file — a shared ".tmp" path let two concurrent writes
+    # interleave into a corrupt replace (coderabbit on the 2739 thread).
+    fd, tmp_name = tempfile.mkstemp(dir=lock.parent, prefix=lock.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp_name, lock)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:
