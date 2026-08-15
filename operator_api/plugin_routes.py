@@ -2,10 +2,12 @@
 
 Backs the console Plugins panel: list installed plugins (with their manifest +
 declared capabilities for review), install from a git URL, uninstall, and
-enable/disable. **Installing AUTO-ENABLES + runs the plugin** (trust-by-default — the
-install dialog carries a static "this enables and runs it" warning only; there is NO
-per-install confirm until the ADR 0071 D3 consent layer lands. Opt out with
-``PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`` for strict install ≠ enable).
+enable/disable. **Installing AUTO-ENABLES + runs the plugin** (trust-by-default,
+ADR 0071 D3): a source that is neither official nor previously acked answers
+``needs_ack`` and the console asks with the one-time "this runs code" confirm;
+``POST /api/plugins/ack`` persists the answer. Opt out with
+``PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`` for strict install ≠ enable (fetch-only —
+no code runs, so the gate is skipped).
 Enable/disable edits ``plugins.enabled`` and hot-reloads.
 
 ENABLE is fully live: tools/middleware/MCP rebuild with the graph, and a plugin's
@@ -49,9 +51,9 @@ def _sources_allowlist() -> list[str] | None:
 
 def _install_no_enable() -> bool:
     """Opt out of auto-enable-on-install — back to ADR 0027's strict install ≠ enable.
-    Default off: installing a plugin enables + runs it (trust-by-default; the only
-    console-side friction is the install dialog's static warning — the per-install
-    consent ack is ADR 0071 D3, not yet built)."""
+    Default off: installing a plugin enables + runs it (trust-by-default, behind the
+    ADR 0071 D3 consent gate — untrusted sources get the one-time "runs code" ack
+    first). Fetch-only mode also skips that gate: no code runs at install."""
     import os
 
     return os.environ.get("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "").strip().lower() in ("1", "true", "yes")
@@ -259,11 +261,11 @@ def register_plugin_routes(app) -> None:
         from ops import OpContext
         from ops.plugins import install_and_activate
 
-        # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default): installing IS
-        # the consent — the dialog's static warning is the only friction; the per-install
-        # "this runs code" ack is ADR 0071 D3, not yet built (the Discover one-click path
-        # has no confirm at all). The op adds it to plugins.enabled + hot-reloads via
-        # _apply_settings_changes — the live-agent rebuild this REST adapter injects. Opt out with
+        # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default) — for a
+        # trusted source; an untrusted one was already turned back with needs_ack
+        # above (ADR 0071 D3, both the dialog and the Discover one-click ask). The
+        # op adds it to plugins.enabled + hot-reloads via _apply_settings_changes —
+        # the live-agent rebuild this REST adapter injects. Opt out with
         # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (strict install ≠ enable).
         from server.agent_init import _apply_settings_changes
 
@@ -370,7 +372,10 @@ def register_plugin_routes(app) -> None:
         re-asks forever."""
         body = body or {}
         url = str(body.get("url", "") or body.get("source", "")).strip()
-        trust_all = bool(body.get("trust_all"))
+        # Never bool(): a string "false" is truthy, and this flag WIDENS trust — the
+        # exact fail-open shape the 2733 review caught on trust_unverified itself.
+        raw_trust = body.get("trust_all")
+        trust_all = raw_trust is True or str(raw_trust or "").strip().lower() in ("1", "true", "yes", "on")
         if not url and not trust_all:
             raise HTTPException(status_code=400, detail="url (or trust_all) is required")
         from graph.plugins.trust import ack_pattern
@@ -385,7 +390,9 @@ def register_plugin_routes(app) -> None:
         updates: dict = {"plugins": {"sources": {"acked": acked}}}
         if trust_all:
             updates["plugins"]["trust_unverified"] = True
-        ok, messages = _apply_settings_changes(config=updates)
+        # Off the event loop — config write + full graph rebuild (2734 review; the
+        # same D9 rule every other reload call site follows).
+        ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "persisting the ack failed")
         return {"ok": True, "acked": pattern or None, "trust_all": trust_all}

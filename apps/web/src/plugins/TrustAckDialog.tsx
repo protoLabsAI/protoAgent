@@ -1,6 +1,8 @@
 import { Checkbox } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+
+import { api } from "../lib/api";
 
 // The one-time "this runs code" consent (ADR 0071 D3, #2721). The install route
 // answers `needs_ack` for a source that is neither official nor previously acked;
@@ -9,6 +11,44 @@ import { useState } from "react";
 // `plugins.trust_unverified` — the global "don't ask again". Shared by the
 // install-by-URL dialog and the Discover one-click path (which previously had no
 // confirm at all).
+// The whole needs_ack → confirm → POST /api/plugins/ack → retry flow, shared by the
+// install-by-URL dialog and the Discover one-click path (the 2734 review flagged the
+// copy-paste). A consumer calls `requestAck` with the target + its own retry, renders
+// `ackDialog`, and routes failures/cancel through its own surface (status line or toast).
+export function useTrustAck({
+  onAckError,
+  onCancel,
+}: {
+  onAckError: (message: string) => void;
+  onCancel?: () => void;
+}): {
+  requestAck: (target: { url: string; source: string; retry: () => void }) => void;
+  ackDialog: ReactNode;
+} {
+  const [pending, setPending] = useState<{ url: string; source: string; retry: () => void } | null>(null);
+  const ackDialog = pending ? (
+    <TrustAckDialog
+      source={pending.source}
+      onConfirm={async (trustAll) => {
+        const target = pending;
+        setPending(null);
+        try {
+          await api.ackPluginSource(target.url, trustAll);
+        } catch (e) {
+          onAckError(e instanceof Error ? e.message : "trust confirmation failed");
+          return;
+        }
+        target.retry(); // now trusted — the retry installs for real
+      }}
+      onClose={() => {
+        setPending(null);
+        onCancel?.();
+      }}
+    />
+  ) : null;
+  return { requestAck: setPending, ackDialog };
+}
+
 export function TrustAckDialog({
   source,
   onConfirm,

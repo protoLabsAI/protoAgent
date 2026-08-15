@@ -204,6 +204,15 @@ def test_ack_route_trust_all_flips_the_switch(monkeypatch):
     assert captured["config"]["plugins"]["trust_unverified"] is True
 
 
+def test_ack_route_trust_all_string_false_stays_off(monkeypatch):
+    """bool("false") is truthy and this flag WIDENS trust — a stringly client value
+    must never flip the global don't-ask switch (the 2734 review's finding)."""
+    captured = _wire(monkeypatch, enabled=[], disabled=[], meta=[], trust_unverified=False)
+    body = _client().post("/api/plugins/ack", json={"url": "https://x/y", "trust_all": "false"}).json()
+    assert body["trust_all"] is False
+    assert "trust_unverified" not in captured["config"]["plugins"]
+
+
 def test_ack_route_requires_a_target(monkeypatch):
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
     assert _client().post("/api/plugins/ack", json={}).status_code == 400

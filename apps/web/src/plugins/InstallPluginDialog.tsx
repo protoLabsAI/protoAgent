@@ -6,7 +6,7 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { TrustAckDialog } from "./TrustAckDialog";
+import { useTrustAck } from "./TrustAckDialog";
 import { usePluginRefresh } from "./usePluginManage";
 
 const REGISTRY_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/plugin-registry";
@@ -19,16 +19,19 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
   const [status, setStatus] = useState("");
-  // Consent gate (#2721): the server answered needs_ack — nothing was fetched. Hold
-  // the target here (the inputs must NOT clear) while the TrustAckDialog asks.
-  const [pendingAck, setPendingAck] = useState<{ url: string; source: string } | null>(null);
+  // Consent gate (#2721): needs_ack means nothing was fetched — the shared hook
+  // holds the target (the inputs must NOT clear), asks, acks, and retries.
+  const { requestAck, ackDialog } = useTrustAck({
+    onAckError: (m) => setStatus(m),
+    onCancel: () => setStatus("Install cancelled — the source wasn't trusted."),
+  });
   const refreshAll = usePluginRefresh();
 
   const install = useMutation({
     mutationFn: () => api.installPlugin(url.trim(), ref.trim() || undefined),
     onSuccess: (res) => {
       if (res.needs_ack) {
-        setPendingAck({ url: url.trim(), source: res.source ?? url.trim() });
+        requestAck({ url: url.trim(), source: res.source ?? url.trim(), retry: () => install.mutate() });
         return;
       }
       const s = res.installed;
@@ -96,26 +99,7 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
         </Button>
       </div>
       {status ? <p className="plugin-install-status" role="status">{status}</p> : null}
-      {pendingAck ? (
-        <TrustAckDialog
-          source={pendingAck.source}
-          onConfirm={async (trustAll) => {
-            const target = pendingAck;
-            setPendingAck(null);
-            try {
-              await api.ackPluginSource(target.url, trustAll);
-            } catch (e) {
-              setStatus(e instanceof Error ? e.message : "trust confirmation failed");
-              return;
-            }
-            install.mutate(); // now trusted — the retry installs for real
-          }}
-          onClose={() => {
-            setPendingAck(null);
-            setStatus("Install cancelled — the source wasn't trusted.");
-          }}
-        />
-      ) : null}
+      {ackDialog}
     </Dialog>
   );
 }
