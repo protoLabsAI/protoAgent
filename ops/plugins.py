@@ -214,9 +214,11 @@ async def update_bundle(
     (or ``ref``) — member pins re-resolve exactly as a fresh install would, the lock
     row is rewritten, and (via ``install_and_activate``) the declared enable set +
     config/mcp/secrets seeding re-apply as defaults with operator values winning.
-    A release-tag pin moves to the newest semver tag first (tags are immutable —
-    re-installing the recorded one would be a no-op forever, same rule as the
-    single-plugin update route). Members the NEW manifest no longer names are
+    When updating the RECORDED ref, a release-tag pin moves to the newest semver
+    tag first (tags are immutable — re-installing the recorded one would be a
+    no-op forever, same rule as the single-plugin update route); an explicit
+    caller ``ref`` is a pin request and is used as-is, never replaced.
+    Members the NEW manifest no longer names are
     RETIRED afterwards (uninstalled + module-purged + a pure reload) when they're
     still exclusively this bundle's — a member another bundle lists, or one the
     operator re-installed directly, is left alone."""
