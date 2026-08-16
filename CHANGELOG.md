@@ -15,6 +15,375 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.137.0] - 2026-08-16
+
+### Added
+- **The bundle pin-bump PR lifecycle now has automated test coverage (#2669).** The
+  `bump` job's dedup/approval-flagging logic (ADR 0049, #2645) lived entirely as inline
+  bash in `examples/bundles/template/.github/workflows/verify-bundle.yml` — verifying a
+  change to it meant a manual dry-run against a real GitHub repo. It's now a standalone,
+  unit-tested script (`scripts/bump_pins_pr.sh`), exercised by `tests/test_bump_pins_pr.py`
+  against a real throwaway git repo with `gh` stubbed on `PATH`. No behavior change — the
+  workflow YAML now just calls the script instead of inlining its body.
+
+- **Agent boot is now instrumented, and there's a `/perf` chat command for a live
+  performance snapshot (#2245, #2674, #2677, #2678).** Agent construction — checkpointer,
+  knowledge store, plugins, MCP, graph compile — is timed phase-by-phase and reported both
+  to Prometheus (`*_boot_phase_seconds{phase}`) and as a single structured `[boot] phase
+  timings: ...` log line, so a slow boot now says *which* phase is slow instead of just
+  "boot took a while." `/perf` surfaces the existing turn-level telemetry (cost, p50/p95
+  latency, cache-hit rate, top models, flagged outliers) directly in chat — no round-trip
+  through Settings ▸ Telemetry needed. That same telemetry rollup (`TelemetryStore.summary`)
+  now also computes p99 duration, plus p50/p95/p99 duration *per model* — both durable, from
+  data already recorded per turn, no new capture pipeline required — and the console's
+  Telemetry surface shows them alongside the existing per-model cost/token breakdown.
+  Per-*tool* latency isn't included: unlike the LLM-call path, `server/chat.py`'s tool-call
+  handling has no timing seam yet, so that's tracked separately rather than bolted on here.
+
+- **Plugin lifecycle latency is now instrumented per plugin (#2675).** The three
+  lifecycle stages — load (module import), config (schema/resolved-config binding),
+  and registration (`register(registry)`) — are timed with `time.monotonic()` per
+  plugin and emitted to a `*_plugin_lifecycle_seconds{plugin,phase}` Prometheus
+  histogram, following the `AuditMiddleware`/boot-phase (#2674) timing idiom. A
+  stage crossing 500ms logs a WARNING naming the plugin and stage, so a slow plugin
+  dragging boot or reload shows up in the log by name instead of hiding inside the
+  aggregate boot-phase `plugins` bucket. Instrumentation point #3 from #2245.
+
+- **Knowledge-store op latency instrumentation (#2676).** The hybrid knowledge store's three hot paths — hybrid query (RRF k=60), ingest (`add_document`/`add_chunk`), and embed round-trips — are now timed with `time.monotonic()` deltas and exposed on `/metrics` as the `*_knowledge_op_seconds{op=query|ingest|embed}` histogram (a failed embed is timed too — the transport-timeout case is exactly the sample worth having). Ops that run inside an A2A turn additionally attribute to that turn's telemetry row under `knowledge:{op}` keys in the same per-tool durations blob as tool calls (the #2697 pipeline — no schema change), so the by-tool percentiles pick them up for free. Instrumentation point #6 from #2245.
+
+- **Publish a chat thread to a shareable, read-only link — pre-release (#2179 P2, #2682, #2683).**
+  A `Publish…` gesture (`/publish` slash command, tab context-menu item) previews exactly
+  what will become public — the redacted structured bundle, rendered with the real chat
+  components — before anything leaves the instance, then POSTs it to a configured hosted
+  endpoint and gets back a public link. Behind the `chat.publish` developer flag (off by
+  default): the hosted service this publishes to (#2685) doesn't exist yet, so every
+  publish attempt honestly reports "not configured" until an operator points
+  `publish.endpoint_url` (Settings ▸ Publish) at a real one. See ADR 0099.
+
+- **Published links can now be listed and revoked — Settings ▸ Publish (#2179 P2, #2684).**
+  Every successful publish is recorded locally; a new Published Links card (Settings ▸
+  Publish, behind the `chat.publish` developer flag) lists them with a revoke action per
+  row. Revoking presents the stored token to a separately configured
+  `publish.revoke_endpoint_url` and only marks the link revoked locally once the hosted
+  service confirms — never before, so the console can't claim a link is dead while it's
+  still live. The publish success note no longer carries the raw revoke token now that
+  there's a real place to manage it. Also fixed: the `publish.*` endpoint-URL fields added
+  alongside the publish/preview routes were unreachable in Settings (mapped to a category
+  nothing renders) — they now live in their own Publish section. See ADR 0099.
+
+- **The marketing changelog page collapses prior months (#2695).** `/changelog` had grown to
+  144 releases across 3 months of unbroken scroll. The current month still renders flat; each
+  prior month now collapses into a native `<details>` section showing a release count, expanding
+  on click — no new JS dependency, matching the marketing site's React-free design.
+
+- **Telemetry breaks down latency by tool, not just by model (#2697).** The turn loop now
+  stamps each tool call's execution time (`on_tool_start`→`on_tool_end`), durably recorded as
+  a per-turn JSON blob and aggregated into p50/p95/p99 duration per tool — a "By tool" table
+  on the Telemetry surface, and a "Slowest tools" line in the `/perf` chat snapshot, both
+  sorted slowest-first so the tools worth investigating lead.
+
+- **`read_file` can page past its 50K-char cap (#2707).** A new `offset` param lets
+  a file larger than one chunk be read in full across a few calls — a truncated
+  result now names the offset to pass next, instead of permanently capping the file
+  at its first chunk in every call.
+
+- **`read_file` can skip a redundant re-read within one turn (#2708).** New
+  `tools.memoize_reads.enabled` flag (off by default): when on, a repeat
+  `read_file` call for a file this turn already read — and hasn't since been
+  written to — returns a short pointer instead of the content again, saving real
+  context tokens rather than just a disk read. Found via a live-session audit
+  where the same file was read twice, byte-identical, for ~12.5K wasted tokens.
+
+- **The project-manager persona now nudges toward `task` delegation for wide
+  multi-repo investigation (#2711).** Found via a live incident where a broad
+  board-cleanup ask ("unblock where it makes sense... tackle do next bucket")
+  ran entirely in the lead agent loop — 38 sequential LLM calls, $58.83 in one
+  turn — because the persona never mentioned `task()` delegation at all. The
+  board-decision step itself stays single-threaded (it genuinely needs
+  cross-card judgment); only the per-repo code-reading that informs it is
+  pushed out to parallel `codebase-mapper` subagent calls.
+
+- **A bundle's `archetype:` block can now name a `soul_preset`, and typo'd keys warn at
+  install (#2715).** The catalog path always supported `soul_preset` / inline `soul`;
+  the bundle path read inline `soul` only, so a preset-naming bundle silently shipped
+  the base persona. The block was also cached into `plugins.lock` unvalidated — an
+  unknown key (`souls:`, `require_tools:`) vanished with no signal. Both seams are now
+  loud: an unknown preset warns and falls back, unknown keys warn (never fail), and the
+  reference bundle template documents the full field set.
+
+- **Bundles now have a lifecycle past install — update, re-pin, uninstall as one
+  action (ADR 0049 D4), and a real guide (#2718).** A bundle was first-class at install
+  and never again: `check_updates`/`sync` ignored the lock's `bundles` rows (a published
+  stack's pin never moved on an installed host) and removing one meant hand-uninstalling
+  members against a provenance row that went stale. Now the update check covers bundles
+  (`GET /api/plugins/updates` → `bundles[]`), `POST /api/plugins/bundles/{id}/update`
+  re-resolves the ref (release-tag pins move to the newest semver tag), re-pins every
+  member, re-applies the declared enable set *without undoing an operator's explicit
+  disable*, and retires members the new manifest dropped; `DELETE /api/plugins/bundles/{id}`
+  removes exclusively-owned members + the lock row and hot-reloads (shared members
+  stay). CLI: `plugin update-bundle` / `uninstall-bundle`, with the out-of-process
+  liveness warning. The new `docs/guides/bundles.md` documents the whole lifecycle —
+  manifest reference, install semantics per surface, updating, publishing a stack with
+  the verify/pin-bump CI.
+
+- **The devkit now covers the entire plugin lifecycle (#2719).** It stopped at
+  authoring (scaffold/edit/test/enable/reload) — installs, updates, disables, and
+  removals had to be handed back to the operator. New tools: `install_plugin` (console
+  semantics — enables + hot-reloads, load failures surfaced, allowlist enforced,
+  `activate=False` for fetch-only), `update_plugin` (release-tag pins move to the
+  newest semver; a bundle id updates the whole bundle incl. retiring dropped members),
+  `disable_plugin`, `uninstall_plugin` (live teardown — the half the CLI can't do),
+  and `verify_bundle` (read-only pre-install peek: members, seeds, archetype-block
+  problems). All route through the same ops/installer layers the console uses.
+
+- **The one-time "this runs code" consent is real (ADR 0071 D3 S4–S6, #2721).**
+  Installing from a source that is neither official (`plugins.sources.official`,
+  fork-overridable) nor previously acked now answers `needs_ack` — before anything is
+  fetched — and the console asks with a proper confirm: the install-by-URL dialog and
+  the Discover one-click path (which previously had **no confirm at all**) share the
+  new TrustAckDialog; confirming persists the exact repo into `plugins.sources.acked`
+  via `POST /api/plugins/ack`, and "don't ask again" flips `plugins.trust_unverified`.
+  Fetch-only installs (`PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`) skip the gate — no
+  code runs, nothing to consent to yet. The docstrings #2720 corrected now describe a
+  dialog that actually exists.
+
+- **Trust & consent foundation (ADR 0071 D3 S1/S2, #2721).** The config now carries
+  `plugins.sources.official` (auto-trusted source globs — default the protoLabsAI org,
+  fork-overridable, with explicit-empty meaning "no official sources"),
+  `plugins.sources.acked` (sources the operator confirmed once), and
+  `plugins.trust_unverified` (the don't-ask-again switch), all persisting through the
+  config write path — the exact drop the June audit warned would make an ack re-ask
+  forever. `graph/plugins/trust.py` resolves them (`source_trusted`, spelling-normalized
+  globs, exact-repo ack grants). Plumbing only: nothing asks yet — the ack API and
+  console consent dialog are the follow-up slices.
+
+- **A bundle lifecycle smoke joins the #912 single-plugin one (#2724).**
+  `tests/test_bundle_lifecycle_smoke.py` drives one host agent through a bundle's whole
+  life against the real installer/loader/config layers: install (fan-out + provenance
+  row) → enable the declared set → seed (config-defaults overlay + declared `mcp:`
+  server) → use a member's tool → update (a moved member re-pins, a
+  dropped-from-the-manifest member is retired, #2718) → one-action uninstall with
+  nothing dangling. The seams between the per-layer tests now have a regression net.
+
+- **Installed bundles are actionable from the console (#2737).** The Installed tab
+  gains a compact strip listing each installed bundle with its freshness (the updates
+  poll's bundle rows — "update available" when the bundle repo's manifest moved),
+  an Update action that re-pins members and retires ones the new manifest dropped,
+  and an Uninstall action behind a confirm that says exactly what goes
+  (exclusively-owned members) and what stays (shared members). Toasts report every
+  failure the backend declares — a failed retirement, enable-reload, or hot-reload
+  is never dressed up as success.
+
+- **One repo-owned fast gate script, shared by local devs and PR CI (#2746).**
+  `python scripts/gate.py` now runs the quick deterministic pre-PR checks in one
+  command — `ruff check .`, `lint-imports`, `gen_attribution --check`,
+  `uv lock --check` (skipped with a warning when `uv` is absent), and
+  `pytest tests/ -q` — sequentially and fail-fast, with `--lint-only` for a
+  pre-commit smoke without the test suite. CI's `lint` job invokes the same
+  script instead of its previous four inline steps, so the local and CI gates
+  can't drift. Pure stdlib and argv-only (no `/bin/sh`), so the one command
+  works on Windows and POSIX alike.
+
+### Changed
+- **The marketing site is rebuilt on the shared protoLabs design system (#2702).** It had
+  drifted into a look protoLabs.studio doesn't ship — centered 6xl bold headings, a radial
+  hero glow, lavender-filled CTAs, card grids with lift-on-hover — and a dark-only palette
+  hand-rolled from `zinc-*` utilities and literal `#0a0a0c`, all while half-importing
+  `@protolabsai/design` and then ignoring it. Tailwind is dropped entirely; the site now
+  loads the same two stylesheets protolabs.studio's own frontend does (`@protolabsai/design`
+  for the `--pl-*` tokens + element base, `@protolabsai/ui` for the `.pl-*` components), so
+  bumping those packages moves the design instead of the two drifting apart. Card grids
+  became `.pl-row` lists, which scan far better at 39 plugins and 12 features than a
+  two-column card wall; the changelog timeline is now the design system's `.pl-changelog`,
+  the same DOM the React `<Changelog>` emits, with month grouping and the collapsed archive
+  intact. The site also follows the reader's OS colour scheme now rather than forcing dark —
+  light mode works because nothing is a hardcoded hex any more. Three latent bugs went with
+  it: the hero badge and two form fields referenced `--color-surface-1`, a variable that was
+  never defined in the Tailwind `@theme` map and so rendered transparent, and the roadmap and
+  changelog carried hardcoded `#4ade80` / `#52525b` status colours that are now token-driven
+  `.pl-badge` variants.
+
+### Fixed
+- **`auth: {token: ""}` now correctly disables bearer auth even when `A2A_AUTH_TOKEN`
+  is set in the environment (#2691).** The three-state contract documented in
+  `a2a_impl/auth.py` — `None` (unset) = fall back to env, `""` (explicitly empty) = auth
+  off with no env fallback — was not honoured at boot or reload. Both paths collapsed any
+  falsy config value to `None` before reaching `configure()` / `set_bearer_token()`,
+  so an operator who set `auth: {token: ""}` to disable bearer auth would have it
+  silently re-enabled by a stray `A2A_AUTH_TOKEN` in the environment. Fixed by changing
+  `auth_token` / `federation_token` in `LangGraphConfig` to default to `None` (absent =
+  unset) rather than `""`, and threading the raw config value through both the boot
+  (`server/__init__.py`) and reload (`server/agent_init.py`) paths without collapsing it.
+
+- **A finished background job now has a durable, tab-independent way to be noticed
+  (#2692).** Two structural gaps let a completed `delegate_to(background=True)` job go
+  unseen even though the backend delivered it correctly: the origin session had to
+  already be an open browser tab for the live report to render (a machinery-driven
+  session, or one aged out of the 50-tab local cap, silently got nothing but a vague
+  toast), and `background.*` events shared one 128-slot process-wide replay ring with
+  every other retained event on the instance — busy enough, and a `background.completed`
+  could get evicted before a reconnecting client replayed it. The Background-agents
+  panel's unread badge is now durable (localStorage-backed, keyed by job id) and
+  reconciles from `GET /api/background` on every hydrate/reconnect — not just from the
+  live bus event — so a missed push still surfaces once the panel next syncs. Its rows
+  also gained a "jump to chat" action when the origin session is already an open tab.
+  The fallback toast ("open the chat to read it") no longer lies when there's no chat to
+  open — it now points at the panel. `background.progress` (the noisiest, most frequent
+  background event) is now published unretained, and the shared replay ring grew from
+  128 to 512 slots, both reducing eviction pressure on `background.completed`. The same
+  silent-drop pattern in `ChatResumeWatch` (a scheduled/watch-triggered turn resuming
+  into a session that isn't a local tab) now degrades to a toast instead of producing
+  nothing at all.
+
+- **The boot-phase timing test no longer fails at random on native Windows CI (#2703).**
+  `test_timed_boot_phase_records_the_measured_elapsed_time` (until this change,
+  `test_timed_boot_phase_records_into_the_sink`) slept 10ms and asserted the recorded
+  duration was `> 0`, but under Python 3.12 `time.monotonic()` is backed by
+  `GetTickCount64()` with ~15.6ms granularity — so on the Windows runner a 10ms sleep
+  legitimately measures as exactly `0.0` and the assertion fails through no fault of the
+  code under test. It now scripts the clock instead of sleeping, which makes it
+  deterministic on every platform and tightens the assertion at the same time: the
+  recorded value is pinned to the exact delta between the helper's two clock reads, so
+  a `_timed_boot_phase` that recorded the raw end timestamp instead of the elapsed time
+  would now fail, where `> 0` accepted it. Test-only — the helper is untouched.
+
+- **Telemetry's `tool_calls` count was silently 2x inflated (#2705).** The turn loop
+  legitimately announces a tool call twice — once early (empty args, so the console
+  shows "running" immediately) and once more when the model finishes streaming (same
+  id, full args, filling the card in). The executor counted both as separate calls,
+  doubling `tool_calls` everywhere it's read: the Telemetry dashboard, the `/perf`
+  chat snapshot, and cost/success correlations keyed on call volume. Now deduped by
+  tool-call id — a real call counts once, regardless of how many times it's announced.
+
+- **Console-created agents now receive their archetype's capability contract (#2713).**
+  The backend has persisted and boot-checked `requires_tools` since #2315, but the
+  console dropped the field at the type boundary — so an agent created from
+  Settings ▸ Agents got no contract in `workspace.yaml`, and a persona could command
+  tools the agent doesn't have without any warning (the original #2277 failure).
+  The `Archetype` type, `createAgent` client, and NewAgentPanel now forward it, with
+  tests pinning both halves of the seam (route → `workspace.yaml`, panel → request body).
+
+- **The setup wizard now has the same bundle Configure step and runtime warning as the
+  fleet new-agent picker (#2714).** Picking Cowork/Social/PM on first run used to install
+  the archetype's bundle with no prompt for its declared MCP inputs or secrets, and no
+  warning when the managed Python runtime the archetype needs isn't provisioned — both
+  existed only in Settings ▸ Agents (#2041/#2186), while the wizard is the surface a new
+  user actually hits first. The wizard's persona step now renders the same collapsible
+  Configure form (skip = env-only seeding) and choose-time runtime notice, and the
+  collected values ride the install exactly like fleet-create.
+
+- **Installing a plugin that fails to load no longer toasts "enabled and live" (#2716).**
+  The loader skips a plugin whose import fails and the reload still succeeds, so the
+  install response said `reloaded: true` for code that never ran — the truth appeared
+  only later as a red pill on the Installed table. `install_and_activate` now reads the
+  post-reload roster and returns `load_errors`; the install dialog, the Discover
+  one-click path, and the setup wizard all surface it, and
+  `GET /api/plugins/installed` rows now carry the plugin's `error` too.
+
+- **CLI uninstall of an enabled plugin now warns that a running server keeps it live
+  (#2717).** `plugin uninstall` runs out-of-process: it scrubs disk and config, but a
+  running server keeps the plugin's tools and routes serving until its next restart or
+  reload — previously with no signal at all. The CLI now detects live servers on this
+  data root (the #818 heartbeats) and, when the plugin was enabled, names the process
+  and points at the console uninstall (which does the live teardown) instead of
+  silently diverging.
+
+- **Bundle-lifecycle corrections from the #2732/#2736 review findings (#2718).**
+  `uninstall_bundle` now buckets honestly — a member uninstalled individually earlier
+  reports as already-gone instead of "kept (shared)"; the shared ownership scan is one
+  helper instead of three copies. `POST /api/plugins/bundles/{id}/update` answers 404
+  for an unknown bundle (matching the DELETE route). In `ops.update_bundle`, an
+  explicitly passed ref is never silently replaced by the newest semver tag, retire
+  failures accumulate instead of overwriting each other, and every graph-rebuilding
+  apply now runs off the event loop. The bundles guide separates what the CLI update
+  shares with the console path from what is console-only, and the lifecycle smoke
+  reads the declared enable set from the lock row and exercises the shared-member
+  keep leg.
+
+- **Devkit lifecycle-tool fixes from the #2735 review findings (#2719).**
+  `install_plugin` no longer claims "fetched only (activate=False)" when the
+  enable-reload actually failed; `_live_apply` catches a raising reload and returns a
+  clean failure like its sibling `_live_enable`; `disable_plugin` refuses builtins
+  instead of reporting a false "✓ disabled" for a plugin the loader keeps live;
+  `uninstall_plugin`'s bundle branch routes through the shared `ops.uninstall_bundle`
+  instead of reimplementing it; and the bundle-preview cache is keyed by (url, ref)
+  so two refs of one bundle stop sharing a preview within the TTL. The
+  single-plugin update success branch (release-tag → newest semver → purge → live
+  reload) is now tested.
+
+- **The plugin-install docs no longer claim a consent dialog that doesn't exist (#2720).**
+  `operator_api/plugin_routes.py` asserted the console "flashes a one-time 'this runs
+  code' confirm for unofficial sources" — no such dialog ships (the install dialog has a
+  static warning; the Discover one-click path has none), and the devkit skill's
+  "installing only fetches code, never runs it" is CLI-true but console-false. Both now
+  describe the shipped behavior and point at the ADR 0071 D3 consent layer as the
+  tracked follow-up, so the trust posture reads honestly until it lands.
+
+- **Trust-matcher hardening from the #2733/#2735 review findings (#2721).** The
+  prefix fallback in the trust matcher (and the byte-identical installer allowlist)
+  widened every exact entry into a bare-`*` glob — acking `github.com/x/y` silently
+  trusted `github.com/x/y-evil`, and an allowlisted `github.com/org` admitted
+  `github.com/org-evil`; both now widen only at a path boundary (`/*`).
+  `ssh://git@…` spellings normalize correctly (scheme and `git@` strip together), a
+  string `"false"` for `plugins.trust_unverified` no longer reads as *enable* the
+  don't-ask switch, and `peek_bundle` refuses a manifest member id that isn't a
+  single safe path component — a `..`-bearing id could previously resolve outside
+  the peek's temp directory before the fetch wrote.
+
+- **Bundle/archetype docs truth pass + ADR 0100 ratifies the archetype system
+  (#2722, #2723).** ADR 0040 is amended to describe the shipped install behavior (the
+  console/ops and workspace-create paths enable and seed — `config:`/`mcp:`/`secrets:` —
+  the CLI stays fetch-only) and the full manifest field set; `docs/guides/fleet.md` no
+  longer describes the two-row fallback as the shipped six-row catalog and documents
+  every `archetype:` field; the reference bundle template gains the missing `secrets:`
+  block; the operator-API reference gains the preview endpoint; version-coherence's
+  rotted line refs now cite functions. Terminology is settled in one place (ADR 0100 +
+  the fleet glossary): a **bundle** is the mechanism, a **stack** is a published
+  archetype-carrying bundle repo — CLI/devkit strings that said "stack" for the
+  mechanism (one of which also falsely promised CLI install enables) now say bundle.
+
+- **`list_verifiers` no longer implies core types are usable by `set_goal`/`create_watch`
+  (#2744).** Both tools only ever accept a plugin-registered verifier name; core types
+  (`command`, `test`, `ci`, `data`, `llm`, `plugin`) are operator-only. The tool's output
+  now says so explicitly, instead of letting the model try a core type and hit
+  `unknown plugin verifier` — found live when an agent read `ci` in the list and tried
+  it on `create_watch`.
+
+- **A `wait()` rescheduled mid-fire no longer gets silently deleted (#2749).** The
+  `wait` tool reuses one stable `wait:<session>` job id so a second `wait` in the same
+  session supersedes the first, but the scheduler's post-fire cleanup deleted by that
+  id alone — if the resumed turn called `wait` again *before* the original POST
+  returned, the fresh reschedule shared the just-fired id and was deleted seconds
+  after being created, breaking the "retry, then back off longer" chain. Found live
+  when a protoEngineer wait-retry-wait(longer) backoff silently stopped after the
+  second `wait`. The post-fire delete is now scoped to the exact row (`next_fire`)
+  that actually fired, so a mid-flight reschedule survives.
+
+- **`read_file` is now line-addressed, and `search_files` supports regex + context
+  lines (#2755).** `read_file(project, path, offset, limit)`'s `offset`/`limit` are
+  now LINE numbers, the same addressing `search_files` already returns — a hit at
+  `file.py:342` now reads straight in as `read_file(path="file.py", offset=320,
+  limit=60)` instead of paging through 50,000-character chunks from the start of
+  the file guessing where line 342 falls. Leaving `limit` unset still returns the
+  whole file (or whole remainder) in one call whenever it fits the char safety
+  cap, regardless of line count — a small file's old one-call guarantee, unchanged.
+  `search_files` gained `regex` (opt-in — literal substring stays the default, with
+  a real match timeout since a model-supplied pattern has no other bound against
+  catastrophic backtracking) and `context_lines` (grep `-C`-style, merges
+  overlapping windows, separates non-adjacent ones with `--`, and is itself capped
+  on total output, not just match count). Found via a live-session transcript
+  audit: a 100KB file got read twice, non-consecutively, in one turn, each call
+  re-truncated to the identical first 50K chars, for zero new information.
+
+- **A2A skill seam hardening — validated registration, owned ids, live served card (#2757).**
+  A plugin skill spec missing `description` no longer passes registration and then
+  `KeyError`s the boot-time card build — `register_a2a_skill` (and YAML `a2a.skills`)
+  now require `id`+`name`+`description` and reject duplicate ids with an attributed
+  warning. Cross-plugin skill-id collisions are rejected visibly at load (first wins,
+  ownership recorded per skill), and the served agent card now follows hot reloads
+  instead of staying frozen at its boot-time build while the structured finalizer
+  moved on. (#2754)
+
 ## [0.136.0] - 2026-08-13
 
 ### Added
