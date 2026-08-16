@@ -158,34 +158,166 @@ def test_search_lists_its_exclusions_in_the_tool_description(workspace):
     assert "__pycache__" in desc and "node_modules" in desc and "include_generated" in desc
 
 
-def test_read_file_pages_past_the_truncation_cap(workspace):
-    # A file bigger than _MAX_READ_CHARS used to be permanently capped at the
-    # first chunk — no way to see the rest in any call. offset pages through it.
+# ── search_files: regex + context lines ─────────────────────────────────────
+
+
+def test_search_files_literal_by_default_regex_metachars_are_not_special(workspace):
+    _, a, _ = workspace
+    (a / "dotted.py").write_text("a.b = 1\naxb = 2\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "a.b"})
+
+    assert "dotted.py:1:" in out
+    assert "dotted.py:2:" not in out  # "." is a literal dot, not "any char" — axb doesn't match
+
+
+def test_search_files_regex_true_matches_a_pattern(workspace):
+    _, a, _ = workspace
+    (a / "handlers.py").write_text("def foo_handler():\n    pass\n\ndef bar():\n    pass\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": r"def \w+_handler\(", "regex": True})
+
+    assert "handlers.py:1:" in out
+    assert "bar" not in out
+
+
+def test_search_files_bad_regex_is_a_clean_error(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "(unclosed", "regex": True})
+
+    assert out.startswith("Error:") and "regex" in out
+
+
+def test_search_files_context_lines_includes_surrounding_lines(workspace):
+    _, a, _ = workspace
+    body = "\n".join([f"line {i}" for i in range(1, 11)]) + "\n"
+    body = body.replace("line 5", "TARGET")
+    (a / "ctx.py").write_text(body)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "TARGET", "context_lines": 2})
+
+    assert "ctx.py:5: TARGET" in out  # the match line, ":" marker
+    assert "ctx.py-3- line 3" in out  # context lines, "-" marker
+    assert "ctx.py-4- line 4" in out
+    assert "ctx.py-6- line 6" in out
+    assert "ctx.py-7- line 7" in out
+    assert "line 1" not in out  # outside the window
+    assert "line 9" not in out
+
+
+def test_search_files_context_lines_merges_overlapping_windows(workspace):
+    # Two matches 3 lines apart with context=2 overlap — must render as ONE
+    # block, not duplicate the lines they share.
+    _, a, _ = workspace
+    lines = [f"line {i}" for i in range(1, 21)]
+    lines[4] = "TARGET_A"  # line 5
+    lines[7] = "TARGET_B"  # line 8
+    (a / "overlap.py").write_text("\n".join(lines) + "\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "TARGET", "regex": True, "context_lines": 2})
+
+    assert out.count("line 6") == 1  # shared by both windows — not duplicated
+    assert out.count("line 7") == 1
+    assert "--" not in out  # adjacent/overlapping ⇒ one merged block, no separator
+
+
+def test_search_files_context_lines_separates_non_adjacent_blocks(workspace):
+    _, a, _ = workspace
+    lines = [f"line {i}" for i in range(1, 31)]
+    lines[2] = "TARGET_A"  # line 3
+    lines[27] = "TARGET_B"  # line 28
+    (a / "apart.py").write_text("\n".join(lines) + "\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "TARGET", "regex": True, "context_lines": 1})
+
+    assert "--" in out  # far apart ⇒ two separate blocks
+
+
+def test_search_files_context_lines_is_clamped(workspace):
+    from tools.fs_tools import _MAX_CONTEXT_LINES
+
+    _, a, _ = workspace
+    lines = [f"line {i}" for i in range(1, 51)]
+    lines[24] = "TARGET"  # line 25
+    (a / "clamp.py").write_text("\n".join(lines) + "\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "TARGET", "context_lines": 9999})
+
+    # Clamped to _MAX_CONTEXT_LINES either side, not the whole 49-line file.
+    assert out.count("\n") + 1 <= 2 * _MAX_CONTEXT_LINES + 2
+
+
+def test_read_file_pages_past_a_line_limit(workspace):
+    # A file with more lines than the default limit used to be permanently capped
+    # at the first chunk — no way to see the rest in any call. offset/limit page
+    # through it, line-addressed the same way search_files reports hits.
+    _, a, _ = workspace
+    lines = [f"line {i}\n" for i in range(1, 251)]
+    (a / "big.txt").write_text("".join(lines))
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    first = t["read_file"].invoke({"project": "a", "path": "big.txt", "limit": 100})
+    assert first.startswith("line 1\n")
+    assert "line 100\n" in first
+    assert "line 101" not in first
+    assert "showing lines 1-100 of 250; call again with offset=101" in first
+
+    second = t["read_file"].invoke({"project": "a", "path": "big.txt", "offset": 101, "limit": 100})
+    assert second.startswith("line 101\n")
+    assert "showing lines 101-200 of 250; call again with offset=201" in second
+
+    third = t["read_file"].invoke({"project": "a", "path": "big.txt", "offset": 201, "limit": 100})
+    assert third.startswith("".join(lines[200:]))  # the remainder
+    assert "showing lines 201-250 of 250)" in third  # still oriented — no "call again", it's EOF
+    assert "call again" not in third
+
+
+def test_read_file_composes_with_search_files_line_numbers(workspace):
+    # The actual point of the redesign: a search_files hit's line number reads
+    # straight into read_file's offset/limit — no char-offset guessing.
+    _, a, _ = workspace
+    lines = [f"line {i}\n" for i in range(1, 51)]
+    lines[29] = "TARGET\n"  # line 30 (1-indexed)
+    (a / "mid.txt").write_text("".join(lines))
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    hit = t["search_files"].invoke({"project": "a", "query": "TARGET"})
+    assert "mid.txt:30:" in hit
+
+    around = t["read_file"].invoke({"project": "a", "path": "mid.txt", "offset": 25, "limit": 10})
+    assert "TARGET\n" in around
+    assert around.startswith("line 25\n")
+
+
+def test_read_file_a_single_line_over_the_char_cap_is_cut_short(workspace):
     from tools.fs_tools import _MAX_READ_CHARS
 
     _, a, _ = workspace
-    big = "x" * (_MAX_READ_CHARS + 100)
-    (a / "big.txt").write_text(big)
+    (a / "minified.js").write_text("x" * (_MAX_READ_CHARS + 100))
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
 
-    first = t["read_file"].invoke({"project": "a", "path": "big.txt"})
-    assert first.startswith("x" * 100)
-    assert f"offset={_MAX_READ_CHARS}" in first
-    assert len(first) - len(f"\n… (showing chars 0-{_MAX_READ_CHARS} of {len(big)}; call again with offset={_MAX_READ_CHARS} for more)") == _MAX_READ_CHARS
-
-    second = t["read_file"].invoke({"project": "a", "path": "big.txt", "offset": _MAX_READ_CHARS})
-    assert second == "x" * 100  # the remainder, no truncation note — it's the end
+    out = t["read_file"].invoke({"project": "a", "path": "minified.js"})
+    assert out.startswith("x" * 100)
+    assert "longer than" in out and "search_files instead" in out
 
 
 def test_read_file_offset_past_the_end_is_an_error(workspace):
     _, a, _ = workspace
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
     out = t["read_file"].invoke({"project": "a", "path": "README.md", "offset": 10_000})
-    assert out.startswith("Error:") and "past the end" in out
+    assert out.startswith("Error:") and "past the end" in out and "lines" in out
 
 
 def test_read_file_default_offset_is_unaffected_by_the_new_param(workspace):
-    # A small file's default (no offset) call is byte-for-byte identical to
+    # A small file's default (no offset/limit) call is byte-for-byte identical to
     # before — no truncation note, no behavior change for the common case.
     _, a, _ = workspace
     p = _write_exact(a)
@@ -723,9 +855,7 @@ def _msgs(*events):
             out.append(HumanMessage(content="go"))
         elif kind == "read":
             _, cid, project, path, offset, result = ev
-            args = {"project": project, "path": path}
-            if offset:
-                args["offset"] = offset
+            args = {"project": project, "path": path, "offset": offset}
             out.append(AIMessage(content="", tool_calls=[{"name": "read_file", "args": args, "id": cid}]))
             out.append(ToolMessage(content=result, tool_call_id=cid, name="read_file"))
         elif kind == "write":
@@ -733,7 +863,9 @@ def _msgs(*events):
             out.append(
                 AIMessage(
                     content="",
-                    tool_calls=[{"name": "write_file", "args": {"project": project, "path": path, "content": "x"}, "id": cid}],
+                    tool_calls=[
+                        {"name": "write_file", "args": {"project": project, "path": path, "content": "x"}, "id": cid}
+                    ],
                 )
             )
             out.append(ToolMessage(content="Overwrote.", tool_call_id=cid, name="write_file"))
@@ -744,7 +876,7 @@ def test_memoization_off_by_default_always_reads_for_real(workspace):
     _, a, _ = workspace
     p = _write_exact(a)
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "STALE CACHED CONTENT"))}
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 1, "STALE CACHED CONTENT"))}
     out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
     assert out == _EXACT_CONTENT  # the REAL file content, cache ignored
 
@@ -754,8 +886,10 @@ def test_memoization_serves_a_pointer_not_the_content_again(workspace):
     # returns a short pointer, not the (possibly huge) content a second time.
     _, a, _ = workspace
     p = _write_exact(a)
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "CACHED CONTENT"))}
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 1, "CACHED CONTENT"))}
     out = t["read_file"].invoke({"project": "a", "path": p, "state": state})
     assert out != "CACHED CONTENT"
     assert "unchanged" in out and f"a/{p}" in out
@@ -764,11 +898,13 @@ def test_memoization_serves_a_pointer_not_the_content_again(workspace):
 def test_memoization_a_write_to_the_same_path_invalidates_the_cache(workspace):
     _, a, _ = workspace
     p = _write_exact(a)
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
     state = {
         "messages": _msgs(
             ("human",),
-            ("read", "1", "a", p, 0, "STALE — before the write"),
+            ("read", "1", "a", p, 1, "STALE — before the write"),
             ("write", "2", "a", p),
         )
     }
@@ -781,19 +917,36 @@ def test_memoization_a_different_offset_is_not_treated_as_the_same_call(workspac
     # same file is not a repeat, even though (project, path) matches.
     _, a, _ = workspace
     p = _write_exact(a)
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "chunk at offset 0"))}
-    out = t["read_file"].invoke({"project": "a", "path": p, "offset": 5, "state": state})
-    assert out != "chunk at offset 0"
-    assert out == _EXACT_CONTENT[5:]  # the real file's content starting at char 5
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 1, "chunk at line 1"))}
+    out = t["read_file"].invoke({"project": "a", "path": p, "offset": 2, "state": state})
+    assert out != "chunk at line 1"
+    assert out.startswith(_EXACT_CONTENT.splitlines(keepends=True)[1])  # the real file's second line onward
+
+
+def test_memoization_a_different_limit_is_not_treated_as_the_same_call(workspace):
+    # Same idea, the other axis: a wider/narrower window at the SAME offset is
+    # still a different chunk, not a repeat.
+    _, a, _ = workspace
+    p = _write_exact(a)
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 1, "stale, limit=1 worth of content"))}
+    out = t["read_file"].invoke({"project": "a", "path": p, "offset": 1, "limit": 2, "state": state})
+    assert out == _EXACT_CONTENT  # re-read for real — limit differs from the cached call's default
 
 
 def test_memoization_a_different_path_is_not_confused_with_the_cached_one(workspace):
     _, a, _ = workspace
     p = _write_exact(a)
     (a / "other.py").write_bytes(b"different file")
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
-    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 0, "cached content"))}
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
+    state = {"messages": _msgs(("human",), ("read", "1", "a", p, 1, "cached content"))}
     out = t["read_file"].invoke({"project": "a", "path": "other.py", "state": state})
     assert out == "different file"
 
@@ -804,10 +957,12 @@ def test_memoization_only_scans_the_current_turn(workspace):
 
     _, a, _ = workspace
     p = _write_exact(a)
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
     state = {
         "messages": [
-            *_msgs(("human",), ("read", "1", "a", p, 0, "turn 1's cached content")),
+            *_msgs(("human",), ("read", "1", "a", p, 1, "turn 1's cached content")),
             HumanMessage(content="turn 2"),
         ]
     }
@@ -820,7 +975,9 @@ def test_memoization_an_errored_prior_read_is_not_served_as_a_cached_success(wor
     p = _write_exact(a)
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True))
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
     state = {
         "messages": [
             HumanMessage(content="go"),
