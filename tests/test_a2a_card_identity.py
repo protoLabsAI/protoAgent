@@ -40,7 +40,13 @@ def test_register_a2a_skill_accumulates_and_validates():
     reg.register_a2a_skill({"id": "s1", "name": "S1", "description": "d"})
     reg.register_a2a_skill({"name": "no-id"})  # rejected: no id
     reg.register_a2a_skill("not-a-dict")  # rejected: not a dict
+    # rejected: no description — the card build hard-indexes it, so a spec
+    # missing it must fail at registration, not KeyError at boot (#2754)
+    reg.register_a2a_skill({"id": "s2", "name": "S2"})
+    # rejected: duplicate id within the plugin — first registration wins (#2754)
+    reg.register_a2a_skill({"id": "s1", "name": "Dup", "description": "d2"})
     assert [s["id"] for s in reg.a2a_skills] == ["s1"]
+    assert reg.a2a_skills[0]["name"] == "S1"
 
 
 # ── resolver precedence: config + plugin, else default ──────────────────────
@@ -68,6 +74,64 @@ def test_resolver_uses_config_then_plugin(monkeypatch):
     )
     ids = [s["id"] for s in a2a._resolved_skill_specs()]
     assert ids == ["cfg1", "plug1"]  # config first, then plugins; default dropped
+
+
+def test_resolver_dedupes_by_id_config_wins(monkeypatch):
+    """A YAML-vs-plugin id collision resolves to the operator's entry — for the
+    card AND the structured finalizer, which previously first-won silently on a
+    duplicated list (#2754)."""
+    monkeypatch.setattr(
+        server.STATE,
+        "graph_config",
+        _cfg(
+            skills=[
+                {
+                    "id": "x",
+                    "name": "Cfg",
+                    "description": "d",
+                    "output_schema": {"type": "object"},
+                    "result_mime": "application/vnd.cfg-v1+json",
+                }
+            ]
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        server.STATE,
+        "plugin_a2a_skills",
+        [
+            {
+                "id": "x",
+                "name": "Plug",
+                "description": "d",
+                "output_schema": {"type": "string"},
+                "result_mime": "application/vnd.plug-v1+json",
+            },
+            {"id": "y", "name": "Y", "description": "d"},
+        ],
+        raising=False,
+    )
+    specs = a2a._resolved_skill_specs()
+    assert [s["id"] for s in specs] == ["x", "y"]
+    assert specs[0]["name"] == "Cfg"
+    assert a2a.structured_skill_schema("x")["mime"] == "application/vnd.cfg-v1+json"
+
+
+def test_config_drops_malformed_a2a_skill_entries(tmp_path):
+    """YAML-declared skills get the same contract as register_a2a_skill (#2754):
+    id+name+description required, unique by id — a bad entry is dropped with a
+    warning at parse instead of KeyError-ing the boot-time card build."""
+    p = tmp_path / "langgraph-config.yaml"
+    p.write_text(
+        "a2a:\n  skills:\n"
+        "    - id: ok\n      name: OK\n      description: d\n"
+        "    - id: nodesc\n      name: NoDesc\n"
+        "    - just-a-string\n"
+        "    - id: ok\n      name: Dup\n      description: d\n"
+    )
+    cfg = LangGraphConfig.from_yaml(p)
+    assert [s["id"] for s in cfg.a2a_skills] == ["ok"]
+    assert cfg.a2a_skills[0]["name"] == "OK"
 
 
 def test_agent_skills_built_from_resolver(monkeypatch):
@@ -147,12 +211,58 @@ async def test_agent_card_route_serves_protocol_version(monkeypatch):
     monkeypatch.setattr(server.STATE, "graph_config", _cfg(), raising=False)
     monkeypatch.setattr(server.STATE, "plugin_a2a_skills", [], raising=False)
     monkeypatch.setattr(server.STATE, "active_port", 7870, raising=False)
+    monkeypatch.setitem(a2a._served_card, "card", None)  # don't leak the seeded holder
     routes = a2a.agent_card_routes(a2a._build_agent_card_proto())
     assert routes and routes[0].path == "/.well-known/agent-card.json"
     resp = await routes[0].endpoint(None)  # request is unused
     body = json.loads(resp.body)
     assert body["protocolVersion"] == "1.0"
     assert body["supportedVersions"] == ["1.0"]
+
+
+# ── hot reload rebuilds the SERVED card, not just STATE (#2754) ─────────────
+
+
+async def test_refresh_served_card_updates_route_and_handler(monkeypatch):
+    """Before #2754 the well-known route and the SDK handler closed over the
+    boot-time card: a hot-enabled plugin's skill reached the structured finalizer
+    (which reads STATE live) but never the card callers actually see."""
+    monkeypatch.setattr(server.STATE, "graph_config", _cfg(), raising=False)
+    monkeypatch.setattr(server.STATE, "plugin_a2a_skills", [], raising=False)
+    monkeypatch.setattr(server.STATE, "active_port", 7870, raising=False)
+    monkeypatch.setitem(a2a._served_card, "card", None)
+    monkeypatch.setitem(a2a._served_card, "consumers", [])
+
+    routes = a2a.agent_card_routes(a2a._build_agent_card_proto())
+
+    class _Handler:  # what DefaultRequestHandler looks like to the refresh
+        _agent_card = None
+
+    handler = _Handler()
+    a2a.register_card_consumer(handler)
+
+    before = (await routes[0].endpoint(None)).body
+    assert b'"hot-skill"' not in before
+
+    # a reload swaps the plugin skill set, then calls refresh_served_card()
+    monkeypatch.setattr(
+        server.STATE, "plugin_a2a_skills", [{"id": "hot-skill", "name": "Hot", "description": "d"}], raising=False
+    )
+    a2a.refresh_served_card()
+
+    after = (await routes[0].endpoint(None)).body
+    assert b'"hot-skill"' in after
+    assert handler._agent_card is a2a._served_card["card"]
+    assert "hot-skill" in [s.id for s in a2a._served_card["card"].skills]
+
+
+def test_refresh_served_card_noops_before_first_build(monkeypatch):
+    """A reload that fires before the server built its first card (setup-not-
+    complete boots) must not try to build one."""
+    monkeypatch.setitem(a2a._served_card, "card", None)
+    monkeypatch.setitem(a2a._served_card, "consumers", [])
+    a2a.refresh_served_card()  # must not raise
+    assert a2a._served_card["card"] is None
 
 
 # ── the card must describe the guard, not a parallel guess (#2620) ──────────

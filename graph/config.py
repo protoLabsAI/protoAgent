@@ -269,6 +269,25 @@ def _falsey(value, *, default: bool) -> bool:
     return not bool(value)
 
 
+def _valid_a2a_skills(entries) -> list[dict]:
+    """Keep only well-formed A2A card skill specs from ``a2a.skills`` (#2754):
+    a dict with truthy ``id``/``name``/``description``, unique by id. The card
+    build hard-indexes all three, so a malformed YAML entry must be dropped HERE
+    with an attributed warning, not surface as a ``KeyError`` inside the
+    boot-time card build. Mirrors ``register_a2a_skill``'s contract for the
+    plugin path — the two ingestion routes enforce one rule."""
+    kept: list[dict] = []
+    for e in entries or []:
+        if not isinstance(e, dict) or not e.get("id") or not e.get("name") or not e.get("description"):
+            log.warning("a2a.skills: skipping malformed entry (needs id+name+description): %r", e)
+            continue
+        if any(k["id"] == e["id"] for k in kept):
+            log.warning("a2a.skills: duplicate skill id %r — keeping the first", e["id"])
+            continue
+        kept.append(e)
+    return kept
+
+
 def _default_filesystem_allow_run() -> bool:
     """Tier-aware app-default for ``filesystem.allow_run`` (#1849). ``run_command``
     is HITL-gated (``run_requires_approval``) — safe when an operator is watching to
@@ -1552,7 +1571,7 @@ class LangGraphConfig:
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
             identity_org=identity.get("org", cls.identity_org),
-            a2a_skills=list(a2a.get("skills", []) or []),
+            a2a_skills=_valid_a2a_skills(a2a.get("skills", []) or []),
             a2a_description=a2a.get("description", "") or "",
             a2a_require_routable_url=bool(a2a.get("require_routable_url", False)),
             instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),

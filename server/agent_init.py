@@ -2256,6 +2256,13 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         STATE.thread_id_resolver = new_plugins.thread_id_resolver
         STATE.plugin_a2a_skills = new_plugins.a2a_skills
         STATE.plugin_workflow_dirs = new_plugins.workflow_dirs
+        # Swapping STATE alone refreshes only the structured finalizer's view — the
+        # SERVED card (route + SDK handler) was built once at boot and closed over.
+        # Rebuild it so the card can't advertise a skill set the runtime no longer
+        # has, or hide one it just gained (#2754). No-op before first card build.
+        from server.a2a import refresh_served_card
+
+        refresh_served_card()
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")

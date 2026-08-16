@@ -351,9 +351,23 @@ class PluginRegistry:
         ``register_skill_dir`` (disk ``SKILL.md`` procedural memory): this is what
         the card advertises to callers. ``spec`` is a dict with at least
         ``id``/``name``/``description`` (+ optional ``tags``/``examples``/
-        ``output_schema``/``result_mime``)."""
-        if not isinstance(spec, dict) or not spec.get("id") or not spec.get("name"):
-            log.warning("[plugins] %s: register_a2a_skill needs a dict with id+name: %r", self.plugin_id, spec)
+        ``output_schema``/``result_mime``). All three are required — the card
+        build hard-indexes them, so a spec missing any must fail HERE, attributed
+        to its plugin, not as a ``KeyError`` at boot inside the card build (#2754)."""
+        if (
+            not isinstance(spec, dict)
+            or not spec.get("id")
+            or not spec.get("name")
+            or not spec.get("description")
+        ):
+            log.warning(
+                "[plugins] %s: register_a2a_skill needs a dict with id+name+description: %r", self.plugin_id, spec
+            )
+            return
+        if any(s.get("id") == spec["id"] for s in self.a2a_skills):
+            log.warning(
+                "[plugins] %s: a2a skill %r registered twice — keeping the first", self.plugin_id, spec["id"]
+            )
             return
         self.a2a_skills.append(spec)
 

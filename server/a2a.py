@@ -274,10 +274,16 @@ def _resolved_skill_specs() -> list[dict]:
     Falls back to the template placeholder ``_SKILL_SPECS`` when neither is set,
     so a fresh clone stays callable."""
     cfg = STATE.graph_config
-    resolved: list[dict] = []
+    merged: list[dict] = []
     if cfg is not None:
-        resolved.extend(getattr(cfg, "a2a_skills", None) or [])
-    resolved.extend(getattr(STATE, "plugin_a2a_skills", None) or [])
+        merged.extend(getattr(cfg, "a2a_skills", None) or [])
+    merged.extend(getattr(STATE, "plugin_a2a_skills", None) or [])
+    # Unique by id, first occurrence wins — config precedes plugins, so on a
+    # YAML-vs-plugin collision the operator's entry is the one advertised AND the
+    # one the structured finalizer enforces (#2754). Plugin-vs-plugin collisions
+    # were already rejected (with a warning) at load.
+    seen: set = set()
+    resolved = [s for s in merged if not (s.get("id") in seen or seen.add(s.get("id")))]
     return resolved or _SKILL_SPECS
 
 
@@ -552,15 +558,56 @@ def agent_card_routes(card) -> list:
     """Starlette route(s) for the agent card — like a2a-sdk's
     ``create_agent_card_routes`` but serving ``agent_card_dict`` so the JSON carries
     the proto-free protocol-version hint. Same well-known path + GET, so
-    ``add_a2a_routes_to_fastapi`` mounts it identically."""
+    ``add_a2a_routes_to_fastapi`` mounts it identically.
+
+    The route reads the LIVE card from ``_served_card`` (seeded with ``card``
+    here) instead of closing over the boot-time object, so a hot reload that
+    changes the skill set (``refresh_served_card``) is visible to callers
+    without a restart (#2754)."""
     from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
+    _served_card["card"] = card
+
     async def _get_agent_card(_request) -> JSONResponse:
-        return JSONResponse(agent_card_dict(card))
+        return JSONResponse(agent_card_dict(_served_card["card"]))
 
     return [Route(path=AGENT_CARD_WELL_KNOWN_PATH, endpoint=_get_agent_card, methods=["GET"])]
+
+
+# The live served card + the SDK objects that hold a private copy of it. The
+# card route above reads ``card`` per-request; ``consumers`` are request
+# handlers whose ``_agent_card`` must follow (the SDK captures the card at
+# construction — same class of boot-time capture #2754 fixes for the route).
+_served_card: dict = {"card": None, "consumers": []}
+
+
+def register_card_consumer(handler) -> None:
+    """Track an a2a-sdk request handler so ``refresh_served_card`` can swap its
+    captured ``_agent_card`` alongside the served route's copy. Private-attr
+    reach-in, like ``harden_active_task_registry`` — remove if the SDK grows a
+    setter."""
+    _served_card["consumers"].append(handler)
+
+
+def refresh_served_card() -> None:
+    """Rebuild the agent card from live state (#2754). Called by the reload path
+    after it swaps ``STATE.plugin_a2a_skills``: before this, hot-enabling a
+    plugin refreshed the structured finalizer's view of the skills but left the
+    SERVED card frozen at its boot-time build — the card advertised a skill set
+    the runtime no longer had (or hid one it did). No-op before the server has
+    built its first card."""
+    if _served_card["card"] is None:
+        return
+    try:
+        card = _build_agent_card_proto()
+    except Exception:  # the reload must survive a cosmetic rebuild failure
+        log.exception("[a2a] card rebuild after reload failed — serving the previous card")
+        return
+    _served_card["card"] = card
+    for handler in _served_card["consumers"]:
+        handler._agent_card = card
 
 
 def _record_a2a_telemetry(outcome) -> None:

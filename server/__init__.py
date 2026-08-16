@@ -291,6 +291,7 @@ from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A s
     _build_agent_card_proto,
     agent_card_routes,
     assert_routable_card_url,
+    register_card_consumer,
     _package_version,
     _record_a2a_telemetry,
     structured_skill_schema,
@@ -1114,6 +1115,10 @@ def _main():
     # flush) or cancelled+awaited before the last reference drops. Remove once the
     # SDK ships the fix and the pin moves past 1.1.0 (see a2a_impl/registry.py).
     harden_active_task_registry(a2a_request_handler)
+    # The handler captured the card at construction; register it so a hot reload
+    # that changes the skill set (server.a2a.refresh_served_card) updates its
+    # copy in lockstep with the served route (#2754).
+    register_card_consumer(a2a_request_handler)
     add_a2a_routes_to_fastapi(
         fastapi_app,
         # ``agent_card_routes`` (server.a2a) serves the same well-known card as

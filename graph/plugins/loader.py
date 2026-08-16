@@ -43,6 +43,7 @@ class PluginLoadResult:
     knowledge_stores: dict = field(default_factory=dict)  # name -> backend factory (ADR 0031)
     embedders: dict = field(default_factory=dict)  # name -> embed_fn factory (ADR 0031)
     a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
+    a2a_skill_plugins: dict = field(default_factory=dict)  # skill id -> plugin id (ownership, #2754)
     routers: list = field(default_factory=list)  # {plugin_id, router, prefix} (ADR 0018)
     public_paths: list = field(default_factory=list)  # manifest-declared auth-exempt prefixes
     surfaces: list = field(default_factory=list)  # {plugin_id, name, start, stop}
@@ -597,7 +598,22 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         conv_workflows = manifest.path / "workflows"
         if conv_workflows.is_dir() and conv_workflows not in result.workflow_dirs:
             result.workflow_dirs.append(conv_workflows)
-        result.a2a_skills.extend(registry.a2a_skills)
+        # A2A card skills — attributed to their plugin and deduped across plugins
+        # (first registration wins, like tools), so a cross-plugin id collision is
+        # rejected visibly at load instead of shipping a duplicate card entry that
+        # the finalizer silently resolves first-wins (#2754).
+        for spec in registry.a2a_skills:
+            owner = result.a2a_skill_plugins.get(spec["id"])
+            if owner is not None:
+                log.warning(
+                    "[plugins] %s: a2a skill %r collides with one from %s — skipped",
+                    manifest.id,
+                    spec["id"],
+                    owner,
+                )
+                continue
+            result.a2a_skills.append(spec)
+            result.a2a_skill_plugins[spec["id"]] = manifest.id
         if registry.thread_id_resolver is not None:  # last plugin wins (#571)
             if result.thread_id_resolver is not None:
                 log.warning("[plugins] %s overrides a thread_id resolver already set by another plugin", manifest.id)

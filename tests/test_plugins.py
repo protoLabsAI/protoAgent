@@ -460,6 +460,23 @@ def test_multi_module_plugin_with_relative_import(tmp_path, monkeypatch) -> None
     assert res.meta[0]["loaded"] is True
 
 
+def test_a2a_skill_cross_plugin_collision_first_wins(tmp_path, monkeypatch) -> None:
+    """Two plugins claiming one skill id: the first load wins, the second is
+    skipped with a warning, and ownership is recorded per id (#2754) — before
+    this, the loader extended a2a_skills anonymously and the duplicate shipped
+    to the card."""
+    body = "def register(registry):\n    registry.register_a2a_skill({'id': 'triage', 'name': '%s', 'description': 'd'})\n"
+    root = tmp_path / "plugins"
+    _make_plugin(root, "aaa", enabled=True, body=body % "A")
+    _make_plugin(root, "bbb", enabled=True, body=body % "B")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg())
+    assert len(res.a2a_skills) == 1
+    owner = res.a2a_skill_plugins["triage"]
+    assert owner in ("aaa", "bbb")
+    assert res.a2a_skills[0]["name"] == ("A" if owner == "aaa" else "B")  # the owner's spec survived
+
+
 def test_tool_collision_skipped(tmp_path, monkeypatch) -> None:
     root = tmp_path / "plugins"
     _make_plugin(root, "c", enabled=True, tool="current_time")  # core tool name
