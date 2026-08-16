@@ -550,7 +550,7 @@ class LocalScheduler:
             ok = await self._fire(job)
             if not cron:
                 if ok:
-                    self._delete_job(job.id)
+                    self._delete_fired_one_shot(job)
                 else:
                     log.warning(
                         "[scheduler] one-shot fire failed for job %s; leaving for retry",
@@ -564,15 +564,41 @@ class LocalScheduler:
         finally:
             self._inflight_ids.discard(job.id)
 
-    def _delete_job(self, job_id: str) -> None:
+    def _delete_fired_one_shot(self, job: Job) -> None:
+        """Delete exactly the row that fired — matched by ``created_at``, not id alone.
+
+        ``_fire`` blocks for the whole agent turn, and that turn can legitimately
+        re-schedule the SAME job id mid-flight: the ``wait`` tool keeps a stable
+        ``wait:<thread>`` id and supersedes via cancel_job + add_job, so a wait that
+        waits again from its own resumed turn replaces the row while the outer POST
+        is still open. An id-only delete here would destroy that freshly scheduled
+        row. ``created_at`` is stamped at add_job time, so the re-add gives the id a
+        new value and this delete matches zero rows — the new wait survives to fire
+        at its own schedule."""
         db = self._connect()
         try:
-            db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
+            cur = db.execute(
+                "DELETE FROM jobs WHERE id = ? AND agent_name = ? AND created_at = ?",
+                (job.id, self.agent_name, job.created_at),
+            )
             db.commit()
+            if cur.rowcount == 0 and self._job_exists(db, job.id):
+                log.info(
+                    "[scheduler] one-shot job %s was superseded mid-fire (re-scheduled "
+                    "during its own turn) — leaving the new row in place",
+                    job.id,
+                )
         except sqlite3.DatabaseError:
-            log.exception("[scheduler] delete failed for job %s", job_id)
+            log.exception("[scheduler] delete failed for job %s", job.id)
         finally:
             db.close()
+
+    def _job_exists(self, db: sqlite3.Connection, job_id: str) -> bool:
+        row = db.execute(
+            "SELECT 1 FROM jobs WHERE id = ? AND agent_name = ?",
+            (job_id, self.agent_name),
+        ).fetchone()
+        return row is not None
 
     def _claim_due_jobs(self, now: datetime) -> list[Job]:
         db = self._connect()

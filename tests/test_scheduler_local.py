@@ -792,6 +792,167 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
     assert s.list_jobs() == []  # one-shot deleted after the turn finally landed
 
 
+# ── #2749: mid-fire supersede of the same job id ─────────────────────────────
+
+
+class TestMidFireSupersede:
+    """A fired ``wait()`` turn can call ``wait()`` again — the wait tool supersedes
+    via cancel_job + add_job under the SAME stable ``wait:<thread>`` id — while the
+    outer fire is still blocked on its A2A POST. The post-fire cleanup must delete
+    only the row it actually fired (matched by ``created_at``), never the freshly
+    re-scheduled one (#2749: an id-only delete silently ate the new wait)."""
+
+    def _rescheduling_client(self, s: LocalScheduler, job_id: str, next_prompt: str):
+        """Fake httpx.AsyncClient whose POST re-schedules ``job_id`` mid-turn —
+        exactly the wait tool's cancel+re-add supersede, run from inside the fire."""
+
+        class _Client:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                s.cancel_job(job_id)
+                s.add_job(
+                    next_prompt,
+                    (datetime.now(UTC) + timedelta(seconds=300)).isoformat(),
+                    job_id=job_id,
+                    context_id="chat-abc",
+                )
+
+                class _R:
+                    status_code = 200
+                    text = "ok"
+
+                return _R()
+
+        return _Client
+
+    @pytest.mark.asyncio
+    async def test_wait_rescheduled_during_its_own_fire_survives_settle(self, tmp_path, monkeypatch, caplog):
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        s.add_job("first resume", past, job_id="wait:chat-abc", context_id="chat-abc")
+        job = s.list_jobs()[0]
+
+        monkeypatch.setattr(httpx, "AsyncClient", self._rescheduling_client(s, "wait:chat-abc", "second resume"))
+        with caplog.at_level("INFO", logger="scheduler.local"):
+            await s._fire_and_settle(job, cron=False)
+
+        # The re-scheduled wait SURVIVED the post-fire cleanup — the old id-only
+        # delete destroyed it right here (silent data loss: the agent believed a
+        # wake was pending and nothing ever fired).
+        jobs = s.list_jobs()
+        assert [j.id for j in jobs] == ["wait:chat-abc"]
+        assert jobs[0].prompt == "second resume"
+        # …and the supersede is visible in the log (conditional delete hit 0 rows).
+        assert any("superseded mid-fire" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unsuperseded_one_shot_still_cleaned_up(self, tmp_path, monkeypatch, caplog):
+        """No mid-fire supersede → the fired row is deleted exactly as before,
+        and no supersede is claimed."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        s.add_job("plain resume", past, job_id="wait:chat-abc", context_id="chat-abc")
+        job = s.list_jobs()[0]
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        with caplog.at_level("INFO", logger="scheduler.local"):
+            await s._fire_and_settle(job, cron=False)
+
+        assert s.list_jobs() == []  # no leftover row
+        assert not any("superseded mid-fire" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_fire_is_not_reported_as_supersede(self, tmp_path, monkeypatch, caplog):
+        """A plain cancel mid-turn (no re-add) also makes the conditional delete
+        match zero rows — but nothing replaced the job, so no supersede is logged."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        s.add_job("cancel me", past, job_id="wait:chat-abc", context_id="chat-abc")
+        job = s.list_jobs()[0]
+
+        class _CancellingClient:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                s.cancel_job("wait:chat-abc")
+                return _FakeResponse(200)
+
+        monkeypatch.setattr(httpx, "AsyncClient", _CancellingClient)
+        with caplog.at_level("INFO", logger="scheduler.local"):
+            await s._fire_and_settle(job, cron=False)
+
+        assert s.list_jobs() == []
+        assert not any("superseded mid-fire" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_rescheduled_wait_fires_at_its_own_time(self, tmp_path, monkeypatch):
+        """End-to-end through the poll loop: the mid-fire re-add not only survives
+        the settle, it is claimed and fired when ITS schedule comes due."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        s.add_job("first resume", past, job_id="wait:chat-abc", context_id="chat-abc")
+
+        posts: list[str] = []
+
+        class _Client:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                posts.append(str(json))
+                if len(posts) == 1:
+                    # The fired turn waits again — due almost immediately, so the
+                    # loop can prove the new row actually fires.
+                    s.cancel_job("wait:chat-abc")
+                    s.add_job(
+                        "second resume",
+                        (datetime.now(UTC) + timedelta(seconds=0.1)).isoformat(),
+                        job_id="wait:chat-abc",
+                        context_id="chat-abc",
+                    )
+                return _FakeResponse(200)
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+        await s.start()
+        await asyncio.sleep(2.5)  # tick 1 fires + supersedes; a later tick fires the re-add
+        await s.stop()
+
+        assert len(posts) == 2
+        assert "first resume" in posts[0]
+        assert "second resume" in posts[1]
+        assert s.list_jobs() == []  # the second fire settled normally — nothing left
+
+
 def test_per_job_timezone_evaluates_cron_in_that_zone(tmp_path):
     """A cron with a timezone fires at local wall-clock time, stored as UTC."""
     from zoneinfo import ZoneInfo
