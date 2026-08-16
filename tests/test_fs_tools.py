@@ -1081,6 +1081,68 @@ def test_memoization_a_different_limit_is_not_treated_as_the_same_call(workspace
     assert out == _EXACT_CONTENT  # re-read for real — limit differs from the cached call's default
 
 
+def test_memoization_an_unset_limit_and_an_explicit_default_sized_limit_are_not_the_same_call(workspace):
+    # An UNSET limit and an explicit limit=_DEFAULT_READ_LINES both normalize to
+    # the same numeric value, but they can return DIFFERENT content — unset
+    # auto-extends past the default line count when the whole remainder still
+    # fits the char cap; an explicit limit never does. The numeric value alone
+    # is not a safe memoization key.
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from tools.fs_tools import _DEFAULT_READ_LINES
+
+    _, a, _ = workspace
+    n = _DEFAULT_READ_LINES + 500  # over the default line count, tiny in chars
+    body = "".join(f"{i}\n" for i in range(n)).encode("utf-8")
+    (a / "many.txt").write_bytes(body)
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
+
+    # Cached: an EXPLICIT limit=_DEFAULT_READ_LINES call (truncated at exactly
+    # that many lines) must not serve a later UNSET-limit call — that call would
+    # for real return the auto-extended WHOLE file, strictly more content.
+    explicit_cached_state = {
+        "messages": [
+            HumanMessage(content="go"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "read_file",
+                        "args": {"project": "a", "path": "many.txt", "limit": _DEFAULT_READ_LINES},
+                        "id": "1",
+                    }
+                ],
+            ),
+            ToolMessage(content="TRUNCATED — stands in for the real limited page", tool_call_id="1", name="read_file"),
+        ]
+    }
+    unset_call = t["read_file"].invoke({"project": "a", "path": "many.txt", "state": explicit_cached_state})
+    assert "TRUNCATED" not in unset_call  # NOT served the truncated cache as "unchanged"
+    assert unset_call == body.decode("utf-8")  # real read — the full, auto-extended file
+
+    # And the reverse: cached UNSET-limit call must not serve a later EXPLICIT
+    # limit=_DEFAULT_READ_LINES call — that call must actually truncate.
+    unset_cached_state = {
+        "messages": [
+            HumanMessage(content="go"),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {"project": "a", "path": "many.txt"}, "id": "1"}],
+            ),
+            ToolMessage(
+                content="WHOLE_FILE — stands in for the real auto-extended page", tool_call_id="1", name="read_file"
+            ),
+        ]
+    }
+    explicit_call = t["read_file"].invoke(
+        {"project": "a", "path": "many.txt", "limit": _DEFAULT_READ_LINES, "state": unset_cached_state}
+    )
+    assert "WHOLE_FILE" not in explicit_call  # NOT served the unset-limit cache as "unchanged"
+    assert "call again" in explicit_call  # real read — genuinely truncated at the explicit limit
+
+
 def test_memoization_normalizes_the_cached_calls_pagination_the_same_way_read_file_does(workspace):
     # A cached call's explicit offset=0/limit=0 must compare as read_file itself
     # would clamp them (max(1, v)) — NOT jump to the unrelated defaults via a

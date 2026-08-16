@@ -352,12 +352,21 @@ def _norm_pagination(value, default: int) -> int:
         return default
 
 
-def _memoized_read(state, project: str, path: str, offset: int, limit: int) -> str | None:
+def _memoized_read(state, project: str, path: str, offset: int, limit: int, limit_was_explicit: bool) -> str | None:
     """The prior read's content to reuse, or None to read for real. Only a call
     whose EXACT (project, path, offset, limit) hasn't been written to since its read
     qualifies — a different offset OR limit is a different chunk of the file, not a
     repeat, so both are keyed in. The LAST event touching that key (read or write),
-    scanned in turn order, decides."""
+    scanned in turn order, decides.
+
+    ``limit_was_explicit`` has to be part of the key too, separate from the numeric
+    ``limit``: an UNSET limit and an explicit ``limit=1000`` both normalize to the
+    same effective value (``_DEFAULT_READ_LINES``), but they can return DIFFERENT
+    content — unset auto-extends past 1000 lines when the whole remainder still
+    fits the char cap, an explicit 1000 never does. Comparing the numeric value
+    alone would let an unset-limit call get served a truncated explicit-limit
+    result (or vice versa) as "unchanged," silently hiding content one of the two
+    calls actually would have returned."""
     if state is None:
         return None
     messages = _this_turn_messages(state)
@@ -379,6 +388,7 @@ def _memoized_read(state, project: str, path: str, offset: int, limit: int) -> s
                 tc_name == "read_file"
                 and _norm_pagination(tc_args.get("offset"), 1) == offset
                 and _norm_pagination(tc_args.get("limit"), _DEFAULT_READ_LINES) == limit
+                and (tc_args.get("limit") is not None) == limit_was_explicit
             ):
                 tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 result = results_by_id.get(tc_id)
@@ -480,7 +490,10 @@ def build_fs_tools(config) -> list:
         offset = max(1, offset)
         explicit_limit = None if limit is None else max(1, limit)
         effective_limit = explicit_limit if explicit_limit is not None else _DEFAULT_READ_LINES
-        if memoize_reads and _memoized_read(state, project, path, offset, effective_limit) is not None:
+        if (
+            memoize_reads
+            and _memoized_read(state, project, path, offset, effective_limit, explicit_limit is not None) is not None
+        ):
             # A short pointer, not the content again — the saving is real context
             # tokens (the earlier full result is still visible earlier in this
             # turn's history), not just a skipped disk read.
