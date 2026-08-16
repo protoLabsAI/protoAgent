@@ -350,6 +350,43 @@ def test_read_file_pages_past_a_line_limit(workspace):
     assert "call again" not in third
 
 
+def test_read_file_no_limit_returns_a_small_file_whole_regardless_of_line_count(workspace):
+    # Regression: _DEFAULT_READ_LINES (1000) must not become a NEW truncation
+    # point for a file that's objectively small in chars but has many short
+    # lines — the old char-only contract returned a file like this whole in one
+    # call (well under _MAX_READ_CHARS), and an unset `limit` must still honor
+    # that, not silently cap at 1000 lines just because line count > line default.
+    from tools.fs_tools import _MAX_READ_CHARS
+
+    _, a, _ = workspace
+    n = 2000  # > _DEFAULT_READ_LINES, but tiny in total chars
+    lines = [f"{i}\n" for i in range(n)]
+    body = "".join(lines).encode("utf-8")
+    assert len(body) < _MAX_READ_CHARS  # sanity: genuinely small, this isn't cheating the cap
+    (a / "many_short_lines.txt").write_bytes(body)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    out = t["read_file"].invoke({"project": "a", "path": "many_short_lines.txt"})
+
+    assert out == body.decode("utf-8")  # the WHOLE file, no truncation note, no "call again"
+
+
+def test_read_file_explicit_limit_still_caps_a_file_that_would_otherwise_fit_whole(workspace):
+    # The auto-extension above only kicks in when `limit` is UNSET — an explicit
+    # limit is a deliberate request and must be honored exactly, even though the
+    # whole file would easily fit in one call.
+    _, a, _ = workspace
+    lines = [f"{i}\n" for i in range(50)]  # tiny — trivially fits in one call
+    (a / "small.txt").write_bytes("".join(lines).encode("utf-8"))
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    out = t["read_file"].invoke({"project": "a", "path": "small.txt", "limit": 10})
+
+    assert out.startswith("0\n1\n")
+    assert "10\n" not in out  # stopped at line 10 (0-indexed content, 10 lines: 0..9)
+    assert "showing lines 1-10 of 50; call again with offset=11" in out
+
+
 def test_read_file_composes_with_search_files_line_numbers(workspace):
     # The actual point of the redesign: a search_files hit's line number reads
     # straight into read_file's offset/limit — no char-offset guessing.

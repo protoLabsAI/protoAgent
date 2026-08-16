@@ -449,7 +449,7 @@ def build_fs_tools(config) -> list:
         project: str,
         path: str,
         offset: int = 1,
-        limit: int = _DEFAULT_READ_LINES,
+        limit: int | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Read a text file inside a managed project (relative path).
@@ -459,9 +459,17 @@ def build_fs_tools(config) -> list:
         as `read_file(path="file.py", offset=320, limit=60)` to see it in context,
         no guessing needed. Returns up to `limit` lines starting at `offset`. A
         truncated result names the next offset to pass, so a file larger than one
-        chunk is reachable in full across a few calls. A single line longer than
-        ~50K chars (e.g. a minified bundle) is itself cut short — prefer
-        `search_files` over paging through a file like that line by line.
+        chunk is reachable in full across a few calls.
+
+        Leave `limit` unset for the common case: everything from `offset` to EOF
+        comes back in one call whenever it fits the ~50K-char safety cap, matching
+        a small file's old one-call guarantee regardless of line count (a file
+        with 2000 short lines still reads in full if the whole thing is only a
+        few KB). Pass an EXPLICIT `limit` to cap the page to exactly that many
+        lines even when the file would otherwise fit in one call — e.g. paging
+        through a file with many short lines N-at-a-time on purpose. A single
+        line longer than ~50K chars (e.g. a minified bundle) is itself cut short
+        either way — prefer `search_files` over paging through a line like that.
         """
         try:
             target = registry.resolve(project, path)
@@ -470,8 +478,9 @@ def build_fs_tools(config) -> list:
         if not target.is_file():
             return f"Error: no such file: {path}"
         offset = max(1, offset)
-        limit = max(1, limit)
-        if memoize_reads and _memoized_read(state, project, path, offset, limit) is not None:
+        explicit_limit = None if limit is None else max(1, limit)
+        effective_limit = explicit_limit if explicit_limit is not None else _DEFAULT_READ_LINES
+        if memoize_reads and _memoized_read(state, project, path, offset, effective_limit) is not None:
             # A short pointer, not the content again — the saving is real context
             # tokens (the earlier full result is still visible earlier in this
             # turn's history), not just a skipped disk read.
@@ -488,7 +497,17 @@ def build_fs_tools(config) -> list:
         if offset > max(total, 1):
             return f"Error: offset {offset} is past the end of {path} ({total} lines)."
         start = offset - 1
-        wanted = lines[start : start + limit]
+        remainder = lines[start:]
+        if explicit_limit is None and sum(len(ln) for ln in remainder) <= _MAX_READ_CHARS:
+            # No line-count cap was requested, and everything from `offset` to EOF
+            # fits the char budget anyway — return it whole. Without this, a file
+            # with more than _DEFAULT_READ_LINES short lines but well under the
+            # char cap would truncate at the line count alone, a real regression
+            # from the old char-only contract (confirmed live: a 2000-line, ~4KB
+            # file used to read in one call and would otherwise now cut off at 1000).
+            wanted = remainder
+        else:
+            wanted = lines[start : start + effective_limit]
 
         # Char safety net independent of `limit` — a run of pathologically long
         # lines (or one minified line) must not blow the budget just because it's
