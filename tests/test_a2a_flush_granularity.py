@@ -1,9 +1,11 @@
 """Regression coverage for the answer-streaming flush threshold (_FLUSH_CHARS).
 
 Proves the many-frame path a lower threshold produces doesn't strand the
-terminal frames on the #1713 teardown-cancel grace window, and that the full
+terminal frames on the #1713 teardown-cancel grace window, that the full
 answer always lands intact regardless of how many artifact-update frames it
-took to get there.
+took to get there, and that the wire actually flushes at ~_FLUSH_CHARS
+granularity (frame count ≈ answer_len / _FLUSH_CHARS) — so a silent
+regression back to coarse batching fails here, not in the console.
 """
 
 import json
@@ -14,10 +16,12 @@ import pytest
 
 from tests.test_a2a_handler import A2A_HEADERS, _build_app
 
-# Long enough, and chunked small enough, to force many flushes at any
-# realistic _FLUSH_CHARS value — the scenario the teardown-race concern was
-# originally about.
-_ANSWER = "The quick brown fox jumps over the lazy dog. " * 60
+# ≥4KB, and chunked small enough, to force many flushes at any realistic
+# _FLUSH_CHARS value — the scenario the teardown-race concern was originally
+# about (#2672 sized the real-world case at 11KB ≈ 48 frames at the old 240).
+_ANSWER = "The quick brown fox jumps over the lazy dog. " * 100
+assert len(_ANSWER) >= 4096
+_FLUSH_CHARS = 60  # mirrors the executor-local constant (a2a_impl/executor.py)
 
 
 async def _fast_dense_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
@@ -58,18 +62,22 @@ async def _run_one(app, rpc_id):
 
 @pytest.mark.asyncio
 async def test_many_small_flushes_never_strand_the_terminal_frames(caplog):
-    """A dense stream that forces well over 100 flush frames still lands the
-    complete answer every time, with no teardown-grace-window warning."""
+    """A dense ≥4KB stream still lands the complete answer every time, at the
+    granularity _FLUSH_CHARS promises, with no teardown-grace-window warning."""
     caplog.set_level(logging.WARNING, logger="a2a_impl.registry")
-    frame_counts = []
+    # The wire carries ~one append frame per _FLUSH_CHARS of answer (each flush
+    # rounds up to a whole 7-char delta, the tail flushes on `done`, plus the
+    # one terminal REPLACE) — so total frames ≈ len/60 within a ±20% band. A
+    # regression back to coarse batching (or a per-token flood) breaks the band.
+    expected = len(_ANSWER) / _FLUSH_CHARS
     for i in range(8):
         app = _build_app(_fast_dense_stream)
         frame_count, text = await _run_one(app, f"r{i}")
-        frame_counts.append(frame_count)
         assert text == _ANSWER, f"iteration {i}: answer truncated/corrupted ({len(text)} vs {len(_ANSWER)} chars)"
-
-    # Sanity: this scenario actually forces the many-frame path it claims to test.
-    assert min(frame_counts) > 20, frame_counts
+        assert 0.8 * expected <= frame_count <= 1.2 * expected, (
+            f"iteration {i}: {frame_count} artifact frames for a {len(_ANSWER)}-char answer — "
+            f"expected ≈{expected:.0f} (±20%) at _FLUSH_CHARS={_FLUSH_CHARS}"
+        )
 
     stuck_warnings = [r.message for r in caplog.records if "still pending" in r.message]
     assert not stuck_warnings, f"teardown grace window was hit: {stuck_warnings}"
