@@ -255,13 +255,83 @@ def test_search_files_context_lines_is_clamped(workspace):
     assert out.count("\n") + 1 <= 2 * _MAX_CONTEXT_LINES + 2
 
 
+def test_search_files_context_lines_total_output_is_bounded_not_just_match_count(workspace):
+    # _MAX_MATCHES bounds the number of MATCHES, not the total rendered size — at
+    # a wide context_lines, many sparse matches would otherwise emit far more
+    # output than the old (zero-context) tool ever could. A separate output-line
+    # budget has to catch this even though the match count alone stays legal.
+    from tools.fs_tools import _MAX_CONTEXT_LINES, _MAX_MATCHES, _MAX_SEARCH_OUTPUT_LINES
+
+    _, a, _ = workspace
+    # Sparse matches spaced further apart than 2*context_lines so their windows
+    # never merge — each of the (well under _MAX_MATCHES) matches gets its own
+    # full-width context block.
+    spacing = 2 * _MAX_CONTEXT_LINES + 5
+    n = 30
+    assert n < _MAX_MATCHES  # the match cap must NOT be what stops this
+    lines = [f"line {i}" for i in range(n * spacing)]
+    for k in range(n):
+        lines[k * spacing] = "TARGET"
+    (a / "sparse.py").write_text("\n".join(lines) + "\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "TARGET", "context_lines": _MAX_CONTEXT_LINES})
+
+    assert "more matches" in out  # the output cap DID engage
+    rendered = out.count("\n") + 1
+    assert rendered <= _MAX_SEARCH_OUTPUT_LINES + 2  # +1 for the cutoff note, +1 slack
+
+
+def test_search_files_output_cap_engages_mid_range_not_just_between_matches(workspace):
+    # A single run of adjacent matches merges into ONE range — the cap must still
+    # cut it off mid-range, not render the whole (possibly huge) merged block
+    # before ever checking.
+    from tools.fs_tools import _MAX_SEARCH_OUTPUT_LINES
+
+    _, a, _ = workspace
+    n = _MAX_SEARCH_OUTPUT_LINES + 100
+    lines = ["TARGET"] * n  # every line matches — one giant merged range
+    (a / "dense.py").write_text("\n".join(lines) + "\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    out = t["search_files"].invoke({"project": "a", "query": "TARGET", "context_lines": 1})
+
+    assert "more matches" in out
+    assert out.count("\n") + 1 <= _MAX_SEARCH_OUTPUT_LINES + 2
+
+
+def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
+    # `query` is model-supplied; stdlib `re` has no match timeout, and capping the
+    # matched slice's LENGTH does not help — verified separately that ~30-40
+    # adversarial chars already take 70s+ against stdlib `re`, far below any sane
+    # length cap. `regex`'s `timeout=` is the actual bound. This must return the
+    # clean timeout error within a few seconds, not hang indefinitely.
+    import time
+
+    _, a, _ = workspace
+    # (a|a)+b: confirmed empirically to blow past a 2s regex timeout at ~40 chars
+    # of non-matching input — a genuinely pathological case, not a fast/optimized one.
+    (a / "evil.txt").write_text("a" * 40)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    start = time.monotonic()
+    out = t["search_files"].invoke({"project": "a", "query": r"(a|a)+b", "regex": True})
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 10.0  # bounded by the 2s per-match timeout, not left to run forever
+    assert out.startswith("Error:") and "too long" in out
+
+
 def test_read_file_pages_past_a_line_limit(workspace):
     # A file with more lines than the default limit used to be permanently capped
     # at the first chunk — no way to see the rest in any call. offset/limit page
     # through it, line-addressed the same way search_files reports hits.
     _, a, _ = workspace
     lines = [f"line {i}\n" for i in range(1, 251)]
-    (a / "big.txt").write_text("".join(lines))
+    # write_bytes with an explicit LF payload — write_text applies platform newline
+    # translation (CRLF on Windows), which would corrupt the exact-content asserts
+    # below the same way _write_exact avoids it elsewhere in this file.
+    (a / "big.txt").write_bytes("".join(lines).encode("utf-8"))
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
 
     first = t["read_file"].invoke({"project": "a", "path": "big.txt", "limit": 100})
@@ -286,7 +356,7 @@ def test_read_file_composes_with_search_files_line_numbers(workspace):
     _, a, _ = workspace
     lines = [f"line {i}\n" for i in range(1, 51)]
     lines[29] = "TARGET\n"  # line 30 (1-indexed)
-    (a / "mid.txt").write_text("".join(lines))
+    (a / "mid.txt").write_bytes("".join(lines).encode("utf-8"))  # see LF-payload note above
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
 
     hit = t["search_files"].invoke({"project": "a", "query": "TARGET"})
@@ -314,6 +384,41 @@ def test_read_file_offset_past_the_end_is_an_error(workspace):
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
     out = t["read_file"].invoke({"project": "a", "path": "README.md", "offset": 10_000})
     assert out.startswith("Error:") and "past the end" in out and "lines" in out
+
+
+def test_read_file_offset_1_is_valid_on_an_empty_file(workspace):
+    _, a, _ = workspace
+    (a / "empty.txt").write_bytes(b"")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    assert t["read_file"].invoke({"project": "a", "path": "empty.txt"}) == ""
+
+
+def test_read_file_offset_past_an_empty_file_is_still_an_error(workspace):
+    # total=0 must not silently bypass the past-the-end guard — only offset=1
+    # (the empty-file floor) is valid; anything past it still errors.
+    _, a, _ = workspace
+    (a / "empty.txt").write_bytes(b"")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+    out = t["read_file"].invoke({"project": "a", "path": "empty.txt", "offset": 2})
+    assert out.startswith("Error:") and "past the end" in out and "(0 lines)" in out
+
+
+def test_read_file_line_truncated_still_names_the_next_offset_when_more_remains(workspace):
+    # A single oversized line gets cut short, but if the FILE isn't done, the
+    # caller still needs a way to discover the rest.
+    from tools.fs_tools import _MAX_READ_CHARS
+
+    _, a, _ = workspace
+    body = ("x" * (_MAX_READ_CHARS + 100) + "\n" + "line 2\n").encode("utf-8")
+    (a / "mixed.txt").write_bytes(body)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    out = t["read_file"].invoke({"project": "a", "path": "mixed.txt"})
+    assert "longer than" in out
+    assert "call again with offset=2" in out  # the file isn't done — line 2 is still there
+
+    rest = t["read_file"].invoke({"project": "a", "path": "mixed.txt", "offset": 2})
+    assert rest.startswith("line 2\n")
 
 
 def test_read_file_default_offset_is_unaffected_by_the_new_param(workspace):
@@ -937,6 +1042,41 @@ def test_memoization_a_different_limit_is_not_treated_as_the_same_call(workspace
     state = {"messages": _msgs(("human",), ("read", "1", "a", p, 1, "stale, limit=1 worth of content"))}
     out = t["read_file"].invoke({"project": "a", "path": p, "offset": 1, "limit": 2, "state": state})
     assert out == _EXACT_CONTENT  # re-read for real — limit differs from the cached call's default
+
+
+def test_memoization_normalizes_the_cached_calls_pagination_the_same_way_read_file_does(workspace):
+    # A cached call's explicit offset=0/limit=0 must compare as read_file itself
+    # would clamp them (max(1, v)) — NOT jump to the unrelated defaults via a
+    # naive `v or default` fallback, which would (wrongly) treat limit=0 as if
+    # it read 1000 lines instead of the 1 it actually reads.
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    _, a, _ = workspace
+    p = _write_exact(a)
+    t = _tools(
+        _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}], tools_memoize_reads_enabled=True)
+    )
+    state = {
+        "messages": [
+            HumanMessage(content="go"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "read_file", "args": {"project": "a", "path": p, "offset": 0, "limit": 0}, "id": "1"}
+                ],
+            ),
+            ToolMessage(content="cached at the clamped (1, 1)", tool_call_id="1", name="read_file"),
+        ]
+    }
+    # A fresh call with the SAME effective (offset=1, limit=1) the cached 0/0 call
+    # actually clamped to — must hit the cache.
+    hit = t["read_file"].invoke({"project": "a", "path": p, "offset": 1, "limit": 1, "state": state})
+    assert "unchanged" in hit
+
+    # A fresh call at the DEFAULT limit (1000) is a genuinely different chunk —
+    # must NOT hit the cache just because 0 is falsy.
+    miss = t["read_file"].invoke({"project": "a", "path": p, "offset": 1, "state": state})
+    assert miss == _EXACT_CONTENT
 
 
 def test_memoization_a_different_path_is_not_confused_with_the_cached_one(workspace):

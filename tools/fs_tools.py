@@ -26,11 +26,11 @@ from __future__ import annotations
 import base64
 import logging
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
+import regex as _regex  # aliased — search_files's own `regex: bool` PARAM shadows the bare name
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
@@ -44,6 +44,17 @@ _DEFAULT_READ_LINES = 1000  # ~_MAX_READ_CHARS worth of typical 40-60 char sourc
 _MAX_LIST = 400
 _MAX_MATCHES = 200
 _MAX_CONTEXT_LINES = 20  # clamp on search_files(context_lines=…) — a runaway value shouldn't blow the result budget
+# search_files(regex=true)'s `query` is model-supplied; stdlib `re` has no match
+# timeout, and a catastrophic-backtracking pattern can hang for a caller-controlled
+# amount of time regardless of how short the input is (verified: ~30 adversarial
+# chars already took 70s, unbounded beyond that — capping input LENGTH doesn't help,
+# the blowup happens well within any reasonable cap). `regex` (already a transitive
+# dep via tiktoken, promoted to direct) is API-compatible and honors `timeout=`.
+_REGEX_MATCH_TIMEOUT_S = 2.0
+# A hard cap on TOTAL rendered lines (matches + context), independent of _MAX_MATCHES —
+# 200 matches at context_lines=20 would otherwise emit up to 200*41 lines (~40x the old
+# tool's ~200-line worst case), since _MAX_MATCHES bounds match COUNT, not output size.
+_MAX_SEARCH_OUTPUT_LINES = 400
 
 # What `search_files` walks past by default (#2541). Two different harms, one list:
 # a compiled artifact dumped into the transcript is several KB of marshalled bytecode
@@ -325,6 +336,22 @@ def _this_turn_messages(state) -> list:
     return list(messages)
 
 
+def _norm_pagination(value, default: int) -> int:
+    """Coerce a possibly-absent/None/invalid `offset`/`limit` tool-call arg to the
+    same clamped value `read_file` itself would actually use (``max(1, v)``) — NOT
+    a naive ``v or default`` fallback, which wrongly jumps an explicit ``0`` (or
+    any falsy value) all the way to the unrelated default instead of clamping it to
+    1 like the real call does. Getting this wrong desyncs the memoization key from
+    what actually ran: an explicit ``limit=0`` call effectively reads 1 line, but
+    ``0 or _DEFAULT_READ_LINES`` would compare it as if it read 1000."""
+    if value is None:
+        return default
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _memoized_read(state, project: str, path: str, offset: int, limit: int) -> str | None:
     """The prior read's content to reuse, or None to read for real. Only a call
     whose EXACT (project, path, offset, limit) hasn't been written to since its read
@@ -350,8 +377,8 @@ def _memoized_read(state, project: str, path: str, offset: int, limit: int) -> s
                 last_content = None  # a later write invalidates any earlier cached read at ANY offset/limit
             elif (
                 tc_name == "read_file"
-                and int(tc_args.get("offset", 1) or 1) == offset
-                and int(tc_args.get("limit", _DEFAULT_READ_LINES) or _DEFAULT_READ_LINES) == limit
+                and _norm_pagination(tc_args.get("offset"), 1) == offset
+                and _norm_pagination(tc_args.get("limit"), _DEFAULT_READ_LINES) == limit
             ):
                 tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 result = results_by_id.get(tc_id)
@@ -455,7 +482,10 @@ def build_fs_tools(config) -> list:
             return f"Error: cannot read {path}: {exc}"
         lines = text.splitlines(keepends=True)
         total = len(lines)
-        if total and offset > total:
+        # offset=1 must stay valid for an empty file (total=0) — `max(total, 1)`
+        # keeps that floor without letting a LARGER offset silently skip the
+        # check just because the file happens to be empty.
+        if offset > max(total, 1):
             return f"Error: offset {offset} is past the end of {path} ({total} lines)."
         start = offset - 1
         wanted = lines[start : start + limit]
@@ -485,7 +515,11 @@ def build_fs_tools(config) -> list:
         end_line = offset + returned - 1
         note = f"\n… (showing lines {offset}-{end_line} of {total}"
         if line_truncated:
-            note += f"; line {offset} is longer than {_MAX_READ_CHARS} chars and was cut short — try search_files instead of paging through it"
+            note += f"; line {offset} is longer than {_MAX_READ_CHARS} chars and was cut short — try search_files instead of paging through a line like that"
+            if not reached_eof:
+                # The line itself is unreadable in full, but the FILE isn't done —
+                # without this the caller has no way to discover the rest exists.
+                note += f"; call again with offset={end_line + 1} for the rest of the file"
         elif not reached_eof:
             note += f"; call again with offset={end_line + 1} for more"
         note += ")"
@@ -524,9 +558,11 @@ def build_fs_tools(config) -> list:
         limit=60)`.
 
         `query` is a literal substring by default; set regex=true to match it as a
-        Python regex instead (e.g. `def \\w+_handler\\(`). `context_lines` (like
-        grep -C) includes that many lines before/after each match, marked `-` for
-        context vs `:` for the matching line itself, with adjacent/overlapping
+        Python regex instead (e.g. `def \\w+_handler\\(`) — a pattern that times out
+        (catastrophic backtracking) aborts the search with an error naming it, so
+        simplify it and retry rather than assuming the tool hung. `context_lines`
+        (like grep -C) includes that many lines before/after each match, marked `-`
+        for context vs `:` for the matching line itself, with adjacent/overlapping
         matches merged into one block and `--` separating non-adjacent ones — so a
         hit comes with enough of the function around it to be useful without a
         separate read_file round trip for the common case.
@@ -544,12 +580,18 @@ def build_fs_tools(config) -> list:
 
         if regex:
             try:
-                pattern = re.compile(query)
-            except re.error as exc:
+                pattern = _regex.compile(query)
+            except _regex.error as exc:
                 return f"Error: bad regex: {exc}"
 
             def matches(line: str) -> bool:
-                return pattern.search(line) is not None
+                # `timeout=` is the actual guarantee against a catastrophic-
+                # backtracking pattern (e.g. `(a|a)+b`) — raises the builtin
+                # TimeoutError, left uncaught here so it propagates straight out
+                # of the search loop below and aborts the whole call immediately,
+                # rather than re-triggering the same timeout on every remaining
+                # line. Literal search (the default) has no backtracking risk.
+                return pattern.search(line, timeout=_REGEX_MATCH_TIMEOUT_S) is not None
         else:
 
             def matches(line: str) -> bool:
@@ -567,50 +609,76 @@ def build_fs_tools(config) -> list:
 
         blocks: list[str] = []
         n_matches = 0
+        rendered_lines = 0
         skipped_binary = False
         hit_cap = False
-        for f in files:
-            if hit_cap:
-                break
-            if not include_generated and _is_probably_binary(f):
-                skipped_binary = True
-                continue
-            try:
-                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            hit_idx = [i for i, line in enumerate(lines) if matches(line)]
-            if not hit_idx:
-                continue
-            rel = f.relative_to(root).as_posix()
-            if context_lines == 0:
-                for i in hit_idx:
-                    blocks.append(f"{rel}:{i + 1}: {lines[i].strip()[:200]}")
-                    n_matches += 1
-                    if n_matches >= _MAX_MATCHES:
-                        hit_cap = True
-                        break
-                continue
-            # Merge each match's [-context, +context] window into contiguous ranges
-            # so overlapping/adjacent hits render as one block, not duplicated lines.
-            ranges: list[list[int]] = []
-            for i in hit_idx:
-                lo, hi = max(0, i - context_lines), min(len(lines) - 1, i + context_lines)
-                if ranges and lo <= ranges[-1][1] + 1:
-                    ranges[-1][1] = max(ranges[-1][1], hi)
-                else:
-                    ranges.append([lo, hi])
-            hit_set = set(hit_idx)
-            for lo, hi in ranges:
-                if blocks:
-                    blocks.append("--")
-                for i in range(lo, hi + 1):
-                    marker = ":" if i in hit_set else "-"
-                    blocks.append(f"{rel}{marker}{i + 1}{marker} {lines[i][:200]}")
-                n_matches += sum(1 for i in range(lo, hi + 1) if i in hit_set)
-                if n_matches >= _MAX_MATCHES:
-                    hit_cap = True
+        try:
+            for f in files:
+                if hit_cap:
                     break
+                if not include_generated and _is_probably_binary(f):
+                    skipped_binary = True
+                    continue
+                try:
+                    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+                except OSError:
+                    continue
+                # Stop SCANNING once the match cap is reached — a huge file with more
+                # than _MAX_MATCHES hits shouldn't pay to enumerate all of them just to
+                # throw the rest away below.
+                hit_idx: list[int] = []
+                for i, line in enumerate(lines):
+                    if matches(line):
+                        hit_idx.append(i)
+                        if len(hit_idx) >= _MAX_MATCHES:
+                            break
+                if not hit_idx:
+                    continue
+                rel = f.relative_to(root).as_posix()
+                if context_lines == 0:
+                    for i in hit_idx:
+                        blocks.append(f"{rel}:{i + 1}: {lines[i].strip()[:200]}")
+                        n_matches += 1
+                        rendered_lines += 1
+                        if n_matches >= _MAX_MATCHES or rendered_lines >= _MAX_SEARCH_OUTPUT_LINES:
+                            hit_cap = True
+                            break
+                    continue
+                # Merge each match's [-context, +context] window into contiguous ranges
+                # so overlapping/adjacent hits render as one block, not duplicated lines.
+                ranges: list[list[int]] = []
+                for i in hit_idx:
+                    lo, hi = max(0, i - context_lines), min(len(lines) - 1, i + context_lines)
+                    if ranges and lo <= ranges[-1][1] + 1:
+                        ranges[-1][1] = max(ranges[-1][1], hi)
+                    else:
+                        ranges.append([lo, hi])
+                hit_set = set(hit_idx)
+                for lo, hi in ranges:
+                    if blocks:
+                        blocks.append("--")
+                        rendered_lines += 1
+                    for i in range(lo, hi + 1):
+                        is_hit = i in hit_set
+                        marker = ":" if is_hit else "-"
+                        # The match line strips like the zero-context path does (a hit
+                        # renders the same regardless of context_lines); context-only
+                        # lines keep their indentation — that's the point of showing them.
+                        text = lines[i].strip() if is_hit else lines[i]
+                        blocks.append(f"{rel}{marker}{i + 1}{marker} {text[:200]}")
+                        rendered_lines += 1
+                        if is_hit:
+                            n_matches += 1
+                        # Checked on EVERY line, not just at range boundaries — a single
+                        # merged range (e.g. from context_lines overlapping many nearby
+                        # hits) must not blow past the budget before the next check.
+                        if n_matches >= _MAX_MATCHES or rendered_lines >= _MAX_SEARCH_OUTPUT_LINES:
+                            hit_cap = True
+                            break
+                    if hit_cap:
+                        break
+        except TimeoutError:
+            return f"Error: regex took too long to match (possible catastrophic backtracking) — simplify the pattern: {query!r}"
         if hit_cap:
             return "\n".join(blocks) + "\n… (more matches; narrow the search)"
         if blocks:

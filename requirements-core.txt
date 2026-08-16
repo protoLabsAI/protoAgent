@@ -87,3 +87,8 @@ zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)
 pypdf>=4.0                    # PDF → text
 youtube-transcript-api>=1.0   # YouTube captions → text (1.x instance API)
 markdown-it-py>=3.0           # Markdown → HTML for the `docs` plugin reader view (server-side, offline)
+
+# search_files(regex=true) (tools/fs_tools.py, #2755) — a model-supplied pattern,
+# compiled and matched with a timeout= so catastrophic backtracking can't hang the
+# process. stdlib re has no timeout; regex is API-compatible and adds one.
+regex>=2024.11.6
