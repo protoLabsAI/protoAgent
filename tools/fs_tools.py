@@ -680,7 +680,11 @@ def build_fs_tools(config) -> list:
         except TimeoutError:
             return f"Error: regex took too long to match (possible catastrophic backtracking) — simplify the pattern: {query!r}"
         if hit_cap:
-            return "\n".join(blocks) + "\n… (more matches; narrow the search)"
+            # Two independent caps can trigger this: too many MATCHES, or too much
+            # OUTPUT (e.g. wide context_lines around matches that were all already
+            # found) — don't claim specifically "more matches" when it might just be
+            # more context around matches already shown in full.
+            return "\n".join(blocks) + "\n… (more matches or output; narrow the search or lower context_lines)"
         if blocks:
             return "\n".join(blocks)
         # Say what was NOT searched, so "(no matches)" can't be read as "not in this
