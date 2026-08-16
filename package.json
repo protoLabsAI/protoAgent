@@ -24,8 +24,8 @@
     "desktop:build": "npm --workspace @protoagent/desktop run build"
   },
   "devDependencies": {
-    "@protolabsai/design": "^0.3.0",
-    "@protolabsai/vitepress-theme": "^0.3.6",
+    "@protolabsai/design": "^0.9.1",
+    "@protolabsai/vitepress-theme": "^0.3.11",
     "vitepress": "^1.6.4"
   },
   "//overrides": "@docsearch/react (VitePress docs search) peers on react@18, which ERESOLVEs against the console's react@19; point it at the root react so we don't need `legacy-peer-deps` (which silently disables overrides). With this, the whole tree resolves a single @types/react@19 \u2014 matching @protolabsai/ui (React-19-native, ships .tsx source our tsc compiles).",

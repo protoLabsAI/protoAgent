@@ -10,9 +10,12 @@ export default defineConfig({
     "Template repository for building protoLabs A2A agents on LangGraph.",
   base,
 
-  // The protoLabs.studio theme (@protolabsai/vitepress-theme) is dark-first like
-  // the marketing site; pin the dark, brand-first ground.
-  appearance: "force-dark",
+  // Follow the reader's OS colour scheme, same as the marketing site this sits
+  // under at agent.protolabs.studio — and give them VitePress's toggle on top.
+  // This was "force-dark", which the theme now documents as legacy ("locks to
+  // dark, disables light mode"): /docs stayed black for light-mode readers while
+  // the marketing pages one path segment up adapted.
+  appearance: "auto",
 
   // Tutorials legitimately reference the local dev server (http://localhost:7870);
   // VitePress treats dead links as fatal, so skip just the localhost ones.
