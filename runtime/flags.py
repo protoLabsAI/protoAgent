@@ -45,13 +45,6 @@ class Flag:
 # The registry — the SINGLE source of truth. Add a flag here; check it with ``flag_enabled``.
 FLAGS: list[Flag] = [
     Flag(
-        id="chat.compact",
-        description="/compact — summarize + archive a chat thread, rewrite the checkpoint (#1527).",
-        tier="dev",
-        owner="kj",
-        remove_by="2026-09-01",
-    ),
-    Flag(
         id="settings.devices",
         description=(
             "Settings ▸ Devices — QR device pairing + per-device tokens (ADR 0087). OFF by "

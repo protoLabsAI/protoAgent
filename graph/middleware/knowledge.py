@@ -278,9 +278,40 @@ class KnowledgeMiddleware(AgentMiddleware):
             "(this is your own state, not recalled memory).\n\n" + "\n\n".join(sections) + "\n</working_state>"
         )
 
-    def before_model(self, state, runtime) -> dict | None:
-        """Query knowledge store with last user message, inject context."""
-        return self.compose_context(state, runtime, record=True)
+    def before_agent(self, state, runtime) -> dict | None:
+        """Compose the turn's dynamic context ONCE and append it to the message
+        stream as part of the turn's input frame (#2776, ADR 0101 D2).
+
+        This replaced the per-model-call ``before_model`` composition on purpose:
+        recomposing per call put a churning block between the cached stable
+        prefix and the history — Anthropic's cache key is prefix-based, so every
+        recomposition invalidated any history caching for the rest of the turn.
+        Composed once at turn entry, the frame is appended to the log and caches
+        like every other message; nothing between prefix and history varies
+        intra-turn (this also subsumes #2779 — the skills-index MRU order and
+        ``<working_state>`` are now snapshotted per turn by construction).
+
+        Guarded on the newest message being a FRESH human input: a HITL resume
+        (``Command(resume=…)``) or a kicker retry re-enters the graph without new
+        input, and must not inject a second frame mid-conversation.
+
+        The legacy ``context`` channel is explicitly cleared either way (#2774's
+        reasoning): it is last-write-wins and checkpointer-persisted, so a value
+        left behind by an older build (or a pre-upgrade thread) would otherwise
+        be re-delivered by PromptCacheMiddleware forever.
+        """
+        from graph.context_frame import context_frame_message, is_context_frame
+
+        clear = {"context": "", "context_sections": []}
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        if not isinstance(last, HumanMessage) or is_context_frame(last):
+            return None  # re-entry without fresh input — no recompose, no state churn
+        composed = self.compose_context(state, runtime, record=True)
+        ctx = (composed or {}).get("context") or ""
+        if not ctx:
+            return clear
+        return {"messages": [context_frame_message(ctx)], **clear}
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
         """The dynamic-context composer behind ``before_model``.
@@ -388,23 +419,11 @@ class KnowledgeMiddleware(AgentMiddleware):
         # carries the id-attributed counts the injection log already tracks.
         parts: list[tuple[str, str]] = []
 
-        # A runtime toolset change, announced ONCE to the next turn (#2640). First in
-        # `parts` on purpose: it's an instruction to re-check a conclusion, and it is
-        # worthless after the model has already reasoned past it.
-        #
-        # Only on the SPECULATIVE-safe path — `record=False` is a prompt preview, and
-        # consuming the one-shot there would burn the announcement without a turn ever
-        # seeing it (the #2388 P3 preview reads the same composer).
-        #
-        # COUPLING, stated rather than hidden: this rides the knowledge middleware's
-        # injection path, so `middleware.knowledge: false` also silences the notice.
-        # That is the trade for zero collision risk — a second middleware returning
-        # `context` would race this one for the same state key.
-        if record:
-            from graph.tool_delta import format_delta, take_pending_delta
-
-            if (delta := take_pending_delta()) is not None and (note := format_delta(delta)):
-                parts.append(("Toolset changed", note))
+        # The one-shot toolset-change notice (#2640) no longer rides this composer:
+        # message-frame delivery removed the state-key collision that forced the
+        # coupling, so ToolDeltaMiddleware now owns it end-to-end (unconditional,
+        # exactly as its docstring always wanted) — ``middleware.knowledge: false``
+        # no longer silences capability awareness (#2776).
 
         if memory_parts:
             bits = []
@@ -511,13 +530,14 @@ class KnowledgeMiddleware(AgentMiddleware):
         except Exception as exc:  # noqa: BLE001 — forensics must never break the loop
             log.debug("[knowledge] injection record failed: %s", exc)
 
-    async def abefore_model(self, state, runtime) -> dict | None:
+    async def abefore_agent(self, state, runtime) -> dict | None:
         """Async version — same logic, off the event loop.
 
-        ``before_model`` blocks: the store search embeds the query over HTTP
+        ``before_agent`` blocks: the store search embeds the query over HTTP
         (HybridKnowledgeStore + create_embed_fn), plus sqlite + disk reads for
-        hot memory / prior sessions / skills. Running it inline here stalled
-        the event loop before *every* LLM call, so it goes through
+        hot memory / prior sessions / skills. Running it inline stalled the
+        event loop (originally before *every* LLM call; since #2776 it would be
+        once per turn — still worth keeping off-loop), so it goes through
         ``asyncio.to_thread`` (same pattern as graph/checkpointer.py). The
         only state mutated is the prior-sessions cache (str + float
         assignment), which is benign across threads; the store opens a sqlite
@@ -525,4 +545,4 @@ class KnowledgeMiddleware(AgentMiddleware):
         """
         import asyncio
 
-        return await asyncio.to_thread(self.before_model, state, runtime)
+        return await asyncio.to_thread(self.before_agent, state, runtime)

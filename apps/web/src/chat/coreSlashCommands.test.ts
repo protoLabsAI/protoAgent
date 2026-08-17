@@ -25,10 +25,12 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
     expect(findSlashCommand("help")).toBeTruthy();
   });
 
-  it("/compact is tagged with the chat.compact developer flag (ADR 0068)", () => {
+  it("/compact is untagged — generally available since #2785 (ADR 0101 D5)", () => {
     // Registration is unconditional; the HOST (ChatSurface) hides + skips dispatch of a
-    // flag-tagged command while its flag is off. The tag is the contract under test here.
-    expect(findSlashCommand("compact")!.flag).toBe("chat.compact");
+    // flag-tagged command while its flag is off. /publish keeps a tag, so the gating
+    // contract still has a live subject; /compact shed its expired dev flag.
+    expect(findSlashCommand("compact")!.flag).toBeUndefined();
+    expect(findSlashCommand("publish")!.flag).toBe("chat.publish");
     expect(findSlashCommand("new")!.flag).toBeUndefined(); // shipped commands stay untagged
   });
 
@@ -109,12 +111,15 @@ describe("/help — the live command/shortcut reference card (#1700)", () => {
   });
 
   it("respects the host's flag gate: a flag-tagged command is listed only while its flag is ON", () => {
-    // /compact is tagged chat.compact. Fail-closed with no predicate at all…
-    expect(helpCard()).not.toContain("`/compact`");
+    // /publish is tagged chat.publish (/compact shed its flag in #2785). Fail-closed
+    // with no predicate at all…
+    expect(helpCard()).not.toContain("`/publish`");
     // …hidden while the flag resolves off…
-    expect(helpCard({ flagOn: () => false })).not.toContain("`/compact`");
+    expect(helpCard({ flagOn: () => false })).not.toContain("`/publish`");
     // …listed while it resolves on (same predicate the slash menu uses).
-    expect(helpCard({ flagOn: (id) => id === "chat.compact" })).toContain("`/compact`");
+    expect(helpCard({ flagOn: (id) => id === "chat.publish" })).toContain("`/publish`");
+    // Un-gated commands list regardless of the predicate.
+    expect(helpCard({ flagOn: () => false })).toContain("`/compact`");
   });
 
   it("lists the host's server commands (installed plugins) and dedupes client-claimed tokens", () => {

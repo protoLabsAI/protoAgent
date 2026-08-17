@@ -194,12 +194,24 @@ prompt_cache:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Attach `cache_control` to the stable prefix for every model. Rejection → auto-fallback (per model, per session); silent zero-hit → a once-per-model WARNING. `false` = plain delivery only. |
-| `ttl` | `"5m"` | Cache tier: `5m` (ephemeral) or `1h` (persistent). |
+| `ttl` | profile-aware | Cache tier: `5m` (ephemeral) or `1h` (persistent). Absent, it resolves by profile (#2780, ADR 0101 D7): **`1h` on fleet members and the packaged desktop app** (long-lived agents that idle past 5m between turns — a single avoided prefix re-warm covers the 1h tier's higher write price), `5m` on an interactive dev instance. Explicit config always wins. |
 | `force` | `false` | Trust-the-operator mode: always attach, never auto-fall back (a rejection propagates instead of degrading silently). |
 | `warm.enabled` | `false` | Run a background heartbeat (`graph/cache_warmer.py`) that periodically reproduces the cached system prefix so the **first** request after an idle gap hits a warm cache instead of a full miss. |
 | `warm.interval_seconds` | `3300` | Heartbeat period. Set just under `ttl` (default 55m for the `1h` tier). |
 
 **When to enable `warm`:** sporadic but latency-sensitive traffic on the `1h` tier — the ~1-token ping per interval is cheap relative to a cold miss on a multi-thousand-token prefix while a user waits. Leave it **off** for steady traffic (the cache stays warm on its own — warming is then pure cost) and for providers where the zero-hit warning fired (nothing to warm). It runs as its own asyncio task (started/stopped with the server), **not** through the scheduler — the scheduler fires full agent turns, the wrong primitive for a keep-alive.
+
+## `pruning`
+
+In-history tool-result pruning (#2782, ADR 0101 D3/D4) — the near-lossless relief step that runs **before** compaction's lossy summarize. At `at_fraction` of the model's context window (chars÷4 estimate; a fixed conservative floor when the gateway reports no window), tool results older than the newest `keep_messages` are rewritten to bounded head + omission marker + bounded tail, in **one batched pass** so the rolling history cache breakpoints (#2777) take a single miss instead of one per call. Replacement is by message id, so tool-call pairing survives; the marker says the middle is gone and to re-run the tool if needed. A pass here often keeps the 0.8 compaction valve from firing at all.
+
+```yaml
+pruning:
+  enabled: true       # on by default
+  at_fraction: 0.6    # prune at 60% of the window — before compaction's 0.8
+  keep_messages: 20   # the newest N messages are never touched
+  min_chars: 4000     # results smaller than this aren't worth a marker
+```
 
 ## `compaction`
 

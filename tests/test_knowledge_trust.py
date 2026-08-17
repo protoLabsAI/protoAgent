@@ -99,8 +99,11 @@ def _seed_three_tiers(store: KnowledgeStore) -> None:
 
 
 def _context(mw, query="gravity fact"):
-    result = mw.before_model({"messages": [HumanMessage(content=query)]}, runtime=None)
-    return (result or {}).get("context", "")
+    # #2776: the composed context is delivered as the turn's injected frame
+    # message (before_agent), no longer staged on the `context` channel.
+    result = mw.before_agent({"messages": [HumanMessage(content=query)]}, runtime=None)
+    msgs = (result or {}).get("messages") or []
+    return msgs[0].content if msgs else ""
 
 
 def test_injection_down_weights_low_tiers(tmp_path):

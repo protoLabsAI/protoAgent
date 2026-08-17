@@ -50,6 +50,19 @@ def _build_middleware(
 
     middleware.append(StallGuardMiddleware())
 
+    # Round governance (#2710, ADR 0101 D8) — the stall guard's sibling for a
+    # different failure: not a stuck loop, a LONG one. One re-grounding nudge at
+    # N rounds (adherence decays with round count — the duplicate-card incident),
+    # optional hard cap. No-op until the soft threshold.
+    from graph.middleware.round_governor import RoundGovernorMiddleware
+
+    middleware.append(
+        RoundGovernorMiddleware(
+            nudge_after=getattr(config, "round_nudge_after", 25),
+            hard_cap=getattr(config, "round_hard_cap", 0),
+        )
+    )
+
     # Mid-turn user steering (spike) — fold queued user input into the running
     # turn at the next model call, so a user can redirect ongoing work without
     # stopping the stream. No-op when nothing was injected this turn.
@@ -152,11 +165,10 @@ def _build_middleware(
     # an agent that refuses work it can now do is a worse failure than a missed
     # injection, so this must not ride a switchable subsystem.
     #
-    # Registered AFTER KnowledgeMiddleware deliberately — `context` has no reducer, so
-    # it composes with what knowledge just wrote rather than clobbering it. Each
-    # before_model hook is its own graph node and LangGraph applies updates in order,
-    # which is what makes reading the staged value here correct. Moving this earlier
-    # silently drops the knowledge/skills block.
+    # Both this and KnowledgeMiddleware deliver via tagged message frames at
+    # before_agent (#2776, ADR 0101 D2) — additive under the messages reducer, so
+    # registration order is no longer load-bearing; keeping knowledge first just
+    # puts the memory frame ahead of the toolset notice in the turn's input.
     from graph.middleware.tool_delta import ToolDeltaMiddleware
 
     middleware.append(ToolDeltaMiddleware())
@@ -176,6 +188,27 @@ def _build_middleware(
     if config.memory_middleware:
         middleware.append(SessionSummaryMiddleware(knowledge_store))
 
+    # In-history tool-result pruning (#2782, ADR 0101 D3/D4) — registered BEFORE
+    # compaction on purpose: relief has an order (prune near-lossless, THEN
+    # summarize lossy), and before_model hooks run in registration order, so a
+    # pruning pass at 0.6 of the window often keeps the 0.8 valve from firing.
+    if getattr(config, "pruning_enabled", True):
+        from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
+        from graph.model_window import context_window_for
+
+        try:
+            _window = context_window_for(config)
+        except Exception:  # noqa: BLE001 — no profile → the middleware's fixed fallback
+            _window = None
+        middleware.append(
+            ToolResultPrunerMiddleware(
+                max_input_tokens=_window,
+                at_fraction=getattr(config, "pruning_at_fraction", 0.6),
+                keep_messages=getattr(config, "pruning_keep_messages", 20),
+                min_chars=getattr(config, "pruning_min_chars", 4000),
+            )
+        )
+
     # Context compaction — summarize old history near the context limit.
     # CountingSummarizationMiddleware adds a Prometheus compaction counter on top
     # of langchain's SummarizationMiddleware (ADR 0006 — proves the lever fires).
@@ -189,6 +222,9 @@ def _build_middleware(
                 model=summ_model,
                 trigger=_parse_compaction_trigger(config.compaction_trigger),
                 keep=keep,
+                # Archive-first (#2784, ADR 0101 D5): the pre-compaction transcript
+                # lands in the knowledge store before the rewrite is committed.
+                knowledge_store=knowledge_store,
             )
         except ValueError:
             # `fraction:`/`tokens:` triggers need the model's context-window
@@ -204,7 +240,9 @@ def _build_middleware(
                 config.model_name,
                 fallback,
             )
-            mw = CountingSummarizationMiddleware(model=summ_model, trigger=("messages", fallback), keep=keep)
+            mw = CountingSummarizationMiddleware(
+                model=summ_model, trigger=("messages", fallback), keep=keep, knowledge_store=knowledge_store
+            )
         middleware.append(mw)
 
     # Model routing / failover — retry on fallback models (same gateway).
@@ -412,16 +450,30 @@ async def _run_subagent(
     # an aux/per-subagent override may be text-only — those degrade to text.
     from graph.middleware.multimodal_tool import build_multimodal_middleware
 
+    # Prompt caching mirrors the lead stack (#2778, ADR 0101 D1): a subagent's
+    # system prompt is static per build, so every `task`/`task_batch` delegation
+    # paying full uncached input on it was free money left on the table — repeat
+    # delegations to the same subagent type (and every call inside one
+    # delegation's tool loop) now read the prefix from cache. Same knobs as the
+    # lead; the middleware's own denylist/zero-activity watchers apply per model.
+    from graph.middleware.prompt_cache import PromptCacheMiddleware
+
     sub_middleware = [
         TraceContextMiddleware(),
+        PromptCacheMiddleware(
+            enabled=getattr(config, "prompt_cache_enabled", True),
+            ttl=getattr(config, "prompt_cache_ttl", "5m"),
+            force=getattr(config, "prompt_cache_force", False),
+        ),
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
     if getattr(config, "prompt_capture_enabled", False):
-        # #2388 P3: subagent prompts were invisible (P1 was main-loop only). The
-        # subagent stack has no PromptCache, so the whole system message captures
-        # as the stable half with a single labeled section; rows nest under the
-        # delegating tool-call id rather than claiming the turn's task_id.
+        # #2388 P3: subagent prompts were invisible (P1 was main-loop only).
+        # Registered after PromptCache (same ordering rule as the lead stack) so
+        # the capture sees the final assembled system message; the whole prompt
+        # still captures as the stable half with a single labeled section, and
+        # rows nest under the delegating tool-call id rather than the turn's task_id.
         from graph.middleware.prompt_capture import PromptCaptureMiddleware
 
         _sub_prompt = build_subagent_prompt(subagent_type)

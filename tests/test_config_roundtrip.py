@@ -61,6 +61,10 @@ def _freeze_ui_tier_default(monkeypatch):
     default the golden was captured under (same isolation ``test_settings_cascade.py``
     applies when it exercises this field)."""
     monkeypatch.delenv("PROTOAGENT_UI", raising=False)
+    # Same reasoning for the profile-aware prompt_cache.ttl default (#2780): a dev
+    # shell running inside a fleet workspace (PROTOAGENT_HOME set) would flip the
+    # pinned "5m" golden to "1h". CI never sets it; pin the interactive profile.
+    monkeypatch.delenv("PROTOAGENT_HOME", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +100,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "commons_path": "",
     "compaction_enabled": True,
     "compaction_keep_messages": 20,
+    "pruning_enabled": True,
+    "pruning_at_fraction": 0.6,
+    "pruning_keep_messages": 20,
+    "pruning_min_chars": 4000,
     "compaction_model": "",
     "compaction_trigger": "fraction:0.8",
     "discovery_mdns": False,
@@ -179,6 +187,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "llm_max_retries": 2,
     "max_iterations": 2000,
     "turn_stall_timeout_seconds": 900.0,
+    "round_nudge_after": 25,
+    "round_hard_cap": 0,
     "max_tokens": 32768,
     "media_public": False,
     "media_retention_days": 0,
@@ -973,3 +983,31 @@ def test_maybe_run_soul_drift_pass_gates_to_interval(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
     disabled = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=0)
     assert agent_init._maybe_run_soul_drift_pass(disabled) is None
+
+
+def test_prompt_cache_ttl_profile_default(monkeypatch, tmp_path):
+    """#2780 / ADR 0101 D7: absent `prompt_cache.ttl` resolves 1h on a fleet/desktop
+    profile and 5m interactive; explicit config beats the profile either way."""
+    import sys
+
+    from graph.config import _default_prompt_cache_ttl
+
+    monkeypatch.delenv("PROTOAGENT_HOME", raising=False)
+    assert _default_prompt_cache_ttl() == "5m"
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
+    assert _default_prompt_cache_ttl() == "1h"
+
+    monkeypatch.delenv("PROTOAGENT_HOME", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert _default_prompt_cache_ttl() == "1h"
+    monkeypatch.delattr(sys, "frozen", raising=False)
+
+    # Explicit config wins over the profile.
+    cfg_yaml = tmp_path / "cfg.yaml"
+    cfg_yaml.write_text("prompt_cache:\n  ttl: '5m'\n")
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
+    assert LangGraphConfig.from_yaml(str(cfg_yaml)).prompt_cache_ttl == "5m"
+    # Absent → the profile default.
+    cfg_yaml.write_text("prompt_cache: {}\n")
+    assert LangGraphConfig.from_yaml(str(cfg_yaml)).prompt_cache_ttl == "1h"

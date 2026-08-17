@@ -41,13 +41,15 @@ def test_parts_labels_and_order():
 # --- knowledge middleware: context/context_sections pair ---------------------
 
 
-def test_before_model_returns_labeled_sections(tmp_path):
+def test_composer_returns_labeled_sections(tmp_path):
+    # #2776: the context/sections pair is the COMPOSER's contract now (it feeds
+    # the #2388 P3 preview); before_agent delivers the text as a message frame.
     from knowledge.store import KnowledgeStore
 
     store = KnowledgeStore(tmp_path / "kb.db")
     store.add_chunk("deploys go out Fridays", domain="hot", heading="ops")
     km = KnowledgeMiddlewareFactory(store)
-    result = km.before_model({"messages": [HumanMessage(content="anything")]}, runtime=None)
+    result = km.compose_context({"messages": [HumanMessage(content="anything")]}, None, record=True)
     assert result is not None
     sections = result["context_sections"]
     labels = [s["label"] for s in sections]
@@ -69,14 +71,12 @@ def KnowledgeMiddlewareFactory(store):
     return km
 
 
-def test_before_model_none_when_nothing_to_inject(tmp_path):
+def test_before_agent_none_without_fresh_input(tmp_path):
     from knowledge.store import KnowledgeStore
 
     km = KnowledgeMiddlewareFactory(KnowledgeStore(tmp_path / "kb.db"))
-    result = km.before_model({"messages": []}, runtime=None)
-    # No context → no sections either (the keys always move together).
-    if result is not None:
-        assert set(result) >= {"context", "context_sections"}
+    # #2776: no fresh human input → no recompose, no state churn at all.
+    assert km.before_agent({"messages": []}, runtime=None) is None
 
 
 # --- capture threading --------------------------------------------------------
@@ -214,5 +214,5 @@ def test_compose_context_record_false_skips_injection_log(tmp_path, monkeypatch)
     assert preview is not None and preview["context"]  # the full dynamic layer ran
     assert recorded == []  # …but nothing claims "this entered a turn" (ADR 0069 D6)
 
-    km.before_model(state, runtime=None)
+    km.before_agent(state, runtime=None)
     assert recorded == [True]  # the real path still records

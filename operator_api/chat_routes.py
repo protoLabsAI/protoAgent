@@ -345,16 +345,9 @@ def register_chat_routes(app, ui: str) -> None:
         checkpoint is left untouched and ``refused`` is true (the console then
         keeps the full thread rather than dropping anything).
 
-        Pre-release: behind the ``chat.compact`` developer flag (ADR 0068)."""
-        from fastapi import HTTPException
-
-        from runtime.flags import flag_enabled
-
-        if not flag_enabled("chat.compact"):
-            raise HTTPException(
-                status_code=403,
-                detail="/compact is pre-release — enable the chat.compact developer flag (ADR 0068)",
-            )
+        Generally available since #2785 (ADR 0101 D5): the ``chat.compact`` dev
+        flag expired past its own remove_by — and gating the LOSSLESS path while
+        lossy auto-compaction ran by default was exactly backwards."""
         return await compact_session(session_id)
 
     @app.get("/api/chat/sessions/{session_id}/export")

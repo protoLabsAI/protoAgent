@@ -188,6 +188,28 @@ FIELDS: list[Field] = [
         "runs. Raise it if a genuinely silent step is being killed; 0 disables.",
         minimum=0,
     ),
+    # Round governance (#2710, ADR 0101 D8) — sits with the other per-turn
+    # budgets (max_iterations / stall timeout).
+    Field(
+        "model.round_nudge_after",
+        "round_nudge_after",
+        "Re-grounding nudge (rounds)",
+        "number",
+        "Model & runtime",
+        "Model rounds into a turn before ONE re-check-your-plan note is injected — long "
+        "runs decay adherence to standing instructions. 0 disables.",
+        minimum=0,
+    ),
+    Field(
+        "model.round_hard_cap",
+        "round_hard_cap",
+        "Round hard cap",
+        "number",
+        "Model & runtime",
+        "End the turn with an honest hand-back at this many model rounds. 0 (default) = "
+        "off; max_iterations remains the runaway backstop.",
+        minimum=0,
+    ),
     # ── Favorite models (#1957) ──────────────────────────────────────────────
     Field(
         "model.favorites",
@@ -258,6 +280,42 @@ FIELDS: list[Field] = [
         "Compaction",
         "Blank = routing.aux_model, then the main model.",
         options_source="slot_models",
+    ),
+    # In-history tool-result pruning (#2782, ADR 0101 D3) — same category as
+    # compaction: it is the near-lossless step that runs before summarization.
+    Field(
+        "pruning.enabled",
+        "pruning_enabled",
+        "Prune old tool results",
+        "bool",
+        "Compaction",
+        "At context pressure, rewrite older tool results to head+tail stubs before summarization is considered.",
+    ),
+    Field(
+        "pruning.at_fraction",
+        "pruning_at_fraction",
+        "Pruning trigger (fraction of window)",
+        "number",
+        "Compaction",
+        "0.6 = prune at 60% of the model's context window (before compaction's 0.8 valve).",
+        minimum=0.05,
+        maximum=1.0,
+    ),
+    Field(
+        "pruning.keep_messages",
+        "pruning_keep_messages",
+        "Never prune the last N messages",
+        "number",
+        "Compaction",
+        minimum=0,
+    ),
+    Field(
+        "pruning.min_chars",
+        "pruning_min_chars",
+        "Minimum result size to prune (chars)",
+        "number",
+        "Compaction",
+        minimum=2000,
     ),
     # ── Goal mode ────────────────────────────────────────────────────────────
     # Goal mode is always on (config default True). The on/off toggle is hidden from

@@ -303,6 +303,29 @@ def _default_filesystem_allow_run() -> bool:
     return os.environ.get("PROTOAGENT_UI", "").strip().lower() != "none"
 
 
+def _default_prompt_cache_ttl() -> str:
+    """Profile-aware app-default for ``prompt_cache.ttl`` (#2780, ADR 0101 D7).
+
+    The 5m ephemeral tier fits an interactive dev chat, where turns arrive
+    faster than the TTL. Fleet members and the packaged desktop app are
+    long-lived agents that routinely idle past 5m between turns — every re-warm
+    re-pays the full stable prefix uncached, so they default to the 1h
+    persistent tier (Anthropic prices 1h writes at 2x base input vs 1.25x for
+    5m; one avoided re-warm already covers the premium on these profiles).
+
+    Signals, deliberately coarse: a fleet member runs with ``PROTOAGENT_HOME``
+    (its workspace as instance root — ``graph/workspaces/manager.run_exec``);
+    the desktop app is a frozen binary. A standalone instance an operator
+    relocated via ``PROTOAGENT_HOME`` matches too — same long-lived profile,
+    same trade. An explicit ``prompt_cache.ttl`` in config always wins.
+    """
+    import sys
+
+    if getattr(sys, "frozen", False) or os.environ.get("PROTOAGENT_HOME", "").strip():
+        return "1h"
+    return "5m"
+
+
 def _host_scoped_fields():
     """The host-scoped (ADR 0047 ``scope=="host"``) settings fields — the single
     source for both the host-layer filter and the shadow check, so they can't drift."""
@@ -408,6 +431,13 @@ class LangGraphConfig:
     # single step by a wide margin (an MCP call is separately bounded at 300s by
     # ``mcp.call_timeout_seconds``). ``0`` disables the guard.
     turn_stall_timeout_seconds: float = 900.0
+    # Round governance (#2710, ADR 0101 D8). ``round_nudge_after``: model rounds
+    # into a turn before ONE re-grounding note is injected (long runs decay
+    # instruction adherence — the duplicate-card incident was 21 rounds in);
+    # 0 disables. ``round_hard_cap``: end the turn with an honest hand-back at
+    # this many rounds; 0 (default) = off — max_iterations remains the backstop.
+    round_nudge_after: int = 25
+    round_hard_cap: int = 0
     # Native vision (ADR 0021): set true when `model_name` is image-capable (e.g.
     # protolabs/fast, protolabs/smart). The chat composer then sends attached
     # images as native multimodal parts straight to the model instead of routing
@@ -521,6 +551,15 @@ class LangGraphConfig:
     compaction_enabled: bool = True
     compaction_trigger: str = "fraction:0.8"
     compaction_keep_messages: int = 20
+    # In-history tool-result pruning (#2782, ADR 0101 D3) — the near-lossless
+    # step BEFORE compaction's lossy summarize: at ``at_fraction`` of the model's
+    # context window, tool results older than the newest ``keep_messages`` are
+    # rewritten to head+tail stubs in one batched pass. See
+    # graph/middleware/tool_result_pruner.py for the full mechanics.
+    pruning_enabled: bool = True
+    pruning_at_fraction: float = 0.6
+    pruning_keep_messages: int = 20
+    pruning_min_chars: int = 4000
     compaction_model: str = ""  # blank = summarize with the main model
 
     # Deferred tools (ADR 0005 #3) — progressive tool disclosure for high tool
@@ -1403,6 +1442,8 @@ class LangGraphConfig:
             turn_stall_timeout_seconds=model.get(
                 "turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds
             ),
+            round_nudge_after=model.get("round_nudge_after", cls.round_nudge_after),
+            round_hard_cap=model.get("round_hard_cap", cls.round_hard_cap),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),
             top_p=model.get("top_p", cls.top_p),
@@ -1420,7 +1461,9 @@ class LangGraphConfig:
             enforcement_disallowed_tools=(data.get("enforcement", {}).get("disallowed_tools", [])),
             enforcement_rate_limits=(data.get("enforcement", {}).get("rate_limits", {})),
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
-            prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
+            # Absent (or blank) resolves through the profile-aware default —
+            # 1h for fleet/desktop, 5m interactive (#2780). Explicit always wins.
+            prompt_cache_ttl=(data.get("prompt_cache", {}).get("ttl") or _default_prompt_cache_ttl()),
             prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
             cache_warming_enabled=data.get("prompt_cache", {})
             .get("warm", {})
@@ -1431,6 +1474,10 @@ class LangGraphConfig:
             compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
+            pruning_enabled=data.get("pruning", {}).get("enabled", cls.pruning_enabled),
+            pruning_at_fraction=data.get("pruning", {}).get("at_fraction", cls.pruning_at_fraction),
+            pruning_keep_messages=data.get("pruning", {}).get("keep_messages", cls.pruning_keep_messages),
+            pruning_min_chars=data.get("pruning", {}).get("min_chars", cls.pruning_min_chars),
             compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),

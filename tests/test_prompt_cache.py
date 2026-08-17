@@ -12,13 +12,14 @@ class _Req:
     """Minimal stand-in for langchain's ModelRequest (the fields the
     middleware touches), with an override() that returns an updated copy."""
 
-    def __init__(self, model_name, system_message, state=None):
-        self.model = SimpleNamespace(model_name=model_name)
+    def __init__(self, model_name, system_message, state=None, model=None, messages=None):
+        self.model = model if model is not None else SimpleNamespace(model_name=model_name)
         self.system_message = system_message
         self.state = state or {}
+        self.messages = list(messages or [])
 
     def override(self, **kw):
-        r = _Req(self.model.model_name, self.system_message, self.state)
+        r = _Req("", self.system_message, self.state, model=self.model, messages=self.messages)
         for k, v in kw.items():
             setattr(r, k, v)
         return r
@@ -234,3 +235,93 @@ async def test_async_path():
 
     await mw.awrap_model_call(req, handler)
     assert captured["req"].system_message.content[0]["cache_control"]
+
+
+# ── rolling history breakpoints (#2777, ADR 0101 D1) ─────────────────────────
+
+
+def _hist_req(model_name="claude-opus-4-7", messages=None, model=None):
+    return _Req(model_name, SystemMessage(content="STABLE"), state={}, model=model, messages=messages)
+
+
+def test_history_marks_last_two_markable_messages():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    mw = PromptCacheMiddleware()
+    msgs = [HumanMessage(content="q1"), AIMessage(content="a1"), HumanMessage(content="q2"), AIMessage(content="a2")]
+    out = _run(mw, _hist_req(messages=msgs))
+    marked = [m for m in out.messages if isinstance(m.content, list) and "cache_control" in m.content[-1]]
+    assert len(marked) == 2
+    # The newest two, walking from the tail.
+    assert marked[0].content[0]["text"] == "q2"
+    assert marked[1].content[0]["text"] == "a2"
+    # View-only: the ORIGINAL stored messages are untouched strings.
+    assert all(isinstance(m.content, str) for m in msgs)
+
+
+def test_history_skips_tool_messages_on_the_gateway_path():
+    """langchain-openai's tool converter drops cache_control — marking a
+    ToolMessage there would waste a slot on a silent no-op. The walk skips them
+    and marks the newest human/assistant text instead."""
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    mw = PromptCacheMiddleware()
+    msgs = [
+        HumanMessage(content="q"),
+        AIMessage(content="calling", tool_calls=[{"name": "t", "args": {}, "id": "x", "type": "tool_call"}]),
+        ToolMessage(content="result", tool_call_id="x"),
+    ]
+    out = _run(mw, _hist_req("protolabs/reasoning", messages=msgs))
+    assert isinstance(out.messages[2].content, str)  # tool result untouched
+    assert out.messages[1].content[-1]["cache_control"]  # AI text marked
+    assert out.messages[0].content[-1]["cache_control"]  # human marked
+
+
+def test_history_marks_tool_results_on_the_native_anthropic_client():
+    """langchain-anthropic lifts a block's cache_control onto the tool_result
+    envelope — so on ChatAnthropic (incl. the oauth subclass) the newest tool
+    results ARE markable, zero-lag caching for tool-heavy rounds."""
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    mw = PromptCacheMiddleware()
+    client = ChatAnthropic(model="claude-3-5-haiku-latest", api_key="test")
+    msgs = [HumanMessage(content="q"), ToolMessage(content="big result", tool_call_id="x")]
+    out = _run(mw, _hist_req(model=client, messages=msgs))
+    assert out.messages[1].content[-1]["cache_control"]
+    assert out.messages[0].content[-1]["cache_control"]
+
+
+def test_history_skips_unmarkable_tails():
+    """Empty tool-calls-only assistant steps and trailing non-text blocks have no
+    legal breakpoint slot — the walk passes over them without spending budget."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    mw = PromptCacheMiddleware()
+    msgs = [
+        HumanMessage(content="q"),
+        AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "x", "type": "tool_call"}]),
+        AIMessage(content=[{"type": "thinking", "thinking": "…"}]),
+    ]
+    out = _run(mw, _hist_req(messages=msgs))
+    assert out.messages[0].content[-1]["cache_control"]  # only the human is markable
+    assert out.messages[1].content == ""
+    assert "cache_control" not in out.messages[2].content[-1]
+
+
+def test_history_unmarked_when_caching_disabled():
+    from langchain_core.messages import HumanMessage
+
+    mw = PromptCacheMiddleware(enabled=False)
+    req = _hist_req(messages=[HumanMessage(content="q")])
+    req.state = {"context": "ctx"}  # forces the plain-delivery path to run
+    out = _run(mw, req)
+    assert isinstance(out.messages[0].content, str)
+
+
+def test_history_marks_carry_the_ttl():
+    from langchain_core.messages import HumanMessage
+
+    mw = PromptCacheMiddleware(ttl="1h")
+    out = _run(mw, _hist_req(messages=[HumanMessage(content="q")]))
+    assert out.messages[0].content[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
