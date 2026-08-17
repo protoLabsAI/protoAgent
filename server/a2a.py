@@ -698,6 +698,10 @@ def _record_a2a_telemetry(outcome) -> None:
                 # comma-joined like `models` above — durations need real structure
                 # (name AND numbers), not just a flat list.
                 "tool_durations": json.dumps(outcome.tool_durations) if outcome.tool_durations else None,
+                # Peak single-call prompt size = context-window fill this turn (#2773,
+                # ADR 0101 D6). getattr-guarded like trace_id: an older/alternate
+                # producer's outcome object may predate the field.
+                "context_tokens": int(getattr(outcome, "context_tokens", 0) or 0),
             }
         )
     except Exception:  # noqa: BLE001 — telemetry is best-effort

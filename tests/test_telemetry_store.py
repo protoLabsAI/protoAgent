@@ -79,6 +79,50 @@ def test_soul_rev_migrates_onto_an_older_db(tmp_path):
     assert store.recent()[0]["soul_rev"] == "deadbeef"
 
 
+def test_context_tokens_roundtrips_and_migrates(tmp_path):
+    # #2773 / ADR 0101 D6: the per-turn context-window fill persists, and a store
+    # created before the column existed gains it via the same guarded ALTER as
+    # soul_rev above (the old-schema table here predates ALL migrated columns).
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    cols = (
+        "task_id TEXT PRIMARY KEY, session_id TEXT, state TEXT, success INTEGER, model TEXT, "
+        "models TEXT, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, "
+        "cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, cost_usd REAL, "
+        "duration_ms INTEGER, llm_calls INTEGER, tool_calls INTEGER, created_at TEXT, ended_at TEXT"
+    )
+    db = sqlite3.connect(path)
+    db.execute(f"CREATE TABLE turns ({cols})")
+    db.commit()
+    db.close()
+
+    store = TelemetryStore(path)
+    store.record(_row("t1", context_tokens=110_500))
+    assert store.recent()[0]["context_tokens"] == 110_500
+
+
+def test_recent_derives_per_turn_cache_hit_ratio(store):
+    # #2773: cached reads / prompt tokens, derived per row — 400/1000 from the
+    # fixture; a zero-input row reads 0.0, never a ZeroDivisionError.
+    store.record(_row("t1"))
+    store.record(_row("t2", input_tokens=0, cache_read_input_tokens=0, ended_at="2026-06-01T00:02:00+00:00"))
+    recent = {r["task_id"]: r for r in store.recent()}
+    assert recent["t1"]["cache_hit_ratio"] == 0.4
+    assert recent["t2"]["cache_hit_ratio"] == 0.0
+
+
+def test_summary_context_fill_stats_exclude_zero_rows(store):
+    # #2773: max/p95 context fill — turns recorded before the column existed (or
+    # with no usage) read as 0 and must not drag the series down.
+    store.record(_row("t1", context_tokens=0))
+    store.record(_row("t2", context_tokens=40_000, ended_at="2026-06-01T00:02:00+00:00"))
+    store.record(_row("t3", context_tokens=90_000, ended_at="2026-06-01T00:03:00+00:00"))
+    s = store.summary()
+    assert s["max_context_tokens"] == 90_000
+    assert s["p95_context_tokens"] > 0
+
+
 def test_record_noop_without_task_id(store):
     store.record({"cost_usd": 1.0})  # no task_id
     assert store.recent() == []

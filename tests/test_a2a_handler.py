@@ -356,6 +356,10 @@ async def test_terminal_artifact_carries_all_extensions():
     _ctx_mime, ctx = pa.read_data(parts[1])
     assert _ctx_mime == _CONTEXT_MIME
     assert ctx["contextTokens"] == 140
+    # projectedTokens = the LAST call's input + output (140 + 20): the floor the next
+    # request on this thread starts from (#2773, ADR 0101 D6) — anchored to the final
+    # call, not the peak, and not the summed spend.
+    assert ctx["projectedTokens"] == 160
 
 
 @pytest.mark.asyncio

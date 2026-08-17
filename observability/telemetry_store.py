@@ -45,6 +45,7 @@ _COLUMNS = (
     "soul_rev",  # short hash of the persona (SOUL.md) live for this turn (#1691)
     "trace_id",  # Langfuse trace for this turn — lets the console deep-link to the trace tree
     "tool_durations",  # JSON {tool_name: [ms, ...]} for this turn's calls (#2697)
+    "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
 )
 
 
@@ -89,7 +90,8 @@ class TelemetryStore:
                     ended_at                    TEXT,
                     soul_rev                    TEXT,
                     trace_id                    TEXT,
-                    tool_durations               TEXT
+                    tool_durations               TEXT,
+                    context_tokens              INTEGER DEFAULT 0
                 )
                 """
             )
@@ -101,6 +103,7 @@ class TelemetryStore:
                 ("soul_rev", "TEXT"),  # #1691
                 ("trace_id", "TEXT"),  # console→Langfuse pivot
                 ("tool_durations", "TEXT"),  # #2697
+                ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
             ):
                 try:
                     db.execute(f"ALTER TABLE turns ADD COLUMN {_col} {_type}")
@@ -137,7 +140,16 @@ class TelemetryStore:
                 "SELECT * FROM turns ORDER BY ended_at DESC LIMIT ?",
                 (max(1, int(limit)),),
             ).fetchall()
-            return [dict(r) for r in rows]
+            out = []
+            for r in rows:
+                d = dict(r)
+                # Per-turn cache-hit ratio, derived — cached reads / total prompt tokens
+                # the turn sent (#2773). Kept out of the schema: both operands are
+                # already columns, so a derived key can't drift from them.
+                inp = d.get("input_tokens", 0) or 0
+                d["cache_hit_ratio"] = round((d.get("cache_read_input_tokens", 0) or 0) / inp, 4) if inp else 0.0
+                out.append(d)
+            return out
         finally:
             db.close()
 
@@ -203,6 +215,19 @@ class TelemetryStore:
             out["p50_duration_ms"] = _percentile(durations, 50)
             out["p95_duration_ms"] = _percentile(durations, 95)
             out["p99_duration_ms"] = _percentile(durations, 99)  # #2678
+            # Context-fill series (#2773, ADR 0101 D6) — same Python-side pattern as
+            # the latency percentiles. Zero rows (pre-migration turns) are excluded:
+            # a turn recorded before the column existed reads as 0, not as evidence
+            # the thread was empty.
+            fills = [
+                r[0]
+                for r in db.execute(
+                    f"SELECT context_tokens FROM turns {where} ORDER BY context_tokens", params
+                ).fetchall()
+                if r[0]
+            ]
+            out["max_context_tokens"] = fills[-1] if fills else 0
+            out["p95_context_tokens"] = _percentile(fills, 95)
             by_model = db.execute(
                 f"""
                 SELECT model,

@@ -141,6 +141,10 @@ class TurnOutcome:
     # duration_ms (an older/alternate producer, e.g. a workflow yield) — those calls
     # still count toward `tool_calls` above, just not toward this durable breakdown.
     tool_durations: dict[str, list[int]] = field(default_factory=dict)
+    # Peak single-call prompt size this turn — the context-window FILL the thread
+    # reached, distinct from the summed spend in `usage` (#1372, persisted per
+    # ADR 0101 D6 so context growth is a series, not a one-turn readout).
+    context_tokens: int = 0
     # Provenance (ADR 0022) — what triggered this turn, from the inbound A2A
     # message metadata. ``origin`` ∈ scheduler|inbox|webhook|a2a|"" (empty = a
     # live/operator turn); ``trigger`` is a human label (job id / inbox source);
@@ -404,6 +408,13 @@ class ProtoAgentExecutor(AgentExecutor):
         # model's own count of all prompt tokens, incl. cache reads). Unlike the summed
         # usage above, this is the live context-window FILL, not per-turn spend (#1372).
         context_tokens = 0
+        # The FINAL model call's input/output, kept separately from the peak above: the
+        # next request on this thread starts from last prompt + last completion, which
+        # makes them the honest basis for the projectedTokens estimate (#2773). The next
+        # turn's user message and envelope aren't knowable here, so the projection is a
+        # floor, not a promise — ADR 0101 D6 keeps precision at the adapter layer.
+        last_call_input = 0
+        last_call_output = 0
         llm_calls = 0
         tool_calls = 0
         _counted_tool_call_ids: set[str] = set()  # dedupe key for tool_calls below
@@ -533,6 +544,10 @@ class ProtoAgentExecutor(AgentExecutor):
                     except Exception:  # noqa: BLE001 — telemetry must never break a turn
                         meta = {}
                 context_meta = {"contextTokens": context_tokens, **meta}
+                if last_call_input > 0:
+                    # What the NEXT request on this thread will roughly cost before
+                    # anything new is added: last prompt + last completion (#2773).
+                    context_meta["projectedTokens"] = last_call_input + last_call_output
             parts, ext_meta = _terminal_parts(
                 body,
                 deltas,
@@ -595,6 +610,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 tool_calls=tool_calls,
                 models=list(models),
                 tool_durations=durations,
+                context_tokens=context_tokens,
                 origin=_origin,
                 trigger=_trigger,
                 priority=_priority,
@@ -718,6 +734,8 @@ class ProtoAgentExecutor(AgentExecutor):
                         had_usage = True
                         llm_calls += 1
                         context_tokens = max(context_tokens, int(payload.get("input_tokens", 0) or 0))
+                        last_call_input = int(payload.get("input_tokens", 0) or 0)
+                        last_call_output = int(payload.get("output_tokens", 0) or 0)
                         usage["input_tokens"] += int(payload.get("input_tokens", 0) or 0)
                         usage["output_tokens"] += int(payload.get("output_tokens", 0) or 0)
                         usage["cache_read_input_tokens"] += int(payload.get("cache_read_input_tokens", 0) or 0)
