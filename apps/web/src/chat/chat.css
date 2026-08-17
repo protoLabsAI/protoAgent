@@ -646,7 +646,7 @@
   pointer-events: none;
 }
 
-/* Gentle fade-in on newly rendered streaming content (#2771). No JS, no bookkeeping:
+/* Gentle fade-in on newly rendered streaming content (#2770). No JS, no bookkeeping:
    a CSS animation runs ONCE per DOM node lifetime, so the browser itself is the ledger —
    an element that mounts mid-stream (a new paragraph, list item, table row, the hoisted
    footnote section) fades in once, and nodes React keeps across re-renders never
