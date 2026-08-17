@@ -201,6 +201,18 @@ prompt_cache:
 
 **When to enable `warm`:** sporadic but latency-sensitive traffic on the `1h` tier — the ~1-token ping per interval is cheap relative to a cold miss on a multi-thousand-token prefix while a user waits. Leave it **off** for steady traffic (the cache stays warm on its own — warming is then pure cost) and for providers where the zero-hit warning fired (nothing to warm). It runs as its own asyncio task (started/stopped with the server), **not** through the scheduler — the scheduler fires full agent turns, the wrong primitive for a keep-alive.
 
+## `pruning`
+
+In-history tool-result pruning (#2782, ADR 0101 D3/D4) — the near-lossless relief step that runs **before** compaction's lossy summarize. At `at_fraction` of the model's context window (chars÷4 estimate; a fixed conservative floor when the gateway reports no window), tool results older than the newest `keep_messages` are rewritten to bounded head + omission marker + bounded tail, in **one batched pass** so the rolling history cache breakpoints (#2777) take a single miss instead of one per call. Replacement is by message id, so tool-call pairing survives; the marker says the middle is gone and to re-run the tool if needed. A pass here often keeps the 0.8 compaction valve from firing at all.
+
+```yaml
+pruning:
+  enabled: true       # on by default
+  at_fraction: 0.6    # prune at 60% of the window — before compaction's 0.8
+  keep_messages: 20   # the newest N messages are never touched
+  min_chars: 4000     # results smaller than this aren't worth a marker
+```
+
 ## `compaction`
 
 Wires langchain's `SummarizationMiddleware` to summarize old history near the context limit (enables long-horizon runs; we otherwise only cap via `max_iterations`). Opt-in.

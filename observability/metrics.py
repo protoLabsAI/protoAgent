@@ -20,6 +20,7 @@ _llm_cache_tokens = None
 _llm_cost = None
 _tools_deferred = None
 _compactions = None
+_prunings = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
@@ -52,7 +53,7 @@ def _prefix() -> str:
 
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
-    global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
+    global _tools_deferred, _compactions, _prunings, _tool_calls, _tool_latency, _active_sessions
     global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
     global _plugin_lifecycle_latency, _knowledge_op_latency
 
@@ -94,6 +95,10 @@ def init():
         _compactions = Counter(
             f"{p}_compactions_total",
             "History-compaction (summarization) events (ADR 0006)",
+        )
+        _prunings = Counter(
+            f"{p}_tool_results_pruned_total",
+            "Tool results pruned to head+tail stubs at context pressure (#2782, ADR 0101)",
         )
         _tool_calls = Counter(
             f"{p}_tool_calls_total",
@@ -227,6 +232,14 @@ def record_compaction():
     fires + how often. Emitted from CountingSummarizationMiddleware."""
     if _enabled and _compactions is not None:
         _compactions.inc()
+
+
+def record_pruning(results: int = 1):
+    """Count tool results pruned to head+tail stubs (#2782, ADR 0101 D3) —
+    proves the prune-before-summarize lever fires. Emitted from
+    ToolResultPrunerMiddleware, one increment per rewritten result."""
+    if _enabled and _prunings is not None:
+        _prunings.inc(results)
 
 
 def record_a2a_turn(state: str, duration_s: float | None = None):

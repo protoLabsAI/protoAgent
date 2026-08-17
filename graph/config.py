@@ -521,6 +521,15 @@ class LangGraphConfig:
     compaction_enabled: bool = True
     compaction_trigger: str = "fraction:0.8"
     compaction_keep_messages: int = 20
+    # In-history tool-result pruning (#2782, ADR 0101 D3) — the near-lossless
+    # step BEFORE compaction's lossy summarize: at ``at_fraction`` of the model's
+    # context window, tool results older than the newest ``keep_messages`` are
+    # rewritten to head+tail stubs in one batched pass. See
+    # graph/middleware/tool_result_pruner.py for the full mechanics.
+    pruning_enabled: bool = True
+    pruning_at_fraction: float = 0.6
+    pruning_keep_messages: int = 20
+    pruning_min_chars: int = 4000
     compaction_model: str = ""  # blank = summarize with the main model
 
     # Deferred tools (ADR 0005 #3) — progressive tool disclosure for high tool
@@ -1431,6 +1440,10 @@ class LangGraphConfig:
             compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
+            pruning_enabled=data.get("pruning", {}).get("enabled", cls.pruning_enabled),
+            pruning_at_fraction=data.get("pruning", {}).get("at_fraction", cls.pruning_at_fraction),
+            pruning_keep_messages=data.get("pruning", {}).get("keep_messages", cls.pruning_keep_messages),
+            pruning_min_chars=data.get("pruning", {}).get("min_chars", cls.pruning_min_chars),
             compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),

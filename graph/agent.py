@@ -176,6 +176,27 @@ def _build_middleware(
     if config.memory_middleware:
         middleware.append(SessionSummaryMiddleware(knowledge_store))
 
+    # In-history tool-result pruning (#2782, ADR 0101 D3/D4) — registered BEFORE
+    # compaction on purpose: relief has an order (prune near-lossless, THEN
+    # summarize lossy), and before_model hooks run in registration order, so a
+    # pruning pass at 0.6 of the window often keeps the 0.8 valve from firing.
+    if getattr(config, "pruning_enabled", True):
+        from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
+        from graph.model_window import context_window_for
+
+        try:
+            _window = context_window_for(config)
+        except Exception:  # noqa: BLE001 — no profile → the middleware's fixed fallback
+            _window = None
+        middleware.append(
+            ToolResultPrunerMiddleware(
+                max_input_tokens=_window,
+                at_fraction=getattr(config, "pruning_at_fraction", 0.6),
+                keep_messages=getattr(config, "pruning_keep_messages", 20),
+                min_chars=getattr(config, "pruning_min_chars", 4000),
+            )
+        )
+
     # Context compaction — summarize old history near the context limit.
     # CountingSummarizationMiddleware adds a Prometheus compaction counter on top
     # of langchain's SummarizationMiddleware (ADR 0006 — proves the lever fires).

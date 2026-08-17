@@ -259,6 +259,42 @@ FIELDS: list[Field] = [
         "Blank = routing.aux_model, then the main model.",
         options_source="slot_models",
     ),
+    # In-history tool-result pruning (#2782, ADR 0101 D3) — same category as
+    # compaction: it is the near-lossless step that runs before summarization.
+    Field(
+        "pruning.enabled",
+        "pruning_enabled",
+        "Prune old tool results",
+        "bool",
+        "Compaction",
+        "At context pressure, rewrite older tool results to head+tail stubs before summarization is considered.",
+    ),
+    Field(
+        "pruning.at_fraction",
+        "pruning_at_fraction",
+        "Pruning trigger (fraction of window)",
+        "number",
+        "Compaction",
+        "0.6 = prune at 60% of the model's context window (before compaction's 0.8 valve).",
+        minimum=0.05,
+        maximum=1.0,
+    ),
+    Field(
+        "pruning.keep_messages",
+        "pruning_keep_messages",
+        "Never prune the last N messages",
+        "number",
+        "Compaction",
+        minimum=0,
+    ),
+    Field(
+        "pruning.min_chars",
+        "pruning_min_chars",
+        "Minimum result size to prune (chars)",
+        "number",
+        "Compaction",
+        minimum=2000,
+    ),
     # ── Goal mode ────────────────────────────────────────────────────────────
     # Goal mode is always on (config default True). The on/off toggle is hidden from
     # the Settings UI; the field stays in FIELDS so existing configs round-trip and the
