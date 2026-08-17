@@ -645,3 +645,31 @@
   color: var(--pl-color-text-muted, #8b8b93);
   pointer-events: none;
 }
+
+/* Gentle fade-in on newly rendered streaming content (#2771). No JS, no bookkeeping:
+   a CSS animation runs ONCE per DOM node lifetime, so the browser itself is the ledger —
+   an element that mounts mid-stream (a new paragraph, list item, table row, the hoisted
+   footnote section) fades in once, and nodes React keeps across re-renders never
+   re-animate. This is what makes it immune to the tree-reorder scrambling that sank the
+   per-word approach (closed PR #2769): there are no offsets to corrupt. Scoped to
+   `.pl-message--streaming` (the DS stamps it only while the message is live), so history
+   loads and settled messages render instantly, animation-free. Block-level elements only,
+   deliberately: inline nodes (strong/em/a) get churned by incomplete-markdown fixups
+   mid-stream and would re-fade as flicker; text appended to an EXISTING paragraph keeps
+   today's behavior. When streaming ends the class drops and any mid-fade element snaps
+   to full opacity — subtle and momentary by design. */
+@media (prefers-reduced-motion: no-preference) {
+  .pl-message--streaming .markdown
+    :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, table, tr, dt, dd, img, hr, section) {
+    animation: chat-stream-fade 260ms ease-out;
+  }
+}
+
+@keyframes chat-stream-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
