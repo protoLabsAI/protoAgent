@@ -189,6 +189,9 @@ def _build_middleware(
                 model=summ_model,
                 trigger=_parse_compaction_trigger(config.compaction_trigger),
                 keep=keep,
+                # Archive-first (#2784, ADR 0101 D5): the pre-compaction transcript
+                # lands in the knowledge store before the rewrite is committed.
+                knowledge_store=knowledge_store,
             )
         except ValueError:
             # `fraction:`/`tokens:` triggers need the model's context-window
@@ -204,7 +207,9 @@ def _build_middleware(
                 config.model_name,
                 fallback,
             )
-            mw = CountingSummarizationMiddleware(model=summ_model, trigger=("messages", fallback), keep=keep)
+            mw = CountingSummarizationMiddleware(
+                model=summ_model, trigger=("messages", fallback), keep=keep, knowledge_store=knowledge_store
+            )
         middleware.append(mw)
 
     # Model routing / failover — retry on fallback models (same gateway).
