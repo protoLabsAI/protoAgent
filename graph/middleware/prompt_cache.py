@@ -51,6 +51,14 @@ MIN_CACHEABLE_CHARS = 4096
 # prefix) before the once-per-model "caching isn't engaging" warning fires.
 ZERO_HIT_WARN_AFTER = 3
 
+# Rolling history breakpoints (#2777, ADR 0101 D1): of Anthropic's four
+# cache_control slots, one holds the stable system prefix and up to this many
+# ride the newest markable messages — so call N+1 reads call N's history from
+# cache instead of re-paying the whole thread every round. Two, not three: the
+# second is the belt for a tail that changed between calls (steering, repair),
+# and the spare slot stays free for a future tool-schema breakpoint.
+HISTORY_BREAKPOINTS = 2
+
 
 def _message_text(msg) -> str:
     """Flatten a message's content to text (handles str or content-block list)."""
@@ -113,7 +121,72 @@ class PromptCacheMiddleware(AgentMiddleware):
             # No caching (disabled, or this model rejected blocks): deliver
             # context as plain appended text — universally safe.
             new_sys = sysmsg.model_copy(update={"content": f"{stable}\n\n# Context\n\n{ctx}"})
+            return request.override(system_message=new_sys), cache
+        # Rolling history breakpoints (#2777) — view-only: request.override never
+        # persists, so the checkpointer's stored messages stay clean strings.
+        new_msgs = self._mark_history(request)
+        if new_msgs is not None:
+            return request.override(system_message=new_sys, messages=new_msgs), cache
         return request.override(system_message=new_sys), cache
+
+    # ── rolling history breakpoints (#2777) ──────────────────────────────────
+
+    @staticmethod
+    def _tool_results_markable(request) -> bool:
+        """Whether a ToolMessage can carry a breakpoint on this client.
+
+        Verified empirically for both wire paths: langchain-anthropic lifts a
+        content block's ``cache_control`` onto the tool_result envelope (legal,
+        cache-effective), while langchain-openai's tool converter rebuilds the
+        block list and silently DROPS extra keys — so on the gateway path a
+        tool-message mark would be a no-op and waste a walk slot. Keyed on the
+        client class (capability), never the model name (#2255's lesson).
+        """
+        try:
+            from langchain_anthropic import ChatAnthropic
+
+            return isinstance(getattr(request, "model", None), ChatAnthropic)
+        except Exception:  # noqa: BLE001 — optional import, default to the safe path
+            return False
+
+    def _marked_copy(self, msg):
+        """A copy of ``msg`` with ``cache_control`` on its final text block, or
+        ``None`` when the message has no markable block (empty content, a
+        tool-calls-only assistant step, a trailing thinking/image block)."""
+        cc = self._cache_control()
+        content = getattr(msg, "content", None)
+        if isinstance(content, str) and content:
+            return msg.model_copy(update={"content": [{"type": "text", "text": content, "cache_control": cc}]})
+        if isinstance(content, list) and content:
+            last = content[-1]
+            if isinstance(last, dict) and last.get("type") == "text" and last.get("text"):
+                return msg.model_copy(update={"content": [*content[:-1], {**last, "cache_control": cc}]})
+        return None
+
+    def _mark_history(self, request):
+        """Mark the newest ``HISTORY_BREAKPOINTS`` markable messages, walking
+        from the tail. Returns the new message list, or ``None`` when nothing
+        was marked. Copies only — stored history is never mutated."""
+        from langchain_core.messages import ToolMessage
+
+        msgs = getattr(request, "messages", None)
+        if not msgs:
+            return None
+        tools_ok = self._tool_results_markable(request)
+        out = list(msgs)
+        budget = HISTORY_BREAKPOINTS
+        changed = False
+        for i in range(len(out) - 1, -1, -1):
+            if budget == 0:
+                break
+            if isinstance(out[i], ToolMessage) and not tools_ok:
+                continue  # the mark would be silently dropped on this wire path
+            marked = self._marked_copy(out[i])
+            if marked is not None:
+                out[i] = marked
+                budget -= 1
+                changed = True
+        return out if changed else None
 
     # ── outcome watching (#2255) ─────────────────────────────────────────────
 
