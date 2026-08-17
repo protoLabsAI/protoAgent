@@ -131,7 +131,9 @@ export function ChatMessageView({
             part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
               renderUserText(part.text, key)
             ) : (
-              <Markdown key={key}>{part.text}</Markdown>
+              <Markdown key={key} streaming={streaming}>
+                {part.text}
+              </Markdown>
             );
           const renderInline = (part: ChatPart, i: number) =>
             part.kind === "tools" ? (
@@ -170,7 +172,7 @@ export function ChatMessageView({
             message.role === "user" ? (
               renderUserText(message.content)
             ) : (
-              <Markdown>{message.content}</Markdown>
+              <Markdown streaming={streaming}>{message.content}</Markdown>
             )
           ) : null}
         </>

@@ -6,10 +6,10 @@ import { lazy, Suspense } from "react";
 // raw text in the DS `.pl-markdown` scope (a blink at most; the real renderer then takes over).
 const MarkdownImpl = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
 
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
   return (
     <Suspense fallback={<div className="pl-markdown markdown">{children}</div>}>
-      <MarkdownImpl>{children}</MarkdownImpl>
+      <MarkdownImpl streaming={streaming}>{children}</MarkdownImpl>
     </Suspense>
   );
 }

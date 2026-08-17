@@ -6,6 +6,16 @@ import { rehypeAbsolutizeServerUrls } from "./mediaUrls";
 // own defaults (GFM/sanitize/harden/KaTeX), so the URL rewrite sees the final tree.
 const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
 
+// Streaming token fade (#2769) — streamdown's built-in animate plugin, enabled only while
+// the message is live (`isAnimating`); settled messages render span-free (the plugin drops
+// out of the rehype pipeline entirely, so history/tab-switch renders never animate).
+// Tuning, chosen against our ~24-char / 100ms SSE cadence (see a2a executor _FLUSH_CHARS):
+// a fade LONGER than the inter-chunk interval overlaps successive chunks into one motion
+// (Perplexity runs a 750ms opacity-only word fade for this same reason); the small stagger
+// cascades the ~4-5 words inside one chunk so a chunk reads as a trickle, not a block.
+// Module-level for stable identity — an inline object would re-key the plugin per render.
+const ANIMATED = { animation: "fadeIn", sep: "word", duration: 400, easing: "ease-out", stagger: 25 } as const;
+
 /**
  * Assistant message markdown — the DS `<Markdown>` (`@protolabsai/ui/markdown`, ≥0.48),
  * which owns the brand styling for streamdown's prose AND its interactive chrome (code /
@@ -32,9 +42,9 @@ const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
  * survives. This replaces the console's old `escapeCurrencyDollars` pre-processing (#1983) —
  * the DS ported that exact guard on-by-default. Opt out per the DS `math` prop if ever needed.
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, streaming = false }: { children: string; streaming?: boolean }) {
   return (
-    <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS}>
+    <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS} animated={ANIMATED} isAnimating={streaming}>
       {children}
     </DSMarkdown>
   );
