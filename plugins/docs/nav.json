@@ -806,6 +806,10 @@
           "title": "0101 — Context lifecycle: log, surface, pressure"
         },
         {
+          "path": "adr/0102-the-trajectory-session-log-and-derived-surface.md",
+          "title": "0102 — The trajectory: append-only session log + derived surface"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
