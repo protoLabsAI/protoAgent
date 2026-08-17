@@ -21,7 +21,7 @@ from tests.test_a2a_handler import A2A_HEADERS, _build_app
 # about (#2672 sized the real-world case at 11KB ≈ 48 frames at the old 240).
 _ANSWER = "The quick brown fox jumps over the lazy dog. " * 100
 assert len(_ANSWER) >= 4096
-_FLUSH_CHARS = 60  # mirrors the executor-local constant (a2a_impl/executor.py)
+_FLUSH_CHARS = 24  # mirrors the executor-local constant (a2a_impl/executor.py)
 
 
 async def _fast_dense_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
@@ -67,7 +67,7 @@ async def test_many_small_flushes_never_strand_the_terminal_frames(caplog):
     caplog.set_level(logging.WARNING, logger="a2a_impl.registry")
     # The wire carries ~one append frame per _FLUSH_CHARS of answer (each flush
     # rounds up to a whole 7-char delta, the tail flushes on `done`, plus the
-    # one terminal REPLACE) — so total frames ≈ len/60 within a ±20% band. A
+    # one terminal REPLACE) — so total frames ≈ len/24 within a ±20% band. A
     # regression back to coarse batching (or a per-token flood) breaks the band.
     expected = len(_ANSWER) / _FLUSH_CHARS
     for i in range(8):
@@ -81,3 +81,29 @@ async def test_many_small_flushes_never_strand_the_terminal_frames(caplog):
 
     stuck_warnings = [r.message for r in caplog.records if "still pending" in r.message]
     assert not stuck_warnings, f"teardown grace window was hit: {stuck_warnings}"
+
+
+async def _slow_sparse_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+    # A slow producer whose deltas are far below _FLUSH_CHARS: without the time
+    # floor NOTHING flushes until the terminal (the size check never trips), so
+    # the console shows a blank bubble for the whole turn and then the answer
+    # in one block — the #2766 chunkiness at its worst.
+    import asyncio
+
+    for word in ("alpha ", "bravo ", "charlie ", "delta "):
+        yield ("text", word)
+        await asyncio.sleep(0.15)  # > _FLUSH_INTERVAL_S — each delta ages past the floor
+    yield ("done", "alpha bravo charlie delta ")
+
+
+@pytest.mark.asyncio
+async def test_slow_producer_still_trickles_via_the_time_floor():
+    """Small deltas spaced past _FLUSH_INTERVAL_S each reach the wire as their
+    own frame instead of parking in the buffer until the size threshold."""
+    app = _build_app(_slow_sparse_stream)
+    frame_count, text = await _run_one(app, "slow")
+    assert text == "alpha bravo charlie delta "
+    # 4 deltas, each aged past the floor when the next arrives (and the first
+    # flushes immediately by design) + the terminal REPLACE. Without the time
+    # floor this is 1-2 frames total — the regression this test pins.
+    assert frame_count >= 4, f"only {frame_count} frames — the time floor didn't trip on a slow producer"
