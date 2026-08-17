@@ -802,6 +802,10 @@
           "title": "0100 — Agent archetypes (starter agent types, ratified)"
         },
         {
+          "path": "adr/0101-context-lifecycle-log-surface-pressure.md",
+          "title": "0101 — Context lifecycle: log, surface, pressure"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
