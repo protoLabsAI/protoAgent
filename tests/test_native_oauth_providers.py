@@ -290,13 +290,36 @@ def _mw():
     return ClaudeCodeIdentityMiddleware()
 
 
-def test_identity_prefixes_string_system():
+def test_identity_string_system_becomes_exact_first_block():
+    # Anthropic's OAuth enforcement matches the FIRST BLOCK byte-exactly (#2763) —
+    # a merged "{prefix}\n\n{persona}" string is refused with a generic 429, so a
+    # string system prompt must be CONVERTED to blocks, never string-prepended.
     from langchain_core.messages import SystemMessage
 
     from graph.providers.anthropic_oauth import CLAUDE_CODE_SYSTEM_PREFIX
 
     req = _mw()._transform(_FakeReq(SystemMessage(content="You are Aria.")))
-    assert req.system_message.content.startswith(CLAUDE_CODE_SYSTEM_PREFIX)
+    content = req.system_message.content
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}  # exact, alone
+    assert content[1]["text"] == "You are Aria."
+
+
+def test_identity_repairs_the_old_merged_string_shape():
+    # The old string branch emitted "{prefix}\n\n{persona}" as ONE string — the
+    # exact shape Anthropic now refuses. A prompt already in that shape must be
+    # SPLIT into the exact-block form, not skipped as already-done (skipping is
+    # what kept it failing forever).
+    from langchain_core.messages import SystemMessage
+
+    from graph.providers.anthropic_oauth import CLAUDE_CODE_SYSTEM_PREFIX
+
+    merged = f"{CLAUDE_CODE_SYSTEM_PREFIX}\n\nYou are Aria."
+    req = _mw()._transform(_FakeReq(SystemMessage(content=merged)))
+    content = req.system_message.content
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
+    assert content[1]["text"] == "You are Aria."
 
 
 def test_identity_is_idempotent():
@@ -307,7 +330,10 @@ def test_identity_is_idempotent():
     mw = _mw()
     once = mw._transform(_FakeReq(SystemMessage(content="You are Aria.")))
     twice = mw._transform(once)
-    assert twice.system_message.content.count(CLAUDE_CODE_SYSTEM_PREFIX) == 1
+    content = twice.system_message.content
+    assert content[0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
+    all_text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    assert all_text.count(CLAUDE_CODE_SYSTEM_PREFIX) == 1
 
 
 def test_identity_prepends_block_list():
@@ -319,7 +345,32 @@ def test_identity_prepends_block_list():
     req = _mw()._transform(_FakeReq(SystemMessage(content=blocks)))
     content = req.system_message.content
     assert len(content) == 2
-    assert content[0]["text"] == CLAUDE_CODE_SYSTEM_PREFIX
+    assert content[0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}  # exact — no extra keys
+    assert content[1]["cache_control"] == {"type": "ephemeral"}  # original block untouched
+
+
+def test_identity_splits_a_first_block_that_starts_with_the_line():
+    # A first block that STARTS with the line but carries more text is the other
+    # refused shape — the line must be split out into its own exact block, with
+    # the original block's other keys (cache_control) kept on the REMAINDER.
+    from langchain_core.messages import SystemMessage
+
+    from graph.providers.anthropic_oauth import CLAUDE_CODE_SYSTEM_PREFIX
+
+    blocks = [
+        {
+            "type": "text",
+            "text": f"{CLAUDE_CODE_SYSTEM_PREFIX}\n\nYou are Aria.",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "text", "text": "Volatile context."},
+    ]
+    req = _mw()._transform(_FakeReq(SystemMessage(content=blocks)))
+    content = req.system_message.content
+    assert content[0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
+    assert content[1]["text"] == "You are Aria."
+    assert content[1]["cache_control"] == {"type": "ephemeral"}
+    assert content[2]["text"] == "Volatile context."
 
 
 # ── codex responses-input middleware ────────────────────────────────────────────
