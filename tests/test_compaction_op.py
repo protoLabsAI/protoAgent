@@ -235,3 +235,54 @@ def test_compact_archive_is_searchable_in_a_real_store(tmp_path):
     assert hits, "archived transcript is NOT searchable"
     blob = " ".join(str(h.get("content") or h.get("preview") or "") for h in hits)
     assert "pumpernickel" in blob
+
+
+# ── force mode: the overflow safety valve (#2783, ADR 0101 D4/D5) ─────────────
+
+
+def test_force_compacts_without_a_store():
+    """The thread cannot take another model call — shrinking outranks purity.
+    No store: proceed unarchived, and the summary message SAYS the removed
+    history was not archived (never claim an archive that didn't happen)."""
+    msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
+    g = _FakeGraph(msgs)
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", summarizer=_summ, force=True))
+    assert res["refused"] is False
+    assert res["archived"] is False
+    assert g.updates, "force mode must rewrite"
+    summary_msg = g.updates[0][1]["messages"][1]
+    assert "NOT archived" in summary_msg.content
+
+
+def test_force_compacts_when_summarizer_raises():
+    """Safety valve: a summarizer failure degrades to an honest stub, never a refusal."""
+    msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
+    g = _FakeGraph(msgs)
+    kb = _FakeKnowledge(yields=True)
+    res = asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_raise_summ, force=True))
+    assert res["refused"] is False
+    assert g.updates
+    summary_msg = g.updates[0][1]["messages"][1]
+    assert "No summary is available" in summary_msg.content
+    assert "force-compacted" in summary_msg.content
+
+
+def test_force_still_noops_on_an_already_short_thread():
+    """A refusal the caller must respect: the thread is already tiny, so the
+    overflow has another cause and a retry would hit the same wall."""
+    msgs = [HumanMessage(content="m", id="m0")]
+    g = _FakeGraph(msgs)
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(5), "a2a:s1", "s1", summarizer=_summ, force=True))
+    # A benign no-op, not a refusal — but nothing shrank, which is what the
+    # overflow caller keys on (it requires removed > 0 before retrying).
+    assert res["reason"] == "too_short" and res["removed"] == 0
+    assert g.updates == []
+
+
+def test_default_mode_unchanged_by_the_force_flag():
+    """The manual /compact path (force absent) keeps its strict refusals."""
+    msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
+    g = _FakeGraph(msgs)
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", summarizer=_summ))
+    assert res["refused"] is True and res["reason"] == "no_store"
+    assert g.updates == []

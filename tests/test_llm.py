@@ -382,3 +382,21 @@ async def test_stream_reconnect_propagates_non_transport_errors():
         async for _ in _stream_with_reconnect(make, max_retries=2, sleep=_nosleep):
             pass
     assert state["opens"] == 1  # a non-transport error is never retried
+
+
+def test_context_overflow_classifier():
+    """#2783 / ADR 0101 D4: recognize each provider's overflow phrasing —
+    conservatively (a false positive triggers a destructive force-compaction)."""
+    from graph.llm import is_context_overflow_error
+
+    for text in (
+        "Error code: 400 - {'error': {'code': 'context_length_exceeded', ...}}",
+        "This model's maximum context length is 128000 tokens.",
+        "400: prompt is too long: 210000 tokens > 200000 maximum",
+        "input length and `max_tokens` exceed context limit: 199999 + 4096",
+        "ValidationException: Input is too long for requested model.",
+    ):
+        assert is_context_overflow_error(ValueError(text)), text
+
+    for text in ("rate limited", "connection reset", "invalid api key", "prompt injection detected"):
+        assert not is_context_overflow_error(ValueError(text)), text

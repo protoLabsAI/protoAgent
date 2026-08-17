@@ -20,6 +20,7 @@ _llm_cache_tokens = None
 _llm_cost = None
 _tools_deferred = None
 _compactions = None
+_overflow_recoveries = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
@@ -52,7 +53,7 @@ def _prefix() -> str:
 
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
-    global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
+    global _tools_deferred, _compactions, _overflow_recoveries, _tool_calls, _tool_latency, _active_sessions
     global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
     global _plugin_lifecycle_latency, _knowledge_op_latency
 
@@ -94,6 +95,10 @@ def init():
         _compactions = Counter(
             f"{p}_compactions_total",
             "History-compaction (summarization) events (ADR 0006)",
+        )
+        _overflow_recoveries = Counter(
+            f"{p}_overflow_recoveries_total",
+            "Context-window overflow errors recovered by force-compact + retry (#2783, ADR 0101)",
         )
         _tool_calls = Counter(
             f"{p}_tool_calls_total",
@@ -227,6 +232,14 @@ def record_compaction():
     fires + how often. Emitted from CountingSummarizationMiddleware."""
     if _enabled and _compactions is not None:
         _compactions.inc()
+
+
+def record_overflow_recovery():
+    """Count a context-overflow recovery (#2783, ADR 0101 D4): a provider
+    overflow error was caught, the thread force-compacted, the call retried.
+    Emitted from server/chat.py's overflow handler."""
+    if _enabled and _overflow_recoveries is not None:
+        _overflow_recoveries.inc()
 
 
 def record_a2a_turn(state: str, duration_s: float | None = None):

@@ -1625,6 +1625,43 @@ async def _chat_langgraph_stream_impl(
                 await record_failed_turn(session_id, f"**Error:** {retry_msg}")
                 yield ("error", retry_msg)
             else:
+                # Context overflow (#2783, ADR 0101 D4): before this, NOTHING caught
+                # the overflow class — the raw error surfaced, ModelFallback re-sent
+                # the same oversized prompt elsewhere, and the next turn hit the same
+                # wall. Now: force-compact the thread once (safety-valve semantics —
+                # archive best-effort, loud on failure) and retry a single time. A
+                # second failure falls through to the honest error below, but the
+                # thread is smaller, so the NEXT turn no longer inherits the wall.
+                from graph.llm import is_context_overflow_error
+
+                # The turn's `async with _thread_lock` unwound before this handler ran,
+                # so the compact + retry re-acquire it — the serialize-per-thread
+                # invariant must hold for the rewrite exactly as for a turn.
+                if is_context_overflow_error(e) and await _force_compact_for_overflow(_tid, session_id):
+                    yield (
+                        "tool_start",
+                        "🧹 The request overflowed the model's context window — older history "
+                        "was force-compacted; retrying once.",
+                    )
+                    try:
+                        async with _thread_lock(_tid):
+                            async for frame in _run_native_turn(
+                                "(The previous request overflowed the context window and the earlier "
+                                "history was compacted to a summary. Continue exactly where you left off.)",
+                                session_id,
+                                config,
+                                request_metadata=request_metadata,
+                                resume=False,
+                                images=None,
+                            ):
+                                yield frame
+                        return
+                    except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
+                        log.exception(
+                            "[a2a-stream] overflow retry failed for session=%s: %s", session_id, retry_exc
+                        )
+                        e = retry_exc
+
                 log.exception(
                     "[a2a-stream] unhandled exception for session=%s: %s",
                     session_id,
@@ -1664,6 +1701,63 @@ def _compaction_message(result: dict) -> str:
         f"last {kept}. The agent now carries a summary of the earlier messages plus the recent ones, at a "
         f"fraction of the token cost; the full raw history stays searchable via memory recall."
     )
+
+
+async def _force_compact_for_overflow(thread_id: str, session_id: str) -> bool:
+    """Emergency thread shrink after a context-window overflow (#2783, ADR 0101 D4).
+
+    Runs ``compact_thread`` in safety-valve mode (``force=True`` — archive
+    best-effort, stub summary on summarizer failure; see compaction_op) under
+    the per-thread lock. Returns whether the thread actually shrank — a refusal
+    (e.g. the thread is already tiny, so overflow must have another cause)
+    means retrying would hit the same wall, and the caller surfaces the
+    original error instead.
+    """
+    if STATE.graph is None or STATE.checkpointer is None:
+        return False
+    try:
+        from graph.compaction_op import compact_thread
+
+        async with _thread_lock(thread_id):
+            result = await compact_thread(
+                STATE.graph,
+                STATE.checkpointer,
+                STATE.knowledge_store,
+                STATE.graph_config,
+                thread_id,
+                session_id,
+                force=True,
+                # Tighter than the configured keep: the window is ALREADY blown, so
+                # the retry needs real headroom, not a gentle trim.
+                keep_recent=min(10, int(getattr(STATE.graph_config, "compaction_keep_messages", 20) or 20)),
+            )
+        # `too_short` is a benign no-op (refused=False, removed=0) — but for THIS
+        # caller a thread that didn't shrink means the retry hits the same wall,
+        # so recovery requires actual removal, not merely non-refusal.
+        ok = not result.get("refused") and int(result.get("removed") or 0) > 0
+        if ok:
+            log.warning(
+                "[a2a-stream] overflow recovery compacted thread %s: removed %s message(s), archived=%s",
+                thread_id,
+                result.get("removed"),
+                result.get("archived"),
+            )
+            try:
+                from observability import metrics
+
+                metrics.record_overflow_recovery()
+            except Exception:  # noqa: BLE001 — telemetry must never break recovery
+                pass
+        else:
+            log.warning(
+                "[a2a-stream] overflow recovery could not shrink thread %s (%s) — surfacing the original error",
+                thread_id,
+                result.get("reason"),
+            )
+        return ok
+    except Exception:  # noqa: BLE001 — recovery must never mask the original error
+        log.exception("[a2a-stream] overflow recovery itself failed for thread %s", thread_id)
+        return False
 
 
 async def compact_session(session_id: str, *, request_metadata: dict | None = None) -> dict:

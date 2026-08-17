@@ -113,6 +113,7 @@ async def compact_thread(
     *,
     summarizer=_default_summarizer,
     keep_recent: int | None = None,
+    force: bool = False,
 ) -> dict:
     """Compact ``thread_id``'s live context: archive the raw transcript, summarize,
     then rewrite the checkpoint to ``[summary, *recent_tail]``.
@@ -120,6 +121,13 @@ async def compact_thread(
     Returns ``{summary, archived_chunks, kept, removed, archived, refused,
     reason}``. Honors the never-lossy invariant — a rewrite happens ONLY after the
     raw history is safely archived and a non-empty summary exists.
+
+    ``force=True`` is the SAFETY-VALVE mode (#2783, ADR 0101 D4/D5): a context
+    overflow means the thread cannot take another model call at all, so
+    shrinking it outranks purity — an archive failure (or no store) proceeds
+    with a loud log instead of refusing, and a summarizer failure falls back to
+    a stub summary line. The manual ``/compact`` path never sets this; its
+    strict never-lossy refusal stands.
     """
     if graph is None or checkpointer is None:
         return _refused("no_checkpointer", kept=0)
@@ -135,14 +143,16 @@ async def compact_thread(
     if len(messages) <= keep:
         return _refused("too_short", kept=len(messages))
 
-    # Never-lossy: no archive target ⇒ never touch the checkpoint.
-    if knowledge_store is None:
+    # Never-lossy: no archive target ⇒ never touch the checkpoint. In force
+    # mode the rewrite proceeds unarchived — loudly: the thread is unusable
+    # until it shrinks, and that outranks purity on the safety-valve path.
+    if knowledge_store is None and not force:
         return _refused("no_store", kept=len(messages))
 
     # Archive the FULL transcript (uncapped) so the raw history is recallable —
     # a capped render would silently drop the head we're about to remove.
     full_transcript = render_transcript(messages, max_chars=None)
-    if not full_transcript.strip():
+    if not full_transcript.strip() and not force:
         # Nothing renderable to archive (e.g. an all-tool-noise thread) — refuse
         # rather than drop un-archived history.
         return _refused("empty", kept=len(messages))
@@ -153,38 +163,64 @@ async def compact_thread(
 
     # add_document does blocking gateway work per chunk (embed + optional
     # enrichment) — keep it off the event loop (mirrors conversation_harvest).
-    try:
-        chunk_ids = await asyncio.to_thread(
-            add_document,
-            knowledge_store,
-            full_transcript,
-            domain="conversation",
-            heading=f"Conversation archive ({session_id})",
-            # Agent-derived trust tier (ADR 0069 D8) — the archive is the
-            # operator's own conversation, not ingested third-party content.
-            source_type="conversation",
-            namespace=f"chat-archive:{session_id}",
-        )
-    except Exception:
-        log.exception("[compact] archive failed for thread %s — refusing to rewrite", thread_id)
-        return _refused("archive_error", kept=len(messages))
-    if not chunk_ids:
+    chunk_ids: list = []
+    if knowledge_store is not None and full_transcript.strip():
+        try:
+            chunk_ids = await asyncio.to_thread(
+                add_document,
+                knowledge_store,
+                full_transcript,
+                domain="conversation",
+                heading=f"Conversation archive ({session_id})",
+                # Agent-derived trust tier (ADR 0069 D8) — the archive is the
+                # operator's own conversation, not ingested third-party content.
+                source_type="conversation",
+                namespace=f"chat-archive:{session_id}",
+            )
+        except Exception:
+            if not force:
+                log.exception("[compact] archive failed for thread %s — refusing to rewrite", thread_id)
+                return _refused("archive_error", kept=len(messages))
+            log.exception(
+                "[compact] FORCE: archive failed for thread %s — compacting ANYWAY (overflow "
+                "safety valve, ADR 0101 D5): the summarized-away history is NOT archived",
+                thread_id,
+            )
+            chunk_ids = []
+    if not chunk_ids and not force:
         return _refused("empty_archive", kept=len(messages))
+    if not chunk_ids and force:
+        log.warning(
+            "[compact] FORCE: proceeding without an archive for thread %s — the history "
+            "removed by this rewrite is unrecoverable (overflow safety valve)",
+            thread_id,
+        )
 
     # Summarize the capped tail (cost-bounded classification-grade work); the head
     # beyond the cap is already archived + searchable, not lost.
     try:
         summary = (await summarizer(render_transcript(messages), config)).strip()
     except Exception:
-        # The archive already succeeded; a summarizer failure must not 500 or leave
-        # the checkpoint half-rewritten. Refuse (never-lossy) — the raw history stands
-        # as a searchable archive and the live context is untouched.
-        log.exception("[compact] summarize failed for thread %s — refusing to rewrite", thread_id)
-        return _refused("summary_error", kept=len(messages), archived=True, archived_chunks=len(chunk_ids))
+        if not force:
+            # The archive already succeeded; a summarizer failure must not 500 or leave
+            # the checkpoint half-rewritten. Refuse (never-lossy) — the raw history stands
+            # as a searchable archive and the live context is untouched.
+            log.exception("[compact] summarize failed for thread %s — refusing to rewrite", thread_id)
+            return _refused("summary_error", kept=len(messages), archived=True, archived_chunks=len(chunk_ids))
+        log.exception("[compact] FORCE: summarize failed for thread %s — using a stub summary", thread_id)
+        summary = ""
     if not summary:
-        # We DID archive, but with no summary a rewrite would strip the context
-        # thread — keep the full live context (archive stands as a searchable bonus).
-        return _refused("no_summary", kept=len(messages), archived=True, archived_chunks=len(chunk_ids))
+        if not force:
+            # We DID archive, but with no summary a rewrite would strip the context
+            # thread — keep the full live context (archive stands as a searchable bonus).
+            return _refused("no_summary", kept=len(messages), archived=True, archived_chunks=len(chunk_ids))
+        # Safety valve: the thread MUST shrink. Say honestly that the summary is
+        # missing rather than fake one.
+        summary = (
+            "(No summary is available — the earlier conversation was force-compacted after "
+            "a context-window overflow."
+            + (" The full transcript is archived and searchable via memory recall.)" if chunk_ids else ")")
+        )
 
     cut = _safe_cut_index(messages, keep)
     recent_tail = messages[cut:]
@@ -192,12 +228,13 @@ async def compact_thread(
     from langchain_core.messages import RemoveMessage
     from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+    archived_note = (
+        "the full transcript is archived and searchable via memory recall"
+        if chunk_ids
+        else "the removed history was NOT archived"  # force-mode honesty — never claim an archive that didn't happen
+    )
     summary_msg = HumanMessage(
-        content=(
-            "Here is a summary of the earlier conversation "
-            "(the full transcript is archived and searchable via memory recall):\n\n"
-            f"{summary}"
-        ),
+        content=(f"Here is a summary of the earlier conversation ({archived_note}):\n\n{summary}"),
         additional_kwargs={"lc_source": "compaction"},
     )
     await graph.aupdate_state(
@@ -216,7 +253,9 @@ async def compact_thread(
         "archived_chunks": len(chunk_ids),
         "kept": len(recent_tail),
         "removed": cut,
-        "archived": True,
+        # Honest under force mode: a rewrite CAN proceed unarchived there, and
+        # the result must never claim an archive that didn't happen.
+        "archived": bool(chunk_ids),
         "refused": False,
         "reason": "",
     }

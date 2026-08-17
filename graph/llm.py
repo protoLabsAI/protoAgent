@@ -46,6 +46,30 @@ RETRYABLE_STREAM_ERRORS: tuple[type[BaseException], ...] = (
     *_STALL_ERRORS,  # provider went silent mid-stream (#2305)
 )
 
+# Provider phrasings for "the prompt no longer fits the context window" (#2783,
+# ADR 0101 D4) — matched as lowercase substrings against the error text.
+# Deliberately conservative: a false positive here triggers a destructive
+# force-compaction, a false negative just keeps today's behavior (raw error).
+_CONTEXT_OVERFLOW_MARKERS: tuple[str, ...] = (
+    "context_length_exceeded",  # OpenAI / LiteLLM error code
+    "maximum context length",  # OpenAI message text
+    "prompt is too long",  # Anthropic messages API
+    "exceed context limit",  # Anthropic: "input length and max_tokens exceed context limit"
+    "input is too long for requested model",  # Bedrock Anthropic
+)
+
+
+def is_context_overflow_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is a provider context-window overflow (#2783).
+
+    Nothing caught this class anywhere before: the raw error surfaced,
+    ``ModelFallbackMiddleware`` re-sent the same oversized prompt elsewhere,
+    and the NEXT turn on the thread hit the same wall. Callers use this to
+    force-compact once and retry, turning a dead end into a recovered event.
+    """
+    text = str(exc).lower()
+    return any(marker in text for marker in _CONTEXT_OVERFLOW_MARKERS)
+
 
 def _chunk_has_content(item: object) -> bool:
     """Did this streamed chunk carry anything a consumer has already SEEN?
