@@ -325,13 +325,23 @@ function LocalTab() {
 
   // One-click pip install for declared requires_pip (POST /api/plugins/install-deps).
   // refreshAll refetches the installed inventory, so the missing-deps state clears.
+  // Consent gate (#2743): deps-install re-checks source trust server-side — a plugin
+  // installed before a trust tightening answers needs_ack (nothing pip'd yet); the
+  // shared hook asks, acks, and retries, same as the install flow.
+  const { requestAck: requestDepsAck, ackDialog: depsAckDialog } = useTrustAck({
+    onAckError: (m) => toast({ tone: "error", title: "Couldn't record the trust confirmation", message: m }),
+  });
   const installDeps = useMutation({
     mutationFn: (p: Plugin) => api.installPluginDeps(p.id),
     onSuccess: (res, p) => {
+      if (res.needs_ack) {
+        requestDepsAck({ url: res.source ?? p.id, source: res.source ?? p.id, retry: () => installDeps.mutate(p) });
+        return;
+      }
       toast({
         tone: "success",
         title: "Dependencies installed",
-        message: `${p.name}: ${res.installed.join(", ") || "nothing to install"}.`,
+        message: `${p.name}: ${(res.installed ?? []).join(", ") || "nothing to install"}.`,
       });
       refreshAll();
     },
@@ -487,6 +497,7 @@ function LocalTab() {
 
   return (
     <>
+      {depsAckDialog}
       <PanelHeader
         title="Installed"
         kicker={`${counts.All} installed · ${counts.Loaded} loaded`}

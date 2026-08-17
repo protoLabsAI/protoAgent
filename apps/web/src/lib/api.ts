@@ -2369,7 +2369,9 @@ export const api = {
   // Pip-install a plugin's declared requires_pip (the code-exec step `install`
   // deliberately skips) — previously CLI-only.
   installPluginDeps(id: string) {
-    return request<{ ok: boolean; installed: string[] }>("/api/plugins/install-deps", {
+    // needs_ack (#2743): deps-install re-checks source trust like install does — the
+    // caller renders the same confirm dialog and retries after POST /api/plugins/ack.
+    return request<{ ok?: boolean; installed?: string[]; needs_ack?: boolean; source?: string }>("/api/plugins/install-deps", {
       method: "POST",
       body: { id },
     });

@@ -179,6 +179,27 @@ def register_plugin_routes(app) -> None:
         plugin_id = str((body or {}).get("id", "")).strip()
         if not plugin_id:
             raise HTTPException(status_code=400, detail="id is required")
+        # Consent re-check at deps time (#2743): a plugin installed before a trust
+        # tightening (or under trust_unverified since switched off) must not run pip
+        # without the same one-time "this runs code" ack install itself requires.
+        # Same 200-with-needs_ack contract as the install endpoint — the client
+        # renders the confirm dialog and retries after POST /api/plugins/ack; a 4xx
+        # here would dead-end as an error toast. Skipped when the lock records no
+        # origin (bundled / hand-copied working tree — nothing was fetched).
+        source_url = installer.recorded_source_url(plugin_id)
+        if source_url:
+            from graph.plugins.trust import normalize_source, source_trusted
+
+            cfg = STATE.graph_config
+            if not source_trusted(
+                source_url,
+                official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
+                acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
+                # Literal-True only — same belt-and-braces fail-closed posture as the
+                # install endpoint's gate (this flag WIDENS trust).
+                trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
+            ):
+                return {"needs_ack": True, "source": normalize_source(source_url)}
         try:
             installed = await asyncio.to_thread(installer.install_deps, plugin_id)
         except installer.InstallError as exc:

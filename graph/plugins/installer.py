@@ -158,9 +158,7 @@ def _normalize_lock(data: object) -> dict:
         normalized["plugins"] = plugins
 
     by_id = {
-        plugin_id: e
-        for e in plugins
-        if isinstance(e, dict) and isinstance(plugin_id := e.get("id"), str) and plugin_id
+        plugin_id: e for e in plugins if isinstance(e, dict) and isinstance(plugin_id := e.get("id"), str) and plugin_id
     }
     for key, value in list(normalized.items()):
         if key in {"plugins", "bundles"} or not isinstance(value, dict) or not isinstance(value.get("deps"), list):
@@ -187,9 +185,7 @@ def _read_lock() -> dict:
 
 def _write_lock(data: dict) -> None:
     data = _normalize_lock(data)
-    data["plugins"].sort(
-        key=lambda e: e.get("id", "") if isinstance(e, dict) and isinstance(e.get("id"), str) else ""
-    )
+    data["plugins"].sort(key=lambda e: e.get("id", "") if isinstance(e, dict) and isinstance(e.get("id"), str) else "")
     lock = lock_path()
     lock.parent.mkdir(parents=True, exist_ok=True)
     # Atomic + concurrency-safe: a crash mid-write must not leave a truncated lock
@@ -345,13 +341,43 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     if ref and _SHA_RE.match(ref):
         # A specific commit: full clone (shallow can't reliably check out an
         # arbitrary SHA), then check it out.
-        _git("clone", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S, env=clone_env)
+        _git(
+            "clone",
+            "--no-hardlinks",
+            "--no-recurse-submodules",
+            url,
+            str(dest),
+            timeout=_CLONE_TIMEOUT_S,
+            env=clone_env,
+        )
         _git("checkout", ref, cwd=dest)
     elif ref:
         # A tag or branch: shallow clone of just that ref.
-        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", "--branch", ref, url, str(dest), timeout=_CLONE_TIMEOUT_S, env=clone_env)
+        _git(
+            "clone",
+            "--depth",
+            "1",
+            "--no-hardlinks",
+            "--no-recurse-submodules",
+            "--branch",
+            ref,
+            url,
+            str(dest),
+            timeout=_CLONE_TIMEOUT_S,
+            env=clone_env,
+        )
     else:
-        _git("clone", "--depth", "1", "--no-hardlinks", "--no-recurse-submodules", url, str(dest), timeout=_CLONE_TIMEOUT_S, env=clone_env)
+        _git(
+            "clone",
+            "--depth",
+            "1",
+            "--no-hardlinks",
+            "--no-recurse-submodules",
+            url,
+            str(dest),
+            timeout=_CLONE_TIMEOUT_S,
+            env=clone_env,
+        )
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
@@ -986,6 +1012,16 @@ def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
             )
 
 
+def recorded_source_url(plugin_id: str) -> str:
+    """The plugin's install origin from ``plugins.lock``, or "" when untracked.
+
+    Empty for a bundled/built-in plugin and for a hand-copied working-tree dir —
+    neither has a recorded origin to re-validate, and both are the operator's own
+    deliberate placement rather than a fetched source."""
+    entry = next((e for e in _read_lock().get("plugins") or [] if e.get("id") == plugin_id), None)
+    return str((entry or {}).get("source_url") or "")
+
+
 def install_deps(plugin_id: str) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Optional deps (#1953)
@@ -998,6 +1034,21 @@ def install_deps(plugin_id: str) -> list[str]:
             break
     if manifest is None:
         raise InstallError(f"plugin {plugin_id!r} is not installed.")
+    # Allowlist re-check at deps time (#2743): a plugin installed BEFORE the
+    # operator tightened ``plugins.sources.allow`` could otherwise still pull its
+    # declared deps — "was allowed then" must not imply "is allowed now" for a
+    # code-adjacent step. Same predicate ``install`` enforces, against the CURRENT
+    # allowlist; skipped when there is no recorded origin (bundled / working-tree).
+    # The CONSENT half (source_trusted) deliberately lives in the operator route,
+    # exactly where install's own consent gate lives — the CLI is the operator's
+    # explicit act, and only the console flow can render the ack dialog.
+    source_url = recorded_source_url(plugin_id)
+    if source_url and not _source_allowed(source_url, configured_allowlist()):
+        raise InstallError(
+            f"{plugin_id!r} was installed from {source_url!r}, which is no longer on "
+            f"plugins.sources.allow — re-add the source or reinstall from an allowed origin "
+            f"before installing its deps."
+        )
     deps = list(manifest.requires_pip)
     optional = list(manifest.optional_pip)
     if not deps and not optional:
@@ -1065,8 +1116,7 @@ def install_deps(plugin_id: str) -> list[str]:
                 f"(scope: host), and a frozen app can't provide that: the managed Python runtime only "
                 f"serves execute_code children, and pure-Python wheel deps require Settings ▸ Plugins ▸ "
                 f"'Install unbundled plugin deps'. Enable that, vendor the code, or ship the dep in the "
-                f"app bundle."
-                + (f" [{'; '.join(errors)}]" if errors else "")
+                f"app bundle." + (f" [{'; '.join(errors)}]" if errors else "")
             )
 
         if not targets_tried:
@@ -1207,7 +1257,9 @@ def _ls_remote_sha(source_url: str, ref: str) -> str:
     # the clone/install path; a plain `git ls-remote` of a private repo still failed auth here,
     # surfacing as "check failed" in the plugins panel). Scoped/off-argv/off-disk via GIT_CONFIG_*.
     _auth = _git_auth_env(source_url)
-    out = _git("ls-remote", source_url, *refspecs, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None)
+    out = _git(
+        "ls-remote", source_url, *refspecs, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None
+    )
     sha = peeled = ""
     for line in out.splitlines():
         parts = line.split("\t")
@@ -1254,7 +1306,9 @@ def _ls_remote_tags(source_url: str) -> dict[str, str]:
     if hit is not None and (now - hit[0]) < _LSREMOTE_TTL_S:
         return hit[1]
     _auth = _git_auth_env(source_url)  # authenticate the update-check for a private github repo (#1805 parity)
-    out = _git("ls-remote", "--tags", source_url, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None)
+    out = _git(
+        "ls-remote", "--tags", source_url, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None
+    )
     tags: dict[str, str] = {}
     for line in out.splitlines():
         parts = line.split("\t")
@@ -1397,9 +1451,7 @@ def exclusive_bundle_members(bundle_id: str) -> list[str]:
     if row is None:
         return []
     return [
-        str(pid)
-        for pid in row.get("plugins") or []
-        if _exclusively_owned(str(pid), bundle_id, listed_elsewhere, by_of)
+        str(pid) for pid in row.get("plugins") or [] if _exclusively_owned(str(pid), bundle_id, listed_elsewhere, by_of)
     ]
 
 

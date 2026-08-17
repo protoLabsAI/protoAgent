@@ -186,6 +186,57 @@ def test_install_fetch_only_mode_skips_the_gate(monkeypatch):
     assert "needs_ack" not in body and calls
 
 
+# ── deps-time consent re-check (#2743) — same needs_ack contract as install ──
+
+
+def _deps_posture(monkeypatch, *, source_url, acked=(), trust_unverified=False, official=("github.com/protoLabsAI/*",)):
+    """Real trust posture + a fake installed plugin with a recorded origin."""
+    from graph.plugins import installer
+
+    _wire(
+        monkeypatch,
+        enabled=[],
+        disabled=[],
+        meta=[],
+        official=list(official),
+        acked=list(acked),
+        trust_unverified=trust_unverified,
+    )
+    monkeypatch.setattr(installer, "recorded_source_url", lambda pid: source_url)
+    calls: list[str] = []
+    monkeypatch.setattr(installer, "install_deps", lambda pid: calls.append(pid) or ["dep-a"])
+    return calls
+
+
+def test_install_deps_untrusted_recorded_source_returns_needs_ack_and_runs_no_pip(monkeypatch):
+    calls = _deps_posture(monkeypatch, source_url="https://github.com/rando/thing.git")
+    body = _client().post("/api/plugins/install-deps", json={"id": "demo"}).json()
+    assert body == {"needs_ack": True, "source": "github.com/rando/thing"}
+    assert calls == []  # the gate fires BEFORE install_deps — no pip ran
+
+
+def test_install_deps_acked_source_proceeds(monkeypatch):
+    calls = _deps_posture(
+        monkeypatch, source_url="https://github.com/rando/thing.git", acked=["github.com/rando/thing"]
+    )
+    body = _client().post("/api/plugins/install-deps", json={"id": "demo"}).json()
+    assert body["ok"] is True and body["installed"] == ["dep-a"] and calls == ["demo"]
+
+
+def test_install_deps_official_source_proceeds(monkeypatch):
+    calls = _deps_posture(monkeypatch, source_url="https://github.com/protoLabsAI/notes-plugin.git")
+    body = _client().post("/api/plugins/install-deps", json={"id": "demo"}).json()
+    assert body["ok"] is True and calls == ["demo"]
+
+
+def test_install_deps_no_recorded_origin_skips_the_gate(monkeypatch):
+    # Bundled / hand-copied plugins have no lock origin — nothing was fetched, so
+    # there is nothing to consent to; the gate must not brick their deps install.
+    calls = _deps_posture(monkeypatch, source_url="")
+    body = _client().post("/api/plugins/install-deps", json={"id": "demo"}).json()
+    assert body["ok"] is True and calls == ["demo"]
+
+
 def test_ack_route_persists_exact_source(monkeypatch):
     captured = _wire(
         monkeypatch, enabled=[], disabled=[], meta=[], official=["github.com/protoLabsAI/*"], trust_unverified=False
@@ -600,9 +651,7 @@ def test_uninstall_disabled_plugin_skips_reload_but_flags_lingering_router(monke
     # still purged and the lingering mounted router still needs a restart.
     from graph.plugins import installer, loader
 
-    captured = _wire(
-        monkeypatch, enabled=[], disabled=["boardy"], meta=[], router_keys={("boardy", "/plugins/boardy")}
-    )
+    captured = _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[], router_keys={("boardy", "/plugins/boardy")})
     purged: list[str] = []
     monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: purged.append(pid))
     monkeypatch.setattr(installer, "uninstall", lambda pid, purge=False: {"id": pid, "removed": True})
@@ -736,7 +785,13 @@ def test_installed_carries_bundle_provenance(monkeypatch, tmp_path):
         inst,
         "list_installed",
         lambda: [
-            {"id": "board", "source_url": "https://x/board", "present": False, "tracked": True, "by": "bundle:pm_stack"},
+            {
+                "id": "board",
+                "source_url": "https://x/board",
+                "present": False,
+                "tracked": True,
+                "by": "bundle:pm_stack",
+            },
             {"id": "solo", "source_url": "https://x/solo", "present": False, "tracked": True, "by": "console"},
         ],
     )

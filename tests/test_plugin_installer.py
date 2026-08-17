@@ -241,6 +241,49 @@ def test_install_deps_noop_without_deps(env):
     assert installer.install_deps("demo_ext") == []
 
 
+# ── deps-time allowlist re-check (#2743): "was allowed then" ≠ "is allowed now" ──
+
+
+def test_install_deps_refuses_when_source_left_the_allowlist(env, monkeypatch):
+    # Installed while the allowlist was open; the operator then locks installs down.
+    # The next deps install (pip = code-adjacent) must re-check against the CURRENT
+    # allowlist, not the one that existed at install time.
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    monkeypatch.setattr(installer, "configured_allowlist", lambda: ["github.com/protoLabsAI/*"])
+    with pytest.raises(installer.InstallError, match="no longer on"):
+        installer.install_deps("demo_ext")
+
+
+def test_install_deps_proceeds_when_source_still_allowed(env, monkeypatch):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    # An exact-source allow entry — the same match predicate install itself uses.
+    monkeypatch.setattr(installer, "configured_allowlist", lambda: [str(repo)])
+    assert installer.install_deps("demo_ext") == []  # no deps declared — reaches the noop path
+
+
+def test_install_deps_skips_recheck_without_a_recorded_origin(env, monkeypatch):
+    # A hand-copied working-tree plugin has no lock entry: nothing was fetched, so
+    # there is no origin to re-validate — the allowlist must not brick it.
+    import yaml as _y
+
+    target = installer.live_plugins_dir() / "handmade"
+    target.mkdir(parents=True)
+    (target / "protoagent.plugin.yaml").write_text(
+        _y.safe_dump({"id": "handmade", "name": "Handmade", "version": "0.1.0"})
+    )
+    monkeypatch.setattr(installer, "configured_allowlist", lambda: ["github.com/protoLabsAI/*"])
+    assert installer.install_deps("handmade") == []
+
+
+def test_recorded_source_url_reads_the_lock(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    assert installer.recorded_source_url("demo_ext") == str(repo)
+    assert installer.recorded_source_url("absent") == ""
+
+
 def test_install_deps_missing_plugin(env):
     with pytest.raises(installer.InstallError, match="not installed"):
         installer.install_deps("nope")
@@ -279,7 +322,8 @@ def test_frozen_install_deps_noop_when_already_in_runtime(env, monkeypatch):
     import runtime.python_install as pi
 
     monkeypatch.setattr(
-        pi, "install_requirements_into_managed_runtime",
+        pi,
+        "install_requirements_into_managed_runtime",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not install — already satisfied")),
     )
     assert installer.install_deps("demo_ext") == ["python-docx>=1.1"]
@@ -362,7 +406,8 @@ def test_frozen_install_refuses_without_managed_runtime_and_names_the_install_ro
 
     monkeypatch.setattr(pr, "managed_python_exe", lambda: None)  # runtime absent
     monkeypatch.setattr(
-        pi, "install_requirements_into_managed_runtime",
+        pi,
+        "install_requirements_into_managed_runtime",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not attempt an install without a runtime")),
     )
     with pytest.raises(installer.InstallError, match="POST /api/runtime/python/install"):
@@ -879,11 +924,11 @@ def test_git_auth_env_prefers_github_token_over_gh_token(monkeypatch):
 
 def test_git_auth_env_empty_for_ssh_nongithub_or_no_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "tok")
-    assert installer._git_auth_env("git@github.com:o/r.git") == {}       # ssh → git's own auth
-    assert installer._git_auth_env("https://gitlab.com/o/r") == {}       # non-github
+    assert installer._git_auth_env("git@github.com:o/r.git") == {}  # ssh → git's own auth
+    assert installer._git_auth_env("https://gitlab.com/o/r") == {}  # non-github
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    assert installer._git_auth_env("https://github.com/o/r") == {}       # no token
+    assert installer._git_auth_env("https://github.com/o/r") == {}  # no token
 
 
 def test_clone_authenticates_private_github_via_scoped_env(monkeypatch, tmp_path):
@@ -916,7 +961,11 @@ def test_clone_no_auth_env_without_token(monkeypatch, tmp_path):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     calls = []
-    monkeypatch.setattr(installer, "_git", lambda *a, cwd=None, timeout=None, env=None: calls.append({"args": a, "env": env}) or "b" * 40)
+    monkeypatch.setattr(
+        installer,
+        "_git",
+        lambda *a, cwd=None, timeout=None, env=None: calls.append({"args": a, "env": env}) or "b" * 40,
+    )
     installer._clone("https://github.com/o/r", None, tmp_path / "dest")
     clone = next(c for c in calls if c["args"][0] == "clone")
     assert clone["env"] is None
@@ -953,7 +1002,11 @@ def test_ls_remote_tags_authenticates_private_github(monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("GH_TOKEN", "tok")
     cap = {}
-    monkeypatch.setattr(installer, "_git", lambda *a, cwd=None, timeout=None, env=None: (cap.update(args=a, env=env) or "sha\trefs/tags/v0.1.0"))
+    monkeypatch.setattr(
+        installer,
+        "_git",
+        lambda *a, cwd=None, timeout=None, env=None: cap.update(args=a, env=env) or "sha\trefs/tags/v0.1.0",
+    )
     installer._lstags_cache.clear()
     installer._ls_remote_tags("https://github.com/protoLabsAI/private-plugin")
     assert cap["env"] and cap["env"]["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
@@ -963,7 +1016,9 @@ def test_ls_remote_no_auth_env_without_token(monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     cap = {}
-    monkeypatch.setattr(installer, "_git", lambda *a, cwd=None, timeout=None, env=None: (cap.update(env=env) or "sha\tHEAD"))
+    monkeypatch.setattr(
+        installer, "_git", lambda *a, cwd=None, timeout=None, env=None: cap.update(env=env) or "sha\tHEAD"
+    )
     installer._lsremote_cache.clear()
     installer._ls_remote_sha("https://github.com/protoLabsAI/public-plugin", "")
     assert cap["env"] is None  # no token → plain env, unchanged behavior
