@@ -37,6 +37,13 @@ def _make_middleware(knowledge_store=None):
     return KnowledgeMiddleware(store, top_k=5)
 
 
+def _frame_text(result) -> str:
+    """Composed context of the turn's injected frame message ('' when none) —
+    #2776 moved delivery from the `context` channel to a before_agent frame."""
+    msgs = (result or {}).get("messages") or []
+    return msgs[0].content if msgs else ""
+
+
 def _write_session(directory: str, session_id: str, content: dict) -> str:
     """Write a session summary JSON file and return its path.
 
@@ -219,11 +226,13 @@ def test_load_memory_cache_via_before_model(tmp_path):
 
     mw.load_memory = counting_load
 
-    state = {"messages": []}
+    from langchain_core.messages import HumanMessage
 
-    # Trigger before_model twice
-    mw.before_model(state, runtime=None)
-    mw.before_model(state, runtime=None)
+    state = {"messages": [HumanMessage(content="hi")]}
+
+    # Trigger before_agent twice (the guard needs a fresh human input to compose)
+    mw.before_agent(state, runtime=None)
+    mw.before_agent(state, runtime=None)
 
     # load_memory should only have been called once (cache hit on second call)
     assert call_count["n"] == 1, f"load_memory called {call_count['n']} times — expected 1 (cached)"
@@ -243,15 +252,17 @@ def test_prior_sessions_cache_refreshes_after_ttl(tmp_path):
         return original(memory_path=str(tmp_path))
 
     mw.load_memory = counting_load
-    state = {"messages": []}
+    from langchain_core.messages import HumanMessage
 
-    mw.before_model(state, runtime=None)
+    state = {"messages": [HumanMessage(content="hi")]}
+
+    mw.before_agent(state, runtime=None)
     assert call_count["n"] == 1
     # Simulate the TTL elapsing.
     from graph.middleware.knowledge import _PRIOR_SESSIONS_TTL_S
 
     mw._prior_sessions_loaded_at -= _PRIOR_SESSIONS_TTL_S + 1
-    mw.before_model(state, runtime=None)
+    mw.before_agent(state, runtime=None)
     assert call_count["n"] == 2, "cache did not refresh after TTL elapsed"
 
 
@@ -275,10 +286,13 @@ def test_before_model_injects_prior_sessions(tmp_path):
 
     state = {"messages": [HumanMessage(content="What did we discuss?")]}
 
-    result = mw.before_model(state, runtime=None)
+    result = mw.before_agent(state, runtime=None)
     assert result is not None
-    assert "<prior_sessions>" in result.get("context", "")
-    assert "inject-sess" in result["context"]
+    ctx = _frame_text(result)
+    assert "<prior_sessions>" in ctx
+    assert "inject-sess" in ctx
+    # The legacy channel is cleared, never written (#2776).
+    assert result["context"] == "" and result["context_sections"] == []
 
 
 def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
@@ -299,10 +313,10 @@ def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
     state = {"messages": [HumanMessage(content="continue the goal")]}
 
     # Normal turn injects it; goal-driven turn suppresses it.
-    assert "<prior_sessions>" in (mw.before_model(state, runtime=None) or {}).get("context", "")
+    assert "<prior_sessions>" in _frame_text(mw.before_agent(state, runtime=None))
     with goal_turn():
-        result = mw.before_model(state, runtime=None)
-    ctx = (result or {}).get("context", "")
+        result = mw.before_agent(state, runtime=None)
+    ctx = _frame_text(result)
     assert "<prior_sessions>" not in ctx
     assert "leak-sess" not in ctx
 
@@ -372,11 +386,11 @@ async def test_abefore_model_runs_search_off_event_loop():
     mw = KnowledgeMiddleware(store, top_k=5)
     state = {"messages": [HumanMessage(content="what do you remember?")]}
 
-    result = await mw.abefore_model(state, runtime=None)
+    result = await mw.abefore_agent(state, runtime=None)
 
     # Same behavior as the sync path…
     assert result is not None
-    assert "remembered fact" in result["context"]
+    assert "remembered fact" in _frame_text(result)
     # …but the blocking search ran on a worker thread, not the event loop.
     assert seen_threads, "store.search was never called"
     assert seen_threads[0] is not threading.main_thread()
@@ -557,7 +571,7 @@ def test_envelope_wraps_memory_parts_not_skills(tmp_path):
 
     from langchain_core.messages import HumanMessage
 
-    ctx = mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)["context"]
+    ctx = _frame_text(mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None))
 
     assert ctx.count("<injected_memory>") == 1  # ONE envelope for all memory parts
     env = ctx[ctx.index("<injected_memory>") : ctx.index("</injected_memory>")]
@@ -586,16 +600,16 @@ def test_no_envelope_without_memory_parts():
 
     from langchain_core.messages import HumanMessage
 
-    ctx = (mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None) or {}).get("context", "")
+    ctx = _frame_text(mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None))
     assert "<injected_memory>" not in ctx
     assert "<available_skills>" in ctx
 
 
-def test_before_model_clears_context_when_nothing_composes(tmp_path):
-    """#2774 / ADR 0101: ``context`` is a last-write-wins channel persisted in the
-    checkpointer. When nothing composes, before_model must EXPLICITLY clear it —
-    a None return would leave the previous call's composition in state, and
-    PromptCacheMiddleware would re-inject stale memory attributed as current."""
+def test_before_agent_clears_the_legacy_channel_when_nothing_composes(tmp_path):
+    """#2774 / #2776 / ADR 0101: ``context`` is a last-write-wins channel persisted
+    in the checkpointer. Even with frame delivery, before_agent must EXPLICITLY
+    clear it — a value left by an older build (or a pre-upgrade thread) would be
+    re-delivered by PromptCacheMiddleware forever."""
     from langchain_core.messages import HumanMessage
 
     mw = _make_middleware()  # mock store, zero hits; no prior sessions, no skills
@@ -605,5 +619,45 @@ def test_before_model_clears_context_when_nothing_composes(tmp_path):
     mw._prior_sessions_loaded_at = time.monotonic()
 
     state = {"messages": [HumanMessage(content="hello")]}
-    result = mw.before_model(state, runtime=None)
+    result = mw.before_agent(state, runtime=None)
     assert result == {"context": "", "context_sections": []}
+
+
+def test_before_agent_skips_reentry_without_fresh_input(tmp_path):
+    """A HITL resume / kicker retry re-enters the graph with no new human input —
+    no second frame, no recompose, no state churn (#2776)."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from graph.context_frame import context_frame_message
+
+    mw = _make_middleware()
+    import time
+
+    mw._prior_sessions_cache = "<prior_sessions>x</prior_sessions>"
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    # Last message is the assistant (mid-turn resume) → skip entirely.
+    assert mw.before_agent({"messages": [HumanMessage(content="q"), AIMessage(content="…")]}, None) is None
+    # Last message is already an injected frame → same.
+    assert mw.before_agent({"messages": [context_frame_message("ctx")]}, None) is None
+    # Empty thread → nothing to compose against.
+    assert mw.before_agent({"messages": []}, None) is None
+
+
+def test_frame_message_is_tagged_and_enveloped(tmp_path):
+    """The frame is a HumanMessage tagged machine-injected, wrapped in
+    <injected_context> so the role is unmistakable even without the kwarg."""
+    from langchain_core.messages import HumanMessage
+
+    _write_session(str(tmp_path), "tag-sess", _sample_session("tag-sess"))
+    mw = _make_middleware()
+    import time
+
+    mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    result = mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
+    frame = result["messages"][0]
+    assert frame.additional_kwargs["protoagent_injected_context"] is True
+    assert frame.content.startswith("<injected_context>")
+    assert frame.content.rstrip().endswith("</injected_context>")

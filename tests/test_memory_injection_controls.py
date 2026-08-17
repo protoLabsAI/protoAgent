@@ -112,14 +112,14 @@ def _mw(store, **kw):
 def test_middleware_omits_namespace_when_unconfigured():
     store = _CapturingStore()
     mw = _mw(store)  # inject_namespaces default = unfiltered
-    mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)
+    mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
     assert store.calls and "namespace" not in store.calls[0]
 
 
 def test_middleware_passes_namespace_when_configured():
     store = _CapturingStore()
     mw = _mw(store, inject_namespaces=["projects/alpha", ""])
-    mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)
+    mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
     assert store.calls[0]["namespace"] == ["projects/alpha", ""]
 
 
@@ -130,8 +130,9 @@ def test_middleware_post_filters_for_legacy_backend():
     out_of_scope = {"table": "chunks", "preview": "out", "id": 2, "namespace": "projects/beta"}
     store = _CapturingStore(results=[in_scope, out_of_scope], accepts_namespace=False)
     mw = _mw(store, inject_namespaces=["projects/alpha"])
-    result = mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)
-    assert "in" in result["context"] and "out" not in result["context"]
+    result = mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
+    ctx = result["messages"][0].content
+    assert "in" in ctx and "out" not in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -174,16 +175,17 @@ def test_incognito_skips_injection_but_keeps_skills(tmp_path):
     mw = _mw(store, skills_index=_FakeSkillsIndex())
     mw._prior_sessions_cache = "<prior_sessions>\n  x\n</prior_sessions>"
 
-    normal = mw.before_model({"messages": [HumanMessage(content="gravity apples")]}, runtime=None)
-    assert "<injected_memory>" in normal["context"]
+    normal = mw.before_agent({"messages": [HumanMessage(content="gravity apples")]}, runtime=None)
+    assert "<injected_memory>" in normal["messages"][0].content
 
-    incog = mw.before_model(
+    incog = mw.before_agent(
         {"messages": [HumanMessage(content="gravity apples")], "incognito": True}, runtime=None
     )
-    assert "<injected_memory>" not in incog["context"]
-    assert "<prior_sessions>" not in incog["context"]
-    assert "hot memory" not in incog["context"]
-    assert "<available_skills>" in incog["context"]  # capability, not memory
+    incog_ctx = incog["messages"][0].content
+    assert "<injected_memory>" not in incog_ctx
+    assert "<prior_sessions>" not in incog_ctx
+    assert "hot memory" not in incog_ctx
+    assert "<available_skills>" in incog_ctx  # capability, not memory
 
 
 @pytest.mark.asyncio
@@ -227,7 +229,8 @@ async def test_incognito_end_to_end_real_graph(tmp_path, monkeypatch):
         {"messages": [HumanMessage(content="hi")], "session_id": "sess-incog", "incognito": True},
         config={"configurable": {"thread_id": "sess-incog"}},
     )
-    assert "<injected_memory>" not in (result.get("context") or "")
+    _msgs = (result or {}).get("messages") or []
+    assert "<injected_memory>" not in (_msgs[0].content if _msgs else "")
     assert not os.listdir(memory_dir), "incognito turn must not persist a session summary"
 
 
@@ -258,10 +261,10 @@ def test_injection_log_records_attributed_ids(tmp_path, monkeypatch):
     rag_id = store.add_chunk("gravity pulls apples")
 
     mw = KnowledgeMiddleware(knowledge_store=store)
-    result = mw.before_model(
+    result = mw.before_agent(
         {"messages": [HumanMessage(content="gravity apples")], "session_id": "sess-now"}, runtime=None
     )
-    assert "<injected_memory>" in result["context"]
+    assert "<injected_memory>" in result["messages"][0].content
 
     rows = injection_log().recent()
     assert len(rows) == 1
@@ -286,7 +289,7 @@ def test_injection_record_falls_back_to_tracing_session_id(tmp_path):
     store.add_chunk("deploys go out Fridays", domain="hot")
     mw = _mw(store)
     with patch("observability.tracing.current_session_id", return_value="ctx-sid-9"):
-        mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None)
+        mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
     rows = injection_log().recent()
     assert rows and rows[0]["session_id"] == "ctx-sid-9"
 
@@ -297,7 +300,7 @@ def test_incognito_writes_no_injection_row(tmp_path):
     store = KnowledgeStore(tmp_path / "kb.db")
     store.add_chunk("deploys go out Fridays", domain="hot")
     mw = _mw(store)
-    mw.before_model(
+    mw.before_agent(
         {"messages": [HumanMessage(content="q")], "session_id": "s", "incognito": True}, runtime=None
     )
     assert injection_log().recent() == []

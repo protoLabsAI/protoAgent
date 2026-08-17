@@ -3,24 +3,23 @@
 The delta itself is recorded in :mod:`graph.tool_delta` at graph-build time; this is the
 half that gets it in front of the model. Unconditional — it must NOT ride the knowledge
 middleware, which is switchable (``middleware.knowledge: false``) and would silently take
-capability-awareness with it.
+capability-awareness with it. (It briefly did ride it, as a stated coupling; #2776 ended
+that — this middleware owns the notice end-to-end again.)
 
-**Why it composes instead of assigning.** ``context`` is a plain ``str`` in the state
-schema with no reducer, so two writers clobber. Every ``before_model`` hook is its own
-graph node, chained in order, and LangGraph applies each node's updates before the next
-runs — so this middleware, registered AFTER KnowledgeMiddleware, sees whatever knowledge
-just wrote and prepends to it. Registration order is therefore load-bearing, not
-cosmetic; ``_build_middleware`` says so at the call site.
+**Why a message frame, not the ``context`` channel** (ADR 0101 D2, #2776). The old
+delivery staged the note on ``state["context"]`` for PromptCacheMiddleware to append as a
+second system block. That worked only because KnowledgeMiddleware rewrote the channel
+every model call — once knowledge moved to per-turn frame delivery, a one-shot note left
+on a last-write-wins channel would be re-sent forever. And a per-call system block is
+exactly what ADR 0101 D2 removes: it sits between the cached stable prefix and the
+history, invalidating history caching. A tagged ``HumanMessage`` in the turn's input
+frame is one-shot by construction (it's appended once, to the log), and mid-thread
+HUMAN messages are handled consistently by every provider — the earlier objection here
+was to mid-thread *system* messages, which this is not.
 
-**Why ``context`` and not the system prompt.** ``PromptCacheMiddleware`` treats the
-system message as the stable, cached prefix and ``state["context"]`` as the volatile
-tail. A one-shot note appended to the system prompt would bust the cache for that call
-and risk being baked into a cached prefix — the opposite of one-shot. The volatile tail
-is exactly where a single-turn notice belongs.
-
-**Why not a message.** Appending a ``SystemMessage`` to ``messages`` would be additive
-and collision-free, but it persists in thread history and mid-thread system messages are
-handled inconsistently across providers.
+Delivered at ``before_agent`` (turn entry): a mid-turn change can't reach the running
+graph anyway (hot reload rebuilds the graph; the old one keeps executing), so the next
+turn was always the earliest a delta could land.
 """
 
 from __future__ import annotations
@@ -29,39 +28,28 @@ import logging
 
 from langchain.agents.middleware import AgentMiddleware
 
+from graph.context_frame import context_frame_message
 from graph.tool_delta import format_delta, take_pending_delta
 
 log = logging.getLogger(__name__)
 
-_LABEL = "Toolset changed"
-
 
 def _compose(state) -> dict | None:
-    """Prepend the one-shot notice to whatever context is already staged.
-
-    First in the block on purpose: it's an instruction to re-check a conclusion, and it
-    is worthless after the model has reasoned past it."""
+    """Append the one-shot notice as its own tagged frame message."""
     delta = take_pending_delta()
     if delta is None:
         return None  # the overwhelmingly common case — no allocation, no injection
     note = format_delta(delta)
     if not note:
         return None
-    existing = (state or {}).get("context") or ""
-    sections = list((state or {}).get("context_sections") or [])
-    # Both keys move together, mirroring KnowledgeMiddleware's contract — sections that
-    # describe one context paired with another is how the viewer's budget breakdown lies.
-    return {
-        "context": f"{note}\n\n{existing}" if existing else note,
-        "context_sections": [{"label": _LABEL, "chars": len(note)}, *sections],
-    }
+    return {"messages": [context_frame_message(note)]}
 
 
 class ToolDeltaMiddleware(AgentMiddleware):
     """Inject a one-shot notice when the bound toolset changed since the last turn."""
 
-    def before_model(self, state, runtime) -> dict | None:  # type: ignore[override]
+    def before_agent(self, state, runtime) -> dict | None:  # type: ignore[override]
         return _compose(state)
 
-    async def abefore_model(self, state, runtime) -> dict | None:  # type: ignore[override]
+    async def abefore_agent(self, state, runtime) -> dict | None:  # type: ignore[override]
         return _compose(state)

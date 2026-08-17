@@ -239,11 +239,11 @@ def test_injected_rag_lines_carry_stored_date(tmp_path):
 
     km = KnowledgeMiddleware(knowledge_store=store)
     km._prior_sessions_cache = ""  # skip session loading
-    result = km.before_model({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
+    result = km.before_agent({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
     assert result is not None
     # The stored date leads the hit's metadata suffix; the trust tier label
     # rides the same parens (ADR 0069 D8).
-    assert f"(stored {stored_date};" in result["context"]
+    assert f"(stored {stored_date};" in result["messages"][0].content
 
 
 def test_injection_skips_invalidated_chunks(tmp_path):
@@ -253,5 +253,6 @@ def test_injection_skips_invalidated_chunks(tmp_path):
 
     km = KnowledgeMiddleware(knowledge_store=store)
     km._prior_sessions_cache = ""
-    result = km.before_model({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
-    assert result is None or "protolabs/reasoning" not in result.get("context", "")
+    result = km.before_agent({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
+    msgs = (result or {}).get("messages") or []
+    assert not msgs or "protolabs/reasoning" not in msgs[0].content

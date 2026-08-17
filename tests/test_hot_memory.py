@@ -35,16 +35,18 @@ def test_middleware_injects_hot_memory(tmp_path):
     store.add_chunk("deploys go out Fridays", domain="hot", heading="ops")
     km = KnowledgeMiddleware(knowledge_store=store)
     km._prior_sessions_cache = ""  # skip session loading
-    result = km.before_model({"messages": [HumanMessage(content="anything")]}, runtime=None)
+    result = km.before_agent({"messages": [HumanMessage(content="anything")]}, runtime=None)
     assert result is not None
-    assert "Always-on facts (hot memory)" in result["context"]
-    assert "deploys go out Fridays" in result["context"]
+    ctx = result["messages"][0].content  # the turn's injected frame (#2776)
+    assert "Always-on facts (hot memory)" in ctx
+    assert "deploys go out Fridays" in ctx
 
 
 def test_middleware_no_hot_memory_no_block(tmp_path):
     store = KnowledgeStore(tmp_path / "kb.db")
     km = KnowledgeMiddleware(knowledge_store=store)
     km._prior_sessions_cache = ""
-    result = km.before_model({"messages": [HumanMessage(content="hi")]}, runtime=None)
+    result = km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None)
     if result is not None:
-        assert "hot memory" not in result.get("context", "").lower()
+        msgs = result.get("messages") or []
+        assert "hot memory" not in (msgs[0].content.lower() if msgs else "")

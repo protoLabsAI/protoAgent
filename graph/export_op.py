@@ -188,6 +188,17 @@ def render_markdown(
         role = role_of(message)
         if role == "system":  # agent configuration, not conversation
             continue
+        # An injected context frame (#2776) is machinery, not conversation — the
+        # memory/skills/working-state block the runtime hands the model each turn.
+        # Rendered as a one-line marker so the transcript stays honest about what
+        # the model saw without dumping recalled memory into a shareable export
+        # (the injection log holds the id-attributed record).
+        from graph.context_frame import is_context_frame
+
+        if is_context_frame(message):
+            lines.append(f"_[injected context frame — {len(text_of(message) or ''):,} chars of recalled memory / skills / working state]_")
+            lines.append("")
+            continue
         heading = _ROLE_HEADINGS.get(role, role.title() or "Message")
         body = _scrub(text_of(message)).strip()
         calls = tool_calls_of(message)

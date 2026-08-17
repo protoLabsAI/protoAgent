@@ -3,18 +3,17 @@
 Two coupled jobs, both at the `wrap_model_call` boundary (the only place that
 sees the final ModelRequest):
 
-1. **Deliver the volatile context** that `KnowledgeMiddleware.before_model`
-   writes to ``state["context"]`` (retrieved knowledge, learned skills, hot
-   memory). ``create_agent`` builds a *static* system prompt and does **not**
-   read a ``context`` state key — so without this hook that context never
-   reaches the model. We append it to the system message **after** the stable
-   prefix.
+1. **Deliver anything staged on the legacy ``context`` channel.** Since #2776
+   (ADR 0101 D2) the dynamic context layer rides the message stream as a
+   per-turn frame, so this channel is empty on a stock build — the delivery
+   path stays for forks/plugins that write ``state["context"]`` directly, and
+   for threads checkpointed by an older build. When non-empty it appends after
+   the stable prefix, exactly as before.
 
 2. **Cache the stable prefix.** We set ``cache_control`` on the stable
    system-prompt block (the big, turn-stable prefix: persona + tool guidance).
-   The volatile context block sits *after* that breakpoint, so it's delivered
-   to the model but never invalidates the cached prefix — the cache-ordering
-   discipline every reference agent uses.
+   With the context block gone (#2776), nothing sits between that breakpoint
+   and the message history — the precondition for history caching (#2777).
 
 **Attempt-by-default, fail loud (#2255).** Caching used to be gated on an
 Anthropic-looking model NAME — which silently disabled it for every gateway

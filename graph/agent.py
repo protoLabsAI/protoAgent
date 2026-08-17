@@ -152,11 +152,10 @@ def _build_middleware(
     # an agent that refuses work it can now do is a worse failure than a missed
     # injection, so this must not ride a switchable subsystem.
     #
-    # Registered AFTER KnowledgeMiddleware deliberately — `context` has no reducer, so
-    # it composes with what knowledge just wrote rather than clobbering it. Each
-    # before_model hook is its own graph node and LangGraph applies updates in order,
-    # which is what makes reading the staged value here correct. Moving this earlier
-    # silently drops the knowledge/skills block.
+    # Both this and KnowledgeMiddleware deliver via tagged message frames at
+    # before_agent (#2776, ADR 0101 D2) — additive under the messages reducer, so
+    # registration order is no longer load-bearing; keeping knowledge first just
+    # puts the memory frame ahead of the toolset notice in the turn's input.
     from graph.middleware.tool_delta import ToolDeltaMiddleware
 
     middleware.append(ToolDeltaMiddleware())

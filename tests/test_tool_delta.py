@@ -108,43 +108,45 @@ def _mw():
 def test_no_change_injects_nothing():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a"])
-    assert _mw().before_model({}, None) is None
+    assert _mw().before_agent({}, None) is None
 
 
-def test_a_change_is_injected_into_context():
+def test_a_change_is_injected_as_a_tagged_frame_message():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "board_register_project"])
-    out = _mw().before_model({}, None)
-    assert "board_register_project" in out["context"]
-    assert out["context_sections"][0]["label"] == "Toolset changed"
+    out = _mw().before_agent({}, None)
+    frame = out["messages"][0]
+    assert "board_register_project" in frame.content
+    assert frame.additional_kwargs["protoagent_injected_context"] is True
 
 
-def test_it_COMPOSES_with_staged_context_instead_of_clobbering_it():
-    """`context` is a plain str with no reducer. This middleware runs after
-    KnowledgeMiddleware, so assigning would silently drop the knowledge/skills block —
-    the failure this test exists to catch."""
+def test_it_never_touches_the_context_channel():
+    """#2776 / ADR 0101 D2: delivery moved off the last-write-wins ``context``
+    channel — once nothing rewrites that channel per call, a one-shot note left
+    there would be re-sent forever. A tagged frame message under the additive
+    ``messages`` reducer is one-shot by construction and can't clobber (or be
+    clobbered by) anything another middleware staged."""
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
     staged = {
         "context": "<available_skills>…</available_skills>",
         "context_sections": [{"label": "Skills", "chars": 38}],
     }
-    out = _mw().before_model(staged, None)
-    assert "<available_skills>" in out["context"]  # knowledge survived
-    assert out["context"].index("tools_changed") < out["context"].index("available_skills")
-    assert [s["label"] for s in out["context_sections"]] == ["Toolset changed", "Skills"]
+    out = _mw().before_agent(staged, None)
+    assert "context" not in out and "context_sections" not in out
+    assert "b" in out["messages"][0].content
 
 
 def test_the_injection_is_one_shot_across_turns():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
-    assert _mw().before_model({}, None) is not None
-    assert _mw().before_model({}, None) is None
+    assert _mw().before_agent({}, None) is not None
+    assert _mw().before_agent({}, None) is None
 
 
 async def test_the_async_hook_behaves_identically():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
-    out = await _mw().abefore_model({}, None)
-    assert "b" in out["context"]
-    assert await _mw().abefore_model({}, None) is None
+    out = await _mw().abefore_agent({}, None)
+    assert "b" in out["messages"][0].content
+    assert await _mw().abefore_agent({}, None) is None

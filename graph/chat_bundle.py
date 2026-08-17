@@ -178,6 +178,13 @@ def build_bundle(
         role = role_of(message)
         if role in ("system", "tool"):  # config, and folded into the caller respectively
             continue
+        # Injected context frames (#2776) are runtime machinery, not conversation —
+        # same rule as the Markdown export: never ship recalled memory on a bundle
+        # headed for a public link.
+        from graph.context_frame import is_context_frame
+
+        if is_context_frame(message):
+            continue
         parts: list[dict] = []
         body = _scrub(text_of(message)).strip()
         if body:
