@@ -269,6 +269,99 @@ def _bind_call_timeout(tool, *, server: str, timeout: float) -> None:
         log.debug("[mcp] %s: could not bind a call timeout to %s", server, tool.name)
 
 
+def _cap_result_text(text: str, max_chars: int, *, server: str, tool: str) -> str:
+    """Rewrite an over-cap result to bounded head + omission marker + bounded tail.
+
+    Head-biased (70/30): most tool results front-load the answer, but the tail
+    survives too — closing JSON/user-visible summaries often live there. The
+    marker names the knob and the true size so the model (and an operator reading
+    the transcript) knows exactly what was elided and how to get more.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    head = int(max_chars * 0.7)
+    tail = max_chars - head
+    omitted = len(text) - head - tail
+    marker = (
+        f"\n\n[... {omitted:,} of {len(text):,} chars omitted by protoAgent "
+        f"(mcp.max_result_chars={max_chars}; server '{server}', tool '{tool}') — "
+        f"narrow the arguments to see the elided middle ...]\n\n"
+    )
+    return text[:head] + marker + text[-tail:]
+
+
+def _bind_result_cap(tool, *, server: str, max_chars: int) -> None:
+    """Bound one MCP tool RESULT at ``max_chars`` chars (``<= 0`` disables).
+
+    MCP outputs were the one uncapped lane (#2781, ADR 0101 D3): every built-in
+    tool truncates at call time, but a server returning 500KB put 500KB into
+    history — re-sent verbatim on every later model call for the thread's life.
+    Bound at the binding layer for the same reasons as the call timeout: it
+    covers both session modes, and the rewrite stays a plain string the model
+    reads normally. Only string results (and the string half of a
+    ``(content, artifact)`` pair) are capped — structured block lists pass
+    through untouched rather than risk corrupting a shape the adapter owns.
+    """
+    import functools
+
+    inner = getattr(tool, "coroutine", None)
+    if max_chars <= 0 or inner is None:
+        return
+
+    def _block_text(b):
+        """The cappable text of one list element: a bare string, or a
+        ``{"type": "text", "text": ...}`` content-block dict (the shape the
+        adapter actually emits). None for anything else (images etc.)."""
+        if isinstance(b, str):
+            return b
+        if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str):
+            return b["text"]
+        return None
+
+    def _cap_content(content):
+        """Cap the text shapes the adapter emits: a plain string, or a list of
+        content blocks — capped against ONE shared budget across the blocks, so
+        the result totals ~max_chars regardless of how the server split it.
+        Non-text blocks pass through untouched."""
+        if isinstance(content, str):
+            return _cap_result_text(content, max_chars, server=server, tool=tool.name)
+        if not isinstance(content, list):
+            return content
+        texts = [_block_text(b) for b in content]
+        if sum(len(t) for t in texts if t is not None) <= max_chars:
+            return content
+        out, remaining = [], max_chars
+        for b, t in zip(content, texts):
+            if t is None:
+                out.append(b)
+            elif len(t) <= remaining:
+                out.append(b)
+                remaining -= len(t)
+            else:
+                # The marker itself may overrun a tiny remainder — accepted: it is
+                # ~150 chars of explanation against a 50K default budget.
+                capped = (
+                    _cap_result_text(t, remaining, server=server, tool=tool.name)
+                    if remaining > 0
+                    else f"[... block elided by protoAgent (mcp.max_result_chars={max_chars} exhausted) ...]"
+                )
+                out.append({**b, "text": capped} if isinstance(b, dict) else capped)
+                remaining = 0
+        return out
+
+    @functools.wraps(inner)
+    async def _capped(*args, **kwargs):
+        result = await inner(*args, **kwargs)
+        if isinstance(result, tuple) and len(result) == 2:
+            return (_cap_content(result[0]), result[1])
+        return _cap_content(result)
+
+    try:
+        tool.coroutine = _capped
+    except Exception:  # noqa: BLE001 — best-effort; never block tool registration
+        log.debug("[mcp] %s: could not bind a result cap to %s", server, tool.name)
+
+
 def close_mcp_clients(clients) -> None:
     """Release the handles ``build_mcp_tools`` returned (best-effort, never raises).
 
@@ -355,6 +448,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
 
     timeout = float(getattr(config, "mcp_timeout_seconds", 20.0))
     call_timeout_default = float(getattr(config, "mcp_call_timeout_seconds", 300.0))
+    max_result_chars_default = int(getattr(config, "mcp_max_result_chars", 50_000))
     denylist = set(getattr(config, "mcp_denylist", []) or [])
     core_names = _core_tool_names()
     # Persistent sessions (default ON): one long-lived session per server shared
@@ -402,6 +496,18 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
                 "[mcp] %s: ignoring non-numeric call_timeout %r", name, server.get("call_timeout")
             )
             call_timeout = call_timeout_default
+        # Per-server override for the result cap (#2781), same shape as call_timeout —
+        # a server whose results are legitimately huge (or that must pass through
+        # untouched) sets ``max_result_chars`` on its own entry; ``0`` disables.
+        try:
+            max_result_chars = int(server.get("max_result_chars", max_result_chars_default))
+        except (TypeError, ValueError):
+            log.warning(
+                "[mcp] %s: ignoring non-numeric max_result_chars %r",
+                name,
+                server.get("max_result_chars"),
+            )
+            max_result_chars = max_result_chars_default
 
         try:
             if use_pool:
@@ -470,6 +576,9 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
             except Exception:  # noqa: BLE001 — best-effort; never block tool registration
                 log.debug("[mcp] %s: could not set handle_tool_error on %s", name, tool.name)
             _bind_call_timeout(tool, server=name, timeout=call_timeout)
+            # Applied AFTER the timeout binding so the cap wraps the bounded
+            # coroutine — a timed-out call raises before any capping runs.
+            _bind_result_cap(tool, server=name, max_chars=max_result_chars)
             kept.append(tool)
 
         tools.extend(kept)

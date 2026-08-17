@@ -870,6 +870,14 @@ class LangGraphConfig:
     # narrower arguments, never a failed turn. ``0`` disables it; a single server
     # entry can override with ``call_timeout``.
     mcp_call_timeout_seconds: float = 300.0
+    # Bounds a single MCP tool RESULT (``mcp.max_result_chars``) — the one lane
+    # that had no size cap at all (#2781, ADR 0101 D3): every built-in tool
+    # truncates at call time, but an MCP server returning 500KB put 500KB into
+    # history, re-sent verbatim on every later model call for the thread's life.
+    # Over the cap, the result is rewritten to bounded head + omission marker +
+    # bounded tail so both ends survive. Matches read_file's ``_MAX_READ_CHARS``.
+    # ``0`` disables it; a single server entry can override with ``max_result_chars``.
+    mcp_max_result_chars: int = 50_000
     mcp_denylist: list[str] = field(default_factory=list)
     # Persistent sessions (default ON): each server keeps ONE long-lived MCP
     # session reused across tool calls, auto-reconnected once when it dies.
@@ -1529,6 +1537,7 @@ class LangGraphConfig:
             mcp_call_timeout_seconds=mcp.get(
                 "call_timeout_seconds", cls.mcp_call_timeout_seconds
             ),
+            mcp_max_result_chars=mcp.get("max_result_chars", cls.mcp_max_result_chars),
             mcp_denylist=list(mcp.get("denylist", []) or []),
             mcp_persistent_sessions=bool(
                 mcp.get("persistent_sessions", cls.mcp_persistent_sessions)

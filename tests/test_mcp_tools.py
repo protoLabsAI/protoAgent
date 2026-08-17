@@ -902,3 +902,57 @@ def test_closed_pool_degrades_to_tool_error(tmp_path) -> None:
     close_mcp_clients(clients)  # idempotent
     result = asyncio.run(ping.ainvoke({"text": "b"}))
     assert "Tool error" in str(result)
+
+
+def test_cap_result_text_rewrites_head_marker_tail():
+    """#2781 / ADR 0101 D3: over the cap → bounded head + omission marker + bounded
+    tail, so both ends survive and the marker names the knob, the true size, and
+    the tool — the model knows exactly what was elided and how to get more."""
+    from tools.mcp_tools import _cap_result_text
+
+    text = "H" * 700 + "M" * 1000 + "T" * 300
+    out = _cap_result_text(text, 100, server="fix", tool="fix__big")
+    assert out.startswith("H" * 70)
+    assert out.endswith("T" * 30)
+    assert "chars omitted by protoAgent" in out
+    assert "mcp.max_result_chars=100" in out
+    assert "fix__big" in out
+    assert f"{len(text):,}" in out  # the true size is named
+
+
+def test_cap_result_text_under_cap_and_disabled_pass_through():
+    from tools.mcp_tools import _cap_result_text
+
+    assert _cap_result_text("short", 100, server="s", tool="t") == "short"
+    big = "x" * 500
+    assert _cap_result_text(big, 0, server="s", tool="t") == big  # 0 disables
+
+
+def test_result_cap_bounds_a_live_tool_result(tmp_path) -> None:
+    """The one uncapped lane closes: an MCP result over `mcp.max_result_chars`
+    reaches history as head+marker+tail, not at full size."""
+    cfg, _boot_file = _fixture_server_cfg(tmp_path)
+    cfg.mcp_max_result_chars = 60
+    clients, tools, _meta = build_mcp_tools(cfg)
+    ping = next(t for t in tools if t.name == "fix__ping")
+    try:
+        out = str(asyncio.run(ping.ainvoke({"text": "x" * 400})))
+        assert "chars omitted by protoAgent" in out
+        assert "x" * 400 not in out  # the full body did NOT reach history
+    finally:
+        _pool_of(clients).close(timeout=2.0)
+
+
+def test_result_cap_per_server_override(tmp_path) -> None:
+    """A server whose results are legitimately huge overrides the global cap on
+    its own entry — same shape as call_timeout's override."""
+    cfg, _boot_file = _fixture_server_cfg(tmp_path, max_result_chars=0)
+    cfg.mcp_max_result_chars = 10  # global would trip on every pong in this test
+    clients, tools, _meta = build_mcp_tools(cfg)
+    ping = next(t for t in tools if t.name == "fix__ping")
+    try:
+        out = str(asyncio.run(ping.ainvoke({"text": "y" * 200})))
+        assert "chars omitted" not in out
+        assert "y" * 200 in out  # 0 on the entry = uncapped, despite the global
+    finally:
+        _pool_of(clients).close(timeout=2.0)
