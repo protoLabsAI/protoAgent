@@ -50,6 +50,19 @@ def _build_middleware(
 
     middleware.append(StallGuardMiddleware())
 
+    # Round governance (#2710, ADR 0101 D8) — the stall guard's sibling for a
+    # different failure: not a stuck loop, a LONG one. One re-grounding nudge at
+    # N rounds (adherence decays with round count — the duplicate-card incident),
+    # optional hard cap. No-op until the soft threshold.
+    from graph.middleware.round_governor import RoundGovernorMiddleware
+
+    middleware.append(
+        RoundGovernorMiddleware(
+            nudge_after=getattr(config, "round_nudge_after", 25),
+            hard_cap=getattr(config, "round_hard_cap", 0),
+        )
+    )
+
     # Mid-turn user steering (spike) — fold queued user input into the running
     # turn at the next model call, so a user can redirect ongoing work without
     # stopping the stream. No-op when nothing was injected this turn.

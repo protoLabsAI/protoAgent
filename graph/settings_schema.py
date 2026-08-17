@@ -188,6 +188,28 @@ FIELDS: list[Field] = [
         "runs. Raise it if a genuinely silent step is being killed; 0 disables.",
         minimum=0,
     ),
+    # Round governance (#2710, ADR 0101 D8) — sits with the other per-turn
+    # budgets (max_iterations / stall timeout).
+    Field(
+        "model.round_nudge_after",
+        "round_nudge_after",
+        "Re-grounding nudge (rounds)",
+        "number",
+        "Model & runtime",
+        "Model rounds into a turn before ONE re-check-your-plan note is injected — long "
+        "runs decay adherence to standing instructions. 0 disables.",
+        minimum=0,
+    ),
+    Field(
+        "model.round_hard_cap",
+        "round_hard_cap",
+        "Round hard cap",
+        "number",
+        "Model & runtime",
+        "End the turn with an honest hand-back at this many model rounds. 0 (default) = "
+        "off; max_iterations remains the runaway backstop.",
+        minimum=0,
+    ),
     # ── Favorite models (#1957) ──────────────────────────────────────────────
     Field(
         "model.favorites",

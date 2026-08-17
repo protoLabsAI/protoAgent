@@ -187,6 +187,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "llm_max_retries": 2,
     "max_iterations": 2000,
     "turn_stall_timeout_seconds": 900.0,
+    "round_nudge_after": 25,
+    "round_hard_cap": 0,
     "max_tokens": 32768,
     "media_public": False,
     "media_retention_days": 0,

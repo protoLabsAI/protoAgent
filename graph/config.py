@@ -431,6 +431,13 @@ class LangGraphConfig:
     # single step by a wide margin (an MCP call is separately bounded at 300s by
     # ``mcp.call_timeout_seconds``). ``0`` disables the guard.
     turn_stall_timeout_seconds: float = 900.0
+    # Round governance (#2710, ADR 0101 D8). ``round_nudge_after``: model rounds
+    # into a turn before ONE re-grounding note is injected (long runs decay
+    # instruction adherence — the duplicate-card incident was 21 rounds in);
+    # 0 disables. ``round_hard_cap``: end the turn with an honest hand-back at
+    # this many rounds; 0 (default) = off — max_iterations remains the backstop.
+    round_nudge_after: int = 25
+    round_hard_cap: int = 0
     # Native vision (ADR 0021): set true when `model_name` is image-capable (e.g.
     # protolabs/fast, protolabs/smart). The chat composer then sends attached
     # images as native multimodal parts straight to the model instead of routing
@@ -1435,6 +1442,8 @@ class LangGraphConfig:
             turn_stall_timeout_seconds=model.get(
                 "turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds
             ),
+            round_nudge_after=model.get("round_nudge_after", cls.round_nudge_after),
+            round_hard_cap=model.get("round_hard_cap", cls.round_hard_cap),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),
             top_p=model.get("top_p", cls.top_p),
