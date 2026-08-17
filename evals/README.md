@@ -121,6 +121,26 @@ Two negative assertions (added for the `memory-regression` probes, usable on any
   most** `max` chunks contain the marker (`max` defaults to 0). The store-level
   half of the poisoning replay: the seeded doc counts as 1, so `max: 1` proves
   no *new* memory row carrying the payload was written.
+- `forbidden_tools`: `["…"]` — tools that must **not** fire (audit-log
+  channel). Selective abstention: `expected_tools: []` asserts *no* tool
+  fired at all, while this lets unrelated tools fire and only requires the
+  named ones to stay cold — e.g. a plain calendar question may hit the
+  calendar tool but must not render a full daily brief. An errored attempt
+  still counts as fired: reaching for the tool is the violation.
+
+## Plugin-owned suites (`--tasks-file`)
+
+A plugin repo can ship its own eval cases (same JSON shape) and run them with
+this runner against an instance that has the plugin installed:
+
+```bash
+python -m evals.runner --tasks-file ../cowork-plugin/evals/tasks.json
+```
+
+The file **replaces** the built-in suite for that run — compose with `--tasks`
+to filter within it. Reports land in `evals/results/` either way, tagged with
+the model under test, so `evals/report.py` trends plugin suites alongside the
+core one.
 
 ### Goal-mode cases (`kind: "goal"`)
 

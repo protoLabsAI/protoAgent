@@ -11,6 +11,7 @@ Usage:
     python -m evals.runner                                # all cases
     python -m evals.runner --category tool                # one category
     python -m evals.runner --tasks current_time,memory_ingest
+    python -m evals.runner --tasks-file ../cowork-plugin/evals/tasks.json
     python -m evals.runner --base-url http://host:7870
 
 Cases are described in ``tasks.json``. Each case picks one of three
@@ -290,6 +291,18 @@ async def _run_prompt_case(
             if not passed:
                 problems.append(detail)
 
+        # "These tools must NOT fire" — selective abstention (unrelated tools
+        # may legitimately fire; the named ones must stay cold). No polling:
+        # absence can't be awaited, and the task is already terminal here.
+        forbidden_tools = case.get("forbidden_tools")
+        if forbidden_tools:
+            passed, detail = verify.assert_tools_not_fired(
+                verify.audit_entries_since(since),
+                forbidden_tools,
+            )
+            if not passed:
+                problems.append(detail)
+
         # Text pattern assertions (expected present, forbidden absent).
         problems += _pattern_problems(
             result.text,
@@ -548,6 +561,15 @@ async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
         if not passed_any:
             problems.append(detail_a)
 
+    forbidden_tools = case.get("forbidden_tools")
+    if forbidden_tools:
+        passed_f, detail_f = verify.assert_tools_not_fired(
+            verify.audit_entries_since(since),
+            forbidden_tools,
+        )
+        if not passed_f:
+            problems.append(detail_f)
+
     detail = "; ".join(problems) if problems else f"OK ({duration_ms}ms, {len(text)} chars)"
     return CaseResult(
         cid,
@@ -640,6 +662,12 @@ async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--base-url", default=None)
     p.add_argument("--tasks", default=None, help="comma-separated case IDs")
+    p.add_argument(
+        "--tasks-file",
+        default=None,
+        help="path to a tasks JSON file (default: the built-in evals/tasks.json). "
+        "Lets a plugin repo ship its own eval cases and run them with this runner.",
+    )
     p.add_argument("--category", default=None)
     p.add_argument("--out", default=None)
     p.add_argument(
@@ -649,7 +677,7 @@ async def main():
     )
     args = p.parse_args()
 
-    tasks_path = Path(__file__).parent / "tasks.json"
+    tasks_path = Path(args.tasks_file) if args.tasks_file else Path(__file__).parent / "tasks.json"
     cases = json.loads(tasks_path.read_text())
 
     if args.tasks:

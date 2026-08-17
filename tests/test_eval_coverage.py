@@ -120,6 +120,22 @@ def test_assert_any_tool_requires_success_when_asked():
     assert verify.assert_any_tool_fired(entries, ["task"], require_success=False)[0]
 
 
+def test_assert_tools_not_fired_passes_when_cold():
+    ok, _ = verify.assert_tools_not_fired(_audit("memory_recall", "web_search"), ["show_artifact"])
+    assert ok
+
+
+def test_assert_tools_not_fired_fails_when_forbidden_fired():
+    ok, detail = verify.assert_tools_not_fired(_audit("show_artifact"), ["show_artifact"])
+    assert not ok and "show_artifact" in detail
+
+
+def test_assert_tools_not_fired_counts_errored_attempts():
+    # Reaching for the tool is the violation — an errored attempt still fails.
+    entries = [{"tool": "show_artifact", "success": False}]
+    assert not verify.assert_tools_not_fired(entries, ["show_artifact"])[0]
+
+
 # ── workflow case runner ───────────────────────────────────────────────────────
 
 

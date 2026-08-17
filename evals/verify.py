@@ -137,6 +137,27 @@ def assert_any_tool_fired(
     return False, f"none of {candidates} fired; saw: {dict(fired)}"
 
 
+def assert_tools_not_fired(
+    audit_entries: list[dict],
+    forbidden: list[str],
+) -> tuple[bool, str]:
+    """Confirm none of ``forbidden`` fired — the selective-abstention channel.
+
+    ``expected_tools: []`` asserts *total* abstention; this asserts the named
+    tools stayed cold while unrelated ones legitimately fire — e.g. a plain
+    calendar question may hit the calendar tool but must not render a full
+    daily brief. An errored attempt still counts as fired: the case polices
+    intent, and reaching for the tool is the violation, success or not."""
+    fired: dict[str, int] = {}
+    for e in audit_entries:
+        name = e.get("tool", "?")
+        fired[name] = fired.get(name, 0) + 1
+    hit = [t for t in forbidden if t in fired]
+    if hit:
+        return False, f"forbidden tools fired: {hit}; saw: {fired}"
+    return True, f"saw: {fired}"
+
+
 # ── knowledge store ─────────────────────────────────────────────────────────
 
 
