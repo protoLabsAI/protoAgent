@@ -109,3 +109,21 @@ def test_gateway_subagent_is_unchanged(monkeypatch):
     names = _capture_subagent_middleware(monkeypatch, "openai")
     assert "CodexResponsesInputMiddleware" not in names
     assert "ClaudeCodeIdentityMiddleware" not in names
+
+
+def test_subagent_stack_carries_prompt_cache(monkeypatch):
+    """#2778 / ADR 0101 D1: a subagent's system prompt is static per build, so
+    every delegation paying full uncached input on it was pure waste — the stack
+    now mirrors the lead's PromptCacheMiddleware (same knobs, same watchers)."""
+    names = _capture_subagent_middleware(monkeypatch, "openai")
+    assert "PromptCacheMiddleware" in names, names
+
+
+def test_subagent_prompt_cache_precedes_the_identity_shape(monkeypatch):
+    """Ordering mirrors the lead stack: the provider-shape transform stays
+    innermost/last (it must see the FINAL system message, cache blocks included —
+    it prepends the identity line onto the block list, which is exactly how the
+    lead path composes with caching)."""
+    names = _capture_subagent_middleware(monkeypatch, "anthropic-oauth")
+    assert "PromptCacheMiddleware" in names, names
+    assert names.index("PromptCacheMiddleware") < names.index("ClaudeCodeIdentityMiddleware")

@@ -412,16 +412,30 @@ async def _run_subagent(
     # an aux/per-subagent override may be text-only — those degrade to text.
     from graph.middleware.multimodal_tool import build_multimodal_middleware
 
+    # Prompt caching mirrors the lead stack (#2778, ADR 0101 D1): a subagent's
+    # system prompt is static per build, so every `task`/`task_batch` delegation
+    # paying full uncached input on it was free money left on the table — repeat
+    # delegations to the same subagent type (and every call inside one
+    # delegation's tool loop) now read the prefix from cache. Same knobs as the
+    # lead; the middleware's own denylist/zero-activity watchers apply per model.
+    from graph.middleware.prompt_cache import PromptCacheMiddleware
+
     sub_middleware = [
         TraceContextMiddleware(),
+        PromptCacheMiddleware(
+            enabled=getattr(config, "prompt_cache_enabled", True),
+            ttl=getattr(config, "prompt_cache_ttl", "5m"),
+            force=getattr(config, "prompt_cache_force", False),
+        ),
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
     if getattr(config, "prompt_capture_enabled", False):
-        # #2388 P3: subagent prompts were invisible (P1 was main-loop only). The
-        # subagent stack has no PromptCache, so the whole system message captures
-        # as the stable half with a single labeled section; rows nest under the
-        # delegating tool-call id rather than claiming the turn's task_id.
+        # #2388 P3: subagent prompts were invisible (P1 was main-loop only).
+        # Registered after PromptCache (same ordering rule as the lead stack) so
+        # the capture sees the final assembled system message; the whole prompt
+        # still captures as the stable half with a single labeled section, and
+        # rows nest under the delegating tool-call id rather than the turn's task_id.
         from graph.middleware.prompt_capture import PromptCaptureMiddleware
 
         _sub_prompt = build_subagent_prompt(subagent_type)
