@@ -194,7 +194,7 @@ prompt_cache:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Attach `cache_control` to the stable prefix for every model. Rejection → auto-fallback (per model, per session); silent zero-hit → a once-per-model WARNING. `false` = plain delivery only. |
-| `ttl` | `"5m"` | Cache tier: `5m` (ephemeral) or `1h` (persistent). |
+| `ttl` | profile-aware | Cache tier: `5m` (ephemeral) or `1h` (persistent). Absent, it resolves by profile (#2780, ADR 0101 D7): **`1h` on fleet members and the packaged desktop app** (long-lived agents that idle past 5m between turns — a single avoided prefix re-warm covers the 1h tier's higher write price), `5m` on an interactive dev instance. Explicit config always wins. |
 | `force` | `false` | Trust-the-operator mode: always attach, never auto-fall back (a rejection propagates instead of degrading silently). |
 | `warm.enabled` | `false` | Run a background heartbeat (`graph/cache_warmer.py`) that periodically reproduces the cached system prefix so the **first** request after an idle gap hits a warm cache instead of a full miss. |
 | `warm.interval_seconds` | `3300` | Heartbeat period. Set just under `ttl` (default 55m for the `1h` tier). |

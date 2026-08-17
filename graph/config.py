@@ -303,6 +303,29 @@ def _default_filesystem_allow_run() -> bool:
     return os.environ.get("PROTOAGENT_UI", "").strip().lower() != "none"
 
 
+def _default_prompt_cache_ttl() -> str:
+    """Profile-aware app-default for ``prompt_cache.ttl`` (#2780, ADR 0101 D7).
+
+    The 5m ephemeral tier fits an interactive dev chat, where turns arrive
+    faster than the TTL. Fleet members and the packaged desktop app are
+    long-lived agents that routinely idle past 5m between turns — every re-warm
+    re-pays the full stable prefix uncached, so they default to the 1h
+    persistent tier (Anthropic prices 1h writes at 2x base input vs 1.25x for
+    5m; one avoided re-warm already covers the premium on these profiles).
+
+    Signals, deliberately coarse: a fleet member runs with ``PROTOAGENT_HOME``
+    (its workspace as instance root — ``graph/workspaces/manager.run_exec``);
+    the desktop app is a frozen binary. A standalone instance an operator
+    relocated via ``PROTOAGENT_HOME`` matches too — same long-lived profile,
+    same trade. An explicit ``prompt_cache.ttl`` in config always wins.
+    """
+    import sys
+
+    if getattr(sys, "frozen", False) or os.environ.get("PROTOAGENT_HOME", "").strip():
+        return "1h"
+    return "5m"
+
+
 def _host_scoped_fields():
     """The host-scoped (ADR 0047 ``scope=="host"``) settings fields — the single
     source for both the host-layer filter and the shadow check, so they can't drift."""
@@ -1420,7 +1443,9 @@ class LangGraphConfig:
             enforcement_disallowed_tools=(data.get("enforcement", {}).get("disallowed_tools", [])),
             enforcement_rate_limits=(data.get("enforcement", {}).get("rate_limits", {})),
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
-            prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
+            # Absent (or blank) resolves through the profile-aware default —
+            # 1h for fleet/desktop, 5m interactive (#2780). Explicit always wins.
+            prompt_cache_ttl=(data.get("prompt_cache", {}).get("ttl") or _default_prompt_cache_ttl()),
             prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
             cache_warming_enabled=data.get("prompt_cache", {})
             .get("warm", {})
