@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.137.1",
+    "date": "2026-08-17",
+    "changes": [
+      "The A2A flush-granularity regression test now locks the 60-char frame granularity (#2672).",
+      "The console is on the current design system (#2761).",
+      "The docs site follows your OS colour scheme now, instead of always being dark (#2760).",
+      "anthropic-oauth agents with string-shaped system prompts no longer fail every call with a fake 429 (#2763)."
+    ]
+  },
+  {
     "version": "v0.137.0",
     "date": "2026-08-16",
     "changes": [

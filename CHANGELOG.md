@@ -15,6 +15,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.137.1] - 2026-08-17
+
+### Changed
+- **The A2A flush-granularity regression test now locks the 60-char frame granularity (#2672).**
+  `tests/test_a2a_flush_granularity.py` streamed a 2.7KB answer and only sanity-checked
+  "more than 20 frames" — a silent regression back to coarse batching (or a per-token
+  flood) would still pass. The test now streams a ≥4KB answer through the real
+  `SendStreamingMessage` SSE path and asserts the artifact frame count lands within
+  ±20% of `answer_len / _FLUSH_CHARS`, alongside the existing intact-text and
+  no-teardown-grace-warning checks.
+
+- **The console is on the current design system (#2761).** `apps/web` had been sitting on
+  `@protolabsai/ui@^0.57.0` / `@protolabsai/design@^0.5.1` while published was 0.59.2 / 0.9.1
+  — the last stale DS consumer in the repo, and the one where it matters most, since the
+  console is the surface that ships the theme picker and therefore owns the `[data-theme]`
+  force the design system documents. Everything in the gap is additive, so nothing in the
+  console had to change to accommodate it: `Button` gains a dense `xs` size, `Drawer` gains
+  top/bottom sheet sides (`width` kept as a deprecated alias for `size`), `ThemePanel` gains
+  a DTCG token export and live WCAG contrast guardrails, segmented `Tabs` scroll instead of
+  spilling, and interactive `Tr` gets a focus-visible ring. Verified past CI: typecheck and
+  build clean, 963 tests across 105 files pass, the built console boots rendering a correctly
+  themed DS shell, and theme forcing resolves in both directions on the new tokens.
+
+### Fixed
+- **The docs site follows your OS colour scheme now, instead of always being dark (#2760).**
+  `agent.protolabs.studio/docs` stayed black for light-mode readers while the marketing
+  pages one path segment up adapted — same domain, opposite behaviour. It needed two
+  fixes, either alone being insufficient: `.vitepress/config.mts` set
+  `appearance: "force-dark"`, which the shared theme documents as legacy ("locks to dark,
+  disables light mode"), and `@protolabsai/design` was pinned at `^0.3.0` — a version that
+  predates light mode entirely (it landed in 0.5.0), so there were no light token values
+  to switch to even once appearance allowed it. `appearance` is now `"auto"` (following
+  the OS, plus VitePress's own toggle), and design moves to `^0.9.1` alongside
+  `@protolabsai/vitepress-theme` `^0.3.11`. The two package bumps are deliberately paired:
+  vitepress-theme 0.3.11 pins design 0.9.1 exactly, so bumping the theme alone would have
+  pulled a nested second copy of the token layer while the root stayed on 0.3.x — and
+  `--pl-*` are global custom properties, so whichever stylesheet loads last would decide
+  the palette. Bumping both together deduped the tree instead.
+
+- **`anthropic-oauth` agents with string-shaped system prompts no longer fail every
+  call with a fake 429 (#2763).** Anthropic's OAuth enforcement now requires the
+  Claude Code identity line to be the system prompt's first block **byte-exactly** —
+  a block that merely starts with the line, or the merged `"{line}\n\n{persona}"`
+  string the identity middleware used to emit for string prompts, is refused with a
+  generic `429 rate_limit_error` carrying no rate-limit headers (quota untouched —
+  verified at 7% utilization while every call "rate limited"). Which shape an agent
+  emitted depended on whether its prompt flowed as a string or a block list, which is
+  why some oauth agents worked while others hard-failed on the same account seconds
+  apart. The middleware now always emits the exact-first-block shape: string prompts
+  become block lists, an oversized first block is split (keeping `cache_control` on
+  the remainder), and the old merged shape is repaired rather than skipped as done.
+
 ## [0.137.0] - 2026-08-16
 
 ### Added
