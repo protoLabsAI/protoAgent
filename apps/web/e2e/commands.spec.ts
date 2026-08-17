@@ -36,17 +36,19 @@ test("slash menu opens and lists the client + server commands", async ({ page })
   expect(names.filter((n) => n === "/clear")).toHaveLength(1);
 });
 
-test("a flag-gated command (/compact, ADR 0068) vanishes when its flag is forced off", async ({ page }) => {
+test("the ?flag: override reveals a flag-gated command (/publish, ADR 0068)", async ({ page }) => {
   // The ?flag: query override is the shareable "try this build" layer — here it turns the
-  // chat.compact flag OFF over the mock server's enabled state, so /compact must not list.
-  await page.goto("/app/?flag:chat.compact=off", { waitUntil: "load" });
+  // chat.publish flag ON over its default-off tier, so /publish must list. (/compact was
+  // this test's previous subject; #2785 / ADR 0101 D5 made it generally available.)
+  await page.goto("/app/?flag:chat.publish=on", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.fill("/");
 
   const menu = page.locator(".slash-menu");
   await expect(menu).toBeVisible();
   const names = await menu.locator(".slash-name").allInnerTexts();
-  expect(names).toEqual([...CLIENT_SLASH.filter((n) => n !== "/compact"), ...serverRows()]);
+  expect(names).toContain("/publish");
+  expect(names.filter((n) => n === "/compact")).toHaveLength(1); // un-gated since #2785
 });
 
 test("a chat.publish=off command (#2179 P2, #2683) is absent by default and appears when forced on", async ({ page }) => {
