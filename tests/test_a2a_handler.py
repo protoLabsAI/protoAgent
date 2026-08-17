@@ -518,6 +518,46 @@ async def test_tool_events_surface_as_tool_call_metadata():
 
 
 @pytest.mark.asyncio
+async def test_tool_end_fragment_carries_true_output_size():
+    """#2775: the fragment's `result` is the CAPPED card preview; `outputChars` rides
+    the same extra-key lane as parentToolCallId with the true pre-truncation size, so
+    the console's context-cost chip estimates from reality. Asserted on the RAW
+    URI-keyed fragment — parse_tool_call deliberately returns only the core keys."""
+    import json
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_end", {"id": "t1", "name": "fetch_url", "output": "preview…", "output_chars": 51_337})
+        yield ("done", "ok")
+
+    app = _build_app(stream)
+    fragments = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                frame = json.loads(line[5:].strip())
+                msg = frame.get("result", {}).get("statusUpdate", {}).get("status", {}).get("message")
+                frag = (msg or {}).get("metadata", {}).get(pa.TOOL_CALL_EXT_URI)
+                if frag is not None:
+                    fragments.append(frag)
+
+    completed = next(f for f in fragments if f.get("phase") == "completed")
+    # Proto-JSON round-trips numbers as floats — compare numerically, like durationMs.
+    assert int(completed["outputChars"]) == 51_337
+
+
+@pytest.mark.asyncio
 async def test_errored_tool_end_surfaces_phase_failed():
     """A tool_end flagged error → a phase=\"failed\" tool-call DataPart (the card
     renders the X), carrying the error text. A genuine command failure takes this

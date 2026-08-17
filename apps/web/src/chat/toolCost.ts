@@ -53,8 +53,14 @@ export function approxTokens(text: string | undefined | null): number {
  * climb for the wrong reason. Null for errors too — a failed call's output is a short
  * message, and "cost" is a misleading frame for a failure.
  */
-export function toolCostTokens(call: Pick<ToolCall, "status" | "output">): number | null {
+export function toolCostTokens(call: Pick<ToolCall, "status" | "output" | "outputChars">): number | null {
   if (call.status !== "done") return null;
-  const n = approxTokens(call.output);
+  // Prefer the server's true pre-truncation size (#2775): `output` on the wire is
+  // the card PREVIEW, capped at 800 chars ≈ 200 tokens — strictly below the
+  // display floor, which made this chip unreachable from the preview alone. The
+  // `output` fallback keeps older servers (no outputChars on the fragment) at the
+  // old behavior rather than hiding the chip everywhere.
+  const n =
+    typeof call.outputChars === "number" ? Math.floor(call.outputChars / CHARS_PER_TOKEN) : approxTokens(call.output);
   return n >= MIN_SHOWN_TOKENS ? n : null;
 }

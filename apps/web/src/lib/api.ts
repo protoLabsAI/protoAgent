@@ -534,6 +534,7 @@ function toolEventFromMeta(metadata: ExtMetadata): ToolEvent | null {
         result?: string;
         error?: string;
         parentToolCallId?: string;
+        outputChars?: number;
       }
     | null;
   if (!d) return null;
@@ -544,6 +545,9 @@ function toolEventFromMeta(metadata: ExtMetadata): ToolEvent | null {
     input: d.args,
     // A "failed" end carries the error text in `error`; fall back to it for the body.
     output: d.result ?? d.error,
+    // True pre-truncation result size (#2775) — proto-JSON round-trips numbers as
+    // floats, so coerce back to an int for the chip arithmetic.
+    ...(typeof d.outputChars === "number" ? { outputChars: Math.floor(d.outputChars) } : {}),
     error: d.phase === "failed" || Boolean(d.error),
     // Set only for a subagent's own tool calls → nest under the `task` card by id.
     ...(d.parentToolCallId ? { parentId: d.parentToolCallId } : {}),

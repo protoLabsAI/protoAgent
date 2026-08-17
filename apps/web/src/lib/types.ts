@@ -569,6 +569,9 @@ export type ToolCall = {
   name: string;
   input?: string;
   output?: string;
+  /** True pre-truncation result size in chars (#2775) — `output` is the capped
+   *  wire preview, so the context-cost chip must estimate from this instead. */
+  outputChars?: number;
   status: "running" | "done" | "error";
   /** Client wall-clock when the start frame arrived (ms epoch). */
   startedAt?: number;
@@ -632,6 +635,8 @@ export type ToolEvent = {
   phase: "start" | "end";
   input?: string;
   output?: string;
+  /** True pre-truncation result size in chars, from the wire fragment (#2775). */
+  outputChars?: number;
   error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
   /** id of the enclosing `task` delegation when this is a subagent's own tool call —
    *  set server-side so nesting is explicit (by id), not inferred from frame order. */

@@ -448,6 +448,25 @@ def _coerce_tool_output(value) -> str:
     return _coerce_tool_value(getattr(value, "content", value))
 
 
+def _tool_output_chars(value) -> int:
+    """True size of a tool result BEFORE the preview truncation (#2775).
+
+    The SSE frame's ``output`` is capped at ``_TOOL_PREVIEW_CHARS`` (800 ≈ 200
+    tokens), which is below the console cost chip's own 250-token display floor
+    — estimating from the preview made the #2282 chip mathematically dead. Same
+    coercion as the preview (ToolMessage unwrap, dict/list → JSON), minus the cap.
+    """
+    v = getattr(value, "content", value)
+    if v is None or v == "":
+        return 0
+    if isinstance(v, (dict, list)):
+        try:
+            return len(json.dumps(v, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            pass
+    return len(str(v))
+
+
 def _interrupt_payload(val) -> dict:
     """Shape a LangGraph interrupt value into the ``input-required`` payload the
     A2A layer parks and the console renders. Richer HITL shapes pass through:
@@ -764,6 +783,9 @@ async def _run_turn_stream(
                     "id": getattr(output, "tool_call_id", None) or event.get("run_id") or name,
                     "name": name,
                     "output": coerced,
+                    # True pre-truncation size — the preview above is capped, so the
+                    # console's context-cost estimate must come from this (#2775).
+                    "output_chars": _tool_output_chars(output),
                     "error": getattr(output, "status", None) == "error",
                     "duration_ms": tool_duration_ms,  # #2697 — execution time, on_tool_start→on_tool_end
                     **({"parentId": parent_tool_id} if parent_tool_id else {}),

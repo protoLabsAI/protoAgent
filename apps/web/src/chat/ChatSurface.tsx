@@ -1604,10 +1604,10 @@ function ChatSessionSlot({
                 const durationMs = startedAt !== undefined ? now - startedAt : undefined;
                 const endStatus = evt.error ? "error" : "done";
                 if (idx >= 0) {
-                  calls[idx] = { ...calls[idx], output: evt.output, status: endStatus, durationMs };
+                  calls[idx] = { ...calls[idx], output: evt.output, outputChars: evt.outputChars, status: endStatus, durationMs };
                 } else {
                   // Missed start — treat as a fresh top-level call so it still renders.
-                  calls.push({ id: evt.id, name: evt.name, output: evt.output, status: endStatus });
+                  calls.push({ id: evt.id, name: evt.name, output: evt.output, outputChars: evt.outputChars, status: endStatus });
                   nextParts = addToolRef(message.parts, evt.id);
                 }
               }

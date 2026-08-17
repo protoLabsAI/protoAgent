@@ -75,3 +75,28 @@ def test_previews_are_truncated():
     big = {"query": "x" * 5000}
     assert len(_coerce_tool_value(big)) <= _TOOL_PREVIEW_CHARS
     assert len(_coerce_tool_output("y" * 5000)) <= _TOOL_PREVIEW_CHARS
+
+
+def test_output_chars_reports_true_size_past_the_preview_cap():
+    """#2775: the SSE preview caps at _TOOL_PREVIEW_CHARS (~200 tokens), below the
+    console cost chip's 250-token floor — the chip must estimate from the TRUE size."""
+    from server.chat import _tool_output_chars
+
+    big = "x" * (_TOOL_PREVIEW_CHARS * 10)
+    msg = ToolMessage(content=big, name="fetch_url", tool_call_id="x")
+    assert len(_coerce_tool_output(msg)) == _TOOL_PREVIEW_CHARS  # preview: capped
+    assert _tool_output_chars(msg) == len(big)  # true size: not
+
+
+def test_output_chars_matches_json_coercion_for_structured_results():
+    from server.chat import _tool_output_chars
+
+    value = {"rows": ["a" * 500] * 5}
+    assert _tool_output_chars(value) == len(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def test_output_chars_zero_for_empty():
+    from server.chat import _tool_output_chars
+
+    assert _tool_output_chars("") == 0
+    assert _tool_output_chars(None) == 0

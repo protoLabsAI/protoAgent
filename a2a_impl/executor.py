@@ -911,6 +911,11 @@ def _tool_call_frame(event_type: str, payload: Any) -> tuple[Part | None, dict[s
         # fragment rather than the old DataPart's content.value.
         if payload.get("parentId"):
             meta[pa.TOOL_CALL_EXT_URI]["parentToolCallId"] = str(payload["parentId"])
+        # True pre-truncation result size (#2775) — `result` above is the capped
+        # card preview; the console's context-cost chip needs the real size. Same
+        # extra-key lane as parentToolCallId.
+        if event_type == "tool_end" and isinstance(payload.get("output_chars"), int):
+            meta[pa.TOOL_CALL_EXT_URI]["outputChars"] = payload["output_chars"]
         return None, meta
     if payload:
         return _text_part(str(payload)), None

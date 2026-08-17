@@ -54,3 +54,26 @@ describe("toolCostTokens", () => {
     expect(toolCostTokens({ status: "done", output: undefined })).toBeNull();
   });
 });
+
+describe("toolCostTokens with outputChars (#2775)", () => {
+  it("estimates from the server's true size, not the capped preview", () => {
+    // The real wire: `output` is truncated to 800 chars (~200 tokens, below the
+    // floor) while the actual result was ~12.5K tokens. The chip must show.
+    expect(toolCostTokens({ status: "done", output: "x".repeat(800), outputChars: 50_000 })).toBe(
+      Math.floor(50_000 / CHARS_PER_TOKEN),
+    );
+  });
+
+  it("stays silent when the true size is genuinely small, even with output text present", () => {
+    expect(toolCostTokens({ status: "done", output: "short", outputChars: 40 })).toBeNull();
+  });
+
+  it("outputChars: 0 means a truly empty result — no chip, not a fallback to the preview", () => {
+    expect(toolCostTokens({ status: "done", output: "x".repeat(2000), outputChars: 0 })).toBeNull();
+  });
+
+  it("falls back to the preview length for older servers that don't send outputChars", () => {
+    const big = "x".repeat(MIN_SHOWN_TOKENS * CHARS_PER_TOKEN);
+    expect(toolCostTokens({ status: "done", output: big })).toBe(MIN_SHOWN_TOKENS);
+  });
+});
