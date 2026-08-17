@@ -589,3 +589,21 @@ def test_no_envelope_without_memory_parts():
     ctx = (mw.before_model({"messages": [HumanMessage(content="q")]}, runtime=None) or {}).get("context", "")
     assert "<injected_memory>" not in ctx
     assert "<available_skills>" in ctx
+
+
+def test_before_model_clears_context_when_nothing_composes(tmp_path):
+    """#2774 / ADR 0101: ``context`` is a last-write-wins channel persisted in the
+    checkpointer. When nothing composes, before_model must EXPLICITLY clear it —
+    a None return would leave the previous call's composition in state, and
+    PromptCacheMiddleware would re-inject stale memory attributed as current."""
+    from langchain_core.messages import HumanMessage
+
+    mw = _make_middleware()  # mock store, zero hits; no prior sessions, no skills
+    import time
+
+    mw._prior_sessions_cache = ""
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    state = {"messages": [HumanMessage(content="hello")]}
+    result = mw.before_model(state, runtime=None)
+    assert result == {"context": "", "context_sections": []}

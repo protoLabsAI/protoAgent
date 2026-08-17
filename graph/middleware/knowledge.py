@@ -430,9 +430,14 @@ class KnowledgeMiddleware(AgentMiddleware):
             parts.append(("Working state", working_state))
 
         if not parts:
-            return None
+            # Explicitly CLEAR the channel rather than returning None (#2774,
+            # ADR 0101). ``context`` is a last-write-wins channel persisted in
+            # the checkpointer: a None here would leave the PREVIOUS call's
+            # composition in state, and PromptCacheMiddleware would re-append
+            # it — the model seeing stale injected memory attributed as current.
+            return {"context": "", "context_sections": []}
 
-        # Both keys always move together so a later call that returns None never
+        # Both keys always move together so a call that composes nothing never
         # leaves sections describing one context paired with another.
         return {
             "context": "\n\n".join(text for _label, text in parts),
