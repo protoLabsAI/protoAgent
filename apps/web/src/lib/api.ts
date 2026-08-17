@@ -618,11 +618,14 @@ export function contextFromParts(parts?: RawPart[]): ContextWindow | null {
         maxTokens?: number;
         trigger?: string;
         enabled?: boolean;
+        projectedTokens?: number;
       }
     | null;
   if (!d || typeof d.contextTokens !== "number") return null;
   return {
     contextTokens: d.contextTokens,
+    // Proto-JSON round-trips numbers as floats — floor back for token arithmetic.
+    ...(typeof d.projectedTokens === "number" ? { projectedTokens: Math.floor(d.projectedTokens) } : {}),
     ...(typeof d.compactionAtTokens === "number" ? { compactionAtTokens: d.compactionAtTokens } : {}),
     ...(typeof d.maxTokens === "number" ? { maxTokens: d.maxTokens } : {}),
     ...(typeof d.trigger === "string" ? { trigger: d.trigger } : {}),

@@ -365,6 +365,13 @@ function UsageTip({
       {ctxTokens != null ? (
         <TipRow label="Context" value={`${ctxTokens.toLocaleString()} tokens`} sub="this turn's prompt" />
       ) : null}
+      {context?.projectedTokens != null ? (
+        <TipRow
+          label="Next request"
+          value={`~${context.projectedTokens.toLocaleString()} tokens`}
+          sub="the floor the next message starts from"
+        />
+      ) : null}
       {compaction ? <TipRow label="Compaction" value={compaction} /> : null}
       {usage ? <TipRow label="Output" value={`${usage.outputTokens.toLocaleString()} tokens`} /> : null}
       {usage?.cacheReadTokens ? (
@@ -388,9 +395,11 @@ function UsageTip({
  *  a rich hover card. Honest about scope: `contextTokens` is the live prompt size; the cost is
  *  summed across the turn's calls (see ContextWindow / TurnUsage). */
 function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextWindow }) {
-  // Prefer the true context-window fill (peak prompt); fall back to the summed input only
-  // for history saved before context-v1 shipped.
-  const ctxTokens = context?.contextTokens ?? usage?.inputTokens;
+  // Only the TRUE context-window fill (peak prompt). The old fallback to the turn's
+  // summed input was the wrong axis entirely — a 38-call turn "sums" to millions while
+  // the window sits at a fraction of that — so pre-context-v1 history now shows no
+  // meter rather than a wrong one (#2787, ADR 0101 D6).
+  const ctxTokens = context?.contextTokens;
   const threshold = context?.compactionAtTokens;
   const pct =
     ctxTokens != null && threshold ? Math.min(100, Math.round((ctxTokens / threshold) * 100)) : null;

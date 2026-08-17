@@ -96,3 +96,22 @@ describe("contextFromParts", () => {
     expect(contextFromParts([{ metadata: { mimeType: CONTEXT_MIME }, data: { trigger: "tokens:1" } }])).toBeNull();
   });
 });
+
+describe("contextFromParts projectedTokens (#2787)", () => {
+  it("carries the next-request projection, floored from proto-JSON floats", () => {
+    const ctx = contextFromParts([
+      {
+        metadata: { mimeType: CONTEXT_MIME },
+        data: { contextTokens: 48_000, projectedTokens: 50_100.0 },
+      },
+    ]);
+    expect(ctx).toEqual({ contextTokens: 48_000, projectedTokens: 50_100 });
+  });
+
+  it("omits the projection when an older backend doesn't send it", () => {
+    const ctx = contextFromParts([
+      { metadata: { mimeType: CONTEXT_MIME }, data: { contextTokens: 10 } },
+    ]);
+    expect(ctx).toEqual({ contextTokens: 10 });
+  });
+});

@@ -762,6 +762,9 @@ export type ContextWindow = {
   /** The configured compaction trigger string, for the tooltip (e.g. "tokens:120000"). */
   trigger?: string;
   enabled?: boolean;
+  /** What the NEXT request on this thread starts from (last prompt + completion) —
+   *  a floor, not a promise (#2773, ADR 0101 D6). Absent on pre-#2789 backends. */
+  projectedTokens?: number;
 };
 
 /** Emphasis tone for a local SYSTEM NOTE (a role-"system" message without a `report`) —
@@ -957,6 +960,10 @@ export type TelemetrySummary = {
   p99_duration_ms: number;
   success_rate: number;
   cache_hit_ratio: number;
+  /** Context-fill series (#2773, ADR 0101 D6) — peak/p95 of per-turn context-window
+   *  fill, zero rows excluded. Absent on pre-#2789 backends. */
+  max_context_tokens?: number;
+  p95_context_tokens?: number;
   by_model: TelemetryByModelRow[];
   by_tool: TelemetryByToolRow[];
 };
@@ -982,6 +989,11 @@ export type TelemetryTurn = {
   // Langfuse trace for this turn — empty/absent when tracing was off. Paired
   // with /api/telemetry/recent's `langfuse_trace_url_template` to deep-link.
   trace_id?: string | null;
+  /** Peak single-call prompt size = this turn's context-window fill (#2773).
+   *  0/absent for turns recorded before the column existed. */
+  context_tokens?: number;
+  /** Derived per-turn cache-hit ratio (cache reads / prompt tokens), from recent(). */
+  cache_hit_ratio?: number;
 };
 
 export type TelemetryInsights = {

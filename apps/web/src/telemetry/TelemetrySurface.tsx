@@ -126,6 +126,12 @@ function TelemetryBody() {
               <Metric icon={<Clock size={16} />} label="Latency p95" value={ms(summary.p95_duration_ms)} />
               <Metric icon={<Clock size={16} />} label="Latency p99" value={ms(summary.p99_duration_ms)} />
               <Metric icon={<Layers size={16} />} label="Tokens" value={tokens(summary.total_tokens)} />
+              {summary.p95_context_tokens ? (
+                <Metric icon={<Layers size={16} />} label="Context p95" value={tokens(summary.p95_context_tokens)} />
+              ) : null}
+              {summary.max_context_tokens ? (
+                <Metric icon={<Layers size={16} />} label="Context peak" value={tokens(summary.max_context_tokens)} />
+              ) : null}
               <Metric icon={<Wrench size={16} />} label="Tool calls" value={String(summary.tool_calls)} />
             </div>
 
@@ -181,7 +187,7 @@ function TelemetryBody() {
                 <THead>
                   <Tr>
                     <Th>Ended</Th><Th>Model</Th><Th>Tokens (in→out)</Th>
-                    <Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th><Th>Trace</Th>
+                    <Th>Context</Th><Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th><Th>Trace</Th>
                   </Tr>
                 </THead>
                 <TBody>
@@ -195,7 +201,13 @@ function TelemetryBody() {
                           : ""}
                       </Td>
                       <Td>{tokens(t.input_tokens)}→{tokens(t.output_tokens)}</Td>
-                      <Td>{t.cache_read_input_tokens ? tokens(t.cache_read_input_tokens) : "—"}</Td>
+                      <Td title="Peak single-call prompt size — the context-window fill this turn reached (#2773)">
+                        {t.context_tokens ? tokens(t.context_tokens) : "—"}
+                      </Td>
+                      <Td title={t.cache_hit_ratio != null ? `${Math.round(t.cache_hit_ratio * 100)}% of this turn's prompt tokens were cache reads` : undefined}>
+                        {t.cache_read_input_tokens ? tokens(t.cache_read_input_tokens) : "—"}
+                        {t.cache_hit_ratio ? ` (${Math.round(t.cache_hit_ratio * 100)}%)` : ""}
+                      </Td>
                       <Td>{usd(t.cost_usd)}</Td>
                       <Td>{ms(t.duration_ms)}</Td>
                       <Td>{t.llm_calls}/{t.tool_calls}</Td>
