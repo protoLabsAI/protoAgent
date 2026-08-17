@@ -743,3 +743,25 @@ def test_aside_session_route(monkeypatch):
     body = c.post("/api/chat/sessions/s1/aside", json={"question": "what's the answer?"}).json()
     assert seen == [("s1", "what's the answer?")]
     assert body["found"] is True and body["answer"] == "42"
+
+
+def test_fork_session_route(monkeypatch):
+    # Thin pass-through to server.chat.fork_session (#2803) — forwards the path
+    # session_id, the new_session_id, and the rewind-shaped target spec.
+    import operator_api.chat_routes as cr
+
+    seen: list[tuple] = []
+
+    async def _fake_fork(session_id, new_session_id, **kw):
+        seen.append((session_id, new_session_id, kw.get("content"), kw.get("occurrence")))
+        return {"found": True, "kept": 4, "discarded": 2, "reason": "", "message": "Forked with 4 message(s) of real context."}
+
+    monkeypatch.setattr(cr, "fork_session", _fake_fork)
+    c = _client(monkeypatch)
+    body = c.post(
+        "/api/chat/sessions/s1/fork",
+        json={"new_session_id": "s2", "content": "answer1", "occurrence": 1},
+    ).json()
+    assert seen == [("s1", "s2", "answer1", 1)]
+    assert body["found"] is True and body["kept"] == 4
+    assert "real context" in body["message"]

@@ -1868,6 +1868,18 @@ export const api = {
   // `before: true` = exclusive cut (#2491): the target itself is discarded too —
   // Regenerate rewinds to just before the last user message so its resend REPLACES
   // the turn instead of appending a duplicate pair.
+  forkChatSession(sessionId: string, newSessionId: string, messageId: string, content?: string, occurrence?: number) {
+    return request<{
+      found: boolean;
+      kept: number;
+      discarded: number;
+      reason: string;
+      message: string;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/fork`, {
+      method: "POST",
+      body: { new_session_id: newSessionId, message_id: messageId, content, occurrence },
+    });
+  },
   rewindChatSession(sessionId: string, messageId: string, content?: string, occurrence?: number, before?: boolean) {
     return request<{
       found: boolean;

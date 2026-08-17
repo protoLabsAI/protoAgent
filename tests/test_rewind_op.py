@@ -282,3 +282,101 @@ def test_rewind_before_first_message_empties_the_thread():
     result = asyncio.run(rewind_thread(fake, object(), "a2a:s1", target_content="q1", before=True))
     assert result["found"] is True
     assert result["kept"] == 0 and result["removed"] == 2
+
+
+# ── fork_thread (#2803) — rewind's non-destructive sibling ────────────────────
+
+
+class _ThreadedFakeGraph:
+    """Per-thread state — a fork reads one thread and writes another."""
+
+    def __init__(self, threads):
+        self.threads = {k: list(v) for k, v in threads.items()}
+        self.updates: list = []
+
+    async def aget_state(self, config):
+        tid = config["configurable"]["thread_id"]
+        return SimpleNamespace(values={"messages": list(self.threads.get(tid, []))})
+
+    async def aupdate_state(self, config, update):
+        tid = config["configurable"]["thread_id"]
+        self.updates.append((tid, update))
+        self.threads.setdefault(tid, []).extend(update.get("messages", []))
+
+
+def test_fork_copies_the_prefix_to_a_fresh_thread_and_leaves_the_source_alone():
+    from graph.rewind_op import fork_thread
+
+    g = _ThreadedFakeGraph({"a2a:src": _tool_thread()})
+    res = asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="answer1"))
+    assert res["found"] is True
+    assert res["kept"] == 4 and res["discarded"] == 4
+    # The fork landed on the new thread…
+    assert [m.id for m in g.threads["a2a:dst"]] == ["h1", "a1", "tm1", "a2"]
+    # …and the source kept everything (non-destructive — the whole point).
+    assert len(g.threads["a2a:src"]) == 8
+
+
+def test_fork_respects_the_tool_pair_safe_cut():
+    from graph.rewind_op import fork_thread
+
+    g = _ThreadedFakeGraph({"a2a:src": _tool_thread()})
+    # Target the AIMessage that REQUESTS turn 2's tool call — the naive prefix
+    # would orphan t2, so the cut extends forward over the answering ToolMessage.
+    res = asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_index=5))
+    assert res["found"] is True
+    ids = [m.id for m in g.threads["a2a:dst"]]
+    assert "tm2" in ids  # the answering ToolMessage rode along — no orphaned tool_call
+
+
+def test_fork_refuses_to_clobber_an_existing_thread():
+    from graph.rewind_op import fork_thread
+
+    g = _ThreadedFakeGraph({"a2a:src": _tool_thread(), "a2a:dst": [HumanMessage(content="x", id="z1")]})
+    res = asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="answer1"))
+    assert res["found"] is False and res["reason"] == "target_exists"
+    assert len(g.threads["a2a:dst"]) == 1  # untouched
+
+
+def test_fork_refuses_on_an_empty_source():
+    from graph.rewind_op import fork_thread
+
+    g = _ThreadedFakeGraph({"a2a:src": []})
+    res = asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="x"))
+    assert res["found"] is False and res["reason"] == "empty_thread"
+    assert "a2a:dst" not in g.threads
+
+
+def test_fork_not_found_and_empty_prefix_never_write():
+    from graph.rewind_op import fork_thread
+
+    g = _ThreadedFakeGraph({"a2a:src": _tool_thread()})
+    res = asyncio.run(fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="no such bubble"))
+    assert res["found"] is False and res["reason"] == "not_found"
+
+    # An unanswered tool block at the very start: the safe cut retreats to
+    # nothing, and an EMPTY fork would be the amnesia bug this fixes — refuse.
+    orphan = [
+        AIMessage(content="", id="a1", tool_calls=[{"id": "t1", "name": "search", "args": {}}]),
+        HumanMessage(content="next", id="h1"),
+    ]
+    g2 = _ThreadedFakeGraph({"a2a:src": orphan})
+    res2 = asyncio.run(fork_thread(g2, object(), "a2a:src", "a2a:dst", target_index=0))
+    assert res2["found"] is False and res2["reason"] == "empty_prefix"
+    assert g2.updates == []
+
+
+def test_fork_resolves_the_clicked_occurrence_of_duplicate_content():
+    from graph.rewind_op import fork_thread
+
+    msgs = [
+        HumanMessage(content="q", id="h1"),
+        AIMessage(content="same reply", id="a1"),
+        HumanMessage(content="again", id="h2"),
+        AIMessage(content="same reply", id="a2"),
+    ]
+    g = _ThreadedFakeGraph({"a2a:src": msgs})
+    res = asyncio.run(
+        fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="same reply", occurrence=0)
+    )
+    assert res["found"] is True and res["kept"] == 2  # the FIRST duplicate, as clicked

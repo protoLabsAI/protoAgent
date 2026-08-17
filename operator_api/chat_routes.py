@@ -38,6 +38,7 @@ from server.chat import (
     chat,
     compact_session,
     export_session,
+    fork_session,
     publish_preview,
     publish_session,
     revoke_published_link,
@@ -486,6 +487,26 @@ def register_chat_routes(app, ui: str) -> None:
             # Exclusive cut (#2491): Regenerate discards the last user+assistant
             # pair so its resend REPLACES the turn instead of appending a duplicate.
             before=bool(body.get("before", False)),
+        )
+
+    @app.post("/api/chat/sessions/{session_id}/fork")
+    async def _api_fork_session(session_id: str, body: dict | None = None):
+        """Fork a chat session at a target message (#2803): copy the checkpoint
+        prefix through the target onto ``new_session_id``'s (fresh) thread. The
+        SOURCE is untouched — this is rewind's non-destructive sibling, and it is
+        what makes "Fork from here" real memory instead of a display copy the
+        agent can't see. Body: ``new_session_id`` (required) + the same target
+        spec as /rewind (``message_id`` / ``content``+``occurrence`` / ``index``)."""
+        body = body or {}
+        idx = body.get("index")
+        occ = body.get("occurrence")
+        return await fork_session(
+            session_id,
+            str(body.get("new_session_id") or ""),
+            message_id=body.get("message_id"),
+            index=int(idx) if idx is not None else None,
+            content=body.get("content"),
+            occurrence=int(occ) if occ is not None else None,
         )
 
     @app.post("/api/chat/sessions/{session_id}/steer")

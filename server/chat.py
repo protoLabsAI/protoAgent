@@ -2113,6 +2113,75 @@ async def rewind_session(
     return {**result, "message": _rewind_message(result)}
 
 
+async def fork_session(
+    session_id: str,
+    new_session_id: str,
+    *,
+    message_id: str | None = None,
+    index: int | None = None,
+    content: str | None = None,
+    occurrence: int | None = None,
+    request_metadata: dict | None = None,
+) -> dict:
+    """Fork a chat session at a target message (#2803): copy the checkpoint
+    prefix through the target onto ``new_session_id``'s thread, leaving the
+    source untouched — so the forked tab's agent actually REMEMBERS the branch
+    point instead of starting amnesiac behind a seeded-looking transcript.
+
+    Both thread locks are taken in sorted order (never a lock cycle), so the
+    fork can't race a live turn on either thread.
+    """
+    base = {"found": False, "kept": 0, "discarded": 0}
+    if STATE.graph is None:
+        return {**base, "reason": "setup", "message": "Setup required — finish the setup wizard first."}
+    if not (new_session_id or "").strip():
+        return {**base, "reason": "no_target", "message": "Fork needs the new session's id."}
+
+    from graph.rewind_op import fork_thread
+
+    src_tid = _resolve_thread_id(request_metadata, session_id)
+    dst_tid = _resolve_thread_id(None, new_session_id)
+    if src_tid == dst_tid:
+        return {**base, "reason": "same_thread", "message": "A fork must target a different session."}
+    first, second = sorted((src_tid, dst_tid))
+    async with _thread_lock(first):
+        async with _thread_lock(second):
+            result = await fork_thread(
+                STATE.graph,
+                STATE.checkpointer,
+                src_tid,
+                dst_tid,
+                target_index=index,
+                target_id=message_id,
+                target_content=content,
+                occurrence=occurrence,
+            )
+    return {**result, "message": _fork_message(result)}
+
+
+def _fork_message(result: dict) -> str:
+    """Human-readable status line for a fork result — honest about the failure
+    modes, because the console falls back to a display-only seed and must SAY so."""
+    if result.get("found"):
+        return f"Forked with {result.get('kept', 0)} message(s) of real context."
+    reason = result.get("reason") or ""
+    if reason in ("no_checkpointer", "empty_thread"):
+        return (
+            "No server history to fork — this branch starts fresh (the transcript "
+            "below is a display copy the agent can't see)."
+        )
+    if reason == "target_exists":
+        return "That session already has history — fork into a fresh tab instead."
+    if reason == "empty_prefix":
+        return "Nothing forkable before that point — the branch starts fresh."
+    if reason == "not_found":
+        return (
+            "Couldn't locate that message in the server history — the branch starts "
+            "fresh (display copy only)."
+        )
+    return "Fork unavailable — the branch starts fresh (display copy only)."
+
+
 def _sum_usage(per_model: dict[str, Any]) -> dict[str, int]:
     """Fold LangChain's per-model ``usage_metadata`` (``{input,output,total}_tokens``) into
     the OpenAI ``usage`` shape, summed across every model call in the turn — the lead model

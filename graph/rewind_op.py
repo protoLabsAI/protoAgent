@@ -201,3 +201,68 @@ async def rewind_thread(
     )
     log.info("[rewind] thread %s: kept %d msg(s), discarded %d", thread_id, len(kept), removed)
     return {"found": True, "kept": len(kept), "removed": removed, "reason": ""}
+
+
+async def fork_thread(
+    graph,
+    checkpointer,
+    source_thread_id: str,
+    target_thread_id: str,
+    *,
+    target_index: int | None = None,
+    target_id: str | None = None,
+    target_content: str | None = None,
+    occurrence: int | None = None,
+) -> dict:
+    """Fork ``source_thread_id`` at the target message: write the prefix THROUGH
+    the target onto ``target_thread_id``, leaving the source untouched (#2803).
+
+    The non-destructive sibling of :func:`rewind_thread` — same target resolution,
+    same tool-pair-safe cut, but the kept prefix lands on a NEW thread so both
+    branches genuinely continue from that point. Before this, the console's fork
+    was display-only: the new tab showed the history while the agent's checkpoint
+    was empty — a fork that looks like memory and is amnesia.
+
+    Returns ``{found, kept, discarded, reason}`` (``discarded`` = source messages
+    past the cut, informational — the source keeps them). Refuses (``found=False``)
+    when the target thread already has messages: a fork must never clobber.
+    """
+    if graph is None or checkpointer is None:
+        return {"found": False, "kept": 0, "discarded": 0, "reason": "no_checkpointer"}
+
+    snapshot = await graph.aget_state({"configurable": {"thread_id": source_thread_id}})
+    messages = list((getattr(snapshot, "values", None) or {}).get("messages") or [])
+    if not messages:
+        return {"found": False, "kept": 0, "discarded": 0, "reason": "empty_thread"}
+
+    raw_end = _resolve_end(
+        messages,
+        target_index=target_index,
+        target_id=target_id,
+        target_content=target_content,
+        occurrence=occurrence,
+    )
+    if raw_end is None:
+        return {"found": False, "kept": 0, "discarded": 0, "reason": "not_found"}
+
+    end = _safe_cut_end(messages, raw_end)
+    kept = messages[:end]
+    if not kept:
+        # The safe cut retreated to nothing (an unanswered tool block at the very
+        # start) — an empty fork would be the amnesia bug this exists to fix.
+        return {"found": False, "kept": 0, "discarded": len(messages), "reason": "empty_prefix"}
+
+    target_config = {"configurable": {"thread_id": target_thread_id}}
+    existing = await graph.aget_state(target_config)
+    if (getattr(existing, "values", None) or {}).get("messages"):
+        return {"found": False, "kept": 0, "discarded": 0, "reason": "target_exists"}
+
+    await graph.aupdate_state(target_config, {"messages": list(kept)})
+    log.info(
+        "[fork] thread %s → %s: copied %d msg(s) (source keeps all %d)",
+        source_thread_id,
+        target_thread_id,
+        len(kept),
+        len(messages),
+    )
+    return {"found": True, "kept": len(kept), "discarded": len(messages) - end, "reason": ""}

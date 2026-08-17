@@ -1202,21 +1202,62 @@ function ChatSessionSlot({
   }
 
   // Fork the conversation at a message: open a NEW tab/session seeded with the
-  // history up to and including that message, leaving the original untouched.
-  // Continue the branch from there.
+  // history up to and including that message, leaving the original untouched —
+  // AND fork the server-side checkpoint onto the new session's thread (#2803),
+  // so the branch's agent actually REMEMBERS the history it displays. Before
+  // this the fork was display-only: the tab showed the transcript while the
+  // agent's checkpoint was empty (a fork that looks like memory and is amnesia).
   function forkAtMessage(message: ChatMessage) {
     if (!session) return;
-    const i = session.messages.findIndex((m) => m.id === message.id);
+    const source = session;
+    const i = source.messages.findIndex((m) => m.id === message.id);
     if (i < 0) return;
-    const seed = session.messages.slice(0, i + 1).map((m) => ({
+    const seed = source.messages.slice(0, i + 1).map((m) => ({
       ...m,
       // a forked-from message is settled history in the new branch
       status: m.status === "streaming" ? "done" : m.status,
     }));
     const created = chatStore.createSession(); // becomes the current + active tab
     chatStore.updateMessages(created.id, seed);
-    const baseTitle = session.title && session.title !== "New chat" ? session.title : "Chat";
+    const baseTitle = source.title && source.title !== "New chat" ? source.title : "Chat";
     chatStore.renameSession(created.id, `${baseTitle} (fork)`);
+    // Same occurrence discipline as rewind: client message ids never appear in the
+    // checkpoint, so the server resolves by content + WHICH duplicate was clicked.
+    const want = (message.content || "").trim();
+    const occurrence = source.messages.slice(0, i).filter((m) => (m.content || "").trim() === want).length;
+    void api
+      .forkChatSession(source.id, created.id, message.id ?? "", message.content, occurrence)
+      .then((res) => {
+        // A refused fork still leaves a usable display-only branch — but the
+        // operator must KNOW the agent can't see it, so surface the server's
+        // honest status line rather than failing silently (the old behavior).
+        if (!res.found) {
+          chatStore.updateMessages(created.id, [
+            ...(chatStore.getSnapshot().sessions.find((s) => s.id === created.id)?.messages ?? seed),
+            {
+              id: `sys-fork-${Date.now()}`,
+              role: "system",
+              content: `⚠️ ${res.message}`,
+              noteTone: "warning",
+              createdAt: Date.now(),
+              status: "done",
+            } as ChatMessage,
+          ]);
+        }
+      })
+      .catch((e) => {
+        chatStore.updateMessages(created.id, [
+          ...(chatStore.getSnapshot().sessions.find((s) => s.id === created.id)?.messages ?? seed),
+          {
+            id: `sys-fork-${Date.now()}`,
+            role: "system",
+            content: `⚠️ Server-side fork failed — this branch is a display copy the agent can't see. (${errMsg(e)})`,
+            noteTone: "warning",
+            createdAt: Date.now(),
+            status: "done",
+          } as ChatMessage,
+        ]);
+      });
   }
 
   // Rewind the conversation to a message IN PLACE (vs fork's new tab): discard
