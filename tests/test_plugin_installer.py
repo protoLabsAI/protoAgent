@@ -284,6 +284,18 @@ def test_recorded_source_url_reads_the_lock(env):
     assert installer.recorded_source_url("absent") == ""
 
 
+def test_recorded_source_url_tolerates_a_malformed_lock_entry(env):
+    # _normalize_lock preserves non-dict members of a hand-edited lock — the
+    # reader must skip them, not AttributeError before install_deps even starts.
+    import json
+
+    installer.lock_path().write_text(
+        json.dumps({"plugins": ["garbage-string", {"id": "real", "source_url": "https://github.com/x/y"}]})
+    )
+    assert installer.recorded_source_url("real") == "https://github.com/x/y"
+    assert installer.recorded_source_url("other") == ""
+
+
 def test_install_deps_missing_plugin(env):
     with pytest.raises(installer.InstallError, match="not installed"):
         installer.install_deps("nope")

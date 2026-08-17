@@ -54,6 +54,27 @@ def _sources_allowlist() -> list[str] | None:
     return list(allow) if allow else None
 
 
+def _consent_needs_ack(url: str) -> dict | None:
+    """The ADR 0071 D3 consent gate, shared by install and install-deps (#2743):
+    the ``{"needs_ack": True, "source": …}`` response when ``url`` needs the
+    one-time "this runs code" ack, else None (trusted — proceed). One home so the
+    two gates can't drift (the 2771 QA panel's DRY finding)."""
+    from graph.plugins.trust import normalize_source, source_trusted
+
+    cfg = STATE.graph_config
+    if source_trusted(
+        url,
+        official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
+        acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
+        # Literal-True only: from_dict already parses string forms via _falsey
+        # (#2739), so the attribute is a real bool — but this flag WIDENS trust,
+        # so the gate is belt-and-braces fail-closed against any exotic value.
+        trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
+    ):
+        return None
+    return {"needs_ack": True, "source": normalize_source(url)}
+
+
 def _install_no_enable() -> bool:
     """Opt out of auto-enable-on-install — back to ADR 0027's strict install ≠ enable.
     Default off: installing a plugin enables + runs it (trust-by-default, behind the
@@ -188,18 +209,9 @@ def register_plugin_routes(app) -> None:
         # origin (bundled / hand-copied working tree — nothing was fetched).
         source_url = installer.recorded_source_url(plugin_id)
         if source_url:
-            from graph.plugins.trust import normalize_source, source_trusted
-
-            cfg = STATE.graph_config
-            if not source_trusted(
-                source_url,
-                official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
-                acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
-                # Literal-True only — same belt-and-braces fail-closed posture as the
-                # install endpoint's gate (this flag WIDENS trust).
-                trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
-            ):
-                return {"needs_ack": True, "source": normalize_source(source_url)}
+            needs_ack = _consent_needs_ack(source_url)
+            if needs_ack is not None:
+                return needs_ack
         try:
             installed = await asyncio.to_thread(installer.install_deps, plugin_id)
         except installer.InstallError as exc:
@@ -276,20 +288,9 @@ def register_plugin_routes(app) -> None:
         # no code runs, so there is nothing to consent to yet — the ENABLE that
         # follows is the operator's explicit act.
         if not _install_no_enable():
-            from graph.plugins.trust import normalize_source, source_trusted
-
-            cfg = STATE.graph_config
-            if not source_trusted(
-                url,
-                official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
-                acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
-                # Literal-True only: from_dict already parses string forms via
-                # _falsey (#2739), so the attribute is a real bool — but this flag
-                # WIDENS trust, so the gate is belt-and-braces fail-closed against
-                # any exotic value that could ever land on the config object.
-                trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
-            ):
-                return {"needs_ack": True, "source": normalize_source(url)}
+            needs_ack = _consent_needs_ack(url)
+            if needs_ack is not None:
+                return needs_ack
 
         mounted_before = _mounted_router_ids()
         prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}

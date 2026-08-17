@@ -1018,7 +1018,13 @@ def recorded_source_url(plugin_id: str) -> str:
     Empty for a bundled/built-in plugin and for a hand-copied working-tree dir —
     neither has a recorded origin to re-validate, and both are the operator's own
     deliberate placement rather than a fetched source."""
-    entry = next((e for e in _read_lock().get("plugins") or [] if e.get("id") == plugin_id), None)
+    entry = next(
+        # isinstance guard: _normalize_lock preserves non-dict members of a hand-edited
+        # lock, and a bare .get here would AttributeError before install_deps' own
+        # error handling ever ran (coderabbit on this PR).
+        (e for e in _read_lock().get("plugins") or [] if isinstance(e, dict) and e.get("id") == plugin_id),
+        None,
+    )
     return str((entry or {}).get("source_url") or "")
 
 
