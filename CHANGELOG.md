@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.137.2] - 2026-08-17
+
+### Fixed
+- **Chat streaming is smoother — text trickles instead of filling in ~10-word blocks
+  (#2766).** The A2A executor batched answer/reasoning deltas by size alone
+  (`_FLUSH_CHARS = 60`, no time dimension), so the console bubble filled in visible
+  lurches — and a slowly-generating model parked its tail in the buffer indefinitely,
+  since nothing flushed until the next delta tipped the size check. The flush is now
+  size-OR-time: the threshold is back to 24 chars (the original value, whose
+  teardown-race concern was already re-tested and disproven), and a non-empty buffer
+  older than 100ms flushes on the next delta regardless of size — fast producers still
+  batch, slow producers trickle word by word, and the first words of a turn flush
+  immediately.
+
 ## [0.137.1] - 2026-08-17
 
 ### Changed

@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.137.2",
+    "date": "2026-08-17",
+    "changes": [
+      "Chat streaming is smoother — text trickles instead of filling in ~10-word blocks (#2766)."
+    ]
+  },
+  {
     "version": "v0.137.1",
     "date": "2026-08-17",
     "changes": [
