@@ -1,20 +1,25 @@
 import { Markdown as DSMarkdown } from "@protolabsai/ui/markdown";
 
 import { rehypeAbsolutizeServerUrls } from "./mediaUrls";
+import { useSmoothReveal } from "./useSmoothReveal";
 
 // Module-level for a stable array identity across renders. The DS appends these AFTER its
 // own defaults (GFM/sanitize/harden/KaTeX), so the URL rewrite sees the final tree.
 const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
 
-// Streaming token fade (#2769) — streamdown's built-in animate plugin, enabled only while
-// the message is live (`isAnimating`); settled messages render span-free (the plugin drops
-// out of the rehype pipeline entirely, so history/tab-switch renders never animate).
-// Tuning, chosen against our ~24-char / 100ms SSE cadence (see a2a executor _FLUSH_CHARS):
-// a fade LONGER than the inter-chunk interval overlaps successive chunks into one motion
-// (Perplexity runs a 750ms opacity-only word fade for this same reason); the small stagger
-// cascades the ~4-5 words inside one chunk so a chunk reads as a trickle, not a block.
+// Streaming token fade (#2769), two cooperating halves:
+// 1. `useSmoothReveal` paces the SOURCE — a steadily-advancing prefix of the accumulated
+//    markdown (append-only by construction), which is what actually smooths bursty chunk
+//    arrival AND keeps the fade correct: streamdown's animate plugin marks already-visible
+//    content by a flat char offset in tree-visit order, which GFM restructuring (footnote
+//    hoisting especially) breaks — first QA round saw later lines fading while earlier ones
+//    were still arriving, and footnote links popping in unfaded. Pacing the source pins the
+//    changing region to the parse tail, so the offset heuristic holds.
+// 2. The fade itself stays short and stagger-free — with the reveal supplying the motion,
+//    the fade is just softening on the freshly-revealed words, not the smoothing mechanism.
+// Settled messages render span-free (`isAnimating` false drops the plugin from the pipeline).
 // Module-level for stable identity — an inline object would re-key the plugin per render.
-const ANIMATED = { animation: "fadeIn", sep: "word", duration: 400, easing: "ease-out", stagger: 25 } as const;
+const ANIMATED = { animation: "fadeIn", sep: "word", duration: 180, easing: "ease-out", stagger: 0 } as const;
 
 /**
  * Assistant message markdown — the DS `<Markdown>` (`@protolabsai/ui/markdown`, ≥0.48),
@@ -43,9 +48,10 @@ const ANIMATED = { animation: "fadeIn", sep: "word", duration: 400, easing: "eas
  * the DS ported that exact guard on-by-default. Opt out per the DS `math` prop if ever needed.
  */
 export function Markdown({ children, streaming = false }: { children: string; streaming?: boolean }) {
+  const shown = useSmoothReveal(children, streaming);
   return (
     <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS} animated={ANIMATED} isAnimating={streaming}>
-      {children}
+      {shown}
     </DSMarkdown>
   );
 }
