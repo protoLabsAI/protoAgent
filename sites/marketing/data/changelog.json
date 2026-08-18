@@ -1,5 +1,35 @@
 [
   {
+    "version": "v0.138.0",
+    "date": "2026-08-18",
+    "changes": [
+      "Round governance: long turns get re-grounded, and can be budgeted (#2710, ADR 0101 D8).",
+      "Context pressure is now a persisted series, and the next request's floor is projected (#2773, ADR 0101 D6).",
+      "Rolling cache breakpoints on message history (#2777, ADR 0101 D1).",
+      "Oversized tool results already in history get pruned before summarization ever runs (#2782, ADR 0101 D3/D4).",
+      "A context-window overflow is now a recovered event, not a dead end (#2783, ADR 0101 D4).",
+      "The console surfaces context pressure honestly (#2787, ADR 0101 D6).",
+      "Plugin repos can now own their eval suites (#2804).",
+      "The trajectory writer: \"what did the model see\" is now answerable (#2806, ADR 0102 S1).",
+      "The dynamic context layer rides the message stream, composed once per turn (#2776/#2779, ADR 0101 D2).",
+      "Subagent delegations get prompt caching (#2778, ADR 0101 D1).",
+      "Prompt-cache TTL resolves by profile (#2780, ADR 0101 D7).",
+      "Auto-compaction archives before it rewrites (#2784, ADR 0101 D5).",
+      "/compact is generally available (#2785, ADR 0101 D5).",
+      "The execute_code tool bridge gets a security posture (#2807, ADR 0103 S1).",
+      "install-deps re-validates source trust at deps time (#2743).",
+      "A turn that composes no dynamic context no longer re-sends the previous turn's (#2774, ADR 0101).",
+      "The per-tool context-cost chip (#2282) actually renders now (#2775, ADR 0101).",
+      "MCP tool results are size-bounded at last (#2781, ADR 0101 D3).",
+      "\"Fork from here\" gives the fork real memory (#2803).",
+      "PTC S2+S3: the bridge shows its schemas and its calls (#2807, ADR 0103).",
+      "ADR 0101 — Context lifecycle: log, surface, pressure (#2772).",
+      "ADR 0102 — The trajectory: append-only session log + derived surface (#2806).",
+      "ADR 0103 — Programmatic tool calls: agent tools callable from execute_code (#2807).",
+      "Evals guide documents the plugin-suite seams (#2811)."
+    ]
+  },
+  {
     "version": "v0.137.2",
     "date": "2026-08-17",
     "changes": [

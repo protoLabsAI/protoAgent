@@ -15,6 +15,256 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.138.0] - 2026-08-18
+
+### Added
+- **Round governance: long turns get re-grounded, and can be budgeted (#2710,
+  ADR 0101 D8).** The August audits showed round count is an
+  instruction-adherence lever, not just a cost one — 21 rounds into one turn,
+  an agent violated its own "check the board and open PRs before creating
+  ANYTHING" rule and produced a duplicate work item. New
+  `RoundGovernorMiddleware`: at `model.round_nudge_after` rounds (default 25)
+  it injects ONE re-grounding note per turn (re-read the request and working
+  state; re-check before creating anything new; prefer finishing over
+  starting); an optional `model.round_hard_cap` (default off) ends the turn
+  with an honest hand-back instead of running to the recursion limit. Genuine
+  mid-turn steering resets the count; machinery (context frames, stall-guard
+  notes, compaction summaries) never does.
+
+- **Context pressure is now a persisted series, and the next request's floor is
+  projected (#2773, ADR 0101 D6).** Each turn's peak context-window fill
+  (`context_tokens`) lands in the telemetry store (guarded migration, same
+  pattern as tool durations), `recent()` rows carry a derived per-turn
+  `cache_hit_ratio`, and `summary()` gains `max_context_tokens` /
+  `p95_context_tokens` — so cache-discipline work (#2776/#2777) has a provable
+  before/after instead of a one-turn live readout. The `context-v1` part now
+  also carries `projectedTokens` (last call's prompt + completion): what the
+  next request on the thread starts from before anything new is added.
+
+- **Rolling cache breakpoints on message history (#2777, ADR 0101 D1).** We
+  placed one `cache_control` breakpoint (of Anthropic's four) on the system
+  prompt and none on the conversation — so every round of a long agentic turn
+  re-paid the entire growing history uncached, most of the measured 31%-vs-99%
+  cache-hit gap. `PromptCacheMiddleware` now also marks the newest two markable
+  messages per call (view-only via `request.override` — stored history stays
+  clean), so call N+1 reads call N's history from cache. Tool results are
+  markable on the native Anthropic client (the block's mark is lifted onto the
+  tool_result envelope) and skipped on the gateway path, where the converter
+  would silently drop the mark — verified empirically for both wire shapes.
+
+- **Oversized tool results already in history get pruned before summarization
+  ever runs (#2782, ADR 0101 D3/D4).** Output caps applied at call time only —
+  once in the checkpointer, a result was re-sent verbatim on every later model
+  call until compaction removed the *entire* history. New
+  `ToolResultPrunerMiddleware` (config `pruning:`, on by default): at 60% of
+  the model's context window, tool results older than the newest 20 messages
+  are rewritten to head+tail stubs in one batched pass (a single cache miss,
+  not one per call), replaced by message id so tool-call pairing survives. The
+  marker is honest — the middle is gone; re-run the tool if it's needed. Runs
+  registered before compaction: prune near-lossless, then summarize lossy.
+
+- **A context-window overflow is now a recovered event, not a dead end (#2783,
+  ADR 0101 D4).** Nothing caught the overflow error class before: the raw
+  provider error surfaced, model fallback re-sent the same oversized prompt
+  elsewhere, and the next turn on the thread hit the same wall. The turn
+  runner now recognizes each provider's overflow phrasing, force-compacts the
+  thread once (safety-valve semantics: archive best-effort with a loud log,
+  honest stub summary if the summarizer fails — the manual `/compact` keeps
+  its strict never-lossy refusal), and retries a single time. A second
+  failure surfaces honestly — but the thread is smaller, so the next turn no
+  longer inherits the wall. Counted as `overflow_recoveries_total`.
+
+- **The console surfaces context pressure honestly (#2787, ADR 0101 D6).** The
+  per-turn hover card now shows the projected next request (the floor the next
+  message starts from, from `context-v1`'s `projectedTokens`); the meter's
+  wrong-axis fallback to the turn's summed input tokens is gone (a 38-call turn
+  "sums" to millions while the window sits far lower — old history now shows no
+  meter rather than a wrong one). The Telemetry surface gains Context p95/peak
+  summary metrics and a per-turn Context column, with the per-turn cache-hit %
+  beside the cache-reads cell — the before/after readout for the cache work.
+
+- **Plugin repos can now own their eval suites (#2804).** `python -m
+  evals.runner --tasks-file <path>` runs any tasks JSON with the full
+  runner — audit-log, pattern, KB, and rubric channels included — with
+  reports model-tagged in `evals/results/` alongside the core suite. New
+  `forbidden_tools` case key asserts *selective* abstention: unrelated
+  tools may fire, the named ones must stay cold (an errored attempt still
+  counts — reaching for the tool is the violation). First consumer: the
+  cowork pack's live eval suite (cowork-plugin#4).
+
+- **The trajectory writer: "what did the model see" is now answerable (#2806,
+  ADR 0102 S1).** Every model call logs its request envelope as references —
+  message ids + content hashes + sizes, the stable-prefix hash, a bound-tools
+  hash, the real per-tab model — plus a response event with usage, into a
+  per-conversation append-only JSONL (`instance_root/trajectory/`). Every
+  history rewrite (auto/manual/forced compaction, pressure pruning, rewind,
+  fork, tool-call repair) lands as a `surface_op` event with counts and ids,
+  so any rewrite is attributable and the model-visible view at any point is
+  derivable. Refs hash the STORED bytes (reconstruction joins the checkpoint);
+  size-capped rotation; the log retires with its thread. Read API, search,
+  and the full-text mode are the ADR's next slices.
+
+### Changed
+- **The dynamic context layer rides the message stream, composed once per turn
+  (#2776/#2779, ADR 0101 D2).** Recalled memory, the skills index, working
+  state, and the one-shot toolset notice used to be recomposed on **every model
+  call** and delivered as a second system block sitting between the cached
+  stable prefix and the history — with a prefix-based cache key, that churn
+  invalidated any history caching every call, most of the measured 31% cache
+  hit ratio. The layer is now composed once at turn entry and appended as one
+  tagged `<injected_context>` frame in the turn's input; nothing between the
+  stable prefix and the history varies intra-turn anymore (the skills-index
+  MRU order and working state are snapshotted per turn by construction). The
+  ADR 0069 delivery contract — untrusted-reference envelope, attribution,
+  incognito and goal-turn scoping, id-attributed injection log — moves intact.
+  Exports render frames as a one-line marker; chat bundles exclude them.
+
+- **Subagent delegations get prompt caching (#2778, ADR 0101 D1).** The subagent
+  middleware stack omitted `PromptCacheMiddleware` entirely, so every `task` /
+  `task_batch` delegation paid full uncached input on its (static-per-build)
+  system prompt — acknowledged in a code comment, never fixed. The stack now
+  mirrors the lead's caching (same config knobs, same reject/ignore watchers):
+  repeat delegations to a subagent type, and every model call inside one
+  delegation's tool loop, read the prefix from cache.
+
+- **Prompt-cache TTL resolves by profile (#2780, ADR 0101 D7).** Fleet members
+  and the packaged desktop app are long-lived agents that routinely idle past
+  the 5m ephemeral tier between turns, re-paying the full stable prefix on
+  every re-warm. Absent an explicit `prompt_cache.ttl`, those profiles now
+  default to the `1h` persistent tier (one avoided re-warm covers its higher
+  write price); interactive dev instances keep `5m`. Explicit config always
+  wins, same rule as the tier-aware `filesystem.allow_run` default.
+
+- **Auto-compaction archives before it rewrites (#2784, ADR 0101 D5).** The
+  automatic path was the lossy one: the summarization rewrite landed in the
+  checkpoint, per-thread pruning destroyed the pre-compaction rows, and the
+  summarized-away history was simply gone — while the never-lossy manual
+  `/compact` archived first. The full transcript now lands in the knowledge
+  store (`chat-archive:<session_id>`, the same namespace `/compact` uses)
+  before the rewrite is committed. Failure mode, operator-decided: attempt the
+  archive; on failure compact ANYWAY with a loud log — the safety valve's duty
+  outranks purity on the automatic path, and the manual path keeps its strict
+  refusal.
+
+- **`/compact` is generally available (#2785, ADR 0101 D5).** The `chat.compact`
+  developer flag sat past its own `remove_by` date while gating the one
+  NEVER-LOSSY compaction path — lossy auto-compaction ran by default the whole
+  time, which was exactly backwards. The flag is removed everywhere (registry,
+  route gate, console tag); the never-lossy semantics themselves are unchanged.
+
+- **The execute_code tool bridge gets a security posture (#2807, ADR 0103 S1).**
+  Starting the PTC spike surfaced that the bridge already existed — and that
+  its default exposed EVERY registered tool to model-written scripts, HITL and
+  delegation included. The default is now the curated read-mostly set
+  (read/list/find/search/fetch/web_search/memory_recall/current_time), and
+  HITL tools, `task`/`task_batch`, and `execute_code` itself are structurally
+  unbridgeable even when named in config — an interrupt can't park a
+  subprocess, and delegation from model-written code is out of scope by
+  decision. Operators widen the set by naming tools explicitly. The spike's
+  measurement lands with it: a deterministic ten-reads-one-round test (model-
+  visible output <0.1% of the intermediate bytes) and `scripts/ptc_bench.py`
+  for live model-in-the-loop numbers.
+
+### Fixed
+- **`install-deps` re-validates source trust at deps time (#2743).** A plugin
+  installed before an allowlist or trust tightening could still pip-install its
+  declared deps — "was trusted then" silently implied "is trusted now" for a
+  code-adjacent step. The installer now re-checks the plugin's recorded origin
+  against the CURRENT `plugins.sources.allow` on every deps install (CLI and
+  console), and the console route re-runs the same one-time "this runs code"
+  consent gate as install itself — an untrusted source answers `needs_ack` and the
+  Plugins panel shows the familiar trust dialog, then retries. Bundled and
+  hand-copied working-tree plugins (no recorded origin — nothing was fetched) are
+  exempt from both checks.
+
+- **A turn that composes no dynamic context no longer re-sends the previous
+  turn's (#2774, ADR 0101).** `context` is a last-write-wins channel persisted
+  in the checkpointer; when `KnowledgeMiddleware` had nothing to inject it
+  returned `None`, leaving the prior call's RAG hits / memory digest in state
+  for `PromptCacheMiddleware` to re-append — the model saw stale injected
+  memory attributed as current. Nothing-to-inject now explicitly clears the
+  channel (and its sections readout with it).
+
+- **The per-tool context-cost chip (#2282) actually renders now (#2775, ADR
+  0101).** It estimated from the SSE frame's `output` — which the server
+  truncates to 800 chars (≈200 tokens), strictly below the chip's own 250-token
+  display floor, so it could mathematically never appear. The `tool_end` frame
+  (and its tool-call-v1 fragment) now carries `outputChars`, the true
+  pre-truncation result size, and the chip estimates from that; older servers
+  without the field fall back to the previous behavior.
+
+- **MCP tool results are size-bounded at last (#2781, ADR 0101 D3).** Every
+  built-in tool truncates its output at call time, but MCP results had no cap
+  anywhere — a server returning 500KB put 500KB into history, re-sent verbatim
+  on every later model call for the life of the thread. New
+  `mcp.max_result_chars` (default `50000`, matching `read_file`'s cap; `0`
+  disables; per-server `max_result_chars` overrides) rewrites an over-cap
+  result to bounded head + omission marker + bounded tail — both ends survive,
+  and the marker names the true size and the knob. Applies across both session
+  modes and to multi-block results against one shared budget.
+
+- **"Fork from here" gives the fork real memory (#2803).** The fork was
+  display-only: the new tab showed the transcript while the agent's checkpoint
+  was empty, so the branch's first reply came from an agent that remembered
+  none of it. Forking now copies the checkpoint prefix through the clicked
+  message onto the new session's thread server-side — rewind's non-destructive
+  sibling, same content/occurrence resolution and tool-pair-safe cut, source
+  untouched, never clobbers an existing thread. When there is genuinely no
+  server history to fork, the branch says so with a visible note instead of
+  silently pretending.
+
+- **PTC S2+S3: the bridge shows its schemas and its calls (#2807, ADR 0103).**
+  S2: the execute_code description now renders real call signatures for every
+  bridged tool (params + defaults + each tool's first description line,
+  budgeted at 25 lines) — the model writes kwargs instead of guessing against
+  a name-only proxy. S3: every bridged call lands in the audit log and the
+  per-tool Prometheus series as `ptc:<name>`, with duration, success, and the
+  run's session id (InjectedState) — a script's tool calls were previously
+  invisible to the operator entirely.
+
+### Docs
+- **ADR 0101 — Context lifecycle: log, surface, pressure (#2772).** The first
+  decision record governing how a session's context grows, shrinks, and gets
+  priced. Prompted by a 30.9% measured prompt-cache hit ratio against the ~99.9%
+  that cache-disciplined harnesses achieve: the stable prefix was already
+  byte-stable by design, but no breakpoints covered message history, the per-call
+  volatile context block churned between prefix and history, and subagents were
+  entirely uncached. Decides cache discipline as a contract (rolling history
+  breakpoints, per-turn context composition in the message stream), a uniform
+  tool-result size/pruning policy (MCP outputs were completely uncapped),
+  prune-before-summarize with one-shot overflow recovery, archive-first
+  auto-compaction, persisted context-pressure telemetry, TTL tiering, and adopts
+  the #2710 round-count circuit breaker. Implementation tracked phase-by-phase
+  under #2772 (#2773–#2787).
+
+- **ADR 0102 — The trajectory: append-only session log + derived surface
+  (#2806).** The log half of ADR 0101's deferred log/surface split, giving
+  #2786 its home. A per-session append-only JSONL of request-envelope
+  REFERENCES (message ids/hashes/sizes, stable-prefix hash, surface-op events
+  for every history rewrite) makes "what did the model see on turn N"
+  answerable — honestly bounded where pruning destroyed bytes, with an opt-in
+  full-text mode for deep forensics and fork-from-any-point. Takes DeepSeek
+  Harness's "model-visible means logged" invariant without its event-sourcing
+  architecture tax. Slices: writer → read API/console view → search →
+  full-text flag → the telemetry-gated derived-view surface.
+
+- **ADR 0103 — Programmatic tool calls: agent tools callable from
+  execute_code (#2807).** The CodeAct/DSH-"code mode" pattern, designed
+  against protoAgent's constraints: a ten-read investigation becomes one model
+  round because the model's script batch-calls tools and only its
+  stdout/return value re-enters context. Opt-in twice, single-run bearer
+  token over loopback dispatched through the SAME binding-layer path as a
+  model call (ADR 0089 posture preserved), curated read-mostly allowlist with
+  HITL hard-denied, a generated per-run stub module, and full
+  audit/trajectory/telemetry visibility for bridged calls. Spike-gated: Slice
+  1 measures rounds/tokens/wall-clock on a real multi-read task, and the ADR
+  graduates or dies on those numbers.
+
+- **Evals guide documents the plugin-suite seams (#2811).** `docs/guides/evals.md`
+  gains the negative assertions (`forbidden_patterns`, `forbidden_tools`) and the
+  `--tasks-file` plugin-owned-suite flow from #2804; the cowork directory listing
+  catches up to v0.3.0 (`/daily-brief`, drop-folder watches, `verifier` chip).
+
 ## [0.137.2] - 2026-08-17
 
 ### Fixed

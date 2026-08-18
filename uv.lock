@@ -1609,7 +1609,7 @@ wheels = [
 
 [[package]]
 name = "protolabs-agent"
-version = "0.137.2"
+version = "0.138.0"
 source = { virtual = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["fastapi", "http-server", "sqlite"] },
