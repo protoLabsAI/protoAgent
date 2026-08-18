@@ -133,7 +133,11 @@ registerSlashCommand({
 
 registerSlashCommand({
   name: "trajectory",
-  description: "Show what the model saw — call-by-call timeline and history rewrites for this chat",
+  // NB: the slash menu filters on name OR description — keep every other command's
+  // NAME out of this text ("model", "prompt", …) or typing that command surfaces
+  // /trajectory above it and Enter runs the wrong one (the /model e2e caught this
+  // AGAIN on this very command's first draft).
+  description: "Show what the agent saw — call-by-call timeline and history rewrites for this conversation",
   usage: "/trajectory",
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
