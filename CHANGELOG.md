@@ -15,6 +15,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.139.0] - 2026-08-18
+
+### Added
+- **The PTC graduation bench is an eval suite (#2807, ADR 0103).**
+  `python -m evals.ptc_bench` generates deterministic labeled fixtures and a
+  two-lane tasks file (loop: `execute_code` forbidden; code: the bridge must
+  PROVABLY fire via the `ptc:` audit prefix, direct reads forbidden), drives
+  `evals.runner`, joins per-turn telemetry by pinned session ids, and judges
+  the thresholds pre-registered on #2807 — rounds ≥5x collapse, tokens ≥3x or
+  wall ≥2x, and verifier-checked correctness, so a cheaper-but-wrong run can
+  never graduate. Prompt-kind eval cases now honor `context_id` (previously
+  goal cases only), the seam the telemetry join needs.
+
+- **File artifacts get typed previews (#2816).** The Artifact panel's
+  download card now renders CSV/TSV as a real table (quoted fields handled,
+  500-row cap with an honest caption), `.md` as formatted prose via the
+  markdown renderer, and `.json` pretty-printed — with truncation-aware
+  parsing so a clipped preview never shows a mangled row. Data and code
+  files (tsv, toml, ini, xml, html, py, js, ts, sh, sql) now get verbatim
+  text previews instead of a "(binary file)" note.
+
+### Changed
+- **The zero-cache-hit watcher now tells "provider ignores caching" apart from
+  "provider doesn't report it" (#2772).** An OpenAI-compatible lane that omits
+  `prompt_tokens_details` (e.g. vLLM without `--enable-prompt-tokens-details`)
+  used to draw the same "provider is likely ignoring prompt caching" warning as
+  a genuinely cache-dead route — sending operators to the wrong fix, since the
+  lane may be caching invisibly (homelab-iac#242 was exactly this). Absent
+  cache fields now draw a reporting-gap warning naming the vLLM flag; explicit
+  zeros keep the original message. No usage-mapping change was needed: verified
+  live that once a lane reports, `prompt_tokens_details.cached_tokens` already
+  flows through langchain-openai's normalization into telemetry's
+  `cache_read_input_tokens` (cold 0 → warm 32k of 35.7k input on
+  `protolabs/reasoning`).
+
+- **The trajectory becomes readable: `/trajectory` + the read API (#2806, ADR
+  0102 S2).** `GET /api/trajectory/{session}` pages the S1 writer's event
+  stream (stable absolute indices, rotation-spanning), and
+  `/call/{n}` reconstructs any model call's request envelope with per-message
+  availability joined against the live checkpoint — `available` (preview
+  included), `rewritten` in place (a pruner stub or repair), or `missing`
+  (compacted/rewound away; the hash and size still prove what was sent). The
+  chat-native `/trajectory` command renders the tail timeline — calls, usage
+  with cache share, and every ⚠-flagged history rewrite — plus the latest
+  call's availability readout.
+
+- **PTC reaches GA: binding-path parity for bridged tool calls (ADR 0103 S4,
+  #2807).** A script's bridged call is now the same path as a model-issued
+  call, with a different caller: late-tool factories receive the
+  denylist-final toolset (previously a tool could be unbound from the model
+  yet still bridgeable), every bridged call is checked at dispatch against
+  the turn's `subagent_fence` and against an enforcement gate built from the
+  same `enforcement_*` config fields (denylist exact-parity; rate limits
+  apply per-path), and policy denials land as failed `ptc:` audit rows. With
+  the graduated bench (rounds 5.5×, correctness 4/4) this closes the ADR —
+  Accepted; the GA surface is plugin enablement + `execute_code.tools`, and
+  the never-implemented `tools.ptc.enabled` flag is retired rather than
+  added. The plugin also reads its live config at graph build, so an edited
+  allowlist takes effect on reload.
+
+- **The artifact plugin is nine modules instead of one 1,800-line file
+  (#2819, #2817 P1).** Pure reorganization — store, previews, render
+  feedback, tools, routes, and the console shell each live in their own
+  module, with `__init__.py` down to `register()` plus the public surface.
+  No behavior change.
+
+- **The artifact console shell is real HTML/JS files (#2822, #2817 P2+P3).**
+  `shell.html` + `shell.js` replace the 540-line embedded Python string —
+  editable, diffable, and visible to tooling, with the served behavior
+  unchanged and the srcdoc `<\/script>` escape discipline now guard-tested
+  on both sides.
+
+### Security
+- **`plugins.sources.allow: []` now means deny-all, not open (#2743 item 1).**
+  Absent-vs-explicit-empty becomes semantic, copying the `sources.official`
+  pattern (#2691's lesson): key absent = any URL allowed (unchanged default);
+  an explicit empty list = deny all plugin installs — the hardening stance a
+  defense-minded admin writing `[]` actually means, where it previously and
+  silently meant "open". **Migration**: a config carrying a literal
+  `allow: []` from before this release flips from open to deny; the boot log
+  warns loudly and the install error names the deny-all state — remove the key
+  to stay open, or list trusted origins. The CLI path preserves the same
+  distinction (it used to collapse explicit `[]` back to open).
+
 ## [0.138.0] - 2026-08-18
 
 ### Added

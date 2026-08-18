@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.139.0",
+    "date": "2026-08-18",
+    "changes": [
+      "The PTC graduation bench is an eval suite (#2807, ADR 0103).",
+      "File artifacts get typed previews (#2816).",
+      "The zero-cache-hit watcher now tells \"provider ignores caching\" apart from \"provider doesn't report it\" (#2772).",
+      "The trajectory becomes readable: /trajectory + the read API (#2806, ADR 0102 S2).",
+      "PTC reaches GA: binding-path parity for bridged tool calls.",
+      "The artifact plugin is nine modules instead of one 1,800-line file (#2819, #2817 P1).",
+      "The artifact console shell is real HTML/JS files (#2822, #2817 P2+P3).",
+      "plugins.sources.allow: [] now means deny-all, not open (#2743 item 1)."
+    ]
+  },
+  {
     "version": "v0.138.0",
     "date": "2026-08-18",
     "changes": [
