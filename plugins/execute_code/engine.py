@@ -49,6 +49,9 @@ import os
 import secrets as _secrets
 import sys
 import tempfile
+from typing import Annotated, Any
+
+from langgraph.prebuilt import InjectedState
 
 from infra.proc import akill_tree, group_kwargs
 
@@ -110,8 +113,40 @@ def _build_runner_file(code: str) -> str:
     return path
 
 
-async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: dict):
+def _record_bridged_call(session_id: str, name: str, args: dict, result: str, duration_ms: int, success: bool) -> None:
+    """Bridged-call observability (ADR 0103 S3, #2807).
+
+    Before this, a script's tool calls were INVISIBLE: direct ``ainvoke`` never
+    passes the graph's audit middleware, so a run that fetched ten URLs left no
+    audit rows and no per-tool metrics — the model couldn't see the intermediate
+    payloads (the point), but neither could the operator (a hole). The ADR's
+    ``via: ptc`` tag lands as a ``ptc:`` tool-name prefix — one greppable
+    convention that also splits bridged from direct calls in the Prometheus
+    per-tool series without a schema change anywhere. Best-effort: observability
+    must never break the RPC loop.
+    """
+    try:
+        from observability import metrics
+        from observability.audit import audit_logger
+
+        tagged = f"ptc:{name}"
+        audit_logger.log(
+            session_id=session_id or "ptc",
+            tool=tagged,
+            args=args,
+            result_summary=(result or "")[:200],
+            duration_ms=duration_ms,
+            success=success,
+        )
+        metrics.record_tool_call(tagged, success, duration_ms / 1000.0)
+    except Exception:  # noqa: BLE001 — observability never breaks the bridge
+        log.debug("[execute_code] bridged-call audit failed", exc_info=True)
+
+
+async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = ""):
     """Read RPC requests from the child, invoke real tools, write back results."""
+    import time
+
     while True:
         line = await req_reader.readline()
         if not line:  # child closed the pipe (exited)
@@ -126,11 +161,16 @@ async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: 
         if tool is None:
             resp = {"id": rid, "ok": False, "error": f"tool '{name}' not available"}
         else:
+            started = time.monotonic()
             try:
                 result = await tool.ainvoke(args)
-                resp = {"id": rid, "ok": True, "result": result if isinstance(result, str) else str(result)}
+                text = result if isinstance(result, str) else str(result)
+                resp = {"id": rid, "ok": True, "result": text}
+                _record_bridged_call(session_id, name, args, text, int((time.monotonic() - started) * 1000), True)
             except Exception as exc:
-                resp = {"id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                err = f"{type(exc).__name__}: {exc}"
+                resp = {"id": rid, "ok": False, "error": err}
+                _record_bridged_call(session_id, name, args, err, int((time.monotonic() - started) * 1000), False)
         try:
             resp_writer.write((json.dumps(resp) + "\n").encode())
             await resp_writer.drain()
@@ -154,8 +194,12 @@ def _resolve_child_interpreter() -> str | None:
     return str(exe) if exe is not None else None
 
 
-async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate: int = 6000) -> str:
-    """Run ``code`` in a child process with a tool-RPC bridge; return its stdout."""
+async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate: int = 6000, session_id: str = "") -> str:
+    """Run ``code`` in a child process with a tool-RPC bridge; return its stdout.
+
+    ``session_id`` attributes the run's bridged tool calls in the audit log
+    (ADR 0103 S3); empty degrades to the literal ``"ptc"`` bucket.
+    """
     interpreter = _resolve_child_interpreter()
     if interpreter is None:
         # Refuse cleanly with a tool RESULT (so the tool_call is answered and the
@@ -221,7 +265,7 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
         async def _serve() -> None:
             reader, writer = await authed
             try:
-                await _service_rpc(reader, writer, tool_map)
+                await _service_rpc(reader, writer, tool_map, session_id=session_id)
             finally:
                 with contextlib.suppress(Exception):
                     writer.close()
@@ -293,6 +337,31 @@ _DEFAULT_BRIDGE_TOOLS = frozenset(
 )
 
 
+def _tool_signature(t) -> str:
+    """One legible line per bridged tool (ADR 0103 S2, #2807): a call signature
+    built from the tool's real schema plus its description's first line — so the
+    model writes ``tools.read_file(project=..., path=...)`` instead of guessing
+    kwargs against a name-only proxy. Injected params never appear (``.args``
+    already excludes them); anything unreadable degrades to ``name(…)``."""
+    try:
+        params = []
+        for pname, meta in (t.args or {}).items():
+            if isinstance(meta, dict) and "default" in meta:
+                params.append(f"{pname}={meta['default']!r}")
+            else:
+                params.append(pname)
+        first = ((t.description or "").strip().splitlines() or [""])[0][:110]
+        sig = f"tools.{t.name}({', '.join(params)})"
+        return f"{sig} — {first}" if first else sig
+    except Exception:  # noqa: BLE001 — a weird schema must not break tool build
+        return f"tools.{t.name}(…)"
+
+
+# Description budget: a wide explicit allowlist must not balloon the (cached,
+# but still token-bearing) tool schema — past this many, the rest list by name.
+_MAX_SIGNATURE_LINES = 25
+
+
 def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000):
     """Build the ``execute_code`` LangChain tool over an allowlist of tools.
 
@@ -308,7 +377,12 @@ def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.
     allow = set(tools or []) or set(_DEFAULT_BRIDGE_TOOLS)
     allow -= _NEVER_BRIDGED
     tool_map = {t.name: t for t in all_tools if t.name in allow}
-    available = ", ".join(sorted(tool_map)) or "(none)"
+    ordered = [tool_map[n] for n in sorted(tool_map)]
+    sig_lines = [_tool_signature(t) for t in ordered[:_MAX_SIGNATURE_LINES]]
+    overflow = [t.name for t in ordered[_MAX_SIGNATURE_LINES:]]
+    if overflow:
+        sig_lines.append(f"(+{len(overflow)} more, same calling shape: {', '.join(overflow)})")
+    available = "\n".join(f"  {line}" for line in sig_lines) or "  (none)"
 
     description = (
         "Run a Python script in a sandboxed subprocess and get its stdout — a "
@@ -322,7 +396,7 @@ def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.
         "Call tools via the injected `tools` object, e.g.:\n"
         "    results = [tools.web_search(query=q) for q in queries]\n"
         "    print('\\n\\n'.join(results)[:2000])\n\n"
-        f"Each tool returns a string. Available tools: {available}\n\n"
+        f"Each tool returns a string. Available tools (call signatures):\n{available}\n\n"
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
         "and a scrubbed environment (no credentials), fresh each call (no state "
         "persists between runs). Only stdout is returned; write your result with "
@@ -330,11 +404,15 @@ def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.
     )
 
     @tool("execute_code", description=description)
-    async def execute_code(code: str) -> str:
+    async def execute_code(code: str, state: Annotated[Any, InjectedState] = None) -> str:
         if not code or not code.strip():
             return "Error: execute_code called with empty code."
+        # Session attribution for the run's bridged calls (ADR 0103 S3) — the
+        # InjectedState lane, not current_session_id() (empty inside tool bodies).
+        # Excluded from the model-facing schema; None on a direct ainvoke.
+        sid = str(state.get("session_id") or "") if isinstance(state, dict) else ""
         try:
-            return await run_code(code, tool_map, timeout=timeout, truncate=truncate)
+            return await run_code(code, tool_map, timeout=timeout, truncate=truncate, session_id=sid)
         except Exception as exc:
             log.exception("[execute_code] harness failure")
             return f"Error: execute_code harness failed: {type(exc).__name__}: {exc}"

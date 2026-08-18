@@ -254,3 +254,75 @@ async def test_ptc_collapse_mechanics_ten_reads_one_round():
     # The model-visible output is <0.1% of what loop mode would have re-sent —
     # the collapse the ADR gates on, measured rather than asserted by vibes.
     assert len(out) < intermediate_bytes * 0.001
+
+
+# --- S2: schema-visible signatures (ADR 0103, #2807) --------------------------
+
+
+def test_description_carries_call_signatures_not_bare_names():
+    """The proxy is name-only on the wire; the model's contract is the tool
+    DESCRIPTION — it now shows real signatures (params + defaults + first line
+    of each tool's description) so kwargs are written, not guessed."""
+    from langchain_core.tools import tool as _tool
+
+    @_tool
+    async def read_file(project: str, path: str, offset: int = 1) -> str:
+        """Read a text file inside a managed project (relative path)."""
+        return ""
+
+    ec = build_execute_code_tool([read_file], tools=["read_file"])
+    assert "tools.read_file(project, path, offset=1)" in ec.description
+    assert "Read a text file inside a managed project" in ec.description
+
+
+def test_signature_lines_are_budgeted():
+    """A wide explicit allowlist must not balloon the schema — past the cap the
+    rest list by name with the calling shape noted."""
+    from langchain_core.tools import tool as _tool
+
+    def _mk(i):
+        @_tool(f"t{i:02d}")
+        async def _t(x: str) -> str:
+            """A tiny tool."""
+            return x
+
+        return _t
+
+    many = [_mk(i) for i in range(30)]
+    ec = build_execute_code_tool(many, tools=[t.name for t in many])
+    assert "(+5 more, same calling shape:" in ec.description
+
+
+# --- S3: bridged-call observability (ADR 0103, #2807) -------------------------
+
+
+@pytest.mark.asyncio
+async def test_bridged_calls_land_in_audit_and_metrics(tmp_path, monkeypatch):
+    """Direct ainvoke bypasses the graph's audit middleware, so a script's tool
+    calls were INVISIBLE to the operator. Each bridged call now writes an audit
+    row (tool `ptc:<name>` — the via-tag as a greppable prefix) with duration and
+    success, attributed to the run's session."""
+    import json as _json
+
+    from observability.audit import AuditLogger
+
+    probe = AuditLogger(tmp_path / "audit.jsonl")
+    monkeypatch.setattr("observability.audit.audit_logger", probe)
+
+    code = (
+        "print(tools.echo_tool(text='ok'))\n"
+        "try:\n"
+        "    tools.boom_tool()\n"
+        "except RuntimeError:\n"
+        "    print('caught')\n"
+    )
+    out = await run_code(code, _TOOL_MAP, session_id="sess-ptc-test")
+    assert out == "OK\ncaught"
+
+    rows = [_json.loads(line) for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
+    by_tool = {r["tool"]: r for r in rows}
+    assert by_tool["ptc:echo_tool"]["success"] is True
+    assert by_tool["ptc:echo_tool"]["session_id"] == "sess-ptc-test"
+    assert by_tool["ptc:echo_tool"]["result_summary"] == "OK"
+    assert by_tool["ptc:boom_tool"]["success"] is False
+    assert "kaboom" in by_tool["ptc:boom_tool"]["result_summary"]
