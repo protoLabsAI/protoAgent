@@ -34,8 +34,6 @@ log = logging.getLogger("protoagent.plugins.execute_code")
 
 def register(registry) -> None:
     """Wire execute_code as a late tool (ADR 0001 + the late-tools seam)."""
-    cfg = registry.config  # the plugin's `execute_code` config section (ADR 0019)
-
     if getattr(sys, "frozen", False):
         # Packaged desktop build: the child spawns the managed CPython (ADR 0094).
         # Register regardless of provisioning state — an unprovisioned runtime answers
@@ -44,11 +42,17 @@ def register(registry) -> None:
         log.info("[execute_code] packaged desktop build — child runs on the managed Python runtime")
 
     def _factory(all_tools, config):
+        # live_config(), not the register-time snapshot: factories run at every
+        # graph (re)build, so an edited `tools` allowlist takes effect on reload
+        # instead of waiting for a full plugin reload (ADR 0103 S4). `config` is
+        # the full graph config the seam passes — the enforcement-parity source.
+        cfg = registry.live_config() if hasattr(registry, "live_config") else registry.config
         return build_execute_code_tool(
             all_tools,
             tools=cfg.get("tools") or None,
             timeout=float(cfg.get("timeout", 30.0)),
             truncate=int(cfg.get("output_truncate", 6000)),
+            graph_config=config,
         )
 
     registry.register_late_tool_factory(_factory)

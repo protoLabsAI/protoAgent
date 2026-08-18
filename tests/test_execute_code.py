@@ -329,3 +329,81 @@ async def test_bridged_calls_land_in_audit_and_metrics(tmp_path, monkeypatch):
     assert by_tool["ptc:echo_tool"]["result_summary"] == "OK"
     assert by_tool["ptc:boom_tool"]["success"] is False
     assert "kaboom" in by_tool["ptc:boom_tool"]["result_summary"]
+
+
+# --- binding-path parity (ADR 0103 S4, #2807) --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fence_blocks_bridged_call_outside_allowlist():
+    # A fenced background run that allowlists execute_code must not bridge past
+    # the fence — same reason text the SubagentFenceMiddleware ToolMessage carries.
+    code = "try:\n    tools.echo_tool(text='x')\nexcept Exception as e:\n    print('err:', e)"
+    out = await run_code(code, _TOOL_MAP, fence=frozenset({"execute_code", "web_search"}))
+    assert "Blocked by policy" in out
+    assert "outside this background subagent's allowlist" in out
+
+
+@pytest.mark.asyncio
+async def test_fence_allows_listed_tool():
+    out = await run_code(
+        "print(tools.echo_tool(text='ok'))", _TOOL_MAP, fence=frozenset({"execute_code", "echo_tool"})
+    )
+    assert out == "OK"
+
+
+@pytest.mark.asyncio
+async def test_enforcement_gate_denylist_blocks_bridged_call():
+    gate = lambda name: f"Tool '{name}' is disabled by policy." if name == "echo_tool" else None  # noqa: E731
+    code = "try:\n    tools.echo_tool(text='x')\nexcept Exception as e:\n    print('err:', e)"
+    out = await run_code(code, _TOOL_MAP, gate=gate)
+    assert "Blocked by policy" in out and "disabled by policy" in out
+
+
+@pytest.mark.asyncio
+async def test_enforcement_rate_limit_applies_within_a_run():
+    # The same sliding-window limits a model-issued call meets (own window,
+    # per the documented S4 deviation) — the second bridged call inside one
+    # run must hit the limit.
+    from plugins.execute_code.engine import _build_enforcement_gate
+
+    class _Cfg:
+        enforcement_enabled = True
+        enforcement_disallowed_tools = None
+        enforcement_rate_limits = {"echo_tool": {"max": 1, "window_seconds": 60}}
+
+    gate = _build_enforcement_gate(_Cfg())
+    code = (
+        "print(tools.echo_tool(text='a'))\n"
+        "try:\n    tools.echo_tool(text='b')\nexcept Exception as e:\n    print('err:', e)"
+    )
+    out = await run_code(code, _TOOL_MAP, gate=gate)
+    assert "A" in out  # first call passed
+    assert "Blocked by policy" in out  # second hit the window
+
+
+def test_enforcement_gate_built_only_when_configured():
+    from types import SimpleNamespace
+
+    from plugins.execute_code.engine import _build_enforcement_gate
+
+    assert _build_enforcement_gate(None) is None
+    assert (
+        _build_enforcement_gate(
+            SimpleNamespace(
+                enforcement_enabled=False,
+                enforcement_disallowed_tools=["echo_tool"],
+                enforcement_rate_limits=None,
+            )
+        )
+        is None
+    )
+    gate = _build_enforcement_gate(
+        SimpleNamespace(
+            enforcement_enabled=True,
+            enforcement_disallowed_tools=["boom_tool"],
+            enforcement_rate_limits=None,
+        )
+    )
+    assert gate is not None
+    assert gate("boom_tool") and gate("echo_tool") is None

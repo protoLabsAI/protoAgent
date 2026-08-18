@@ -476,9 +476,12 @@ class PluginRegistry:
         """Contribute a tool factory that runs AFTER the full toolset is assembled.
 
         ``factory(all_tools, config) -> BaseTool | list[BaseTool] | None`` receives the
-        fully-resolved tool list (core + subagent + plugin + MCP tools) and the live
-        ``LangGraphConfig``; its result is appended last, before the deferred
-        ``search_tools`` meta-tool (so the late tool stays discoverable). For a
+        fully-resolved, **denylist-final** tool list (core + subagent + plugin + MCP
+        tools, after the operator ``tools.disabled`` sweep — ADR 0103 S4: a proxying
+        factory may treat it as exactly what the model has bound) and the live
+        ``LangGraphConfig``; its result is appended last (and denylist-swept itself),
+        before the deferred ``search_tools`` meta-tool (so the late tool stays
+        discoverable). For a
         *meta-tool* that must see or wrap **every** other tool — e.g. programmatic
         tool-calling that proxies the whole set — which a plain ``register_tool`` can't,
         because plugin tools are registered before the set is complete. Built last, so

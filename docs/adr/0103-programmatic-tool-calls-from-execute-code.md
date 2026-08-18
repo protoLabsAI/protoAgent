@@ -1,7 +1,34 @@
 # 0103 — Programmatic tool calls: agent tools callable from execute_code
 
-Status: **Proposed** (umbrella #2807; spike-gated) — **amended 2026-08-18: the
+Status: **Accepted** (umbrella #2807) — graduated 2026-08-18 on the
+pre-registered bench (rounds 5.5×, clean-rep wall 2.4×, correctness 4/4;
+S4 closed binding parity the same day) — **amended 2026-08-18: the
 bridge already existed** (see Reality check below)
+
+## GA decision (2026-08-18, with S4)
+
+All four slices are shipped and the bench graduated, so the ADR is
+**Accepted** with one honest correction to D1's proposed config surface:
+**`tools.ptc.enabled` was never implemented and is not being added.** The
+"opt-in, twice" posture D1 wanted already exists without it — the
+`execute_code` plugin is off by default (`plugins.enabled` is the gate), and
+the bridge exposes only the curated read-mostly default set until an operator
+names tools in `execute_code.tools`. A third global flag would be a second
+switch for the same door. The GA surface is therefore: plugin enablement +
+the plugin section's `tools` / `timeout` / `output_truncate` keys.
+
+**S4 (binding-path parity), as shipped:** late-tool factories now receive the
+**denylist-final** toolset (and their outputs meet the sweep themselves), so
+the bridge's tool_map is exactly the model's bound set; every bridged call is
+checked at dispatch against the turn's `subagent_fence` (read from the same
+state channel the middleware reads, same denial text) and against an
+enforcement gate built from the same `enforcement_*` config fields (denylist
+exact-parity; rate limits apply with a **per-path sliding window** — the
+middleware instance is constructed after the late-tools seam runs, so the
+window cannot be shared without reordering the graph builder; an operator who
+needs a bridge-specific budget can rate-limit the audit-visible `ptc:` names).
+Denied bridged calls are recorded (`ptc:` audit rows, success=false), so
+policy blocks are as observable on this path as on the direct one.
 
 ## Reality check (2026-08-18, the spike's first finding)
 

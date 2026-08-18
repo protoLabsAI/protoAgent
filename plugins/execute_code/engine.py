@@ -143,7 +143,27 @@ def _record_bridged_call(session_id: str, name: str, args: dict, result: str, du
         log.debug("[execute_code] bridged-call audit failed", exc_info=True)
 
 
-async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = ""):
+def _deny_reason(name: str, gate, fence) -> str | None:
+    """Binding-path parity for a bridged call (ADR 0103 S4, #2807): the same
+    pre-execution checks a model-issued call meets, in the same order the graph
+    runs them — the subagent fence (per-turn state), then the enforcement gate
+    (config denylist + rate limits). A bridged call is never a second, softer
+    path to a tool; it is the same path with a different caller."""
+    if fence is not None and name not in fence:
+        # Same reason text as SubagentFenceMiddleware._deny_reason — the script
+        # (and the model reading its stderr) sees the identical policy message.
+        return (
+            f"tool '{name}' is outside this background subagent's allowlist "
+            f"({', '.join(sorted(fence))}) — work within the allowed tools."
+        )
+    if gate is not None:
+        return gate(name)
+    return None
+
+
+async def _service_rpc(
+    req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = "", gate=None, fence=None
+):
     """Read RPC requests from the child, invoke real tools, write back results."""
     import time
 
@@ -158,8 +178,16 @@ async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: 
             continue
         rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
         tool = tool_map.get(name)
+        denied = _deny_reason(name, gate, fence) if tool is not None else None
         if tool is None:
             resp = {"id": rid, "ok": False, "error": f"tool '{name}' not available"}
+        elif denied:
+            # Same "Blocked by policy:" prefix the enforcement/fence ToolMessages
+            # carry — and the denial is a RECORDED bridged call (success=False),
+            # so policy blocks are as observable on this path as on the direct one.
+            err = f"Blocked by policy: {denied}"
+            resp = {"id": rid, "ok": False, "error": err}
+            _record_bridged_call(session_id, name, args, err, 0, False)
         else:
             started = time.monotonic()
             try:
@@ -194,11 +222,23 @@ def _resolve_child_interpreter() -> str | None:
     return str(exe) if exe is not None else None
 
 
-async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate: int = 6000, session_id: str = "") -> str:
+async def run_code(
+    code: str,
+    tool_map: dict,
+    *,
+    timeout: float = 30.0,
+    truncate: int = 6000,
+    session_id: str = "",
+    gate=None,
+    fence=None,
+) -> str:
     """Run ``code`` in a child process with a tool-RPC bridge; return its stdout.
 
     ``session_id`` attributes the run's bridged tool calls in the audit log
-    (ADR 0103 S3); empty degrades to the literal ``"ptc"`` bucket.
+    (ADR 0103 S3); empty degrades to the literal ``"ptc"`` bucket. ``gate``
+    (``name -> deny-reason | None``, from the enforcement config) and ``fence``
+    (the turn's subagent allowlist, or None) apply the model-path policy checks
+    to every bridged call (S4 binding parity).
     """
     interpreter = _resolve_child_interpreter()
     if interpreter is None:
@@ -265,7 +305,7 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
         async def _serve() -> None:
             reader, writer = await authed
             try:
-                await _service_rpc(reader, writer, tool_map, session_id=session_id)
+                await _service_rpc(reader, writer, tool_map, session_id=session_id, gate=gate, fence=fence)
             finally:
                 with contextlib.suppress(Exception):
                     writer.close()
@@ -362,7 +402,41 @@ def _tool_signature(t) -> str:
 _MAX_SIGNATURE_LINES = 25
 
 
-def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000):
+def _build_enforcement_gate(graph_config):
+    """The bridge's copy of ``EnforcementMiddleware._enforce`` (ADR 0103 S4),
+    built from the SAME config fields the graph wires the middleware from —
+    exact-name denylist first, then the sliding-window rate limit. One honest
+    deviation, by construction: the middleware instance is built AFTER the
+    late-tools seam runs, so the limiter here is a separate window over the
+    same limits — bridged and direct calls each get the configured budget
+    rather than sharing one. The denylist (the security-relevant half) is
+    exact parity. Core wires no predicate; a fork that adds one should extend
+    this gate too."""
+    if graph_config is None or not getattr(graph_config, "enforcement_enabled", False):
+        return None
+    denied = set(getattr(graph_config, "enforcement_disallowed_tools", None) or ())
+    limits = getattr(graph_config, "enforcement_rate_limits", None)
+    if not denied and not limits:
+        return None
+    from enforcement.rate_limiter import RateLimiter
+
+    limiter = RateLimiter(limits) if limits else None
+
+    def _gate(name: str) -> str | None:
+        if name in denied:
+            return f"Tool '{name}' is disabled by policy."
+        if limiter is not None:
+            allowed, reason = limiter.check(name)
+            if not allowed:
+                return reason
+        return None
+
+    return _gate
+
+
+def build_execute_code_tool(
+    all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000, graph_config=None
+):
     """Build the ``execute_code`` LangChain tool over an allowlist of tools.
 
     ``all_tools`` is the agent's full toolset. ``tools`` empty/None exposes the
@@ -370,13 +444,15 @@ def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.
     exactly those names. Either way ``_NEVER_BRIDGED`` is subtracted — HITL and
     delegation are structurally unbridgeable, not policy preferences. ``timeout``
     (seconds) and ``truncate`` (chars of stdout) come from the plugin's
-    ``execute_code`` config section.
+    ``execute_code`` config section. ``graph_config`` (the full graph config the
+    late-tools seam passes) supplies the enforcement fields for S4 parity.
     """
     from langchain_core.tools import tool
 
     allow = set(tools or []) or set(_DEFAULT_BRIDGE_TOOLS)
     allow -= _NEVER_BRIDGED
     tool_map = {t.name: t for t in all_tools if t.name in allow}
+    enforcement_gate = _build_enforcement_gate(graph_config)
     ordered = [tool_map[n] for n in sorted(tool_map)]
     sig_lines = [_tool_signature(t) for t in ordered[:_MAX_SIGNATURE_LINES]]
     overflow = [t.name for t in ordered[_MAX_SIGNATURE_LINES:]]
@@ -411,8 +487,22 @@ def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.
         # InjectedState lane, not current_session_id() (empty inside tool bodies).
         # Excluded from the model-facing schema; None on a direct ainvoke.
         sid = str(state.get("session_id") or "") if isinstance(state, dict) else ""
+        # S4 fence parity: a fenced background run that allowlists execute_code
+        # must not bridge past the fence — read the turn's stamped allowlist from
+        # the same state channel SubagentFenceMiddleware reads, and apply it to
+        # every bridged call. No fence on the turn → None → no check.
+        raw_fence = state.get("subagent_fence") if isinstance(state, dict) else None
+        fence = frozenset(raw_fence) if raw_fence else None
         try:
-            return await run_code(code, tool_map, timeout=timeout, truncate=truncate, session_id=sid)
+            return await run_code(
+                code,
+                tool_map,
+                timeout=timeout,
+                truncate=truncate,
+                session_id=sid,
+                gate=enforcement_gate,
+                fence=fence,
+            )
         except Exception as exc:
             log.exception("[execute_code] harness failure")
             return f"Error: execute_code harness failed: {type(exc).__name__}: {exc}"

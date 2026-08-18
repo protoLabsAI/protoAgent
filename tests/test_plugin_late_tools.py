@@ -80,3 +80,34 @@ def test_registry_collects_late_factories_and_rejects_non_callables():
     reg.register_late_tool_factory(lambda tools, cfg: None)
     reg.register_late_tool_factory("not-callable")  # ignored with a warning
     assert len(reg.late_tool_factories) == 1
+
+
+# --- binding-path parity (ADR 0103 S4, #2807) --------------------------------
+
+
+def test_late_factory_receives_denylist_final_toolset():
+    # A proxying factory (execute_code's bridge) snapshots its tool_map from the
+    # list it receives — so that list must already be denylist-final. Before S4
+    # the factories ran pre-sweep and a disabled tool stayed bridgeable.
+    seen: dict[str, list[str]] = {}
+
+    def factory(all_tools, config):
+        seen["names"] = [t.name for t in all_tools]
+        return None
+
+    create_agent_graph(
+        LangGraphConfig(tools_disabled=["current_time"]),
+        late_tool_factories=[factory],
+    )
+    assert seen.get("names"), "factory should be called"
+    assert "current_time" not in seen["names"]
+
+
+def test_late_tool_itself_is_still_denylistable():
+    # Factories now run AFTER the main sweep, so their outputs meet their own
+    # pass — tools.disabled naming a late tool must still drop it.
+    graph = create_agent_graph(
+        LangGraphConfig(tools_disabled=["_sentinel"]),
+        late_tool_factories=[lambda tools, cfg: _sentinel],
+    )
+    assert "_sentinel" not in _bound_names(graph)

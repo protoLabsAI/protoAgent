@@ -1144,11 +1144,23 @@ def create_agent_graph(
 
         all_tools.extend(build_fs_tools(config))
 
+    # Operator denylist over the assembled set — covers the tools appended since the
+    # extra_tools filter above (task/task_batch, the filesystem tools incl.
+    # ``run_command``). Runs BEFORE the late-tools seam (ADR 0103 S4, #2807): a late
+    # factory that proxies other tools (execute_code's bridge) snapshots its tool_map
+    # from this list, so a denylisted name must already be gone — previously the
+    # factories saw the pre-sweep set and a tool could be unbound from the model yet
+    # still bridgeable from a script. This is also what makes ``tools.disabled:
+    # [run_command]`` actually work (#1527-era gap: the filter used to live only
+    # inside get_all_tools, which fs tools bypass).
+    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+
     # Plugin-contributed late tools (the late-tools seam) — factories that need the
-    # FULLY assembled toolset (core + subagent + plugin + MCP tools). Built
-    # here, before the deferred meta-tool, so a late tool can wrap or proxy any other
-    # tool (but never itself) and is still surfaced by search_tools.
-    # factory(all_tools, config) -> tool | list[tool] | None; a raiser is skipped.
+    # FULLY assembled (and now denylist-final) toolset: core + subagent + plugin +
+    # MCP tools. Built here, before the deferred meta-tool, so a late tool can wrap
+    # or proxy any other tool (but never itself) and is still surfaced by
+    # search_tools. factory(all_tools, config) -> tool | list[tool] | None; a
+    # raiser is skipped.
     for _late_factory in late_tool_factories or ():
         try:
             _produced = _late_factory(all_tools, config)
@@ -1160,11 +1172,10 @@ def create_agent_graph(
         if _produced:
             all_tools.extend(_produced if isinstance(_produced, list) else [_produced])
 
-    # Operator denylist, final pass — covers the tools appended since the extra_tools
-    # filter above (task/task_batch, the filesystem tools incl. ``run_command``, late-seam
-    # tools). Sits before the deferred build so search_tools never advertises a dropped
-    # name. This is what makes ``tools.disabled: [run_command]`` actually work (#1527-era
-    # gap: the filter used to live only inside get_all_tools, which fs tools bypass).
+    # Denylist over the late tools THEMSELVES — the factories ran after the sweep
+    # above (so their inputs were final), which means their outputs haven't met the
+    # filter yet: without this pass ``tools.disabled: [execute_code]`` would silently
+    # re-bind. Everything else is already filtered, so only late-seam names can drop.
     all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
