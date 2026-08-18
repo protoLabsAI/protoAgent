@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-
 import os
 
 log = logging.getLogger("protoagent.plugins.artifact")

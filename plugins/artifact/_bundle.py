@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-
 from . import _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
@@ -17,7 +16,8 @@ log = logging.getLogger("protoagent.plugins.artifact")
 # trustworthy as an index.
 #
 # ``_store._commit_version`` returns the POST-TRIM array length, not a lifetime-monotonic
-# counter: once an artifact's version count has ever exceeded ``_config._max_versions()``,
+# counter: once an artifact's version count has ever exceeded the retention cap
+# (``_max_versions`` in ``_config``),
 # ``_store._write_store`` truncates from the FRONT (oldest dropped), so a later commit can report
 # the SAME number as an earlier one, and "version N" no longer means "index N-1". We detect
 # that a trim has ever happened for this artifact structurally — its oldest surviving
