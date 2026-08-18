@@ -810,6 +810,10 @@
           "title": "0102 — The trajectory: append-only session log + derived surface"
         },
         {
+          "path": "adr/0103-programmatic-tool-calls-from-execute-code.md",
+          "title": "0103 — Programmatic tool calls: agent tools callable from execute_code"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
