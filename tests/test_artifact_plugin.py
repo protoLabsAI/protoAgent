@@ -1244,7 +1244,9 @@ def test_text_ext_covers_data_and_code_files(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     for name, body in (("t.tsv", "a\tb\n1\t2"), ("s.py", "print('hi')")):
         f = tmp_path / name
-        f.write_text(body, encoding="utf-8")
+        # newline="\n" pins LF on disk — Windows' default translation writes CRLF and
+        # the verbatim-preview equality below would fail there (the CRLF trap, cf. #2814).
+        f.write_text(body, encoding="utf-8", newline="\n")
         art.save_file_artifact.invoke({"path": str(f)})
         assert _arts(art)[0]["versions"][0]["code"] == body
 
