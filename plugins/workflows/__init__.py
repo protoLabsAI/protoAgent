@@ -602,6 +602,16 @@ def register(registry: Any) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get("/{name}/recipe")
+    async def _recipe(name: str) -> dict:
+        # The FULL recipe document (prompts, output template, gates) — what the
+        # builder loads to EDIT. `/list` stays a summary. Declared after the /runs
+        # routes so a run id never resolves as a recipe name.
+        recipe = _reg().get(name)
+        if recipe is None:
+            raise HTTPException(status_code=404, detail=f"no workflow named {name!r}")
+        return {"recipe": recipe}
+
     @router.delete("/{name}")
     async def _delete(name: str) -> dict:
         return {"deleted": _reg().delete(name)}

@@ -254,6 +254,26 @@ def test_runs_all_route_is_not_captured_as_a_run_id(client, tmp_path):
     assert client.get("/api/plugins/workflows/runs/ghost-id").status_code == 404
 
 
+def test_recipe_route_returns_the_full_document(client):
+    gated = {
+        "name": "editme",
+        "version": 1,
+        "steps": [{"id": "a", "subagent": "researcher", "prompt": "p {{inputs.x}}", "gate": "human"}],
+        "inputs": [{"name": "x", "required": True}],
+        "output": "{{steps.a.output}}",
+    }
+    assert client.post("/api/plugins/workflows/save", json=gated).status_code == 200
+    got = client.get("/api/plugins/workflows/editme/recipe").json()["recipe"]
+    assert got["steps"][0]["prompt"] == "p {{inputs.x}}"
+    assert got["steps"][0]["gate"] == "human"
+    assert got["output"] == "{{steps.a.output}}"
+    assert client.get("/api/plugins/workflows/ghost/recipe").status_code == 404
+    # the summary list marks the gate for the DAG lanes
+    listed = client.get("/api/plugins/workflows/list").json()["workflows"]
+    me = next(w for w in listed if w["name"] == "editme")
+    assert me["steps"][0].get("gate") == "human"
+
+
 def test_validate_route_returns_errors_as_data(client):
     bad = {"name": "x", "steps": [{"id": "a", "subagent": "nope", "prompt": "p", "depends_on": ["z"]}]}
     errs = client.post("/api/plugins/workflows/validate", json=bad).json()["errors"]

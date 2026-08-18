@@ -70,6 +70,8 @@ class WorkflowRegistry:
                             "id": s.get("id"),
                             "subagent": s.get("subagent"),
                             "depends_on": ([dep] if isinstance(dep := s.get("depends_on"), str) else list(dep or [])),
+                            # the Studio's DAG lanes mark gated steps; only `human` exists
+                            **({"gate": "human"} if s.get("gate") == "human" else {}),
                         }
                         for s in (r.get("steps") or [])
                         if isinstance(s, dict)
