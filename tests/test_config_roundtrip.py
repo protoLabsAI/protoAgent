@@ -215,7 +215,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "plugins_dir": "",
     "plugins_disabled": [],
     "plugins_enabled": [],
-    "plugins_sources_allow": [],
+    "plugins_sources_allow": None,  # key absent in the example → open (#2743)
     "plugins_sources_official": ["github.com/protoLabsAI/*"],  # ADR 0071 D3 (#2721)
     "plugins_sources_acked": [],
     "plugins_trust_unverified": False,
@@ -715,7 +715,7 @@ def test_plugins_sources_empty_section_is_empty_list(tmp_path):
     """plugins.sources present-but-empty -> (sources or {}).get('allow', []) -> []."""
     path = _write_yaml(tmp_path, "plugins:\n  sources:\n")
     cfg = LangGraphConfig.from_yaml(path)
-    assert cfg.plugins_sources_allow == []
+    assert cfg.plugins_sources_allow is None
 
 
 def test_null_top_level_section_falls_back_to_defaults(tmp_path):

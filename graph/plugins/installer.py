@@ -134,8 +134,10 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
     path-boundary widening (never bare ``pat*``), both sides normalized, with the
     ``.git`` trim applied only to glob-free entries (a glob's ``.git`` suffix is
     semantics, not spelling)."""
+    if allow is None:
+        return True  # key absent — open (the documented default)
     if not allow:
-        return True
+        return False  # EXPLICIT empty list — deny-all (#2743 item 1)
     from graph.plugins.trust import source_matches
 
     return source_matches(url, allow)
@@ -242,7 +244,8 @@ def _allow_unbundled_deps() -> bool:
 
 def configured_allowlist() -> list[str] | None:
     """`plugins.sources.allow` read from the live config file (for the CLI, which
-    runs without a loaded LangGraphConfig). None = open."""
+    runs without a loaded LangGraphConfig). ``None`` = key absent (open);
+    ``[]`` = explicit deny-all (#2743 item 1); non-empty = the allowlist."""
     try:
         import yaml
 
@@ -252,8 +255,12 @@ def configured_allowlist() -> list[str] | None:
         if not cfg_path.exists():
             return None
         data = yaml.safe_load(cfg_path.read_text()) or {}
-        allow = (((data.get("plugins") or {}).get("sources") or {}).get("allow")) or None
-        return [str(x) for x in allow] if allow else None
+        sources = ((data.get("plugins") or {}).get("sources")) or {}
+        if "allow" not in sources:
+            return None  # key absent — open
+        # Explicit [] survives as [] (deny-all, #2743 item 1) — the old `or None`
+        # collapsed it back to open, exactly the ambiguity this distinction removes.
+        return [str(x) for x in (sources.get("allow") or [])]
     except Exception:  # noqa: BLE001
         return None
 
@@ -641,9 +648,13 @@ def install(
     if ref:
         _validate_ref(ref)  # before it reaches git or the GitHub API URL (PR #1140 QA)
     if not _source_allowed(url, allow):
-        raise InstallError(
-            f"source {url!r} is not on plugins.sources.allow — add it or install from an allowed origin."
+        detail = (
+            "plugins.sources.allow is an explicit empty list (deny-all) — list the origins you trust, "
+            "or remove the key to allow any source."
+            if allow is not None and not allow
+            else f"source {url!r} is not on plugins.sources.allow — add it or install from an allowed origin."
         )
+        raise InstallError(detail)
 
     target_root = live_plugins_dir()
     target_root.mkdir(parents=True, exist_ok=True)

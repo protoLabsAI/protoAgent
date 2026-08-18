@@ -768,7 +768,13 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 # store MUST survive this dict — an ack that doesn't persist re-asks
                 # forever (the exact write-path drop the June audit warned about).
                 "sources": {
-                    "allow": list(config.plugins_sources_allow),
+                    # Absent-vs-explicit-empty is semantic (#2743): None (open)
+                    # OMITS the key; [] (deny-all) writes an explicit empty list.
+                    **(
+                        {"allow": list(config.plugins_sources_allow)}
+                        if config.plugins_sources_allow is not None
+                        else {}
+                    ),
                     "official": list(config.plugins_sources_official),
                     "acked": list(config.plugins_sources_acked),
                 },

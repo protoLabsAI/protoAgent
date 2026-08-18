@@ -1034,3 +1034,57 @@ def test_ls_remote_no_auth_env_without_token(monkeypatch):
     installer._lsremote_cache.clear()
     installer._ls_remote_sha("https://github.com/protoLabsAI/public-plugin", "")
     assert cap["env"] is None  # no token → plain env, unchanged behavior
+
+
+# ── absent-open vs explicit-empty-deny (#2743 item 1) ─────────────────────────
+
+
+def test_source_allowed_absent_is_open_explicit_empty_denies():
+    from graph.plugins.installer import _source_allowed
+
+    url = "https://github.com/someone/some-plugin"
+    assert _source_allowed(url, None) is True  # key absent — the documented open default
+    assert _source_allowed(url, []) is False  # explicit [] — deny-all, the hardening stance
+    assert _source_allowed(url, ["github.com/protoLabsAI/*"]) is False
+    assert _source_allowed("https://github.com/protoLabsAI/x", ["github.com/protoLabsAI/*"]) is True
+
+
+def test_install_names_deny_all_distinctly(tmp_path, monkeypatch):
+    from graph.plugins.installer import InstallError, install
+
+    try:
+        install("https://github.com/someone/some-plugin", allow=[])
+        raise AssertionError("expected InstallError")
+    except InstallError as e:
+        assert "deny-all" in str(e)
+
+
+def test_configured_allowlist_preserves_explicit_empty(tmp_path, monkeypatch):
+    """The CLI path collapsed explicit [] back to None (open) via `or None` —
+    exactly the ambiguity #2743 removes."""
+    import graph.plugins.installer as inst
+
+    cfg = tmp_path / "langgraph-config.yaml"
+    cfg.write_text("plugins:\n  sources:\n    allow: []\n")
+    monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: cfg)
+    assert inst.configured_allowlist() == []
+
+    cfg.write_text("plugins:\n  sources: {}\n")
+    assert inst.configured_allowlist() is None
+
+    cfg.write_text("plugins:\n  sources:\n    allow: [github.com/protoLabsAI/*]\n")
+    assert inst.configured_allowlist() == ["github.com/protoLabsAI/*"]
+
+
+def test_from_yaml_distinguishes_and_warns_on_explicit_empty(tmp_path, caplog):
+    from graph.config import LangGraphConfig
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("plugins:\n  sources:\n    allow: []\n")
+    with caplog.at_level("WARNING"):
+        parsed = LangGraphConfig.from_yaml(str(cfg))
+    assert parsed.plugins_sources_allow == []
+    assert "DENY-ALL" in caplog.text  # the migration flip is loud, never silent
+
+    cfg.write_text("plugins: {}\n")
+    assert LangGraphConfig.from_yaml(str(cfg)).plugins_sources_allow is None

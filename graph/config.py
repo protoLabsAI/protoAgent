@@ -303,6 +303,26 @@ def _default_filesystem_allow_run() -> bool:
     return os.environ.get("PROTOAGENT_UI", "").strip().lower() != "none"
 
 
+def _parse_sources_allow(sources: dict):
+    """``plugins.sources.allow`` with the absent-vs-explicit-empty distinction
+    (#2743 item 1): absent → ``None`` (open), explicit ``[]`` → deny-all,
+    non-empty → the allowlist. An explicit empty list previously meant OPEN —
+    warn loudly on the flip so an operator carrying a literal ``allow: []``
+    learns their config now hardens instead of silently changing behavior."""
+    if "allow" not in sources:
+        return None
+    allow = [str(x) for x in (sources.get("allow") or [])]
+    if not allow:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[plugins] sources.allow is an EXPLICIT empty list — since #2743 that means "
+            "DENY-ALL plugin installs (it used to mean open). Remove the key to allow any "
+            "source, or list the origins you trust."
+        )
+    return allow
+
+
 def _default_prompt_cache_ttl() -> str:
     """Profile-aware app-default for ``prompt_cache.ttl`` (#2780, ADR 0101 D7).
 
@@ -979,9 +999,13 @@ class LangGraphConfig:
     # runs code on import, so it stays consent-gated (ADR 0071). No effect off-frozen
     # (a source/server run pip-installs into its own venv as before).
     plugins_allow_unbundled_deps: bool = False
-    # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org globs
-    # (e.g. ``github.com/protoLabsAI/*``); empty = any URL allowed (gated install).
-    plugins_sources_allow: list[str] = field(default_factory=list)
+    # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org
+    # globs (e.g. ``github.com/protoLabsAI/*``). Absent-vs-explicit-empty is
+    # load-bearing since #2743 (the #2691 lesson, same pattern as ``official``
+    # below): ``None`` (key absent) = any URL allowed; an explicit empty list =
+    # DENY-ALL (a hardening stance, what a defense-minded admin writing ``[]``
+    # means); non-empty = the allowlist. Previously ``[]`` silently meant open.
+    plugins_sources_allow: list[str] | None = None
     # Trust & consent (ADR 0071 D3, #2721) — decides only whether the console asks
     # for a one-time "this runs code" confirm before an install; install ≠ enable ≠
     # trust semantics are untouched. ``official``: auto-trusted source globs —
@@ -1600,7 +1624,7 @@ class LangGraphConfig:
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
             plugins_allow_unbundled_deps=bool(plugins.get("allow_unbundled_deps", cls.plugins_allow_unbundled_deps)),
-            plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
+            plugins_sources_allow=_parse_sources_allow(plugins.get("sources", {}) or {}),
             # ``official``'s absent-vs-explicit-empty distinction is load-bearing
             # (#2691's lesson): absent → the protoLabsAI default; an explicit empty
             # list → "no official sources" (a fork's hardening choice).
