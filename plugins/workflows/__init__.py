@@ -7,13 +7,23 @@ and the engine taps core **only via the plugin SDK** (`graph.sdk.run_subagent` +
 
 Contributes:
   • tools  `run_workflow`, `save_workflow` (the agent runs/saves recipes)
-  • router `/api/plugins/workflows/{list, {name}/run, save, {name}}` (the console Studio surface)
+  • router `/api/plugins/workflows/{list, {name}/run, {name}/start, save, validate,
+    runs, runs/all, runs/{id}, runs/{id}/resume, {name}}` (the console Studio surface)
   • recipe dir (its bundled recipes, also exposed to the shared registry per ADR 0027)
   • run state — every execution persists a durable per-run audit record (`run_state.py`)
+
+Two run shapes serve two callers. The agent tool and the legacy `POST /{name}/run`
+are **synchronous** — the caller wants the final output in the reply. The Studio
+uses `POST /{name}/start`: inputs are validated up front (a bad request 400s, it
+never mints a failed run), the DAG executes detached, and the console polls
+`GET /runs/{run_id}` — whose record now carries the step graph + per-step lifecycle
+(`step_started`/`step_done`) — to render a live timeline.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -24,10 +34,24 @@ from plugins.workflows.engine import execute_workflow, render_template, resolve_
 from plugins.workflows.registry import WorkflowRegistry
 from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_PAUSED, WorkflowRunStore
 
+log = logging.getLogger("protoagent.plugins.workflows")
+
 _RECIPES = Path(__file__).parent / "recipes"
 
-
 _PAUSE_PREVIEW = 400  # chars of each prior step's output shown in the pause notice
+
+# Terminal-run retention (`.runs/` pruning); the manifest's `max_runs` overrides in register().
+_MAX_RUNS = 200
+
+# Detached Studio runs — referenced so the loop can't GC an in-flight DAG.
+_BG_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro: Awaitable) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(coro)
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+    return task
 
 
 def _paused_message(name: str, result: dict) -> str:
@@ -88,13 +112,9 @@ def _build_registry(extra_dirs: list[str] | None) -> WorkflowRegistry:
     return WorkflowRegistry(dirs, writable_dir=str(writable))
 
 
-async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None, run_store=None) -> dict:
-    """Validate → resolve → run a recipe over subagents (each step via the SDK). Raises
-    ValueError on unknown/invalid recipe or missing inputs.
-
-    Every execution gets a UUID run_id and a durable audit trail: a ``WorkflowRunStore``
-    (default: ``{writable_dir}/.runs/{run_id}.json``) is written on start, after each
-    completed step, and on finish — the run flow itself is unchanged."""
+def _prepare(reg: WorkflowRegistry, name: str, inputs: dict) -> tuple[dict, dict]:
+    """Validate the recipe + resolve inputs — everything that should fail the CALLER
+    (a 400 / readable tool error), long before a run record exists. Raises ValueError."""
     recipe = reg.get(name)
     if recipe is None:
         raise ValueError(f"no workflow named {name!r}")
@@ -104,12 +124,23 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None,
     resolved, missing = resolve_inputs(recipe, inputs or {})
     if missing:
         raise ValueError(f"missing required input(s): {', '.join(missing)}")
+    return recipe, resolved
 
-    if run_store is None:
-        run_store = WorkflowRunStore(_writable_dir() / ".runs")
-    run_id = run_store.start(name, resolved)
+
+async def _run_prepared(
+    recipe: dict,
+    name: str,
+    resolved: dict,
+    run_store: WorkflowRunStore,
+    run_id: str,
+    on_step=None,
+) -> dict:
+    """Execute an already-validated recipe against its live run record: the store is
+    updated at each step dispatch/completion (the Studio's polling target) and closed
+    out with the final envelope on finish/pause."""
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+        run_store.step_started(step_id)
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
         out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
@@ -148,10 +179,61 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None,
     # Failed steps never reach _run_step's step_done (the engine records their error
     # text inline) — mirror that error text into the run record.
     for sid in result["failed"]:
-        run_store.step_done(sid, result["steps"][sid])
-    run_store.finish(STATUS_FAILED if result["failed"] else STATUS_DONE)
+        run_store.step_done(sid, result["steps"][sid], failed=True)
+    run_store.finish(STATUS_FAILED if result["failed"] else STATUS_DONE, result)
     result["run_id"] = run_id
     return result
+
+
+async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None, run_store=None) -> dict:
+    """Validate → resolve → run a recipe over subagents (each step via the SDK). Raises
+    ValueError on unknown/invalid recipe or missing inputs.
+
+    Every execution gets a UUID run_id and a durable audit trail: a ``WorkflowRunStore``
+    (default: ``{writable_dir}/.runs/{run_id}.json``) is written on start, at each step
+    dispatch and completion, and on finish."""
+    recipe, resolved = _prepare(reg, name, inputs)
+    if run_store is None:
+        run_store = WorkflowRunStore(_writable_dir() / ".runs")
+    run_id = run_store.start(name, resolved, steps=recipe.get("steps"))
+    run_store.prune(keep=_MAX_RUNS)
+    return await _run_prepared(recipe, name, resolved, run_store, run_id, on_step)
+
+
+async def _start_background(
+    reg: WorkflowRegistry,
+    name: str,
+    inputs: dict,
+    notify: Callable[[str, dict], None] | None = None,
+    run_store: WorkflowRunStore | None = None,
+) -> str:
+    """The Studio's run shape: validate NOW (a bad request fails the caller, it never
+    mints a failed run record), create the run record, execute detached, return the
+    run_id the console polls. ``notify(event, data)`` fires on the terminal/paused
+    transition (the plugin event bus — a rail dot when the operator looks away)."""
+    recipe, resolved = _prepare(reg, name, inputs)
+    if run_store is None:
+        run_store = WorkflowRunStore(_writable_dir() / ".runs")
+    run_id = run_store.start(name, resolved, steps=recipe.get("steps"))
+    run_store.prune(keep=_MAX_RUNS)
+
+    async def _run() -> None:
+        try:
+            result = await _run_prepared(recipe, name, resolved, run_store, run_id)
+        except Exception:  # noqa: BLE001 — the record is already finished(FAILED)
+            log.exception("[workflows] background run %s (%s) failed", run_id, name)
+            if notify:
+                notify("run-finished", {"run_id": run_id, "recipe": name, "status": STATUS_FAILED})
+            return
+        if notify:
+            if result.get("paused"):
+                notify("run-paused", {"run_id": run_id, "recipe": name, "paused_step": result.get("paused_step")})
+            else:
+                status = STATUS_FAILED if result.get("failed") else STATUS_DONE
+                notify("run-finished", {"run_id": run_id, "recipe": name, "status": status})
+
+    _spawn(_run())
+    return run_id
 
 
 async def _safe(cb: Callable[[dict], Awaitable[None]], event: dict) -> None:
@@ -194,6 +276,29 @@ def _list_paused_runs(reg: WorkflowRegistry, run_store: WorkflowRunStore | None 
     return [_paused_run_view(reg, state) for state in run_store.paused()]
 
 
+def _resume_precheck(run_store: WorkflowRunStore, run_id: str, action: str, edits: dict | None) -> dict:
+    """The resume guards that must fail the CALLER — before anything flips on disk.
+    Failing later would orphan the run: gone from the pending list, stuck ``running``,
+    unresumable (QA panel blocker). Returns the paused state. Raises ValueError."""
+    if action not in ("approve", "edit", "reject"):
+        raise ValueError(f"unknown resume action {action!r} (approve | edit | reject)")
+    # A non-empty STRING is required. `str(x).strip()` was the old check, but
+    # `str(None)` == "None" (truthy), so a JSON `null` prompt slipped past this up-front
+    # guard, flipped the run to `running`, then failed a second check too late —
+    # orphaning it (#2143). isinstance catches null / missing / non-string here.
+    _edit_prompt = (edits or {}).get("prompt")
+    if action == "edit" and not (isinstance(_edit_prompt, str) and _edit_prompt.strip()):
+        raise ValueError("edit action requires a non-empty edits.prompt")
+    state = run_store.load(run_id)
+    if state is None:
+        raise ValueError(f"no run {run_id!r}")
+    if state.get("status") != STATUS_PAUSED:
+        raise ValueError(f"run {run_id!r} is not paused (status: {state.get('status')})")
+    if not state.get("pending_step"):
+        raise ValueError(f"run {run_id!r} has no pending step to resume")
+    return state
+
+
 async def _resume(
     reg: WorkflowRegistry,
     run_id: str,
@@ -213,30 +318,10 @@ async def _resume(
     ``execute_workflow`` with the done steps seeded, so nothing already-run re-runs.
     The run flips to ``running`` and then to ``done``/``failed`` (or re-``paused`` if a
     *downstream* gate is hit). Raises ``ValueError`` on an unknown/non-paused run."""
-    if action not in ("approve", "edit", "reject"):
-        raise ValueError(f"unknown resume action {action!r} (approve | edit | reject)")
-    # Validate EVERYTHING up front — before the registry is consulted and long before
-    # the run flips to `running` on disk. Failing later would orphan the run: gone
-    # from the pending list, stuck `running`, unresumable (QA panel blocker).
-    # A non-empty STRING is required. `str(x).strip()` was the old check, but
-    # `str(None)` == "None" (truthy), so a JSON `null` prompt slipped past this up-front
-    # guard, flipped the run to `running`, then failed a second check too late —
-    # orphaning it (#2143). isinstance catches null / missing / non-string here, before
-    # the flip.
-    _edit_prompt = (edits or {}).get("prompt")
-    if action == "edit" and not (isinstance(_edit_prompt, str) and _edit_prompt.strip()):
-        raise ValueError("edit action requires a non-empty edits.prompt")
     if run_store is None:
         run_store = WorkflowRunStore(_writable_dir() / ".runs")
-
-    state = run_store.load(run_id)
-    if state is None:
-        raise ValueError(f"no run {run_id!r}")
-    if state.get("status") != STATUS_PAUSED:
-        raise ValueError(f"run {run_id!r} is not paused (status: {state.get('status')})")
-    pending_step = state.get("pending_step")
-    if not pending_step:
-        raise ValueError(f"run {run_id!r} has no pending step to resume")
+    state = _resume_precheck(run_store, run_id, action, edits)
+    pending_step = state["pending_step"]
 
     name = state["recipe_name"]
     recipe = reg.get(name)
@@ -249,6 +334,7 @@ async def _resume(
     run_store.resume(run_id)
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+        run_store.step_started(step_id)
         out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
         run_store.step_done(step_id, out)
         return out
@@ -282,10 +368,10 @@ async def _resume(
         result["output"] = _paused_message(name, result)
         return result
     # Failed steps (inline errors + a reject) never hit _run_step's step_done — mirror
-    # their error text into the record, matching _execute's finish path.
+    # their error text into the record, matching _run_prepared's finish path.
     for sid in result["failed"]:
-        run_store.step_done(sid, result["steps"][sid])
-    run_store.finish(STATUS_FAILED if result["failed"] else STATUS_DONE)
+        run_store.step_done(sid, result["steps"][sid], failed=True)
+    run_store.finish(STATUS_FAILED if result["failed"] else STATUS_DONE, result)
     result["run_id"] = run_id
     return result
 
@@ -301,6 +387,13 @@ def register(registry: Any) -> None:
     # Rescanning a handful of YAML files is cheap; staleness here is silent data loss.
     from runtime.state import STATE
 
+    global _MAX_RUNS
+    cfg = getattr(registry, "config", None) or {}
+    try:
+        _MAX_RUNS = max(1, int(cfg.get("max_runs", _MAX_RUNS)))
+    except (TypeError, ValueError):
+        pass
+
     _cache: dict[str, Any] = {"dirs": None, "reg": None}
 
     def _reg() -> WorkflowRegistry:
@@ -309,6 +402,13 @@ def register(registry: Any) -> None:
             _cache["dirs"] = dirs
             _cache["reg"] = _build_registry(list(dirs))
         return _cache["reg"]
+
+    def _notify(event: str, data: dict) -> None:
+        # Bus broadcast (ADR 0039) — best-effort; a Studio that's open polls anyway.
+        try:
+            registry.emit(event, data)
+        except Exception:  # noqa: BLE001
+            pass
 
     class _LiveRegistry:
         """What STATE.workflow_registry publishes — a thin proxy so consumers that
@@ -415,10 +515,20 @@ def register(registry: Any) -> None:
 
     @router.post("/{name}/run")
     async def _run_route(name: str, body: dict = Body(default={})) -> dict:
+        # Synchronous — blocks until the DAG completes. The Studio uses /start.
         try:
             return await _execute(_reg(), name, (body or {}).get("inputs") or {})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/{name}/start")
+    async def _start_route(name: str, body: dict = Body(default={})) -> dict:
+        # The Studio's live-run shape: validate now, run detached, poll GET /runs/{id}.
+        try:
+            run_id = await _start_background(_reg(), name, (body or {}).get("inputs") or {}, notify=_notify)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"started": True, "run_id": run_id}
 
     @router.post("/save")
     async def _save(body: dict = Body(...)) -> dict:
@@ -428,17 +538,67 @@ def register(registry: Any) -> None:
         path = _reg().save(body)
         return {"saved": True, "name": body.get("name"), "path": path}
 
+    @router.post("/validate")
+    async def _validate(body: dict = Body(...)) -> dict:
+        # The builder's live validation — the same checks /save enforces, as data
+        # instead of a 400, so the UI can show them inline while authoring.
+        return {"errors": validate_recipe(body or {}, known_subagents=sdk.subagent_types())}
+
     @router.get("/runs")
     async def _runs() -> dict:
         # The Pending Gates queue — only PAUSED runs, each with its parked step's
         # rendered prompt + prior outputs. Empty list when nothing is gated.
         return {"runs": _list_paused_runs(_reg())}
 
+    @router.get("/runs/all")
+    async def _runs_all(limit: int = 50) -> dict:
+        # Run history — summaries of every recorded run (any status), newest first.
+        store = WorkflowRunStore(_writable_dir() / ".runs")
+        return {"runs": store.recent(limit=limit)}
+
+    @router.get("/runs/{run_id}")
+    async def _run_get(run_id: str) -> dict:
+        # One run's full record — the Studio's live-timeline polling target and its
+        # history inspector (step graph, per-step status/timing, outputs, final envelope).
+        store = WorkflowRunStore(_writable_dir() / ".runs")
+        state = store.load(run_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+        return state
+
     @router.post("/runs/{run_id}/resume")
     async def _resume_route(run_id: str, body: dict = Body(default={})) -> dict:
         body = body or {}
+        action = body.get("action") or "approve"
+        edits = body.get("edits") or {}
+        if body.get("background"):
+            # Studio shape: precheck now (a bad action/prompt or non-paused run 400s
+            # without flipping anything), resume detached, poll GET /runs/{run_id}.
+            store = WorkflowRunStore(_writable_dir() / ".runs")
+            try:
+                _resume_precheck(store, run_id, action, edits)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            async def _bg() -> None:
+                try:
+                    result = await _resume(_reg(), run_id, action, edits)
+                except Exception:  # noqa: BLE001 — record already finished(FAILED)
+                    log.exception("[workflows] background resume %s failed", run_id)
+                    _notify("run-finished", {"run_id": run_id, "status": STATUS_FAILED})
+                    return
+                if result.get("paused"):
+                    _notify("run-paused", {"run_id": run_id, "paused_step": result.get("paused_step")})
+                else:
+                    _notify(
+                        "run-finished",
+                        {"run_id": run_id, "status": STATUS_FAILED if result.get("failed") else STATUS_DONE},
+                    )
+
+            _spawn(_bg())
+            return {"resumed": True, "run_id": run_id}
         try:
-            return await _resume(_reg(), run_id, body.get("action") or "approve", body.get("edits") or {})
+            return await _resume(_reg(), run_id, action, edits)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
