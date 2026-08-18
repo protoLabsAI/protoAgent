@@ -286,6 +286,20 @@ jobs:
         # a stalled download fails fast and retries instead of hanging the whole job.
         timeout-minutes: 8
         run: |
+          # The runner's own background apt (unattended-upgrades / apt-daily) can hold
+          # /var/lib/apt/lists/lock for tens of seconds right after boot — three quick
+          # 5s retries all collided with the SAME held lock and failed the job three
+          # separate times on 2026-08-18 (exit 100: "Could not get lock … held by
+          # process N (apt-get)"). Wait the lock out ONCE up front, bounded, instead
+          # of racing it: playwright's installer shells out to apt itself, so this is
+          # the only seam where we can be polite about it.
+          for i in $(seq 1 24); do
+            if ! sudo fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+              break
+            fi
+            echo "apt lock held by a background process — waiting (${i}/24)…"
+            sleep 5
+          done
           if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
             cmd="playwright install-deps chromium"   # binary cached → apt deps only
           else
@@ -296,7 +310,7 @@ jobs:
               exit 0
             fi
             echo "::warning::playwright install attempt $attempt stalled/failed; retrying…"
-            sleep 5
+            sleep 20
           done
           echo "::error::playwright install failed after 3 attempts"
           exit 1
