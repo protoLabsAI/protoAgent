@@ -154,6 +154,20 @@ The case `kind`s that ship:
   and assert on its synthesized output (patterns + rubric). Used to track the
   subagent workflows (research-and-brief, deep-research).
 
+### Negative assertions — `forbidden_patterns` and `forbidden_tools`
+
+Both positive channels have an inverse:
+
+- `forbidden_patterns: ["…"]` — substrings that must **not** appear in the
+  reply (a stale fact that must not be restated, a poisoning marker that must
+  not be obeyed).
+- `forbidden_tools: ["…"]` — tools that must **not** fire, checked against the
+  audit log. This is *selective* abstention: `expected_tools: []` asserts no
+  tool fired at all, while `forbidden_tools` lets unrelated tools fire and only
+  requires the named ones to stay cold — e.g. a plain calendar question may hit
+  the calendar tool but must not render a full daily brief. An errored attempt
+  still counts as fired: reaching for the tool is the violation.
+
 ### Gating a case on prerequisites — `requires_env`
 
 A case can declare `requires_env: [VAR, …]`. If any of those env vars is unset
@@ -176,6 +190,22 @@ it's gated:
 
 Declare an `acp` delegate, export `EVAL_CODING_AGENT=1`, and run
 `python -m evals.runner --tasks acp_delegation`.
+
+## Plugin-owned suites — `--tasks-file`
+
+A plugin repo can ship its own eval cases (same JSON shape, every assertion
+channel available) and run them with this runner against an instance that has
+the plugin installed:
+
+```bash
+python -m evals.runner --tasks-file ../cowork-plugin/evals/tasks.json
+```
+
+The file **replaces** the built-in suite for that run; compose with `--tasks`
+to filter within it. Reports land in `evals/results/` model-tagged like the
+core suite, so `evals/report.py` and `evals/compare.py` trend plugin suites
+alongside it. First consumer: the cowork pack's suite (document deliverables,
+daily-brief contract, drop-folder watch round-trip).
 
 ## Asserting the agent layer (subagents & workflows)
 

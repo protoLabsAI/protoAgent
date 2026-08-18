@@ -255,9 +255,10 @@
     "name": "Cowork (document skills)",
     "category": "Productivity",
     "official": true,
-    "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus schedule, memory-consolidation, and writing-voice habits (ADR 0083).",
+    "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083).",
     "adds": [
-      "skill"
+      "skill",
+      "verifier"
     ],
     "bundled": false,
     "install": "https://github.com/protoLabsAI/cowork-plugin",
