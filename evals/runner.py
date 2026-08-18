@@ -230,15 +230,23 @@ async def _run_prompt_case(
 
         since = verify.audit_now()
 
+        # An explicit ``context_id`` pins the A2A contextId (= the agent's
+        # session_id) for prompt cases too, not just goal cases — a suite that
+        # joins its cases against per-turn telemetry (evals.ptc_bench) needs a
+        # deterministic session key per case. Absent → the client's default
+        # per-call behavior, exactly as before.
+        ctx = case.get("context_id")
         if streaming:
             events, result = await client.stream(
                 case["prompt"],
                 timeout_s=case.get("timeout_s", 90),
+                context_id=ctx,
             )
         else:
             result = await client.ask(
                 case["prompt"],
                 timeout_s=case.get("timeout_s", 90),
+                context_id=ctx,
             )
 
         if result is None or result.state != "completed":

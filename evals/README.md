@@ -66,6 +66,28 @@ python -m evals.compare results/run-OLD.json results/run-NEW.json
 | `workflow` | A recipe runs end-to-end via `/api/workflows/{name}/run`; assert on its output **and** (optionally) on tool-firing — `expected_tools` / `expected_any_tools` check the audit log, so a case can require a step to have actually called a tool (e.g. a quant step that backtests, not one that only describes a backtest) |
 | `memory-regression` | Memory delivery-layer probes ([ADR 0069](../docs/adr/0069-memory-delivery-layer.md) D10): a knowledge-update case (seed a fact, seed its supersede, assert the newer value wins and the stale one is not restated — `forbidden_patterns`), an abstention case (ask about an adjacent-but-absent fact, judge that it declines rather than fabricates — `verify_rubric`), and a poisoning replay (ingest a doc with an embedded instruction payload, then a later benign turn; assert both the behavioral condition — the payload token never appears — and the store-level one — `verify_kb.max_chunks_containing` bounds the marker's row count so the "save a memory that …" payload never persists) |
 
+## PTC graduation bench (ADR 0103, #2807)
+
+The decision harness for programmatic tool calls — a two-lane suite over the
+same deterministic task, judged against thresholds pre-registered on #2807:
+
+```bash
+# once: fixtures + the project-registration snippet
+python -m evals.ptc_bench fixtures --dir /path/to/ptc-bench-files
+
+# the run: generates the two-lane tasks file, drives evals.runner, joins the
+# per-turn telemetry by pinned session id, prints the verdict
+python -m evals.ptc_bench run --project ptcbench --base-url http://127.0.0.1:7871 --reps 2
+```
+
+Lane provability rides the audit log: the loop lane forbids `execute_code`;
+the code lane REQUIRES `ptc:read_file` (the bridge's audit prefix) and forbids
+the direct tool — a run that quietly used the wrong mode fails its lane.
+Correctness is symmetric (labeled `SIZE:` answers, no character counting), so a
+cheaper-but-wrong lane can never graduate. Run it on ≥v0.138.0 with prompt
+caching ON — the history breakpoints made loop rounds cache-cheap, and an
+uncached comparison would flatter PTC dishonestly.
+
 ## File layout
 
 ```
