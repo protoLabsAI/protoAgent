@@ -262,18 +262,52 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
             os.unlink(path)
 
 
+# Never bridgeable, regardless of configuration (ADR 0103 D3, #2807):
+# - HITL tools: a LangGraph interrupt cannot park a subprocess mid-script — the
+#   same structural reason subagents hard-deny them; from the bridge it would
+#   surface as an opaque error after wedging the run.
+# - task/task_batch: nested delegation from model-written code is out of scope
+#   (D6) — a script that can spawn subagents is an escalation, not a batch call.
+# - execute_code itself: no recursion (as before).
+_NEVER_BRIDGED = frozenset({"ask_human", "request_user_input", "task", "task_batch", "execute_code"})
+
+# The curated read-mostly DEFAULT bridge set (ADR 0103 D3): what the script can
+# call when the operator hasn't named an allowlist. Read-only, individually
+# capped tools — batching reads is the pattern PTC exists for. An operator
+# widens it by naming tools in the plugin's ``tools`` config (explicit intent;
+# _NEVER_BRIDGED still applies). The old default exposed EVERY registered tool,
+# write tools and delegation included — the allowlist is the security posture,
+# and "everything" isn't a posture.
+_DEFAULT_BRIDGE_TOOLS = frozenset(
+    {
+        "read_file",
+        "list_dir",
+        "find_files",
+        "search_files",
+        "fetch_url",
+        "web_search",
+        "memory_recall",
+        "memory_list",
+        "current_time",
+    }
+)
+
+
 def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000):
     """Build the ``execute_code`` LangChain tool over an allowlist of tools.
 
-    ``all_tools`` is the agent's full toolset; ``execute_code`` itself is never
-    exposed to the script (no recursion). ``tools`` empty/None means expose all
-    other tools; ``timeout`` (seconds) and ``truncate`` (chars of stdout) come
-    from the plugin's ``execute_code`` config section.
+    ``all_tools`` is the agent's full toolset. ``tools`` empty/None exposes the
+    curated read-mostly default set (ADR 0103 D3); a configured list exposes
+    exactly those names. Either way ``_NEVER_BRIDGED`` is subtracted — HITL and
+    delegation are structurally unbridgeable, not policy preferences. ``timeout``
+    (seconds) and ``truncate`` (chars of stdout) come from the plugin's
+    ``execute_code`` config section.
     """
     from langchain_core.tools import tool
 
-    allow = set(tools or [])
-    tool_map = {t.name: t for t in all_tools if t.name != "execute_code" and (not allow or t.name in allow)}
+    allow = set(tools or []) or set(_DEFAULT_BRIDGE_TOOLS)
+    allow -= _NEVER_BRIDGED
+    tool_map = {t.name: t for t in all_tools if t.name in allow}
     available = ", ".join(sorted(tool_map)) or "(none)"
 
     description = (

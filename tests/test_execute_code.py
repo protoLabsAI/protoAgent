@@ -105,16 +105,57 @@ def test_build_excludes_self_and_respects_allowlist():
 
 @pytest.mark.asyncio
 async def test_built_tool_runs():
-    ec = build_execute_code_tool([echo_tool])
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
     out = await ec.ainvoke({"code": "print(tools.echo_tool(text='hi'))"})
     assert out == "HI"
 
 
 @pytest.mark.asyncio
 async def test_built_tool_rejects_empty():
-    ec = build_execute_code_tool([echo_tool])
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
     out = await ec.ainvoke({"code": "  "})
     assert "empty code" in out
+
+
+# --- the bridge allowlist is a posture (ADR 0103 D3, #2807) -------------------
+
+
+def test_default_bridge_set_is_curated_not_everything():
+    """No configured allowlist used to expose EVERY registered tool. The default
+    is now the curated read-mostly set — an unknown fake tool stays unbridged."""
+    from langchain_core.tools import tool as _tool
+
+    @_tool
+    async def read_file(project: str, path: str) -> str:
+        """Fake core read tool (name matches the curated set)."""
+        return "content"
+
+    ec = build_execute_code_tool([echo_tool, boom_tool, read_file])
+    assert "read_file" in ec.description  # curated-set member: bridged
+    assert "echo_tool" not in ec.description  # arbitrary tool: NOT bridged by default
+    assert "boom_tool" not in ec.description
+
+
+def test_hitl_and_delegation_are_never_bridgeable():
+    """ADR 0103 D3/D6: an interrupt can't park a subprocess, and delegation from
+    model-written code is out of scope — even an EXPLICIT config entry can't
+    bridge them (structural denial, not a policy default)."""
+    from langchain_core.tools import tool as _tool
+
+    @_tool
+    async def ask_human(question: str) -> str:
+        """Fake HITL tool."""
+        return "?"
+
+    @_tool
+    async def task(subagent_type: str, prompt: str) -> str:
+        """Fake delegation tool."""
+        return "done"
+
+    ec = build_execute_code_tool([ask_human, task, echo_tool], tools=["ask_human", "task", "echo_tool"])
+    assert "ask_human" not in ec.description
+    assert "task" not in ec.description
+    assert "echo_tool" in ec.description  # the explicit list otherwise works
 
 
 # --- plugin wiring ----------------------------------------------------------
@@ -170,3 +211,46 @@ async def test_frozen_without_runtime_answers_with_install_path(monkeypatch):
     out = await run_code("print('hi')", {})
     assert out.startswith("Error:")
     assert "install-python" in out and "Settings" in out
+
+
+# --- the spike measurement (ADR 0103 S1, #2807) -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ptc_collapse_mechanics_ten_reads_one_round():
+    """The number the spike exists to produce, in its deterministic half: a
+    10-read investigation through the bridge is ONE tool round whose
+    model-visible output is a small fraction of the bytes the loop equivalent
+    would have pushed through the context.
+
+    Loop mode: 10 tool rounds, each ~5KB result entering history and riding
+    every later call (cache-read after #2777, pruned at pressure after #2782 —
+    but present). PTC mode: the intermediate 50KB stays in the subprocess;
+    the model reads only the printed digest."""
+    from langchain_core.tools import tool as _tool
+
+    payload = "x" * 5_000
+
+    calls = {"n": 0}
+
+    @_tool
+    async def read_file(project: str, path: str) -> str:
+        """Fake 5KB read."""
+        calls["n"] += 1
+        return f"[{path}]\n{payload}"
+
+    code = (
+        "sizes = {}\n"
+        "for i in range(10):\n"
+        "    body = tools.read_file(project='demo', path=f'f{i}.txt')\n"
+        "    sizes[f'f{i}.txt'] = len(body)\n"
+        "print('files:', len(sizes), 'total bytes:', sum(sizes.values()))\n"
+    )
+    out = await run_code(code, {"read_file": read_file})
+
+    assert calls["n"] == 10  # ten real tool executions happened…
+    assert out == "files: 10 total bytes: 50090"  # …behind ONE model-visible result
+    intermediate_bytes = 10 * (len(payload) + len("[f0.txt]\n"))
+    # The model-visible output is <0.1% of what loop mode would have re-sent —
+    # the collapse the ADR gates on, measured rather than asserted by vibes.
+    assert len(out) < intermediate_bytes * 0.001

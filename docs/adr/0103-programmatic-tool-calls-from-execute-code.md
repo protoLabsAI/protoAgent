@@ -1,6 +1,47 @@
 # 0103 — Programmatic tool calls: agent tools callable from execute_code
 
-Status: **Proposed** (umbrella #2807; spike-gated)
+Status: **Proposed** (umbrella #2807; spike-gated) — **amended 2026-08-18: the
+bridge already existed** (see Reality check below)
+
+## Reality check (2026-08-18, the spike's first finding)
+
+Starting S1 surfaced that **the bridge this ADR designs already shipped** with
+the `execute_code` plugin itself (bd-pe2.6, the lean-core extraction): the
+child process gets a `tools` proxy object that RPCs each call back to the
+parent over a loopback TCP socket gated by a per-run token, and the parent
+dispatches via the real tools' own handlers. The plugin's docstring names
+programmatic tool-calling as its headline use. The ADR's authors (this one
+included) designed against an audit that never read the plugin — the record
+stands as a lesson in checking the tree before drafting.
+
+What this changes, decision by decision:
+
+- **D2 is SHIPPED, in a better wire shape than proposed.** The socket-RPC +
+  per-run token is strictly smaller than the proposed `POST /api/ptc/call`: no
+  new authenticated HTTP surface, an ephemeral port that dies with the run, a
+  token that gates the only connection. The HTTP-route design moves to
+  Rejected alternatives. The remaining D2 gap is real: dispatch is direct
+  `tool.ainvoke`, which bypasses the graph-level enforcement middleware and
+  subagent fences — now **S4**.
+- **D3 was the live gap — closed by S1.** The default bridge set was
+  *everything registered* (HITL, write tools, `task` included). S1 lands the
+  curated read-mostly default and the structural `_NEVER_BRIDGED` denial
+  (HITL + `task`/`task_batch` + self), applied even over an explicit config
+  entry.
+- **D4 (schemas visible to the model) is still open** — the shipped proxy is
+  name-only; the model guesses kwargs. Stays **S2**.
+- **D5 (audit/trajectory/telemetry for bridged calls) is still open** — direct
+  `ainvoke` bypasses the audit middleware, so bridged calls are invisible
+  today. Stays **S3**.
+- **The measurement** — S1's deterministic half is a repo test
+  (`test_ptc_collapse_mechanics_ten_reads_one_round`: ten 5KB reads behind one
+  model-visible result, output <0.1% of the intermediate bytes); the
+  model-in-the-loop half is `scripts/ptc_bench.py`, run against a live
+  instance.
+
+Re-scoped slices: **S1** = D3 hardening + measurement harness (shipped with
+this amendment) · **S2** = schema-visible stubs · **S3** = observability ·
+**S4** = binding-path parity + GA decision.
 
 ## Context
 
