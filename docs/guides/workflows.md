@@ -5,22 +5,21 @@ extract angles → write a brief, each step feeding the next, some running in
 parallel. Define it once as YAML, run it many times with different inputs. See
 [ADR 0002](/adr/0002-reusable-subagent-workflows) for the design.
 
-::: tip Workflows is an opt-in plugin (lean core)
+::: tip Workflows is a first-party plugin (GA — shipped on)
 As of [ADR 0043](/adr/0043-plugin-consumption-sdk-workflows-extraction), workflows ship as
-the `plugins/workflows` plugin (`enabled: false` by default) — the engine, the
-`run_workflow`/`save_workflow` tools, the `/api/plugins/workflows` API, and the **Studio**
-console surface only load when the plugin is enabled. Turn it on by adding `workflows` to
-`plugins.enabled` (or `enabled: true` in its manifest). The plugin taps core through the
-consumption SDK (`graph.sdk.run_subagent`).
+the `plugins/workflows` plugin — the engine, the `run_workflow`/`save_workflow` tools, the
+`/api/plugins/workflows` API, and the **Studio** console surface all come from it. It's
+**enabled by default**; an instance that doesn't want it adds `workflows` to
+`plugins.disabled`. The plugin taps core through the consumption SDK
+(`graph.sdk.run_subagent`).
 :::
 
 ## Run one (the short path)
 
-1. Enable the plugin — `plugins: { enabled: [workflows] }` (it ships off by default).
-2. Drop a `*.yaml` recipe in the workflows folder ([Anatomy](#anatomy) has the shape,
+1. Drop a `*.yaml` recipe in the workflows folder ([Anatomy](#anatomy) has the shape,
    [Where recipes live](#where-recipes-live) the path).
-3. [Run it](#running-one) — ask the agent to, or call `run_workflow` with your inputs.
-4. Watch the steps stream as tool cards; the final `output` comes back as the result.
+2. [Run it](#running-one) — ask the agent to, or call `run_workflow` with your inputs.
+3. Watch the steps stream as tool cards; the final `output` comes back as the result.
 
 The rest of this page is the recipe format, the step types, and how workflows differ
 from skills.

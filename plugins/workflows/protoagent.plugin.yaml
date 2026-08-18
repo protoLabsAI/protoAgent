@@ -1,12 +1,12 @@
 id: workflows
 name: Workflows
-version: 0.2.0
+version: 0.3.0
 description: >-
   Declarative, multi-step subagent workflows (ADR 0002) — chain subagent steps
-  (some in parallel) into repeatable recipes. Extracted from core to an opt-in
-  plugin (lean core); the engine taps core via the plugin SDK (graph.sdk.run_subagent),
-  never core internals.
-enabled: false            # lean core — opt in via plugins.enabled or enabled:true
+  (some in parallel) into repeatable recipes, with the Studio console surface for
+  authoring and live-watching runs. Lives as a plugin (lean core); the engine taps
+  core via the plugin SDK (graph.sdk.run_subagent), never core internals.
+enabled: true             # first-party — GA, shipped on (disable via plugins.disabled)
 config:
   # Terminal-run retention: `.runs/` keeps this many done/failed records (paused and
   # running runs are never pruned — they're resumable state, not history).
