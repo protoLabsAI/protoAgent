@@ -15,14 +15,6 @@ log = logging.getLogger("protoagent.plugins.artifact")
 
 _KINDS = {"html", "svg", "mermaid", "react", "markdown"}
 
-# Vendored assets served same-origin so artifacts render fully offline (no cdnjs).
-# Allowlist (no path traversal) — must match the files in vendor/. Two groups:
-#  • UMD libs loaded via <script> + SRI (react/react-dom/babel/mermaid), pinned in the
-#    shell's LIB map.
-#  • ESM modules resolved by the `react` import map — curated offline libs, tiny React
-#    shims (re-export the UMD globals → one shared React instance), and the authored
-#    @pl/ui DS wrappers; same-origin + install-pinned (plugins.lock sha), not SRI.
-
 # ── full-body-write nudge (#2257) ────────────────────────────────────────────
 # Iterating an artifact by re-SAVING it (save_file_artifact / rewrite_artifact)
 # round-trips the entire body through the conversation every time — the field
